@@ -11,13 +11,15 @@ Parity is defined in `docs/architecture.md` under "Parity oracle".
 
 ## Commands
 
-Run Go through `make`. The Makefile sets the toolchain from `go.mod`.
+Run Go through `make`. The Makefile sets the toolchain from `go.mod`, and
+golangci-lint runs from its own module, `tools/go.mod`.
 
 ```
-make fmt     # golangci-lint fmt
-make lint    # golangci-lint run
-make test    # go test -race ./...
-make build   # bin/gostack
+make fmt            # golangci-lint fmt
+make lint           # golangci-lint run
+make test           # go test -race ./...
+make build          # bin/gostack
+make -s toolchain   # print the pinned toolchain
 ```
 
 Targets are added with the code that needs them.

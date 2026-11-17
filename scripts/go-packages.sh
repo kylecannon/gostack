@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Print the Go packages that hold the .go files named as arguments, as ./dir
-# paths joined by spaces on one line. The pre-commit manifest passes the result
-# to make as PKGS.
+# paths joined by spaces on one line. The pre-commit manifest reaches it through
+# `make -s packages FILES=...`, so it runs under the pinned toolchain, and
+# passes the result to make as PKGS. Exits non-zero when go list fails.
 #
 # A package with no buildable files for the current GOOS and GOARCH is dropped:
 # a directory that only holds a `//go:build ignore` file, or only _linux.go
@@ -9,8 +10,9 @@
 # package is left.
 #
 # Known gap: the hook passes only added, copied, modified and renamed paths
-# (ACMR), so a commit that only deletes files from a package does not check
-# that package. CI runs the whole tree and catches it.
+# (ACMR), and a rename is reported under its new path only. A commit that
+# deletes files from a package, or moves them out with `git mv`, does not check
+# the package they left. CI runs the whole tree and catches it.
 set -euo pipefail
 
 dirs=()

@@ -28,8 +28,9 @@ readiness probe and waits for the `ready.d` hooks to finish.
 make fmt lint test build
 ```
 
-The Makefile sets the Go toolchain from `go.mod`. `docs/standards.md` lists
-the gates.
+The Makefile sets the Go toolchain from `go.mod`. Editors and gopls need
+`export GOTOOLCHAIN=$(make -s toolchain)` to use the same one.
+`docs/standards.md` lists the gates.
 
 ## Documentation
 

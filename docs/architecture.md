@@ -107,6 +107,7 @@ internal/
   tlscert/                   self-signed generation, custom cert, opt-in fetch
   api/<svc>/                 GENERATED: types, operation enum, errors, codec, Handler interface, Unimplemented
   service/<svc>/             hand-written providers and state
+tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
 specs/                       vendored botocore JSON + LocalStack patches + SOURCES.lock
 parity/                      runner Dockerfile, pytest_gostack.py, exclusions.yaml, ledger.json, scripts
@@ -131,14 +132,25 @@ type breaks streaming S3 bodies and SDK event streams.
 - **Root router.** chi routes the fixed paths: `/_gostack/*`, `/_localstack/*`,
   `/_aws/*` and `/_localstack_lambda/*`. A catch-all `/*` mounts the AWS
   gateway.
-- **Middleware placement.** Two layers, matching LocalStack's `aws/app.py`.
-  - The root router carries internal-request marking, the shutdown guard, CORS
-    and content decoding, so they run for every path, internal or AWS.
-  - The `/*` AWS mount carries service detection onward.
-- **Host-based data planes.** `middleware.RouteHeaders` on `Host` sends
-  `<bucket>.s3.*`, `*.s3-website.*`, `<id>.execute-api.*` and `*.lambda-url.*`
-  to their service routers ahead of header detection. This mirrors
-  `ServiceLoaderForDataPlane`.
+- **Middleware placement.** Two layers, matching the handler order in
+  LocalStack's `aws/app.py`. The root router carries these steps for every
+  path, internal or AWS, in this order:
+  1. Internal-request marking.
+  2. The shutdown guard.
+  3. Data-plane service detection by `Host`: `<bucket>.s3.*`,
+     `*.s3-website.*`, `<id>.execute-api.*` and `*.lambda-url.*`
+     (`middleware.RouteHeaders`). This mirrors `ServiceLoaderForDataPlane`, and
+     a service set here is not detected again later.
+  4. Preprocess hooks. S3 marks a request as S3 when it is host-style, or
+     path-style to an existing bucket (`services/s3/cors.py`).
+  5. CORS, skipped for requests marked S3 or API Gateway.
+  6. Content decoding, skipped for S3. LocalStack's own comment says it depends
+     on the preprocess step for S3.
+  7. The `/_gostack`, `/_localstack` and `/_aws` routes.
+  8. The `/*` AWS mount, which carries service detection onward.
+
+  The response handlers that add `x-localstack` and `x-gostack` also run on the
+  root router, so every response carries them, `/_localstack/health` included.
 - **Per-service REST routers.** Codegen emits one `chi.Router` per rest-json or
   rest-xml service from each operation's `http.requestUri`. Greedy labels like
   `{Key+}` become chi wildcards. The gateway first works out the service from
@@ -154,8 +166,9 @@ type breaks streaming S3 bodies and SDK event streams.
   parse, dispatch, response hooks (see Response headers), then the logging and
   metrics finalizers.
   - chi's `middleware.Recoverer` is wrapped so a panic becomes a 500
-    `InternalError` in the service's own protocol, and a crash only under
-    `FAIL_FAST`.
+    `InternalError` in the service's own protocol. Under `FAIL_FAST` the status
+    is 501 instead of 500, as in LocalStack's `aws/handlers/service.py`. The
+    process keeps running in both cases.
   - The request state (service, operation, account, region, parsed input) lives
     in a pooled `RequestContext` stored once on the request context.
 
@@ -187,9 +200,8 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
   dependency.
 - `GATEWAY_LISTEN` takes a comma-separated list. A missing host defaults to
   `0.0.0.0` in a container and `127.0.0.1` otherwise, and a missing port to
-  4566, as in LocalStack's `config.py`. The container check follows its
-  `in_docker()`: marker files, `/.dockerenv`, `/run/.containerenv`, and an
-  `OVERRIDE_IN_DOCKER` override.
+  4566, as in LocalStack's `config.py`. The container check mirrors its
+  `in_docker()` (see Container detection).
 - `ReadHeaderTimeout` is set. There is no `WriteTimeout`, because SQS long-polls
   for 20s and responses stream.
 - `DisableGeneralOptionsHandler` is set.
@@ -231,6 +243,7 @@ follows add, migrate, delete.
 | Canonical | Purpose | LocalStack alias |
 |---|---|---|
 | `GET/HEAD /_gostack/health` | Liveness probe. `{status, version, services: {name: {state, persisted}}}` | `/_localstack/health` (LocalStack shape, `edition: community`) |
+| `POST /_gostack/health` with `{"action":"restart"}` or `{"action":"kill"}` | `restart` signals the PID 1 supervisor (see Container), which restarts the child process. Without a supervisor it logs a warning and does nothing. `kill` exits the process with code 0. Any other action returns 200 `ok` and does nothing. An empty or invalid body returns 400. | `POST /_localstack/health`, same body (LocalStack's `services/internal.py`) |
 | `GET /_gostack/ready` | Readiness probe. 200 after the `ready.d` hooks finish, 503 before. LocalStack has none. | none |
 | `GET /_gostack/info` | version, uptime, config summary | `/_localstack/info` |
 | `GET /_gostack/init` | hook status per stage | `/_localstack/init[/<stage>]` |
@@ -246,7 +259,9 @@ same suffix under both prefixes:
 
 - `cloudwatch/metrics/raw`
 - `dynamodb/expired`
-- `events/rules/<arn>/trigger`
+- `events/rules/<arn>/trigger`: LocalStack serves it only from the v1 Events
+  provider (`services/events/v1/provider.py`, selected with
+  `PROVIDER_OVERRIDE_EVENTS=v1`). The default provider has no such route.
 - `lambda/runtimes`
 - `ses`
 - `sns/platform-endpoint-messages`, `sns/sms-messages`,
@@ -282,6 +297,12 @@ gostack's own name comes first, and the LocalStack name keeps working.
     `bin/docker-entrypoint.sh`: names starting with `LOCALSTACK_HOST` (which
     covers `LOCALSTACK_HOSTNAME`) and with `LOCALSTACK_<digit>` are never
     mapped to a bare name.
+  - The runtime also exports each stripped bare name into the environment of
+    the gostack process and of every hook subprocess, with the same
+    exclusions, as `docker-entrypoint.sh` does for LocalStack. The
+    `LOCALSTACK_` value replaces an existing bare variable. For example,
+    `LOCALSTACK_AWS_DEFAULT_REGION=eu-west-1` makes a hook's `awslocal` call
+    target eu-west-1.
   - Settings that exist only in gostack have only the `GOSTACK_` form.
   - `PERSIST_*` stays as it is, for localstack-persist compatibility.
 - **CLI.** `gostack status` is canonical. The `localstack` symlink still
@@ -307,15 +328,42 @@ Tests split along the same line:
 ### Container
 
 - **Ports:** `EXPOSE 4566 4510-4559`. `VOLUME /var/lib/localstack`, which holds
-  `lib`, `cache`, `tmp` and `logs`. Persisted state lives under
-  `PERSIST_BASE_DIR`, not in that volume. LocalStack's own `state` directory
-  belongs to its `PERSISTENCE=1` snapshots, which gostack does not use.
+  `lib`, `cache`, `tmp`, `state` and `logs`. `state` holds persisted state when
+  `PERSISTENCE=1` is the only persistence setting. Under any `PERSIST_*`
+  variable or a `/persisted-data` mount, state lives under `PERSIST_BASE_DIR`
+  instead (see Persistence).
 - **Images:** `ghcr.io/kylecannon/gostack:latest` is the full image: bash, curl,
-  python3, awscli, awslocal. `:slim` is the static binary on distroless.
+  python3, awscli, awslocal. `:slim` is the static binary on distroless. Both
+  create the marker files LocalStack's Dockerfile creates (lines 74 and 179):
+  `/tmp/localstack/.marker` and `/usr/lib/localstack/.community-version`.
+- **Container detection.** `internal/config` mirrors LocalStack's `in_docker()`
+  (`config.py`), in the same order. The first check that answers decides:
+  1. `OVERRIDE_IN_DOCKER`, when set, wins.
+  2. The marker files `/usr/lib/localstack/.community-version`,
+     `/usr/lib/localstack/.pro-version` and `/tmp/localstack/.marker`.
+  3. `/.dockerenv`, then `/run/.containerenv`.
+  4. `/proc/1/cgroup`. Without it the answer is no. With it, the answer is no
+     when the Docker host's own cgroup directories exist, and yes when the file
+     names `docker`, `buildkit` or the container's hostname.
+  5. The root mount in `/proc/mounts` carrying an `io.containerd` option, which
+     is how containerd marks a container.
+  The result picks the `GATEWAY_LISTEN` host default.
 - **Entrypoint.** The image runs the gostack binary directly. There is no
   shell entrypoint. Startup is in `internal/config` and `internal/runtime`:
   - `internal/config` resolves env vars (see Other compatibility aliases).
   - `internal/runtime` runs the `boot.d` hooks, then starts the gateway.
+  - `internal/runtime` also supervises. When gostack runs as PID 1, it starts
+    itself as a child process and acts as LocalStack's
+    `bin/localstack-supervisor`:
+    - It reaps zombie processes, including adopted ones.
+    - It forwards SIGTERM and SIGINT to the child as SIGTERM, and exits with
+      the child's exit code once the child ends.
+    - It restarts the child on a `restart` action posted to
+      `/_localstack/health` or `/_gostack/health`. The child signals the
+      supervisor through `SUPERVISOR_PID`, as LocalStack does.
+    - It honors `SHUTDOWN_TIMEOUT` (default 5 seconds): a child still running
+      after that is sent SIGKILL.
+    - Under any other PID, gostack runs directly with no supervisor.
   - `internal/runtime` also prints LocalStack's two entrypoint warnings: the
     community-image notice when `LOCALSTACK_AUTH_TOKEN` is unset, and the
     wrong-image notice when `LOCALSTACK_API_KEY` or `LOCALSTACK_AUTH_TOKEN` is
@@ -324,11 +372,17 @@ Tests split along the same line:
   accepting `.sh` and `.py`. The status of each script is exposed at
   `/_gostack/init`. The process prints `Ready.` on stdout, which testcontainers
   waits for.
-  - A `.sh` hook runs under its shebang, or `/bin/sh` without one. A `.py` hook
-    runs under `python3`. Both run as subprocesses.
-  - A missing interpreter marks the hook failed and logs which interpreter was
-    not found. The slim image has neither `/bin/sh` nor `python3`, so it runs
-    no `.sh` or `.py` hooks.
+  - A `.sh` hook runs exactly as LocalStack runs it
+    (`runtime/init.py`, `subprocess.call(args=[path])`): the file itself is
+    executed, so it needs the executable bit and a shebang. There is no
+    `/bin/sh` fallback. A non-zero exit marks the hook failed. A `.py` hook
+    runs under `python3` as a subprocess.
+  - A hook whose interpreter is missing is marked failed, and the log names the
+    interpreter. The slim image has no shell and no `python3`, so every `.py`
+    hook, and any `.sh` hook whose shebang names a missing interpreter, fails
+    there.
+  - Every hook subprocess gets the environment described under Env vars,
+    including the names stripped from `LOCALSTACK_*`.
   - Known limitation: LocalStack `exec()`s `.py` hooks inside its own process.
     A hook that imports `localstack.*` does not work under gostack, because
     there is no such package.
@@ -348,9 +402,17 @@ Tests split along the same line:
 
 ### Persistence (localstack-persist contract)
 
-**Default.** Persist when `/persisted-data` is a real mount (checked in
-`/proc/self/mountinfo`), or when `PERSISTENCE=1` or any `PERSIST_*` variable is
-set. Otherwise state is in-memory only.
+**Default.** One persistence engine with two sources for its base directory:
+
+- If any `PERSIST_*` variable is set, or `/persisted-data` is a real mount
+  (checked in `/proc/self/mountinfo`), the base directory is `PERSIST_BASE_DIR`
+  (default `/persisted-data`).
+- Otherwise, if `PERSISTENCE=1`, the base directory is
+  `/var/lib/localstack/state`, and gostack persists every service there. That
+  is where LocalStack Community keeps asset state under `PERSISTENCE=1`
+  (`config.py` `dirs.data`, DynamoDB's `services/dynamodb/server.py`, and the
+  Kinesis, CloudWatch and SES assets).
+- Otherwise nothing persists and state is in-memory only.
 
 **Configuration** is copied exactly:
 
@@ -383,12 +445,13 @@ set. Otherwise state is in-memory only.
 ## Dependencies
 
 A dependency enters `go.mod` with the code that uses it. Nothing else without a
-written case.
+written case. Development tools (golangci-lint) live in `tools/go.mod`, never
+in the product `go.mod`.
 
 | Dependency | Enters with | Why |
 |---|---|---|
 | go-chi/chi/v5 | the gateway | Routing and middleware composition. |
-| go-chi/cors | the gateway | CORS. LocalStack's rules go through `AllowOriginFunc`: the allowed-origin list from `aws/handlers/cors.py`, `EXTRA_CORS_*`, and `DISABLE_CORS_CHECKS`/`DISABLE_CORS_HEADERS`. S3 and API Gateway bypass it for their own CORS handling, as LocalStack does. |
+| go-chi/cors | the gateway | CORS. LocalStack's rules go through `AllowOriginFunc`: the allowed-origin list from `aws/handlers/cors.py`, `EXTRA_CORS_*`, and `DISABLE_CORS_CHECKS`/`DISABLE_CORS_HEADERS`. It runs at root middleware step 5. S3 and API Gateway requests, marked earlier in the chain, skip it for their own CORS handling, as LocalStack does. |
 | bytedance/sonic | codegen | JSON codec. The Go version limit is in the Makefile and the native-path test is in `standards.md`. |
 | spf13/viper | config | Every LocalStack variable is registered with `BindEnv` and given its LocalStack default. `/_localstack/config` POST applies updates with `viper.Set`. `PERSIST_*` values go through an extra validator on top of viper, which reproduces localstack-persist's exact rules (only 1/0/true/false, a warning for anything else, dependency expansion). |
 | moby client (`github.com/moby/moby/client`) | Lambda | Lambda containers through the Docker socket. |

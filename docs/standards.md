@@ -19,7 +19,8 @@ specific to gostack.
   pass.
 - **AWS errors** are generated typed error values. Handlers return them and the
   gateway serializes them. Handlers never panic. The gateway recovers a panic
-  into 500 `InternalError`, and into a crash only under `FAIL_FAST`.
+  into 500 `InternalError`, or 501 under `FAIL_FAST`. The process keeps
+  running.
 - **State.**
   - Each service has its own `State`, held in `store.Bundle[State]` keyed by
     account and region. This mirrors `AccountRegionBundle` and
@@ -69,7 +70,8 @@ specific to gostack.
 
 - **Pre-commit** runs `.agentic-quality`, the manifest the harness hook reads:
   `make fmt` on staged `*.go` files, then `make lint` and `make test`
-  (`go test -race`) on the packages those files belong to.
+  (`go test -race`) on the packages those files belong to. `make -s packages`
+  finds those packages, and a failing `go list` fails the rule.
 - **CI** (`ci.yml`) runs `make lint`, `make test` and `make build`.
 - **Linters and formatters** are configured in `.golangci.yml` (v2 format).
   `govet` runs with every analyzer enabled except `fieldalignment`, `exhaustive`
@@ -89,10 +91,19 @@ None of these exist yet. Each lands in the phase that adds the code it checks.
 
 ## Toolchain
 
-The Go version is pinned by the `toolchain` line in `go.mod`. The Makefile
-derives `GOTOOLCHAIN` from it and holds the reason. golangci-lint is a `go.mod`
-tool dependency, run as `go tool golangci-lint`, so it is built with that same
-toolchain.
+The Go version is pinned by the `toolchain` line in `go.mod`, or the `go` line
+when there is none. The Makefile derives `GOTOOLCHAIN` from it, stops when both
+are missing, and holds the reason for the layout below.
+
+- **Make targets** run under that pin, golangci-lint included. golangci-lint is
+  a tool dependency of its own module, `tools/go.mod`, run as
+  `go tool -modfile=tools/go.mod golangci-lint`. The product `go.mod` carries
+  none of its dependencies.
+- **Editors and gopls** do not read the Makefile, so the pin does not reach
+  them. Run `export GOTOOLCHAIN=$(make -s toolchain)` in the shell that starts
+  the editor. Plain `go` commands outside `make` need it too.
+- **Each module** has its own `go mod tidy`. Both `go mod tidy -diff` (root) and
+  `go -C tools mod tidy -diff` must exit 0.
 
 On a Go version sonic does not support, sonic falls back to `encoding/json`
 without warning. A test asserts its native path is active, so an unsupported

@@ -17,6 +17,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
       - run: make lint
 
   test:
@@ -27,6 +30,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
       - run: make test
 
   build:
@@ -37,4 +43,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
       - run: make build
