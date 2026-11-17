@@ -4,7 +4,8 @@
 # `make -s packages FILES=...`, so it runs under the pinned toolchain, and
 # passes the result to make as PKGS. Exits non-zero when go list fails.
 #
-# A package with no buildable files for the current GOOS and GOARCH is dropped:
+# A directory with a path element named testdata or starting with _ or . is
+# dropped, matching what ./... skips. A package with no buildable files for the current GOOS and GOARCH is dropped:
 # a directory that only holds a `//go:build ignore` file, or only _linux.go
 # files on macOS, cannot be linted or tested here. Prints nothing when no
 # package is left.
@@ -18,6 +19,17 @@ set -euo pipefail
 dirs=()
 for f in "$@"; do
 	d=$(dirname "$f")
+	# ./... skips a directory with a path element named testdata or starting
+	# with _ or ., so those files are not part of any package we lint or test.
+	skip=0
+	IFS=/ read -ra elems <<<"$d"
+	for e in "${elems[@]}"; do
+		case $e in
+		. | '') ;;
+		testdata | _* | .*) skip=1 ;;
+		esac
+	done
+	((skip)) && continue
 	[[ $d == . ]] || d=./$d
 	dirs+=("$d")
 done

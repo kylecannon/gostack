@@ -11,12 +11,14 @@ linters:
     - gocritic
     - gosec
     - govet
+    - ineffassign
     - nilerr
     - perfsprint
     - revive
     - staticcheck
     - testifylint
     - unparam
+    - unused
     - usestdlibvars
   settings:
     exhaustive:

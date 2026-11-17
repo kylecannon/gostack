@@ -3,7 +3,7 @@ botocore_version 1.42.59
 botocore_wheel_sha256 d2f2ff7ecc31e86ef46b5daee112cfbca052c13801285fb23af909f7bff5b657
 localstack_repo https://github.com/localstack/localstack.git
 localstack_sha 8b9a79f05846835cf4dff63ab7eefdde9df83783
-moto_ext_min >=5.1.22
+moto_ext_version 5.1.25
 file 3e0deaa356a6a01faed5be2c473222d63c8a42be1a660c07819c342b27540b02 botocore/acm/2015-12-08/service-2.json
 file c847c35cdeb27eff7aa1e51a3d92d1192f387146b751204eb12ef61b4d242dcf botocore/apigateway/2015-07-09/service-2.json
 file abffdc3257826cb347db68eee668df3992590c2a8d7562ed968fa294dbfef4de botocore/apigatewayv2/2018-11-29/service-2.json
@@ -23,7 +23,6 @@ file b798617077cd5abed9904525be02f7823bf431e98d450e1c8462f73410f706be botocore/k
 file 0cdf6f01f6a83e999911d9b201c1e6d92e0bc3e39d6b12314906bd58cc2f9851 botocore/lambda/2015-03-31/service-2.json
 file 5da763f0b41eba166a62dc937c6a36acc5aa6907ae932472a3b6a48982102a5b botocore/logs/2014-03-28/service-2.json
 file f0473ead211c82183392b57e0d9bdf7c3281cb1efbcce7a6a369a9d5cf7d98d8 botocore/opensearch/2021-01-01/service-2.json
-file 4f077ef57656d2fb147539e618b94420febfe1ab564893416079e485bcd4011e botocore/pipes/2015-10-07/service-2.json
 file d470eb361088fca78047f7bd54c7ec1942024c3decaa88dcbf5c06cfdf78422b botocore/redshift/2012-12-01/service-2.json
 file fe1b10a28f93c31b99f1cd1a861694cd8f013a925da6bec8ab6cd34ddc3ebaec botocore/resource-groups/2017-11-27/service-2.json
 file cd0f74ae0f7ab909ca7b4a7f3fe822b5f6e1716045aaa5b8dbafb1038223186b botocore/resourcegroupstaggingapi/2017-01-26/service-2.json

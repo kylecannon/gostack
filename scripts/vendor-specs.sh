@@ -13,7 +13,9 @@
 #     into specs/.
 #
 # Idempotent: specs/botocore and specs/localstack are rebuilt from scratch on
-# every run, so a re-run over unchanged sources leaves no git diff. Nothing
+# every run, so a re-run over unchanged sources leaves no git diff. Everything
+# is staged in a temp directory first and specs/ is replaced only after every
+# step has succeeded, so a failure partway leaves specs/ untouched. Nothing
 # from the downloaded wheel is executed; it is only read as a zip archive.
 #
 # specs/SOURCES.lock format: plain text, one record per line, '#' starts a
@@ -22,21 +24,20 @@
 #   botocore_wheel_sha256 <sha256 of the downloaded wheel>
 #   localstack_repo <url>
 #   localstack_sha <full 40-char commit sha>
-#   moto_ext_min <pip requirement string>
+#   moto_ext_version <exact moto-ext version in LocalStack's requirements-runtime.txt>
 #   file <sha256> <path relative to specs/>     (one per vendored file, sorted by path)
 set -euo pipefail
 
 BOTOCORE_VERSION=1.42.59
 LOCALSTACK_REPO=https://github.com/localstack/localstack.git
 LOCALSTACK_SHA_PREFIX=8b9a79f05
-MOTO_EXT_MIN='>=5.1.22'
 
 # botocore service names (lambda_ -> lambda, resource_groups -> resource-groups,
 # config -> config), plus apigatewayv2 because spec-patches.json patches it.
 SERVICES=(
   acm apigateway apigatewayv2 cloudcontrol cloudformation cloudwatch config
   dynamodb dynamodbstreams ec2 es events firehose iam kinesis kms lambda logs
-  opensearch pipes redshift resource-groups resourcegroupstaggingapi route53
+  opensearch redshift resource-groups resourcegroupstaggingapi route53
   route53resolver s3 s3control scheduler secretsmanager ses sns sqs ssm
   stepfunctions sts support swf transcribe
 )
@@ -65,9 +66,10 @@ case "$LS_SHA" in
 esac
 LS_SRC=localstack-core/localstack
 ls_show() { git -C "$LOCALSTACK_DIR" show "$LS_SHA:$1"; }
-PYPROJECT=$(ls_show pyproject.toml)
-grep -q "moto-ext\[all\]$MOTO_EXT_MIN" <<<"$PYPROJECT" ||
-  { echo "moto-ext minimum in LocalStack pyproject.toml is not $MOTO_EXT_MIN" >&2; exit 1; }
+# The oracle image installs exactly this moto-ext release.
+MOTO_EXT_VERSION=$(ls_show requirements-runtime.txt | sed -n 's/^moto-ext==\([0-9][0-9.]*\)$/\1/p')
+[ -n "$MOTO_EXT_VERSION" ] ||
+  { echo "no 'moto-ext==<version>' line in LocalStack requirements-runtime.txt at $LS_SHA" >&2; exit 1; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -80,9 +82,10 @@ WHEEL="$TMP/dl/botocore-$BOTOCORE_VERSION-py3-none-any.whl"
 
 # Extract service-2.json for each service, latest api-version only.
 # python -I: isolated mode; the wheel is read with zipfile, never executed.
-rm -rf "$SPECS/botocore" "$SPECS/localstack"
-mkdir -p "$SPECS/botocore" "$SPECS/localstack/sqs-query/2012-11-05"
-python3 -I - "$WHEEL" "$SPECS/botocore" "${SERVICES[@]}" <<'PY'
+# Everything is staged under $TMP/specs; specs/ itself is touched last.
+STAGE="$TMP/specs"
+mkdir -p "$STAGE/botocore" "$STAGE/localstack/sqs-query/2012-11-05"
+python3 -I - "$WHEEL" "$STAGE/botocore" "${SERVICES[@]}" <<'PY'
 import gzip, os, re, sys, zipfile
 
 wheel, out, services = sys.argv[1], sys.argv[2], sys.argv[3:]
@@ -108,21 +111,26 @@ for svc in services:
         f.write(data)
 PY
 
-ls_show "$LS_SRC/aws/spec-patches.json" >"$SPECS/localstack/spec-patches.json"
-ls_show "$LS_SRC/aws/data/sqs-query/2012-11-05/service-2.json" >"$SPECS/localstack/sqs-query/2012-11-05/service-2.json"
-ls_show "$LS_SRC/openapi.yaml" >"$SPECS/localstack/openapi.yaml"
+ls_show "$LS_SRC/aws/spec-patches.json" >"$STAGE/localstack/spec-patches.json"
+ls_show "$LS_SRC/aws/data/sqs-query/2012-11-05/service-2.json" >"$STAGE/localstack/sqs-query/2012-11-05/service-2.json"
+ls_show "$LS_SRC/openapi.yaml" >"$STAGE/localstack/openapi.yaml"
 
-# Write the lock file.
+# Write the lock file from the staged copy.
 {
   echo "# specs/SOURCES.lock, written by scripts/vendor-specs.sh. Do not edit by hand."
   echo "botocore_version $BOTOCORE_VERSION"
   echo "botocore_wheel_sha256 $(sha256 "$WHEEL")"
   echo "localstack_repo $LOCALSTACK_REPO"
   echo "localstack_sha $LS_SHA"
-  echo "moto_ext_min $MOTO_EXT_MIN"
-  (cd "$SPECS" && find botocore localstack -type f | LC_ALL=C sort) | while IFS= read -r f; do
-    echo "file $(sha256 "$SPECS/$f") $f"
+  echo "moto_ext_version $MOTO_EXT_VERSION"
+  (cd "$STAGE" && find botocore localstack -type f | LC_ALL=C sort) | while IFS= read -r f; do
+    echo "file $(sha256 "$STAGE/$f") $f"
   done
-} >"$SPECS/SOURCES.lock"
+} >"$STAGE/SOURCES.lock"
+
+# Every step succeeded: replace specs/ from the staged copy.
+mkdir -p "$SPECS"
+rm -rf "$SPECS/botocore" "$SPECS/localstack"
+cp -R "$STAGE/botocore" "$STAGE/localstack" "$STAGE/SOURCES.lock" "$SPECS/"
 
 echo "vendored $(find "$SPECS" -type f | wc -l | tr -d ' ') files into $SPECS"

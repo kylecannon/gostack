@@ -83,9 +83,10 @@ are what the oracle checks.
 ### moto counts as spec
 
 About 20 services (iam, ec2, ssm, secretsmanager, route53, logs, sts, acm, ses,
-swf, and others) get their real behavior from moto. The pinned moto-ext version
-(5.1.22 or later) is recorded in `SOURCES.lock`, and those services are sized
-against moto's code, not LocalStack's provider files.
+swf, and others) get their real behavior from moto. The oracle image installs
+the exact moto-ext version LocalStack pins in `requirements-runtime.txt`
+(5.1.25), recorded in `SOURCES.lock` as `moto_ext_version`, and those services
+are sized against moto's code, not LocalStack's provider files.
 
 ## Layout
 

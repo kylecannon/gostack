@@ -20,6 +20,7 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/go.sum
+      - run: make tidy-check
       - run: make lint
 
   test:
