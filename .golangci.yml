@@ -10,9 +10,11 @@ linters:
     - exhaustruct # conventions: design the zero value to be useful; omitted fields are intended
     - gomodguard # deprecated since v2.12.0; gomodguard_v2 replaces it and stays on
     - nlreturn # conventions: layout is the formatter's job (gofumpt)
+    - noinlineerr # conventions: name an inverted condition inline (`if cacheHit := err == nil; cacheHit`)
     - nonamedreturns # conventions: name results to document a caller obligation
     - tagliatelle # AWS wire format: JSON and XML tags keep AWS casing (PascalCase, camelCase, mixed per service)
     - testpackage # conventions: package foo in foo_internal_test.go where internals must be reached
+    - thelper # conventions: t.Helper() in setup helpers, never in assertion wrappers
     - varnamelen # conventions: tt, i and ok are the stated names
     - wsl # conventions: layout is the formatter's job (gofumpt)
     - wsl_v5 # conventions: layout is the formatter's job (gofumpt)
