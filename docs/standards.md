@@ -74,9 +74,11 @@ specific to gostack.
   finds those packages, and a failing `go list` fails the rule.
 - **CI** (`ci.yml`) runs `make lint`, `make test` and `make build`.
 - **Linters and formatters** are configured in `.golangci.yml` (v2 format).
-  `govet` runs with every analyzer enabled except `fieldalignment`, `exhaustive`
-  treats a `default` case as exhaustive, and `gosec` is tuned there. Formatters
-  are gofumpt and gci with two import groups.
+  Linting runs in strict mode (`default: all`), and each disabled linter is
+  documented there. `govet` runs with every analyzer enabled except
+  `fieldalignment`, `exhaustive` treats a `default` case as exhaustive, and
+  `gosec` is tuned there. Formatters are gofumpt and gci with two import
+  groups.
 
 ### Arriving with their code
 

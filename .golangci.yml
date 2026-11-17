@@ -1,43 +1,93 @@
 version: "2"
 
 linters:
-  default: none
-  enable:
-    - bodyclose
-    - contextcheck
-    - errcheck
-    - errorlint
-    - exhaustive
-    - gocritic
-    - gosec
-    - govet
-    - ineffassign
-    - nilerr
-    - perfsprint
-    - revive
-    - staticcheck
-    - testifylint
-    - unparam
-    - unused
-    - usestdlibvars
+  default: all
+  # A linter is disabled only where it contradicts conventions-go.md or the AWS
+  # wire format. Everything else stays on and is configured below.
+  disable:
+    - depguard # conventions: standard library first; dependency control is go.mod review and the architecture.md dependency table
+    - err113 # conventions: fmt.Errorf with %v for implementation-detail errors, not dynamic-error sentinels
+    - exhaustruct # conventions: design the zero value to be useful; omitted fields are intended
+    - gomodguard # deprecated since v2.12.0; gomodguard_v2 replaces it and stays on
+    - nlreturn # conventions: layout is the formatter's job (gofumpt)
+    - nonamedreturns # conventions: name results to document a caller obligation
+    - tagliatelle # AWS wire format: JSON and XML tags keep AWS casing (PascalCase, camelCase, mixed per service)
+    - testpackage # conventions: package foo in foo_internal_test.go where internals must be reached
+    - varnamelen # conventions: tt, i and ok are the stated names
+    - wsl # conventions: layout is the formatter's job (gofumpt)
+    - wsl_v5 # conventions: layout is the formatter's job (gofumpt)
   settings:
+    cyclop:
+      max-complexity: 10
     exhaustive:
       default-signifies-exhaustive: true
+    forbidigo:
+      forbid:
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+    funlen:
+      lines: 60
+      statements: 40
+    gocognit:
+      min-complexity: 30
+    gosec:
+      excludes:
+        - G104 # unhandled errors are errcheck's job
     govet:
       enable-all: true
       disable:
         - fieldalignment
-    gosec:
-      excludes:
-        - G104 # unhandled errors are errcheck's job
+    lll:
+      line-length: 120
+    mnd:
+      ignored-functions:
+        - ^http\.(Error|StatusText)$ # HTTP status codes
+        - \.WriteHeader$ # HTTP status codes
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: add-constant # duplicates mnd and goconst
+          disabled: true
+        - name: cognitive-complexity # duplicates gocognit
+          disabled: true
+        - name: cyclomatic # duplicates cyclop and gocyclo
+          disabled: true
+        - name: error-naming # duplicates errname
+          disabled: true
+        - name: errorf # duplicates perfsprint
+          disabled: true
+        - name: file-header # duplicates goheader
+          disabled: true
+        - name: function-length # duplicates funlen
+          disabled: true
+        - name: line-length-limit # duplicates lll
+          disabled: true
+        - name: redefines-builtin-id # duplicates predeclared
+          disabled: true
+        - name: unchecked-type-assertion # duplicates forcetypeassert
+          disabled: true
+        - name: unhandled-error # duplicates errcheck
+          disabled: true
+        - name: use-errors-new # duplicates perfsprint
+          disabled: true
   exclusions:
     generated: lax
     paths:
       - internal/api
     rules:
+      - path: ^cmd/
+        linters:
+          - forbidigo
+        text: fmt\.Print # conventions: printing to stdout belongs to the binary
       - path: _test\.go
         linters:
           - gosec
+      - path: _test\.go
+        linters:
+          - revive
+        text: should not use dot imports # conventions: dot imports in test files only
 
 formatters:
   enable:
