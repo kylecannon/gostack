@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/persist"
 )
 
 const (
@@ -65,6 +67,48 @@ type Persist struct {
 	BaseDir string
 }
 
+// PersistConfig returns the persistence settings in the form the persist engine
+// takes. The engine looks a service up by the exact name it was registered
+// under, a botocore name such as "cognito-idp", while the PERSIST_* variables
+// are keyed by their normalized name ("cognitoidp"). Pass the botocore names of
+// the registered services, so each one is found under its own name. A name
+// with no setting of its own takes PERSIST_DEFAULT, as the engine decides.
+func (c *Config) PersistConfig(services ...string) persist.Config {
+	settings := c.Settings()
+	p := settings.Persist
+
+	byName := maps.Clone(p.Services)
+	if byName == nil {
+		byName = make(map[string]bool, len(services))
+	}
+	for _, name := range services {
+		if enabled, set := p.Services[normalizeService(name)]; set {
+			byName[name] = enabled
+		}
+	}
+
+	formats := make([]persist.Format, 0, len(p.Formats))
+	for _, format := range p.Formats {
+		switch format {
+		case formatJSON:
+			formats = append(formats, persist.FormatJSON)
+		case formatBinary:
+			formats = append(formats, persist.FormatBinary)
+		default:
+		}
+	}
+
+	return persist.Config{
+		Persistence:   settings.Persistence,
+		PersistVarSet: p.Configured,
+		BaseDir:       p.BaseDir,
+		Default:       &p.Default,
+		Services:      byName,
+		Frequency:     p.Frequency,
+		Formats:       formats,
+	}
+}
+
 // Enabled reports whether the service persists. The name is normalized the same
 // way a PERSIST_<SERVICE> variable's is, so "cognito-idp" matches PERSIST_COGNITO_IDP.
 func (p Persist) Enabled(service string) bool {
@@ -88,8 +132,8 @@ func normalizeService(name string) string {
 
 // parsePersist reads the PERSIST_* variables from environ. Anything the rules
 // reject becomes a warning, and the setting keeps its default.
-func parsePersist(environ []string) (persist Persist, warnings []string) {
-	persist = Persist{
+func parsePersist(environ []string) (result Persist, warnings []string) {
+	result = Persist{
 		Default:   true,
 		Formats:   []string{formatJSON},
 		Frequency: DefaultPersistFrequency,
@@ -103,39 +147,39 @@ func parsePersist(environ []string) (persist Persist, warnings []string) {
 		if !found || !hasPrefix || suffix == "" || value == "" {
 			continue
 		}
-		persist.Configured = true
-		warning := applyPersistVariable(&persist, explicit, key, suffix, value)
+		result.Configured = true
+		warning := applyPersistVariable(&result, explicit, key, suffix, value)
 		if warning != "" {
 			warnings = append(warnings, warning)
 		}
 	}
-	persist.Services = expandDependencies(explicit)
+	result.Services = expandDependencies(explicit)
 
-	return persist, warnings
+	return result, warnings
 }
 
-func applyPersistVariable(persist *Persist, explicit map[string]bool, key, suffix, value string) string {
+func applyPersistVariable(p *Persist, explicit map[string]bool, key, suffix, value string) string {
 	switch suffix {
 	case "DEFAULT":
 		enabled, ok := parseBoolean(value)
 		if !ok {
 			return invalidPersistValue(key, value)
 		}
-		persist.Default = enabled
+		p.Default = enabled
 	case "FORMAT":
 		formats, ok := parsePersistFormats(value)
 		if !ok {
 			return invalidPersistValue(key, value)
 		}
-		persist.Formats = formats
+		p.Formats = formats
 	case "FREQUENCY":
 		seconds, err := strconv.Atoi(value)
 		if err != nil || seconds <= 0 {
 			return invalidPersistValue(key, value)
 		}
-		persist.Frequency = time.Duration(seconds) * time.Second
+		p.Frequency = time.Duration(seconds) * time.Second
 	case "BASE_DIR":
-		persist.BaseDir = value
+		p.BaseDir = value
 	default:
 		enabled, ok := parseBoolean(value)
 		if !ok {

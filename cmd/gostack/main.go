@@ -2,17 +2,15 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/kylecannon/gostack/internal/gateway"
+	"github.com/kylecannon/gostack/internal/config"
+	"github.com/kylecannon/gostack/internal/lifecycle"
 )
 
 // version is set at link time with -ldflags "-X main.version=<version>".
@@ -31,12 +29,32 @@ func main() {
 	os.Exit(run())
 }
 
-// run starts gostack and returns the exit code.
+// run starts gostack and returns the exit code. As PID 1 it only supervises: it
+// runs gostack again as a child, reaps zombies and restarts the child on
+// request. Under any other PID it serves directly.
 func run() int {
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("gostack cannot start", "error", err)
+
+		return 1
+	}
+
+	// The supervisor puts SUPERVISOR_PID in its child's environment. Only the
+	// process that is not that child prints the entrypoint notices, so they
+	// appear once per container.
+	if os.Getenv(lifecycle.SupervisorPIDEnv) == "" {
+		lifecycle.WriteStartupWarnings(os.Stdout, os.Getenv)
+	}
+
+	if lifecycle.NeedsSupervisor() {
+		return supervise(cfg)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err := start(ctx, os.Stdout)
+	err = start(ctx, cfg, os.Stdout)
 	if err != nil {
 		slog.Error("gostack stopped", "error", err)
 
@@ -46,61 +64,15 @@ func run() int {
 	return 0
 }
 
-// start wires the packages together, serves until ctx ends and shuts down.
-//
-// The lines marked "Integrator step" stand in for packages that other tickets
-// add. The integrator replaces each one with the real call and deletes its stub
-// in stubs.go.
-func start(ctx context.Context, stdout io.Writer) error {
-	settings := loadSettings() // Integrator step: config.Load, then read each setting from *config.Config.
+// supervise runs the PID 1 supervisor until its child ends, and returns the
+// child's exit code. The supervisor handles its own signals.
+func supervise(cfg *config.Config) int {
+	supervisor := &lifecycle.Supervisor{ShutdownTimeout: cfg.Settings().ShutdownTimeout}
 
-	// Integrator step: persist.New(cfg), Register each service's Snapshotter, Load.
-	// The engine goes in here only when persistence is on. With it off, leave eng
-	// as the nil interface: a nil *persist.Engine stored in a Dirtier is not nil.
-	var eng gateway.Dirtier
-
-	gw, err := gateway.New(
-		func() gateway.Settings { return settings },
-		registrations(),
-		mountInternal, // Integrator step: internalapi.Mount.
-		eng,
-	)
+	code, err := supervisor.Run(context.Background())
 	if err != nil {
-		return fmt.Errorf("build gateway: %w", err)
+		slog.Error("supervisor stopped", "error", err)
 	}
 
-	listeners, err := gw.Listen(ctx)
-	if err != nil {
-		return err //nolint:wrapcheck // Listen names the address.
-	}
-
-	return serve(ctx, gw, listeners, stdout)
-}
-
-// serve runs the gateway on listeners until ctx ends.
-//
-// Integrator step: internal/lifecycle takes this over: boot.d hooks before
-// the listeners open, start.d and ready.d after, the "Ready." marker once the
-// ready hooks are done, shutdown.d hooks on the way out, and the PID 1
-// supervisor. lifecycle should call gw.BeginShutdown before the shutdown
-// hooks run, and eng.Flush after the gateway has stopped.
-func serve(ctx context.Context, gw *gateway.Gateway, listeners []net.Listener, stdout io.Writer) error {
-	slog.Info("gostack listening", "addresses", addresses(listeners))
-	_, _ = fmt.Fprintln(stdout, "Ready.")
-
-	err := gw.Serve(ctx, listeners...)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		return fmt.Errorf("serve: %w", err)
-	}
-
-	return nil
-}
-
-func addresses(listeners []net.Listener) []string {
-	out := make([]string, 0, len(listeners))
-	for _, listener := range listeners {
-		out = append(out, listener.Addr().String())
-	}
-
-	return out
+	return code
 }

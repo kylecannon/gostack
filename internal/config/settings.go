@@ -77,6 +77,11 @@ type Settings struct {
 	DisableCORSChecks bool
 	// DisableCORSHeaders is DISABLE_CORS_HEADERS.
 	DisableCORSHeaders bool
+	// DisablePreflightProcessing is DISABLE_PREFLIGHT_PROCESSING.
+	DisablePreflightProcessing bool
+	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
+	// decode to an account.
+	ParityAWSAccessKeyID bool
 	// ExtraCORSAllowedHeaders is EXTRA_CORS_ALLOWED_HEADERS, split on commas.
 	ExtraCORSAllowedHeaders []string
 	// ExtraCORSExposeHeaders is EXTRA_CORS_EXPOSE_HEADERS, split on commas.
@@ -114,6 +119,8 @@ func (s *Settings) values() map[string]any {
 		varShutdownTimeout:                 int(s.ShutdownTimeout / time.Second),
 		varDisableCORSChecks:               s.DisableCORSChecks,
 		varDisableCORSHeaders:              s.DisableCORSHeaders,
+		varDisablePreflightProcessing:      s.DisablePreflightProcessing,
+		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
 		varExtraCORSAllowedOrigins:         strings.Join(s.ExtraCORSAllowedOrigins, ","),
@@ -164,6 +171,8 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		ShutdownTimeout:                  timeout,
 		DisableCORSChecks:                isTrue(get(varDisableCORSChecks)),
 		DisableCORSHeaders:               isTrue(get(varDisableCORSHeaders)),
+		DisablePreflightProcessing:       isTrue(get(varDisablePreflightProcessing)),
+		ParityAWSAccessKeyID:             isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:          splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:           splitList(get(varExtraCORSExposeHeaders)),
 		ExtraCORSAllowedOrigins:          splitList(get(varExtraCORSAllowedOrigins)),

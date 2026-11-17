@@ -67,6 +67,20 @@ func Test_Load_defaults(t *testing.T) {
 	require.Empty(t, got.LogLevel)
 }
 
+func Test_Load_gatewayFlags(t *testing.T) {
+	isolate(t)
+	require.False(t, mustLoad(t).Settings().ParityAWSAccessKeyID)
+	require.False(t, mustLoad(t).Settings().DisablePreflightProcessing)
+
+	t.Setenv("PARITY_AWS_ACCESS_KEY_ID", "1")
+	t.Setenv("LOCALSTACK_DISABLE_PREFLIGHT_PROCESSING", "true")
+	cfg := mustLoad(t)
+
+	require.True(t, cfg.Settings().ParityAWSAccessKeyID)
+	require.True(t, cfg.Settings().DisablePreflightProcessing)
+	require.Equal(t, true, cfg.Values()[varParityAWSAccessKeyID])
+}
+
 func Test_Load_listenDefaultFollowsInDocker(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -373,6 +387,21 @@ func Test_Config_Set(t *testing.T) {
 		require.Equal(t, "x", cfg.Value("SOME_NEW_THING"))
 		require.Equal(t, "x", cfg.Values()["SOME_NEW_THING"])
 		require.Nil(t, cfg.Value("NOT_SET_ANYWHERE"))
+	})
+
+	t.Run("a value reads back as it was set", func(t *testing.T) {
+		isolate(t)
+		cfg := mustLoad(t)
+
+		require.NoError(t, cfg.Set(varGatewayListen, "127.0.0.1:4570"))
+		require.NoError(t, cfg.Set(varDebug, true))
+		require.NoError(t, cfg.Set(varShutdownTimeout, float64(9)))
+
+		require.Equal(t, "127.0.0.1:4570", cfg.Value(varGatewayListen), "a string stays a string, not the []string of GET")
+		require.Equal(t, true, cfg.Value(varDebug), "a bool stays a bool")
+		require.InDelta(t, 9, cfg.Value(varShutdownTimeout), 0, "a number stays a number")
+		require.Equal(t, []HostPort{{Host: "127.0.0.1", Port: 4570}}, cfg.Settings().GatewayListen)
+		require.Equal(t, "127.0.0.1:4570", cfg.Values()[varGatewayListen])
 	})
 
 	t.Run("a nil value changes nothing", func(t *testing.T) {

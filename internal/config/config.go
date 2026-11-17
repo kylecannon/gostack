@@ -67,6 +67,8 @@ var variables = []variable{
 	{name: varExtraCORSExposeHeaders},
 	{name: varExtraCORSAllowedOrigins},
 	{name: varOverrideInDocker},
+	{name: varParityAWSAccessKeyID},
+	{name: varDisablePreflightProcessing},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
@@ -154,7 +156,8 @@ func (c *Config) Settings() *Settings {
 // does: the variable takes the value from then on, whatever the environment says.
 // A nil value changes nothing. The value is a string, a bool or a number. A
 // variable gostack does not know is stored and reported by [Config.Value], but
-// nothing reads it. Set returns an error, and keeps the old settings, when the
+// nothing reads it. [Config.Value] and [Config.Values] report the value as it was
+// set. Set returns an error, and keeps the old settings, when the
 // name is invalid or the new value cannot be parsed.
 func (c *Config) Set(key string, value any) error {
 	if !keyPattern.MatchString(key) {
@@ -178,19 +181,17 @@ func (c *Config) Set(key string, value any) error {
 	return nil
 }
 
-// Values returns every setting by its LocalStack name, plus every variable set
-// through [Config.Set] that gostack does not know.
+// Values returns every setting by its LocalStack name. A variable set through
+// [Config.Set] reports the value as it was set, as LocalStack does (it sets the
+// attribute and reads it back), so a string stays a string and a bool stays a
+// bool. That includes a variable gostack does not know.
 func (c *Config) Values() map[string]any {
 	c.mu.Lock()
 	overrides := maps.Clone(c.overrides)
 	c.mu.Unlock()
 
 	values := c.Settings().values()
-	for key, value := range overrides {
-		if _, known := values[key]; !known {
-			values[key] = value
-		}
-	}
+	maps.Copy(values, overrides)
 
 	return values
 }

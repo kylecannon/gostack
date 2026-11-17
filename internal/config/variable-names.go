@@ -27,4 +27,6 @@ const (
 	varExtraCORSExposeHeaders          = "EXTRA_CORS_EXPOSE_HEADERS"
 	varExtraCORSAllowedOrigins         = "EXTRA_CORS_ALLOWED_ORIGINS"
 	varOverrideInDocker                = "OVERRIDE_IN_DOCKER"
+	varParityAWSAccessKeyID            = "PARITY_AWS_ACCESS_KEY_ID"
+	varDisablePreflightProcessing      = "DISABLE_PREFLIGHT_PROCESSING"
 )
