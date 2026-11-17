@@ -282,6 +282,21 @@ func Test_URL_route_errors(t *testing.T) {
 		assert.JSONEq(t, `{"Attributes":{"VisibilityTimeout":"30"}}`, res.body)
 	})
 
+	t.Run("a percent-encoded unreserved character in the path", func(t *testing.T) {
+		s.as(protoJSON).createQueue("my-queue", nil)
+
+		// chi routes on RawPath when it is set, and Go sets it for an escape
+		// that Path does not need. The queue-URL pattern does not match the
+		// escape, so the call falls through to the AWS route, which still finds
+		// the queue from the URL it was sent to.
+		res := send(http.MethodGet, "/000000000000/my%2Dqueue", url.Values{
+			paramAction: {opGetQueueAttributes}, formAttributeName1: {attrAll},
+		})
+
+		require.Equal(t, http.StatusOK, res.status, res.body)
+		assert.Contains(t, res.body, "<Value>arn:aws:sqs:us-east-1:000000000000:my-queue</Value>")
+	})
+
 	t.Run("paths that are not queue URLs are not taken", func(t *testing.T) {
 		for _, target := range []string{"/12345/plain", "/000000000000/plain/extra", "/000000000000/pl%20ain"} {
 			res := send(http.MethodPost, target, url.Values{paramAction: {opGetQueueAttributes}})
