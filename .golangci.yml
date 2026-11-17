@@ -102,7 +102,7 @@ linters:
   exclusions:
     generated: lax
     paths:
-      - internal/api
+      - (^|/)internal/api/ # generated code; anchored so internal/apiX packages stay linted
     rules:
       # Not anchored to the start of the path: golangci-lint caches issues under
       # absolute paths, so a checkout that shares a cache with another one sees
@@ -137,4 +137,4 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - internal/api
+      - (^|/)internal/api/ # generated code; anchored so internal/apiX packages stay linted
