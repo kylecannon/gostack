@@ -1,0 +1,415 @@
+openapi: 3.1.0
+info:
+  title: gostack internal API
+  summary: gostack's own endpoints for health, readiness, introspection, configuration and state.
+  description: >-
+    The canonical /_gostack routes. The LocalStack developer paths under
+    /_localstack stay available as aliases and answer with LocalStack's response
+    shapes, described in specs/localstack/openapi.yaml. The paths are unversioned:
+    a breaking change adds the new form, migrates callers, then deletes the old one.
+  version: latest
+servers:
+  - url: http://{host}:{port}
+    variables:
+      host:
+        default: localhost
+      port:
+        default: '4566'
+paths:
+  /_gostack/health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+    head:
+      operationId: headHealth
+      summary: Liveness probe without a body.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The process is alive.
+    post:
+      operationId: manageHealth
+      summary: Restart or stop the process.
+      description: >-
+        restart signals the PID 1 supervisor, which restarts the child process.
+        Without a supervisor it logs a warning and does nothing. kill exits the
+        process with code 0. Any other action answers 200 and does nothing.
+      tags: [gostack]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  examples: [restart, kill]
+              required: [action]
+      responses:
+        '200':
+          description: The action was accepted.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          description: The body is empty or is not a JSON object.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /_gostack/ready:
+    get:
+      operationId: getReady
+      summary: Readiness probe.
+      description: 200 after the ready.d hooks finish, 503 before.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The ready hooks have finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: The process is still starting.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+    head:
+      operationId: headReady
+      summary: Readiness probe without a body.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The ready hooks have finished.
+        '503':
+          description: The process is still starting.
+  /_gostack/info:
+    get:
+      operationId: getInfo
+      summary: Version, uptime and a summary of the configuration.
+      tags: [gostack]
+      responses:
+        '200':
+          description: Information about this process.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Info'
+  /_gostack/init:
+    get:
+      operationId: getInit
+      summary: The status of every init hook, by stage.
+      tags: [gostack]
+      responses:
+        '200':
+          description: Hook status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Init'
+  /_gostack/config:
+    get:
+      operationId: getConfig
+      summary: Every setting by its LocalStack name.
+      description: Mounted only when GOSTACK_ENABLE_CONFIG_UPDATES or ENABLE_CONFIG_UPDATES is set.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+    post: &updateConfig
+      operationId: updateConfig
+      summary: Change one setting at runtime, without a restart.
+      description: >-
+        Mounted only when GOSTACK_ENABLE_CONFIG_UPDATES or ENABLE_CONFIG_UPDATES is
+        set. A number written as a string counts as a number. A null value changes
+        nothing. A variable gostack does not know is stored and reported back, but
+        nothing reads it. The parity harness posts SQS_ENDPOINT_STRATEGY,
+        SQS_DELAY_RECENTLY_DELETED and INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE here.
+      tags: [gostack]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigUpdate'
+      responses:
+        '200':
+          description: The setting now in force.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigValue'
+        '400':
+          description: The variable name is invalid or the value cannot be parsed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      <<: *updateConfig
+      operationId: patchConfig
+  /_gostack/services:
+    get:
+      operationId: getServices
+      summary: The operations each service implements, and how many its API has.
+      tags: [gostack]
+      responses:
+        '200':
+          description: Capabilities by service.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Services'
+  /_gostack/state/reset:
+    post:
+      operationId: resetState
+      summary: Wipe in-memory state without a restart.
+      tags: [gostack]
+      parameters:
+        - in: query
+          name: service
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: account
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: region
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The operation finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateDone'
+        '404':
+          description: The operation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: The operation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /_gostack/state/save:
+    post:
+      operationId: saveState
+      summary: Write state to disk now.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The operation finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateDone'
+        '501':
+          description: The operation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /_gostack/state/load:
+    post:
+      operationId: loadState
+      summary: Read state from disk now.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The operation finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateDone'
+        '501':
+          description: The operation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /_gostack/openapi.yaml:
+    get:
+      operationId: getOpenAPI
+      summary: This document.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  schemas:
+    StateDone:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          const: ok
+      required: [status]
+    Error:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+      required: [error]
+    Health:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          const: ok
+        version:
+          type: string
+        services:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              state:
+                type: string
+                description: available, running, disabled, error and so on.
+              persisted:
+                type: boolean
+            required: [state, persisted]
+      required: [status, version, services]
+    Readiness:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          enum: [ready, starting]
+      required: [status]
+    Info:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        uptime_seconds:
+          type: integer
+        system:
+          type: string
+        is_docker:
+          type: boolean
+        session_id:
+          type: string
+        machine_id:
+          type: string
+        config:
+          type: object
+          description: A summary of non-sensitive settings, by LocalStack name.
+      required: [version, started_at, uptime_seconds, system, is_docker, session_id, machine_id, config]
+    InitScript:
+      type: object
+      additionalProperties: false
+      properties:
+        stage:
+          enum: [BOOT, START, READY, SHUTDOWN]
+        name:
+          type: string
+        state:
+          enum: [UNKNOWN, RUNNING, SUCCESSFUL, ERROR]
+      required: [stage, name, state]
+    InitStage:
+      type: object
+      additionalProperties: false
+      properties:
+        completed:
+          type: boolean
+        scripts:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitScript'
+      required: [completed, scripts]
+    Init:
+      type: object
+      additionalProperties: false
+      properties:
+        stages:
+          type: object
+          additionalProperties: false
+          properties:
+            BOOT:
+              $ref: '#/components/schemas/InitStage'
+            START:
+              $ref: '#/components/schemas/InitStage'
+            READY:
+              $ref: '#/components/schemas/InitStage'
+            SHUTDOWN:
+              $ref: '#/components/schemas/InitStage'
+          required: [BOOT, START, READY, SHUTDOWN]
+      required: [stages]
+    ConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        variable:
+          type: string
+          pattern: ^[_a-zA-Z0-9]+$
+        value:
+          type: [number, string, boolean, 'null']
+      required: [variable]
+    ConfigValue:
+      type: object
+      additionalProperties: false
+      properties:
+        variable:
+          type: string
+        value:
+          type: [number, string, boolean, array, 'null']
+      required: [variable, value]
+    Services:
+      type: object
+      additionalProperties: false
+      properties:
+        services:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              implemented:
+                type: integer
+                description: The number of operations implemented.
+              total:
+                type: integer
+                description: The number of operations in the service's API.
+              operations:
+                type: array
+                description: The implemented operations, sorted.
+                items:
+                  type: string
+            required: [implemented, total, operations]
+      required: [services]

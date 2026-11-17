@@ -1,0 +1,30 @@
+package config
+
+// The LocalStack names of the variables Load reads.
+const (
+	varGatewayListen                   = "GATEWAY_LISTEN"
+	varLocalstackHost                  = "LOCALSTACK_HOST"
+	varServices                        = "SERVICES"
+	varEagerServiceLoading             = "EAGER_SERVICE_LOADING"
+	varDebug                           = "DEBUG"
+	varLSLog                           = "LS_LOG"
+	varLog                             = "LOG"
+	varPersistence                     = "PERSISTENCE"
+	varSQSEndpointStrategy             = "SQS_ENDPOINT_STRATEGY"
+	varSQSDelayRecentlyDeleted         = "SQS_DELAY_RECENTLY_DELETED"
+	varSQSEnableMessageRetentionPeriod = "SQS_ENABLE_MESSAGE_RETENTION_PERIOD"
+	varSQSDelayPurgeRetry              = "SQS_DELAY_PURGE_RETRY"
+	varFailFast                        = "FAIL_FAST"
+	varIncludeStackTraces              = "INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE"
+	varEnableConfigUpdates             = "ENABLE_CONFIG_UPDATES"
+	varCompatPaths                     = "COMPAT_PATHS"
+	varResponseHeaderEnabled           = "LOCALSTACK_RESPONSE_HEADER_ENABLED"
+	varCustomSSLCertPath               = "CUSTOM_SSL_CERT_PATH"
+	varShutdownTimeout                 = "SHUTDOWN_TIMEOUT"
+	varDisableCORSChecks               = "DISABLE_CORS_CHECKS"
+	varDisableCORSHeaders              = "DISABLE_CORS_HEADERS"
+	varExtraCORSAllowedHeaders         = "EXTRA_CORS_ALLOWED_HEADERS"
+	varExtraCORSExposeHeaders          = "EXTRA_CORS_EXPOSE_HEADERS"
+	varExtraCORSAllowedOrigins         = "EXTRA_CORS_ALLOWED_ORIGINS"
+	varOverrideInDocker                = "OVERRIDE_IN_DOCKER"
+)
