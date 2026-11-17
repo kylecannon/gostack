@@ -17,6 +17,13 @@ import (
 var version = "dev"
 
 func main() {
+	// The status command is the image HEALTHCHECK. It runs before anything that
+	// loads the configuration, serves, or supervises.
+	code, isStatus := statusMain(context.Background(), os.Args[1:], os.Stdout, os.Stderr)
+	if isStatus {
+		os.Exit(code)
+	}
+
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 

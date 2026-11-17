@@ -205,6 +205,20 @@ func Test_gostack_smoke(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, status)
 	})
 
+	t.Run("status services reports the running server, as gostack and as localstack", func(t *testing.T) {
+		listen := strings.TrimPrefix(g.base, "http://")
+
+		for _, bin := range []string{binary, localstackLink(t)} {
+			stdout, stderr, code := statusBinary(t, bin, listen, cmdStatus, cmdServices, jsonArg)
+
+			require.Equal(t, 0, code, stderr)
+
+			var services map[string]any
+
+			require.NoError(t, json.Unmarshal([]byte(stdout), &services), stdout)
+		}
+	})
+
 	t.Run("SIGTERM ends the process cleanly", func(t *testing.T) {
 		require.NoError(t, g.cmd.Process.Signal(syscall.SIGTERM))
 
