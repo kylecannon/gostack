@@ -30,7 +30,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	regs := registrations()
+	regs := registrations(cfg)
 	eng := persist.New(cfg.PersistConfig(serviceNames(regs)...))
 
 	snapshots := snapshotters()

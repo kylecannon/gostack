@@ -1,14 +1,19 @@
 package main
 
 import (
+	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/sts"
 )
 
 // registrations lists the services the gateway serves. Each service ticket
-// adds one line here, for example `sts.Registration(...)`.
-func registrations() []service.Registration {
-	return nil
+// adds one line here. A service reads its settings through cfg on each call,
+// so an update through /_localstack/config reaches it.
+func registrations(cfg *config.Config) []service.Registration {
+	return []service.Registration{
+		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
+	}
 }
 
 // snapshotters lists the persistence hook of each service that keeps state, by
