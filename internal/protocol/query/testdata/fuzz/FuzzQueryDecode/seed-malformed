@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Int=99999999999&Flag=maybe&Data=%25&When=never&Dbl=NaN&Items.member.10.Key=far&=&&Name.=x&.1=y&Attr.0.N=z")

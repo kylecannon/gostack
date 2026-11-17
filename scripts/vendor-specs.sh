@@ -11,26 +11,43 @@
 #     sqs-query service-2.json and openapi.yaml. They are read from that commit
 #     with `git show`, never from the working tree, so local edits cannot leak
 #     into specs/.
+#   - botocore 1.42.59 tag tarball from GitHub: the protocol conformance
+#     fixtures tests/unit/protocols/{input,output}/{query,json}.json and the
+#     protocol-tests-ignore-list.json beside them. The wheel does not ship
+#     tests. They go to internal/protocol/testdata/botocore/, which the codec
+#     conformance tests in internal/protocol/{query,awsjson} read.
 #
-# Idempotent: specs/botocore and specs/localstack are rebuilt from scratch on
-# every run, so a re-run over unchanged sources leaves no git diff. Everything
-# is staged in a temp directory first and specs/ is replaced only after every
-# step has succeeded, so a failure partway leaves specs/ untouched. Nothing
-# from the downloaded wheel is executed; it is only read as a zip archive.
+# Idempotent: specs/botocore, specs/localstack and the fixture directory are
+# rebuilt from scratch on every run, so a re-run over unchanged sources leaves
+# no git diff. Everything is staged in a temp directory first and the
+# destinations are replaced only after every step has succeeded, so a failure
+# partway leaves them untouched. Nothing from the downloaded wheel or tarball
+# is executed; the wheel is only read as a zip archive and only named members
+# are extracted from the tarball.
 #
 # specs/SOURCES.lock format: plain text, one record per line, '#' starts a
 # comment. Records:
 #   botocore_version <version>
 #   botocore_wheel_sha256 <sha256 of the downloaded wheel>
+#   botocore_tarball_sha256 <sha256 of the downloaded tag tarball>
 #   localstack_repo <url>
 #   localstack_sha <full 40-char commit sha>
 #   moto_ext_version <exact moto-ext version in LocalStack's requirements-runtime.txt>
 #   file <sha256> <path relative to specs/>     (one per vendored file, sorted by path)
+#   fixture <sha256> <path relative to the repo root>   (one per fixture, sorted by path)
 set -euo pipefail
 
 BOTOCORE_VERSION=1.42.59
+BOTOCORE_TARBALL_URL=https://github.com/boto/botocore/archive/refs/tags/$BOTOCORE_VERSION.tar.gz
 LOCALSTACK_REPO=https://github.com/localstack/localstack.git
 LOCALSTACK_SHA_PREFIX=8b9a79f05
+
+# Fixtures taken from the tarball, relative to tests/unit/protocols/.
+FIXTURES=(
+  input/json.json input/query.json output/json.json output/query.json
+  protocol-tests-ignore-list.json
+)
+FIXTURE_DIR=internal/protocol/testdata/botocore
 
 # botocore service names (lambda_ -> lambda, resource_groups -> resource-groups,
 # config -> config), plus apigatewayv2 because spec-patches.json patches it.
@@ -111,6 +128,18 @@ for svc in services:
         f.write(data)
 PY
 
+# Download the tag tarball and take the protocol fixtures out of it, by name.
+TARBALL="$TMP/botocore-$BOTOCORE_VERSION.tar.gz"
+curl -fsSL --retry 3 -o "$TARBALL" "$BOTOCORE_TARBALL_URL"
+FIXTURE_STAGE="$TMP/fixtures"
+mkdir -p "$FIXTURE_STAGE"
+members=()
+for f in "${FIXTURES[@]}"; do members+=("botocore-$BOTOCORE_VERSION/tests/unit/protocols/$f"); done
+tar -xzf "$TARBALL" -C "$FIXTURE_STAGE" --strip-components=4 "${members[@]}"
+for f in "${FIXTURES[@]}"; do
+  [ -s "$FIXTURE_STAGE/$f" ] || { echo "fixture $f missing from the botocore tarball" >&2; exit 1; }
+done
+
 ls_show "$LS_SRC/aws/spec-patches.json" >"$STAGE/localstack/spec-patches.json"
 ls_show "$LS_SRC/aws/data/sqs-query/2012-11-05/service-2.json" >"$STAGE/localstack/sqs-query/2012-11-05/service-2.json"
 ls_show "$LS_SRC/openapi.yaml" >"$STAGE/localstack/openapi.yaml"
@@ -120,17 +149,23 @@ ls_show "$LS_SRC/openapi.yaml" >"$STAGE/localstack/openapi.yaml"
   echo "# specs/SOURCES.lock, written by scripts/vendor-specs.sh. Do not edit by hand."
   echo "botocore_version $BOTOCORE_VERSION"
   echo "botocore_wheel_sha256 $(sha256 "$WHEEL")"
+  echo "botocore_tarball_sha256 $(sha256 "$TARBALL")"
   echo "localstack_repo $LOCALSTACK_REPO"
   echo "localstack_sha $LS_SHA"
   echo "moto_ext_version $MOTO_EXT_VERSION"
   (cd "$STAGE" && find botocore localstack -type f | LC_ALL=C sort) | while IFS= read -r f; do
     echo "file $(sha256 "$STAGE/$f") $f"
   done
+  (cd "$FIXTURE_STAGE" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | while IFS= read -r f; do
+    echo "fixture $(sha256 "$FIXTURE_STAGE/$f") $FIXTURE_DIR/$f"
+  done
 } >"$STAGE/SOURCES.lock"
 
-# Every step succeeded: replace specs/ from the staged copy.
-mkdir -p "$SPECS"
-rm -rf "$SPECS/botocore" "$SPECS/localstack"
+# Every step succeeded: replace specs/ and the fixtures from the staged copies.
+mkdir -p "$SPECS" "$ROOT/$FIXTURE_DIR"
+rm -rf "$SPECS/botocore" "$SPECS/localstack" "$ROOT/$FIXTURE_DIR"
 cp -R "$STAGE/botocore" "$STAGE/localstack" "$STAGE/SOURCES.lock" "$SPECS/"
+cp -R "$FIXTURE_STAGE" "$ROOT/$FIXTURE_DIR"
 
-echo "vendored $(find "$SPECS" -type f | wc -l | tr -d ' ') files into $SPECS"
+echo "vendored $(find "$SPECS" -type f | wc -l | tr -d ' ') files into $SPECS" \
+  "and $(find "$ROOT/$FIXTURE_DIR" -type f | wc -l | tr -d ' ') fixtures into $ROOT/$FIXTURE_DIR"

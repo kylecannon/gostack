@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Str\":\"a\",\"Int\":1,\"Long\":-9,\"Dbl\":1.5,\"Flag\":true,\"Data\":\"aGk=\",\"When\":946845296.5}")

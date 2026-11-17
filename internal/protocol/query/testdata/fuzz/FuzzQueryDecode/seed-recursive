@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Tree.Label=root&Tree.Child.Label=c&Tree.Child.Child.Label=cc&Tree.kid.member.1.Label=k&Tree.kid.member.1.Child.Label=kc")

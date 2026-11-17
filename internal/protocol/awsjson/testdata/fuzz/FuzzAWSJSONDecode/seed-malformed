@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Int\":99999999999,\"Flag\":\"yes\",\"Data\":\"%\",\"When\":\"never\",\"Names\":[1,null],\"str\":\"case\",\"Nested\":{\"Nested\":{\"Str\":\"deep\"}}")
