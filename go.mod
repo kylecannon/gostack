@@ -7,6 +7,7 @@ toolchain go1.26.11
 require (
 	github.com/bytedance/sonic v1.15.5
 	github.com/go-chi/chi/v5 v5.5.0
+	github.com/go-chi/cors v1.2.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
