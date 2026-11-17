@@ -7,8 +7,10 @@
 #     botocore ships several api-versions the latest one is taken.
 #   - LocalStack checkout at ${LOCALSTACK_DIR:-../localstack}, which must be at
 #     a commit starting with 8b9a79f05 (default: ../localstack, or next to the
-#     main checkout when run from a linked worktree): spec-patches.json, the sqs-query
-#     service-2.json and openapi.yaml.
+#     main checkout when run from a linked worktree): spec-patches.json, the
+#     sqs-query service-2.json and openapi.yaml. They are read from that commit
+#     with `git show`, never from the working tree, so local edits cannot leak
+#     into specs/.
 #
 # Idempotent: specs/botocore and specs/localstack are rebuilt from scratch on
 # every run, so a re-run over unchanged sources leaves no git diff. Nothing
@@ -61,8 +63,10 @@ case "$LS_SHA" in
   "$LOCALSTACK_SHA_PREFIX"*) ;;
   *) echo "LocalStack at $LOCALSTACK_DIR is $LS_SHA, expected $LOCALSTACK_SHA_PREFIX*" >&2; exit 1 ;;
 esac
-LS_SRC="$LOCALSTACK_DIR/localstack-core/localstack"
-grep -q "moto-ext\[all\]$MOTO_EXT_MIN" "$LOCALSTACK_DIR/pyproject.toml" ||
+LS_SRC=localstack-core/localstack
+ls_show() { git -C "$LOCALSTACK_DIR" show "$LS_SHA:$1"; }
+PYPROJECT=$(ls_show pyproject.toml)
+grep -q "moto-ext\[all\]$MOTO_EXT_MIN" <<<"$PYPROJECT" ||
   { echo "moto-ext minimum in LocalStack pyproject.toml is not $MOTO_EXT_MIN" >&2; exit 1; }
 
 TMP=$(mktemp -d)
@@ -104,9 +108,9 @@ for svc in services:
         f.write(data)
 PY
 
-cp "$LS_SRC/aws/spec-patches.json" "$SPECS/localstack/spec-patches.json"
-cp "$LS_SRC/aws/data/sqs-query/2012-11-05/service-2.json" "$SPECS/localstack/sqs-query/2012-11-05/service-2.json"
-cp "$LS_SRC/openapi.yaml" "$SPECS/localstack/openapi.yaml"
+ls_show "$LS_SRC/aws/spec-patches.json" >"$SPECS/localstack/spec-patches.json"
+ls_show "$LS_SRC/aws/data/sqs-query/2012-11-05/service-2.json" >"$SPECS/localstack/sqs-query/2012-11-05/service-2.json"
+ls_show "$LS_SRC/openapi.yaml" >"$SPECS/localstack/openapi.yaml"
 
 # Write the lock file.
 {

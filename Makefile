@@ -1,7 +1,10 @@
-# Pinned to a go1.26 patch: golangci-lint 2.12 is built with go1.26.2 and sonic
-# (arriving in Phase 1) supports Go 1.26 at most. Keep ci.yml and
-# .agentic-quality in step when this moves.
-GOTOOLCHAIN = go1.26.11
+# The Go toolchain is pinned by the `toolchain` line in go.mod, the only place
+# the version is written. CI's setup-go reads it from there. Exporting it here
+# gives every go command below, including `go tool golangci-lint`, that same
+# release, and overrides the GOTOOLCHAIN=local that setup-go sets. The pin
+# stays on go1.26 because sonic (arriving in Phase 1) supports Go 1.26 at most.
+# Raise it with the `go` directive once sonic supports the newer release.
+GOTOOLCHAIN := $(shell sed -n 's/^toolchain //p' go.mod)
 export GOTOOLCHAIN
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -14,10 +17,10 @@ PKGS ?= ./...
 .PHONY: fmt lint test build
 
 fmt:
-	golangci-lint fmt $(FMT_ARGS)
+	go tool golangci-lint fmt $(FMT_ARGS)
 
 lint:
-	golangci-lint run $(PKGS)
+	go tool golangci-lint run $(PKGS)
 
 test:
 	go test -race $(PKGS)

@@ -1,6 +1,7 @@
 # Pre-commit gate, read by agentic-harness/.agentic/hooks/pre-commit.
 # Every rule is scoped to the staged Go files. The make targets carry the
-# GOTOOLCHAIN pin, so the toolchain is stated in one place.
+# toolchain pin (see the Makefile). A commit with no buildable Go package
+# staged skips lint and test.
 fmt [*.go]: make fmt FMT_ARGS="--diff {staged}"
-lint [*.go]: make lint PKGS="$(scripts/go-packages.sh {staged})"
-test [*.go]: make test PKGS="$(scripts/go-packages.sh {staged})"
+lint [*.go]: p=$(scripts/go-packages.sh {staged}); test -z "$p" || make lint PKGS="$p"
+test [*.go]: p=$(scripts/go-packages.sh {staged}); test -z "$p" || make test PKGS="$p"

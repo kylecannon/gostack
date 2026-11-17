@@ -8,10 +8,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # Same pin as the Makefile. Keep them in step.
-  GOTOOLCHAIN: go1.26.11
-
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -20,9 +16,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.12
+          cache: true
+      - run: make lint
 
   test:
     runs-on: ubuntu-latest
@@ -31,7 +26,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go test -race ./...
+          cache: true
+      - run: make test
 
   build:
     runs-on: ubuntu-latest
@@ -40,4 +36,5 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go build -o bin/gostack ./cmd/gostack
+          cache: true
+      - run: make build

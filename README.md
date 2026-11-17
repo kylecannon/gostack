@@ -18,8 +18,9 @@ services:
       - "4566:4566"
 ```
 
-The readiness probe is `GET /_gostack/health`. `/_localstack/health` also
-works and returns LocalStack's response shape.
+`GET /_gostack/health` is the liveness probe. `GET /_gostack/ready` is the
+readiness probe and waits for the `ready.d` hooks to finish.
+`/_localstack/health` also works and returns LocalStack's response shape.
 
 ## Building
 
@@ -27,7 +28,8 @@ works and returns LocalStack's response shape.
 make fmt lint test build
 ```
 
-`make` pins the Go toolchain; see `docs/standards.md` for the gates.
+The Makefile sets the Go toolchain from `go.mod`. `docs/standards.md` lists
+the gates.
 
 ## Documentation
 
