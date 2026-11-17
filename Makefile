@@ -36,7 +36,19 @@ GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
 PARITY_BASE ?= HEAD
 export SERVICES GOSTACK_IMAGE
 
-.PHONY: fmt lint test build tidy-check toolchain packages parity parity-baseline parity-check
+
+comma := ,
+space := $(subst ,, )
+
+# The services gen regenerates, as botocore service names. A later service adds
+# its name here and an entry in codegen/cmd/gostack-codegen/config.go.
+GEN_SERVICES ?= sts sqs
+
+# How long each fuzz target runs under `make fuzz`.
+FUZZTIME ?= 30s
+
+
+.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -54,6 +66,23 @@ build:
 tidy-check:
 	go mod tidy -diff
 	go -C tools mod tidy -diff
+
+# Regenerates internal/api/<service> from the vendored specs.
+gen:
+	go run ./codegen/cmd/gostack-codegen -services $(subst $(space),$(comma),$(strip $(GEN_SERVICES)))
+
+# Fails when regenerating changes internal/api: a modified file, or a generated
+# file that is not tracked yet, which git diff alone would not show.
+gen-check: gen
+	git diff --exit-code -- internal/api
+	@untracked=$$(git ls-files --others --exclude-standard -- internal/api); \
+	if [ -n "$$untracked" ]; then echo "untracked generated files:" >&2; echo "$$untracked" >&2; exit 1; fi
+
+# Runs each fuzz target for FUZZTIME. go test accepts one -fuzz target and one
+# package at a time, so each target has its own invocation.
+fuzz:
+	go test -run '^$$' -fuzz '^FuzzQueryDecode$$' -fuzztime $(FUZZTIME) ./internal/protocol/query
+	go test -run '^$$' -fuzz '^FuzzAWSJSONDecode$$' -fuzztime $(FUZZTIME) ./internal/protocol/awsjson
 
 # Prints the pinned toolchain, for `export GOTOOLCHAIN=$(make -s toolchain)`.
 toolchain:
