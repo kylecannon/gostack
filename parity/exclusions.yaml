@@ -1,0 +1,65 @@
+# Tests the parity runner does not run, with the reason for each.
+#
+# Format: "nodeid pattern": reason
+#
+# A pattern is a pytest nodeid, optionally with `*` wildcards. Without a
+# wildcard it matches that nodeid and every parametrization of it
+# (`...::test_x` covers `...::test_x[a]` and `...::test_x[b]`). parity/pytest_gostack.py
+# skips the matching tests with the reason `excluded: <reason>` and records them in
+# the ledger as `excluded` for both columns, so they stay visible.
+#
+# Reasons in use:
+#   requires_in_process     marked so in LocalStack; it patches state inside the
+#                           server process, which no external container can reach.
+#                           Tests carrying the marker are always excluded, listed or not.
+#   hard-skipped            LocalStack's own source skips the test unconditionally.
+#   depends-on:<service>    needs a service outside the current scope.
+#   engine-deferred         needs a real engine (OpenSearch, Transcribe) that gostack defers.
+#   runner-docker           needs Docker from inside the runner.
+#
+# Adding an entry for a test that passes is a deferral, not a fix. parity-check
+# warns when a passing test turns into an exclusion.
+
+# --- requires_in_process: sqs ---------------------------------------------
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_get_queue_url_contains_localstack_host": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted_cache": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_with_inflight": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_endpoint": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_hostname_via_host_header": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_successive_purge_calls_fail": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_without_endpoint_strategy": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_with_endpoint_strategy_domain": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_endpoint_strategy_with_multi_region[off]": requires_in_process
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_queue_url_format_path_strategy": requires_in_process
+
+# --- hard-skipped: sqs ----------------------------------------------------
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_with_default_arguments_works_with_modified_attributes": hard-skipped (localstack/localstack#5938)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_after_modified_attributes": hard-skipped (localstack/localstack#5938)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_delete_message_batch_from_lambda": hard-skipped (needs AWS fixing, fails against LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_fifo_delete_message_with_expired_receipt_handle": hard-skipped (not implemented in LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_redrive_policy_attribute_validity": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_invalid_dead_letter_arn_rejected_before_lookup": hard-skipped (behavior not implemented yet)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_send_message_with_invalid_fifo_parameters": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_dead_letter_queue_chain": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_disallow_queue_name_with_slashes": hard-skipped (LocalStack allows slashes in queue names)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_dead_letter_queue_execution_lambda_mapping_preserves_id": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_deduplication_interval": hard-skipped (needs 5 minutes, manual only)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_sse_kms_and_sqs_are_mutually_exclusive": hard-skipped (validation not implemented in LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_get_list_queues_fails_json_format": hard-skipped (json serialization not supported yet)
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_get_queue_attributes_json_format": hard-skipped (json serialization not supported yet)
+
+# --- depends-on:cloudformation: sqs ---------------------------------------
+# The resource-provider tests deploy CloudFormation templates. CloudFormation
+# is outside the SQS + STS scope.
+"tests/aws/services/sqs/resource_providers/*": depends-on:cloudformation
+
+# --- depends-on:iam: sts --------------------------------------------------
+# These five need IAM (create_role, create_user, create_access_key, put_role_policy).
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_role": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_user_access_key": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_role_access_key": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_iam_role_chaining_override_transitive_tags": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_assume_role_tag_validation": depends-on:iam

@@ -26,7 +26,17 @@ FMT_ARGS ?=
 PKGS ?= ./...
 FILES ?=
 
-.PHONY: fmt lint test build tidy-check toolchain packages
+# Parity oracle (docs/architecture.md, "Parity oracle"). Needs Docker.
+#   make parity-baseline SERVICES=sqs,sts   LocalStack's own result, built from the pinned checkout
+#   make parity SERVICES=sqs,sts            the same suite against GOSTACK_IMAGE
+#   make parity-check                       fail when a test that passed in the committed ledger now fails
+# Both runs merge into parity/ledger.json and rewrite docs/parity.md.
+SERVICES ?= sqs,sts
+GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
+PARITY_BASE ?= HEAD
+export SERVICES GOSTACK_IMAGE
+
+.PHONY: fmt lint test build tidy-check toolchain packages parity parity-baseline parity-check
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -53,3 +63,13 @@ toolchain:
 # script runs under the pinned toolchain. Exits non-zero when go list fails.
 packages:
 	@scripts/go-packages.sh $(FILES)
+
+parity:
+	parity/run.sh gostack
+
+parity-baseline:
+	parity/run.sh localstack
+
+# Compares the working-tree ledger with the one at PARITY_BASE (default HEAD).
+parity-check:
+	python3 parity/ledger.py check --base $(PARITY_BASE)
