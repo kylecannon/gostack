@@ -101,7 +101,7 @@ internal/
   config/                    viper-backed LocalStack env vars and their lookup order, PERSIST_* validator, config updates
   store/                     Bundle[State] (account x region), cross-region and cross-account attributes
   persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats
-  runtime/                   lifecycle, init hooks (boot/start/ready/shutdown .d, .sh/.py as subprocesses), startup warnings, "Ready." marker, signals
+  lifecycle/                 lifecycle, init hooks (boot/start/ready/shutdown .d, .sh/.py as subprocesses), startup warnings, "Ready." marker, signals
   internalapi/               /_gostack/* canonical handlers, /_localstack/* and /_aws/* developer aliases, always-on protocol paths
   dns/                       DNS server for *.localhost.localstack.cloud (DNS_ADDRESS=0 disables it)
   container/                 Lambda container lifecycle on the moby client
@@ -350,10 +350,10 @@ Tests split along the same line:
      is how containerd marks a container.
   The result picks the `GATEWAY_LISTEN` host default.
 - **Entrypoint.** The image runs the gostack binary directly. There is no
-  shell entrypoint. Startup is in `internal/config` and `internal/runtime`:
+  shell entrypoint. Startup is in `internal/config` and `internal/lifecycle`:
   - `internal/config` resolves env vars (see Other compatibility aliases).
-  - `internal/runtime` runs the `boot.d` hooks, then starts the gateway.
-  - `internal/runtime` also supervises. When gostack runs as PID 1, it starts
+  - `internal/lifecycle` runs the `boot.d` hooks, then starts the gateway.
+  - `internal/lifecycle` also supervises. When gostack runs as PID 1, it starts
     itself as a child process and acts as LocalStack's
     `bin/localstack-supervisor`:
     - It reaps zombie processes, including adopted ones.
@@ -365,7 +365,7 @@ Tests split along the same line:
     - It honors `SHUTDOWN_TIMEOUT` (default 5 seconds): a child still running
       after that is sent SIGKILL.
     - Under any other PID, gostack runs directly with no supervisor.
-  - `internal/runtime` also prints LocalStack's two entrypoint warnings: the
+  - `internal/lifecycle` also prints LocalStack's two entrypoint warnings: the
     community-image notice when `LOCALSTACK_AUTH_TOKEN` is unset, and the
     wrong-image notice when `LOCALSTACK_API_KEY` or `LOCALSTACK_AUTH_TOKEN` is
     set.
