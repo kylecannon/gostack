@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,13 @@ const (
 
 	targetSendMessage = "AmazonSQS.SendMessage"
 	opSendMessage     = "SendMessage"
+
+	valueTrue           = "true"
+	headerReferer       = "Referer"
+	headerRequestMethod = "Access-Control-Request-Method"
+	protoHTTP1          = "http1"
+	eventDataPlane      = "dataPlane"
+	eventPreprocess     = "preprocess"
 
 	allowOrigin = "Access-Control-Allow-Origin"
 	appOrigin   = "https://app.localstack.cloud"
@@ -174,6 +182,15 @@ func call(t *testing.T, h http.Handler, r *http.Request) (reply, string) {
 	require.NoError(t, err)
 
 	return reply{StatusCode: resp.StatusCode, Header: resp.Header}, string(body)
+}
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	t.Helper()
+
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+
+	return parsed
 }
 
 // rawHeader returns the values stored under name exactly as written, without

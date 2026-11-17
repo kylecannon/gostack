@@ -297,7 +297,7 @@ func Test_Gateway_noService(t *testing.T) {
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 			assert.JSONEq(t, `{"message": "Not Found"}`, body)
 			assert.Equal(t, "application/json", resp.Header.Get(headerType))
-			assert.Equal(t, []string{"true"}, rawHeader(resp.Header, "x-localstack"))
+			assert.Equal(t, []string{valueTrue}, rawHeader(resp.Header, "x-localstack"))
 		})
 	}
 }
