@@ -48,7 +48,17 @@ GEN_SERVICES ?= sts sqs
 FUZZTIME ?= 30s
 
 
-.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check
+# Container images, for the local architecture (docs/architecture.md, Container).
+#   make image        docker/Dockerfile      -> $(IMAGE)
+#   make image-slim   docker/Dockerfile.slim -> $(IMAGE_SLIM)
+# The release workflow builds the same files for amd64 and arm64.
+IMAGE ?= gostack:dev
+IMAGE_SLIM ?= $(IMAGE)-slim
+DOCKER ?= docker
+IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(VERSION)
+
+
+.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -102,3 +112,9 @@ parity-baseline:
 # Compares the working-tree ledger with the one at PARITY_BASE (default HEAD).
 parity-check:
 	python3 parity/ledger.py check --base $(PARITY_BASE)
+
+image:
+	$(DOCKER) build -f docker/Dockerfile $(IMAGE_BUILD_ARGS) -t $(IMAGE) .
+
+image-slim:
+	$(DOCKER) build -f docker/Dockerfile.slim $(IMAGE_BUILD_ARGS) -t $(IMAGE_SLIM) .

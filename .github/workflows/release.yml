@@ -1,0 +1,83 @@
+name: release
+
+# A v* tag publishes the full and slim images to ghcr.io, for amd64 and arm64:
+#   ghcr.io/kylecannon/gostack:<version>, :latest
+#   ghcr.io/kylecannon/gostack:<version>-slim, :latest-slim, :slim
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/kylecannon/gostack
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same pin the Makefile uses: the toolchain line of go.mod.
+      - id: pin
+        run: echo "toolchain=$(make -s toolchain)" >> "$GITHUB_OUTPUT"
+
+      - id: full
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - id: slim
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}},suffix=-slim
+            type=raw,value=latest-slim
+            type=raw,value=slim
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.full.outputs.tags }}
+          labels: ${{ steps.full.outputs.labels }}
+          build-args: |
+            GOTOOLCHAIN=${{ steps.pin.outputs.toolchain }}
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=full
+          cache-to: type=gha,scope=full,mode=max
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.slim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.slim.outputs.tags }}
+          labels: ${{ steps.slim.outputs.labels }}
+          build-args: |
+            GOTOOLCHAIN=${{ steps.pin.outputs.toolchain }}
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=slim
+          cache-to: type=gha,scope=slim,mode=max
