@@ -1,0 +1,43 @@
+package sqs_test
+
+// The names of the members, attributes and values that the tests write more
+// than once.
+const (
+	protoJSON  = "json"
+	protoQuery = "query"
+
+	paramAction         = "Action"
+	paramVersion        = "Version"
+	paramQueueURL       = "QueueUrl"
+	paramQueueName      = "QueueName"
+	paramAttributes     = "Attributes"
+	paramAttributeNames = "AttributeNames"
+	paramTags           = "Tags"
+	paramTagKeys        = "TagKeys"
+
+	attrAll                = "All"
+	attrVisibilityTimeout  = "VisibilityTimeout"
+	attrDelaySeconds       = "DelaySeconds"
+	attrFifoQueue          = "FifoQueue"
+	attrRedrivePolicy      = "RedrivePolicy"
+	attrQueueArn           = "QueueArn"
+	attrPolicy             = "Policy"
+	codeInvalidAttribute   = "InvalidAttributeName"
+	opSendMessage          = "SendMessage"
+	headerAuthorization    = "Authorization"
+	valueTrue              = "true"
+	tagTeam                = "team"
+	tagCost                = "cost"
+	formAttributeName1     = "AttributeName.1"
+	tagProd                = "prod"
+	opGetQueueAttributes   = "GetQueueAttributes"
+	tagEnv                 = "env"
+	labelFirst             = "first"
+	unknownAttribute       = "Bogus"
+	hostLocalstack         = "localhost:4566"
+	hostStandard           = "sqs.us-east-1.localhost.localstack.cloud:4566"
+	domainAmazon           = "amazonaws.com"
+	pathPlain              = "/000000000000/plain"
+	policyVersion          = "2008-10-17"
+	policyVersionAttribute = "Version"
+)

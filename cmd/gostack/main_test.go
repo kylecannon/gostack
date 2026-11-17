@@ -149,14 +149,16 @@ func Test_gostack_smoke(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, status)
 		assert.JSONEq(t, `{"status":"ok","version":"`+smokeVersion+
-			`","services":{"sts":{"state":"running","persisted":false}}}`, body)
+			`","services":{"sqs":{"state":"running","persisted":false},`+
+			`"sts":{"state":"running","persisted":false}}}`, body)
 	})
 
 	t.Run("the LocalStack health route has LocalStack's shape", func(t *testing.T) {
 		status, body := g.do(t, http.MethodGet, "/_localstack/health", "")
 
 		assert.Equal(t, http.StatusOK, status)
-		assert.JSONEq(t, `{"services":{"sts":"running"},"edition":"community","version":"`+smokeVersion+`"}`, body)
+		assert.JSONEq(t, `{"services":{"sqs":"running","sts":"running"},"edition":"community",`+
+			`"version":"`+smokeVersion+`"}`, body)
 	})
 
 	t.Run("the process reports ready once Ready. is printed", func(t *testing.T) {
