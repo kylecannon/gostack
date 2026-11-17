@@ -1,43 +1,127 @@
 version: "2"
 
 linters:
-  default: none
-  enable:
-    - bodyclose
-    - contextcheck
-    - errcheck
-    - errorlint
-    - exhaustive
-    - gocritic
-    - gosec
-    - govet
-    - ineffassign
-    - nilerr
-    - perfsprint
-    - revive
-    - staticcheck
-    - testifylint
-    - unparam
-    - unused
-    - usestdlibvars
+  default: all
+  # A linter is disabled only where it contradicts conventions-go.md or the AWS
+  # wire format. Everything else stays on and is configured below. Each comment
+  # quotes the conventions text the linter fights.
+  disable:
+    - cyclop # duplicates gocognit and gocyclo (gocyclo stays at its default of 30); a flat switch over a spec's type codes trips it with no nesting to simplify. Not a conventions rule
+    - depguard # conventions, opening list: "Standard library first. A dependency earns its place by doing what the standard library does not." Dependency control is go.mod review and the architecture.md dependency table
+    - err113 # conventions, Errors: "`%v` over `%w` when the wrapped error is an implementation detail." err113 wants a wrapped sentinel for every dynamic error
+    - exhaustruct # conventions, Types and zero values: "Design the zero value to be useful; add a constructor only where a non-zero default is required." Omitted fields are intended
+    - gochecknoglobals # conventions, Global state: "Global state only where logically constant, stateless, or free of external side effects." gochecknoglobals forbids all of it
+    - gomodguard # deprecated since v2.12.0; gomodguard_v2 replaces it and stays on
+    - nlreturn # conventions, Toolchain: "`golangci-lint fmt` formats". Blank-line layout is the formatter's job
+    - nonamedreturns # conventions, Declarations: "Name result parameters only to document a caller obligation, never for a naked return." nonamedreturns forbids the obligation case too
+    - paralleltest # conventions, Testing: "Use the self-undoing helpers: `t.TempDir()`, `t.Setenv()`, `t.Chdir()`". t.Chdir and t.Setenv panic under t.Parallel, and paralleltest demands t.Parallel in every test. tparallel stays on
+    - tagliatelle # AWS wire format: JSON and XML tags keep AWS casing (PascalCase, camelCase, mixed per service)
+    - thelper # conventions, Testing: "`t.Helper()` in setup helpers, never in assertion wrappers." thelper requires it in every helper
+    - varnamelen # conventions, Testing: "Table tests: slice `tests`, case `tt`". varnamelen flags `tt`
+    - wsl # conventions, Toolchain: "`golangci-lint fmt` formats". Blank-line layout is the formatter's job
+    - wsl_v5 # conventions, Toolchain: "`golangci-lint fmt` formats". Blank-line layout is the formatter's job
   settings:
     exhaustive:
       default-signifies-exhaustive: true
+    forbidigo:
+      forbid:
+        - pattern: ^(fmt\.Print(|f|ln)|print|println)$
+    funlen:
+      lines: 60
+      statements: 40
+    gocognit:
+      min-complexity: 30
+    gosec:
+      excludes:
+        - G104 # unhandled errors are errcheck's job
     govet:
       enable-all: true
       disable:
         - fieldalignment
-    gosec:
-      excludes:
-        - G104 # unhandled errors are errcheck's job
+    inamedparam:
+      # conventions, Configuration: "`type Option interface{ apply(*options) }`" has
+      # one unnamed parameter by design.
+      skip-single-param: true
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - generic
+        # conventions, Configuration: "`type Option interface{ apply(*options) }`" is the
+        # functional-options shape, and its constructors return that interface.
+        - Option$
+    lll:
+      line-length: 120
+    mnd:
+      ignored-functions:
+        - ^http\.(Error|StatusText)$ # HTTP status codes
+        - \.WriteHeader$ # HTTP status codes
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: add-constant # duplicates mnd and goconst
+          disabled: true
+        - name: cognitive-complexity # duplicates gocognit
+          disabled: true
+        - name: confusing-results # conventions, Declarations: "Name result parameters only to document a caller obligation, never for a naked return." confusing-results asks for named results on any pair of same-typed results
+          disabled: true
+        - name: cyclomatic # duplicates gocyclo
+          disabled: true
+        - name: error-naming # duplicates errname
+          disabled: true
+        - name: errorf # duplicates perfsprint
+          disabled: true
+        - name: file-header # duplicates goheader
+          disabled: true
+        - name: function-length # duplicates funlen
+          disabled: true
+        - name: line-length-limit # duplicates lll
+          disabled: true
+        - name: redefines-builtin-id # duplicates predeclared
+          disabled: true
+        - name: unchecked-type-assertion # duplicates forcetypeassert
+          disabled: true
+        - name: unhandled-error # duplicates errcheck
+          disabled: true
+        - name: use-errors-new # duplicates perfsprint
+          disabled: true
+    wrapcheck:
+      # conventions, Errors: "A contract requiring the bare sentinel — `io.EOF` from a
+      # `Reader` — returns it unwrapped." An io.Reader or io.Writer implementation
+      # returns the error of the Read or Write it delegates to as is. The regexp matches
+      # the called method's signature, e.g. `func (io.Reader).Read(...)` or
+      # `func (*bufio.Reader).Read(...)`. ignore-interface-regexps alone is not enough:
+      # it skips the interface-method report, and the external-package report still fires.
+      ignore-sig-regexps:
+        - ^func \(\*?(io|bufio)\.
   exclusions:
     generated: lax
     paths:
-      - internal/api
+      - (^|/)internal/api/ # generated code; anchored so internal/apiX packages stay linted
     rules:
+      # Not anchored to the start of the path: golangci-lint caches issues under
+      # absolute paths, so a checkout that shares a cache with another one sees
+      # /abs/path/cmd/..., and the generator's binary is codegen/cmd/gostack-codegen.
+      - path: (^|/)cmd/
+        linters:
+          - forbidigo
+        text: fmt\.Print # a binary prints to stdout; library packages do not
+      - path: _test\.go
+        linters:
+          - funlen
+        # conventions, Testing: "Every row exercises every field." A table test grows with its rows.
       - path: _test\.go
         linters:
           - gosec
+      - path: _test\.go
+        linters:
+          - revive
+        text: should not use dot imports # conventions: dot imports in test files only
 
 formatters:
   enable:
@@ -53,4 +137,4 @@ formatters:
   exclusions:
     generated: lax
     paths:
-      - internal/api
+      - (^|/)internal/api/ # generated code; anchored so internal/apiX packages stay linted
