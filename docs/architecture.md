@@ -43,6 +43,12 @@ When gostack passes every test but behaves differently from LocalStack:
    inferred rather than verified, and any range, limit or error code AWS
    doesn't document.
 
+4. When LocalStack's answer is a crash or a stuck state, gostack doesn't copy
+   it. A crash means an unhandled error surfacing as a 500; a stuck state means
+   a task left RUNNING forever. In that case gostack uses the inferred AWS answer
+   and `docs/compat.md` says so. The exception is a 500 that a parity test pins,
+   which stays.
+
 A gostack safety bound that is not API behavior, such as the request body cap,
 is decided case by case.
 
