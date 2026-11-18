@@ -1,8 +1,8 @@
 package query
 
 import (
-	"encoding/base64"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -18,7 +18,6 @@ const (
 	entryName   = "entry"
 	keyName     = "key"
 	valueName   = "value"
-	int32Bits   = 32
 	int64Bits   = 64
 	decimalBase = 10
 )
@@ -128,33 +127,38 @@ func (d *Decoder) String(key string) *string {
 }
 
 // Int32 returns the value of key as an int32, or nil when the request has none.
+// It reads what Python's int() reads, as LocalStack does: " 5", "+5" and
+// "1_0" are numbers. A value past the int32 range becomes the nearest bound,
+// so a range check on the member still refuses it.
 func (d *Decoder) Int32(key string) *int32 {
 	s := d.String(key)
 	if s == nil {
 		return nil
 	}
 
-	n, err := strconv.ParseInt(*s, decimalBase, int32Bits)
-	if err != nil {
+	n, ok := protocol.ParsePyInt(*s)
+	if !ok {
 		d.fail(key, *s)
 
 		return nil
 	}
 
-	v := int32(n)
+	v := int32(max(math.MinInt32, min(math.MaxInt32, n)))
 
 	return &v
 }
 
 // Int64 returns the value of key as an int64, or nil when the request has none.
+// It reads what Python's int() reads; a value past the int64 range becomes the
+// nearest bound.
 func (d *Decoder) Int64(key string) *int64 {
 	s := d.String(key)
 	if s == nil {
 		return nil
 	}
 
-	n, err := strconv.ParseInt(*s, decimalBase, int64Bits)
-	if err != nil {
+	n, ok := protocol.ParsePyInt(*s)
+	if !ok {
 		d.fail(key, *s)
 
 		return nil
@@ -164,15 +168,16 @@ func (d *Decoder) Int64(key string) *int64 {
 }
 
 // Float64 returns the value of key as a float64, or nil when the request has
-// none. "NaN", "Infinity" and "-Infinity" are accepted.
+// none. It reads what Python's float() reads, which includes "NaN", "Infinity"
+// and "-Infinity".
 func (d *Decoder) Float64(key string) *float64 {
 	s := d.String(key)
 	if s == nil {
 		return nil
 	}
 
-	f, err := strconv.ParseFloat(*s, int64Bits)
-	if err != nil {
+	f, ok := protocol.ParsePyFloat(*s)
+	if !ok {
 		d.fail(key, *s)
 
 		return nil
@@ -206,14 +211,16 @@ func (d *Decoder) Bool(key string) *bool {
 }
 
 // Blob returns the base64-decoded value of key, or nil when the request has none.
+// It reads what Python's b64decode() reads, as LocalStack does: characters
+// outside the alphabet are skipped and text after a completing "=" is ignored.
 func (d *Decoder) Blob(key string) []byte {
 	s := d.String(key)
 	if s == nil {
 		return nil
 	}
 
-	b, err := base64.StdEncoding.DecodeString(*s)
-	if err != nil {
+	b, ok := protocol.ParsePyBase64(*s)
+	if !ok {
 		d.fail(key, *s)
 
 		return nil

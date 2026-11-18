@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // options are the encoding/json/v2 settings of every encode and decode here.
@@ -22,7 +23,13 @@ import (
 //     "-Infinity", as AWS json writes them.
 var options = json.JoinOptions(
 	json.WithMarshalers(json.MarshalToFunc(marshalNonFinite)),
-	json.WithUnmarshalers(json.UnmarshalFromFunc(unmarshalNonFinite)),
+	json.WithUnmarshalers(json.JoinUnmarshalers(
+		json.UnmarshalFromFunc(unmarshalNonFinite),
+		json.UnmarshalFromFunc(unmarshalInt32),
+		json.UnmarshalFromFunc(unmarshalInt64),
+		json.UnmarshalFromFunc(unmarshalBool),
+		json.UnmarshalFromFunc(unmarshalBlob),
+	)),
 	json.FormatNilSliceAsNull(true),
 	json.FormatNilMapAsNull(true),
 	jsontext.AllowDuplicateNames(true),
@@ -43,8 +50,10 @@ func marshalNonFinite(enc *jsontext.Encoder, f float64) error {
 	return errors.ErrUnsupported
 }
 
-// unmarshalNonFinite reads a float written as a name, and leaves a number to
-// the default decoding.
+// unmarshalNonFinite reads a float written as a string, and leaves a number to
+// the default decoding. A string is read as Python's float() reads it, which is
+// what LocalStack does: "NaN", "Infinity" and "-Infinity", but also "5" and
+// "1_0".
 func unmarshalNonFinite(dec *jsontext.Decoder, f *float64) error {
 	if dec.PeekKind() != '"' {
 		return errors.ErrUnsupported
@@ -55,7 +64,7 @@ func unmarshalNonFinite(dec *jsontext.Decoder, f *float64) error {
 		return err //nolint:wrapcheck // an unmarshaler returns the decoder's error as is
 	}
 
-	v, ok := nonFinite[tok.String()]
+	v, ok := protocol.ParsePyFloat(tok.String())
 	if !ok {
 		return fmt.Errorf("float written as %q", tok.String())
 	}
