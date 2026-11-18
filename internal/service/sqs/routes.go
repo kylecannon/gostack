@@ -29,6 +29,8 @@ const (
 	// credentialScopeRegion is the index of the region in the "/" separated
 	// X-Amz-Credential value: key, date, region, service, terminator.
 	credentialScopeRegion = 2
+	// maxRegionLength is the longest region name a State is keyed by.
+	maxRegionLength = 32
 	// uuidSize is the number of random bytes of a request id.
 	uuidSize = 16
 	// The bits of a version 4 UUID, RFC 4122 variant: the version occupies the
@@ -168,13 +170,32 @@ func writeQueryError(w http.ResponseWriter, rc *request.Context, err *awserr.Err
 // reads from the part of the URL that carries it: the path of the path
 // strategy, the host of the standard and domain ones. A URL with no region in
 // it takes the region of the credentials, as LocalStack's legacy handler does.
+//
+// The region becomes the key of a State, and a snapshot has to write that key
+// and read it back, so a candidate that is not shaped like a region (see
+// validRegion) is passed over for the next source. It need not be a known
+// region: LocalStack serves any well-formed one.
 func queueURLRegion(r *http.Request, credentialRegion string) string {
-	if region := chi.URLParam(r, "region"); region != "" {
+	if region := chi.URLParam(r, "region"); validRegion(region) {
 		return region
 	}
 
-	host := r.Host
+	if region := hostRegion(r.Host); validRegion(region) {
+		return region
+	}
 
+	parts := strings.Split(r.URL.Query().Get("X-Amz-Credential"), "/")
+	if len(parts) > credentialScopeRegion && validRegion(parts[credentialScopeRegion]) {
+		return parts[credentialScopeRegion]
+	}
+
+	return credentialRegion
+}
+
+// hostRegion is the region a host carries: sqs.<region>.<host> of the standard
+// strategy, <region>.queue.<host> of the domain strategy, and the default region
+// for queue.<host>. It is "" for any other host.
+func hostRegion(host string) string {
 	name, _, err := net.SplitHostPort(host)
 	if err == nil {
 		host = name
@@ -183,21 +204,33 @@ func queueURLRegion(r *http.Request, credentialRegion string) string {
 	labels := strings.Split(host, ".")
 
 	switch {
-	case labels[0] == "sqs" && len(labels) > 2 && labels[1] != "":
+	case labels[0] == "sqs" && len(labels) > 2:
 		return labels[1]
 	case labels[0] == pathPrefix:
 		return domainRegion
-	case len(labels) > 2 && labels[1] == pathPrefix && labels[0] != "":
+	case len(labels) > 2 && labels[1] == pathPrefix:
 		return labels[0]
+	default:
+		return ""
+	}
+}
+
+// validRegion reports whether s is shaped like the name of an AWS region: 1 to
+// maxRegionLength bytes of lower case letters, digits and "-". That is also
+// valid UTF-8, which a State key has to be.
+func validRegion(s string) bool {
+	if s == "" || len(s) > maxRegionLength {
+		return false
 	}
 
-	if credential := r.URL.Query().Get("X-Amz-Credential"); credential != "" {
-		if parts := strings.Split(credential, "/"); len(parts) > credentialScopeRegion {
-			return parts[credentialScopeRegion]
+	for i := range len(s) {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
 		}
 	}
 
-	return credentialRegion
+	return true
 }
 
 // newRequestID returns a random UUID, version 4.

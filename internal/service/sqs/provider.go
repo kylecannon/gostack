@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -122,6 +123,22 @@ func (p *Provider) notifyChanged() {
 	}
 }
 
+// stateAt returns the State of an account and region. It is the only way a
+// call reaches one, because a place that is not valid UTF-8 must never become a
+// key of the Bundle: a snapshot writes it as U+FFFD, so two of them would be
+// saved as one place twice and Restore would refuse the file.
+//
+// For such a place the caller gets an empty State that nothing else can reach.
+// It finds no queue, which is the answer for an ARN or a queue URL that names
+// a place that does not exist.
+func (p *Provider) stateAt(account, region string) *State {
+	if !utf8.ValidString(account) || !utf8.ValidString(region) {
+		return newState(account, region)
+	}
+
+	return p.states.Get(account, region)
+}
+
 // callOf returns the request context the gateway put in ctx.
 func callOf(ctx context.Context) (*request.Context, *awserr.Error) {
 	rc, ok := request.From(ctx)
@@ -138,7 +155,7 @@ func callOf(ctx context.Context) (*request.Context, *awserr.Error) {
 func (p *Provider) resolve(rc *request.Context, queueURL *string) (*Queue, *awserr.Error) {
 	loc := locate(rc, queueURL)
 
-	q, found := p.states.Get(loc.account, loc.region).find(loc.name)
+	q, found := p.stateAt(loc.account, loc.region).find(loc.name)
 	if !found {
 		return nil, queueDoesNotExist(rc)
 	}
