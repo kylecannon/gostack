@@ -26,7 +26,8 @@ var (
 	// roleARNPattern is LocalStack's check of a RoleArn. It lets
 	// "arn:a:a:::aaaaaaaaaa" through, as LocalStack does.
 	roleARNPattern = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
-	// sessionNamePattern is the pattern AWS names in its error for a RoleSessionName.
+	// sessionNamePattern is the pattern AWS names in its error for a RoleSessionName
+	// and a federated user Name.
 	sessionNamePattern = regexp.MustCompile(`^[\p{L}\p{N}_+=,.@-]*$`)
 	accountPattern     = regexp.MustCompile(`^[0-9]{12}$`)
 )
@@ -92,6 +93,16 @@ func (p *provider) AssumeRoleWithWebIdentity(
 		return nil, nullMember("roleSessionName")
 	}
 
+	var limits violations
+
+	limits.name("roleSessionName", in.RoleSessionName, maxSessionNameLength)
+	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
+
+	invalid := limits.err()
+	if invalid != nil {
+		return nil, invalid
+	}
+
 	creds, user := p.assume(rc, *in.RoleArn, *in.RoleSessionName, in.DurationSeconds)
 
 	return &api.AssumeRoleWithWebIdentityOutput{
@@ -119,9 +130,18 @@ func (p *provider) AssumeRoleWithSAML(
 		return nil, nullMember("sAMLAssertion")
 	}
 
-	parsed, invalid := parseAssertion(*in.SAMLAssertion)
+	var limits violations
+
+	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
+
+	invalid := limits.err()
 	if invalid != nil {
 		return nil, invalid
+	}
+
+	parsed, rejected := parseAssertion(*in.SAMLAssertion)
+	if rejected != nil {
+		return nil, rejected
 	}
 
 	creds, user := p.assume(rc, *in.RoleArn, parsed.sessionName, in.DurationSeconds)
@@ -150,6 +170,16 @@ func (p *provider) GetFederationToken(
 		return nil, nullMember("name")
 	}
 
+	var limits violations
+
+	limits.name("name", in.Name, maxUserNameLength)
+	limits.duration(in.DurationSeconds, maxTokenDurationSeconds)
+
+	invalid := limits.err()
+	if invalid != nil {
+		return nil, invalid
+	}
+
 	creds := p.newCredentials(rc.AccountID, in.DurationSeconds, defaultTokenDuration)
 	user := &api.FederatedUser{
 		FederatedUserId: new(rc.AccountID + ":" + *in.Name),
@@ -170,6 +200,15 @@ func (p *provider) GetSessionToken(
 	rc, err := callContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	var limits violations
+
+	limits.duration(in.DurationSeconds, maxTokenDurationSeconds)
+
+	invalid := limits.err()
+	if invalid != nil {
+		return nil, invalid
 	}
 
 	creds := p.newCredentials(rc.AccountID, in.DurationSeconds, defaultTokenDuration)
@@ -228,18 +267,22 @@ func validateAssumeRole(in *api.AssumeRoleInput) *awserr.Error {
 		return nullMember("roleArn")
 	}
 
-	if !roleARNPattern.MatchString(*in.RoleArn) {
-		return validationError(*in.RoleArn + " is invalid")
-	}
-
 	if in.RoleSessionName == nil {
 		return nullMember("roleSessionName")
 	}
 
-	if !sessionNamePattern.MatchString(*in.RoleSessionName) {
-		return validationError("1 validation error detected: Value '" + *in.RoleSessionName +
-			"' at 'roleSessionName' failed to satisfy constraint: " +
-			"Member must satisfy regular expression pattern: [\\w+=,.@-]*")
+	var limits violations
+
+	limits.name("roleSessionName", in.RoleSessionName, maxSessionNameLength)
+	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
+
+	invalid := limits.err()
+	if invalid != nil {
+		return invalid
+	}
+
+	if !roleARNPattern.MatchString(*in.RoleArn) {
+		return validationError(*in.RoleArn + " is invalid")
 	}
 
 	return validateTags(in)

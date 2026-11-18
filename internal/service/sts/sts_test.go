@@ -270,7 +270,7 @@ func Test_AssumeRole_duration(t *testing.T) {
 
 	r := call(t, server, defaultKey, url.Values{
 		paramAction: {opAssumeRole}, paramRoleArn: {"arn:aws:iam::000000000000:role/r"},
-		paramSession: {"s"}, "DurationSeconds": {"900"},
+		paramSession: {"ss"}, "DurationSeconds": {"900"},
 	}, "")
 	got := decode[assumeRoleResult](t, r)
 
@@ -371,7 +371,7 @@ func Test_AssumeRole_tags(t *testing.T) {
 
 			tt.give.Set(paramAction, opAssumeRole)
 			tt.give.Set(paramRoleArn, "arn:aws:iam::000000000000:role/r")
-			tt.give.Set(paramSession, "s")
+			tt.give.Set(paramSession, "ss")
 
 			got := call(t, server, defaultKey, tt.give, "")
 
@@ -422,10 +422,10 @@ func Test_AssumeRoleWithSAML(t *testing.T) {
 	}
 
 	got := decode[result](t, call(t, server, defaultKey, url.Values{
-		paramAction:     {"AssumeRoleWithSAML"},
-		paramRoleArn:    {"arn:aws:iam::000000000000:role/test-role"},
-		"PrincipalArn":  {"arn:aws:iam:000000000000:saml-provider/TestProvFed"},
-		"SAMLAssertion": {base64.StdEncoding.EncodeToString([]byte(samlAssertion))},
+		paramAction:    {"AssumeRoleWithSAML"},
+		paramRoleArn:   {"arn:aws:iam::000000000000:role/test-role"},
+		paramPrincipal: {"arn:aws:iam:000000000000:saml-provider/TestProvFed"},
+		paramAssertion: {base64.StdEncoding.EncodeToString([]byte(samlAssertion))},
 	}, ""))
 
 	assert.NotEmpty(t, got.Credentials.SecretAccessKey)
@@ -437,7 +437,7 @@ func Test_AssumeRoleWithSAML(t *testing.T) {
 
 	rejected := call(t, server, defaultKey, url.Values{
 		paramAction: {"AssumeRoleWithSAML"}, paramRoleArn: {"arn:aws:iam::000000000000:role/r"},
-		"PrincipalArn": {"p"}, "SAMLAssertion": {"not base64 !"},
+		paramPrincipal: {"p"}, paramAssertion: {"not base64 !"},
 	}, "")
 	assert.Equal(t, http.StatusBadRequest, rejected.status)
 	assert.Contains(t, rejected.body, "<Code>InvalidIdentityToken</Code>")
