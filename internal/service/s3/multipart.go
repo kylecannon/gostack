@@ -484,9 +484,13 @@ func partChecksums(part *Part) checksumFields {
 // hasCurrentObject reports whether key has a current version that is not a
 // delete marker. The caller holds b.mu.
 func hasCurrentObject(b *Bucket, key string) bool {
-	object, ok := b.Objects[key]
+	return isLive(b.Objects[key])
+}
 
-	return ok && object.current() != nil && !object.current().DeleteMarker
+// isLive reports whether object, a key's version chain, has a current version
+// that is not a delete marker. A nil object has none.
+func isLive(object *Object) bool {
+	return object != nil && object.current() != nil && !object.current().DeleteMarker
 }
 
 // partsOf returns the upload's parts sorted by number.

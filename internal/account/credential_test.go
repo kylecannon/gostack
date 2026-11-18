@@ -191,6 +191,37 @@ func Test_FromRequest(t *testing.T) {
 
 // Test_FromAuthorization reads the header as FromRequest does, and never the
 // query string of a presigned URL.
+func Test_ParseScope(t *testing.T) {
+	tests := []struct {
+		name   string
+		give   string
+		want   account.Scope
+		wantOK bool
+	}{
+		{
+			name: "a complete scope",
+			give: "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/s3/aws4_request",
+			want: account.Scope{
+				AccessKey: "AKIAIOSFODNN7EXAMPLE", Date: "20130524", Region: euWest1, Service: "s3", Terminator: "aws4_request",
+			},
+			wantOK: true,
+		},
+		{name: "empty fields are the caller's to judge", give: "///s3/", want: account.Scope{Service: "s3"}, wantOK: true},
+		{name: "four fields", give: "key/20130524/" + euWest1 + "/s3"},
+		{name: "six fields", give: "key/20130524/" + euWest1 + "/s3/aws4_request/extra"},
+		{name: "empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := account.ParseScope(tt.give)
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func Test_FromAuthorization(t *testing.T) {
 	const scope = "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/" + signingSQS + "/aws4_request"
 

@@ -218,7 +218,9 @@ func buildTable(services []service.Metadata) (*Table, error) {
 //
 // The mark comes ahead of every other step, as LocalStack's ServiceNameParser
 // keeps the service an earlier handler set (aws/handlers/service.py:38). A mark
-// that names no service in the table is ignored.
+// that names no service in the table is ignored. A request that Claim took by
+// its host is not detected at all, so a mark never takes it from its claimant:
+// the gateway keeps other services' Preprocess from marking it.
 //
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.

@@ -63,12 +63,7 @@ func (p *Provider) CompleteMultipartUpload(
 		return nil, err
 	}
 
-	err = p.finishUpload(b, plan.upload, v)
-	if err != nil {
-		return nil, err
-	}
-
-	err = p.commitVersion(b, key, v)
+	err = p.commitCompletion(b, plan.upload, v, deref(in.IfMatch), deref(in.IfNoneMatch))
 	if err != nil {
 		return nil, err
 	}
@@ -103,23 +98,37 @@ func completeOutput(
 	return out
 }
 
-// finishUpload takes the upload out of the bucket and drops the bodies of its
-// parts, the whole body being v's. It refuses, and drops v's body, when the
-// upload is gone or was replaced since it was found.
-func (p *Provider) finishUpload(b *Bucket, upload *MultipartUpload, v *Version) error {
-	b.mu.Lock()
+// commitCompletion makes v the key's current version and takes the upload out
+// of the bucket, as one step under the bucket's write lock: the conditions are
+// checked again there against the key as it now is, since another write may
+// have landed while the parts were copied. A refused completion drops v's body
+// and leaves the upload as it was. On success the bodies of the parts go, the
+// whole body being v's.
+func (p *Provider) commitCompletion(
+	b *Bucket, upload *MultipartUpload, v *Version, ifMatch, ifNoneMatch string,
+) error {
+	var parts map[int32]*Part
 
-	if b.Uploads[upload.ID] != upload {
-		b.mu.Unlock()
-		_ = p.blobs.Remove(v.BlobID)
+	err := p.commitVersion(b, upload.Key, v, func(object *Object) error {
+		err := completePrecondition(object, upload, ifMatch, ifNoneMatch)
+		if err != nil {
+			return err
+		}
 
-		return noSuchUpload(upload.ID)
+		// The upload is gone, or was replaced, if another completion or an abort
+		// took it since it was found.
+		if b.Uploads[upload.ID] != upload {
+			return noSuchUpload(upload.ID)
+		}
+
+		delete(b.Uploads, upload.ID)
+		parts, upload.Parts = upload.Parts, nil
+
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-
-	delete(b.Uploads, upload.ID)
-	parts := upload.Parts
-	upload.Parts = nil
-	b.mu.Unlock()
 
 	for _, part := range parts {
 		_ = p.blobs.Remove(part.BlobID)
@@ -142,7 +151,7 @@ func (p *Provider) prepareCompletion(
 		return nil, noSuchUpload(deref(in.UploadId))
 	}
 
-	err := completePrecondition(b, upload, deref(in.IfMatch), deref(in.IfNoneMatch))
+	err := completePrecondition(b.Objects[key], upload, deref(in.IfMatch), deref(in.IfNoneMatch))
 	if err != nil {
 		return nil, err
 	}
@@ -427,9 +436,9 @@ func checkPart(upload *MultipartUpload, listed s3api.CompletedPart, minSize int6
 }
 
 // completePrecondition checks the If-Match and If-None-Match of a
-// completion against the key's object (provider.py:2731-2768). The caller holds
-// b.mu.
-func completePrecondition(b *Bucket, upload *MultipartUpload, ifMatch, ifNoneMatch string) error {
+// completion against the key's object, nil for none (provider.py:2731-2768).
+// The caller holds the bucket's lock.
+func completePrecondition(object *Object, upload *MultipartUpload, ifMatch, ifNoneMatch string) error {
 	notImplemented := func(header, why string) error {
 		return (&s3api.NotImplemented{Header: &header, AdditionalMessage: &why}).Err(
 			"A header you provided implies functionality that is not implemented")
@@ -441,7 +450,7 @@ func completePrecondition(b *Bucket, upload *MultipartUpload, ifMatch, ifNoneMat
 		return notImplemented("If-Match,If-None-Match", "Multiple conditional request headers present in the request")
 	case ifNoneMatch != "" && ifNoneMatch != "*":
 		return notImplemented("If-None-Match", refused)
-	case ifNoneMatch != "" && hasCurrentObject(b, upload.Key):
+	case ifNoneMatch != "" && isLive(object):
 		return (&s3api.PreconditionFailed{Condition: new("If-None-Match")}).Err(
 			"At least one of the pre-conditions you specified did not hold")
 	case ifNoneMatch != "" && upload.KeyExisted:
@@ -449,11 +458,11 @@ func completePrecondition(b *Bucket, upload *MultipartUpload, ifMatch, ifNoneMat
 	case ifMatch == "*":
 		return notImplemented("If-None-Match", refused)
 	case ifMatch != "":
-		if !hasCurrentObject(b, upload.Key) {
+		if !isLive(object) {
 			return noSuchKey(upload.Key)
 		}
 
-		current := b.Objects[upload.Key].current()
+		current := object.current()
 		if current.ETag != strings.Trim(ifMatch, `"`) {
 			return (&s3api.PreconditionFailed{Condition: new("If-Match")}).Err(
 				"At least one of the pre-conditions you specified did not hold")

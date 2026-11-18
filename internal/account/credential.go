@@ -111,26 +111,59 @@ func parseAuthorization(authorization string) (Credential, bool) {
 	return Credential{}, false
 }
 
+// completeScopeFields counts the fields of a complete credential scope.
+const completeScopeFields = 5
+
+// Scope is the credential scope of a SigV4 request, "<key>/<date>/<region>/<service>/<terminator>",
+// as ParseScope reads it. Its fields may be empty.
+type Scope struct {
+	// AccessKey is the access key ID.
+	AccessKey string
+	// Date is the scope date, yyyymmdd.
+	Date string
+	// Region is the region, as sent.
+	Region string
+	// Service is the signing name.
+	Service string
+	// Terminator is the last field, aws4_request for SigV4.
+	Terminator string
+}
+
+// ParseScope splits a credential scope into its five fields. It is false when
+// the scope does not have exactly five, and it does not judge their values.
+// Presigned-URL validation reads the scope of X-Amz-Credential through it, with
+// the same five-field rule FromRequest applies to the signing name.
+func ParseScope(scope string) (Scope, bool) {
+	fields := strings.Split(scope, "/")
+	if len(fields) != completeScopeFields {
+		return Scope{}, false
+	}
+
+	return Scope{
+		AccessKey: fields[0], Date: fields[1], Region: fields[2], Service: fields[3], Terminator: fields[4],
+	}, true
+}
+
 // fromScope reads a credential scope, "<key>/<date>/<region>/<signing
 // name>/aws4_request".
 func fromScope(scope string) (Credential, bool) {
-	key, rest, _ := strings.Cut(scope, "/")
-	date, rest, _ := strings.Cut(rest, "/")
-	region, rest, found := strings.Cut(rest, "/")
-
 	var cred Credential
 
-	// The signing name and the terminator, and nothing after them, whatever
-	// the fields before them hold.
-	if signingName, terminator, ok := strings.Cut(rest, "/"); ok && !strings.Contains(terminator, "/") {
-		cred.SigningName = signingName
+	fields := strings.Split(scope, "/")
+
+	// The signing name is the fourth of exactly five fields, whatever the
+	// fields before it hold.
+	if len(fields) == completeScopeFields {
+		cred.SigningName = fields[3]
 	}
 
-	if key == "" || date == "" || region == "" || !found {
+	// The key, date and region, then a fourth field, which a longer scope has
+	// too.
+	if len(fields) < completeScopeFields-1 || fields[0] == "" || fields[1] == "" || fields[2] == "" {
 		return cred, false
 	}
 
-	cred.AccessKey, cred.Region = key, region
+	cred.AccessKey, cred.Region = fields[0], fields[2]
 
 	return cred, true
 }

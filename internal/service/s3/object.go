@@ -574,7 +574,7 @@ func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD
 		if err != nil {
 			writer.Abort()
 
-			return fmt.Errorf("read object body: %w", err)
+			return bodyReadError(err)
 		}
 	}
 

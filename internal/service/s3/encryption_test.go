@@ -399,6 +399,83 @@ func TestSSECMultipart(t *testing.T) {
 	})
 }
 
+// UploadPartCopy follows AWS, which asks for the copy-source key of an SSE-C
+// source and the upload's own key for an SSE-C upload; LocalStack checks neither.
+func TestSSECUploadPartCopy(t *testing.T) {
+	const secret = "top secret"
+
+	copyPart := func(s *server, id, source string, header map[string]string) reply {
+		return s.do(call{
+			method: http.MethodPut, target: multipartKey + "?partNumber=1&uploadId=" + id, region: regionUSEast1,
+			header: with(header, map[string]string{headerCopySource: source}),
+		})
+	}
+	newCopyServer := func(t *testing.T) *server {
+		t.Helper()
+
+		s := newServer(t)
+		createBucket(t, s)
+		put(t, s, "/bucket/secret", secret, keyOne.headers())
+		put(t, s, "/bucket/plain", secret, nil)
+
+		return s
+	}
+
+	t.Run("an SSE-C source needs its key", func(t *testing.T) {
+		s := newCopyServer(t)
+		id := startUpload(t, s, multipartKey, nil)
+
+		expectError(t, copyPart(s, id, "bucket/secret", nil), http.StatusBadRequest, codeInvalidReq, msgKeyForRead)
+		expectError(t, copyPart(s, id, "bucket/secret", keyTwo.sourceHeaders()), http.StatusForbidden,
+			codeAccessDenied, "Access Denied")
+
+		wrongAlgo := with(keyOne.sourceHeaders(), map[string]string{headerSourceAlgo: notAnAlgorithm})
+		expectError(t, copyPart(s, id, "bucket/secret", wrongAlgo), http.StatusBadRequest,
+			"InvalidEncryptionAlgorithmError", "Supported value: AES256.")
+
+		// The refused copies left no part, so nothing could be completed from them.
+		listed := s.do(call{method: http.MethodGet, target: multipartKey + "?uploadId=" + id, region: regionUSEast1})
+		assert.Empty(t, decodeXML[listedParts](t, listed).Parts)
+	})
+
+	t.Run("an SSE-C upload needs its key on every part", func(t *testing.T) {
+		s := newCopyServer(t)
+		id := startUpload(t, s, multipartKey, keyOne.headers())
+
+		expectError(t, copyPart(s, id, "bucket/plain", nil), http.StatusBadRequest, codeInvalidReq, msgPartsNeedKey)
+		expectError(t, copyPart(s, id, "bucket/plain", keyTwo.headers()), http.StatusBadRequest,
+			codeInvalidReq, msgPartsDifferent)
+	})
+
+	t.Run("the right keys copy", func(t *testing.T) {
+		s := newCopyServer(t)
+		id := startUpload(t, s, multipartKey, keyTwo.headers())
+
+		got := copyPart(s, id, "bucket/secret", with(keyOne.sourceHeaders(), keyTwo.headers()))
+		require.Equal(t, http.StatusOK, got.status, string(got.body))
+		assert.Equal(t, sseAES256, got.header.Get(headerCustomerAlgo))
+		assert.Equal(t, keyTwo.md5, got.header.Get(headerCustomerMD5))
+
+		etag := decodeXML[struct {
+			ETag string `xml:"ETag"`
+		}](t, got).ETag
+
+		done := complete(s, id, completeBody([]string{etag}), nil)
+		require.Equal(t, http.StatusOK, done.status, string(done.body))
+
+		expectError(t, get(s, http.MethodGet, multipartKey, nil), http.StatusBadRequest, codeInvalidReq, msgKeyForRead)
+		assert.Equal(t, secret, string(get(s, http.MethodGet, multipartKey, keyTwo.headers()).body))
+	})
+
+	t.Run("a plain source and a plain upload copy as before", func(t *testing.T) {
+		s := newCopyServer(t)
+		id := startUpload(t, s, multipartKey, nil)
+
+		got := copyPart(s, id, "bucket/plain", nil)
+		assert.Equal(t, http.StatusOK, got.status, string(got.body))
+	})
+}
+
 func TestDefaultEncryptionIsEchoed(t *testing.T) {
 	t.Run("an object takes the bucket's default, SSE-S3 for a new bucket", func(t *testing.T) {
 		s := newServer(t)

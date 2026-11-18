@@ -40,6 +40,13 @@ func (p *Provider) UploadPartCopy(
 
 	defer func() { _ = source.body.Close() }()
 
+	customer := customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5)
+
+	err = checkCopyKeys(in, upload, source.version, customer)
+	if err != nil {
+		return nil, err
+	}
+
 	offset, length, err := copySourceRange(deref(in.CopySourceRange), source.version.Size)
 	if err != nil {
 		return nil, err
@@ -69,11 +76,26 @@ func (p *Provider) UploadPartCopy(
 		return nil, err
 	}
 
-	return copyPartOutput(part, upload, source), nil
+	return copyPartOutput(part, upload, source, customer), nil
+}
+
+// checkCopyKeys holds an UploadPartCopy to the SSE-C keys it needs: the
+// source's, as CopyObject holds them (a source stored with a key does not copy
+// out in the clear), and the upload's own, as UploadPart holds them.
+func checkCopyKeys(in *s3api.UploadPartCopyInput, upload *MultipartUpload, source *Version, target customerKey) error {
+	err := checkCustomerRead(source.SSECustomerKeyMD5, customerKeyOf(
+		in.CopySourceSSECustomerAlgorithm, in.CopySourceSSECustomerKey, in.CopySourceSSECustomerKeyMD5), accessDenied)
+	if err != nil {
+		return err
+	}
+
+	return checkPartKey(upload, target)
 }
 
 // copyPartOutput is the answer to an UploadPartCopy that made part.
-func copyPartOutput(part *Part, upload *MultipartUpload, source *copySource) *s3api.UploadPartCopyOutput {
+func copyPartOutput(
+	part *Part, upload *MultipartUpload, source *copySource, customer customerKey,
+) *s3api.UploadPartCopyOutput {
 	result := &s3api.CopyPartResult{ETag: new(quoted(part.ETag)), LastModified: timeOf(part.LastModified)}
 	c := partChecksums(part)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
@@ -81,6 +103,7 @@ func copyPartOutput(part *Part, upload *MultipartUpload, source *copySource) *s3
 
 	out := &s3api.UploadPartCopyOutput{CopyPartResult: result}
 	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = uploadEncryption(upload)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customer.echo()
 
 	if source.versioned {
 		out.CopySourceVersionId = &source.version.ID

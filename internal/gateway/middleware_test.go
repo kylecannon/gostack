@@ -262,7 +262,7 @@ func Test_Gateway_contentDecoding(t *testing.T) {
 		sqsRegistration(func(w http.ResponseWriter, rc *request.Context) {
 			data, err := io.ReadAll(rc.Request.Body)
 			body, readErr = string(data), err
-			encoding, length = rc.Request.Header.Get("Content-Encoding"), rc.Request.ContentLength
+			encoding, length = rc.Request.Header.Get(headerContentEncoding), rc.Request.ContentLength
 
 			_, _ = io.WriteString(w, "ok")
 		}),
@@ -271,7 +271,7 @@ func Test_Gateway_contentDecoding(t *testing.T) {
 	t.Run("gzip", func(t *testing.T) {
 		r := newRequest(t, http.MethodPost, "http://localhost:4566/", zipped.String(), map[string]string{
 			headerAuth: signed("test", usEast1, nameSQS), headerType: jsonType,
-			headerTarget: targetSendMessage, "Content-Encoding": "GZIP",
+			headerTarget: targetSendMessage, headerContentEncoding: "GZIP",
 		})
 
 		resp, _ := call(t, g.Handler(), r)
@@ -285,7 +285,7 @@ func Test_Gateway_contentDecoding(t *testing.T) {
 
 	t.Run("a body that is not gzip fails when it is read", func(t *testing.T) {
 		r := sendMessage(t)
-		r.Header.Set("Content-Encoding", "gzip")
+		r.Header.Set(headerContentEncoding, "gzip")
 
 		resp, _ := call(t, g.Handler(), r)
 

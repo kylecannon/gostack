@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/restxml"
@@ -45,8 +46,6 @@ const (
 	paramSignatureV4 = "X-Amz-Signature"
 	paramSecurity    = "x-amz-security-token"
 
-	// credentialFields counts the parts of <key>/<date>/<region>/<service>/aws4_request.
-	credentialFields = 5
 	// hexGroup is the hex digits of the two bytes in a group of hexBytes.
 	hexGroup = 4
 
@@ -270,8 +269,8 @@ type paramsV4 struct {
 // readV4Params reads the parameters, which are checked whether or not
 // signatures are.
 func readV4Params(args queryArgs) (paramsV4, *refusal) {
-	credential := strings.Split(args.get(paramCredential), "/")
-	if len(credential) != credentialFields {
+	scope, complete := account.ParseScope(args.get(paramCredential))
+	if !complete {
 		return paramsV4{}, refuse(s3api.NewAuthorizationQueryParametersError("Error parsing the X-Amz-Credential "+
 			`parameter; the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request".`),
 			hostIDMember)
@@ -298,7 +297,7 @@ func readV4Params(args queryArgs) (paramsV4, *refusal) {
 	}
 
 	return paramsV4{
-		accessKey: credential[0], region: credential[2], amzDate: amzDate,
+		accessKey: scope.AccessKey, region: scope.Region, amzDate: amzDate,
 		signature: args.get(paramSignatureV4), expiresIn: expiresIn, signedAt: signedAt,
 	}, nil
 }

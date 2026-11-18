@@ -15,8 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// objectText is the object body the gzip tests send compressed.
-const objectText = "an object body stored gzipped"
+const (
+	// objectText is the object body the gzip tests send compressed.
+	objectText = "an object body stored gzipped"
+
+	headerContentEncoding = "Content-Encoding"
+)
 
 // ownedCall is what a fake service's Serve was given.
 type ownedCall struct {
@@ -27,10 +31,37 @@ type ownedCall struct {
 	length   int64
 }
 
+// recordCalls is a Serve that answers "ok" and appends what it was given to
+// calls.
+func recordCalls(t *testing.T, calls *[]ownedCall) func(http.ResponseWriter, *request.Context) {
+	t.Helper()
+
+	return func(w http.ResponseWriter, rc *request.Context) {
+		body, err := io.ReadAll(rc.Request.Body)
+		require.NoError(t, err)
+
+		*calls = append(*calls, ownedCall{
+			service: rc.Service, method: rc.Request.Method, body: body,
+			encoding: rc.Request.Header.Get(headerContentEncoding), length: rc.Request.ContentLength,
+		})
+
+		_, _ = io.WriteString(w, "ok")
+	}
+}
+
+// ownsBucketPaths is a Preprocess that owns every request under /bucket, as
+// S3's CORS preprocess marks a path-style request to a bucket it has
+// (services/s3/cors.py:101-110).
+func ownsBucketPaths(r *http.Request) *http.Request {
+	if strings.HasPrefix(r.URL.Path, "/bucket") {
+		return service.Own(r, nameS3)
+	}
+
+	return nil
+}
+
 // ownGateway is a gateway with sqs, and with a fake s3 whose Preprocess owns
-// every request under /bucket, as S3's CORS preprocess marks a path-style
-// request to a bucket it has (services/s3/cors.py:101-110). flags sets the
-// fake's RawBody and OwnCORS.
+// every request under /bucket. flags sets the fake's RawBody and OwnCORS.
 func ownGateway(
 	t *testing.T, settings *liveSettings, flags func(*service.Registration),
 ) (*gateway.Gateway, *[]ownedCall) {
@@ -38,27 +69,11 @@ func ownGateway(
 
 	var calls []ownedCall
 
-	record := func(w http.ResponseWriter, rc *request.Context) {
-		body, err := io.ReadAll(rc.Request.Body)
-		require.NoError(t, err)
-
-		calls = append(calls, ownedCall{
-			service: rc.Service, method: rc.Request.Method, body: body,
-			encoding: rc.Request.Header.Get("Content-Encoding"), length: rc.Request.ContentLength,
-		})
-
-		_, _ = io.WriteString(w, "ok")
-	}
+	record := recordCalls(t, &calls)
 
 	s3, _ := s3Registration()
 	s3.Serve = record
-	s3.Preprocess = func(r *http.Request) *http.Request {
-		if strings.HasPrefix(r.URL.Path, "/bucket") {
-			return service.Own(r, nameS3)
-		}
-
-		return nil
-	}
+	s3.Preprocess = ownsBucketPaths
 	flags(&s3)
 
 	return newGateway(t, settings, []service.Registration{sqsRegistration(record), s3}), &calls
@@ -99,7 +114,7 @@ func Test_Gateway_ownedRawBody(t *testing.T) {
 		t.Helper()
 
 		return newRequest(t, http.MethodPut, "http://localhost:4566/bucket/key.gz", string(zipped), map[string]string{
-			headerAuth: signed("test", usEast1, nameS3), "Content-Encoding": "gzip",
+			headerAuth: signed("test", usEast1, nameS3), headerContentEncoding: "gzip",
 		})
 	}
 
@@ -132,7 +147,7 @@ func Test_Gateway_ownedRawBody(t *testing.T) {
 
 		r := sendMessage(t)
 		r.Body = io.NopCloser(bytes.NewReader(gzipped(t, `{"QueueUrl":"q"}`)))
-		r.Header.Set("Content-Encoding", "gzip")
+		r.Header.Set(headerContentEncoding, "gzip")
 
 		resp, _ := call(t, g.Handler(), r)
 
@@ -315,4 +330,82 @@ func Test_Gateway_ownerWinsDetection(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, *calls, 1)
 	assert.Equal(t, nameS3, (*calls)[0].service, "signed for sqs, owned by s3")
+}
+
+// Test_Gateway_hostClaimBeatsOwnerMark: a request that a service claimed by its
+// host stays that service's. A Preprocess of another service that owns it, as
+// S3's does for a path whose first segment is a bucket, is not run for it, so
+// the claiming service still gets the root gzip decoding and CORS.
+func Test_Gateway_hostClaimBeatsOwnerMark(t *testing.T) {
+	const (
+		bucketKey   = "/bucket/key"
+		claimedHost = "http://s3.localhost.localstack.cloud:4566"
+	)
+
+	zipped := gzipped(t, objectText)
+
+	newClaimGateway := func(t *testing.T) (*gateway.Gateway, *[]ownedCall) {
+		t.Helper()
+
+		var calls []ownedCall
+
+		record := recordCalls(t, &calls)
+
+		s3, _ := s3Registration()
+		s3.Serve = record
+		s3.Preprocess = ownsBucketPaths
+		s3.ClaimHost = func(host string) bool { return strings.HasPrefix(host, "s3.") }
+		selfManaged(&s3)
+
+		edge := edgeRegistration()
+		edge.Serve = record
+
+		return newGateway(t, newSettings(), []service.Registration{s3, edge}), &calls
+	}
+
+	put := func(t *testing.T, target string) *http.Request {
+		t.Helper()
+
+		return newRequest(t, http.MethodPut, target, string(zipped), map[string]string{headerContentEncoding: "gzip"})
+	}
+
+	t.Run("the claiming service gets the gzip body decoded", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), put(t, functionURL+bucketKey))
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Len(t, *calls, 1)
+		assert.Equal(t, nameEdge, (*calls)[0].service)
+		assert.Equal(t, objectText, string((*calls)[0].body))
+		assert.Equal(t, "identity", (*calls)[0].encoding)
+	})
+
+	t.Run("the claiming service gets the gateway's CORS", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), preflight(t, functionURL+bucketKey, badOrigin))
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+		resp, _ = call(t, g.Handler(), preflight(t, functionURL+bucketKey, appOrigin))
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+		assert.Equal(t, appOrigin, resp.Header.Get(allowOrigin))
+
+		assert.Empty(t, *calls, "the gateway answers both")
+	})
+
+	t.Run("a service that claims a host and owns it keeps its own handling", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), put(t, claimedHost+bucketKey))
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Len(t, *calls, 1)
+		assert.Equal(t, nameS3, (*calls)[0].service)
+		assert.Equal(t, zipped, (*calls)[0].body, "the claimant's own Preprocess still marks it")
+		assert.Equal(t, "gzip", (*calls)[0].encoding)
+
+		resp, _ = call(t, g.Handler(), preflight(t, claimedHost+bucketKey, badOrigin))
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "the claimant's own CORS")
+	})
 }

@@ -161,9 +161,22 @@ func isInternalPath(path string) bool {
 // preprocess is root step 4, LocalStack's preprocess_request: the Preprocess
 // of each registration, in registration order, sees every request before CORS
 // and content decoding, and may replace it.
+//
+// A request that step 3 claimed by its host belongs to the claiming service, so
+// no other service's Preprocess sees it: a mark from one (service.Own) would
+// take the request from its claimant, whose gzip decoding and CORS it would
+// skip. The claimant's own Preprocess still runs, as it is how S3 rewrites a
+// virtual-host request and owns it. A claim that is an error (served as one) has
+// no claimant, and no Preprocess runs.
 func (g *Gateway) preprocess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claimed, isClaimed := claimOf(r)
+
 		for i := range g.regs {
+			if isClaimed && (claimed.err != nil || claimed.match.Index != i) {
+				continue
+			}
+
 			if preprocess := g.regs[i].Preprocess; preprocess != nil {
 				if replaced := preprocess(r); replaced != nil {
 					r = replaced

@@ -33,6 +33,7 @@ const (
 	typeFullObject        = "FULL_OBJECT"
 	headerContentEncoding = "Content-Encoding"
 	headerContentType     = "Content-Type"
+	encodingAWSChunked    = "aws-chunked"
 )
 
 type initiated struct {
@@ -476,7 +477,7 @@ func TestAWSChunkedBodies(t *testing.T) {
 	}
 	headers := func(payload string, extra ...string) map[string]string {
 		h := map[string]string{
-			"X-Amz-Content-Sha256": signed + "-TRAILER", headerContentEncoding: "aws-chunked",
+			"X-Amz-Content-Sha256": signed + "-TRAILER", headerContentEncoding: encodingAWSChunked,
 			"X-Amz-Decoded-Content-Length": strconv.Itoa(len(payload)),
 		}
 		for i := 0; i < len(extra); i += 2 {
@@ -546,7 +547,7 @@ func TestAWSChunkedBodies(t *testing.T) {
 		put := s.do(call{
 			method: http.MethodPut, target: objectPath, region: regionUSEast1,
 			header: map[string]string{
-				headerContentEncoding: "aws-chunked", "X-Amz-Decoded-Content-Length": "0",
+				headerContentEncoding: encodingAWSChunked, "X-Amz-Decoded-Content-Length": "0",
 				"X-Amz-Trailer": headerChecksumCRC32,
 			}, body: []byte("0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"),
 		})
@@ -585,10 +586,50 @@ func TestAWSChunkedBodies(t *testing.T) {
 			method: http.MethodPut, target: target, region: regionUSEast1, header: headers(payload),
 			body: []byte("\r\n" + payload + "\r\n0;chunk-signature=0\r\n"),
 		})
-		require.Equal(t, http.StatusInternalServerError, broken.status, string(broken.body))
+		require.Equal(t, http.StatusBadRequest, broken.status, string(broken.body))
+		assert.Equal(t, codeInvalidReq, broken.err(t).Code)
 
 		etag := putPart(t, s, id, 1, chunked(payload, ""), headers(payload))
 		_, want := md5Of([]byte(payload))
 		assert.Equal(t, want, etag)
+	})
+
+	// A client's malformed body is a 400, which an SDK does not retry, and the
+	// object is not written. LocalStack answers 500 for both.
+	t.Run("a malformed body answers 400 and writes nothing", func(t *testing.T) {
+		const unsigned = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+
+		tests := []struct {
+			name       string
+			giveBody   string
+			giveLength string
+			wantCode   string
+		}{
+			{"a decoded length longer than the bytes sent", "5\r\nhello\r\n0\r\n\r\n", "10", "IncompleteBody"},
+			{"a decoded length shorter than the bytes sent", "5\r\nhello\r\n0\r\n\r\n", "3", "IncompleteBody"},
+			{"a chunk size that is not hexadecimal", "zz\r\nhello\r\n0\r\n\r\n", "", codeInvalidReq},
+			{"a body that ends inside a chunk", "5\r\nhel", "", codeInvalidReq},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := newServer(t)
+				createBucket(t, s)
+
+				h := map[string]string{headerContentSHA: unsigned, headerContentEncoding: encodingAWSChunked}
+				if tt.giveLength != "" {
+					h["X-Amz-Decoded-Content-Length"] = tt.giveLength
+				}
+
+				got := s.do(call{
+					method: http.MethodPut, target: objectPath, region: regionUSEast1, header: h, body: []byte(tt.giveBody),
+				})
+				require.Equal(t, http.StatusBadRequest, got.status, string(got.body))
+				assert.Equal(t, tt.wantCode, got.err(t).Code)
+
+				absent := s.do(call{method: http.MethodGet, target: objectPath, region: regionUSEast1})
+				assert.Equal(t, http.StatusNotFound, absent.status)
+			})
+		}
 	})
 }
