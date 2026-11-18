@@ -24,6 +24,8 @@ const (
 	versionIDQuery    = "&versionId="
 	modeGovernance    = "GOVERNANCE"
 	modeCompliance    = "COMPLIANCE"
+	modeBad           = "BAD"
+	copyLockedPath    = "/bucket/copy-locked"
 )
 
 func createLockedBucket(t *testing.T, s *server) {
@@ -252,7 +254,7 @@ func TestPutObjectRetention(t *testing.T) {
 	for name, body := range map[string][]byte{
 		"no date":            retentionBody(modeGovernance, ""),
 		"no mode":            retentionBody("", farFuture),
-		"bad retention mode": retentionBody("BAD", farFuture),
+		"bad retention mode": retentionBody(modeBad, farFuture),
 	} {
 		got := put(body, nil)
 		require.Equal(t, http.StatusBadRequest, got.status, name)
@@ -310,13 +312,61 @@ func TestObjectLockOperationsNeedAnObjectLockBucket(t *testing.T) {
 	empty := s.do(call{method: http.MethodPut, target: objectPath + legalHoldQuery, region: regionUSEast1})
 	require.Equal(t, http.StatusBadRequest, empty.status)
 	assert.Equal(t, codeMalformedXML, empty.err(t).Code, "a missing legal hold is malformed before the bucket is checked")
+}
 
-	params := s.do(call{
-		method: http.MethodPut, target: "/bucket/locked", region: regionUSEast1,
-		header: map[string]string{headerLockMode: modeGovernance, headerLockUntil: farFuture},
+// TestLockHeadersOnABucketWithoutObjectLock: each row is a request SQ-143 sent
+// to LocalStack 8b9a79f, which keeps the lock a request names whether or not
+// the bucket has Object Lock. AWS's answer is only inferred (SQ-138).
+func TestLockHeadersOnABucketWithoutObjectLock(t *testing.T) {
+	s := newServer(t)
+	seed(t, s, nil)
+
+	lock := map[string]string{headerLockMode: modeGovernance, headerLockUntil: farFuture}
+
+	put(t, s, "/bucket/put-locked", "a", lock)
+	put(t, s, "/bucket/put-held", "a", map[string]string{headerLockHold: "ON"})
+
+	copied := s.do(call{
+		method: http.MethodPut, target: copyLockedPath, region: regionUSEast1,
+		header: map[string]string{headerCopySource: sourceRef, headerLockMode: modeCompliance, headerLockUntil: farFuture},
 	})
-	require.Equal(t, http.StatusBadRequest, params.status, "a lock on a bucket without Object Lock is refused")
-	assert.Equal(t, codeInvalidRequest, params.err(t).Code)
+	require.Equal(t, http.StatusOK, copied.status, string(copied.body))
+
+	id := startUpload(t, s, multipartKey, lock)
+	etag := putPart(t, s, id, 1, []byte("part"), nil)
+	require.Equal(t, http.StatusOK, complete(s, id, completeBody([]string{etag}), nil).status)
+
+	for _, row := range []struct{ target, mode, hold string }{
+		{"/bucket/put-locked", modeGovernance, ""},
+		{"/bucket/put-held", "", "ON"},
+		{copyLockedPath, modeCompliance, ""},
+		{multipartKey, modeGovernance, ""},
+	} {
+		head := get(s, http.MethodHead, row.target, nil)
+		require.Equal(t, http.StatusOK, head.status, row.target)
+		assert.Equal(t, row.mode, head.header.Get(headerLockMode), row.target)
+		assert.Equal(t, row.hold, head.header.Get(headerLockHold), row.target)
+
+		if row.mode != "" {
+			assert.Contains(t, head.header.Get(headerLockUntil), "2099-01-01T00:00:00", row.target)
+		}
+	}
+
+	// The checks that do not depend on the bucket still run.
+	for name, header := range map[string]map[string]string{
+		"mode only":    {headerLockMode: modeGovernance},
+		"date only":    {headerLockUntil: farFuture},
+		"bad put mode": {headerLockMode: modeBad, headerLockUntil: farFuture},
+	} {
+		got := s.do(call{method: http.MethodPut, target: "/bucket/refused", region: regionUSEast1, header: header})
+		require.Equal(t, http.StatusBadRequest, got.status, name)
+		assert.Equal(t, cfgInvalidArgument, got.err(t).Code, name)
+	}
+
+	// Retention and legal hold operations still need Object Lock on the bucket.
+	retention := get(s, http.MethodGet, "/bucket/put-locked"+retentionQuery, nil)
+	require.Equal(t, http.StatusBadRequest, retention.status)
+	assert.Equal(t, codeInvalidRequest, retention.err(t).Code)
 }
 
 func TestLegalHold(t *testing.T) {
@@ -379,7 +429,7 @@ func TestLockParametersAreCheckedAndDefaulted(t *testing.T) {
 	for name, header := range map[string]map[string]string{
 		"mode only":    {headerLockMode: modeGovernance},
 		"date only":    {headerLockUntil: farFuture},
-		"bad put mode": {headerLockMode: "BAD", headerLockUntil: farFuture},
+		"bad put mode": {headerLockMode: modeBad, headerLockUntil: farFuture},
 	} {
 		got := s.do(call{method: http.MethodPut, target: objectPath, region: regionUSEast1, header: header})
 		require.Equal(t, http.StatusBadRequest, got.status, name)
@@ -388,7 +438,7 @@ func TestLockParametersAreCheckedAndDefaulted(t *testing.T) {
 
 	upload := s.do(call{
 		method: http.MethodPost, target: multipartKey + "?uploads", region: regionUSEast1,
-		header: map[string]string{headerLockMode: "BAD", headerLockUntil: farFuture},
+		header: map[string]string{headerLockMode: modeBad, headerLockUntil: farFuture},
 	})
 	assert.Equal(t, http.StatusBadRequest, upload.status, "an upload checks its lock when it starts")
 
@@ -428,7 +478,7 @@ func TestCopyAndMultipartTakeTheirOwnLock(t *testing.T) {
 	assert.Empty(t, head.header.Get(headerLockMode), "a copy keeps no lock from its source")
 
 	locked := s.do(call{
-		method: http.MethodPut, target: "/bucket/copy-locked", region: regionUSEast1,
+		method: http.MethodPut, target: copyLockedPath, region: regionUSEast1,
 		header: map[string]string{
 			headerCopySource: objectPath, headerLockMode: modeCompliance, headerLockUntil: farFuture,
 			headerLockHold: "ON",
@@ -436,7 +486,7 @@ func TestCopyAndMultipartTakeTheirOwnLock(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, locked.status, string(locked.body))
 
-	head = get(s, http.MethodHead, "/bucket/copy-locked", nil)
+	head = get(s, http.MethodHead, copyLockedPath, nil)
 	assert.Equal(t, modeCompliance, head.header.Get(headerLockMode))
 	assert.Equal(t, "ON", head.header.Get(headerLockHold))
 

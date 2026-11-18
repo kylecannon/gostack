@@ -106,16 +106,15 @@ func (b *Bucket) enableObjectLock() {
 
 // lockFor is the Lock a new version or upload gets from what its request names
 // and from the bucket's default retention, as
-// get_object_lock_parameters_from_bucket_and_request works it out. A request
-// that names a mode, a date or a legal hold in a bucket without Object Lock is
-// refused, as AWS does.
+// get_object_lock_parameters_from_bucket_and_request works it out. A bucket
+// without Object Lock keeps what a request names, as LocalStack does: AWS's
+// answer there is only inferred (SQ-138), so it is not checked.
 func (b *Bucket) lockFor(mode *string, until *protocol.Time, legalHold *string) (Lock, error) {
 	return b.lockAt(mode, until, legalHold, time.Now())
 }
 
 func (b *Bucket) lockAt(mode *string, until *protocol.Time, legalHold *string, now time.Time) (Lock, error) {
 	b.mu.RLock()
-	enabled := b.lockEnabled()
 
 	var defaultRetention *s3api.DefaultRetention
 	if b.ObjectLock != nil && b.ObjectLock.Rule != nil {
@@ -125,10 +124,6 @@ func (b *Bucket) lockAt(mode *string, until *protocol.Time, legalHold *string, n
 	b.mu.RUnlock()
 
 	name, hold := deref(mode), deref(legalHold)
-
-	if (name != "" || until != nil || hold != "") && !enabled {
-		return Lock{}, s3api.NewInvalidRequest(missingLockMessage)
-	}
 
 	switch {
 	case name != "" && until == nil:
