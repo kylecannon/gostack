@@ -50,18 +50,29 @@ type Contents interface {
 	Counts() Counts
 	// Clear drops every message. PurgeQueue calls it.
 	Clear()
-	// Close stops the timers and drops the messages. DeleteQueue and a state
-	// reset call it, and the queue is not used afterwards.
+	// Close stops the timers, drops the messages and wakes every long poll.
+	// DeleteQueue and a state reset call it, and the queue is not used
+	// afterwards.
 	Close()
+	// Put adds a message that stays hidden for delay. The message's sent time
+	// is the clock of the call.
+	Put(m *message, delay time.Duration)
+	// Receive hides up to max visible messages for visibility, oldest first,
+	// and returns each with a new receipt handle. A visibility of zero or less
+	// leaves them visible.
+	Receive(maxMessages int, visibility time.Duration) []delivery
+	// Delete removes the message a receipt handle names, whatever state it is
+	// in. A handle that names none is ignored.
+	Delete(handle string)
+	// ChangeVisibility hides the in-flight message a receipt handle names for
+	// visibility from now on, or makes it visible at once for a visibility of
+	// zero or less. A message that is not in flight is left as it is. It
+	// reports whether the handle names a message.
+	ChangeVisibility(handle string, visibility time.Duration) bool
+	// Wake returns a channel that is closed the next time a message may have
+	// become visible. It returns nil once the contents are closed.
+	Wake() <-chan struct{}
 }
-
-// emptyContents is the Contents of a queue that holds no messages, which is
-// every queue until messages arrive.
-type emptyContents struct{}
-
-func (emptyContents) Counts() Counts { return Counts{} }
-func (emptyContents) Clear()         {}
-func (emptyContents) Close()         {}
 
 // Queue is one SQS queue. Its identity (name, account, region, type) never
 // changes. Everything else is guarded by the queue's own lock, so calls on

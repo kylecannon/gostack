@@ -19,16 +19,32 @@
 // The Queue type is complete for what the later tickets add. They fill these
 // seams and leave the type as it is.
 //
-// Messages (W4). A queue's messages live in its Contents, an interface the
-// Queue calls with its own lock held: Counts feeds the three Approximate
-// attributes, Clear is PurgeQueue, Close stops timers when the queue is deleted
-// or reset. W4 writes the implementation and replaces Provider.contents, the
-// factory New fills with an empty one. The implementation reads the queue's
-// attributes (VisibilityTimeout, DelaySeconds, MaximumMessageSize and the
-// rest) from Queue.attrs under the queue's lock, so a SetQueueAttributes call
-// reaches it without a notification. The per-queue deadline heap and its one
-// armed timer belong to the Contents, and a timer callback takes the queue's
-// lock like any other caller.
+// Messages. A queue's messages live in its Contents, an interface the Queue
+// calls with its own lock held: Counts feeds the three Approximate attributes,
+// Clear is PurgeQueue, Close stops timers when the queue is deleted or reset,
+// and Put, Receive, Delete, ChangeVisibility and Wake are the message
+// operations. Provider.contents is the factory that makes one per queue. For a
+// standard queue it makes a standardContents, which keeps the visible messages
+// in a heap in sending order, and the delayed and in-flight ones in a second
+// heap by deadline. One time.Timer is armed for the earliest deadline of that
+// heap, and stopped when the heap is empty, so a queue with no pending deadline
+// costs no wakeups. The timer callback takes the queue's lock like any other
+// caller. Long polls do not hold the lock: ReceiveMessage asks the contents for
+// a channel (Wake) that is closed when a message may be visible, releases the
+// lock and waits on that channel, the end of its wait and its request context.
+// The implementation reads the queue's attributes (VisibilityTimeout,
+// DelaySeconds, MaximumMessageSize, MessageRetentionPeriod) from Queue.attrs
+// under the queue's lock, so a SetQueueAttributes call reaches it without a
+// notification. Message retention runs without a timer, when
+// Settings.EnableMessageRetentionPeriod is on: whatever looks at the queue first
+// drops the visible messages that are past it.
+//
+// A FIFO queue gets the same contents until the FIFO ticket writes its own. The
+// message operations refuse a FIFO queue with a 501 until then
+// (Queue.requireStandard), and that check goes with the ticket. Dead letters
+// are not handled yet: where standardContents.Receive takes a message off the
+// visible heap is the place to compare its receive count with the
+// RedrivePolicy's maxReceiveCount.
 //
 // FIFO and dead letters (W5). Queue.fifo is fixed at creation, from the
 // FifoQueue attribute. validateAttributes, defaultAttributes and

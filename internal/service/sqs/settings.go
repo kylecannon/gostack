@@ -27,6 +27,10 @@ type Settings struct {
 	// DelayPurgeRetry is SQS_DELAY_PURGE_RETRY: a queue purged less than 60
 	// seconds ago refuses another PurgeQueue.
 	DelayPurgeRetry bool
+	// EnableMessageRetentionPeriod is SQS_ENABLE_MESSAGE_RETENTION_PERIOD: a
+	// queue drops visible messages older than its MessageRetentionPeriod.
+	// Without it the attribute is stored and ignored, as in LocalStack.
+	EnableMessageRetentionPeriod bool
 	// Host is LOCALSTACK_HOST as host:port, the address clients use to reach
 	// gostack. It goes into the queue URLs.
 	Host string

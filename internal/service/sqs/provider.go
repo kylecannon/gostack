@@ -18,8 +18,7 @@ type Provider struct {
 
 	settings func() Settings
 	states   *store.Bundle[State]
-	// contents makes the Contents of a new queue. W4 replaces it with the
-	// factory that makes message stores.
+	// contents makes the Contents of a new queue.
 	contents func(*Queue) Contents
 }
 
@@ -33,11 +32,13 @@ func New(settings func() Settings) *Provider {
 		settings = defaultSettings
 	}
 
-	return &Provider{
+	p := &Provider{
 		settings: settings,
 		states:   store.NewBundle(newState),
-		contents: func(*Queue) Contents { return emptyContents{} },
 	}
+	p.contents = func(q *Queue) Contents { return newStandardContents(q, p.settings) }
+
+	return p
 }
 
 func defaultSettings() Settings {

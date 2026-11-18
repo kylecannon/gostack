@@ -86,8 +86,12 @@ func Test_guessStrategy(t *testing.T) {
 	}
 }
 
-// fakeContents records what the queue asks of its Contents.
+// fakeContents records what the queue asks of its Contents. The message
+// operations are the embedded interface's, and a test that calls one fails on
+// the nil.
 type fakeContents struct {
+	Contents
+
 	counts  Counts
 	cleared int
 	closed  int

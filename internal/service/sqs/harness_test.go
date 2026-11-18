@@ -2,9 +2,11 @@ package sqs_test
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -188,6 +190,7 @@ func (c caller) overTLS() caller {
 
 // result is a decoded response, read the same way for both protocols.
 type result struct {
+	t      *testing.T
 	status int
 	header http.Header
 	json   map[string]any
@@ -254,7 +257,7 @@ func (c caller) call(operation string, params map[string]any) result {
 func (c caller) decode(r reply) result {
 	c.s.t.Helper()
 
-	out := result{status: r.status, header: r.header, query: c.protocol == protoQuery}
+	out := result{t: c.s.t, status: r.status, header: r.header, query: c.protocol == protoQuery}
 
 	if out.query {
 		require.NoError(c.s.t, xml.Unmarshal([]byte(r.body), &out.xml), r.body) //nolint:musttag // node reads any element
@@ -274,42 +277,77 @@ func (c caller) decode(r reply) result {
 func queryForm(operation string, params map[string]any) url.Values {
 	form := url.Values{paramAction: {operation}, paramVersion: {"2012-11-05"}}
 
-	listNames := map[string]string{
-		paramAttributeNames: "AttributeName",
-		"AWSAccountIds":     "AWSAccountId",
-		"Actions":           "ActionName",
-		paramTagKeys:        "TagKey",
+	for name, value := range params {
+		addParam(form, operation, "", name, value)
 	}
+
+	return form
+}
+
+// queryListNames are the member names of the lists a test passes.
+var queryListNames = map[string]string{
+	paramAttributeNames:   "AttributeName",
+	"AWSAccountIds":       "AWSAccountId",
+	"Actions":             "ActionName",
+	paramTagKeys:          "TagKey",
+	paramMessageAttrNames: "MessageAttributeName",
+	paramSystemAttrNames:  "AttributeName",
+}
+
+// addParam writes one parameter in the query form. prefix is "" for a member of
+// the request and "<Entry>.<n>." for a member of a batch entry.
+func addParam(form url.Values, operation, prefix, name string, value any) {
 	mapNames := map[string][2]string{
 		paramAttributes: {"Attribute", "Name"},
 		"tags":          {"Tag", "Key"},
 		paramTags:       {"Tag", "Key"},
 	}
 
-	for name, value := range params {
-		switch typed := value.(type) {
-		case string:
-			form.Set(name, typed)
-		case int:
-			form.Set(name, strconv.Itoa(typed))
-		case []string:
-			for i, item := range typed {
-				form.Set(listNames[name]+"."+strconv.Itoa(i+1), item)
-			}
-		case map[string]string:
-			prefix, key := mapNames[name][0], mapNames[name][1]
-
-			for i, k := range sortedKeys(typed) {
-				n := strconv.Itoa(i + 1)
-				form.Set(prefix+"."+n+"."+key, k)
-				form.Set(prefix+"."+n+".Value", typed[k])
-			}
-		default:
-			// Every parameter of these tests is one of the types above.
+	switch typed := value.(type) {
+	case string:
+		form.Set(prefix+name, typed)
+	case int:
+		form.Set(prefix+name, strconv.Itoa(typed))
+	case []string:
+		for i, item := range typed {
+			form.Set(prefix+queryListNames[name]+"."+strconv.Itoa(i+1), item)
 		}
-	}
+	case map[string]string:
+		element, key := mapNames[name][0], mapNames[name][1]
 
-	return form
+		for i, k := range sortedKeys(typed) {
+			n := strconv.Itoa(i + 1)
+			form.Set(prefix+element+"."+n+"."+key, k)
+			form.Set(prefix+element+"."+n+".Value", typed[k])
+		}
+	case attrs:
+		element := "MessageAttribute"
+		if name == paramMessageSystemAttrs {
+			element = "MessageSystemAttribute"
+		}
+
+		for i, k := range slices.Sorted(maps.Keys(typed)) {
+			n := strconv.Itoa(i + 1)
+			form.Set(prefix+element+"."+n+".Name", k)
+			form.Set(prefix+element+"."+n+".Value.DataType", typed[k].DataType)
+
+			if typed[k].StringValue != "" {
+				form.Set(prefix+element+"."+n+".Value.StringValue", typed[k].StringValue)
+			}
+
+			if len(typed[k].BinaryValue) > 0 {
+				form.Set(prefix+element+"."+n+".Value.BinaryValue", base64.StdEncoding.EncodeToString(typed[k].BinaryValue))
+			}
+		}
+	case []map[string]any:
+		for i, entry := range typed {
+			for key, member := range entry {
+				addParam(form, operation, prefix+operation+"RequestEntry."+strconv.Itoa(i+1)+".", key, member)
+			}
+		}
+	default:
+		// Every parameter of these tests is one of the types above.
+	}
 }
 
 func sortedKeys(m map[string]string) []string {
