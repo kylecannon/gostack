@@ -178,8 +178,8 @@ func (c *fifoContents) Receive(maxMessages int, visibility time.Duration) receiv
 	out := receiveResult{expired: c.refreshed(now)}
 
 	var (
-		taken   []*entry
-		touched []*group
+		taken, dying []*entry
+		touched      []*group
 	)
 
 	for len(taken) < maxMessages {
@@ -190,7 +190,7 @@ func (c *fifoContents) Receive(maxMessages int, visibility time.Duration) receiv
 
 		g.locked = true
 		touched = append(touched, g)
-		taken = c.takeFrom(g, maxMessages, taken, &out)
+		taken = c.takeFrom(g, maxMessages, taken, &dying)
 	}
 
 	out.taken = make([]delivery, 0, len(taken))
@@ -205,7 +205,19 @@ func (c *fifoContents) Receive(maxMessages int, visibility time.Duration) receiv
 		}
 	}
 
-	// A group whose messages all left, as dead letters, is not in flight.
+	// A dead letter stays in flight, and its group locked, until the Provider
+	// has put it on its dead-letter queue and deletes it.
+	policy, _ := c.redrive.of(c.q)
+
+	for _, e := range dying {
+		out.dead = append(out.dead, deadLetter{
+			delivery: c.deliver(e, now),
+			target:   policy.target,
+			received: e.msg.receiveBase + e.receiveCount - 1,
+		})
+		c.enterFlight(e, now.Add(max(visibility, deadLetterHold)))
+	}
+
 	for _, g := range touched {
 		c.reopenIfIdle(g)
 	}
@@ -330,8 +342,8 @@ func (c *fifoContents) nextGroup() *group {
 }
 
 // takeFrom takes visible messages of g into taken until there are max of them,
-// and sends the ones past the redrive limit to out.dead instead.
-func (c *fifoContents) takeFrom(g *group, maxMessages int, taken []*entry, out *receiveResult) []*entry {
+// and sets the ones past the redrive limit aside in dying instead.
+func (c *fifoContents) takeFrom(g *group, maxMessages int, taken []*entry, dying *[]*entry) []*entry {
 	policy, redriven := c.redrive.of(c.q)
 	redriven = redriven && policy.maxReceives > 0
 
@@ -341,10 +353,7 @@ func (c *fifoContents) takeFrom(g *group, maxMessages int, taken []*entry, out *
 		e.receiveCount++
 
 		if redriven && e.receiveCount > policy.maxReceives {
-			c.forget(e)
-			out.dead = append(out.dead, deadLetter{
-				msg: e.msg, target: policy.target, received: e.msg.receiveBase + e.receiveCount - 1,
-			})
+			*dying = append(*dying, e)
 
 			continue
 		}

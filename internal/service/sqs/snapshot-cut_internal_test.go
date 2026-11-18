@@ -11,7 +11,6 @@ import (
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
-	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,20 +157,19 @@ func (s *asyncSnapshot) result(t *testing.T) map[string][]string {
 }
 
 // Test_a_snapshot_waits_for_a_dead_letter_move is SQ-41 finding 1 for a
-// dead-letter move: the message has left its queue and is not on the dead-letter
-// queue yet, and a snapshot taken then holds it nowhere.
+// dead-letter move: the message is hidden on its queue and not on the
+// dead-letter queue yet, and a snapshot taken between the put and the delete
+// would hold it in both.
 func Test_a_snapshot_waits_for_a_dead_letter_move(t *testing.T) {
 	c := newCutProvider(t)
 	c.send(t, c.workURL, cutPrecious)
 
 	ctx := callContext(t)
-	rc, err := callOf(ctx)
-	require.Nil(t, err)
 
 	// The first receive counts, the second finds the message past the limit.
 	zero := int32(0)
-	_, err2 := c.p.ReceiveMessage(ctx, &sqsapi.ReceiveMessageInput{QueueUrl: &c.workURL, VisibilityTimeout: &zero})
-	require.NoError(t, err2)
+	_, err := c.p.ReceiveMessage(ctx, &sqsapi.ReceiveMessageInput{QueueUrl: &c.workURL, VisibilityTimeout: &zero})
+	require.NoError(t, err)
 
 	inMove, release := make(chan struct{}), make(chan struct{})
 	moved := make(chan struct{})
@@ -179,21 +177,21 @@ func Test_a_snapshot_waits_for_a_dead_letter_move(t *testing.T) {
 	go func() {
 		defer close(moved)
 
-		_, _, failure := c.work.poll(ctx, receiveParams{count: 1, visibility: &zero}, &c.p.transfer,
-			func(dead []deadLetter) *awserr.Error {
+		taken, _ := c.work.poll(ctx, receiveParams{count: 1, visibility: &zero}, &c.p.transfer,
+			func(dead []deadLetter) []delivery {
 				close(inMove)
 				<-release
 
-				return c.p.deadLetter(rc, c.work, dead)
+				return c.p.deadLetter(c.work, dead)
 			})
-		assert.Nil(t, failure)
+		assert.Empty(t, taken)
 	}()
 
 	<-inMove
 
-	// The message is in neither queue now.
+	// The message is still on its queue, hidden, and not on the other yet.
 	c.work.mu.Lock()
-	assert.Zero(t, c.work.contents.Counts(), "the message left its queue")
+	assert.Equal(t, Counts{NotVisible: 1}, c.work.contents.Counts(), "the message waits on its queue")
 	c.work.mu.Unlock()
 
 	snapshot := c.snapshotAsync()

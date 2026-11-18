@@ -311,8 +311,8 @@ func queryForm(operation string, params map[string]any) url.Values {
 // queryListNames are the member names of the lists a test passes.
 var queryListNames = map[string]string{
 	paramAttributeNames:   "AttributeName",
-	"AWSAccountIds":       "AWSAccountId",
-	"Actions":             "ActionName",
+	paramAccountIDs:       "AWSAccountId",
+	paramActions:          "ActionName",
 	paramTagKeys:          "TagKey",
 	paramMessageAttrNames: "MessageAttributeName",
 	paramSystemAttrNames:  "AttributeName",

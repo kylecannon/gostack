@@ -12,6 +12,9 @@ const (
 	paramQueueName      = "QueueName"
 	paramAttributes     = "Attributes"
 	paramAttributeNames = "AttributeNames"
+	paramAccountIDs     = "AWSAccountIds"
+	paramActions        = "Actions"
+	paramLabel          = "Label"
 	paramTags           = "Tags"
 	paramTagKeys        = "TagKeys"
 

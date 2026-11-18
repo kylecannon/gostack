@@ -31,8 +31,9 @@ type Provider struct {
 	// both under transfer.
 	tasks *sync.WaitGroup
 	// transfer is held for reading by whatever carries a message from one queue
-	// to another, from the moment the message leaves the first to the moment it
-	// is on the second: a dead-letter move, and one message of a move task. A
+	// to another, from the moment it takes the message to the moment the message
+	// is on the second and gone from the first: a dead-letter move, and one
+	// message of a move task. A
 	// snapshot holds it for writing while it copies the queues, so it never sees
 	// a message that is in neither queue, or in both. It is taken before any
 	// queue's lock.

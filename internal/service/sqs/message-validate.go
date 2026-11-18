@@ -29,6 +29,7 @@ const (
 	maxBatchIDLength = 80
 
 	typeString = "String"
+	typeNumber = "Number"
 
 	messageInvalidContents = "Invalid characters found. Valid unicode characters are " +
 		"#x9 | #xA | #xD | #x20 to #xD7FF | #xE000 to #xFFFD | #x10000 to #x10FFFF"
@@ -184,14 +185,22 @@ func checkAttributeType(name string, value sqsapi.MessageAttributeValue) *awserr
 		return invalidParameterValue("Message (user) attribute types must be shorter than 256 Bytes")
 	}
 
-	if dataType != typeString {
-		return nil
-	}
-
 	text := deref(value.StringValue)
-	if text == "" {
-		return invalidParameterValue("Message (user) attribute '" + name +
-			"' must contain a non-empty value of type 'String'.")
+
+	// The families are told apart by the same prefix rule that accepted the
+	// type above, so no accepted type ("Stringx" included) skips its checks.
+	switch {
+	case strings.HasPrefix(dataType, typeString):
+		// A custom type such as "String.x" follows the rules of String.
+		if text == "" {
+			return invalidParameterValue("Message (user) attribute '" + name +
+				"' must contain a non-empty value of type 'String'.")
+		}
+	case strings.HasPrefix(dataType, typeNumber):
+		// LocalStack looks at no Number value and no AWS response is recorded
+		// for one, so a number only has to be text that XML can carry.
+	default:
+		return nil
 	}
 
 	if checkContent(text) != nil {

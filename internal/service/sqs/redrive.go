@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
-	"github.com/kylecannon/gostack/internal/request"
 )
 
 // redrivePolicy is what a queue's RedrivePolicy says: where a message goes after
@@ -24,7 +24,7 @@ type redrivePolicy struct {
 
 // parseRedrive reads a RedrivePolicy attribute. It reports false for an absent
 // policy, one that is not a JSON object and one without a deadLetterTargetArn:
-// SetQueueAttributes refuses those, and CreateQueue does not look at the policy.
+// CreateQueue and SetQueueAttributes refuse those.
 func parseRedrive(raw string) (redrivePolicy, bool) {
 	if raw == "" {
 		return redrivePolicy{}, false
@@ -163,24 +163,55 @@ func (q *Queue) redrivesTo(arn string) bool {
 
 // deadLetter puts the messages a receive found past the limit on their
 // dead-letter queue, as LocalStack's ReceiveMessage does after it released the
-// source queue: no call ever holds the lock of two queues. A dead-letter queue
-// that is gone fails the call, and the messages with it.
-func (p *Provider) deadLetter(rc *request.Context, source *Queue, dead []deadLetter) *awserr.Error {
+// source queue: no call ever holds the lock of two queues. A message is deleted
+// from the source only after the put, so a dead-letter queue that is gone or
+// refuses it loses nothing: those messages are returned, still hidden on the
+// source, for the receive to hand out as ordinary ones. LocalStack fails the
+// receive and drops them.
+func (p *Provider) deadLetter(source *Queue, dead []deadLetter) (kept []delivery) {
 	now := time.Now()
+	moved := make([]deadLetter, 0, len(dead))
+
+	var failure *awserr.Error
 
 	for _, d := range dead {
-		target, ok := p.queueByARN(d.target)
-		if !ok {
-			return queueDoesNotExist(rc)
+		err := p.putDeadLetter(source, d, now)
+		if err != nil {
+			failure = err
+			kept = append(kept, d.delivery)
+
+			continue
 		}
 
-		err := target.put(d.msg.moved(source.arn, d.received, now), nil)
+		moved = append(moved, d)
+	}
+
+	source.mu.Lock()
+	defer source.mu.Unlock()
+
+	for _, d := range moved {
+		err := source.contents.Delete(d.delivery.handle)
 		if err != nil {
-			return err
+			failure = err
 		}
 	}
 
-	return nil
+	if failure != nil && source.deadLetterWarned.CompareAndSwap(false, true) {
+		slog.Warn("sqs: a message could not leave its queue for the dead-letter queue and stays on it",
+			"queue", source.arn, "error", failure.Message)
+	}
+
+	return kept
+}
+
+// putDeadLetter puts one dead letter on its dead-letter queue.
+func (p *Provider) putDeadLetter(source *Queue, d deadLetter, now time.Time) *awserr.Error {
+	target, ok := p.queueByARN(d.target)
+	if !ok {
+		return sqsapi.NewQueueDoesNotExist("The specified queue does not exist.")
+	}
+
+	return target.put(d.delivery.msg.moved(source.arn, d.received, now), nil)
 }
 
 // queueByARN finds a queue by its ARN, in whichever account and region the ARN

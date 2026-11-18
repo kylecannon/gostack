@@ -57,10 +57,14 @@
 // and a queue's snapshot carries the scope.
 //
 // Dead letters. Receive returns the messages whose receive count passed the
-// RedrivePolicy's maxReceiveCount next to the ones it hands out, and the
-// Provider puts them on the dead-letter queue after the source queue's lock is
-// released, so no call holds the lock of two queues. The message keeps its id
-// and attributes and the receives so far carry over into ApproximateReceiveCount.
+// RedrivePolicy's maxReceiveCount next to the ones it hands out, and keeps them
+// on the queue, hidden. The Provider puts them on the dead-letter queue after
+// the source queue's lock is released, so no call holds the lock of two queues,
+// and deletes them from the source only once the put worked. A dead-letter
+// queue that is gone or refuses the put loses nothing: the message is received
+// as an ordinary one, and the queue logs the fault once. The message keeps its
+// id and attributes and the receives so far carry over into
+// ApproximateReceiveCount.
 //
 // Message move tasks. A task is a goroutine that takes one message at a time
 // from a dead-letter queue and puts it on its destination (or on the queue it
@@ -89,8 +93,9 @@
 //
 // A snapshot is one moment of the state. Whatever carries a message from one
 // queue to another, a dead-letter move or one message of a move task, holds
-// Provider.transfer for reading from the moment the message leaves its queue to
-// the moment it is on the other. Snapshot holds it for writing, only while it
+// Provider.transfer for reading from the moment it takes the message to the
+// moment the message is on the other queue and gone from the first. Snapshot
+// holds it for writing, only while it
 // copies the queues into memory, each under its own lock; it sorts and encodes
 // the copy with every lock released, streaming to the writer. Restore stops the
 // move tasks and waits for their goroutines before it replaces the state, so

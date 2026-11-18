@@ -311,18 +311,14 @@ func (p *Provider) ReceiveMessage(
 		defer release()
 	}
 
-	taken, changed, err := q.poll(ctx, params, &p.transfer, func(dead []deadLetter) *awserr.Error {
-		return p.deadLetter(rc, q, dead)
+	taken, changed := q.poll(ctx, params, &p.transfer, func(dead []deadLetter) []delivery {
+		return p.deadLetter(q, dead)
 	})
 
 	// A receive that found nothing and dropped nothing leaves the state as it
 	// was, so a client that polls an empty queue does not make persistence save.
 	if changed {
 		p.notifyChanged()
-	}
-
-	if err != nil {
-		return nil, err
 	}
 
 	if len(taken) == 0 {
@@ -437,13 +433,14 @@ const holdSlack = time.Minute
 // one to a dead-letter queue or dropped one past retention.
 //
 // Each look at the queue is a transfer when it finds a message past the
-// redrive limit: the message leaves the queue here and is on the dead-letter
-// queue only once deadLetter has put it there. transfer is held for reading from
-// before the look until deadLetter is done, so a snapshot sees the message in
-// one queue of the two.
+// redrive limit: the message is on the dead-letter queue first and is deleted
+// from this one only after, and a message that cannot move stays here and is
+// received as an ordinary one. transfer is held for reading from before the
+// look until deadLetter is done, so a snapshot sees the message in one queue of
+// the two.
 func (q *Queue) poll(
-	ctx context.Context, params receiveParams, transfer *sync.RWMutex, deadLetter func([]deadLetter) *awserr.Error,
-) (taken []delivery, changed bool, _ *awserr.Error) {
+	ctx context.Context, params receiveParams, transfer *sync.RWMutex, deadLetter func([]deadLetter) []delivery,
+) (taken []delivery, changed bool) {
 	parent := ctx
 
 	if params.wait > 0 {
@@ -453,8 +450,7 @@ func (q *Queue) poll(
 		defer cancel()
 	}
 
-	// held is what a poll that fills its response has to release when it ends,
-	// even when a dead letter fails and the response is dropped.
+	// held is what a poll that fills its response has to release when it ends.
 	var held []delivery
 
 	defer func() { q.release(params, held) }()
@@ -462,7 +458,7 @@ func (q *Queue) poll(
 	last := false
 
 	for {
-		got, wake, err := q.lookAndMove(params, params.count-len(taken), transfer, deadLetter)
+		got, wake := q.lookAndMove(params, params.count-len(taken), transfer, deadLetter)
 		taken = append(taken, got.taken...)
 		changed = changed || len(got.taken) > 0 || len(got.dead) > 0 || got.expired
 
@@ -470,20 +466,16 @@ func (q *Queue) poll(
 			held = append(held, got.taken...)
 		}
 
-		if err != nil {
-			return nil, changed, err
-		}
-
 		done := len(taken) >= params.count || (len(taken) > 0 && !params.fill)
 		if done || wake == nil || params.wait <= 0 || last {
-			return taken, changed, nil
+			return taken, changed
 		}
 
 		select {
 		case <-wake:
 		case <-ctx.Done():
 			if parent.Err() != nil {
-				return taken, changed, nil
+				return taken, changed
 			}
 
 			// The wait ran out, not the request: look once more.
@@ -494,19 +486,59 @@ func (q *Queue) poll(
 
 // lookAndMove is one look at the queue of a poll, and the dead-letter moves it
 // causes. The queue's lock is free by the time the dead letters go to a queue
-// that has a lock of its own.
+// that has a lock of its own. The dead letters that could not move are in the
+// result's taken ones, ahead of the others, as far as want has room for them.
 func (q *Queue) lookAndMove(
-	params receiveParams, want int, transfer *sync.RWMutex, deadLetter func([]deadLetter) *awserr.Error,
-) (receiveResult, <-chan struct{}, *awserr.Error) {
+	params receiveParams, want int, transfer *sync.RWMutex, deadLetter func([]deadLetter) []delivery,
+) (receiveResult, <-chan struct{}) {
 	transfer.RLock()
 	defer transfer.RUnlock()
 
 	got, wake := q.receiveOnce(params, want)
 	if len(got.dead) == 0 {
-		return got, wake, nil
+		return got, wake
 	}
 
-	return got, wake, deadLetter(got.dead)
+	// The messages past the limit are the oldest, and a FIFO queue hands out a
+	// group's messages in order, so they go first.
+	got.taken = append(q.keep(params, deadLetter(got.dead), want-len(got.taken)), got.taken...)
+
+	return got, wake
+}
+
+// keep makes the dead letters that could not move ordinary receives: they are
+// hidden as the receive hides what it takes, as many as room has space for. The
+// others are visible again, so no receive hides a message whose handle nobody
+// gets.
+func (q *Queue) keep(params receiveParams, kept []delivery, room int) []delivery {
+	if len(kept) == 0 {
+		return nil
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	visibility := q.receiveVisibility(params)
+
+	var received []delivery
+
+	for i := range kept {
+		switch {
+		case i >= room:
+			q.contents.ChangeVisibility(kept[i].handle, 0)
+		case params.fill:
+			// The poll releases it when it ends, as it does the others.
+			q.contents.Hold(kept[i].handle)
+
+			received = append(received, kept[i])
+		default:
+			q.contents.ChangeVisibility(kept[i].handle, visibility)
+
+			received = append(received, kept[i])
+		}
+	}
+
+	return received
 }
 
 // release gives the messages of a poll that filled its response the visibility
