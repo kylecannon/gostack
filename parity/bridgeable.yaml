@@ -23,3 +23,36 @@
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_with_endpoint_strategy_domain": SQS_ENDPOINT_STRATEGY
 "tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_endpoint_strategy_with_multi_region[off]": SQS_ENDPOINT_STRATEGY
 "tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_queue_url_format_path_strategy": SQS_ENDPOINT_STRATEGY
+
+# s3: the config variables are S3_SKIP_SIGNATURE_VALIDATION (22 via the
+# patch_s3_skip_signature_validation_false fixture, the rest in the test body),
+# LOCALSTACK_HOST and S3_SKIP_KMS_KEY_VALIDATION. The two KMS tests are also
+# listed in exclusions.yaml as depends-on:kms, which wins.
+"tests/aws/services/s3/test_s3.py::TestS3::test_set_external_hostname": LOCALSTACK_HOST
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key": S3_SKIP_KMS_KEY_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key_state": S3_SKIP_KMS_KEY_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presign_with_additional_query_params": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presign_check_signature_validation_for_port_permutation": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_get_request_expires_ignored_if_validation_disabled": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_put_url_metadata_with_sig_s3v4": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_put_url_metadata_with_sig_s3": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_put_object_with_md5_and_chunk_signature_bad_headers": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_presigned_url_expired": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_put_presigned_url_with_different_headers": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_put_presigned_url_same_header_and_qs_parameter": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_put_presigned_url_missing_sig_param": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_with_session_token": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_with_different_user_credentials": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_get_response_header_overrides": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_signature_authentication_expired": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_signature_authentication": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_signature_authentication_multi_part": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_v4_x_amz_in_qs": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_v4_signed_headers_in_qs": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_pre_signed_url_forward_slash_bucket": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_presign_url_encoding": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_s3_ignored_special_headers": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_pre_signed_url_validation_works_on_internal_account": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_malformed_policy": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_missing_signature": S3_SKIP_SIGNATURE_VALIDATION
+"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_missing_fields": S3_SKIP_SIGNATURE_VALIDATION

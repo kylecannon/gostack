@@ -57,3 +57,67 @@
 "tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_role_access_key": depends-on:iam
 "tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_iam_role_chaining_override_transitive_tags": depends-on:iam
 "tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_assume_role_tag_validation": depends-on:iam
+
+# --- requires_in_process: s3 ----------------------------------------------
+# The other requires_in_process S3 tests patch only localstack.config and run
+# through the config bridge; see parity/bridgeable.yaml. These two patch
+# DefaultRegionRewriterStrategy.apply, a class in the server process.
+"tests/aws/services/s3/test_s3.py::TestS3::test_create_bucket_aws_global": requires_in_process (patches DefaultRegionRewriterStrategy)
+"tests/aws/services/s3/test_s3_list_operations.py::TestS3ListBuckets::test_region_validation_non_standard_regions_enabled": requires_in_process (patches DefaultRegionRewriterStrategy)
+
+# --- hard-skipped: s3 -----------------------------------------------------
+"tests/aws/services/s3/test_s3.py::TestS3::test_access_bucket_different_region": hard-skipped (asf provider - routing for region-path style not working - both provider - return 200 for other regions (no redirects))
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_batch_delete_objects_using_requests_with_acl": hard-skipped (ACL behaviour is not implemented, see comments)
+"tests/aws/services/s3/test_s3_api.py::TestS3DeletePrecondition::test_delete_object_if_match_non_express": hard-skipped (Behavior is not in line anymore with AWS - implement IfMatch in DeleteObject)
+"tests/aws/services/s3/test_s3_api.py::TestS3DeletePrecondition::test_delete_object_if_match_modified_non_express": hard-skipped (Behavior is not in line anymore with AWS - implement IfMatch in DeleteObject)
+"tests/aws/services/s3/test_s3_api.py::TestS3DeletePrecondition::test_delete_object_if_match_size_non_express": hard-skipped (Behavior is not in line anymore with AWS - implement IfMatch in DeleteObject)
+"tests/aws/services/s3/test_s3_api.py::TestS3DeletePrecondition::test_delete_object_if_match_all_non_express": hard-skipped (Behavior is not in line anymore with AWS - implement IfMatch in DeleteObject)
+
+# --- depends-on:sns: s3 -------------------------------------
+# LocalStack gates these on TEST_S3_IMAGE ("SNS not enabled in S3 image") or they
+# need SNS fixtures. SQS-backed notification tests are not excluded.
+"tests/aws/services/s3/test_s3_notifications_sns.py::TestS3NotificationsToSns::test_object_created_put": depends-on:sns
+"tests/aws/services/s3/test_s3_notifications_sns.py::TestS3NotificationsToSns::test_bucket_notifications_with_filter": depends-on:sns
+"tests/aws/services/s3/test_s3_notifications_sns.py::TestS3NotificationsToSns::test_bucket_not_exist": depends-on:sns
+"tests/aws/services/s3/test_s3_notifications_sns.py::TestS3NotificationsToSns::test_invalid_topic_arn": depends-on:sns
+
+# --- depends-on:lambda: s3 ----------------------------------
+# LocalStack gates these on TEST_S3_IMAGE ("Lambda not enabled in S3 image") or they
+# need Lambda fixtures. SQS-backed notification tests are not excluded.
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_download_object_with_lambda": depends-on:lambda
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_lambda_integration": depends-on:lambda
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_v4_x_amz_in_qs": depends-on:lambda
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_v4_signed_headers_in_qs": depends-on:lambda
+"tests/aws/services/s3/test_s3_notifications_lambda.py::TestS3NotificationsToLambda::test_create_object_put_via_dynamodb": depends-on:lambda
+"tests/aws/services/s3/test_s3_notifications_lambda.py::TestS3NotificationsToLambda::test_create_object_by_presigned_request_via_dynamodb": depends-on:lambda
+"tests/aws/services/s3/test_s3_notifications_lambda.py::TestS3NotificationsToLambda::test_invalid_lambda_arn": depends-on:lambda
+
+# --- depends-on:eventbridge: s3 -----------------------------
+# LocalStack gates these on TEST_S3_IMAGE ("EventBridge not enabled in S3 image") or they
+# need EventBridge fixtures. SQS-backed notification tests are not excluded.
+"tests/aws/services/s3/test_s3_notifications_eventbridge.py::TestS3NotificationsToEventBridge::test_object_created_put": depends-on:eventbridge
+"tests/aws/services/s3/test_s3_notifications_eventbridge.py::TestS3NotificationsToEventBridge::test_object_put_acl": depends-on:eventbridge
+"tests/aws/services/s3/test_s3_notifications_eventbridge.py::TestS3NotificationsToEventBridge::test_restore_object": depends-on:eventbridge
+"tests/aws/services/s3/test_s3_notifications_eventbridge.py::TestS3NotificationsToEventBridge::test_object_created_put_in_different_region": depends-on:eventbridge
+"tests/aws/services/s3/test_s3_notifications_eventbridge.py::TestS3NotificationsToEventBridge::test_object_created_put_versioned": depends-on:eventbridge
+
+# --- depends-on:kms: s3 -------------------------------------
+# LocalStack gates these on TEST_S3_IMAGE ("KMS not enabled in S3 image") or they
+# need KMS fixtures. SQS-backed notification tests are not excluded.
+"tests/aws/services/s3/test_s3.py::TestS3::test_copy_object_kms": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_copy_object_in_place_with_encryption": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key_state": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_multipart_upload_sse": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_bucket_key_default": depends-on:kms
+"tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_default_kms_key": depends-on:kms
+"tests/aws/services/s3/test_s3_api.py::TestS3BucketEncryption::test_s3_bucket_encryption_sse_kms": depends-on:kms
+"tests/aws/services/s3/test_s3_api.py::TestS3BucketEncryption::test_s3_bucket_encryption_sse_kms_aws_managed_key": depends-on:kms
+
+# --- depends-on:iam: s3 -------------------------------------
+# LocalStack gates these on TEST_S3_IMAGE ("IAM not enabled in S3 image") or they
+# need IAM fixtures. SQS-backed notification tests are not excluded.
+"tests/aws/services/s3/test_s3.py::TestS3PresignedUrl::test_presigned_url_with_different_user_credentials": depends-on:iam
+"tests/aws/services/s3/test_s3.py::TestS3BucketReplication::test_replication_config_without_filter": depends-on:iam
+"tests/aws/services/s3/test_s3.py::TestS3BucketReplication::test_replication_config": depends-on:iam
+"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_presigned_post_with_different_user_credentials": depends-on:iam
