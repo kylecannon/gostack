@@ -10,8 +10,9 @@ Contracts and rationale: `docs/architecture.md` (parity oracle, layout, HTTP sta
 client ──► gateway listener (TLS / HTTP1 / h2c on one port)   internal/gateway/listener.go
              └─ chi root router, middleware in this order (gateway.go):
                   markInternal, shutdownGuard, claimService (Registration.ClaimHost),
-                  preprocess (each Registration.Preprocess; S3 marks its requests with service.Own
-                  and rewrites virtual-host addressing to path style), CORS (skipped for an OwnCORS
+                  preprocess (a host-claimed request is marked for its claimant with service.Own and
+                  only the claimant's Preprocess runs; otherwise each Registration.Preprocess, where
+                  S3 marks its requests and rewrites virtual-host addressing to path style), CORS (skipped for an OwnCORS
                   owner), decodeContent (skipped for a RawBody owner), responseHeaders, recoverPanic
                   ├─ host claim served ahead of other services' routes (serveClaimed)
                   ├─ internal API routes            internal/internalapi (Mount)
