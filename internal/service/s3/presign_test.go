@@ -54,7 +54,6 @@ const (
 	fieldETag          = "etag"
 	fieldAccessKeyID   = "AWSAccessKeyId"
 	accessKeyTest      = "test"
-	codeAccessDenied   = "AccessDenied"
 	headerCacheControl = "Cache-Control"
 	headerContentSHA   = "X-Amz-Content-Sha256"
 	conditionKey       = "$key"
@@ -319,7 +318,7 @@ func TestPostObject(t *testing.T) {
 			wantStatus: http.StatusForbidden, wantCode: codeAccessDenied,
 		},
 		{
-			name: "no key", fields: [][2]string{{"acl", "private"}},
+			name: "a form without a key field", fields: [][2]string{{"acl", "private"}},
 			wantStatus: http.StatusBadRequest, wantCode: cfgInvalidArgument,
 		},
 		{
