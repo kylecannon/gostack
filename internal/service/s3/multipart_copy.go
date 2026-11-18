@@ -143,7 +143,7 @@ func (p *Provider) openCopySource(account, header string) (*copySource, error) {
 // extract_bucket_key_version_id_from_copy_source does. A path that does not
 // decode is taken as it is, as Python's unquote takes it.
 func parseCopySource(header string) (copySourceName, error) {
-	path, query, _ := strings.Cut(header, "?")
+	path, query, _ := strings.Cut(stripURLPrefix(header), "?")
 	path = strings.ReplaceAll(path, "+", " ")
 
 	unescaped, err := url.PathUnescape(path)
@@ -161,6 +161,34 @@ func parseCopySource(header string) (copySourceName, error) {
 	values, _ := url.ParseQuery(query)
 
 	return copySourceName{bucket: bucket, key: key, versionID: values.Get("versionId")}, nil
+}
+
+// stripURLPrefix drops the scheme and host of a copy source sent as a whole
+// URL, http://host/bucket/key, leaving /bucket/key, as Python's urlparse
+// reads it. AWS takes one (test_response_structure is aws.validated). A
+// scheme is what urlparse takes for one: a letter, then letters, digits,
+// "+", "-" or ".". A bucket name holds no ":", so a plain bucket/key never
+// has one.
+func stripURLPrefix(source string) string {
+	scheme, rest, found := strings.Cut(source, "://")
+	if !found || scheme == "" || !isLetter(rune(scheme[0])) ||
+		strings.ContainsFunc(scheme, func(r rune) bool { return !isSchemeChar(r) }) {
+		return source
+	}
+
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		return rest[i:]
+	}
+
+	return ""
+}
+
+func isLetter(r rune) bool {
+	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z'
+}
+
+func isSchemeChar(r rune) bool {
+	return isLetter(r) || '0' <= r && r <= '9' || r == '+' || r == '-' || r == '.'
 }
 
 // sourceVersion returns the version of key a copy reads: the current one, or

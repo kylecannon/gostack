@@ -119,14 +119,31 @@ func TestCopyObject(t *testing.T) {
 		}
 	})
 
+	t.Run("the source may be a whole URL, read for its path", func(t *testing.T) {
+		s := newServer(t)
+		createBucket(t, s)
+		put(t, s, "/bucket/dir/a%20b.txt", "whole", nil)
+
+		for _, ref := range []string{
+			"http://localhost.localstack.cloud:4566/bucket/dir/a%20b.txt",
+			"https://s3.amazonaws.com/bucket/dir/a+b.txt?versionId=null",
+		} {
+			got := copyTo(s, ref, nil)
+			require.Equal(t, http.StatusOK, got.status, ref+": "+string(got.body))
+			assert.Equal(t, "whole", string(get(s, http.MethodGet, destPath, nil).body), ref)
+		}
+	})
+
 	t.Run("a source with no key is refused", func(t *testing.T) {
 		s := newServer(t)
 		seed(t, s, nil)
 
-		got := copyTo(s, "bucket", nil)
-		require.Equal(t, http.StatusBadRequest, got.status, string(got.body))
-		assert.Equal(t, "InvalidArgument", got.err(t).Code)
-		assert.Contains(t, string(got.body), "<ArgumentName>x-amz-copy-source</ArgumentName>")
+		for _, ref := range []string{bucketPath[1:], "http://localhost:4566" + bucketPath, "http://localhost:4566"} {
+			got := copyTo(s, ref, nil)
+			require.Equal(t, http.StatusBadRequest, got.status, ref+": "+string(got.body))
+			assert.Equal(t, "InvalidArgument", got.err(t).Code, ref)
+			assert.Contains(t, string(got.body), "<ArgumentName>x-amz-copy-source</ArgumentName>", ref)
+		}
 	})
 
 	t.Run("a missing source key or bucket", func(t *testing.T) {
