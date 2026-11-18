@@ -95,10 +95,16 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An unparsable form is read as far as it parses, as werkzeug reads it.
-	_ = r.ParseForm()
+	// The form is read as werkzeug reads it, which also keeps invalid UTF-8 out
+	// of the call.
+	form, formErr := query.RequestForm(r)
+	if formErr != nil {
+		writeQueryError(w, rc, query.MalformedQueryString())
 
-	rc.Operation = r.Form.Get("Action")
+		return
+	}
+
+	rc.Operation = form.Get("Action")
 	if rc.Operation == "" {
 		http.Error(w, "<UnknownOperationException/>", http.StatusNotFound)
 
@@ -113,8 +119,8 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A QueueUrl in the form wins over the URL the call was sent to.
-	if !r.Form.Has("QueueUrl") {
-		r.Form.Set("QueueUrl", baseURL(r))
+	if !form.Has("QueueUrl") {
+		form.Set("QueueUrl", baseURL(r))
 	}
 
 	rc.Request = r.WithContext(request.With(r.Context(), rc))

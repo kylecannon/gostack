@@ -99,8 +99,14 @@ func attributesSize(attrs map[string]sqsapi.MessageAttributeValue) int {
 	return size
 }
 
-// checkContent accepts the characters that XML 1.0 allows in text.
+// checkContent accepts the characters that XML 1.0 allows in text. Bytes that
+// are not UTF-8 are refused: ranging over them reads each one as U+FFFD, which
+// the XML rules allow, and a message stored with them cannot be received again.
 func checkContent(text string) *awserr.Error {
+	if !utf8.ValidString(text) {
+		return sqsapi.NewInvalidMessageContents(messageInvalidContents)
+	}
+
 	for _, r := range text {
 		valid := r == '\t' || r == '\n' || r == '\r' || (r >= 0x20 && r <= 0xD7FF) ||
 			(r >= 0xE000 && r <= 0xFFFD) || (r >= 0x10000 && r <= unicode.MaxRune)

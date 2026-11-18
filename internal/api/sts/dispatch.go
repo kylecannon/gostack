@@ -641,16 +641,14 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	}
 }
 
+// readForm gives the parameters of a query call as LocalStack reads them: the URL's
+// before the body's, with no ";" separator and a malformed escape kept as typed.
 func readForm(rc *request.Context) (url.Values, *awserr.Error) {
-	if err := rc.Request.ParseForm(); err != nil {
-		return nil, &awserr.Error{
-			Code:       "MalformedQueryString",
-			Message:    "The request could not be parsed as a form.",
-			StatusCode: 400,
-			Fault:      awserr.FaultSender,
-		}
+	vals, err := query.RequestForm(rc.Request)
+	if err != nil {
+		return nil, query.MalformedQueryString()
 	}
-	return rc.Request.Form, nil
+	return vals, nil
 }
 
 // missingRequired returns the name of the first required member v lacks, or "".

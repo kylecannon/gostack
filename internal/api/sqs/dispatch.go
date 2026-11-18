@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"unicode/utf8"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -1469,19 +1470,31 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 			Fault:      awserr.FaultSender,
 		}
 	}
+	if !utf8.Valid(body) {
+		return nil, errBodyNotUTF8
+	}
 	return body, nil
 }
 
+// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8. LocalStack's
+// parser raises, and its exception handler turns that into a 500 of this form.
+var errBodyNotUTF8 = &awserr.Error{
+	Code: "CommonServiceException",
+	Message: "exception while calling sqs with unknown operation: " +
+		"HTTP body could not be parsed as JSON.",
+	StatusCode: 500,
+	Fault:      awserr.FaultSender,
+	QueryCode:  "InternalError",
+}
+
+// readForm gives the parameters of a query call as LocalStack reads them: the URL's
+// before the body's, with no ";" separator and a malformed escape kept as typed.
 func readForm(rc *request.Context) (url.Values, *awserr.Error) {
-	if err := rc.Request.ParseForm(); err != nil {
-		return nil, &awserr.Error{
-			Code:       "MalformedQueryString",
-			Message:    "The request could not be parsed as a form.",
-			StatusCode: 400,
-			Fault:      awserr.FaultSender,
-		}
+	vals, err := query.RequestForm(rc.Request)
+	if err != nil {
+		return nil, query.MalformedQueryString()
 	}
-	return rc.Request.Form, nil
+	return vals, nil
 }
 
 // missingRequired returns the name of the first required member v lacks, or "".

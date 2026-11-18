@@ -1,12 +1,10 @@
 package gateway
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -14,15 +12,12 @@ import (
 
 	"github.com/kylecannon/gostack/internal/account"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
 )
 
 const (
-	// maxFormBody is the largest form body the gateway reads to find the Action.
-	// A larger one is left for the service to read.
-	maxFormBody = 16 << 20
-
 	// The bits of a version 4 UUID, RFC 4122 variant: the version occupies the
 	// high nibble of byte 6, the variant the two high bits of byte 8.
 	versionKeep    = 0x0f
@@ -154,49 +149,20 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
 // way werkzeug's request.values does, reading the body at most once. The body
 // is put back, so the service reads it whole.
 type formReader struct {
-	r      *http.Request
-	done   bool
-	merged url.Values
+	r    *http.Request
+	done bool
+	vals url.Values
 }
 
 func (f *formReader) values() url.Values {
-	if f.done {
-		return f.merged
+	if !f.done {
+		f.done = true
+		// A request that cannot be read whole still has the parameters that
+		// read cleanly. The service answers the failure when it reads the form.
+		f.vals, _ = query.RequestForm(f.r)
 	}
 
-	f.done = true
-	f.merged = f.r.URL.Query()
-
-	if !isForm(f.r.Header.Get("Content-Type")) || f.r.Body == nil || f.r.Body == http.NoBody {
-		return f.merged
-	}
-
-	original := f.r.Body
-
-	body, err := io.ReadAll(io.LimitReader(original, maxFormBody+1))
-	f.r.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(body), original), Closer: original}
-
-	if err != nil || len(body) > maxFormBody {
-		return f.merged
-	}
-
-	// A malformed pair is skipped by ParseQuery, as werkzeug skips it.
-	posted, _ := url.ParseQuery(string(body))
-	for name, list := range posted {
-		f.merged[name] = append(f.merged[name], list...)
-	}
-
-	return f.merged
-}
-
-// readCloser reads from one place and closes another.
-type readCloser struct {
-	io.Reader
-	io.Closer
-}
-
-func isForm(contentType string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "application/x-www-form-urlencoded")
+	return f.vals
 }
 
 // newRequestID returns a random UUID, version 4.

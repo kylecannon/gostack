@@ -22,6 +22,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
+	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 )
 
@@ -248,8 +249,11 @@ type devCall struct {
 }
 
 func (p *Provider) beginDevCall(w http.ResponseWriter, r *http.Request) *devCall {
-	// An unparsable form is read as far as it parses, as werkzeug reads it.
-	_ = r.ParseForm()
+	// A form that cannot be read has no parameters, so the call finds no queue.
+	_, err := query.RequestForm(r)
+	if err != nil {
+		r.Form = url.Values{}
+	}
 
 	identity := account.Resolve(r.Header.Get("Authorization"), p.settings().ParityAWSAccessKeyID)
 
@@ -385,13 +389,10 @@ func flagSet(r *http.Request, name string) bool {
 }
 
 // requestValue is werkzeug's request.values.get: the query string wins over the
-// form, and a key given with an empty value is that empty value.
+// form, and a key given with an empty value is that empty value. The form
+// RequestForm read lists the query string's pairs first.
 func requestValue(r *http.Request, name string) string {
-	if query := r.URL.Query(); query.Has(name) {
-		return query.Get(name)
-	}
-
-	return r.PostForm.Get(name)
+	return r.Form.Get(name)
 }
 
 // queueURL reads the QueueUrl of a call. A call that says it is from an AWS

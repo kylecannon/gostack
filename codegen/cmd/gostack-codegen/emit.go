@@ -44,6 +44,7 @@ var importPaths = map[string]string{
 	"service":  "github.com/kylecannon/gostack/internal/service",
 	"slices":   "slices",
 	"url":      "net/url",
+	"utf8":     "unicode/utf8",
 }
 
 // literals matches what is not code: line comments, interpreted strings and raw
