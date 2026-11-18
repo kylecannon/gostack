@@ -227,7 +227,7 @@ func (p *Provider) serveCORS(w http.ResponseWriter, rc *request.Context) bool {
 	origin := r.Header.Get(headerOrigin)
 	if origin == "" {
 		if preflight {
-			writeCORSError(w, rc, awserr.Error{
+			writeErrorWithMethod(w, rc, awserr.Error{
 				Code: "BadRequest", Message: messageCORSNoOrigin, StatusCode: http.StatusBadRequest,
 			}, "", "")
 
@@ -252,7 +252,7 @@ func (p *Provider) serveCORS(w http.ResponseWriter, rc *request.Context) bool {
 	rule := matchCORSRule(rules, r)
 	if rule == nil {
 		if preflight {
-			writeCORSError(w, rc, forbidden(messageCORSDenied), r.Header.Get(headerRequestMethod), "OBJECT")
+			writeErrorWithMethod(w, rc, forbidden(messageCORSDenied), r.Header.Get(headerRequestMethod), resourceObject)
 
 			return true
 		}
@@ -327,7 +327,7 @@ func defaultCORS(w http.ResponseWriter, rc *request.Context, refusal string) boo
 		method = http.MethodOptions
 	}
 
-	writeCORSError(w, rc, forbidden(refusal), method, "BUCKET")
+	writeErrorWithMethod(w, rc, forbidden(refusal), method, resourceBucket)
 
 	return true
 }
@@ -336,9 +336,9 @@ func forbidden(message string) awserr.Error {
 	return awserr.Error{Code: "AccessForbidden", Message: message, StatusCode: http.StatusForbidden}
 }
 
-// writeCORSError answers a preflight with an S3 error that carries the HostId
+// writeErrorWithMethod answers a preflight with an S3 error that carries the HostId
 // and, when they are not empty, the Method and ResourceType members.
-func writeCORSError(w http.ResponseWriter, rc *request.Context, e awserr.Error, method, resourceType string) {
+func writeErrorWithMethod(w http.ResponseWriter, rc *request.Context, e awserr.Error, method, resourceType string) {
 	restxml.WriteS3Error(w, &restxml.Envelope{RequestID: rc.RequestID}, &e, func(xw *restxml.Writer) {
 		xw.String("HostId", hostID)
 

@@ -397,6 +397,40 @@ func TestRequestsS3DoesNotServeYetAnswer501(t *testing.T) {
 	}
 }
 
+// TestMethodsNoOperationTakesAnswer405: LocalStack 8b9a79f answers each of
+// these with a 500 InternalError, "Unable to find operation" (SQ-143 probe).
+// gostack does not copy a crash. AWS's recorded 405s name the method and the
+// resource type.
+func TestMethodsNoOperationTakesAnswer405(t *testing.T) {
+	s := newServer(t)
+	seed(t, s, nil)
+
+	// Path-style and virtual-host requests, on a bucket and on an object. FOO,
+	// LINK and PROPFIND are methods chi does not know.
+	paths := []struct{ host, target, wantResource string }{
+		{"", bucketPath, resourceBucket},
+		{"", bucketPath + "/", resourceBucket},
+		{"", objectPath, resourceObject},
+		{"bucket.s3." + localstackHost, "/key", resourceObject},
+	}
+
+	for _, method := range []string{http.MethodPatch, http.MethodTrace, "FOO", "LINK", "PROPFIND"} {
+		for _, p := range paths {
+			name := method + " " + p.host + p.target
+
+			got := s.do(call{method: method, host: p.host, target: p.target, region: regionUSEast1})
+			require.Equal(t, http.StatusMethodNotAllowed, got.status, name+": "+string(got.body))
+			assert.Contains(t, got.header.Get("Content-Type"), "application/xml", name)
+
+			body := string(got.body)
+			assert.Contains(t, body, "<Code>MethodNotAllowed</Code>", name)
+			assert.Contains(t, body, "<Message>The specified method is not allowed against this resource.</Message>", name)
+			assert.Contains(t, body, "<Method>"+method+"</Method>", name)
+			assert.Contains(t, body, "<ResourceType>"+p.wantResource+"</ResourceType>", name)
+		}
+	}
+}
+
 // TestS3ControlHostIsS3s follows LocalStack, whose S3 pre-router takes any host
 // that matches S3's virtual-host pattern, a *.s3-control.* host among them,
 // before the signing name or the path is read: the /v20180820 path is a bucket

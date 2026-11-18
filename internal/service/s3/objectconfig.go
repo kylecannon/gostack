@@ -8,7 +8,13 @@ import (
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 )
 
-const resourceDeleteMarker = "DeleteMarker"
+// The ResourceType of a MethodNotAllowed, and its message.
+const (
+	resourceDeleteMarker    = "DeleteMarker"
+	resourceBucket          = "BUCKET"
+	resourceObject          = "OBJECT"
+	messageMethodNotAllowed = "The specified method is not allowed against this resource."
+)
 
 // versioned reports whether the bucket has ever had versioning set, which is
 // when its objects report version ids. The caller holds b.mu.
@@ -78,7 +84,7 @@ func methodNotAllowed(method, versionID string) error {
 	return (&s3api.MethodNotAllowed{
 		Method: &method, ResourceType: new(resourceDeleteMarker), DeleteMarker: new(true),
 		Allow: new(http.MethodDelete), VersionId: &versionID,
-	}).Err("The specified method is not allowed against this resource.")
+	}).Err(messageMethodNotAllowed)
 }
 
 // reportedVersionID is the version id a tagging or ACL reply names: none for a

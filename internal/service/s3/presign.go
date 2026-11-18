@@ -88,9 +88,12 @@ var (
 // headers its query carries are moved into the request, so the generated
 // decoder reads them (LocalStack's ParsePreSignedUrlRequest).
 func (p *Provider) serveAPI(w http.ResponseWriter, rc *request.Context) {
-	if refused := p.checkPresigned(rc.Request); refused != nil {
+	refused := p.checkPresigned(rc.Request)
+	op, routed := s3api.Route(rc.Request)
+
+	if refused != nil {
 		rc.Operation = "GetObject"
-		if op, ok := s3api.Route(rc.Request); ok {
+		if routed {
 			rc.Operation = op
 		}
 
@@ -99,11 +102,40 @@ func (p *Provider) serveAPI(w http.ResponseWriter, rc *request.Context) {
 		return
 	}
 
+	if !routed {
+		writeMethodNotAllowed(w, rc)
+
+		return
+	}
+
+	rc.Operation = op
+
 	if rc.Request.Method == http.MethodPost {
 		w = &postWriter{ResponseWriter: w, rc: rc}
 	}
 
 	s3api.Serve(p, w, rc)
+}
+
+// writeMethodNotAllowed answers a request no S3 operation takes, such as a
+// PATCH to a bucket or an object. LocalStack crashes into a 500 InternalError
+// there ("Unable to find operation"), which
+// gostack does not copy (docs/architecture.md, "Behavior the suite does not
+// pin"). AWS's recorded 405s name the method and the resource type, as this
+// does (test_s3.snapshot.json, the website 405 pages).
+func writeMethodNotAllowed(w http.ResponseWriter, rc *request.Context) {
+	r := rc.Request
+	resource := ""
+
+	if bucket, key, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/"); bucket != "" {
+		resource = resourceBucket
+
+		if key != "" {
+			resource = resourceObject
+		}
+	}
+
+	writeErrorWithMethod(w, rc, *s3api.NewMethodNotAllowed(messageMethodNotAllowed), r.Method, resource)
 }
 
 // refusal is an error a presigned request gets before it is decoded, with the
