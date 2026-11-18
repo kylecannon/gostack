@@ -271,7 +271,7 @@ func (v *GetObjectOutput) encodeBindings(h http.Header) {
 	rest.SetInt32(h, "x-amz-mp-parts-count", v.PartsCount)
 	rest.SetInt32(h, "x-amz-tagging-count", v.TagCount)
 	rest.SetString(h, "x-amz-object-lock-mode", v.ObjectLockMode)
-	rest.SetTime(h, "x-amz-object-lock-retain-until-date", v.ObjectLockRetainUntilDate, "iso8601")
+	rest.SetTime(h, "x-amz-object-lock-retain-until-date", v.ObjectLockRetainUntilDate, "s3iso8601")
 	rest.SetString(h, "x-amz-object-lock-legal-hold", v.ObjectLockLegalHoldStatus)
 }
 
@@ -612,7 +612,7 @@ func (v *HeadObjectOutput) encodeBindings(h http.Header) {
 	rest.SetInt32(h, "x-amz-mp-parts-count", v.PartsCount)
 	rest.SetInt32(h, "x-amz-tagging-count", v.TagCount)
 	rest.SetString(h, "x-amz-object-lock-mode", v.ObjectLockMode)
-	rest.SetTime(h, "x-amz-object-lock-retain-until-date", v.ObjectLockRetainUntilDate, "iso8601")
+	rest.SetTime(h, "x-amz-object-lock-retain-until-date", v.ObjectLockRetainUntilDate, "s3iso8601")
 	rest.SetString(h, "x-amz-object-lock-legal-hold", v.ObjectLockLegalHoldStatus)
 }
 

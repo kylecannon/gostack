@@ -168,6 +168,23 @@ func TestObjectLockCanBeTurnedOnForAVersionedBucket(t *testing.T) {
 	assert.Contains(t, string(read.body), "<ObjectLockEnabled>Enabled</ObjectLockEnabled>")
 }
 
+// TestRetainUntilHeaderCarriesMilliseconds: LocalStack's serializer writes the
+// iso8601 header with ".000Z" (_timestamp_iso8601), as it does in a body.
+func TestRetainUntilHeaderCarriesMilliseconds(t *testing.T) {
+	s := newServer(t)
+	createLockedBucket(t, s)
+	lockedPut(t, s, modeGovernance)
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		got := get(s, method, objectPath, nil)
+		require.Equal(t, http.StatusOK, got.status, method)
+		assert.Equal(t, "2099-01-01T00:00:00.000Z", got.header.Get(headerLockUntil), method)
+	}
+
+	body := get(s, http.MethodGet, objectPath+retentionQuery, nil)
+	assert.Contains(t, string(body.body), "<RetainUntilDate>2099-01-01T00:00:00.000Z</RetainUntilDate>")
+}
+
 func TestRetentionKeepsAVersionFromBeingDeleted(t *testing.T) {
 	s := newServer(t)
 	createLockedBucket(t, s)
