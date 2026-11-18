@@ -718,6 +718,16 @@ func Test_Engine_Timer(t *testing.T) {
 			time.Sleep(time.Nanosecond)
 			synctest.Wait()
 			assert.Equal(t, 2, s.count(), "and comes after a second")
+
+			time.Sleep(2*time.Second - time.Nanosecond)
+			synctest.Wait()
+			assert.Equal(t, 2, s.count(), "the next waits twice as long")
+
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			assert.Equal(t, 3, s.count())
+
+			_ = e.Close(t.Context())
 		})
 	})
 }

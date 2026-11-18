@@ -27,7 +27,11 @@ const (
 
 	// retryDelay is the least wait before a failed flush is tried again, so a
 	// PERSIST_FREQUENCY of zero cannot turn a failing disk into a busy loop.
+	// The wait doubles with each failure in a row, up to maxRetryDelay.
 	retryDelay = time.Second
+	// maxRetryDelay is the longest wait between failed flushes, unless
+	// PERSIST_FREQUENCY is longer.
+	maxRetryDelay = 30 * time.Second
 
 	mountinfoPath = "/proc/self/mountinfo"
 )

@@ -460,8 +460,14 @@ cites the lines.
 - A load never overlaps a save, so a state file on disk is always a whole old or
   a whole new state. A save, load or shutdown that waits for the other stops
   waiting when its deadline passes.
-- A failed save is retried no sooner than one second after it failed, even when
-  `PERSIST_FREQUENCY` is zero, and until it succeeds.
+- A failed save is retried until it succeeds. The first retry waits
+  max(1 s, `PERSIST_FREQUENCY`) after the failure, and each failure in a row
+  doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
+  bring a pending retry forward. A successful save resets the wait, so with
+  `PERSIST_FREQUENCY` zero a change is saved at once again.
+- Of a run of failed saves the log shows the first in full, each one whose error
+  differs from the one before, every tenth with the count, and
+  `save recovered after N failures` when a save succeeds.
 
 **Loading and unloadable files:**
 

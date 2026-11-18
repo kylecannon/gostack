@@ -67,10 +67,26 @@ type Engine struct {
 	// that came during a flush, or a service whose flush failed. The flush that
 	// ends next schedules the one after.
 	dirtyAgain bool
-	// retryAt is when a failed flush may be tried again, retryDelay after it
-	// ended. It is zero after a flush that saved everything.
+	// retryAt is when a failed flush may be tried again: the backoff after it
+	// ended. It is zero after a flush that saved what it took.
 	retryAt time.Time
-	closed  bool
+	// failures counts the flushes that failed in a row, and lastFailure is the
+	// error of the last one, so a failing disk is logged when something changes
+	// rather than at every retry.
+	failures    int
+	lastFailure string
+	closed      bool
+}
+
+// outcome is what one flush did to the run of failed flushes.
+type outcome struct {
+	// failures is the number of flushes failed in a row, this one included. It is
+	// zero when the flush saved what it took.
+	failures int
+	// changed is true when this failure's error is not the last one's.
+	changed bool
+	// recovered is the number of failures in a row this flush ended.
+	recovered int
 }
 
 type tracked struct {
@@ -176,12 +192,18 @@ func (e *Engine) Flush(ctx context.Context) error {
 		return fmt.Errorf("flush: %w", err)
 	}
 
-	err = e.writeDirty(ctx)
+	result, err := e.writeDirty(ctx)
 	e.release()
 
 	e.mu.Lock()
 	e.scheduleLocked() //nolint:contextcheck // arms a timer, whose callback has no caller context
 	e.mu.Unlock()
+
+	// A failure is the caller's to report; the end of a run of them is logged here,
+	// since the timer that logged the run will not see it.
+	if result.recovered > 0 {
+		e.logRecovered(result.recovered)
+	}
 
 	return errors.Join(err, e.unsafeErr())
 }
@@ -275,8 +297,8 @@ func (e *Engine) release() {
 // scheduleLocked arms the flush timer when a service is dirty that no flush has
 // taken, and no flush is armed, running or under way. The timer waits
 // PERSIST_FREQUENCY, and at least until retryAt after a failed flush, so a
-// failing disk is retried once a second even when PERSIST_FREQUENCY asks for no
-// wait.
+// failing disk is retried with a backoff even when PERSIST_FREQUENCY asks for no
+// wait. A change while the timer is armed leaves it as it is.
 func (e *Engine) scheduleLocked() {
 	if !e.dirtyAgain || e.timer != nil || e.running || e.flushing || e.closed {
 		return
@@ -312,13 +334,16 @@ func (e *Engine) flushOnTimer(gen uint64) {
 	e.running = true
 	e.mu.Unlock()
 
-	var err error
+	var (
+		result outcome
+		err    error
+	)
 
 	e.sem <- struct{}{} // a Load or a Flush by hand may hold it
 	if e.due() {
 		// The timer has no caller to take a context from, and a flush must run to
 		// completion once the state is marked clean.
-		err = e.writeDirty(context.Background())
+		result, err = e.writeDirty(context.Background())
 	}
 	e.release()
 
@@ -327,9 +352,30 @@ func (e *Engine) flushOnTimer(gen uint64) {
 	e.scheduleLocked()
 	e.mu.Unlock()
 
-	if err != nil {
-		e.log.Error("persist: flush failed", "error", err)
+	e.logOutcome(result, err)
+}
+
+// logOutcome logs a flush by the timer. Of a run of failures it logs the first
+// in full, then each failure whose error changed, then every tenth with the
+// count, and then the save that ends the run. A refused service has been logged
+// by writeAll.
+func (e *Engine) logOutcome(result outcome, err error) {
+	switch {
+	case result.recovered > 0:
+		e.logRecovered(result.recovered)
+	case result.failures == 0:
+	case result.failures == 1 || result.changed:
+		e.log.Error("persist: flush failed; retrying with a backoff",
+			"failures", result.failures, "error", err)
+	case result.failures%10 == 0:
+		e.log.Error("persist: flush still failing", "failures", result.failures, "error", err)
+	default:
+		// The same error again, logged at the next tenth failure.
 	}
+}
+
+func (e *Engine) logRecovered(failures int) {
+	e.log.Info(fmt.Sprintf("persist: save recovered after %d failures", failures))
 }
 
 // due reports whether the timer's flush may run: not after Close, which flushes
@@ -343,16 +389,15 @@ func (e *Engine) due() bool {
 }
 
 // writeDirty writes the dirty services. The caller holds sem.
-func (e *Engine) writeDirty(ctx context.Context) error {
+func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 	pending := e.takeDirty()
 	if len(pending) == 0 {
-		return nil
+		return outcome{}, nil
 	}
 
 	failed, err := e.writeAll(ctx, pending)
-	e.finish(failed)
 
-	return err
+	return e.finish(failed, err), err
 }
 
 // takeDirty clears the dirty bit of every dirty service and returns the safe
@@ -385,21 +430,27 @@ func (e *Engine) takeDirty() []pendingService {
 	return pending
 }
 
-// finish ends a flush. The services that were not saved are dirty again, and the
-// next flush waits at least retryDelay.
-func (e *Engine) finish(failed []pendingService) {
+// finish ends a flush and returns what it did to the run of failures. The
+// services that were not saved are dirty again, and the next flush waits for
+// the backoff.
+func (e *Engine) finish(failed []pendingService, err error) outcome {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	e.flushing = false
 
 	if len(failed) == 0 {
-		e.retryAt = time.Time{}
+		result := outcome{recovered: e.failures}
+		e.failures, e.lastFailure, e.retryAt = 0, "", time.Time{}
 
-		return
+		return result
 	}
 
-	e.retryAt = time.Now().Add(retryDelay)
+	e.failures++
+	text := fmt.Sprint(err)
+	result := outcome{failures: e.failures, changed: text != e.lastFailure}
+	e.lastFailure = text
+	e.retryAt = time.Now().Add(e.backoffLocked())
 
 	for _, p := range failed {
 		t := e.services[p.name]
@@ -408,6 +459,25 @@ func (e *Engine) finish(failed []pendingService) {
 			e.dirtyAgain = true
 		}
 	}
+
+	return result
+}
+
+// backoffLocked is the wait after e.failures failed flushes in a row:
+// max(retryDelay, PERSIST_FREQUENCY) after the first, doubled after each one
+// that follows, up to max(maxRetryDelay, PERSIST_FREQUENCY).
+func (e *Engine) backoffLocked() time.Duration {
+	delay, limit := max(retryDelay, e.freq), max(maxRetryDelay, e.freq)
+
+	for range e.failures - 1 {
+		if delay >= limit {
+			break
+		}
+
+		delay *= 2
+	}
+
+	return min(delay, limit)
 }
 
 // writeAll saves each pending service. It returns the services to try again,

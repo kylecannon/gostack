@@ -125,6 +125,79 @@ func Test_Engine_LinkOutOfTheBaseDir(t *testing.T) {
 	}
 }
 
+// Test_Engine_LinkPlantedAfterLoadIsRefusedAtSave covers the write side: the
+// link appears after Load checked the files, or Load never ran.
+func Test_Engine_LinkPlantedAfterLoadIsRefusedAtSave(t *testing.T) {
+	absolute := func(_, path string) string { return path }
+	climbing := func(base, path string) string {
+		rel, err := filepath.Rel(filepath.Join(base, sqs), path)
+		if err != nil {
+			panic(err)
+		}
+
+		return rel
+	}
+
+	tests := []struct {
+		name     string
+		giveLoad bool
+		giveLink func(base, path string) string
+	}{
+		{name: "absolute, after Load", giveLoad: true, giveLink: absolute},
+		{name: "climbing out, after Load", giveLoad: true, giveLink: climbing},
+		{name: "absolute, no Load", giveLink: absolute},
+		{name: "climbing out, no Load", giveLink: climbing},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			top := t.TempDir()
+			base, outside := filepath.Join(top, "base"), filepath.Join(top, "outside")
+			dir := filepath.Join(base, sqs)
+			require.NoError(t, os.MkdirAll(dir, 0o750))
+			require.NoError(t, os.MkdirAll(outside, 0o750))
+
+			var logs syncBuffer
+
+			e := persist.New(loggedCfg(base, &logs))
+			s := &fake{state: stateB}
+			e.Register(sqs, s)
+			t.Cleanup(func() { _ = e.Close(t.Context()) })
+
+			if tt.giveLoad {
+				require.NoError(t, e.Load(t.Context()))
+			}
+
+			sentinel := filepath.Join(outside, "ld.so.preload")
+			link := tt.giveLink(base, sentinel)
+			require.NoError(t, os.Symlink(link, filepath.Join(dir, jsonFile)))
+
+			e.MarkDirty(sqs)
+
+			err := e.Flush(t.Context())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), sqs)
+			assert.False(t, e.Enabled(sqs), "saving is off for the service")
+			assert.Zero(t, s.count(), "the refusal comes before the snapshot")
+			assert.Contains(t, logs.String(), "level=ERROR")
+			assert.Contains(t, logs.String(), "relative")
+
+			// Saving stays off: a later change is not saved either.
+			e.MarkDirty(sqs)
+			require.Error(t, e.Flush(t.Context()))
+			assert.Zero(t, s.count())
+
+			assert.NoFileExists(t, sentinel, "the file outside is never created")
+			assert.Empty(t, names(t, outside))
+
+			got, err := os.Readlink(filepath.Join(dir, jsonFile))
+			require.NoError(t, err)
+			assert.Equal(t, link, got, "the link itself is left alone")
+			assert.Equal(t, []string{jsonFile}, names(t, dir), "no temp file is left")
+		})
+	}
+}
+
 func Test_Engine_AbsoluteLinkInsideTheBaseDirIsRefused(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, sqs)
