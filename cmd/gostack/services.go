@@ -104,10 +104,11 @@ func (p *providers) close() {
 // the ones PERSIST_* does not enable. A persisted S3 then keeps its bodies as
 // the engine's assets, opened here: after S3 is registered, and before its
 // state loads or is first saved, so no body is written anywhere else. With S3
-// not persisted, or its assets directory unsafe (the engine has logged it and
-// neither loads nor saves S3), the bodies stay in the ephemeral store. Any
-// other failure to open the assets is returned: S3's state would be saved
-// naming bodies that a restart loses.
+// not persisted, or its assets directory unsafe or impossible to make, such as
+// on a read-only base dir, the bodies stay in the ephemeral store: the engine
+// has logged it, neither loads nor saves S3, and health reports S3 as not
+// persisted. Only an S3 the engine cannot give assets to at all, a wiring
+// error, stops the start.
 func (p *providers) persist(eng *persist.Engine) error {
 	for i := range p.regs {
 		if snapshotter := p.regs[i].Persist; snapshotter != nil {

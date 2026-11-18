@@ -330,17 +330,27 @@ func (p *Provider) References() iter.Seq[string] {
 func (p *Provider) Restore(r io.Reader) error {
 	buckets, err := readSnapshot(r)
 
-	p.transfer.Lock()
-	defer p.transfer.Unlock()
-
-	replaced := p.install(buckets)
-
+	// The restored buckets are read here, while nothing else can reach them:
+	// once install publishes them, only a holder of a bucket's lock may.
 	keep := make(map[string]struct{})
+
 	for _, b := range buckets {
 		for _, id := range b.blobIDs() {
 			keep[id] = struct{}{}
 		}
+
+		for _, object := range b.Objects {
+			for _, v := range object.Versions {
+				observeVersionID(v.ID)
+			}
+		}
 	}
+
+	p.transfer.Lock()
+	defer p.transfer.Unlock()
+
+	replaced := p.install(buckets)
+	p.restored = slices.Collect(maps.Keys(keep))
 
 	for _, b := range replaced {
 		for _, id := range b.drop() {
@@ -350,19 +360,20 @@ func (p *Provider) Restore(r io.Reader) error {
 		}
 	}
 
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	for _, b := range buckets {
-		for _, object := range b.Objects {
-			for _, v := range object.Versions {
-				observeVersionID(v.ID)
-			}
-		}
-	}
+// Restored returns the blob ids the snapshot the last Restore read names, and
+// forgets them. It implements persist.Referencer: the engine keeps those bodies
+// through the sweep after a load, since a request may drop one from the state
+// before it calls Remove while the file on disk still names it.
+func (p *Provider) Restored() iter.Seq[string] {
+	p.transfer.Lock()
+	ids := p.restored
+	p.restored = nil
+	p.transfer.Unlock()
 
-	return nil
+	return slices.Values(ids)
 }
 
 // install puts the buckets in their accounts' States, in place of every bucket

@@ -47,6 +47,14 @@ type persisted struct {
 func startPersisted(t *testing.T, dir string) *persisted {
 	t.Helper()
 
+	return startPersistedAs(t, dir, nil)
+}
+
+// startPersistedAs is startPersisted with the engine seeing S3 through as, so a
+// test can act between the engine's calls. A nil as is S3 itself.
+func startPersistedAs(t *testing.T, dir string, as func(*s3.Provider) persist.Snapshotter) *persisted {
+	t.Helper()
+
 	eng := persist.New(persist.Config{
 		PersistVarSet: true, BaseDir: dir, Frequency: time.Hour,
 		MountDetector: func(string) bool { return false },
@@ -57,6 +65,10 @@ func startPersisted(t *testing.T, dir string) *persisted {
 	t.Cleanup(provider.Close)
 
 	reg := provider.Registration()
+	if as != nil {
+		reg.Persist = as(provider)
+	}
+
 	eng.Register(s3Name, reg.Persist)
 
 	assets, err := eng.Assets(s3Name)
@@ -87,7 +99,7 @@ func (p *persisted) flush() {
 
 // blobsDir is where the bodies are on disk.
 func (p *persisted) blobsDir() string {
-	return filepath.Join(p.dir, s3Name, "assets", "blobs")
+	return filepath.Join(p.dir, s3Name, "assets", ".gostack", "blobs")
 }
 
 // blobFiles counts the bodies on disk.

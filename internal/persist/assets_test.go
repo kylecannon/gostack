@@ -37,6 +37,11 @@ type shelf struct {
 	before func()
 	during func()
 	fail   error
+	// restored runs once after the next Restore has replaced the state, as a
+	// request that lands right after it would.
+	restored func()
+	// loaded holds the ids the last Restore read, until Restored takes them.
+	loaded []string
 }
 
 func newShelf() *shelf {
@@ -88,12 +93,19 @@ func (s *shelf) Restore(r io.Reader) error {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	clear(s.ids)
 
-	for _, id := range lines[1:] {
+	s.loaded = lines[1:]
+	for _, id := range s.loaded {
 		s.ids[id] = true
+	}
+
+	restored := s.restored
+	s.restored = nil
+	s.mu.Unlock()
+
+	if restored != nil {
+		restored()
 	}
 
 	return nil
@@ -102,6 +114,15 @@ func (s *shelf) Restore(r io.Reader) error {
 func (s *shelf) References() iter.Seq[string] {
 	s.mu.Lock()
 	ids := slices.Collect(maps.Keys(s.ids))
+	s.mu.Unlock()
+
+	return slices.Values(ids)
+}
+
+func (s *shelf) Restored() iter.Seq[string] {
+	s.mu.Lock()
+	ids := s.loaded
+	s.loaded = nil
 	s.mu.Unlock()
 
 	return slices.Values(ids)
@@ -133,6 +154,13 @@ func (s *shelf) setBefore(before func()) {
 	defer s.mu.Unlock()
 
 	s.before = before
+}
+
+func (s *shelf) setRestored(restored func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.restored = restored
 }
 
 func (s *shelf) set(during func(), fail error) {
@@ -176,7 +204,7 @@ func put(t *testing.T, a *persist.Assets, body string) string {
 }
 
 func assetsOf(dir string) string {
-	return filepath.Join(dir, shelfService, "assets")
+	return filepath.Join(dir, shelfService, "assets", ".gostack")
 }
 
 func blobFile(dir, id string) string {
@@ -333,7 +361,7 @@ func Test_Engine_Assets_FollowsPersistence(t *testing.T) {
 				return
 			}
 
-			assert.DirExists(t, filepath.Join(e.BaseDir(), shelfService, "assets", "blobs", "ff"))
+			assert.DirExists(t, filepath.Join(e.BaseDir(), shelfService, "assets", ".gostack", "blobs", "ff"))
 
 			again, err := e.Assets(shelfService)
 			require.NoError(t, err)
@@ -416,7 +444,7 @@ func Test_Assets_LinkOutOfTheBaseDir(t *testing.T) {
 		dir := t.TempDir()
 		outside := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, shelfService), 0o750))
-		require.NoError(t, os.Symlink(outside, assetsOf(dir)))
+		require.NoError(t, os.Symlink(outside, filepath.Dir(assetsOf(dir))))
 
 		e := persist.New(baseCfg(dir))
 		e.Register(shelfService, newShelf())
@@ -434,7 +462,7 @@ func Test_Assets_LinkOutOfTheBaseDir(t *testing.T) {
 		outside := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, shelfService), 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, shelfService, jsonFile), []byte(shelfHeader+"\nid"), 0o600))
-		require.NoError(t, os.Symlink(outside, assetsOf(dir)))
+		require.NoError(t, os.Symlink(outside, filepath.Dir(assetsOf(dir))))
 
 		e := persist.New(baseCfg(dir))
 		s := newShelf()

@@ -168,13 +168,14 @@ func (e *Engine) Register(service string, s Snapshotter) {
 }
 
 // Assets returns the assets of the service named by service, and opens
-// <base>/<service>/assets on the first call; later calls return the same
-// Assets, which stay open for the life of the process. It returns nil when the
-// service's state is not persisted, as Enabled reports, so a nil Assets goes
-// with health's persisted false. The service must be registered, and its
-// Snapshotter must be a [Referencer]. When the directory is, or is reached
-// through, a link that leaves the base dir, the service is neither loaded nor
-// saved, as for a state file, and the error wraps [ErrUnsafe].
+// <base>/<service>/assets/.gostack on the first call; later calls return the
+// same Assets, which stay open for the life of the process. It returns nil when
+// the service's state is not persisted, as Enabled reports, so a nil Assets
+// goes with health's persisted false. The service must be registered, and its
+// Snapshotter must be a [Referencer]. When the directory cannot be opened, for
+// a link that leaves the base dir as for a state file, or because it cannot be
+// made, the service is neither loaded nor saved and the error wraps
+// [ErrUnsafe].
 func (e *Engine) Assets(service string) (*Assets, error) {
 	if !e.Enabled(service) {
 		return nil, nil //nolint:nilnil // a nil Assets is the answer for a service that is not persisted
@@ -742,34 +743,28 @@ func (e *Engine) loadService(root *os.Root, name string, t *tracked) {
 	}
 
 	ref, keepsAssets := t.snap.(Referencer)
+	if !keepsAssets {
+		e.restore(root, name, t.snap)
 
-	var assets *Assets
+		return
+	}
 
-	if keepsAssets {
-		var err error
+	assets, err := e.openAssets(name, t)
+	if err != nil {
+		e.log.Error("persist: the assets directory could not be opened, so the service is neither loaded nor saved",
+			"service", name, "error", err)
 
-		assets, err = e.openAssets(name, t)
-
-		switch {
-		case errors.Is(err, ErrUnsafe):
-			e.log.Error("persist: the assets directory is a link that leaves the base dir or is absolute, "+
-				"or holds a link or file where a directory belongs, so the service is neither loaded nor saved; "+
-				"use a relative link inside the base dir and real directories under assets/",
-				"service", name, "error", err)
-
-			return
-		case err != nil:
-			e.log.Error("persist: assets could not be opened; the service loads without removing orphans",
-				"service", name, "error", err)
-		default:
-		}
+		return
 	}
 
 	result := e.restore(root, name, t.snap)
 
-	if assets != nil {
-		e.sweepAssets(root, name, ref, assets, result)
+	loaded := make(map[string]struct{})
+	for id := range ref.Restored() {
+		loaded[id] = struct{}{}
 	}
+
+	e.sweepAssets(root, name, ref, assets, result, loaded)
 }
 
 // restore restores s from the first of the service's state files that loads.
@@ -825,12 +820,16 @@ func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, err err
 }
 
 // sweepAssets removes what a crash left in the assets of a service whose state
-// has just loaded: temp files no writer holds, and committed assets its state
-// does not name, except the ones this process committed, which a request may be
-// about to name. Queued removals of assets the restored state names again are
-// dropped. Every asset is kept while a state file of the service sits moved
-// aside, because that file may name them.
-func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Assets, result loaded) {
+// has just loaded: temp files no writer holds, and committed assets that
+// neither its live state nor loadedIDs, the file it loaded, names, except the
+// ones this process committed, which a request may be about to name. The load
+// holds the guard a save holds, so the file loaded is the one on disk. Queued
+// removals of assets the restored state names again are dropped. Every asset is
+// kept while a state file of the service sits moved aside, because that file
+// may name them.
+func (e *Engine) sweepAssets(
+	root *os.Root, name string, ref Referencer, a *Assets, result loaded, loadedIDs map[string]struct{},
+) {
 	err := a.removeTemps()
 	if err != nil {
 		e.log.Error("persist: remove asset temp files", "service", name, "dir", a.dir, "error", err)
@@ -853,7 +852,7 @@ func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Asse
 		return
 	}
 
-	removed, err := a.sweep(refs)
+	removed, err := a.sweep(refs, loadedIDs)
 	if err != nil {
 		e.log.Error("persist: remove orphaned assets", "service", name, "dir", a.dir, "error", err)
 	}
@@ -864,8 +863,11 @@ func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Asse
 }
 
 // openAssets returns the open Assets of a registered service, and opens them when
-// they are not. A link that leaves the base dir turns the service off, and the
-// error wraps [ErrUnsafe].
+// they are not. Assets that cannot be opened turn the service off, whatever the
+// cause, and the error wraps [ErrUnsafe]: a link that leaves the base dir, a
+// link or a file where a directory belongs, or a directory that cannot be made,
+// such as on a read-only base dir. A service saved without its assets would name
+// bodies a restart loses.
 func (e *Engine) openAssets(service string, t *tracked) (*Assets, error) {
 	e.openMu.Lock()
 	defer e.openMu.Unlock()
@@ -879,14 +881,10 @@ func (e *Engine) openAssets(service string, t *tracked) (*Assets, error) {
 	}
 
 	a, err := newAssets(e.dir, service, e.log)
-	if errors.Is(err, errLinkLeaves) || errors.Is(err, errNotDirectory) {
+	if err != nil {
 		e.markUnsafe(service, err)
 
 		return nil, fmt.Errorf("persist %s: %w: %w", service, ErrUnsafe, err)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("assets of %s: %w", service, err)
 	}
 
 	e.mu.Lock()

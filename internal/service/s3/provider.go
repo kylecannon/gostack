@@ -75,6 +75,9 @@ type Provider struct {
 	// so neither falls between a restore's swap of the buckets and of the names.
 	// It is taken before State.mu and Bucket.mu, and never held over a body.
 	transfer sync.RWMutex
+	// restored holds the blob ids the snapshot the last Restore read names,
+	// until Restored hands them to the engine. transfer guards it.
+	restored []string
 
 	// client delivers notifications, and checks their targets, through the
 	// gateway. Bind gives it the handler.

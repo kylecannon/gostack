@@ -715,16 +715,24 @@ outside the base directory.
 bodies, keeps them beside its state through `Engine.Assets(service)`. The
 answer is nil when the service is not persisted, which is when
 `/_gostack/health` reports `persisted: false`. The service's Snapshotter must
-also be a `Referencer`, which yields the ids its state names; SQS is neither
-and is untouched.
+also be a `Referencer`: `References` yields the ids its live state names, and
+`Restored` the ids the file the last `Restore` read names. SQS is neither and
+is untouched.
 
-- Layout: `<base>/<service>/assets/blobs/<id[0:2]>/<id>`, under a random
-  128-bit hex id the engine picks. A file is written once and never changed.
-  Writes in progress live in `assets/tmp/`. The 256 `blobs/` subdirectories are
-  made and fsynced, with their parents, when the assets are opened.
-- Writing happens at request time. `Create` opens a temp file; `Commit` fsyncs
-  it, renames it into `blobs/`, fsyncs that directory and returns the id, all
-  before any snapshot can name the id.
+- Layout: `<base>/<service>/assets/.gostack/blobs/<id[0:2]>/<id>`, under a
+  random 128-bit hex id the engine picks. A file is written once and never
+  changed. Writes in progress live in `assets/.gostack/tmp/`. The 256 `blobs/`
+  subdirectories are made and fsynced, with every parent up to the base
+  directory, when the assets are opened.
+- gostack touches nothing in `assets/` outside `.gostack/`. localstack-persist
+  keeps S3 objects in the same directory, at `<bucket>/<key>@<version>`, and a
+  bucket name starts with a letter or a digit, so no bucket is named `.gostack`.
+  A volume swapped from localstack-persist keeps its buckets, including ones
+  named `tmp` or `blobs`, through every load, save and reset.
+- Writing happens at request time. `Create` opens a temp file; `Commit` marks
+  the id as committed, renames the file into `blobs/`, fsyncs that directory
+  and returns the id, all before any snapshot can name the id. The mark comes
+  before the rename, so a load's sweep that lists the file also knows the id.
 - `Remove` queues the id. A flush takes the queue before it takes the snapshot,
   and deletes those files once the snapshot is renamed into place and its
   directory fsynced. A failed save keeps the queue; a deletion that fails is
@@ -741,14 +749,19 @@ and is untouched.
   between a snapshot and its deletions leaves a file no snapshot names. No
   order of crashes leaves a snapshot that names a missing file.
 - After a service's state loads, the engine deletes temp files no writer holds
-  and every committed asset the state does not name. The exception is an asset
-  this process committed that the state does not name: a request may be on its
-  way to naming it, as `POST /_gostack/state/load` can run beside a write. The
-  engine keeps those ids in memory, not by file time, because a file's time is
-  the end of its last write and says nothing about when it was committed. An id
-  leaves that set when it is removed or when a loaded or saved state names it,
-  so a start, which has committed nothing, removes every orphan. The load also
-  drops queued removals of ids the restored state names again.
+  and every committed asset that neither the live state nor the file just
+  loaded names. The file counts because a request that lands once `Restore`
+  returns can drop an id from the state before it calls `Remove`, while that
+  file, still the one on disk (a load holds the guard a save holds), names the
+  asset. Assets queued for removal are kept too; they go after the next save.
+  The other exception is an asset this process committed that the state does
+  not name: a request may be on its way to naming it, as
+  `POST /_gostack/state/load` can run beside a write. The engine keeps those
+  ids in memory, not by file time, because a file's time is the end of its last
+  write and says nothing about when it was committed. An id leaves that set
+  when it is removed or when a loaded or saved state names it, so a start,
+  which has committed nothing, removes every orphan. The load also drops queued
+  removals of ids the live state names again.
 - The load sweep deletes nothing while a state file of the service sits moved
   aside (`.unloadable-`), because that file may name the assets. Orphaned
   assets build up until the file is removed by hand and gostack restarts or
@@ -764,12 +777,15 @@ and is untouched.
 - A missing asset fails only the object that names it, in whatever way the
   service decides. The state file is not moved aside for it.
 - Confinement: the assets are reached through an `os.Root` on the assets
-  directory, kept open for the life of the process. `Open` and `Remove` accept
-  only 32 lower-case hex digits. An assets directory that is a link leaving the
-  base directory turns the service off, as a state-file link does. So does a
-  link or a file where `tmp/`, `blobs/` or a `blobs/<xx>` directory belongs,
-  checked with `Lstat` when the assets open: a link from a fanout directory to
-  `tmp/` would send a commit into the directory Load empties.
+  directory (`assets/.gostack`), kept open for the life of the process. `Open`
+  and `Remove` accept only 32 lower-case hex digits. An assets directory that is
+  a link leaving the base directory turns the service off, as a state-file link
+  does. So does a link or a file where `tmp/`, `blobs/` or a `blobs/<xx>`
+  directory belongs, checked with `Lstat` when the assets open: a link from a
+  fanout directory to `tmp/` would send a commit into the directory Load
+  empties. So does any other failure to open the assets, such as a read-only
+  base directory: the service runs without loading or saving, and health
+  reports `persisted: false`, so no save can name a body a restart loses.
 - A service calls `Remove` only once its state no longer names the id. A write
   that started before a reset or a load must fail rather than name its asset in
   the new state. S3's reset and its restore mark the buckets they drop gone,
@@ -780,10 +796,10 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 
 - gostack opens S3's assets after the engine registers S3 and before the state
   loads, and S3 writes every body through `persist.NewBlobStore`, the
-  `blob.Store` over them. An assets directory that is unsafe leaves S3 off for
-  saving and loading, with its bodies in memory as without persistence; any
-  other failure to open it stops gostack from starting, since the state would
-  name bodies a restart loses.
+  `blob.Store` over them. An assets directory that is unsafe or cannot be
+  opened, such as on a read-only base directory, leaves S3 off for saving and
+  loading, with its bodies in memory as without persistence. gostack still
+  starts, and the state file already on disk is left as it is.
 - The snapshot holds every bucket of every account with all of its
   subresources, each key's version chain, and each upload in progress with its
   parts. Bodies are named by blob id. A string that is not valid UTF-8, such as
@@ -795,6 +811,8 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
   under the transfer lock, puts each account's restored buckets in place in one
   step and rebuilds the name index. It builds each bucket's sorted key and
   upload indexes before the bucket is visible, since every listing walks them.
+  It reads the restored buckets' body ids and version ids before it publishes
+  them, while no request can reach them, and keeps the body ids for `Restored`.
   Each bucket it replaces is marked gone, so a
   write that found it fails with `NoSuchBucket` and removes its own body, and
   the bodies the replaced buckets named that the restored state does not are
@@ -809,7 +827,7 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus
-  `assets/` for a service that keeps assets. S3 object bodies are assets, not
+  `assets/.gostack/` for a service that keeps assets. S3 object bodies are assets, not
   part of the snapshot.
 - Old localstack-persist data cannot be read, because those files are pickled
   Python objects.

@@ -63,6 +63,11 @@ func (b *bodies) References() iter.Seq[string] {
 	return slices.Values(b.ids)
 }
 
+// Restored names nothing: the double's Restore does not read ids.
+func (*bodies) Restored() iter.Seq[string] {
+	return slices.Values([]string(nil))
+}
+
 func (b *bodies) registration() service.Registration {
 	reg := b.widgets.registration()
 	reg.Persist = b
@@ -283,7 +288,7 @@ func Test_stateController_Reset_removes_assets(t *testing.T) {
 	require.NoError(t, err)
 
 	b.ids = []string{id}
-	blob := filepath.Join(dir, testService, "assets", "blobs", id[:2], id)
+	blob := filepath.Join(dir, testService, "assets", ".gostack", "blobs", id[:2], id)
 
 	require.NoError(t, c.Save(t.Context()))
 

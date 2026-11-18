@@ -19,7 +19,13 @@ import (
 
 const (
 	// assetsDir is a service's assets directory, beside its state files.
+	// localstack-persist keeps S3's objects in the same directory, at
+	// <bucket>/<key>@<version>.
 	assetsDir = "assets"
+	// ownDir is gostack's directory under assetsDir, the only one it touches. A
+	// bucket name starts with a letter or a digit, so no bucket of
+	// localstack-persist's is ever named like it.
+	ownDir = ".gostack"
 	// blobsDir holds the committed assets, at blobs/<id[0:2]>/<id>.
 	blobsDir = "blobs"
 	// tmpDir holds the files of the assets being written.
@@ -48,18 +54,26 @@ var (
 
 // Referencer is implemented by a Snapshotter whose state names assets. A
 // service needs it to get [Assets]: after its state file loads, the engine
-// keeps the assets References names and removes the others, so References has
-// to name every asset the state holds.
+// keeps the assets References or Restored names and removes the others, so
+// References has to name every asset the state holds, and Restored every asset
+// the file Restore read names.
 type Referencer interface {
 	// References returns the ids of the assets the service's state names.
 	References() iter.Seq[string]
+	// Restored returns the ids of the assets the snapshot the last Restore read
+	// names, and forgets them. The engine calls it once after each Restore. It
+	// covers what References cannot: a request that runs once Restore has
+	// returned can drop an id from the state before it calls Remove, while the
+	// file on disk still names the asset.
+	Restored() iter.Seq[string]
 }
 
 // Assets holds the large files of one service, such as S3's object bodies, in
-// <base>/<service>/assets. An asset is written once, under a random id the
-// engine picks, and never changed; the snapshot names it by id. Every file it
-// touches is reached through an os.Root on the assets directory, which it keeps
-// open, so no id or link takes it outside.
+// <base>/<service>/assets/.gostack. An asset is written once, under a random id
+// the engine picks, and never changed; the snapshot names it by id. Every file
+// it touches is reached through an os.Root on that directory, which it keeps
+// open, so no id or link takes it outside, and whatever else sits in assets,
+// such as localstack-persist's buckets, is never read, changed or removed.
 //
 // The files are ordered so that a crash never leaves a snapshot naming a file
 // that is gone. A new asset is fsynced and renamed into place before Commit
@@ -131,7 +145,7 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 
 	defer func() { _ = base.Close() }()
 
-	dir := service + "/" + assetsDir
+	dir := service + "/" + assetsDir + "/" + ownDir
 
 	root, err := openAssetsRoot(base, dir)
 	if err != nil {
@@ -308,24 +322,30 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	dir := blobsDir + "/" + id[:2]
 	path := dir + "/" + id
 
-	err = a.root.Rename(tmp, path)
-	if err != nil {
-		_ = a.root.Remove(tmp)
+	// The id is known as committed before its file is in blobs, so a sweep that
+	// lists the file also finds the id and keeps it.
+	a.mu.Lock()
+	a.committed[id] = struct{}{}
+	a.mu.Unlock()
 
-		return "", fmt.Errorf("commit asset: %w", err)
+	err = a.root.Rename(tmp, path)
+	if err == nil {
+		err = syncDir(a.root, dir)
 	}
 
-	err = syncDir(a.root, dir)
 	if err != nil {
+		_ = a.root.Remove(tmp)
 		_ = a.root.Remove(path)
+
+		a.mu.Lock()
+		delete(a.committed, id)
+		a.mu.Unlock()
 
 		return "", fmt.Errorf("commit asset: %w", err)
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	a.committed[id] = struct{}{}
 
 	if a.saving {
 		a.capturing[id] = struct{}{}
@@ -577,14 +597,18 @@ func (a *Assets) removeTemps() error {
 	return nil
 }
 
-// sweep removes the committed assets refs does not name, and returns how many
-// it removed. An asset this process committed that refs does not name is kept:
-// a request may still be about to name it. No file time decides this, because a
-// file's time is the end of its last write and says nothing about its commit.
-// Before the first Create nothing is kept, so a start removes every orphan the
+// sweep removes the committed assets that neither refs, the live state, nor
+// loaded, the state file just loaded, names, and returns how many it removed.
+// An asset the loaded file names is kept even when the live state has dropped
+// it: the file is on disk until the next save, and the service may not have
+// called Remove yet. An asset this process committed that refs does not name is
+// kept: a request may still be about to name it. So is one queued for removal,
+// which waits for the next save. No file time decides this, because a file's
+// time is the end of its last write and says nothing about its commit. Before
+// the first Create nothing is committed, so a start removes every orphan the
 // last run left. The ids refs names leave the committed set: the state names
 // them now.
-func (a *Assets) sweep(refs map[string]struct{}) (int, error) {
+func (a *Assets) sweep(refs, loaded map[string]struct{}) (int, error) {
 	var orphans []blobEntry
 
 	for entry, err := range a.blobs() {
@@ -592,13 +616,16 @@ func (a *Assets) sweep(refs map[string]struct{}) (int, error) {
 			return 0, err
 		}
 
-		if _, named := refs[entry.name]; !named {
+		_, named := refs[entry.name]
+		_, saved := loaded[entry.name]
+
+		if !named && !saved {
 			orphans = append(orphans, entry)
 		}
 	}
 
-	// Read after the listing: an asset committed by this process is in the
-	// listing only if its commit ran before this read.
+	// Read after the listing: commit marks an id committed before it renames the
+	// file into blobs, so every listed asset this process committed is here.
 	a.mu.Lock()
 	maps.DeleteFunc(a.committed, func(id string, _ struct{}) bool {
 		_, named := refs[id]
@@ -607,6 +634,7 @@ func (a *Assets) sweep(refs map[string]struct{}) (int, error) {
 	})
 
 	kept := maps.Clone(a.committed)
+	maps.Copy(kept, a.removed)
 	a.mu.Unlock()
 
 	removed := 0
@@ -674,8 +702,8 @@ func (a *Assets) blobs() iter.Seq2[blobEntry, error] {
 }
 
 // openAssetsRoot makes dir under base with its tmp and blobs directories and
-// every fanout directory, fsyncs them and the parents of dir, and opens a root
-// on it.
+// every fanout directory, fsyncs them and every parent of dir up to base, and
+// opens a root on it.
 func openAssetsRoot(base *os.Root, dir string) (*os.Root, error) {
 	err := base.MkdirAll(dir, dirMode)
 	if err != nil {
@@ -689,7 +717,7 @@ func openAssetsRoot(base *os.Root, dir string) (*os.Root, error) {
 
 	err = makeAssetDirs(root)
 	if err == nil {
-		err = syncDirs(base, dirOf(dir), ".")
+		err = syncDirs(base, parentsOf(dir)...)
 	}
 
 	if err != nil {
@@ -730,6 +758,18 @@ func makeAssetDirs(root *os.Root) error {
 	}
 
 	return syncDirs(root, blobsDir, ".")
+}
+
+// parentsOf returns every directory above dir, nearest first, ending with ".".
+func parentsOf(dir string) []string {
+	var parents []string
+
+	for dir != "." {
+		dir = dirOf(dir)
+		parents = append(parents, dir)
+	}
+
+	return parents
 }
 
 func syncDirs(root *os.Root, dirs ...string) error {
