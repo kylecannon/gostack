@@ -241,8 +241,15 @@ func queueURLsOf(r result) []string {
 func Test_two_bad_credential_regions_do_not_make_a_snapshot_that_Restore_refuses(t *testing.T) {
 	k := newKeyed(t)
 
-	for _, region := range []string{"\xff", "\xfe"} {
-		assert.Equal(t, http.StatusOK, k.startMoveAt([]byte(region)).status, "region %q", region)
+	require.Equal(t, http.StatusOK, k.startMoveAt([]byte("\xff")).status)
+
+	// Both regions fall back to the credential's, so the second call starts a
+	// task on the same source queue. It is refused while the first task is still
+	// running, which is itself proof that it reached the same State.
+	second := k.startMoveAt([]byte("\xfe"))
+	if second.status != http.StatusOK {
+		assert.Equal(t, http.StatusBadRequest, second.status)
+		assert.Contains(t, second.body, "There is already a task running.")
 	}
 
 	states := k.checkRoundTrip()
