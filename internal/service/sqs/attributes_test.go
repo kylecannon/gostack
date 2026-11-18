@@ -411,7 +411,7 @@ func Test_Permissions(t *testing.T) {
 			}
 			add := func(label string, accounts, actions []string) result {
 				return c.call("AddPermission", map[string]any{
-					paramQueueURL: url, "Label": label, "AWSAccountIds": accounts, "Actions": actions,
+					paramQueueURL: url, paramLabel: label, paramAccountIDs: accounts, paramActions: actions,
 				})
 			}
 
@@ -460,7 +460,7 @@ func Test_Permissions(t *testing.T) {
 
 			t.Run("removing takes the statement out, and the last one the policy", func(t *testing.T) {
 				remove := func(label string) result {
-					return c.call("RemovePermission", map[string]any{paramQueueURL: url, "Label": label})
+					return c.call("RemovePermission", map[string]any{paramQueueURL: url, paramLabel: label})
 				}
 
 				res := remove("nothing")

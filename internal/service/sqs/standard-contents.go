@@ -144,7 +144,7 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) re
 	policy, redriven := c.redrive.of(c.q)
 	redriven = redriven && policy.maxReceives > 0
 
-	var taken []*entry
+	var taken, dying []*entry
 
 	for len(taken) < maxMessages {
 		e := c.visible.pop()
@@ -155,10 +155,7 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) re
 		e.receiveCount++
 
 		if redriven && e.receiveCount > policy.maxReceives {
-			c.forget(e)
-			out.dead = append(out.dead, deadLetter{
-				msg: e.msg, target: policy.target, received: e.msg.receiveBase + e.receiveCount - 1,
-			})
+			dying = append(dying, e)
 
 			continue
 		}
@@ -169,27 +166,17 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) re
 	out.taken = make([]delivery, 0, len(taken))
 
 	for _, e := range taken {
-		if e.firstReceived.IsZero() {
-			e.firstReceived = now
-		}
+		out.taken = append(out.taken, c.deliver(e, now, visibility))
+	}
 
-		handle := newReceiptHandle(c.q.arn, e.msg.id, now)
-		e.handles = append(e.handles, handle)
-		c.receipts[handle] = e
-		out.taken = append(out.taken, delivery{
-			msg: e.msg, handle: handle, receiveCount: e.msg.receiveBase + e.receiveCount, firstReceived: e.firstReceived,
+	// A dead letter stays on the queue, hidden, until the Provider has put it on
+	// its dead-letter queue and deletes it.
+	for _, e := range dying {
+		out.dead = append(out.dead, deadLetter{
+			delivery: c.deliver(e, now, max(visibility, deadLetterHold)),
+			target:   policy.target,
+			received: e.msg.receiveBase + e.receiveCount - 1,
 		})
-
-		if visibility <= 0 {
-			c.makeVisible(e)
-
-			continue
-		}
-
-		e.state = stateInflight
-		e.deadline = now.Add(visibility)
-		c.deadlines.push(e)
-		c.inflight++
 	}
 
 	c.rearm(now)
@@ -256,6 +243,33 @@ func hold(receipts map[string]*entry, handle string) {
 }
 
 func (c *standardContents) Wake() <-chan struct{} { return c.wake.channel() }
+
+// deliver gives a receive of e its receipt handle, and hides e for visibility.
+func (c *standardContents) deliver(e *entry, now time.Time, visibility time.Duration) delivery {
+	if e.firstReceived.IsZero() {
+		e.firstReceived = now
+	}
+
+	handle := newReceiptHandle(c.q.arn, e.msg.id, now)
+	e.handles = append(e.handles, handle)
+	c.receipts[handle] = e
+	out := delivery{
+		msg: e.msg, handle: handle, receiveCount: e.msg.receiveBase + e.receiveCount, firstReceived: e.firstReceived,
+	}
+
+	if visibility <= 0 {
+		c.makeVisible(e)
+
+		return out
+	}
+
+	e.state = stateInflight
+	e.deadline = now.Add(visibility)
+	c.deadlines.push(e)
+	c.inflight++
+
+	return out
+}
 
 // makeVisible puts e where a receive finds it and wakes the long polls.
 func (c *standardContents) makeVisible(e *entry) {

@@ -104,12 +104,28 @@ func statusMain(ctx context.Context, args []string, stdout, stderr io.Writer) (i
 		return exitFailure, true
 	}
 
-	// The server's own default, with the container check, decides the port when
-	// GATEWAY_LISTEN is unset. The request always goes to the loopback address.
-	port := cfg.Settings().GatewayListen[0].Port
-	baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	// The server's own default, with the container check, decides the address
+	// when GATEWAY_LISTEN is unset.
+	baseURL := "http://" + healthAddress(cfg.Settings().GatewayListen[0])
 
 	return runStatus(ctx, baseURL, format, stdout, stderr), true
+}
+
+// healthAddress is the host:port the first GATEWAY_LISTEN entry answers on. A
+// listener bound to every address (an empty host, 0.0.0.0 or ::) answers on the
+// IPv4 loopback address too; any other host, such as 192.0.2.7 or ::1, only
+// answers on itself.
+func healthAddress(listen config.HostPort) string {
+	host := listen.Host
+
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	default:
+		// The listener's own address.
+	}
+
+	return net.JoinHostPort(host, strconv.Itoa(listen.Port))
 }
 
 // runStatus asks the health route at baseURL for the service states and prints

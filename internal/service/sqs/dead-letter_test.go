@@ -141,7 +141,45 @@ func Test_a_FIFO_message_moves_to_a_FIFO_dead_letter_queue(t *testing.T) {
 	}
 }
 
-func Test_a_missing_dead_letter_queue_fails_the_receive(t *testing.T) {
+// Test_a_missing_dead_letter_queue_loses_no_message is the code-review finding
+// on dead-lettering: the message used to leave the source before the put, so a
+// dead-letter queue that was gone took it with it. LocalStack fails the receive
+// and drops the message; here it stays on the source and is received as an
+// ordinary one, until the dead-letter queue is back.
+func Test_a_missing_dead_letter_queue_loses_no_message(t *testing.T) {
+	for _, protocol := range protocols {
+		t.Run(protocol, func(t *testing.T) {
+			c := newStack(t).as(protocol)
+			dead := c.createQueue("dead", nil)
+			deadARN := c.arnOf(dead)
+			source := c.createQueue("source", map[string]string{
+				attrRedrivePolicy: redrivePolicy(t, deadARN, 1),
+			})
+
+			sent := c.send(source, "m", nil)
+			require.Len(t, c.receiveAll(source, nil), 1)
+			require.True(t, c.call(opDeleteQueue, map[string]any{paramQueueURL: dead}).ok())
+
+			// The second receive finds the message past its limit and cannot move it.
+			got := c.receiveAll(source, nil)
+			require.Len(t, got, 1, "the message is still received")
+			assert.Equal(t, sent.str("MessageId"), got[0].id)
+			assert.Equal(t, "2", got[0].system[sysReceiveCount])
+			assert.NotEmpty(t, got[0].handle)
+
+			// Once the dead-letter queue is back the next receive moves it.
+			c.createQueue("dead", nil)
+			assert.Empty(t, c.receiveAll(source, nil))
+			assert.Equal(t, []string{"m"}, bodiesOf(c.receiveAll(c.queueURL("dead"), nil)))
+			assert.Equal(t, "0", attributesOf(c, source)["ApproximateNumberOfMessages"])
+		})
+	}
+}
+
+// Test_a_failed_dead_letter_hides_nothing_unreceived is the finding on poll: the
+// messages of a receive whose dead letters failed were hidden for the visibility
+// timeout and never handed out.
+func Test_a_failed_dead_letter_hides_nothing_unreceived(t *testing.T) {
 	for _, protocol := range protocols {
 		t.Run(protocol, func(t *testing.T) {
 			c := newStack(t).as(protocol)
@@ -150,12 +188,113 @@ func Test_a_missing_dead_letter_queue_fails_the_receive(t *testing.T) {
 				attrRedrivePolicy: redrivePolicy(t, c.arnOf(dead), 1),
 			})
 
-			c.send(source, "m", nil)
+			c.send(source, "old", nil)
 			require.Len(t, c.receiveAll(source, nil), 1)
+			c.send(source, "new", nil)
 			require.True(t, c.call(opDeleteQueue, map[string]any{paramQueueURL: dead}).ok())
 
-			res := c.call(opReceiveMessage, map[string]any{paramQueueURL: source})
-			assert.Equal(t, nonExistentCode(protocol), res.errorCode())
+			// Every message that the receive hides, it hands out.
+			got := c.receive(source, map[string]any{paramMaxMessages: 10, paramVisibilityTimeout: 30})
+			assert.ElementsMatch(t, []string{"old", "new"}, bodiesOf(got))
+
+			counts := attributesOf(c, source)
+			assert.Equal(t, "0", counts["ApproximateNumberOfMessages"])
+			assert.Equal(t, "2", counts["ApproximateNumberOfMessagesNotVisible"])
+
+			for _, m := range got {
+				assert.True(t, c.deleteMessage(source, m.handle).ok(), "the handle of %s is good", m.body)
+			}
+		})
+	}
+}
+
+// Test_a_failed_dead_letter_over_the_receive_size_stays_visible covers the
+// messages of a failed dead-letter move that the response has no room for: they
+// stay visible, not hidden under a handle that nobody gets.
+func Test_a_failed_dead_letter_over_the_receive_size_stays_visible(t *testing.T) {
+	for _, protocol := range protocols {
+		t.Run(protocol, func(t *testing.T) {
+			c := newStack(t).as(protocol)
+			dead := c.createQueue("dead", nil)
+			source := c.createQueue("source", map[string]string{
+				attrRedrivePolicy: redrivePolicy(t, c.arnOf(dead), 1),
+			})
+
+			c.send(source, "a", nil)
+			c.send(source, "b", nil)
+			require.Len(t, c.receiveAll(source, map[string]any{paramMaxMessages: 2}), 2)
+			require.True(t, c.call(opDeleteQueue, map[string]any{paramQueueURL: dead}).ok())
+
+			got := c.receive(source, map[string]any{paramMaxMessages: 1, paramVisibilityTimeout: 30})
+			require.Len(t, got, 1)
+
+			counts := attributesOf(c, source)
+			assert.Equal(t, "1", counts["ApproximateNumberOfMessages"], "the other one is visible")
+			assert.Equal(t, "1", counts["ApproximateNumberOfMessagesNotVisible"])
+		})
+	}
+}
+
+func Test_a_missing_dead_letter_queue_loses_no_FIFO_message(t *testing.T) {
+	c := newStack(t).as(protoJSON)
+	dead := c.createQueue("dead.fifo", map[string]string{attrFifoQueue: valueTrue, attrContentDedu: valueTrue})
+	source := c.createQueue("source.fifo", map[string]string{
+		attrFifoQueue:     valueTrue,
+		attrContentDedu:   valueTrue,
+		attrRedrivePolicy: redrivePolicy(t, c.arnOf(dead), 1),
+	})
+
+	sent := c.sendTo(source, "first", "g", "")
+	c.sendTo(source, "second", "g", "")
+	require.Len(t, c.receiveAll(source, nil), 1)
+	require.True(t, c.call(opDeleteQueue, map[string]any{paramQueueURL: dead}).ok())
+
+	got := c.receiveAll(source, map[string]any{paramMaxMessages: 10, paramVisibilityTimeout: 30})
+	require.Len(t, got, 2)
+	assert.Equal(t, sent.str("MessageId"), got[0].id, "the message that could not move is still first")
+
+	for _, m := range got {
+		assert.True(t, c.deleteMessage(source, m.handle).ok(), "the handle of %s is good", m.body)
+	}
+}
+
+func (c caller) queueURL(name string) string {
+	c.s.t.Helper()
+
+	res := c.call("GetQueueUrl", map[string]any{paramQueueName: name})
+	require.True(c.s.t, res.ok())
+
+	return res.str(paramQueueURL)
+}
+
+// Test_CreateQueue_checks_the_RedrivePolicy is the finding that CreateQueue took
+// a policy that SetQueueAttributes refuses. Whether the target exists is checked
+// by neither, as in LocalStack.
+func Test_CreateQueue_checks_the_RedrivePolicy(t *testing.T) {
+	for _, protocol := range protocols {
+		t.Run(protocol, func(t *testing.T) {
+			c := newStack(t).as(protocol)
+
+			for name, policy := range map[string]string{
+				"no target": `{"maxReceiveCount":3}`,
+				"no count":  `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:gone"}`,
+				"zero":      `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:gone","maxReceiveCount":0}`,
+			} {
+				res := c.call("CreateQueue", map[string]any{
+					paramQueueName: "refused", paramAttributes: map[string]string{attrRedrivePolicy: policy},
+				})
+				assert.Equal(t, invalidParameterCode(protocol), res.errorCode(), name)
+			}
+
+			assert.Empty(t, c.listQueues(), "no queue was made")
+
+			ok := c.call("CreateQueue", map[string]any{
+				paramQueueName: "accepted",
+				paramAttributes: map[string]string{
+					attrRedrivePolicy: `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:gone","maxReceiveCount":3}`,
+				},
+			})
+			assert.True(t, ok.ok(), "a target that does not exist yet is fine")
 		})
 	}
 }

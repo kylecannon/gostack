@@ -141,7 +141,13 @@ func (q *Queue) loadPolicy() (policy, *awserr.Error) {
 		doc["Id"] = q.arn + "/SQSDefaultPolicy"
 	}
 
-	if _, ok := doc["Statement"].([]any); !ok {
+	switch statement := doc["Statement"].(type) {
+	case []any:
+		// Already a list.
+	case map[string]any:
+		// IAM allows a single statement object, which the list keeps.
+		doc["Statement"] = []any{statement}
+	default:
 		doc["Statement"] = []any{}
 	}
 

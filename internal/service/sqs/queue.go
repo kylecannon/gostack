@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -62,8 +63,10 @@ type Contents interface {
 	// Receive hides up to max visible messages for visibility, oldest first,
 	// and returns each with a new receipt handle. A visibility of zero or less
 	// leaves them visible. A message past the maxReceiveCount of the queue's
-	// RedrivePolicy leaves the queue, comes back as a dead letter and does not
-	// count towards max.
+	// RedrivePolicy comes back as a dead letter and does not count towards max.
+	// It stays in flight, with a handle of its own, for at least deadLetterHold:
+	// the caller deletes it once it is on the dead-letter queue, or makes it
+	// visible again when it could not put it there.
 	Receive(maxMessages int, visibility time.Duration) receiveResult
 	// Delete removes the message a receipt handle names, whatever state it is
 	// in. A handle that names none is ignored. A FIFO queue refuses the handle
@@ -105,6 +108,10 @@ type Queue struct {
 	// returns queues in this order.
 	seq uint64
 
+	// deadLetterWarned is set once the queue has logged that a message could
+	// not move to its dead-letter queue, so a lasting fault logs once.
+	deadLetterWarned atomic.Bool
+
 	mu       sync.Mutex
 	attrs    map[string]string
 	tags     map[string]string
@@ -135,6 +142,13 @@ func newQueue(
 	err = validateThroughputPairing(attrs, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	if policy := attrs[attrRedrivePolicy]; policy != "" {
+		err = validateRedrivePolicy(policy)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	err = validateRedriveAllowPolicy(attrs[attrRedriveAllowPolicy])

@@ -76,18 +76,25 @@ type receiveResult struct {
 	// taken are the messages for the receiver.
 	taken []delivery
 	// dead are the messages whose receive count passed the maxReceiveCount of
-	// the queue's RedrivePolicy. They left the queue and wait for the Provider
-	// to put them on the dead-letter queue, which it does without holding the
-	// source queue's lock.
+	// the queue's RedrivePolicy. They stay on the queue, hidden, and wait for
+	// the Provider to put them on the dead-letter queue, which it does without
+	// holding the source queue's lock, and then to delete them.
 	dead []deadLetter
 	// expired is whether the receive found messages past the queue's retention
 	// period and dropped them.
 	expired bool
 }
 
+// deadLetterHold is how long a dead letter stays hidden on its queue, at least,
+// while the Provider puts it on its dead-letter queue. The Provider ends it
+// sooner, by deleting the message or by making it visible again.
+const deadLetterHold = time.Minute
+
 // deadLetter is a message on its way to a dead-letter queue.
 type deadLetter struct {
-	msg *message
+	// delivery is the receive that found the message past the limit. Its handle
+	// deletes the message from the queue once it is on the dead-letter queue.
+	delivery delivery
 	// target is the ARN of the dead-letter queue.
 	target string
 	// received is how many times the receivers got the message: the receive that

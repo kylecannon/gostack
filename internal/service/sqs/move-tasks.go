@@ -114,6 +114,14 @@ func (p *Provider) StartMessageMoveTask(
 	}
 
 	if destination := deref(in.DestinationArn); destination != "" {
+		// A task that moves a queue onto itself takes each message and puts it
+		// back, and never finishes. Neither botocore nor LocalStack says what
+		// AWS answers, so this is the documented constraint: the destination is
+		// another queue than the source.
+		if destination == source {
+			return nil, invalidParameterValue("The DestinationArn must be different from the SourceArn.")
+		}
+
 		_, err = p.requireARN(destination, messageDestinationMissing)
 		if err != nil {
 			return nil, err
@@ -372,6 +380,20 @@ func (p *Provider) moveOne(ctx context.Context, source *Queue, task *moveTask) (
 	got, _ := source.receiveOnce(receiveParams{count: 1, visibility: &visibility}, 1)
 
 	if len(got.dead) > 0 {
+		// What the receive hid, the messages past their limit and one it took
+		// besides, stays on the source, visible again.
+		source.mu.Lock()
+
+		for i := range got.dead {
+			source.contents.ChangeVisibility(got.dead[i].delivery.handle, 0)
+		}
+
+		for i := range got.taken {
+			source.contents.ChangeVisibility(got.taken[i].handle, 0)
+		}
+
+		source.mu.Unlock()
+
 		return false, &awserr.Error{
 			Code: "NotImplementedError", Message: "Cannot deal with DLQ chains in move tasks",
 			StatusCode: http.StatusNotImplemented, Fault: awserr.FaultReceiver,

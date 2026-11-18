@@ -66,17 +66,32 @@ jobs:
           cache-dependency-path: |
             head/go.sum
             base/go.sum
+      # Main has no image until the pull request that adds docker/Dockerfile
+      # merges. A base without one leaves nothing to measure, so the job says so
+      # in the summary and skips the steps below, which keeps it green.
+      - name: Check that the base has an image
+        id: base
+        run: |
+          if [ -f base/docker/Dockerfile ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=false" >> "$GITHUB_OUTPUT"
+            echo "base has no image to measure; nothing to compare" >> "$GITHUB_STEP_SUMMARY"
+          fi
       # The head's Makefile and Dockerfile logic builds both trees, so a base
       # that predates a Make target is still measured.
       - name: Build the base image
+        if: steps.base.outputs.image == 'true'
         working-directory: base
         run: make -f ../head/Makefile image IMAGE=gostack:base
       - name: Build the head image
+        if: steps.base.outputs.image == 'true'
         working-directory: head
         run: make image IMAGE=gostack:head
       # The head's load generator drives both images, so the two runs differ only
       # in the image.
       - name: Measure the base
+        if: steps.base.outputs.image == 'true'
         working-directory: head
         run: |
           go run ./bench run -profile quick -targets gostack -gostack-image gostack:base \
@@ -84,6 +99,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
       - name: Measure the head
+        if: steps.base.outputs.image == 'true'
         working-directory: head
         run: |
           go run ./bench run -profile quick -targets gostack -gostack-image gostack:head \
@@ -91,6 +107,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       - name: Compare
+        if: steps.base.outputs.image == 'true'
         working-directory: head
         run: |
           base=$(ls "$RUNNER_TEMP"/base/*.json)
@@ -100,7 +117,7 @@ jobs:
           cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.base.outputs.image == 'true'
         with:
           name: bench-system-pull-request
           path: |

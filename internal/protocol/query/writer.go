@@ -115,6 +115,9 @@ func (w *Writer) Time(name string, value *protocol.Time, format string) {
 	w.String(name, FormatTime(value, format))
 }
 
+// replacementCharacter is U+FFFD in UTF-8.
+const replacementCharacter = "�"
+
 func (w *Writer) escape(s string) {
 	start := 0
 
@@ -137,7 +140,14 @@ func (w *Writer) escape(s string) {
 
 			repl = "&quot;"
 		default:
-			continue
+			if s[i] >= ' ' || s[i] == '\t' || s[i] == '\n' {
+				continue
+			}
+
+			// A C0 control character is not a character of XML 1.0, as text or
+			// as a reference (&#x1; is not well-formed either). Like
+			// encoding/xml's EscapeText, write U+FFFD in its place.
+			repl = replacementCharacter
 		}
 
 		w.buf = append(w.buf, s[start:i]...)
