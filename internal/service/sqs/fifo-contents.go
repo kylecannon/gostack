@@ -63,6 +63,9 @@ func raiseSequence(restored string) {
 type fifoContents struct {
 	q        *Queue
 	settings func() Settings
+	// scope is the DeduplicationScope the queue was created with. As in AWS,
+	// changing the attribute afterwards does not change it.
+	scope string
 
 	groups    map[string]*group
 	ready     readyList
@@ -88,6 +91,7 @@ func newFIFOContents(q *Queue, settings func() Settings) *fifoContents {
 	return &fifoContents{
 		q:        q,
 		settings: settings,
+		scope:    q.attrs[attrDeduplicationScope],
 		groups:   make(map[string]*group),
 		deadlines: entryHeap{
 			less: func(a, b *entry) bool {
@@ -268,13 +272,11 @@ func (c *fifoContents) ChangeVisibility(handle string, visibility time.Duration)
 }
 
 // dedupKey is what a message is deduplicated on: its id, and with the
-// messageGroup scope its group too. The scope is the queue's DeduplicationScope
-// at the time of the send, so SetQueueAttributes takes effect on the next send,
-// which AWS allows and LocalStack ignores. A record keeps the key, and with it
-// the scope, it was made under: a send after the scope changed does not match a
-// record of the other scope, and the old records leave with their window.
+// messageGroup scope its group too. The scope is the one the queue was created
+// with: SetQueueAttributes stores a new value and GetQueueAttributes shows it,
+// but deduplication keeps the creation scope, as AWS does.
 func (c *fifoContents) dedupKey(m *message) string {
-	if c.q.attrs[attrDeduplicationScope] == scopeMessageGroup {
+	if c.scope == scopeMessageGroup {
 		return m.groupID + "\x00" + m.dedupID
 	}
 

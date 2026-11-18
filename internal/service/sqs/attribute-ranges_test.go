@@ -141,6 +141,10 @@ func Test_Attributes_throughput_limit_pairing(t *testing.T) {
 			giveSet:    map[string]string{attrThroughput: valuePerGroup},
 		},
 		{
+			name:    "the scope and the limit set together after creation",
+			giveSet: map[string]string{attrDedupScope: valueMsgGroup, attrThroughput: valuePerGroup},
+		},
+		{
 			name:    "the limit set on the default scope",
 			giveSet: map[string]string{attrThroughput: valuePerGroup}, wantErr: wantMsg,
 		},

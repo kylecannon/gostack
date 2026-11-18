@@ -50,9 +50,11 @@
 // list and the deduplication records (five minutes, exact, kept in the same heap
 // and dropped at the first whole second after) share the one heap and the one
 // timer, so a FIFO queue adds no goroutine and no wakeup of its own.
-// DeduplicationScope is read from the queue's attributes on each send, so
-// SetQueueAttributes takes effect on the next one (LocalStack reads it at
-// creation). A deduplication record keeps the scope it was made under.
+// DeduplicationScope is fixed at creation, as in AWS: SetQueueAttributes stores
+// a new value and GetQueueAttributes shows it, but deduplication keeps the scope
+// the queue was created with. The AWS-validated LocalStack parity test
+// TestSqsProvider::test_fifo_change_to_high_throughput_after_creation pins it,
+// and a queue's snapshot carries the scope.
 //
 // Dead letters. Receive returns the messages whose receive count passed the
 // RedrivePolicy's maxReceiveCount next to the ones it hands out, and the

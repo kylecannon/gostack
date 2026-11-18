@@ -24,7 +24,7 @@ var _ persistentContents = (*fifoContents)(nil)
 
 func (c *fifoContents) snapshot() contentsData {
 	data := contentsData{
-		Seq: c.seq, Entries: make([]*entryData, 0, c.visible+c.delayed+c.inflight),
+		Seq: c.seq, Scope: c.scope, Entries: make([]*entryData, 0, c.visible+c.delayed+c.inflight),
 		Dedup: make([]dedupData, 0, len(c.dedup)),
 	}
 	store := newEntryStore(c.visible + c.delayed + c.inflight)
@@ -67,6 +67,15 @@ func (c *fifoContents) snapshot() contentsData {
 	return data
 }
 
+// keepScope sets the creation scope a snapshot saved. A snapshot from before the
+// scope was saved has none: the queue's DeduplicationScope attribute, which
+// newFIFOContents read, stands.
+func (c *fifoContents) keepScope(saved string) {
+	if saved != "" {
+		c.scope = saved
+	}
+}
+
 // restore fills an empty fifoContents from a snapshot. It puts each message in
 // its group and the groups in the state they were in, and sets the deadline
 // heap and its timer again: a delayed message whose delay has run out, an
@@ -74,6 +83,8 @@ func (c *fifoContents) snapshot() contentsData {
 // are settled by the time the queue is used.
 func (c *fifoContents) restore(data *contentsData) error {
 	c.seq = data.Seq
+
+	c.keepScope(data.Scope)
 
 	for i := range data.Entries {
 		d := data.Entries[i]
