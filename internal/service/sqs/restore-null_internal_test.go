@@ -129,6 +129,14 @@ func Test_Restore_refuses_a_null_wherever_a_struct_belongs(t *testing.T) {
 
 	tests := map[string]string{
 		"the file":             `null`,
+		"data":                 `{"v":1,"data":null}`,
+		"the list of states":   `{"v":1,"data":{"states":null}}`,
+		"the contents":         strings.Replace(standard, `"contents":{`, `"contents":null,"x":{`, 1),
+		"the list of entries":  strings.Replace(standard, `"entries":[{`, `"entries":null,"x":[{`, 1),
+		"a locked group":       strings.Replace(fifo, `"locked":[`, `"locked":[null,`, 1),
+		"a ready group":        strings.Replace(fifo, `"ready":[`, `"ready":[null,`, 1),
+		"a receipt handle":     strings.Replace(fifo, `"handles":["`, `"handles":[null,"`, 1),
+		"a deleted queue name": strings.Replace(standard, `"next":`, `"deleted":{"gone":null},"next":`, 1),
 		"a state":              `{"v":1,"data":{"states":[null]}}`,
 		"a queue":              strings.Replace(standard, `"queues":[{`, `"queues":[null,{`, 1),
 		"an entry's message":   strings.Replace(standard, `"entries":[{"message":{`, `"entries":[{"message":null,"x":{`, 1),

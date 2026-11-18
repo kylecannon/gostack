@@ -117,6 +117,10 @@ func (c *fifoContents) restore(data *contentsData) error {
 		c.deadlines.push(c.dedup[d.Key])
 	}
 
+	if slices.Contains(data.Locked, "") || slices.Contains(data.Ready, "") {
+		return errors.New("sqs snapshot has a message group without an id")
+	}
+
 	c.restoreGroups(data)
 
 	now := time.Now()

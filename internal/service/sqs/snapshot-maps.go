@@ -13,13 +13,37 @@ import (
 // decoder of encoding/json/v2 builds each map through reflection, which
 // allocates more than the finished map holds, and a restore reads one or two of
 // these maps for every message of every queue.
+//
+// A null where a struct belongs is an error. The decoder would make a zero
+// struct of it, and a snapshot never has one: restore would take a zero message
+// or a queue with no contents for a real one.
 var restoreOptions = json.JoinOptions(
 	snapshotOptions,
 	json.WithUnmarshalers(json.JoinUnmarshalers(
+		json.UnmarshalFromFunc(rejectNull[snapshotFile]),
+		json.UnmarshalFromFunc(rejectNull[snapshotData]),
+		json.UnmarshalFromFunc(rejectNull[stateData]),
+		json.UnmarshalFromFunc(rejectNull[queueData]),
+		json.UnmarshalFromFunc(rejectNull[contentsData]),
+		json.UnmarshalFromFunc(rejectNull[entryData]),
+		json.UnmarshalFromFunc(rejectNull[messageData]),
+		json.UnmarshalFromFunc(rejectNull[dedupData]),
+		json.UnmarshalFromFunc(rejectNull[moveTaskData]),
 		json.UnmarshalFromFunc(unmarshalAttributes),
 		json.UnmarshalFromFunc(unmarshalStrings),
 	)),
 )
+
+// rejectNull is the unmarshaler of a struct of a snapshot: it fails on a null,
+// and for anything else leaves the decoding to the decoder, which is what
+// errors.ErrUnsupported asks for.
+func rejectNull[T any](dec *jsontext.Decoder, _ *T) error {
+	if dec.PeekKind() == 'n' {
+		return errors.New("sqs snapshot has a null where an object belongs")
+	}
+
+	return errors.ErrUnsupported
+}
 
 // unmarshalAttributes reads the message attributes of a message.
 func unmarshalAttributes(dec *jsontext.Decoder, m *map[string]sqsapi.MessageAttributeValue) error {

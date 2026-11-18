@@ -76,6 +76,8 @@ func checkEntry(d *entryData) error {
 		return errors.New("sqs snapshot has a null message entry")
 	case d.Message.ID == "":
 		return errors.New("sqs snapshot has a message without an id")
+	case slices.Contains(d.Handles, ""):
+		return errors.New("sqs snapshot has a message with an empty receipt handle")
 	default:
 		return nil
 	}

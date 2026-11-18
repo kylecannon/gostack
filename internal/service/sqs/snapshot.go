@@ -196,6 +196,9 @@ func (q *Queue) save() (queueData, error) {
 // can start or be cancelled, and none of the stopped ones puts a message on a
 // restored queue. The wait is bounded: a task ends after the message it is
 // moving, and nothing starts a new one.
+//
+// Whatever goes wrong, a panic included, SQS is left empty and usable, and every
+// queue that was built is closed.
 func (p *Provider) Restore(r io.Reader) error {
 	built, err := p.build(r)
 
@@ -209,23 +212,55 @@ func (p *Provider) Restore(r io.Reader) error {
 		return err
 	}
 
+	// A panic while the state goes in leaves half of it there: empty it, and
+	// close the queues that did not get in.
+	defer closeOnPanic(func() {
+		closeBuilt(built)
+		p.Reset("", "")
+	})
+
 	for _, one := range built {
-		state := p.states.Get(one.account, one.region)
-
-		state.mu.Lock()
-		state.next = one.next
-		state.deleted = one.deleted
-		state.moveTasks = one.moveTasks
-		state.moveSeq = one.moveSeq
-
-		for _, q := range one.queues {
-			state.add(q)
-		}
-
-		state.mu.Unlock()
+		p.install(one)
 	}
 
 	return nil
+}
+
+// install puts a built State in the Provider.
+func (p *Provider) install(one builtState) {
+	state := p.states.Get(one.account, one.region)
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	state.next = one.next
+	state.deleted = one.deleted
+	state.moveTasks = one.moveTasks
+	state.moveSeq = one.moveSeq
+
+	for _, q := range one.queues {
+		state.add(q)
+	}
+}
+
+// closeOnPanic is deferred to run fn when its caller panics. The panic goes on.
+func closeOnPanic(fn func()) {
+	//nolint:revive // The caller defers this function itself, so recover is called by the deferred call.
+	if r := recover(); r != nil {
+		fn()
+
+		panic(r)
+	}
+}
+
+// closeBuilt closes the queues of states that are not in the Provider. Closing
+// a queue twice is harmless.
+func closeBuilt(built []builtState) {
+	for _, one := range built {
+		for _, q := range one.queues {
+			q.close()
+		}
+	}
 }
 
 // builtState is a State read from a snapshot and not yet in the Provider.
@@ -239,9 +274,16 @@ type builtState struct {
 }
 
 // build reads a snapshot into queues with their contents restored. A queue
-// that was built before an error is closed, so no timer outlives a failed
-// restore.
+// that was built before an error or a panic is closed, so no timer outlives a
+// failed restore, and a panic comes back as the error of the snapshot that
+// caused it.
 func (p *Provider) build(r io.Reader) (built []builtState, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			built, err = nil, fmt.Errorf("restore sqs snapshot: panic: %v", recovered)
+		}
+	}()
+
 	var file snapshotFile
 
 	dec := jsontext.NewDecoder(r, restoreOptions)
@@ -260,13 +302,16 @@ func (p *Provider) build(r io.Reader) (built []builtState, err error) {
 		return nil, fmt.Errorf("sqs snapshot is version %d, this build reads version %d", file.Version, snapshotVersion)
 	}
 
+	// Snapshot always writes the list, empty when there is no state.
+	if file.Data.States == nil {
+		return nil, errors.New("sqs snapshot has no list of states")
+	}
+
+	done := false
+
 	defer func() {
-		if err != nil {
-			for _, one := range built {
-				for _, q := range one.queues {
-					q.close()
-				}
-			}
+		if !done {
+			closeBuilt(built)
 
 			built = nil
 		}
@@ -283,6 +328,8 @@ func (p *Provider) build(r io.Reader) (built []builtState, err error) {
 		}
 	}
 
+	done = true
+
 	return built, nil
 }
 
@@ -295,12 +342,21 @@ func (p *Provider) buildState(saved *stateData) (builtState, error) {
 		moveTasks: make(map[string]*moveTask, len(saved.MoveTasks)), moveSeq: saved.MoveSeq,
 	}
 
+	// A panic loses the queues made so far, which the caller would never see.
+	defer closeOnPanic(func() { closeBuilt([]builtState{one}) })
+
 	if saved.Account == "" || saved.Region == "" {
 		return one, errors.New("sqs snapshot has a state without an account or region")
 	}
 
 	if one.deleted == nil {
 		one.deleted = make(map[string]time.Time)
+	}
+
+	for name, at := range one.deleted {
+		if at.IsZero() {
+			return one, fmt.Errorf("sqs snapshot has no time for the deleted queue %s", name)
+		}
 	}
 
 	for i := range saved.MoveTasks {
@@ -366,6 +422,16 @@ func (p *Provider) buildQueue(saved *stateData, d *queueData) (*Queue, error) {
 
 		return nil, fmt.Errorf("queue %s (%s): its contents cannot be restored", q.name, q.arn)
 	}
+
+	// Snapshot always writes the list, empty when the queue holds nothing.
+	if d.Contents.Entries == nil {
+		q.close()
+
+		return nil, fmt.Errorf("queue %s (%s): the snapshot has no list of messages", q.name, q.arn)
+	}
+
+	// It runs after the queue's lock is given up, which close takes.
+	defer closeOnPanic(q.close)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
