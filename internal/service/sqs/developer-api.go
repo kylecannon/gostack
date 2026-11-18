@@ -318,7 +318,7 @@ func (p *Provider) listQueueMessages(w http.ResponseWriter, r *http.Request) {
 
 // listQueue answers with the messages of the queue loc names.
 func (p *Provider) listQueue(ctx context.Context, call *devCall, loc location) {
-	q, found := p.states.Get(loc.account, loc.region).find(loc.name)
+	q, found := p.stateAt(loc.account, loc.region).find(loc.name)
 	if !found {
 		call.fail(ctx, sqsapi.NewQueueDoesNotExist(""))
 

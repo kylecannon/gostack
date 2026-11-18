@@ -127,7 +127,7 @@ func (p *Provider) ListDeadLetterSourceQueues(
 
 	var urls []string
 
-	for _, q := range p.states.Get(rc.AccountID, rc.Region).list("") {
+	for _, q := range p.stateAt(rc.AccountID, rc.Region).list("") {
 		if q.redrivesTo(target.arn) {
 			urls = append(urls, queueURL(&settings, rc.Request, q))
 		}
@@ -191,7 +191,7 @@ func (p *Provider) queueByARN(arn string) (*Queue, bool) {
 		return nil, false
 	}
 
-	return p.states.Get(parts.account, parts.region).find(parts.resource)
+	return p.stateAt(parts.account, parts.region).find(parts.resource)
 }
 
 // arnParts are the fields of an ARN that find a queue.

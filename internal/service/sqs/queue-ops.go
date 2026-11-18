@@ -52,7 +52,7 @@ func (p *Provider) CreateQueue(ctx context.Context, in *sqsapi.CreateQueueInput)
 // addQueue adds the queue to the state of the caller's account and region,
 // holding the state's lock so that two creates of one name cannot both win.
 func (p *Provider) addQueue(rc *request.Context, name string, attrs, tags map[string]string) (*Queue, *awserr.Error) {
-	state := p.states.Get(rc.AccountID, rc.Region)
+	state := p.stateAt(rc.AccountID, rc.Region)
 	now := time.Now()
 
 	state.mu.Lock()
@@ -114,7 +114,7 @@ func (p *Provider) DeleteQueue(ctx context.Context, in *sqsapi.DeleteQueueInput)
 	}
 
 	loc := locate(rc, in.QueueUrl)
-	state := p.states.Get(loc.account, loc.region)
+	state := p.stateAt(loc.account, loc.region)
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -150,7 +150,7 @@ func (p *Provider) GetQueueUrl(ctx context.Context, in *sqsapi.GetQueueUrlInput)
 		owner = *in.QueueOwnerAWSAccountId
 	}
 
-	q, found := p.states.Get(owner, rc.Region).find(*in.QueueName)
+	q, found := p.stateAt(owner, rc.Region).find(*in.QueueName)
 	if !found {
 		return nil, queueDoesNotExist(rc)
 	}
@@ -174,7 +174,7 @@ func (p *Provider) ListQueues(ctx context.Context, in *sqsapi.ListQueuesInput) (
 	}
 
 	settings := p.settings()
-	queues := p.states.Get(rc.AccountID, rc.Region).list(prefix)
+	queues := p.stateAt(rc.AccountID, rc.Region).list(prefix)
 
 	urls := make([]string, 0, len(queues))
 	for _, q := range queues {

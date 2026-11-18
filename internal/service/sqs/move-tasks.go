@@ -130,7 +130,7 @@ func (p *Provider) StartMessageMoveTask(
 	task.toMove = int64(sourceQueue.contents.Counts().Visible)
 	sourceQueue.mu.Unlock()
 
-	err = p.states.Get(rc.AccountID, rc.Region).addMoveTask(task)
+	err = p.stateAt(rc.AccountID, rc.Region).addMoveTask(task)
 	if err != nil {
 		cancel()
 
@@ -171,7 +171,7 @@ func (p *Provider) CancelMessageMoveTask(
 		return nil, err
 	}
 
-	task, found := p.states.Get(rc.AccountID, rc.Region).moveTask(taskID)
+	task, found := p.stateAt(rc.AccountID, rc.Region).moveTask(taskID)
 	if !found {
 		return nil, resourceNotFound("Task does not exist.")
 	}
@@ -207,7 +207,7 @@ func (p *Provider) ListMessageMoveTasks(
 		return nil, err
 	}
 
-	tasks := p.states.Get(rc.AccountID, rc.Region).moveTasksOf(source)
+	tasks := p.stateAt(rc.AccountID, rc.Region).moveTasksOf(source)
 
 	limit := 1
 	if in.MaxResults != nil && *in.MaxResults > 0 {
