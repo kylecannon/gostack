@@ -390,6 +390,11 @@ func (q *Queue) receiveParams(
 
 	params.count = count
 
+	// Only the header can make the wait negative.
+	if params.wait < 0 {
+		return params, negativeWait()
+	}
+
 	return params, nil
 }
 
@@ -516,7 +521,7 @@ func (q *Queue) release(params receiveParams, held []delivery) {
 	visibility := q.receiveVisibility(params)
 
 	for i := range held {
-		q.contents.ChangeVisibility(held[i].handle, visibility)
+		q.contents.Release(held[i].handle, visibility)
 	}
 }
 
@@ -542,6 +547,12 @@ func (q *Queue) receiveOnce(params receiveParams, want int) (receiveResult, <-ch
 	}
 
 	got := q.contents.Receive(want, visibility)
+
+	if params.fill {
+		for i := range got.taken {
+			q.contents.Hold(got.taken[i].handle)
+		}
+	}
 
 	var wake <-chan struct{}
 	if params.wait > 0 {

@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -64,6 +65,20 @@ type entryData struct {
 	ReceiveCount  int         `json:"receiveCount,omitzero"`
 	FirstReceived time.Time   `json:"firstReceived,omitzero"`
 	Handles       []string    `json:"handles,omitempty"`
+}
+
+// checkEntry refuses what a null leaves of an entry. The entries are pointers
+// so that sort swaps pointers, and a null is nil; a null where a message belongs
+// is a message with no id, which no message is.
+func checkEntry(d *entryData) error {
+	switch {
+	case d == nil:
+		return errors.New("sqs snapshot has a null message entry")
+	case d.Message.ID == "":
+		return errors.New("sqs snapshot has a message without an id")
+	default:
+		return nil
+	}
 }
 
 // entryStore hands out the entryData of one copy from a single allocation, so a
@@ -161,13 +176,19 @@ func (c *standardContents) restore(data *contentsData) error {
 
 	for i := range data.Entries {
 		d := data.Entries[i]
+
+		err := checkEntry(d)
+		if err != nil {
+			return err
+		}
+
 		e := &entry{
 			msg: d.Message.message(), seq: d.Seq, deadline: d.Deadline,
 			receiveCount: d.ReceiveCount, firstReceived: d.FirstReceived, handles: d.Handles,
 			visibleAt: -1, deadlineAt: -1,
 		}
 
-		err := c.place(e, d.State)
+		err = c.place(e, d.State)
 		if err != nil {
 			return err
 		}

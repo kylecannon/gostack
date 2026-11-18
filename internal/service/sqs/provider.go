@@ -25,9 +25,10 @@ type Provider struct {
 	// changed is called after a call made to a queue URL that changes state, so
 	// persistence can save it. It is set before the Provider serves.
 	changed func()
-	// tasks holds the goroutines of the message move tasks, so that Close can
-	// wait for them.
-	tasks sync.WaitGroup
+	// tasks holds the goroutines of the message move tasks, so that Close and
+	// Restore can wait for them. A start reads it, and stopMoveTasks replaces it,
+	// both under transfer.
+	tasks *sync.WaitGroup
 	// transfer is held for reading by whatever carries a message from one queue
 	// to another, from the moment the message leaves the first to the moment it
 	// is on the second: a dead-letter move, and one message of a move task. A
@@ -53,6 +54,7 @@ func New(settings func() Settings) *Provider {
 	p := &Provider{
 		settings: settings,
 		states:   store.NewBundle(newState),
+		tasks:    new(sync.WaitGroup),
 		stopping: make(chan struct{}),
 	}
 	p.contents = func(q *Queue) Contents {

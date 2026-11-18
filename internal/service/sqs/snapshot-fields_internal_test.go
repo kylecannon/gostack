@@ -86,6 +86,8 @@ func Test_snapshot_data_covers_every_field_of_an_entry(t *testing.T) {
 		skipped: map[string]string{
 			"visibleAt":  "the position in the visible heap, which restore sets by pushing the entry",
 			"deadlineAt": "the position in the deadline heap, which restore sets by pushing the entry",
+			"held": "the long poll that held the message did not survive, so a restored message is in flight " +
+				"until the deadline the snapshot has",
 			"fifo": "a FIFO entry's group comes from the message's groupID and the order of its group's " +
 				"in-flight messages from the order of the snapshot's entries; a deduplication record is dedupData",
 		},

@@ -38,6 +38,10 @@ func unmarshalAttributes(dec *jsontext.Decoder, m *map[string]sqsapi.MessageAttr
 			return err
 		}
 
+		if dec.PeekKind() == 'n' {
+			return fmt.Errorf("message attribute %q is null", name)
+		}
+
 		var value sqsapi.MessageAttributeValue
 
 		err = json.UnmarshalDecode(dec, &value)

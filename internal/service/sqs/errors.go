@@ -50,6 +50,21 @@ func queueDoesNotExist(rc *request.Context) *awserr.Error {
 	return sqsapi.NewQueueDoesNotExist("The specified queue does not exist.")
 }
 
+// negativeWait is LocalStack's answer to a negative override wait. The header
+// goes to queue.Queue.get, which raises a ValueError for a negative timeout
+// whatever the queue holds, and LocalStack's handler turns an error it does not
+// know into this 500: a CommonServiceException that the query protocol names
+// InternalError.
+func negativeWait() *awserr.Error {
+	return &awserr.Error{
+		Code:       "CommonServiceException",
+		Message:    "exception while calling sqs.ReceiveMessage: 'timeout' must be a non-negative number",
+		StatusCode: http.StatusInternalServerError,
+		Fault:      awserr.FaultReceiver,
+		QueryCode:  "InternalError",
+	}
+}
+
 // purgeInProgress is PurgeQueueInProgress, which LocalStack answers with 403
 // where the generated constructor says 400.
 func purgeInProgress(queueName string) *awserr.Error {

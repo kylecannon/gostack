@@ -70,7 +70,7 @@ type stateData struct {
 // contents' own data.
 type queueData struct {
 	Name     string            `json:"name"`
-	FIFO     bool              `json:"fifo,omitempty"`
+	FIFO     bool              `json:"fifo,omitzero"`
 	Seq      uint64            `json:"seq"`
 	Attrs    map[string]string `json:"attributes"`
 	Tags     map[string]string `json:"tags,omitempty"`
@@ -191,10 +191,16 @@ func (q *Queue) save() (queueData, error) {
 // the Snapshotter contract says.
 //
 // A message move task is a goroutine that puts messages on queues it looks up
-// by ARN. Restore stops every one and waits for it before it swaps the state,
-// so that none of them puts a message on a restored queue.
+// by ARN. Restore holds the transfer lock for writing from the moment it stops
+// them until the new state is in. No dead-letter move runs meanwhile, no task
+// can start or be cancelled, and none of the stopped ones puts a message on a
+// restored queue. The wait is bounded: a task ends after the message it is
+// moving, and nothing starts a new one.
 func (p *Provider) Restore(r io.Reader) error {
 	built, err := p.build(r)
+
+	p.transfer.Lock()
+	defer p.transfer.Unlock()
 
 	p.stopMoveTasks()
 	p.Reset("", "")
@@ -299,6 +305,10 @@ func (p *Provider) buildState(saved *stateData) (builtState, error) {
 
 	for i := range saved.MoveTasks {
 		d := &saved.MoveTasks[i]
+
+		if d.ID == "" || d.Source == "" {
+			return one, errors.New("sqs snapshot has a message move task without an id or a source")
+		}
 
 		one.moveTasks[d.ID] = d.task()
 		one.moveSeq = max(one.moveSeq, d.Order)

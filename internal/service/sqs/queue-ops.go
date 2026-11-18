@@ -28,6 +28,11 @@ func (p *Provider) CreateQueue(ctx context.Context, in *sqsapi.CreateQueueInput)
 		return nil, missingParameter("QueueName")
 	}
 
+	err = checkTags(in.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	attrs := maps.Clone(in.Attributes)
 	if value, ok := attrs[attrPolicy]; ok && value == "" {
 		// An empty policy is no policy.

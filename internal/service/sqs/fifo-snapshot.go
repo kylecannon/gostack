@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -77,6 +78,12 @@ func (c *fifoContents) restore(data *contentsData) error {
 
 	for i := range data.Entries {
 		d := data.Entries[i]
+
+		err := checkEntry(d)
+		if err != nil {
+			return err
+		}
+
 		e := &entry{
 			msg: d.Message.message(), seq: d.Seq, deadline: d.Deadline,
 			receiveCount: d.ReceiveCount, firstReceived: d.FirstReceived, handles: d.Handles,
@@ -84,7 +91,7 @@ func (c *fifoContents) restore(data *contentsData) error {
 		}
 		e.fifo = &fifoState{group: c.group(e.msg.groupID)}
 
-		err := c.place(e, d.State)
+		err = c.place(e, d.State)
 		if err != nil {
 			return err
 		}
@@ -99,6 +106,10 @@ func (c *fifoContents) restore(data *contentsData) error {
 
 	for i := range data.Dedup {
 		d := &data.Dedup[i]
+		if _, twice := c.dedup[d.Key]; d.Key == "" || twice {
+			return errors.New("sqs snapshot has a deduplication record without a key, or two with one")
+		}
+
 		c.dedup[d.Key] = &entry{
 			state: stateDedup, deadline: ceilSecond(d.Expires), visibleAt: -1, deadlineAt: -1,
 			fifo: &fifoState{dedupKey: d.Key, original: d.Original, sequence: d.Sequence, expires: d.Expires},

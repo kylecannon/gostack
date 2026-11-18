@@ -223,7 +223,7 @@ func Test_a_snapshot_waits_for_a_move_task_message(t *testing.T) {
 	go func() {
 		defer close(moved)
 
-		found, failure := c.p.moveOne(c.dead, task)
+		found, failure := c.p.moveOne(t.Context(), c.dead, task)
 		assert.True(t, found)
 		assert.Nil(t, failure)
 	}()

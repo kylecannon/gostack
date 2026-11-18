@@ -71,9 +71,18 @@ type Contents interface {
 	Delete(handle string) *awserr.Error
 	// ChangeVisibility hides the in-flight message a receipt handle names for
 	// visibility from now on, or makes it visible at once for a visibility of
-	// zero or less. A message that is not in flight is left as it is. It
-	// reports whether the handle names a message.
+	// zero or less. A message that is not in flight, or that a long poll holds
+	// (see Hold), is left as it is. It reports whether the handle names a
+	// message.
 	ChangeVisibility(handle string, visibility time.Duration) bool
+	// Hold marks the message a receipt handle names as held by a long poll that
+	// has not ended. LocalStack keeps such a message in neither of its
+	// collections, so no ChangeVisibility reaches it. A message is held until
+	// Release or until it leaves the queue.
+	Hold(handle string)
+	// Release ends the hold of the message a receipt handle names and
+	// changes its visibility as ChangeVisibility does.
+	Release(handle string, visibility time.Duration)
 	// Wake returns a channel that is closed the next time a message may have
 	// become visible. It returns nil once the contents are closed.
 	Wake() <-chan struct{}

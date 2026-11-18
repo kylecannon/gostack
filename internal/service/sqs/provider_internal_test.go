@@ -194,13 +194,13 @@ func Test_Reset(t *testing.T) {
 	assert.Equal(t, []int{1, 1, 1}, []int{made[0].closed, made[1].closed, made[2].closed})
 }
 
-func callContext(t *testing.T) context.Context {
+func callContext(t testing.TB) context.Context {
 	t.Helper()
 
 	return callContextAs(t, "000000000000", "us-east-1")
 }
 
-func callContextAs(t *testing.T, account, region string) context.Context {
+func callContextAs(t testing.TB, account, region string) context.Context {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), "POST", "/", nil)

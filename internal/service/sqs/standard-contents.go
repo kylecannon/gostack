@@ -36,6 +36,9 @@ type entry struct {
 	receiveCount  int
 	firstReceived time.Time
 	handles       []string
+	// held is set while a long poll that fills its response has the message:
+	// the poll sets its real visibility when it ends. It is not saved.
+	held bool
 	// visibleAt and deadlineAt are the positions in the two heaps, -1 when out.
 	visibleAt, deadlineAt int
 	// fifo is what only an entry of a FIFO queue has, nil for a standard one.
@@ -216,8 +219,8 @@ func (c *standardContents) ChangeVisibility(handle string, visibility time.Durat
 	c.refresh(now)
 
 	// A message that is visible again is not in flight, and the call leaves it
-	// alone.
-	if e.state != stateInflight {
+	// alone, as it does a message that a long poll holds.
+	if e.state != stateInflight || e.held {
 		return true
 	}
 
@@ -233,6 +236,23 @@ func (c *standardContents) ChangeVisibility(handle string, visibility time.Durat
 	c.rearm(now)
 
 	return true
+}
+
+func (c *standardContents) Hold(handle string) { hold(c.receipts, handle) }
+
+func (c *standardContents) Release(handle string, visibility time.Duration) {
+	if e, ok := c.receipts[handle]; ok {
+		e.held = false
+	}
+
+	c.ChangeVisibility(handle, visibility)
+}
+
+// hold marks the entry of a receipt handle as held by a long poll.
+func hold(receipts map[string]*entry, handle string) {
+	if e, ok := receipts[handle]; ok {
+		e.held = true
+	}
 }
 
 func (c *standardContents) Wake() <-chan struct{} { return c.wake.channel() }

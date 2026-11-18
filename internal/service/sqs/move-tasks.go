@@ -27,6 +27,10 @@ const (
 // move task puts it on its destination, as in LocalStack.
 const moveVisibility = int32(1)
 
+// transferRetry is how long a task waits between two tries for the transfer
+// lock while a snapshot or a restore holds it.
+const transferRetry = time.Millisecond
+
 // Messages of the errors a move task call answers with.
 const (
 	messageSourceMissing      = "The resource that you specified for the SourceArn parameter doesn't exist."
@@ -92,6 +96,12 @@ func (p *Provider) StartMessageMoveTask(
 		return nil, err
 	}
 
+	// Restore holds the lock for writing while it stops the tasks and swaps the
+	// state, so a start waits for it and then runs on the restored state, and a
+	// task started before it is one that Restore stops.
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	source := deref(in.SourceArn)
 
 	sourceQueue, err := p.requireARN(source, messageSourceMissing)
@@ -127,6 +137,8 @@ func (p *Provider) StartMessageMoveTask(
 		return nil, err
 	}
 
+	// The group is read under the lock: stopMoveTasks swaps it under the lock
+	// for writing.
 	p.tasks.Go(func() {
 		defer cancel()
 
@@ -150,6 +162,9 @@ func (p *Provider) CancelMessageMoveTask(
 	if !ok {
 		return nil, invalidParameterValue("Value for parameter TaskHandle is invalid.")
 	}
+
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
 
 	_, err = p.requireARN(source, messageSourceMissing)
 	if err != nil {
@@ -322,7 +337,7 @@ func (p *Provider) moveMessages(ctx context.Context, task *moveTask) *awserr.Err
 			return sqsapi.NewQueueDoesNotExist("The specified queue does not exist.")
 		}
 
-		moved, err := p.moveOne(source, task)
+		moved, err := p.moveOne(ctx, source, task)
 		if err != nil || !moved {
 			return err
 		}
@@ -344,10 +359,13 @@ func (p *Provider) moveMessages(ctx context.Context, task *moveTask) *awserr.Err
 // moveOne takes a message from the source and puts it on its destination. The
 // message is deleted from the source only after the put, so a failed move loses
 // nothing. It reports whether there was a message.
-func (p *Provider) moveOne(source *Queue, task *moveTask) (bool, *awserr.Error) {
+func (p *Provider) moveOne(ctx context.Context, source *Queue, task *moveTask) (bool, *awserr.Error) {
 	// A snapshot waits until the message is on its destination and gone from its
 	// source, or still only on its source.
-	p.transfer.RLock()
+	if !p.rlockTransfer(ctx) {
+		return false, nil
+	}
+
 	defer p.transfer.RUnlock()
 
 	visibility := moveVisibility
@@ -455,15 +473,21 @@ func (s *State) cancelMoveTasks() {
 	}
 }
 
-// Close stops every message move task and waits for their goroutines. The
-// provider serves no more calls that start one afterwards only if its caller
-// stops sending them first.
+// Close stops every message move task and waits for their goroutines. A call
+// that starts one after Close starts it as usual, so the caller stops sending
+// them first.
 func (p *Provider) Close() {
+	p.transfer.Lock()
+	defer p.transfer.Unlock()
+
 	p.stopMoveTasks()
 }
 
 // stopMoveTasks cancels every message move task and waits until each of their
-// goroutines has ended, the message it was moving included.
+// goroutines has ended, the message it was moving included. The caller holds the
+// transfer lock for writing, so no task starts meanwhile and the wait is
+// bounded by one message move. Each call waits on a group of its own, which no
+// start can add to afterwards.
 func (p *Provider) stopMoveTasks() {
 	p.states.Range(func(_, _ string, state *State) bool {
 		state.cancelMoveTasks()
@@ -471,5 +495,23 @@ func (p *Provider) stopMoveTasks() {
 		return true
 	})
 
-	p.tasks.Wait()
+	tasks := p.tasks
+	p.tasks = new(sync.WaitGroup)
+
+	tasks.Wait()
+}
+
+// rlockTransfer takes the transfer lock for reading, and gives up with false
+// when ctx ends first. A task cannot block on the lock plainly: Restore holds it
+// for writing while it waits for the task to end, which it would never do.
+func (p *Provider) rlockTransfer(ctx context.Context) bool {
+	for !p.transfer.TryRLock() {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		pause(ctx, transferRetry)
+	}
+
+	return true
 }

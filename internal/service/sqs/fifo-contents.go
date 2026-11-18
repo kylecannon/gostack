@@ -129,6 +129,16 @@ func (c *fifoContents) Close() {
 	c.wake.shutdown()
 }
 
+func (c *fifoContents) Hold(handle string) { hold(c.receipts, handle) }
+
+func (c *fifoContents) Release(handle string, visibility time.Duration) {
+	if e, ok := c.receipts[handle]; ok {
+		e.held = false
+	}
+
+	c.ChangeVisibility(handle, visibility)
+}
+
 func (c *fifoContents) Wake() <-chan struct{} { return c.wake.channel() }
 
 func (c *fifoContents) Put(m *message, delay time.Duration) {
@@ -240,8 +250,8 @@ func (c *fifoContents) ChangeVisibility(handle string, visibility time.Duration)
 	c.refresh(now)
 
 	// A message that is visible again is not in flight, and the call leaves it
-	// alone.
-	if e.state != stateInflight {
+	// alone, as it does a message that a long poll holds.
+	if e.state != stateInflight || e.held {
 		return true
 	}
 
