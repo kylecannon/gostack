@@ -232,6 +232,15 @@ func Test_Config_PersistConfig(t *testing.T) {
 		require.Equal(t, persist.Immediate, got.Frequency)
 	})
 
+	t.Run("a lower-case variable name reaches the engine", func(t *testing.T) {
+		got := load(t, "persist_default=0", "persist_sqs=1").PersistConfig(serviceSQS, "sts")
+		engine := persist.New(got)
+
+		require.True(t, got.PersistVarSet)
+		require.True(t, engine.Enabled(serviceSQS))
+		require.False(t, engine.Enabled("sts"))
+	})
+
 	t.Run("a hyphenated expansion is not found under a registered name", func(t *testing.T) {
 		got := load(t, persistDefaultOff, persistCognitoOn).PersistConfig(svcCognitoIDP)
 
