@@ -142,6 +142,11 @@ func (q *Queue) setAttributes(attrs map[string]string) *awserr.Error {
 		}
 	}
 
+	err = validateRedriveAllowPolicy(attrs[attrRedriveAllowPolicy])
+	if err != nil {
+		return err
+	}
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -156,7 +161,7 @@ func (q *Queue) setAttributes(attrs map[string]string) *awserr.Error {
 	}
 
 	// An empty policy is no policy.
-	for _, name := range []string{attrPolicy, attrRedrivePolicy} {
+	for _, name := range []string{attrPolicy, attrRedrivePolicy, attrRedriveAllowPolicy} {
 		if q.attrs[name] == "" {
 			delete(q.attrs, name)
 		}

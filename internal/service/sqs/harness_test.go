@@ -87,6 +87,9 @@ func newStack(t *testing.T) *stack {
 	)
 	require.NoError(t, err)
 
+	// A message move task is a goroutine, and a test leaves none behind.
+	t.Cleanup(provider.Close)
+
 	return &stack{t: t, handler: gw.Handler(), settings: settings, provider: provider}
 }
 

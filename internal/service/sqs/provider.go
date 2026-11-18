@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -24,6 +25,9 @@ type Provider struct {
 	// changed is called after a call made to a queue URL that changes state, so
 	// persistence can save it. It is set before the Provider serves.
 	changed func()
+	// tasks holds the goroutines of the message move tasks, so that Close can
+	// wait for them.
+	tasks sync.WaitGroup
 }
 
 var _ sqsapi.Handler = (*Provider)(nil)
@@ -40,7 +44,13 @@ func New(settings func() Settings) *Provider {
 		settings: settings,
 		states:   store.NewBundle(newState),
 	}
-	p.contents = func(q *Queue) Contents { return newStandardContents(q, p.settings) }
+	p.contents = func(q *Queue) Contents {
+		if q.kind == kindFIFO {
+			return newFIFOContents(q, p.settings)
+		}
+
+		return newStandardContents(q, p.settings)
+	}
 
 	return p
 }
@@ -85,6 +95,7 @@ func (p *Provider) OnChange(fn func()) {
 func (p *Provider) Reset(accountID, region string) {
 	p.states.Range(func(stateAccount, stateRegion string, state *State) bool {
 		if (accountID == "" || accountID == stateAccount) && (region == "" || region == stateRegion) {
+			state.cancelMoveTasks()
 			state.Range(func(q *Queue) bool {
 				q.close()
 

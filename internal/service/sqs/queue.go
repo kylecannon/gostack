@@ -55,15 +55,20 @@ type Contents interface {
 	// afterwards.
 	Close()
 	// Put adds a message that stays hidden for delay. The message's sent time
-	// is the clock of the call.
+	// is the clock of the call. A FIFO queue sets the message's dedupID and
+	// sequence, and for a duplicate of a message it holds, takes the id and
+	// the sequence of that original over, so the sender sees them.
 	Put(m *message, delay time.Duration)
 	// Receive hides up to max visible messages for visibility, oldest first,
 	// and returns each with a new receipt handle. A visibility of zero or less
-	// leaves them visible.
-	Receive(maxMessages int, visibility time.Duration) []delivery
+	// leaves them visible. A message past the maxReceiveCount of the queue's
+	// RedrivePolicy leaves the queue, comes back as a dead letter and does not
+	// count towards max.
+	Receive(maxMessages int, visibility time.Duration) receiveResult
 	// Delete removes the message a receipt handle names, whatever state it is
-	// in. A handle that names none is ignored.
-	Delete(handle string)
+	// in. A handle that names none is ignored. A FIFO queue refuses the handle
+	// of a message that is visible again.
+	Delete(handle string) *awserr.Error
 	// ChangeVisibility hides the in-flight message a receipt handle names for
 	// visibility from now on, or makes it visible at once for a visibility of
 	// zero or less. A message that is not in flight is left as it is. It
@@ -114,6 +119,11 @@ func newQueue(
 	}
 
 	err = validateAttributes(kind, attrs)
+	if err != nil {
+		return nil, err
+	}
+
+	err = validateRedriveAllowPolicy(attrs[attrRedriveAllowPolicy])
 	if err != nil {
 		return nil, err
 	}

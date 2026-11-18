@@ -45,6 +45,9 @@ const (
 	fieldQueueURL = "QueueUrl"
 	fieldAction   = "Action"
 
+	// opReceiveMessage is the one operation the developer API answers.
+	opReceiveMessage = "ReceiveMessage"
+
 	// backdoorReceiptHandle is the receipt handle of every listed message. It
 	// names nothing, so a message cannot be deleted through it.
 	backdoorReceiptHandle = "SQS/BACKDOOR/ACCESS"

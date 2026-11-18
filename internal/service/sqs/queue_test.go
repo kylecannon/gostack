@@ -204,14 +204,14 @@ func Test_Queue_ListQueues(t *testing.T) {
 			})
 
 			t.Run("pages carry the URL of the next page's first queue", func(t *testing.T) {
-				first := c.call("ListQueues", map[string]any{"MaxResults": 3})
+				first := c.call("ListQueues", map[string]any{paramMaxResults: 3})
 
 				require.True(t, first.ok())
 				assert.Equal(t, urlsOf("zeta", "alpha", "alpine"), first.urls())
 				assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(standardURLPrefix+"beta")),
 					first.str("NextToken"))
 
-				second := c.call("ListQueues", map[string]any{"MaxResults": 3, "NextToken": first.str("NextToken")})
+				second := c.call("ListQueues", map[string]any{paramMaxResults: 3, "NextToken": first.str("NextToken")})
 
 				require.True(t, second.ok())
 				assert.Equal(t, urlsOf("beta"), second.urls())

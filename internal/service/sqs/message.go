@@ -22,6 +22,9 @@ const (
 	sysApproximateFirstReceiveTimestamp = "ApproximateFirstReceiveTimestamp"
 	sysAWSTraceHeader                   = "AWSTraceHeader"
 	sysMessageGroupID                   = "MessageGroupId"
+	sysMessageDeduplicationID           = "MessageDeduplicationId"
+	sysSequenceNumber                   = "SequenceNumber"
+	sysDeadLetterQueueSourceArn         = "DeadLetterQueueSourceArn"
 
 	// headerTraceID is the header X-Ray puts the trace on. A message sent with
 	// it carries the AWSTraceHeader attribute.
@@ -48,6 +51,15 @@ type message struct {
 	// from the two that change with each receive.
 	system map[string]string
 	sent   time.Time
+	// groupID and dedupID are the MessageGroupId and the MessageDeduplicationId
+	// the message was sent with, "" for none. A FIFO queue sets dedupID to the
+	// id it deduplicates on and sequence to the SequenceNumber it gave.
+	groupID  string
+	dedupID  string
+	sequence string
+	// receiveBase is how many times the message was received before this queue
+	// got it: ApproximateReceiveCount carries over a dead-letter move.
+	receiveBase int
 }
 
 // delivery is one message handed to a receiver: the message, the receipt handle
@@ -59,6 +71,43 @@ type delivery struct {
 	firstReceived time.Time
 }
 
+// receiveResult is what one Receive of a Contents took from a queue.
+type receiveResult struct {
+	// taken are the messages for the receiver.
+	taken []delivery
+	// dead are the messages whose receive count passed the maxReceiveCount of
+	// the queue's RedrivePolicy. They left the queue and wait for the Provider
+	// to put them on the dead-letter queue, which it does without holding the
+	// source queue's lock.
+	dead []deadLetter
+}
+
+// deadLetter is a message on its way to a dead-letter queue.
+type deadLetter struct {
+	msg *message
+	// target is the ARN of the dead-letter queue.
+	target string
+	// received is how many times the receivers got the message: the receive that
+	// found it past the limit is not one of them.
+	received int
+}
+
+// moved returns the message as the queue it moves to holds it: the same id, body
+// and attributes, a sent time of now for its retention, and a receive count that
+// continues from receives. A sourceARN other than "" is the queue it came from.
+func (m *message) moved(sourceARN string, receives int, now time.Time) *message {
+	next := *m
+	next.sent = now
+	next.receiveBase = receives
+	next.system = maps.Clone(m.system)
+
+	if sourceARN != "" {
+		next.system[sysDeadLetterQueueSourceArn] = sourceARN
+	}
+
+	return &next
+}
+
 // newMessage builds the message of a send request that passed validation.
 func newMessage(rc *request.Context, req *sendRequest, now time.Time) *message {
 	m := &message{
@@ -67,6 +116,8 @@ func newMessage(rc *request.Context, req *sendRequest, now time.Time) *message {
 		sent:    now,
 		system:  systemAttributes(rc, req, now),
 		bodyMD5: md5Hex([]byte(deref(req.body))),
+		groupID: deref(req.groupID),
+		dedupID: deref(req.dedupID),
 	}
 
 	if req.attributes != nil {
