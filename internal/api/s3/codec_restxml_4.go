@@ -11,25 +11,30 @@ import (
 	"github.com/kylecannon/gostack/internal/request"
 )
 
+// encodeXML writes the attributes and child elements of v into the element
+// xw opened last.
+func (v *UploadPartCopyOutput) encodeXML(xw *restxml.Writer) {
+}
+
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *UploadPartInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
+	v.ContentLength = d.HeaderInt64("Content-Length")
+	v.ContentMD5 = d.Header("Content-MD5")
 	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ChecksumCRC32 = d.Header("x-amz-checksum-crc32")
 	v.ChecksumCRC32C = d.Header("x-amz-checksum-crc32c")
 	v.ChecksumCRC64NVME = d.Header("x-amz-checksum-crc64nvme")
 	v.ChecksumSHA1 = d.Header("x-amz-checksum-sha1")
 	v.ChecksumSHA256 = d.Header("x-amz-checksum-sha256")
-	v.ContentLength = d.HeaderInt64("Content-Length")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
 	v.PartNumber = d.QueryInt32("partNumber")
-	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.UploadId = d.Query("uploadId")
 	v.SSECustomerAlgorithm = d.Header("x-amz-server-side-encryption-customer-algorithm")
 	v.SSECustomerKey = d.Header("x-amz-server-side-encryption-customer-key")
 	v.SSECustomerKeyMD5 = d.Header("x-amz-server-side-encryption-customer-key-MD5")
-	v.UploadId = d.Query("uploadId")
+	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -48,18 +53,18 @@ func (v *UploadPartInput) decodeXML(d *restxml.Decoder) {
 
 // encodeBindings sets the members of v bound to headers.
 func (v *UploadPartOutput) encodeBindings(h http.Header) {
-	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
+	rest.SetString(h, "ETag", v.ETag)
 	rest.SetString(h, "x-amz-checksum-crc32", v.ChecksumCRC32)
 	rest.SetString(h, "x-amz-checksum-crc32c", v.ChecksumCRC32C)
 	rest.SetString(h, "x-amz-checksum-crc64nvme", v.ChecksumCRC64NVME)
 	rest.SetString(h, "x-amz-checksum-sha1", v.ChecksumSHA1)
 	rest.SetString(h, "x-amz-checksum-sha256", v.ChecksumSHA256)
-	rest.SetString(h, "ETag", v.ETag)
-	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-algorithm", v.SSECustomerAlgorithm)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-key-MD5", v.SSECustomerKeyMD5)
 	rest.SetString(h, "x-amz-server-side-encryption-aws-kms-key-id", v.SSEKMSKeyId)
-	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
+	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
 }
 
 // encodeXML writes the attributes and child elements of v into the element
@@ -122,46 +127,46 @@ func (v *WebsiteConfiguration) decodeXML(d *restxml.Decoder) {
 
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *WriteGetObjectResponseInput) decodeBindings(d *rest.Decoder) {
+	v.RequestRoute = d.Header("x-amz-request-route")
+	v.RequestToken = d.Header("x-amz-request-token")
+	v.StatusCode = d.HeaderInt32("x-amz-fwd-status")
+	v.ErrorCode = d.Header("x-amz-fwd-error-code")
+	v.ErrorMessage = d.Header("x-amz-fwd-error-message")
 	v.AcceptRanges = d.Header("x-amz-fwd-header-accept-ranges")
-	v.BucketKeyEnabled = d.HeaderBool("x-amz-fwd-header-x-amz-server-side-encryption-bucket-key-enabled")
 	v.CacheControl = d.Header("x-amz-fwd-header-Cache-Control")
-	v.ChecksumCRC32 = d.Header("x-amz-fwd-header-x-amz-checksum-crc32")
-	v.ChecksumCRC32C = d.Header("x-amz-fwd-header-x-amz-checksum-crc32c")
-	v.ChecksumCRC64NVME = d.Header("x-amz-fwd-header-x-amz-checksum-crc64nvme")
-	v.ChecksumSHA1 = d.Header("x-amz-fwd-header-x-amz-checksum-sha1")
-	v.ChecksumSHA256 = d.Header("x-amz-fwd-header-x-amz-checksum-sha256")
 	v.ContentDisposition = d.Header("x-amz-fwd-header-Content-Disposition")
 	v.ContentEncoding = d.Header("x-amz-fwd-header-Content-Encoding")
 	v.ContentLanguage = d.Header("x-amz-fwd-header-Content-Language")
 	v.ContentLength = d.HeaderInt64("Content-Length")
 	v.ContentRange = d.Header("x-amz-fwd-header-Content-Range")
 	v.ContentType = d.Header("x-amz-fwd-header-Content-Type")
+	v.ChecksumCRC32 = d.Header("x-amz-fwd-header-x-amz-checksum-crc32")
+	v.ChecksumCRC32C = d.Header("x-amz-fwd-header-x-amz-checksum-crc32c")
+	v.ChecksumCRC64NVME = d.Header("x-amz-fwd-header-x-amz-checksum-crc64nvme")
+	v.ChecksumSHA1 = d.Header("x-amz-fwd-header-x-amz-checksum-sha1")
+	v.ChecksumSHA256 = d.Header("x-amz-fwd-header-x-amz-checksum-sha256")
 	v.DeleteMarker = d.HeaderBool("x-amz-fwd-header-x-amz-delete-marker")
 	v.ETag = d.Header("x-amz-fwd-header-ETag")
-	v.ErrorCode = d.Header("x-amz-fwd-error-code")
-	v.ErrorMessage = d.Header("x-amz-fwd-error-message")
-	v.Expiration = d.Header("x-amz-fwd-header-x-amz-expiration")
 	v.Expires = d.Header("x-amz-fwd-header-Expires")
+	v.Expiration = d.Header("x-amz-fwd-header-x-amz-expiration")
 	v.LastModified = d.HeaderTime("x-amz-fwd-header-Last-Modified", "")
-	v.Metadata = d.HeaderMap("x-amz-meta-")
 	v.MissingMeta = d.HeaderInt32("x-amz-fwd-header-x-amz-missing-meta")
-	v.ObjectLockLegalHoldStatus = d.Header("x-amz-fwd-header-x-amz-object-lock-legal-hold")
+	v.Metadata = d.HeaderMap("x-amz-meta-")
 	v.ObjectLockMode = d.Header("x-amz-fwd-header-x-amz-object-lock-mode")
+	v.ObjectLockLegalHoldStatus = d.Header("x-amz-fwd-header-x-amz-object-lock-legal-hold")
 	v.ObjectLockRetainUntilDate = d.HeaderTime("x-amz-fwd-header-x-amz-object-lock-retain-until-date", "iso8601")
 	v.PartsCount = d.HeaderInt32("x-amz-fwd-header-x-amz-mp-parts-count")
 	v.ReplicationStatus = d.Header("x-amz-fwd-header-x-amz-replication-status")
 	v.RequestCharged = d.Header("x-amz-fwd-header-x-amz-request-charged")
-	v.RequestRoute = d.Header("x-amz-request-route")
-	v.RequestToken = d.Header("x-amz-request-token")
 	v.Restore = d.Header("x-amz-fwd-header-x-amz-restore")
-	v.SSECustomerAlgorithm = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-customer-algorithm")
-	v.SSECustomerKeyMD5 = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-customer-key-MD5")
-	v.SSEKMSKeyId = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-aws-kms-key-id")
 	v.ServerSideEncryption = d.Header("x-amz-fwd-header-x-amz-server-side-encryption")
-	v.StatusCode = d.HeaderInt32("x-amz-fwd-status")
+	v.SSECustomerAlgorithm = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-customer-algorithm")
+	v.SSEKMSKeyId = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-aws-kms-key-id")
+	v.SSECustomerKeyMD5 = d.Header("x-amz-fwd-header-x-amz-server-side-encryption-customer-key-MD5")
 	v.StorageClass = d.Header("x-amz-fwd-header-x-amz-storage-class")
 	v.TagCount = d.HeaderInt32("x-amz-fwd-header-x-amz-tagging-count")
 	v.VersionId = d.Header("x-amz-fwd-header-x-amz-version-id")
+	v.BucketKeyEnabled = d.HeaderBool("x-amz-fwd-header-x-amz-server-side-encryption-bucket-key-enabled")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.

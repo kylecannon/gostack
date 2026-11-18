@@ -1,10 +1,13 @@
 package main
 
 import (
+	"cmp"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/kylecannon/gostack/codegen/spec"
+	"github.com/kylecannon/gostack/internal/protocol/rest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -466,6 +469,110 @@ func Test_newModel_RestTraits(t *testing.T) {
 		route := fieldOf(t, "WriteGetObjectResponseInput", "RequestRoute")
 		assert.True(t, route.pair.p.hostLabel)
 		assert.Equal(t, spec.LocationHeader, route.pair.p.binding)
+	})
+}
+
+// Test_newModel_S3Responses checks what S3's response bodies take from its
+// service options and its patched model, against LocalStack's S3 serializer:
+// the root names and namespace, the member order and the body time format.
+func Test_newModel_S3Responses(t *testing.T) {
+	t.Parallel()
+
+	const s3Namespace = "http://s3.amazonaws.com/doc/2006-03-01/"
+
+	loader := newTestLoader(t)
+	patched, err := loader.Botocore("s3")
+	require.NoError(t, err)
+
+	g, err := newModel("s3", serviceTable["s3"], patched, nil)
+	require.NoError(t, err)
+
+	t.Run("each renamed root is an output's, with S3's namespace", func(t *testing.T) {
+		t.Parallel()
+
+		roots := serviceTable["s3"].ResponseRoots
+		require.Len(t, roots, 40, "LocalStack's _RESPONSE_ROOT_TAGS has 40 entries")
+
+		for key, want := range roots {
+			var named []string
+
+			for _, name := range g.opNames {
+				if out := g.p.Operations[name].Output; out == nil || out.Shape != key {
+					continue
+				}
+
+				named = append(named, name)
+				op := g.ops[name]
+
+				if f := op.output.payload; f != nil {
+					assert.Equal(t, want, cmp.Or(f.pair.p.loc, f.pair.p.name), "%s: the payload is the root", name)
+
+					continue
+				}
+
+				assert.Equal(t, want, op.outRoot, name)
+				assert.Equal(t, &spec.XMLNamespace{URI: s3Namespace}, op.outNS, name)
+			}
+
+			assert.NotEmpty(t, named, "no operation answers with %s", key)
+		}
+	})
+
+	t.Run("members keep the order the patched model gives them", func(t *testing.T) {
+		t.Parallel()
+
+		body := func(goName string) []string {
+			st := g.structs[goName]
+			require.NotNil(t, st, goName)
+
+			var names []string
+
+			for _, f := range st.fields {
+				if inXMLBody(st, f, encoding) {
+					names = append(names, f.member)
+				}
+			}
+
+			return names
+		}
+
+		for _, goName := range []string{"ListObjectsOutput", "ListObjectsV2Output"} {
+			names := body(goName)
+			assert.Equal(t, "IsTruncated", names[0], goName)
+			assert.Less(t, slices.Index(names, "Name"), slices.Index(names, "Contents"), goName)
+			assert.Equal(t, "Contents", names[len(names)-1], "%s: the patch moves Contents last", goName)
+		}
+
+		versions := body("ListObjectVersionsOutput")
+		assert.Less(t, slices.Index(versions, "Name"), slices.Index(versions, "Versions"))
+		assert.Equal(t, "Versions", versions[len(versions)-1], "the patch moves Versions last")
+
+		assert.Equal(t, []string{"Owner", "ContinuationToken", "Prefix", "Buckets"}, body("ListBucketsOutput"),
+			"Owner comes before Buckets, which the patch moves last")
+	})
+
+	t.Run("a body timestamp in iso8601 is written in S3's form", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tt := range []struct{ giveFormat, want string }{
+			{giveFormat: "", want: rest.TimeS3},
+			{giveFormat: "iso8601", want: rest.TimeS3},
+			{giveFormat: "rfc822", want: "rfc822"},
+		} {
+			assert.Equal(t, tt.want, g.bodyTime(ref{tsfmt: tt.giveFormat}), tt.giveFormat)
+		}
+	})
+
+	t.Run("a service without the options keeps the model's names", func(t *testing.T) {
+		t.Parallel()
+
+		generic, err := newModel("s3", serviceOptions{}, patched, nil)
+		require.NoError(t, err)
+
+		op := generic.ops["ListObjectsV2"]
+		assert.Equal(t, "ListObjectsV2Output", op.outRoot)
+		assert.Nil(t, op.outNS)
+		assert.Empty(t, generic.bodyTime(ref{}), "the writer's own default, iso8601")
 	})
 }
 

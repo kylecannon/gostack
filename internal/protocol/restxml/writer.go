@@ -10,7 +10,8 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/rest"
 )
 
-const xmlDeclaration = "<?xml version='1.0' encoding='utf-8'?>\n"
+// xmlDeclaration is the one S3 sends, in double quotes.
+const xmlDeclaration = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
 
 // Writer appends the XML elements of one body to a buffer. Elements are
 // written in call order and nothing is validated, so generated code opens and

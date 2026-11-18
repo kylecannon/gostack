@@ -11,8 +11,12 @@ import (
 )
 
 const (
-	opAdd    = "add"
-	opRemove = "remove"
+	opAdd     = "add"
+	opRemove  = "remove"
+	opReplace = "replace"
+	opTest    = "test"
+
+	pathMemberA = "/m/A"
 
 	objectURI = "/{Bucket}/{Key+}"
 )
@@ -47,7 +51,7 @@ func Test_ApplyPatches(t *testing.T) {
 		},
 		{
 			name:    "replace a value",
-			giveOps: []spec.Patch{{Op: "replace", Path: "/c", Value: []byte(`"y"`)}},
+			giveOps: []spec.Patch{{Op: opReplace, Path: "/c", Value: []byte(`"y"`)}},
 			want:    `{"a":{"b":[1,2,3],"big":9223372036854775807},"c":"y"}`,
 		},
 		{
@@ -57,7 +61,7 @@ func Test_ApplyPatches(t *testing.T) {
 		},
 		{
 			name:    "test that passes changes nothing",
-			giveOps: []spec.Patch{{Op: "test", Path: "/c", Value: []byte(`"x"`)}},
+			giveOps: []spec.Patch{{Op: opTest, Path: "/c", Value: []byte(`"x"`)}},
 			want:    doc,
 		},
 		{
@@ -79,6 +83,61 @@ func Test_ApplyPatches(t *testing.T) {
 	}
 }
 
+// Test_ApplyPatches_KeyOrder checks the order a patched object keeps, which is
+// the order a structure's members go on the wire: Python dict order, as
+// LocalStack's jsonpatch leaves it.
+func Test_ApplyPatches_KeyOrder(t *testing.T) {
+	t.Parallel()
+
+	const doc = `{"m":{"Z":1,"A":2,"C":3,"E":[]}}`
+
+	tests := []struct {
+		name    string
+		giveOps []spec.Patch
+		want    string
+	}{
+		{name: "no patch keeps the order written", want: doc},
+		{
+			name:    "remove then add moves a member last",
+			giveOps: []spec.Patch{{Op: opRemove, Path: pathMemberA}, {Op: opAdd, Path: pathMemberA, Value: []byte(`2`)}},
+			want:    `{"m":{"Z":1,"C":3,"E":[],"A":2}}`,
+		},
+		{
+			name: "add of a new member goes last, of an existing one keeps its place",
+			giveOps: []spec.Patch{
+				{Op: opAdd, Path: "/m/B", Value: []byte(`5`)},
+				{Op: opAdd, Path: "/m/Z", Value: []byte(`9`)},
+			},
+			want: `{"m":{"Z":9,"A":2,"C":3,"E":[],"B":5}}`,
+		},
+		{
+			name:    "replace keeps its place",
+			giveOps: []spec.Patch{{Op: opReplace, Path: pathMemberA, Value: []byte(`{"y":1,"x":2}`)}},
+			want:    `{"m":{"Z":1,"A":{"y":1,"x":2},"C":3,"E":[]}}`,
+		},
+		{
+			name:    "test ignores key order",
+			giveOps: []spec.Patch{{Op: opTest, Path: "/m", Value: []byte(`{"E":[],"C":3,"A":2,"Z":1}`)}},
+			want:    doc,
+		},
+		{
+			name:    "copy of an object keeps its members and their order",
+			giveOps: []spec.Patch{{Op: "copy", From: "/m", Path: "/n"}},
+			want:    `{"m":{"Z":1,"A":2,"C":3,"E":[]},"n":{"Z":1,"A":2,"C":3,"E":[]}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := spec.ApplyPatches([]byte(doc), tt.giveOps)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
 func Test_ApplyPatches_Errors(t *testing.T) {
 	t.Parallel()
 
@@ -89,10 +148,10 @@ func Test_ApplyPatches_Errors(t *testing.T) {
 		giveOp spec.Patch
 	}{
 		{name: "remove a missing member", giveOp: spec.Patch{Op: opRemove, Path: "/nope"}},
-		{name: "replace a missing member", giveOp: spec.Patch{Op: "replace", Path: "/nope", Value: []byte(`1`)}},
+		{name: "replace a missing member", giveOp: spec.Patch{Op: opReplace, Path: "/nope", Value: []byte(`1`)}},
 		{name: "add under a missing parent", giveOp: spec.Patch{Op: opAdd, Path: "/nope/x", Value: []byte(`1`)}},
 		{name: "array index past the end", giveOp: spec.Patch{Op: opAdd, Path: "/a/5", Value: []byte(`1`)}},
-		{name: "test that fails", giveOp: spec.Patch{Op: "test", Path: "/c", Value: []byte(`"y"`)}},
+		{name: "test that fails", giveOp: spec.Patch{Op: opTest, Path: "/c", Value: []byte(`"y"`)}},
 		{name: "unknown operation", giveOp: spec.Patch{Op: "frob", Path: "/c"}},
 		{name: "pointer without a slash", giveOp: spec.Patch{Op: opRemove, Path: "c"}},
 	}

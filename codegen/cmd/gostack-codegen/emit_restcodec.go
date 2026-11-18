@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kylecannon/gostack/codegen/spec"
+	"github.com/kylecannon/gostack/internal/protocol/rest"
 )
 
 // restCodecFile writes the methods that carry each struct's members between
@@ -744,7 +745,7 @@ func (x *xmlEmitter) encodeValue(r ref, v, name string, depth int) error {
 	case spec.TypeBoolean:
 		p.f("xw.Bool(%q, %s)", name, v)
 	case spec.TypeTimestamp:
-		p.f("xw.Time(%q, %s, %q)", name, v, r.tsfmt)
+		p.f("xw.Time(%q, %s, %q)", name, v, x.g.bodyTime(r))
 	case spec.TypeBlob:
 		p.f("xw.Blob(%q, %s)", name, v)
 	case spec.TypeStructure:
@@ -772,6 +773,16 @@ func (x *xmlEmitter) encodeValue(r ref, v, name string, depth int) error {
 	}
 
 	return nil
+}
+
+// bodyTime is the format of a timestamp in a rest-xml body: the service's
+// BodyTime in place of iso8601, the default, and else the model's.
+func (g *generator) bodyTime(r ref) string {
+	if g.opts.BodyTime != "" && (r.tsfmt == "" || strings.EqualFold(r.tsfmt, rest.TimeISO8601)) {
+		return g.opts.BodyTime
+	}
+
+	return r.tsfmt
 }
 
 func (x *xmlEmitter) encodeList(r ref, v, name string, depth int) error {

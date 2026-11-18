@@ -21,11 +21,11 @@ type AbortIncompleteMultipartUpload struct {
 // AbortMultipartUploadInput is a structure of the s3 API.
 type AbortMultipartUploadInput struct {
 	Bucket               *string        `json:"Bucket,omitzero"`
+	Key                  *string        `json:"Key,omitzero"`
+	UploadId             *string        `json:"uploadId,omitzero"`
+	RequestPayer         *string        `json:"-"`
 	ExpectedBucketOwner  *string        `json:"-"`
 	IfMatchInitiatedTime *protocol.Time `json:"-"`
-	Key                  *string        `json:"Key,omitzero"`
-	RequestPayer         *string        `json:"-"`
-	UploadId             *string        `json:"uploadId,omitzero"`
 }
 
 // AbortMultipartUploadOutput is a structure of the s3 API.
@@ -52,10 +52,10 @@ type AccessControlTranslation struct {
 // AccessDenied is a structure of the s3 API.
 type AccessDenied struct {
 	Expires          *string        `json:"Expires,omitzero"`
-	HeadersNotSigned *string        `json:"HeadersNotSigned,omitzero"`
-	HostId           *string        `json:"HostId,omitzero"`
 	ServerTime       *protocol.Time `json:"ServerTime,omitzero"`
 	X_Amz_Expires    *int32         `json:"X-Amz-Expires,omitzero"`
+	HostId           *string        `json:"HostId,omitzero"`
+	HeadersNotSigned *string        `json:"HeadersNotSigned,omitzero"`
 }
 
 // AccessForbidden is a structure of the s3 API.
@@ -73,8 +73,8 @@ type AnalyticsAndOperator struct {
 
 // AnalyticsConfiguration is a structure of the s3 API.
 type AnalyticsConfiguration struct {
-	Filter               *AnalyticsFilter      `json:"Filter,omitzero"`
 	Id                   *string               `json:"Id,omitzero"`
+	Filter               *AnalyticsFilter      `json:"Filter,omitzero"`
 	StorageClassAnalysis *StorageClassAnalysis `json:"StorageClassAnalysis,omitzero"`
 }
 
@@ -85,23 +85,23 @@ type AnalyticsExportDestination struct {
 
 // AnalyticsFilter is a structure of the s3 API.
 type AnalyticsFilter struct {
-	And    *AnalyticsAndOperator `json:"And,omitzero"`
 	Prefix *string               `json:"Prefix,omitzero"`
 	Tag    *Tag                  `json:"Tag,omitzero"`
+	And    *AnalyticsAndOperator `json:"And,omitzero"`
 }
 
 // AnalyticsS3BucketDestination is a structure of the s3 API.
 type AnalyticsS3BucketDestination struct {
-	Bucket          *string `json:"Bucket,omitzero"`
-	BucketAccountId *string `json:"BucketAccountId,omitzero"`
 	Format          *string `json:"Format,omitzero"`
+	BucketAccountId *string `json:"BucketAccountId,omitzero"`
+	Bucket          *string `json:"Bucket,omitzero"`
 	Prefix          *string `json:"Prefix,omitzero"`
 }
 
 // AuthorizationHeaderMalformed is a structure of the s3 API.
 type AuthorizationHeaderMalformed struct {
-	HostId *string `json:"HostId,omitzero"`
 	Region *string `json:"Region,omitzero"`
+	HostId *string `json:"HostId,omitzero"`
 }
 
 // AuthorizationQueryParametersError is a structure of the s3 API.
@@ -111,8 +111,8 @@ type AuthorizationQueryParametersError struct {
 
 // BadDigest is a structure of the s3 API.
 type BadDigest struct {
-	CalculatedDigest *string `json:"CalculatedDigest,omitzero"`
 	ExpectedDigest   *string `json:"ExpectedDigest,omitzero"`
+	CalculatedDigest *string `json:"CalculatedDigest,omitzero"`
 }
 
 // BadRequest is a structure of the s3 API.
@@ -127,10 +127,10 @@ type BlockedEncryptionTypes struct {
 
 // Bucket is a structure of the s3 API.
 type Bucket struct {
-	BucketArn    *string        `json:"BucketArn,omitzero"`
-	BucketRegion *string        `json:"BucketRegion,omitzero"`
-	CreationDate *protocol.Time `json:"CreationDate,omitzero"`
 	Name         *string        `json:"Name,omitzero"`
+	CreationDate *protocol.Time `json:"CreationDate,omitzero"`
+	BucketRegion *string        `json:"BucketRegion,omitzero"`
+	BucketArn    *string        `json:"BucketArn,omitzero"`
 }
 
 // BucketAlreadyOwnedByYou is a structure of the s3 API.
@@ -166,32 +166,32 @@ type CORSConfiguration struct {
 
 // CORSRule is a structure of the s3 API.
 type CORSRule struct {
+	ID             *string  `json:"ID,omitzero"`
 	AllowedHeaders []string `json:"AllowedHeader,omitzero"`
 	AllowedMethods []string `json:"AllowedMethod,omitzero"`
 	AllowedOrigins []string `json:"AllowedOrigin,omitzero"`
 	ExposeHeaders  []string `json:"ExposeHeader,omitzero"`
-	ID             *string  `json:"ID,omitzero"`
 	MaxAgeSeconds  *int32   `json:"MaxAgeSeconds,omitzero"`
 }
 
 // CSVInput is a structure of the s3 API.
 type CSVInput struct {
-	AllowQuotedRecordDelimiter *bool   `json:"AllowQuotedRecordDelimiter,omitzero"`
-	Comments                   *string `json:"Comments,omitzero"`
-	FieldDelimiter             *string `json:"FieldDelimiter,omitzero"`
 	FileHeaderInfo             *string `json:"FileHeaderInfo,omitzero"`
-	QuoteCharacter             *string `json:"QuoteCharacter,omitzero"`
+	Comments                   *string `json:"Comments,omitzero"`
 	QuoteEscapeCharacter       *string `json:"QuoteEscapeCharacter,omitzero"`
 	RecordDelimiter            *string `json:"RecordDelimiter,omitzero"`
+	FieldDelimiter             *string `json:"FieldDelimiter,omitzero"`
+	QuoteCharacter             *string `json:"QuoteCharacter,omitzero"`
+	AllowQuotedRecordDelimiter *bool   `json:"AllowQuotedRecordDelimiter,omitzero"`
 }
 
 // CSVOutput is a structure of the s3 API.
 type CSVOutput struct {
+	QuoteFields          *string `json:"QuoteFields,omitzero"`
+	QuoteEscapeCharacter *string `json:"QuoteEscapeCharacter,omitzero"`
+	RecordDelimiter      *string `json:"RecordDelimiter,omitzero"`
 	FieldDelimiter       *string `json:"FieldDelimiter,omitzero"`
 	QuoteCharacter       *string `json:"QuoteCharacter,omitzero"`
-	QuoteEscapeCharacter *string `json:"QuoteEscapeCharacter,omitzero"`
-	QuoteFields          *string `json:"QuoteFields,omitzero"`
-	RecordDelimiter      *string `json:"RecordDelimiter,omitzero"`
 }
 
 // Checksum is a structure of the s3 API.
@@ -206,10 +206,10 @@ type Checksum struct {
 
 // CloudFunctionConfiguration is a structure of the s3 API.
 type CloudFunctionConfiguration struct {
-	CloudFunction  *string  `json:"CloudFunction,omitzero"`
+	Id             *string  `json:"Id,omitzero"`
 	Event          *string  `json:"Event,omitzero"`
 	Events         []string `json:"Event,omitzero"`
-	Id             *string  `json:"Id,omitzero"`
+	CloudFunction  *string  `json:"CloudFunction,omitzero"`
 	InvocationRole *string  `json:"InvocationRole,omitzero"`
 }
 
@@ -221,43 +221,43 @@ type CommonPrefix struct {
 // CompleteMultipartUploadInput is a structure of the s3 API.
 type CompleteMultipartUploadInput struct {
 	Bucket               *string                   `json:"Bucket,omitzero"`
+	Key                  *string                   `json:"Key,omitzero"`
+	MultipartUpload      *CompletedMultipartUpload `json:"-"`
+	UploadId             *string                   `json:"uploadId,omitzero"`
 	ChecksumCRC32        *string                   `json:"-"`
 	ChecksumCRC32C       *string                   `json:"-"`
 	ChecksumCRC64NVME    *string                   `json:"-"`
 	ChecksumSHA1         *string                   `json:"-"`
 	ChecksumSHA256       *string                   `json:"-"`
 	ChecksumType         *string                   `json:"-"`
+	MpuObjectSize        *int64                    `json:"-"`
+	RequestPayer         *string                   `json:"-"`
 	ExpectedBucketOwner  *string                   `json:"-"`
 	IfMatch              *string                   `json:"-"`
 	IfNoneMatch          *string                   `json:"-"`
-	Key                  *string                   `json:"Key,omitzero"`
-	MpuObjectSize        *int64                    `json:"-"`
-	MultipartUpload      *CompletedMultipartUpload `json:"-"`
-	RequestPayer         *string                   `json:"-"`
 	SSECustomerAlgorithm *string                   `json:"-"`
 	SSECustomerKey       *string                   `json:"-"`
 	SSECustomerKeyMD5    *string                   `json:"-"`
-	UploadId             *string                   `json:"uploadId,omitzero"`
 }
 
 // CompleteMultipartUploadOutput is a structure of the s3 API.
 type CompleteMultipartUploadOutput struct {
+	Location             *string `json:"Location,omitzero"`
 	Bucket               *string `json:"Bucket,omitzero"`
-	BucketKeyEnabled     *bool   `json:"-"`
+	Key                  *string `json:"Key,omitzero"`
+	Expiration           *string `json:"-"`
+	ETag                 *string `json:"ETag,omitzero"`
 	ChecksumCRC32        *string `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C       *string `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME    *string `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1         *string `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256       *string `json:"ChecksumSHA256,omitzero"`
 	ChecksumType         *string `json:"ChecksumType,omitzero"`
-	ETag                 *string `json:"ETag,omitzero"`
-	Expiration           *string `json:"-"`
-	Key                  *string `json:"Key,omitzero"`
-	Location             *string `json:"Location,omitzero"`
-	RequestCharged       *string `json:"-"`
-	SSEKMSKeyId          *string `json:"-"`
 	ServerSideEncryption *string `json:"-"`
 	VersionId            *string `json:"-"`
+	SSEKMSKeyId          *string `json:"-"`
+	BucketKeyEnabled     *bool   `json:"-"`
+	RequestCharged       *string `json:"-"`
 }
 
 // CompletedMultipartUpload is a structure of the s3 API.
@@ -267,12 +267,12 @@ type CompletedMultipartUpload struct {
 
 // CompletedPart is a structure of the s3 API.
 type CompletedPart struct {
+	ETag              *string `json:"ETag,omitzero"`
 	ChecksumCRC32     *string `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C    *string `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME *string `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1      *string `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256    *string `json:"ChecksumSHA256,omitzero"`
-	ETag              *string `json:"ETag,omitzero"`
 	PartNumber        *int32  `json:"PartNumber,omitzero"`
 }
 
@@ -295,7 +295,6 @@ type ContinuationEvent struct{}
 type CopyObjectInput struct {
 	ACL                            *string           `json:"-"`
 	Bucket                         *string           `json:"Bucket,omitzero"`
-	BucketKeyEnabled               *bool             `json:"-"`
 	CacheControl                   *string           `json:"-"`
 	ChecksumAlgorithm              *string           `json:"-"`
 	ContentDisposition             *string           `json:"-"`
@@ -307,11 +306,6 @@ type CopyObjectInput struct {
 	CopySourceIfModifiedSince      *protocol.Time    `json:"-"`
 	CopySourceIfNoneMatch          *string           `json:"-"`
 	CopySourceIfUnmodifiedSince    *protocol.Time    `json:"-"`
-	CopySourceSSECustomerAlgorithm *string           `json:"-"`
-	CopySourceSSECustomerKey       *string           `json:"-"`
-	CopySourceSSECustomerKeyMD5    *string           `json:"-"`
-	ExpectedBucketOwner            *string           `json:"-"`
-	ExpectedSourceBucketOwner      *string           `json:"-"`
 	Expires                        *string           `json:"-"`
 	GrantFullControl               *string           `json:"-"`
 	GrantRead                      *string           `json:"-"`
@@ -322,65 +316,71 @@ type CopyObjectInput struct {
 	Key                            *string           `json:"Key,omitzero"`
 	Metadata                       map[string]string `json:"-"`
 	MetadataDirective              *string           `json:"-"`
-	ObjectLockLegalHoldStatus      *string           `json:"-"`
-	ObjectLockMode                 *string           `json:"-"`
-	ObjectLockRetainUntilDate      *protocol.Time    `json:"-"`
-	RequestPayer                   *string           `json:"-"`
+	TaggingDirective               *string           `json:"-"`
+	ServerSideEncryption           *string           `json:"-"`
+	StorageClass                   *string           `json:"-"`
+	WebsiteRedirectLocation        *string           `json:"-"`
 	SSECustomerAlgorithm           *string           `json:"-"`
 	SSECustomerKey                 *string           `json:"-"`
 	SSECustomerKeyMD5              *string           `json:"-"`
-	SSEKMSEncryptionContext        *string           `json:"-"`
 	SSEKMSKeyId                    *string           `json:"-"`
-	ServerSideEncryption           *string           `json:"-"`
-	StorageClass                   *string           `json:"-"`
+	SSEKMSEncryptionContext        *string           `json:"-"`
+	BucketKeyEnabled               *bool             `json:"-"`
+	CopySourceSSECustomerAlgorithm *string           `json:"-"`
+	CopySourceSSECustomerKey       *string           `json:"-"`
+	CopySourceSSECustomerKeyMD5    *string           `json:"-"`
+	RequestPayer                   *string           `json:"-"`
 	Tagging                        *string           `json:"-"`
-	TaggingDirective               *string           `json:"-"`
-	WebsiteRedirectLocation        *string           `json:"-"`
+	ObjectLockMode                 *string           `json:"-"`
+	ObjectLockRetainUntilDate      *protocol.Time    `json:"-"`
+	ObjectLockLegalHoldStatus      *string           `json:"-"`
+	ExpectedBucketOwner            *string           `json:"-"`
+	ExpectedSourceBucketOwner      *string           `json:"-"`
 }
 
 // CopyObjectOutput is a structure of the s3 API.
 type CopyObjectOutput struct {
-	BucketKeyEnabled        *bool             `json:"-"`
 	CopyObjectResult        *CopyObjectResult `json:"-"`
-	CopySourceVersionId     *string           `json:"-"`
 	Expiration              *string           `json:"-"`
-	RequestCharged          *string           `json:"-"`
+	CopySourceVersionId     *string           `json:"-"`
+	VersionId               *string           `json:"-"`
+	ServerSideEncryption    *string           `json:"-"`
 	SSECustomerAlgorithm    *string           `json:"-"`
 	SSECustomerKeyMD5       *string           `json:"-"`
-	SSEKMSEncryptionContext *string           `json:"-"`
 	SSEKMSKeyId             *string           `json:"-"`
-	ServerSideEncryption    *string           `json:"-"`
-	VersionId               *string           `json:"-"`
+	SSEKMSEncryptionContext *string           `json:"-"`
+	BucketKeyEnabled        *bool             `json:"-"`
+	RequestCharged          *string           `json:"-"`
 }
 
 // CopyObjectResult is a structure of the s3 API.
 type CopyObjectResult struct {
+	ETag              *string        `json:"ETag,omitzero"`
+	LastModified      *protocol.Time `json:"LastModified,omitzero"`
+	ChecksumType      *string        `json:"ChecksumType,omitzero"`
 	ChecksumCRC32     *string        `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C    *string        `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME *string        `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1      *string        `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256    *string        `json:"ChecksumSHA256,omitzero"`
-	ChecksumType      *string        `json:"ChecksumType,omitzero"`
-	ETag              *string        `json:"ETag,omitzero"`
-	LastModified      *protocol.Time `json:"LastModified,omitzero"`
 }
 
 // CopyPartResult is a structure of the s3 API.
 type CopyPartResult struct {
+	ETag              *string        `json:"ETag,omitzero"`
+	LastModified      *protocol.Time `json:"LastModified,omitzero"`
 	ChecksumCRC32     *string        `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C    *string        `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME *string        `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1      *string        `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256    *string        `json:"ChecksumSHA256,omitzero"`
-	ETag              *string        `json:"ETag,omitzero"`
-	LastModified      *protocol.Time `json:"LastModified,omitzero"`
 }
 
 // CreateBucketConfiguration is a structure of the s3 API.
 type CreateBucketConfiguration struct {
-	Bucket             *BucketInfo   `json:"Bucket,omitzero"`
-	Location           *LocationInfo `json:"Location,omitzero"`
 	LocationConstraint *string       `json:"LocationConstraint,omitzero"`
+	Location           *LocationInfo `json:"Location,omitzero"`
+	Bucket             *BucketInfo   `json:"Bucket,omitzero"`
 	Tags               []Tag         `json:"Tags,omitzero"`
 }
 
@@ -401,10 +401,10 @@ type CreateBucketInput struct {
 // CreateBucketMetadataConfigurationInput is a structure of the s3 API.
 type CreateBucketMetadataConfigurationInput struct {
 	Bucket                *string                `json:"Bucket,omitzero"`
-	ChecksumAlgorithm     *string                `json:"-"`
 	ContentMD5            *string                `json:"-"`
-	ExpectedBucketOwner   *string                `json:"-"`
+	ChecksumAlgorithm     *string                `json:"-"`
 	MetadataConfiguration *MetadataConfiguration `json:"-"`
+	ExpectedBucketOwner   *string                `json:"-"`
 }
 
 // CreateBucketMetadataConfigurationOutput has no members.
@@ -413,10 +413,10 @@ type CreateBucketMetadataConfigurationOutput struct{}
 // CreateBucketMetadataTableConfigurationInput is a structure of the s3 API.
 type CreateBucketMetadataTableConfigurationInput struct {
 	Bucket                     *string                     `json:"Bucket,omitzero"`
-	ChecksumAlgorithm          *string                     `json:"-"`
 	ContentMD5                 *string                     `json:"-"`
-	ExpectedBucketOwner        *string                     `json:"-"`
+	ChecksumAlgorithm          *string                     `json:"-"`
 	MetadataTableConfiguration *MetadataTableConfiguration `json:"-"`
+	ExpectedBucketOwner        *string                     `json:"-"`
 }
 
 // CreateBucketMetadataTableConfigurationOutput has no members.
@@ -424,23 +424,19 @@ type CreateBucketMetadataTableConfigurationOutput struct{}
 
 // CreateBucketOutput is a structure of the s3 API.
 type CreateBucketOutput struct {
-	BucketArn *string `json:"-"`
 	Location  *string `json:"-"`
+	BucketArn *string `json:"-"`
 }
 
 // CreateMultipartUploadInput is a structure of the s3 API.
 type CreateMultipartUploadInput struct {
 	ACL                       *string           `json:"-"`
 	Bucket                    *string           `json:"Bucket,omitzero"`
-	BucketKeyEnabled          *bool             `json:"-"`
 	CacheControl              *string           `json:"-"`
-	ChecksumAlgorithm         *string           `json:"-"`
-	ChecksumType              *string           `json:"-"`
 	ContentDisposition        *string           `json:"-"`
 	ContentEncoding           *string           `json:"-"`
 	ContentLanguage           *string           `json:"-"`
 	ContentType               *string           `json:"-"`
-	ExpectedBucketOwner       *string           `json:"-"`
 	Expires                   *string           `json:"-"`
 	GrantFullControl          *string           `json:"-"`
 	GrantRead                 *string           `json:"-"`
@@ -448,19 +444,23 @@ type CreateMultipartUploadInput struct {
 	GrantWriteACP             *string           `json:"-"`
 	Key                       *string           `json:"Key,omitzero"`
 	Metadata                  map[string]string `json:"-"`
-	ObjectLockLegalHoldStatus *string           `json:"-"`
-	ObjectLockMode            *string           `json:"-"`
-	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
-	RequestPayer              *string           `json:"-"`
+	ServerSideEncryption      *string           `json:"-"`
+	StorageClass              *string           `json:"-"`
+	WebsiteRedirectLocation   *string           `json:"-"`
 	SSECustomerAlgorithm      *string           `json:"-"`
 	SSECustomerKey            *string           `json:"-"`
 	SSECustomerKeyMD5         *string           `json:"-"`
-	SSEKMSEncryptionContext   *string           `json:"-"`
 	SSEKMSKeyId               *string           `json:"-"`
-	ServerSideEncryption      *string           `json:"-"`
-	StorageClass              *string           `json:"-"`
+	SSEKMSEncryptionContext   *string           `json:"-"`
+	BucketKeyEnabled          *bool             `json:"-"`
+	RequestPayer              *string           `json:"-"`
 	Tagging                   *string           `json:"-"`
-	WebsiteRedirectLocation   *string           `json:"-"`
+	ObjectLockMode            *string           `json:"-"`
+	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
+	ObjectLockLegalHoldStatus *string           `json:"-"`
+	ExpectedBucketOwner       *string           `json:"-"`
+	ChecksumAlgorithm         *string           `json:"-"`
+	ChecksumType              *string           `json:"-"`
 }
 
 // CreateMultipartUploadOutput is a structure of the s3 API.
@@ -468,48 +468,48 @@ type CreateMultipartUploadOutput struct {
 	AbortDate               *protocol.Time `json:"-"`
 	AbortRuleId             *string        `json:"-"`
 	Bucket                  *string        `json:"Bucket,omitzero"`
-	BucketKeyEnabled        *bool          `json:"-"`
-	ChecksumAlgorithm       *string        `json:"-"`
-	ChecksumType            *string        `json:"-"`
 	Key                     *string        `json:"Key,omitzero"`
-	RequestCharged          *string        `json:"-"`
+	UploadId                *string        `json:"UploadId,omitzero"`
+	ServerSideEncryption    *string        `json:"-"`
 	SSECustomerAlgorithm    *string        `json:"-"`
 	SSECustomerKeyMD5       *string        `json:"-"`
-	SSEKMSEncryptionContext *string        `json:"-"`
 	SSEKMSKeyId             *string        `json:"-"`
-	ServerSideEncryption    *string        `json:"-"`
-	UploadId                *string        `json:"UploadId,omitzero"`
+	SSEKMSEncryptionContext *string        `json:"-"`
+	BucketKeyEnabled        *bool          `json:"-"`
+	RequestCharged          *string        `json:"-"`
+	ChecksumAlgorithm       *string        `json:"-"`
+	ChecksumType            *string        `json:"-"`
 }
 
 // CreateSessionInput is a structure of the s3 API.
 type CreateSessionInput struct {
-	Bucket                  *string `json:"Bucket,omitzero"`
-	BucketKeyEnabled        *bool   `json:"-"`
-	SSEKMSEncryptionContext *string `json:"-"`
-	SSEKMSKeyId             *string `json:"-"`
-	ServerSideEncryption    *string `json:"-"`
 	SessionMode             *string `json:"-"`
+	Bucket                  *string `json:"Bucket,omitzero"`
+	ServerSideEncryption    *string `json:"-"`
+	SSEKMSKeyId             *string `json:"-"`
+	SSEKMSEncryptionContext *string `json:"-"`
+	BucketKeyEnabled        *bool   `json:"-"`
 }
 
 // CreateSessionOutput is a structure of the s3 API.
 type CreateSessionOutput struct {
+	ServerSideEncryption    *string             `json:"-"`
+	SSEKMSKeyId             *string             `json:"-"`
+	SSEKMSEncryptionContext *string             `json:"-"`
 	BucketKeyEnabled        *bool               `json:"-"`
 	Credentials             *SessionCredentials `json:"Credentials,omitzero"`
-	SSEKMSEncryptionContext *string             `json:"-"`
-	SSEKMSKeyId             *string             `json:"-"`
-	ServerSideEncryption    *string             `json:"-"`
 }
 
 // CrossLocationLoggingProhibitted is a structure of the s3 API.
 type CrossLocationLoggingProhibitted struct {
-	SourceBucketLocation *string `json:"SourceBucketLocation,omitzero"`
 	TargetBucketLocation *string `json:"TargetBucketLocation,omitzero"`
+	SourceBucketLocation *string `json:"SourceBucketLocation,omitzero"`
 }
 
 // DefaultRetention is a structure of the s3 API.
 type DefaultRetention struct {
-	Days  *int32  `json:"Days,omitzero"`
 	Mode  *string `json:"Mode,omitzero"`
+	Days  *int32  `json:"Days,omitzero"`
 	Years *int32  `json:"Years,omitzero"`
 }
 
@@ -522,8 +522,8 @@ type Delete struct {
 // DeleteBucketAnalyticsConfigurationInput is a structure of the s3 API.
 type DeleteBucketAnalyticsConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // DeleteBucketAnalyticsConfigurationOutput has no members.
@@ -556,8 +556,8 @@ type DeleteBucketInput struct {
 // DeleteBucketIntelligentTieringConfigurationInput is a structure of the s3 API.
 type DeleteBucketIntelligentTieringConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // DeleteBucketIntelligentTieringConfigurationOutput has no members.
@@ -566,8 +566,8 @@ type DeleteBucketIntelligentTieringConfigurationOutput struct{}
 // DeleteBucketInventoryConfigurationInput is a structure of the s3 API.
 type DeleteBucketInventoryConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // DeleteBucketInventoryConfigurationOutput has no members.
@@ -603,8 +603,8 @@ type DeleteBucketMetadataTableConfigurationOutput struct{}
 // DeleteBucketMetricsConfigurationInput is a structure of the s3 API.
 type DeleteBucketMetricsConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // DeleteBucketMetricsConfigurationOutput has no members.
@@ -660,11 +660,11 @@ type DeleteBucketWebsiteOutput struct{}
 
 // DeleteMarkerEntry is a structure of the s3 API.
 type DeleteMarkerEntry struct {
-	IsLatest     *bool          `json:"IsLatest,omitzero"`
-	Key          *string        `json:"Key,omitzero"`
-	LastModified *protocol.Time `json:"LastModified,omitzero"`
 	Owner        *Owner         `json:"Owner,omitzero"`
+	Key          *string        `json:"Key,omitzero"`
 	VersionId    *string        `json:"VersionId,omitzero"`
+	IsLatest     *bool          `json:"IsLatest,omitzero"`
+	LastModified *protocol.Time `json:"LastModified,omitzero"`
 }
 
 // DeleteMarkerReplication is a structure of the s3 API.
@@ -675,30 +675,30 @@ type DeleteMarkerReplication struct {
 // DeleteObjectInput is a structure of the s3 API.
 type DeleteObjectInput struct {
 	Bucket                    *string        `json:"Bucket,omitzero"`
+	Key                       *string        `json:"Key,omitzero"`
+	MFA                       *string        `json:"-"`
+	VersionId                 *string        `json:"versionId,omitzero"`
+	RequestPayer              *string        `json:"-"`
 	BypassGovernanceRetention *bool          `json:"-"`
 	ExpectedBucketOwner       *string        `json:"-"`
 	IfMatch                   *string        `json:"-"`
 	IfMatchLastModifiedTime   *protocol.Time `json:"-"`
 	IfMatchSize               *int64         `json:"-"`
-	Key                       *string        `json:"Key,omitzero"`
-	MFA                       *string        `json:"-"`
-	RequestPayer              *string        `json:"-"`
-	VersionId                 *string        `json:"versionId,omitzero"`
 }
 
 // DeleteObjectOutput is a structure of the s3 API.
 type DeleteObjectOutput struct {
 	DeleteMarker   *bool   `json:"-"`
-	RequestCharged *string `json:"-"`
 	VersionId      *string `json:"-"`
+	RequestCharged *string `json:"-"`
 }
 
 // DeleteObjectTaggingInput is a structure of the s3 API.
 type DeleteObjectTaggingInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
 	VersionId           *string `json:"versionId,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // DeleteObjectTaggingOutput is a structure of the s3 API.
@@ -709,19 +709,19 @@ type DeleteObjectTaggingOutput struct {
 // DeleteObjectsInput is a structure of the s3 API.
 type DeleteObjectsInput struct {
 	Bucket                    *string `json:"Bucket,omitzero"`
-	BypassGovernanceRetention *bool   `json:"-"`
-	ChecksumAlgorithm         *string `json:"-"`
 	Delete                    *Delete `json:"-"`
-	ExpectedBucketOwner       *string `json:"-"`
 	MFA                       *string `json:"-"`
 	RequestPayer              *string `json:"-"`
+	BypassGovernanceRetention *bool   `json:"-"`
+	ExpectedBucketOwner       *string `json:"-"`
+	ChecksumAlgorithm         *string `json:"-"`
 }
 
 // DeleteObjectsOutput is a structure of the s3 API.
 type DeleteObjectsOutput struct {
 	Deleted        []DeletedObject `json:"Deleted,omitzero"`
-	Errors         []Error         `json:"Error,omitzero"`
 	RequestCharged *string         `json:"-"`
+	Errors         []Error         `json:"Error,omitzero"`
 }
 
 // DeletePublicAccessBlockInput is a structure of the s3 API.
@@ -735,35 +735,35 @@ type DeletePublicAccessBlockOutput struct{}
 
 // DeletedObject is a structure of the s3 API.
 type DeletedObject struct {
-	DeleteMarker          *bool   `json:"DeleteMarker,omitzero"`
-	DeleteMarkerVersionId *string `json:"DeleteMarkerVersionId,omitzero"`
 	Key                   *string `json:"Key,omitzero"`
 	VersionId             *string `json:"VersionId,omitzero"`
+	DeleteMarker          *bool   `json:"DeleteMarker,omitzero"`
+	DeleteMarkerVersionId *string `json:"DeleteMarkerVersionId,omitzero"`
 }
 
 // Destination is a structure of the s3 API.
 type Destination struct {
-	AccessControlTranslation *AccessControlTranslation `json:"AccessControlTranslation,omitzero"`
-	Account                  *string                   `json:"Account,omitzero"`
 	Bucket                   *string                   `json:"Bucket,omitzero"`
-	EncryptionConfiguration  *EncryptionConfiguration  `json:"EncryptionConfiguration,omitzero"`
-	Metrics                  *Metrics                  `json:"Metrics,omitzero"`
-	ReplicationTime          *ReplicationTime          `json:"ReplicationTime,omitzero"`
+	Account                  *string                   `json:"Account,omitzero"`
 	StorageClass             *string                   `json:"StorageClass,omitzero"`
+	AccessControlTranslation *AccessControlTranslation `json:"AccessControlTranslation,omitzero"`
+	EncryptionConfiguration  *EncryptionConfiguration  `json:"EncryptionConfiguration,omitzero"`
+	ReplicationTime          *ReplicationTime          `json:"ReplicationTime,omitzero"`
+	Metrics                  *Metrics                  `json:"Metrics,omitzero"`
 }
 
 // DestinationResult is a structure of the s3 API.
 type DestinationResult struct {
-	TableBucketArn  *string `json:"TableBucketArn,omitzero"`
 	TableBucketType *string `json:"TableBucketType,omitzero"`
+	TableBucketArn  *string `json:"TableBucketArn,omitzero"`
 	TableNamespace  *string `json:"TableNamespace,omitzero"`
 }
 
 // Encryption is a structure of the s3 API.
 type Encryption struct {
 	EncryptionType *string `json:"EncryptionType,omitzero"`
-	KMSContext     *string `json:"KMSContext,omitzero"`
 	KMSKeyId       *string `json:"KMSKeyId,omitzero"`
+	KMSContext     *string `json:"KMSContext,omitzero"`
 }
 
 // EncryptionConfiguration is a structure of the s3 API.
@@ -776,8 +776,8 @@ type EndEvent struct{}
 
 // EntityTooLarge is a structure of the s3 API.
 type EntityTooLarge struct {
-	HostId         *string `json:"HostId,omitzero"`
 	MaxSizeAllowed *string `json:"MaxSizeAllowed,omitzero"`
+	HostId         *string `json:"HostId,omitzero"`
 	ProposedSize   *int64  `json:"ProposedSize,omitzero"`
 }
 
@@ -791,10 +791,10 @@ type EntityTooSmall struct {
 
 // Error is a structure of the s3 API.
 type Error struct {
-	Code      *string `json:"Code,omitzero"`
 	Key       *string `json:"Key,omitzero"`
-	Message   *string `json:"Message,omitzero"`
 	VersionId *string `json:"VersionId,omitzero"`
+	Code      *string `json:"Code,omitzero"`
+	Message   *string `json:"Message,omitzero"`
 }
 
 // ErrorDetails is a structure of the s3 API.
@@ -842,8 +842,8 @@ type GetBucketAccelerateConfigurationInput struct {
 
 // GetBucketAccelerateConfigurationOutput is a structure of the s3 API.
 type GetBucketAccelerateConfigurationOutput struct {
-	RequestCharged *string `json:"-"`
 	Status         *string `json:"Status,omitzero"`
+	RequestCharged *string `json:"-"`
 }
 
 // GetBucketAclInput is a structure of the s3 API.
@@ -854,15 +854,15 @@ type GetBucketAclInput struct {
 
 // GetBucketAclOutput is a structure of the s3 API.
 type GetBucketAclOutput struct {
-	Grants []Grant `json:"AccessControlList,omitzero"`
 	Owner  *Owner  `json:"Owner,omitzero"`
+	Grants []Grant `json:"AccessControlList,omitzero"`
 }
 
 // GetBucketAnalyticsConfigurationInput is a structure of the s3 API.
 type GetBucketAnalyticsConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetBucketAnalyticsConfigurationOutput is a structure of the s3 API.
@@ -895,8 +895,8 @@ type GetBucketEncryptionOutput struct {
 // GetBucketIntelligentTieringConfigurationInput is a structure of the s3 API.
 type GetBucketIntelligentTieringConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetBucketIntelligentTieringConfigurationOutput is a structure of the s3 API.
@@ -907,8 +907,8 @@ type GetBucketIntelligentTieringConfigurationOutput struct {
 // GetBucketInventoryConfigurationInput is a structure of the s3 API.
 type GetBucketInventoryConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetBucketInventoryConfigurationOutput is a structure of the s3 API.
@@ -990,16 +990,16 @@ type GetBucketMetadataTableConfigurationOutput struct {
 
 // GetBucketMetadataTableConfigurationResult is a structure of the s3 API.
 type GetBucketMetadataTableConfigurationResult struct {
-	Error                            *ErrorDetails                     `json:"Error,omitzero"`
 	MetadataTableConfigurationResult *MetadataTableConfigurationResult `json:"MetadataTableConfigurationResult,omitzero"`
 	Status                           *string                           `json:"Status,omitzero"`
+	Error                            *ErrorDetails                     `json:"Error,omitzero"`
 }
 
 // GetBucketMetricsConfigurationInput is a structure of the s3 API.
 type GetBucketMetricsConfigurationInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Id                  *string `json:"id,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetBucketMetricsConfigurationOutput is a structure of the s3 API.
@@ -1009,10 +1009,10 @@ type GetBucketMetricsConfigurationOutput struct {
 
 // GetBucketNotificationConfigurationOutput is a structure of the s3 API.
 type GetBucketNotificationConfigurationOutput struct {
-	EventBridgeConfiguration     *EventBridgeConfiguration     `json:"EventBridgeConfiguration,omitzero"`
-	LambdaFunctionConfigurations []LambdaFunctionConfiguration `json:"CloudFunctionConfiguration,omitzero"`
-	QueueConfigurations          []QueueConfiguration          `json:"QueueConfiguration,omitzero"`
 	TopicConfigurations          []TopicConfiguration          `json:"TopicConfiguration,omitzero"`
+	QueueConfigurations          []QueueConfiguration          `json:"QueueConfiguration,omitzero"`
+	LambdaFunctionConfigurations []LambdaFunctionConfiguration `json:"CloudFunctionConfiguration,omitzero"`
+	EventBridgeConfiguration     *EventBridgeConfiguration     `json:"EventBridgeConfiguration,omitzero"`
 }
 
 // GetBucketNotificationConfigurationRequest is a structure of the s3 API.
@@ -1023,9 +1023,9 @@ type GetBucketNotificationConfigurationRequest struct {
 
 // GetBucketNotificationOutput is a structure of the s3 API.
 type GetBucketNotificationOutput struct {
-	CloudFunctionConfiguration *CloudFunctionConfiguration   `json:"CloudFunctionConfiguration,omitzero"`
-	QueueConfiguration         *QueueConfigurationDeprecated `json:"QueueConfiguration,omitzero"`
 	TopicConfiguration         *TopicConfigurationDeprecated `json:"TopicConfiguration,omitzero"`
+	QueueConfiguration         *QueueConfigurationDeprecated `json:"QueueConfiguration,omitzero"`
+	CloudFunctionConfiguration *CloudFunctionConfiguration   `json:"CloudFunctionConfiguration,omitzero"`
 }
 
 // GetBucketOwnershipControlsInput is a structure of the s3 API.
@@ -1102,8 +1102,8 @@ type GetBucketVersioningInput struct {
 
 // GetBucketVersioningOutput is a structure of the s3 API.
 type GetBucketVersioningOutput struct {
-	MFADelete *string `json:"MfaDelete,omitzero"`
 	Status    *string `json:"Status,omitzero"`
+	MFADelete *string `json:"MfaDelete,omitzero"`
 }
 
 // GetBucketWebsiteInput is a structure of the s3 API.
@@ -1114,98 +1114,98 @@ type GetBucketWebsiteInput struct {
 
 // GetBucketWebsiteOutput is a structure of the s3 API.
 type GetBucketWebsiteOutput struct {
-	ErrorDocument         *ErrorDocument         `json:"ErrorDocument,omitzero"`
-	IndexDocument         *IndexDocument         `json:"IndexDocument,omitzero"`
 	RedirectAllRequestsTo *RedirectAllRequestsTo `json:"RedirectAllRequestsTo,omitzero"`
+	IndexDocument         *IndexDocument         `json:"IndexDocument,omitzero"`
+	ErrorDocument         *ErrorDocument         `json:"ErrorDocument,omitzero"`
 	RoutingRules          []RoutingRule          `json:"RoutingRules,omitzero"`
 }
 
 // GetObjectAclInput is a structure of the s3 API.
 type GetObjectAclInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
-	RequestPayer        *string `json:"-"`
 	VersionId           *string `json:"versionId,omitzero"`
+	RequestPayer        *string `json:"-"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetObjectAclOutput is a structure of the s3 API.
 type GetObjectAclOutput struct {
-	Grants         []Grant `json:"AccessControlList,omitzero"`
 	Owner          *Owner  `json:"Owner,omitzero"`
+	Grants         []Grant `json:"AccessControlList,omitzero"`
 	RequestCharged *string `json:"-"`
 }
 
 // GetObjectAttributesInput is a structure of the s3 API.
 type GetObjectAttributesInput struct {
 	Bucket               *string  `json:"Bucket,omitzero"`
-	ExpectedBucketOwner  *string  `json:"-"`
 	Key                  *string  `json:"Key,omitzero"`
+	VersionId            *string  `json:"versionId,omitzero"`
 	MaxParts             *int32   `json:"-"`
-	ObjectAttributes     []string `json:"-"`
 	PartNumberMarker     *int32   `json:"-"`
-	RequestPayer         *string  `json:"-"`
 	SSECustomerAlgorithm *string  `json:"-"`
 	SSECustomerKey       *string  `json:"-"`
 	SSECustomerKeyMD5    *string  `json:"-"`
-	VersionId            *string  `json:"versionId,omitzero"`
+	RequestPayer         *string  `json:"-"`
+	ExpectedBucketOwner  *string  `json:"-"`
+	ObjectAttributes     []string `json:"-"`
 }
 
 // GetObjectAttributesOutput is a structure of the s3 API.
 type GetObjectAttributesOutput struct {
-	Checksum       *Checksum                 `json:"Checksum,omitzero"`
 	DeleteMarker   *bool                     `json:"-"`
-	ETag           *string                   `json:"ETag,omitzero"`
 	LastModified   *protocol.Time            `json:"-"`
-	ObjectParts    *GetObjectAttributesParts `json:"ObjectParts,omitzero"`
-	ObjectSize     *int64                    `json:"ObjectSize,omitzero"`
-	RequestCharged *string                   `json:"-"`
-	StorageClass   *string                   `json:"StorageClass,omitzero"`
 	VersionId      *string                   `json:"-"`
+	RequestCharged *string                   `json:"-"`
+	ETag           *string                   `json:"ETag,omitzero"`
+	Checksum       *Checksum                 `json:"Checksum,omitzero"`
+	ObjectParts    *GetObjectAttributesParts `json:"ObjectParts,omitzero"`
+	StorageClass   *string                   `json:"StorageClass,omitzero"`
+	ObjectSize     *int64                    `json:"ObjectSize,omitzero"`
 }
 
 // GetObjectAttributesParts is a structure of the s3 API.
 type GetObjectAttributesParts struct {
-	IsTruncated          *bool        `json:"IsTruncated,omitzero"`
-	MaxParts             *int32       `json:"MaxParts,omitzero"`
-	NextPartNumberMarker *int32       `json:"NextPartNumberMarker,omitzero"`
-	PartNumberMarker     *int32       `json:"PartNumberMarker,omitzero"`
-	Parts                []ObjectPart `json:"Part,omitzero"`
 	TotalPartsCount      *int32       `json:"PartsCount,omitzero"`
+	PartNumberMarker     *int32       `json:"PartNumberMarker,omitzero"`
+	NextPartNumberMarker *int32       `json:"NextPartNumberMarker,omitzero"`
+	MaxParts             *int32       `json:"MaxParts,omitzero"`
+	IsTruncated          *bool        `json:"IsTruncated,omitzero"`
+	Parts                []ObjectPart `json:"Part,omitzero"`
 }
 
 // GetObjectInput is a structure of the s3 API.
 type GetObjectInput struct {
 	Bucket                     *string        `json:"Bucket,omitzero"`
-	ChecksumMode               *string        `json:"-"`
-	ExpectedBucketOwner        *string        `json:"-"`
 	IfMatch                    *string        `json:"-"`
 	IfModifiedSince            *protocol.Time `json:"-"`
 	IfNoneMatch                *string        `json:"-"`
 	IfUnmodifiedSince          *protocol.Time `json:"-"`
 	Key                        *string        `json:"Key,omitzero"`
-	PartNumber                 *int32         `json:"partNumber,omitzero"`
 	Range                      *string        `json:"-"`
-	RequestPayer               *string        `json:"-"`
 	ResponseCacheControl       *string        `json:"response-cache-control,omitzero"`
 	ResponseContentDisposition *string        `json:"response-content-disposition,omitzero"`
 	ResponseContentEncoding    *string        `json:"response-content-encoding,omitzero"`
 	ResponseContentLanguage    *string        `json:"response-content-language,omitzero"`
 	ResponseContentType        *string        `json:"response-content-type,omitzero"`
 	ResponseExpires            *protocol.Time `json:"response-expires,omitzero"`
+	VersionId                  *string        `json:"versionId,omitzero"`
 	SSECustomerAlgorithm       *string        `json:"-"`
 	SSECustomerKey             *string        `json:"-"`
 	SSECustomerKeyMD5          *string        `json:"-"`
-	VersionId                  *string        `json:"versionId,omitzero"`
+	RequestPayer               *string        `json:"-"`
+	PartNumber                 *int32         `json:"partNumber,omitzero"`
+	ExpectedBucketOwner        *string        `json:"-"`
+	ChecksumMode               *string        `json:"-"`
 }
 
 // GetObjectLegalHoldInput is a structure of the s3 API.
 type GetObjectLegalHoldInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
-	RequestPayer        *string `json:"-"`
 	VersionId           *string `json:"versionId,omitzero"`
+	RequestPayer        *string `json:"-"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetObjectLegalHoldOutput is a structure of the s3 API.
@@ -1226,54 +1226,54 @@ type GetObjectLockConfigurationOutput struct {
 
 // GetObjectOutput is a structure of the s3 API.
 type GetObjectOutput struct {
-	AcceptRanges              *string           `json:"-"`
 	Body                      io.ReadCloser     `json:"-"`
-	BucketKeyEnabled          *bool             `json:"-"`
-	CacheControl              *string           `json:"-"`
+	DeleteMarker              *bool             `json:"-"`
+	AcceptRanges              *string           `json:"-"`
+	Expiration                *string           `json:"-"`
+	Restore                   *string           `json:"-"`
+	LastModified              *protocol.Time    `json:"-"`
+	ContentLength             *int64            `json:"-"`
+	ETag                      *string           `json:"-"`
 	ChecksumCRC32             *string           `json:"-"`
 	ChecksumCRC32C            *string           `json:"-"`
 	ChecksumCRC64NVME         *string           `json:"-"`
 	ChecksumSHA1              *string           `json:"-"`
 	ChecksumSHA256            *string           `json:"-"`
 	ChecksumType              *string           `json:"-"`
+	MissingMeta               *int32            `json:"-"`
+	VersionId                 *string           `json:"-"`
+	CacheControl              *string           `json:"-"`
 	ContentDisposition        *string           `json:"-"`
 	ContentEncoding           *string           `json:"-"`
 	ContentLanguage           *string           `json:"-"`
-	ContentLength             *int64            `json:"-"`
 	ContentRange              *string           `json:"-"`
 	ContentType               *string           `json:"-"`
-	DeleteMarker              *bool             `json:"-"`
-	ETag                      *string           `json:"-"`
-	Expiration                *string           `json:"-"`
 	Expires                   *string           `json:"-"`
-	LastModified              *protocol.Time    `json:"-"`
+	WebsiteRedirectLocation   *string           `json:"-"`
+	ServerSideEncryption      *string           `json:"-"`
 	Metadata                  map[string]string `json:"-"`
-	MissingMeta               *int32            `json:"-"`
-	ObjectLockLegalHoldStatus *string           `json:"-"`
-	ObjectLockMode            *string           `json:"-"`
-	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
-	PartsCount                *int32            `json:"-"`
-	ReplicationStatus         *string           `json:"-"`
-	RequestCharged            *string           `json:"-"`
-	Restore                   *string           `json:"-"`
 	SSECustomerAlgorithm      *string           `json:"-"`
 	SSECustomerKeyMD5         *string           `json:"-"`
 	SSEKMSKeyId               *string           `json:"-"`
-	ServerSideEncryption      *string           `json:"-"`
-	StatusCode                *int32            `json:"-"`
+	BucketKeyEnabled          *bool             `json:"-"`
 	StorageClass              *string           `json:"-"`
+	RequestCharged            *string           `json:"-"`
+	ReplicationStatus         *string           `json:"-"`
+	PartsCount                *int32            `json:"-"`
 	TagCount                  *int32            `json:"-"`
-	VersionId                 *string           `json:"-"`
-	WebsiteRedirectLocation   *string           `json:"-"`
+	ObjectLockMode            *string           `json:"-"`
+	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
+	ObjectLockLegalHoldStatus *string           `json:"-"`
+	StatusCode                *int32            `json:"-"`
 }
 
 // GetObjectRetentionInput is a structure of the s3 API.
 type GetObjectRetentionInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
-	RequestPayer        *string `json:"-"`
 	VersionId           *string `json:"versionId,omitzero"`
+	RequestPayer        *string `json:"-"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetObjectRetentionOutput is a structure of the s3 API.
@@ -1284,24 +1284,24 @@ type GetObjectRetentionOutput struct {
 // GetObjectTaggingInput is a structure of the s3 API.
 type GetObjectTaggingInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
-	RequestPayer        *string `json:"-"`
 	VersionId           *string `json:"versionId,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
+	RequestPayer        *string `json:"-"`
 }
 
 // GetObjectTaggingOutput is a structure of the s3 API.
 type GetObjectTaggingOutput struct {
-	TagSet    []Tag   `json:"TagSet,omitzero"`
 	VersionId *string `json:"-"`
+	TagSet    []Tag   `json:"TagSet,omitzero"`
 }
 
 // GetObjectTorrentInput is a structure of the s3 API.
 type GetObjectTorrentInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	Key                 *string `json:"Key,omitzero"`
 	RequestPayer        *string `json:"-"`
+	ExpectedBucketOwner *string `json:"-"`
 }
 
 // GetObjectTorrentOutput is a structure of the s3 API.
@@ -1349,79 +1349,79 @@ type HeadBucketInput struct {
 
 // HeadBucketOutput is a structure of the s3 API.
 type HeadBucketOutput struct {
-	AccessPointAlias   *bool   `json:"-"`
 	BucketArn          *string `json:"-"`
-	BucketLocationName *string `json:"-"`
 	BucketLocationType *string `json:"-"`
+	BucketLocationName *string `json:"-"`
 	BucketRegion       *string `json:"-"`
+	AccessPointAlias   *bool   `json:"-"`
 }
 
 // HeadObjectInput is a structure of the s3 API.
 type HeadObjectInput struct {
 	Bucket                     *string        `json:"Bucket,omitzero"`
-	ChecksumMode               *string        `json:"-"`
-	ExpectedBucketOwner        *string        `json:"-"`
 	IfMatch                    *string        `json:"-"`
 	IfModifiedSince            *protocol.Time `json:"-"`
 	IfNoneMatch                *string        `json:"-"`
 	IfUnmodifiedSince          *protocol.Time `json:"-"`
 	Key                        *string        `json:"Key,omitzero"`
-	PartNumber                 *int32         `json:"partNumber,omitzero"`
 	Range                      *string        `json:"-"`
-	RequestPayer               *string        `json:"-"`
 	ResponseCacheControl       *string        `json:"response-cache-control,omitzero"`
 	ResponseContentDisposition *string        `json:"response-content-disposition,omitzero"`
 	ResponseContentEncoding    *string        `json:"response-content-encoding,omitzero"`
 	ResponseContentLanguage    *string        `json:"response-content-language,omitzero"`
 	ResponseContentType        *string        `json:"response-content-type,omitzero"`
 	ResponseExpires            *protocol.Time `json:"response-expires,omitzero"`
+	VersionId                  *string        `json:"versionId,omitzero"`
 	SSECustomerAlgorithm       *string        `json:"-"`
 	SSECustomerKey             *string        `json:"-"`
 	SSECustomerKeyMD5          *string        `json:"-"`
-	VersionId                  *string        `json:"versionId,omitzero"`
+	RequestPayer               *string        `json:"-"`
+	PartNumber                 *int32         `json:"partNumber,omitzero"`
+	ExpectedBucketOwner        *string        `json:"-"`
+	ChecksumMode               *string        `json:"-"`
 }
 
 // HeadObjectOutput is a structure of the s3 API.
 type HeadObjectOutput struct {
+	DeleteMarker              *bool             `json:"-"`
 	AcceptRanges              *string           `json:"-"`
+	Expiration                *string           `json:"-"`
+	Restore                   *string           `json:"-"`
 	ArchiveStatus             *string           `json:"-"`
-	BucketKeyEnabled          *bool             `json:"-"`
-	CacheControl              *string           `json:"-"`
+	LastModified              *protocol.Time    `json:"-"`
+	ContentLength             *int64            `json:"-"`
 	ChecksumCRC32             *string           `json:"-"`
 	ChecksumCRC32C            *string           `json:"-"`
 	ChecksumCRC64NVME         *string           `json:"-"`
 	ChecksumSHA1              *string           `json:"-"`
 	ChecksumSHA256            *string           `json:"-"`
 	ChecksumType              *string           `json:"-"`
+	ETag                      *string           `json:"-"`
+	MissingMeta               *int32            `json:"-"`
+	VersionId                 *string           `json:"-"`
+	CacheControl              *string           `json:"-"`
 	ContentDisposition        *string           `json:"-"`
 	ContentEncoding           *string           `json:"-"`
 	ContentLanguage           *string           `json:"-"`
-	ContentLength             *int64            `json:"-"`
-	ContentRange              *string           `json:"-"`
 	ContentType               *string           `json:"-"`
-	DeleteMarker              *bool             `json:"-"`
-	ETag                      *string           `json:"-"`
-	Expiration                *string           `json:"-"`
+	ContentRange              *string           `json:"-"`
 	Expires                   *string           `json:"-"`
-	LastModified              *protocol.Time    `json:"-"`
+	WebsiteRedirectLocation   *string           `json:"-"`
+	ServerSideEncryption      *string           `json:"-"`
 	Metadata                  map[string]string `json:"-"`
-	MissingMeta               *int32            `json:"-"`
-	ObjectLockLegalHoldStatus *string           `json:"-"`
-	ObjectLockMode            *string           `json:"-"`
-	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
-	PartsCount                *int32            `json:"-"`
-	ReplicationStatus         *string           `json:"-"`
-	RequestCharged            *string           `json:"-"`
-	Restore                   *string           `json:"-"`
 	SSECustomerAlgorithm      *string           `json:"-"`
 	SSECustomerKeyMD5         *string           `json:"-"`
 	SSEKMSKeyId               *string           `json:"-"`
-	ServerSideEncryption      *string           `json:"-"`
-	StatusCode                *int32            `json:"-"`
+	BucketKeyEnabled          *bool             `json:"-"`
 	StorageClass              *string           `json:"-"`
+	RequestCharged            *string           `json:"-"`
+	ReplicationStatus         *string           `json:"-"`
+	PartsCount                *int32            `json:"-"`
 	TagCount                  *int32            `json:"-"`
-	VersionId                 *string           `json:"-"`
-	WebsiteRedirectLocation   *string           `json:"-"`
+	ObjectLockMode            *string           `json:"-"`
+	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
+	ObjectLockLegalHoldStatus *string           `json:"-"`
+	StatusCode                *int32            `json:"-"`
 }
 
 // IndexDocument is a structure of the s3 API.
@@ -1431,8 +1431,8 @@ type IndexDocument struct {
 
 // Initiator is a structure of the s3 API.
 type Initiator struct {
-	DisplayName *string `json:"DisplayName,omitzero"`
 	ID          *string `json:"ID,omitzero"`
+	DisplayName *string `json:"DisplayName,omitzero"`
 }
 
 // InputSerialization is a structure of the s3 API.
@@ -1451,17 +1451,17 @@ type IntelligentTieringAndOperator struct {
 
 // IntelligentTieringConfiguration is a structure of the s3 API.
 type IntelligentTieringConfiguration struct {
-	Filter   *IntelligentTieringFilter `json:"Filter,omitzero"`
 	Id       *string                   `json:"Id,omitzero"`
+	Filter   *IntelligentTieringFilter `json:"Filter,omitzero"`
 	Status   *string                   `json:"Status,omitzero"`
 	Tierings []Tiering                 `json:"Tiering,omitzero"`
 }
 
 // IntelligentTieringFilter is a structure of the s3 API.
 type IntelligentTieringFilter struct {
-	And    *IntelligentTieringAndOperator `json:"And,omitzero"`
 	Prefix *string                        `json:"Prefix,omitzero"`
 	Tag    *Tag                           `json:"Tag,omitzero"`
+	And    *IntelligentTieringAndOperator `json:"And,omitzero"`
 }
 
 // InvalidArgument is a structure of the s3 API.
@@ -1494,21 +1494,21 @@ type InvalidLocationConstraint struct {
 
 // InvalidObjectState is a structure of the s3 API.
 type InvalidObjectState struct {
-	AccessTier   *string `json:"AccessTier,omitzero"`
 	StorageClass *string `json:"StorageClass,omitzero"`
+	AccessTier   *string `json:"AccessTier,omitzero"`
 }
 
 // InvalidPart is a structure of the s3 API.
 type InvalidPart struct {
 	ETag       *string `json:"ETag,omitzero"`
-	PartNumber *int32  `json:"PartNumber,omitzero"`
 	UploadId   *string `json:"UploadId,omitzero"`
+	PartNumber *int32  `json:"PartNumber,omitzero"`
 }
 
 // InvalidPartNumber is a structure of the s3 API.
 type InvalidPartNumber struct {
-	ActualPartCount     *int32 `json:"ActualPartCount,omitzero"`
 	PartNumberRequested *int32 `json:"PartNumberRequested,omitzero"`
+	ActualPartCount     *int32 `json:"ActualPartCount,omitzero"`
 }
 
 // InvalidPartOrder is a structure of the s3 API.
@@ -1541,10 +1541,10 @@ type InvalidTargetBucketForLogging struct {
 // InventoryConfiguration is a structure of the s3 API.
 type InventoryConfiguration struct {
 	Destination            *InventoryDestination `json:"Destination,omitzero"`
+	IsEnabled              *bool                 `json:"IsEnabled,omitzero"`
 	Filter                 *InventoryFilter      `json:"Filter,omitzero"`
 	Id                     *string               `json:"Id,omitzero"`
 	IncludedObjectVersions *string               `json:"IncludedObjectVersions,omitzero"`
-	IsEnabled              *bool                 `json:"IsEnabled,omitzero"`
 	OptionalFields         []string              `json:"OptionalFields,omitzero"`
 	Schedule               *InventorySchedule    `json:"Schedule,omitzero"`
 }
@@ -1556,8 +1556,8 @@ type InventoryDestination struct {
 
 // InventoryEncryption is a structure of the s3 API.
 type InventoryEncryption struct {
-	SSEKMS *SSEKMS `json:"SSE-KMS,omitzero"`
 	SSES3  *SSES3  `json:"SSE-S3,omitzero"`
+	SSEKMS *SSEKMS `json:"SSE-KMS,omitzero"`
 }
 
 // InventoryFilter is a structure of the s3 API.
@@ -1569,9 +1569,9 @@ type InventoryFilter struct {
 type InventoryS3BucketDestination struct {
 	AccountId  *string              `json:"AccountId,omitzero"`
 	Bucket     *string              `json:"Bucket,omitzero"`
-	Encryption *InventoryEncryption `json:"Encryption,omitzero"`
 	Format     *string              `json:"Format,omitzero"`
 	Prefix     *string              `json:"Prefix,omitzero"`
+	Encryption *InventoryEncryption `json:"Encryption,omitzero"`
 }
 
 // InventorySchedule is a structure of the s3 API.
@@ -1588,10 +1588,10 @@ type InventoryTableConfiguration struct {
 // InventoryTableConfigurationResult is a structure of the s3 API.
 type InventoryTableConfigurationResult struct {
 	ConfigurationState *string       `json:"ConfigurationState,omitzero"`
-	Error              *ErrorDetails `json:"Error,omitzero"`
-	TableArn           *string       `json:"TableArn,omitzero"`
-	TableName          *string       `json:"TableName,omitzero"`
 	TableStatus        *string       `json:"TableStatus,omitzero"`
+	Error              *ErrorDetails `json:"Error,omitzero"`
+	TableName          *string       `json:"TableName,omitzero"`
+	TableArn           *string       `json:"TableArn,omitzero"`
 }
 
 // InventoryTableConfigurationUpdates is a structure of the s3 API.
@@ -1612,17 +1612,17 @@ type JSONOutput struct {
 
 // JournalTableConfiguration is a structure of the s3 API.
 type JournalTableConfiguration struct {
-	EncryptionConfiguration *MetadataTableEncryptionConfiguration `json:"EncryptionConfiguration,omitzero"`
 	RecordExpiration        *RecordExpiration                     `json:"RecordExpiration,omitzero"`
+	EncryptionConfiguration *MetadataTableEncryptionConfiguration `json:"EncryptionConfiguration,omitzero"`
 }
 
 // JournalTableConfigurationResult is a structure of the s3 API.
 type JournalTableConfigurationResult struct {
-	Error            *ErrorDetails     `json:"Error,omitzero"`
-	RecordExpiration *RecordExpiration `json:"RecordExpiration,omitzero"`
-	TableArn         *string           `json:"TableArn,omitzero"`
-	TableName        *string           `json:"TableName,omitzero"`
 	TableStatus      *string           `json:"TableStatus,omitzero"`
+	Error            *ErrorDetails     `json:"Error,omitzero"`
+	TableName        *string           `json:"TableName,omitzero"`
+	TableArn         *string           `json:"TableArn,omitzero"`
+	RecordExpiration *RecordExpiration `json:"RecordExpiration,omitzero"`
 }
 
 // JournalTableConfigurationUpdates is a structure of the s3 API.
@@ -1638,10 +1638,10 @@ type KeyTooLongError struct {
 
 // LambdaFunctionConfiguration is a structure of the s3 API.
 type LambdaFunctionConfiguration struct {
-	Events            []string                         `json:"Event,omitzero"`
-	Filter            *NotificationConfigurationFilter `json:"Filter,omitzero"`
 	Id                *string                          `json:"Id,omitzero"`
 	LambdaFunctionArn *string                          `json:"CloudFunction,omitzero"`
+	Events            []string                         `json:"Event,omitzero"`
+	Filter            *NotificationConfigurationFilter `json:"Filter,omitzero"`
 }
 
 // LifecycleConfiguration is a structure of the s3 API.
@@ -1658,32 +1658,32 @@ type LifecycleExpiration struct {
 
 // LifecycleRule is a structure of the s3 API.
 type LifecycleRule struct {
-	AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `json:"AbortIncompleteMultipartUpload,omitzero"`
 	Expiration                     *LifecycleExpiration            `json:"Expiration,omitzero"`
-	Filter                         *LifecycleRuleFilter            `json:"Filter,omitzero"`
 	ID                             *string                         `json:"ID,omitzero"`
-	NoncurrentVersionExpiration    *NoncurrentVersionExpiration    `json:"NoncurrentVersionExpiration,omitzero"`
-	NoncurrentVersionTransitions   []NoncurrentVersionTransition   `json:"NoncurrentVersionTransition,omitzero"`
 	Prefix                         *string                         `json:"Prefix,omitzero"`
+	Filter                         *LifecycleRuleFilter            `json:"Filter,omitzero"`
 	Status                         *string                         `json:"Status,omitzero"`
 	Transitions                    []Transition                    `json:"Transition,omitzero"`
+	NoncurrentVersionTransitions   []NoncurrentVersionTransition   `json:"NoncurrentVersionTransition,omitzero"`
+	NoncurrentVersionExpiration    *NoncurrentVersionExpiration    `json:"NoncurrentVersionExpiration,omitzero"`
+	AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `json:"AbortIncompleteMultipartUpload,omitzero"`
 }
 
 // LifecycleRuleAndOperator is a structure of the s3 API.
 type LifecycleRuleAndOperator struct {
-	ObjectSizeGreaterThan *int64  `json:"ObjectSizeGreaterThan,omitzero"`
-	ObjectSizeLessThan    *int64  `json:"ObjectSizeLessThan,omitzero"`
 	Prefix                *string `json:"Prefix,omitzero"`
 	Tags                  []Tag   `json:"Tag,omitzero"`
+	ObjectSizeGreaterThan *int64  `json:"ObjectSizeGreaterThan,omitzero"`
+	ObjectSizeLessThan    *int64  `json:"ObjectSizeLessThan,omitzero"`
 }
 
 // LifecycleRuleFilter is a structure of the s3 API.
 type LifecycleRuleFilter struct {
-	And                   *LifecycleRuleAndOperator `json:"And,omitzero"`
-	ObjectSizeGreaterThan *int64                    `json:"ObjectSizeGreaterThan,omitzero"`
-	ObjectSizeLessThan    *int64                    `json:"ObjectSizeLessThan,omitzero"`
 	Prefix                *string                   `json:"Prefix,omitzero"`
 	Tag                   *Tag                      `json:"Tag,omitzero"`
+	ObjectSizeGreaterThan *int64                    `json:"ObjectSizeGreaterThan,omitzero"`
+	ObjectSizeLessThan    *int64                    `json:"ObjectSizeLessThan,omitzero"`
+	And                   *LifecycleRuleAndOperator `json:"And,omitzero"`
 }
 
 // ListBucketAnalyticsConfigurationsInput is a structure of the s3 API.
@@ -1695,10 +1695,10 @@ type ListBucketAnalyticsConfigurationsInput struct {
 
 // ListBucketAnalyticsConfigurationsOutput is a structure of the s3 API.
 type ListBucketAnalyticsConfigurationsOutput struct {
-	AnalyticsConfigurationList []AnalyticsConfiguration `json:"AnalyticsConfiguration,omitzero"`
-	ContinuationToken          *string                  `json:"ContinuationToken,omitzero"`
 	IsTruncated                *bool                    `json:"IsTruncated,omitzero"`
+	ContinuationToken          *string                  `json:"ContinuationToken,omitzero"`
 	NextContinuationToken      *string                  `json:"NextContinuationToken,omitzero"`
+	AnalyticsConfigurationList []AnalyticsConfiguration `json:"AnalyticsConfiguration,omitzero"`
 }
 
 // ListBucketIntelligentTieringConfigurationsInput is a structure of the s3 API.
@@ -1710,10 +1710,10 @@ type ListBucketIntelligentTieringConfigurationsInput struct {
 
 // ListBucketIntelligentTieringConfigurationsOutput is a structure of the s3 API.
 type ListBucketIntelligentTieringConfigurationsOutput struct {
-	ContinuationToken                   *string                           `json:"ContinuationToken,omitzero"`
-	IntelligentTieringConfigurationList []IntelligentTieringConfiguration `json:"IntelligentTieringConfiguration,omitzero"`
 	IsTruncated                         *bool                             `json:"IsTruncated,omitzero"`
+	ContinuationToken                   *string                           `json:"ContinuationToken,omitzero"`
 	NextContinuationToken               *string                           `json:"NextContinuationToken,omitzero"`
+	IntelligentTieringConfigurationList []IntelligentTieringConfiguration `json:"IntelligentTieringConfiguration,omitzero"`
 }
 
 // ListBucketInventoryConfigurationsInput is a structure of the s3 API.
@@ -1740,26 +1740,26 @@ type ListBucketMetricsConfigurationsInput struct {
 
 // ListBucketMetricsConfigurationsOutput is a structure of the s3 API.
 type ListBucketMetricsConfigurationsOutput struct {
-	ContinuationToken        *string                `json:"ContinuationToken,omitzero"`
 	IsTruncated              *bool                  `json:"IsTruncated,omitzero"`
-	MetricsConfigurationList []MetricsConfiguration `json:"MetricsConfiguration,omitzero"`
+	ContinuationToken        *string                `json:"ContinuationToken,omitzero"`
 	NextContinuationToken    *string                `json:"NextContinuationToken,omitzero"`
+	MetricsConfigurationList []MetricsConfiguration `json:"MetricsConfiguration,omitzero"`
 }
 
 // ListBucketsInput is a structure of the s3 API.
 type ListBucketsInput struct {
-	BucketRegion      *string `json:"bucket-region,omitzero"`
-	ContinuationToken *string `json:"continuation-token,omitzero"`
 	MaxBuckets        *int32  `json:"max-buckets,omitzero"`
+	ContinuationToken *string `json:"continuation-token,omitzero"`
 	Prefix            *string `json:"prefix,omitzero"`
+	BucketRegion      *string `json:"bucket-region,omitzero"`
 }
 
 // ListBucketsOutput is a structure of the s3 API.
 type ListBucketsOutput struct {
-	Buckets           []Bucket `json:"Buckets,omitzero"`
-	ContinuationToken *string  `json:"ContinuationToken,omitzero"`
 	Owner             *Owner   `json:"Owner,omitzero"`
+	ContinuationToken *string  `json:"ContinuationToken,omitzero"`
 	Prefix            *string  `json:"Prefix,omitzero"`
+	Buckets           []Bucket `json:"Buckets,omitzero"`
 }
 
 // ListDirectoryBucketsInput is a structure of the s3 API.
@@ -1779,29 +1779,29 @@ type ListMultipartUploadsInput struct {
 	Bucket              *string `json:"Bucket,omitzero"`
 	Delimiter           *string `json:"delimiter,omitzero"`
 	EncodingType        *string `json:"encoding-type,omitzero"`
-	ExpectedBucketOwner *string `json:"-"`
 	KeyMarker           *string `json:"key-marker,omitzero"`
 	MaxUploads          *int32  `json:"max-uploads,omitzero"`
 	Prefix              *string `json:"prefix,omitzero"`
-	RequestPayer        *string `json:"-"`
 	UploadIdMarker      *string `json:"upload-id-marker,omitzero"`
+	ExpectedBucketOwner *string `json:"-"`
+	RequestPayer        *string `json:"-"`
 }
 
 // ListMultipartUploadsOutput is a structure of the s3 API.
 type ListMultipartUploadsOutput struct {
 	Bucket             *string           `json:"Bucket,omitzero"`
-	CommonPrefixes     []CommonPrefix    `json:"CommonPrefixes,omitzero"`
-	Delimiter          *string           `json:"Delimiter,omitzero"`
-	EncodingType       *string           `json:"EncodingType,omitzero"`
-	IsTruncated        *bool             `json:"IsTruncated,omitzero"`
 	KeyMarker          *string           `json:"KeyMarker,omitzero"`
-	MaxUploads         *int32            `json:"MaxUploads,omitzero"`
-	NextKeyMarker      *string           `json:"NextKeyMarker,omitzero"`
-	NextUploadIdMarker *string           `json:"NextUploadIdMarker,omitzero"`
-	Prefix             *string           `json:"Prefix,omitzero"`
-	RequestCharged     *string           `json:"-"`
 	UploadIdMarker     *string           `json:"UploadIdMarker,omitzero"`
+	NextKeyMarker      *string           `json:"NextKeyMarker,omitzero"`
+	Prefix             *string           `json:"Prefix,omitzero"`
+	Delimiter          *string           `json:"Delimiter,omitzero"`
+	NextUploadIdMarker *string           `json:"NextUploadIdMarker,omitzero"`
+	MaxUploads         *int32            `json:"MaxUploads,omitzero"`
+	IsTruncated        *bool             `json:"IsTruncated,omitzero"`
 	Uploads            []MultipartUpload `json:"Upload,omitzero"`
+	CommonPrefixes     []CommonPrefix    `json:"CommonPrefixes,omitzero"`
+	EncodingType       *string           `json:"EncodingType,omitzero"`
+	RequestCharged     *string           `json:"-"`
 }
 
 // ListObjectVersionsInput is a structure of the s3 API.
@@ -1809,30 +1809,30 @@ type ListObjectVersionsInput struct {
 	Bucket                   *string  `json:"Bucket,omitzero"`
 	Delimiter                *string  `json:"delimiter,omitzero"`
 	EncodingType             *string  `json:"encoding-type,omitzero"`
-	ExpectedBucketOwner      *string  `json:"-"`
 	KeyMarker                *string  `json:"key-marker,omitzero"`
 	MaxKeys                  *int32   `json:"max-keys,omitzero"`
-	OptionalObjectAttributes []string `json:"-"`
 	Prefix                   *string  `json:"prefix,omitzero"`
-	RequestPayer             *string  `json:"-"`
 	VersionIdMarker          *string  `json:"version-id-marker,omitzero"`
+	ExpectedBucketOwner      *string  `json:"-"`
+	RequestPayer             *string  `json:"-"`
+	OptionalObjectAttributes []string `json:"-"`
 }
 
 // ListObjectVersionsOutput is a structure of the s3 API.
 type ListObjectVersionsOutput struct {
-	CommonPrefixes      []CommonPrefix      `json:"CommonPrefixes,omitzero"`
-	DeleteMarkers       []DeleteMarkerEntry `json:"DeleteMarker,omitzero"`
-	Delimiter           *string             `json:"Delimiter,omitzero"`
-	EncodingType        *string             `json:"EncodingType,omitzero"`
 	IsTruncated         *bool               `json:"IsTruncated,omitzero"`
 	KeyMarker           *string             `json:"KeyMarker,omitzero"`
-	MaxKeys             *int32              `json:"MaxKeys,omitzero"`
-	Name                *string             `json:"Name,omitzero"`
+	VersionIdMarker     *string             `json:"VersionIdMarker,omitzero"`
 	NextKeyMarker       *string             `json:"NextKeyMarker,omitzero"`
 	NextVersionIdMarker *string             `json:"NextVersionIdMarker,omitzero"`
+	DeleteMarkers       []DeleteMarkerEntry `json:"DeleteMarker,omitzero"`
+	Name                *string             `json:"Name,omitzero"`
 	Prefix              *string             `json:"Prefix,omitzero"`
+	Delimiter           *string             `json:"Delimiter,omitzero"`
+	MaxKeys             *int32              `json:"MaxKeys,omitzero"`
+	CommonPrefixes      []CommonPrefix      `json:"CommonPrefixes,omitzero"`
+	EncodingType        *string             `json:"EncodingType,omitzero"`
 	RequestCharged      *string             `json:"-"`
-	VersionIdMarker     *string             `json:"VersionIdMarker,omitzero"`
 	Versions            []ObjectVersion     `json:"Version,omitzero"`
 }
 
@@ -1841,75 +1841,75 @@ type ListObjectsInput struct {
 	Bucket                   *string  `json:"Bucket,omitzero"`
 	Delimiter                *string  `json:"delimiter,omitzero"`
 	EncodingType             *string  `json:"encoding-type,omitzero"`
-	ExpectedBucketOwner      *string  `json:"-"`
 	Marker                   *string  `json:"marker,omitzero"`
 	MaxKeys                  *int32   `json:"max-keys,omitzero"`
-	OptionalObjectAttributes []string `json:"-"`
 	Prefix                   *string  `json:"prefix,omitzero"`
 	RequestPayer             *string  `json:"-"`
+	ExpectedBucketOwner      *string  `json:"-"`
+	OptionalObjectAttributes []string `json:"-"`
 }
 
 // ListObjectsOutput is a structure of the s3 API.
 type ListObjectsOutput struct {
-	BucketRegion   *string        `json:"-"`
-	CommonPrefixes []CommonPrefix `json:"CommonPrefixes,omitzero"`
-	Contents       []Object       `json:"Contents,omitzero"`
-	Delimiter      *string        `json:"Delimiter,omitzero"`
-	EncodingType   *string        `json:"EncodingType,omitzero"`
 	IsTruncated    *bool          `json:"IsTruncated,omitzero"`
 	Marker         *string        `json:"Marker,omitzero"`
-	MaxKeys        *int32         `json:"MaxKeys,omitzero"`
-	Name           *string        `json:"Name,omitzero"`
 	NextMarker     *string        `json:"NextMarker,omitzero"`
+	Name           *string        `json:"Name,omitzero"`
 	Prefix         *string        `json:"Prefix,omitzero"`
+	Delimiter      *string        `json:"Delimiter,omitzero"`
+	MaxKeys        *int32         `json:"MaxKeys,omitzero"`
+	CommonPrefixes []CommonPrefix `json:"CommonPrefixes,omitzero"`
+	EncodingType   *string        `json:"EncodingType,omitzero"`
 	RequestCharged *string        `json:"-"`
+	BucketRegion   *string        `json:"-"`
+	Contents       []Object       `json:"Contents,omitzero"`
 }
 
 // ListObjectsV2Input is a structure of the s3 API.
 type ListObjectsV2Input struct {
 	Bucket                   *string  `json:"Bucket,omitzero"`
-	ContinuationToken        *string  `json:"continuation-token,omitzero"`
 	Delimiter                *string  `json:"delimiter,omitzero"`
 	EncodingType             *string  `json:"encoding-type,omitzero"`
-	ExpectedBucketOwner      *string  `json:"-"`
-	FetchOwner               *bool    `json:"fetch-owner,omitzero"`
 	MaxKeys                  *int32   `json:"max-keys,omitzero"`
-	OptionalObjectAttributes []string `json:"-"`
 	Prefix                   *string  `json:"prefix,omitzero"`
-	RequestPayer             *string  `json:"-"`
+	ContinuationToken        *string  `json:"continuation-token,omitzero"`
+	FetchOwner               *bool    `json:"fetch-owner,omitzero"`
 	StartAfter               *string  `json:"start-after,omitzero"`
+	RequestPayer             *string  `json:"-"`
+	ExpectedBucketOwner      *string  `json:"-"`
+	OptionalObjectAttributes []string `json:"-"`
 }
 
 // ListObjectsV2Output is a structure of the s3 API.
 type ListObjectsV2Output struct {
-	BucketRegion          *string        `json:"-"`
-	CommonPrefixes        []CommonPrefix `json:"CommonPrefixes,omitzero"`
-	Contents              []Object       `json:"Contents,omitzero"`
-	ContinuationToken     *string        `json:"ContinuationToken,omitzero"`
-	Delimiter             *string        `json:"Delimiter,omitzero"`
-	EncodingType          *string        `json:"EncodingType,omitzero"`
 	IsTruncated           *bool          `json:"IsTruncated,omitzero"`
-	KeyCount              *int32         `json:"KeyCount,omitzero"`
-	MaxKeys               *int32         `json:"MaxKeys,omitzero"`
 	Name                  *string        `json:"Name,omitzero"`
-	NextContinuationToken *string        `json:"NextContinuationToken,omitzero"`
 	Prefix                *string        `json:"Prefix,omitzero"`
-	RequestCharged        *string        `json:"-"`
+	Delimiter             *string        `json:"Delimiter,omitzero"`
+	MaxKeys               *int32         `json:"MaxKeys,omitzero"`
+	CommonPrefixes        []CommonPrefix `json:"CommonPrefixes,omitzero"`
+	EncodingType          *string        `json:"EncodingType,omitzero"`
+	KeyCount              *int32         `json:"KeyCount,omitzero"`
+	ContinuationToken     *string        `json:"ContinuationToken,omitzero"`
+	NextContinuationToken *string        `json:"NextContinuationToken,omitzero"`
 	StartAfter            *string        `json:"StartAfter,omitzero"`
+	RequestCharged        *string        `json:"-"`
+	BucketRegion          *string        `json:"-"`
+	Contents              []Object       `json:"Contents,omitzero"`
 }
 
 // ListPartsInput is a structure of the s3 API.
 type ListPartsInput struct {
 	Bucket               *string `json:"Bucket,omitzero"`
-	ExpectedBucketOwner  *string `json:"-"`
 	Key                  *string `json:"Key,omitzero"`
 	MaxParts             *int32  `json:"max-parts,omitzero"`
 	PartNumberMarker     *int32  `json:"part-number-marker,omitzero"`
+	UploadId             *string `json:"uploadId,omitzero"`
 	RequestPayer         *string `json:"-"`
+	ExpectedBucketOwner  *string `json:"-"`
 	SSECustomerAlgorithm *string `json:"-"`
 	SSECustomerKey       *string `json:"-"`
 	SSECustomerKeyMD5    *string `json:"-"`
-	UploadId             *string `json:"uploadId,omitzero"`
 }
 
 // ListPartsOutput is a structure of the s3 API.
@@ -1917,46 +1917,46 @@ type ListPartsOutput struct {
 	AbortDate            *protocol.Time `json:"-"`
 	AbortRuleId          *string        `json:"-"`
 	Bucket               *string        `json:"Bucket,omitzero"`
+	Key                  *string        `json:"Key,omitzero"`
+	UploadId             *string        `json:"UploadId,omitzero"`
+	PartNumberMarker     *int32         `json:"PartNumberMarker,omitzero"`
+	NextPartNumberMarker *int32         `json:"NextPartNumberMarker,omitzero"`
+	MaxParts             *int32         `json:"MaxParts,omitzero"`
+	IsTruncated          *bool          `json:"IsTruncated,omitzero"`
+	Parts                []Part         `json:"Part,omitzero"`
+	Initiator            *Initiator     `json:"Initiator,omitzero"`
+	Owner                *Owner         `json:"Owner,omitzero"`
+	StorageClass         *string        `json:"StorageClass,omitzero"`
+	RequestCharged       *string        `json:"-"`
 	ChecksumAlgorithm    *string        `json:"ChecksumAlgorithm,omitzero"`
 	ChecksumType         *string        `json:"ChecksumType,omitzero"`
-	Initiator            *Initiator     `json:"Initiator,omitzero"`
-	IsTruncated          *bool          `json:"IsTruncated,omitzero"`
-	Key                  *string        `json:"Key,omitzero"`
-	MaxParts             *int32         `json:"MaxParts,omitzero"`
-	NextPartNumberMarker *int32         `json:"NextPartNumberMarker,omitzero"`
-	Owner                *Owner         `json:"Owner,omitzero"`
-	PartNumberMarker     *int32         `json:"PartNumberMarker,omitzero"`
-	Parts                []Part         `json:"Part,omitzero"`
-	RequestCharged       *string        `json:"-"`
-	StorageClass         *string        `json:"StorageClass,omitzero"`
-	UploadId             *string        `json:"UploadId,omitzero"`
 }
 
 // LocationInfo is a structure of the s3 API.
 type LocationInfo struct {
-	Name *string `json:"Name,omitzero"`
 	Type *string `json:"Type,omitzero"`
+	Name *string `json:"Name,omitzero"`
 }
 
 // LoggingEnabled is a structure of the s3 API.
 type LoggingEnabled struct {
 	TargetBucket          *string                `json:"TargetBucket,omitzero"`
 	TargetGrants          []TargetGrant          `json:"TargetGrants,omitzero"`
-	TargetObjectKeyFormat *TargetObjectKeyFormat `json:"TargetObjectKeyFormat,omitzero"`
 	TargetPrefix          *string                `json:"TargetPrefix,omitzero"`
+	TargetObjectKeyFormat *TargetObjectKeyFormat `json:"TargetObjectKeyFormat,omitzero"`
 }
 
 // MetadataConfiguration is a structure of the s3 API.
 type MetadataConfiguration struct {
-	InventoryTableConfiguration *InventoryTableConfiguration `json:"InventoryTableConfiguration,omitzero"`
 	JournalTableConfiguration   *JournalTableConfiguration   `json:"JournalTableConfiguration,omitzero"`
+	InventoryTableConfiguration *InventoryTableConfiguration `json:"InventoryTableConfiguration,omitzero"`
 }
 
 // MetadataConfigurationResult is a structure of the s3 API.
 type MetadataConfigurationResult struct {
 	DestinationResult                 *DestinationResult                 `json:"DestinationResult,omitzero"`
-	InventoryTableConfigurationResult *InventoryTableConfigurationResult `json:"InventoryTableConfigurationResult,omitzero"`
 	JournalTableConfigurationResult   *JournalTableConfigurationResult   `json:"JournalTableConfigurationResult,omitzero"`
+	InventoryTableConfigurationResult *InventoryTableConfigurationResult `json:"InventoryTableConfigurationResult,omitzero"`
 }
 
 // MetadataEntry is a structure of the s3 API.
@@ -1977,44 +1977,44 @@ type MetadataTableConfigurationResult struct {
 
 // MetadataTableEncryptionConfiguration is a structure of the s3 API.
 type MetadataTableEncryptionConfiguration struct {
-	KmsKeyArn    *string `json:"KmsKeyArn,omitzero"`
 	SseAlgorithm *string `json:"SseAlgorithm,omitzero"`
+	KmsKeyArn    *string `json:"KmsKeyArn,omitzero"`
 }
 
 // MethodNotAllowed is a structure of the s3 API.
 type MethodNotAllowed struct {
-	Allow        *string `json:"-"`
-	DeleteMarker *bool   `json:"-"`
 	Method       *string `json:"Method,omitzero"`
 	ResourceType *string `json:"ResourceType,omitzero"`
+	DeleteMarker *bool   `json:"-"`
 	VersionId    *string `json:"-"`
+	Allow        *string `json:"-"`
 }
 
 // Metrics is a structure of the s3 API.
 type Metrics struct {
-	EventThreshold *ReplicationTimeValue `json:"EventThreshold,omitzero"`
 	Status         *string               `json:"Status,omitzero"`
+	EventThreshold *ReplicationTimeValue `json:"EventThreshold,omitzero"`
 }
 
 // MetricsAndOperator is a structure of the s3 API.
 type MetricsAndOperator struct {
-	AccessPointArn *string `json:"AccessPointArn,omitzero"`
 	Prefix         *string `json:"Prefix,omitzero"`
 	Tags           []Tag   `json:"Tag,omitzero"`
+	AccessPointArn *string `json:"AccessPointArn,omitzero"`
 }
 
 // MetricsConfiguration is a structure of the s3 API.
 type MetricsConfiguration struct {
-	Filter *MetricsFilter `json:"Filter,omitzero"`
 	Id     *string        `json:"Id,omitzero"`
+	Filter *MetricsFilter `json:"Filter,omitzero"`
 }
 
 // MetricsFilter is a structure of the s3 API.
 type MetricsFilter struct {
-	AccessPointArn *string             `json:"AccessPointArn,omitzero"`
-	And            *MetricsAndOperator `json:"And,omitzero"`
 	Prefix         *string             `json:"Prefix,omitzero"`
 	Tag            *Tag                `json:"Tag,omitzero"`
+	AccessPointArn *string             `json:"AccessPointArn,omitzero"`
+	And            *MetricsAndOperator `json:"And,omitzero"`
 }
 
 // MissingSecurityHeader is a structure of the s3 API.
@@ -2024,14 +2024,14 @@ type MissingSecurityHeader struct {
 
 // MultipartUpload is a structure of the s3 API.
 type MultipartUpload struct {
+	UploadId          *string        `json:"UploadId,omitzero"`
+	Key               *string        `json:"Key,omitzero"`
+	Initiated         *protocol.Time `json:"Initiated,omitzero"`
+	StorageClass      *string        `json:"StorageClass,omitzero"`
+	Owner             *Owner         `json:"Owner,omitzero"`
+	Initiator         *Initiator     `json:"Initiator,omitzero"`
 	ChecksumAlgorithm *string        `json:"ChecksumAlgorithm,omitzero"`
 	ChecksumType      *string        `json:"ChecksumType,omitzero"`
-	Initiated         *protocol.Time `json:"Initiated,omitzero"`
-	Initiator         *Initiator     `json:"Initiator,omitzero"`
-	Key               *string        `json:"Key,omitzero"`
-	Owner             *Owner         `json:"Owner,omitzero"`
-	StorageClass      *string        `json:"StorageClass,omitzero"`
-	UploadId          *string        `json:"UploadId,omitzero"`
 }
 
 // NoSuchBucket is a structure of the s3 API.
@@ -2051,8 +2051,8 @@ type NoSuchCORSConfiguration struct {
 
 // NoSuchKey is a structure of the s3 API.
 type NoSuchKey struct {
-	DeleteMarker *bool   `json:"-"`
 	Key          *string `json:"Key,omitzero"`
+	DeleteMarker *bool   `json:"-"`
 	VersionId    *string `json:"-"`
 }
 
@@ -2078,8 +2078,8 @@ type NoSuchUpload struct {
 
 // NoSuchVersion is a structure of the s3 API.
 type NoSuchVersion struct {
-	Key       *string `json:"Key,omitzero"`
 	VersionId *string `json:"VersionId,omitzero"`
+	Key       *string `json:"Key,omitzero"`
 }
 
 // NoSuchWebsiteConfiguration is a structure of the s3 API.
@@ -2089,15 +2089,15 @@ type NoSuchWebsiteConfiguration struct {
 
 // NoncurrentVersionExpiration is a structure of the s3 API.
 type NoncurrentVersionExpiration struct {
-	NewerNoncurrentVersions *int32 `json:"NewerNoncurrentVersions,omitzero"`
 	NoncurrentDays          *int32 `json:"NoncurrentDays,omitzero"`
+	NewerNoncurrentVersions *int32 `json:"NewerNoncurrentVersions,omitzero"`
 }
 
 // NoncurrentVersionTransition is a structure of the s3 API.
 type NoncurrentVersionTransition struct {
-	NewerNoncurrentVersions *int32  `json:"NewerNoncurrentVersions,omitzero"`
 	NoncurrentDays          *int32  `json:"NoncurrentDays,omitzero"`
 	StorageClass            *string `json:"StorageClass,omitzero"`
+	NewerNoncurrentVersions *int32  `json:"NewerNoncurrentVersions,omitzero"`
 }
 
 // NotImplemented is a structure of the s3 API.
@@ -2113,15 +2113,15 @@ type NotificationConfigurationFilter struct {
 
 // Object is a structure of the s3 API.
 type Object struct {
-	ChecksumAlgorithm []string       `json:"ChecksumAlgorithm,omitzero"`
-	ChecksumType      *string        `json:"ChecksumType,omitzero"`
-	ETag              *string        `json:"ETag,omitzero"`
 	Key               *string        `json:"Key,omitzero"`
 	LastModified      *protocol.Time `json:"LastModified,omitzero"`
-	Owner             *Owner         `json:"Owner,omitzero"`
-	RestoreStatus     *RestoreStatus `json:"RestoreStatus,omitzero"`
+	ETag              *string        `json:"ETag,omitzero"`
+	ChecksumAlgorithm []string       `json:"ChecksumAlgorithm,omitzero"`
+	ChecksumType      *string        `json:"ChecksumType,omitzero"`
 	Size              *int64         `json:"Size,omitzero"`
 	StorageClass      *string        `json:"StorageClass,omitzero"`
+	Owner             *Owner         `json:"Owner,omitzero"`
+	RestoreStatus     *RestoreStatus `json:"RestoreStatus,omitzero"`
 }
 
 // ObjectEncryption is a structure of the s3 API.
@@ -2131,11 +2131,11 @@ type ObjectEncryption struct {
 
 // ObjectIdentifier is a structure of the s3 API.
 type ObjectIdentifier struct {
-	ETag             *string        `json:"ETag,omitzero"`
 	Key              *string        `json:"Key,omitzero"`
+	VersionId        *string        `json:"VersionId,omitzero"`
+	ETag             *string        `json:"ETag,omitzero"`
 	LastModifiedTime *protocol.Time `json:"LastModifiedTime,omitzero"`
 	Size             *int64         `json:"Size,omitzero"`
-	VersionId        *string        `json:"VersionId,omitzero"`
 }
 
 // ObjectLockConfiguration is a structure of the s3 API.
@@ -2167,28 +2167,28 @@ type ObjectLockRule struct {
 
 // ObjectPart is a structure of the s3 API.
 type ObjectPart struct {
+	PartNumber        *int32  `json:"PartNumber,omitzero"`
+	Size              *int64  `json:"Size,omitzero"`
 	ChecksumCRC32     *string `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C    *string `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME *string `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1      *string `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256    *string `json:"ChecksumSHA256,omitzero"`
-	PartNumber        *int32  `json:"PartNumber,omitzero"`
-	Size              *int64  `json:"Size,omitzero"`
 }
 
 // ObjectVersion is a structure of the s3 API.
 type ObjectVersion struct {
+	ETag              *string        `json:"ETag,omitzero"`
 	ChecksumAlgorithm []string       `json:"ChecksumAlgorithm,omitzero"`
 	ChecksumType      *string        `json:"ChecksumType,omitzero"`
-	ETag              *string        `json:"ETag,omitzero"`
-	IsLatest          *bool          `json:"IsLatest,omitzero"`
+	Size              *int64         `json:"Size,omitzero"`
+	StorageClass      *string        `json:"StorageClass,omitzero"`
 	Key               *string        `json:"Key,omitzero"`
+	VersionId         *string        `json:"VersionId,omitzero"`
+	IsLatest          *bool          `json:"IsLatest,omitzero"`
 	LastModified      *protocol.Time `json:"LastModified,omitzero"`
 	Owner             *Owner         `json:"Owner,omitzero"`
 	RestoreStatus     *RestoreStatus `json:"RestoreStatus,omitzero"`
-	Size              *int64         `json:"Size,omitzero"`
-	StorageClass      *string        `json:"StorageClass,omitzero"`
-	VersionId         *string        `json:"VersionId,omitzero"`
 }
 
 // OutputLocation is a structure of the s3 API.
@@ -2228,15 +2228,15 @@ type ParquetInput struct{}
 
 // Part is a structure of the s3 API.
 type Part struct {
+	PartNumber        *int32         `json:"PartNumber,omitzero"`
+	LastModified      *protocol.Time `json:"LastModified,omitzero"`
+	ETag              *string        `json:"ETag,omitzero"`
+	Size              *int64         `json:"Size,omitzero"`
 	ChecksumCRC32     *string        `json:"ChecksumCRC32,omitzero"`
 	ChecksumCRC32C    *string        `json:"ChecksumCRC32C,omitzero"`
 	ChecksumCRC64NVME *string        `json:"ChecksumCRC64NVME,omitzero"`
 	ChecksumSHA1      *string        `json:"ChecksumSHA1,omitzero"`
 	ChecksumSHA256    *string        `json:"ChecksumSHA256,omitzero"`
-	ETag              *string        `json:"ETag,omitzero"`
-	LastModified      *protocol.Time `json:"LastModified,omitzero"`
-	PartNumber        *int32         `json:"PartNumber,omitzero"`
-	Size              *int64         `json:"Size,omitzero"`
 }
 
 // PartitionedPrefix is a structure of the s3 API.
@@ -2257,28 +2257,28 @@ type PostObjectInput struct {
 
 // PostObjectOutput is a structure of the s3 API.
 type PostObjectOutput struct {
+	StatusCode              *int32  `json:"-"`
+	Location                *string `json:"Location,omitzero"`
+	LocationHeader          *string `json:"-"`
 	Bucket                  *string `json:"Bucket,omitzero"`
-	BucketKeyEnabled        *bool   `json:"-"`
+	Key                     *string `json:"Key,omitzero"`
+	Expiration              *string `json:"-"`
+	ETag                    *string `json:"ETag,omitzero"`
+	ETagHeader              *string `json:"-"`
 	ChecksumCRC32           *string `json:"-"`
 	ChecksumCRC32C          *string `json:"-"`
 	ChecksumCRC64NVME       *string `json:"-"`
 	ChecksumSHA1            *string `json:"-"`
 	ChecksumSHA256          *string `json:"-"`
 	ChecksumType            *string `json:"-"`
-	ETag                    *string `json:"ETag,omitzero"`
-	ETagHeader              *string `json:"-"`
-	Expiration              *string `json:"-"`
-	Key                     *string `json:"Key,omitzero"`
-	Location                *string `json:"Location,omitzero"`
-	LocationHeader          *string `json:"-"`
-	RequestCharged          *string `json:"-"`
+	ServerSideEncryption    *string `json:"-"`
+	VersionId               *string `json:"-"`
 	SSECustomerAlgorithm    *string `json:"-"`
 	SSECustomerKeyMD5       *string `json:"-"`
-	SSEKMSEncryptionContext *string `json:"-"`
 	SSEKMSKeyId             *string `json:"-"`
-	ServerSideEncryption    *string `json:"-"`
-	StatusCode              *int32  `json:"-"`
-	VersionId               *string `json:"-"`
+	SSEKMSEncryptionContext *string `json:"-"`
+	BucketKeyEnabled        *bool   `json:"-"`
+	RequestCharged          *string `json:"-"`
 }
 
 // PreconditionFailed is a structure of the s3 API.
@@ -2288,9 +2288,9 @@ type PreconditionFailed struct {
 
 // Progress is a structure of the s3 API.
 type Progress struct {
+	BytesScanned   *int64 `json:"BytesScanned,omitzero"`
 	BytesProcessed *int64 `json:"BytesProcessed,omitzero"`
 	BytesReturned  *int64 `json:"BytesReturned,omitzero"`
-	BytesScanned   *int64 `json:"BytesScanned,omitzero"`
 }
 
 // ProgressEvent is a structure of the s3 API.
@@ -2301,18 +2301,18 @@ type ProgressEvent struct {
 // PublicAccessBlockConfiguration is a structure of the s3 API.
 type PublicAccessBlockConfiguration struct {
 	BlockPublicAcls       *bool `json:"BlockPublicAcls,omitzero"`
-	BlockPublicPolicy     *bool `json:"BlockPublicPolicy,omitzero"`
 	IgnorePublicAcls      *bool `json:"IgnorePublicAcls,omitzero"`
+	BlockPublicPolicy     *bool `json:"BlockPublicPolicy,omitzero"`
 	RestrictPublicBuckets *bool `json:"RestrictPublicBuckets,omitzero"`
 }
 
 // PutBucketAbacInput is a structure of the s3 API.
 type PutBucketAbacInput struct {
-	AbacStatus          *AbacStatus `json:"-"`
 	Bucket              *string     `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string     `json:"-"`
 	ContentMD5          *string     `json:"-"`
+	ChecksumAlgorithm   *string     `json:"-"`
 	ExpectedBucketOwner *string     `json:"-"`
+	AbacStatus          *AbacStatus `json:"-"`
 }
 
 // PutBucketAbacOutput has no members.
@@ -2320,10 +2320,10 @@ type PutBucketAbacOutput struct{}
 
 // PutBucketAccelerateConfigurationInput is a structure of the s3 API.
 type PutBucketAccelerateConfigurationInput struct {
-	AccelerateConfiguration *AccelerateConfiguration `json:"-"`
 	Bucket                  *string                  `json:"Bucket,omitzero"`
-	ChecksumAlgorithm       *string                  `json:"-"`
+	AccelerateConfiguration *AccelerateConfiguration `json:"-"`
 	ExpectedBucketOwner     *string                  `json:"-"`
+	ChecksumAlgorithm       *string                  `json:"-"`
 }
 
 // PutBucketAccelerateConfigurationOutput has no members.
@@ -2334,14 +2334,14 @@ type PutBucketAclInput struct {
 	ACL                 *string              `json:"-"`
 	AccessControlPolicy *AccessControlPolicy `json:"-"`
 	Bucket              *string              `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string              `json:"-"`
 	ContentMD5          *string              `json:"-"`
-	ExpectedBucketOwner *string              `json:"-"`
+	ChecksumAlgorithm   *string              `json:"-"`
 	GrantFullControl    *string              `json:"-"`
 	GrantRead           *string              `json:"-"`
 	GrantReadACP        *string              `json:"-"`
 	GrantWrite          *string              `json:"-"`
 	GrantWriteACP       *string              `json:"-"`
+	ExpectedBucketOwner *string              `json:"-"`
 }
 
 // PutBucketAclOutput has no members.
@@ -2349,10 +2349,10 @@ type PutBucketAclOutput struct{}
 
 // PutBucketAnalyticsConfigurationInput is a structure of the s3 API.
 type PutBucketAnalyticsConfigurationInput struct {
-	AnalyticsConfiguration *AnalyticsConfiguration `json:"-"`
 	Bucket                 *string                 `json:"Bucket,omitzero"`
-	ExpectedBucketOwner    *string                 `json:"-"`
 	Id                     *string                 `json:"id,omitzero"`
+	AnalyticsConfiguration *AnalyticsConfiguration `json:"-"`
+	ExpectedBucketOwner    *string                 `json:"-"`
 }
 
 // PutBucketAnalyticsConfigurationOutput has no members.
@@ -2362,8 +2362,8 @@ type PutBucketAnalyticsConfigurationOutput struct{}
 type PutBucketCorsInput struct {
 	Bucket              *string            `json:"Bucket,omitzero"`
 	CORSConfiguration   *CORSConfiguration `json:"-"`
-	ChecksumAlgorithm   *string            `json:"-"`
 	ContentMD5          *string            `json:"-"`
+	ChecksumAlgorithm   *string            `json:"-"`
 	ExpectedBucketOwner *string            `json:"-"`
 }
 
@@ -2373,10 +2373,10 @@ type PutBucketCorsOutput struct{}
 // PutBucketEncryptionInput is a structure of the s3 API.
 type PutBucketEncryptionInput struct {
 	Bucket                            *string                            `json:"Bucket,omitzero"`
-	ChecksumAlgorithm                 *string                            `json:"-"`
 	ContentMD5                        *string                            `json:"-"`
-	ExpectedBucketOwner               *string                            `json:"-"`
+	ChecksumAlgorithm                 *string                            `json:"-"`
 	ServerSideEncryptionConfiguration *ServerSideEncryptionConfiguration `json:"-"`
+	ExpectedBucketOwner               *string                            `json:"-"`
 }
 
 // PutBucketEncryptionOutput has no members.
@@ -2385,8 +2385,8 @@ type PutBucketEncryptionOutput struct{}
 // PutBucketIntelligentTieringConfigurationInput is a structure of the s3 API.
 type PutBucketIntelligentTieringConfigurationInput struct {
 	Bucket                          *string                          `json:"Bucket,omitzero"`
-	ExpectedBucketOwner             *string                          `json:"-"`
 	Id                              *string                          `json:"id,omitzero"`
+	ExpectedBucketOwner             *string                          `json:"-"`
 	IntelligentTieringConfiguration *IntelligentTieringConfiguration `json:"-"`
 }
 
@@ -2396,9 +2396,9 @@ type PutBucketIntelligentTieringConfigurationOutput struct{}
 // PutBucketInventoryConfigurationInput is a structure of the s3 API.
 type PutBucketInventoryConfigurationInput struct {
 	Bucket                 *string                 `json:"Bucket,omitzero"`
-	ExpectedBucketOwner    *string                 `json:"-"`
 	Id                     *string                 `json:"id,omitzero"`
 	InventoryConfiguration *InventoryConfiguration `json:"-"`
+	ExpectedBucketOwner    *string                 `json:"-"`
 }
 
 // PutBucketInventoryConfigurationOutput has no members.
@@ -2408,8 +2408,8 @@ type PutBucketInventoryConfigurationOutput struct{}
 type PutBucketLifecycleConfigurationInput struct {
 	Bucket                             *string                       `json:"Bucket,omitzero"`
 	ChecksumAlgorithm                  *string                       `json:"-"`
-	ExpectedBucketOwner                *string                       `json:"-"`
 	LifecycleConfiguration             *BucketLifecycleConfiguration `json:"-"`
+	ExpectedBucketOwner                *string                       `json:"-"`
 	TransitionDefaultMinimumObjectSize *string                       `json:"-"`
 }
 
@@ -2421,10 +2421,10 @@ type PutBucketLifecycleConfigurationOutput struct {
 // PutBucketLifecycleInput is a structure of the s3 API.
 type PutBucketLifecycleInput struct {
 	Bucket                 *string                 `json:"Bucket,omitzero"`
-	ChecksumAlgorithm      *string                 `json:"-"`
 	ContentMD5             *string                 `json:"-"`
-	ExpectedBucketOwner    *string                 `json:"-"`
+	ChecksumAlgorithm      *string                 `json:"-"`
 	LifecycleConfiguration *LifecycleConfiguration `json:"-"`
+	ExpectedBucketOwner    *string                 `json:"-"`
 }
 
 // PutBucketLifecycleOutput has no members.
@@ -2434,8 +2434,8 @@ type PutBucketLifecycleOutput struct{}
 type PutBucketLoggingInput struct {
 	Bucket              *string              `json:"Bucket,omitzero"`
 	BucketLoggingStatus *BucketLoggingStatus `json:"-"`
-	ChecksumAlgorithm   *string              `json:"-"`
 	ContentMD5          *string              `json:"-"`
+	ChecksumAlgorithm   *string              `json:"-"`
 	ExpectedBucketOwner *string              `json:"-"`
 }
 
@@ -2445,9 +2445,9 @@ type PutBucketLoggingOutput struct{}
 // PutBucketMetricsConfigurationInput is a structure of the s3 API.
 type PutBucketMetricsConfigurationInput struct {
 	Bucket               *string               `json:"Bucket,omitzero"`
-	ExpectedBucketOwner  *string               `json:"-"`
 	Id                   *string               `json:"id,omitzero"`
 	MetricsConfiguration *MetricsConfiguration `json:"-"`
+	ExpectedBucketOwner  *string               `json:"-"`
 }
 
 // PutBucketMetricsConfigurationOutput has no members.
@@ -2456,8 +2456,8 @@ type PutBucketMetricsConfigurationOutput struct{}
 // PutBucketNotificationConfigurationInput is a structure of the s3 API.
 type PutBucketNotificationConfigurationInput struct {
 	Bucket                    *string                                   `json:"Bucket,omitzero"`
-	ExpectedBucketOwner       *string                                   `json:"-"`
 	NotificationConfiguration *GetBucketNotificationConfigurationOutput `json:"-"`
+	ExpectedBucketOwner       *string                                   `json:"-"`
 	SkipDestinationValidation *bool                                     `json:"-"`
 }
 
@@ -2467,10 +2467,10 @@ type PutBucketNotificationConfigurationOutput struct{}
 // PutBucketNotificationInput is a structure of the s3 API.
 type PutBucketNotificationInput struct {
 	Bucket                    *string                      `json:"Bucket,omitzero"`
-	ChecksumAlgorithm         *string                      `json:"-"`
 	ContentMD5                *string                      `json:"-"`
-	ExpectedBucketOwner       *string                      `json:"-"`
+	ChecksumAlgorithm         *string                      `json:"-"`
 	NotificationConfiguration *GetBucketNotificationOutput `json:"-"`
+	ExpectedBucketOwner       *string                      `json:"-"`
 }
 
 // PutBucketNotificationOutput has no members.
@@ -2479,10 +2479,10 @@ type PutBucketNotificationOutput struct{}
 // PutBucketOwnershipControlsInput is a structure of the s3 API.
 type PutBucketOwnershipControlsInput struct {
 	Bucket              *string            `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string            `json:"-"`
 	ContentMD5          *string            `json:"-"`
 	ExpectedBucketOwner *string            `json:"-"`
 	OwnershipControls   *OwnershipControls `json:"-"`
+	ChecksumAlgorithm   *string            `json:"-"`
 }
 
 // PutBucketOwnershipControlsOutput has no members.
@@ -2491,11 +2491,11 @@ type PutBucketOwnershipControlsOutput struct{}
 // PutBucketPolicyInput is a structure of the s3 API.
 type PutBucketPolicyInput struct {
 	Bucket                        *string `json:"Bucket,omitzero"`
+	ContentMD5                    *string `json:"-"`
 	ChecksumAlgorithm             *string `json:"-"`
 	ConfirmRemoveSelfBucketAccess *bool   `json:"-"`
-	ContentMD5                    *string `json:"-"`
-	ExpectedBucketOwner           *string `json:"-"`
 	Policy                        *string `json:"-"`
+	ExpectedBucketOwner           *string `json:"-"`
 }
 
 // PutBucketPolicyOutput has no members.
@@ -2504,11 +2504,11 @@ type PutBucketPolicyOutput struct{}
 // PutBucketReplicationInput is a structure of the s3 API.
 type PutBucketReplicationInput struct {
 	Bucket                   *string                   `json:"Bucket,omitzero"`
-	ChecksumAlgorithm        *string                   `json:"-"`
 	ContentMD5               *string                   `json:"-"`
-	ExpectedBucketOwner      *string                   `json:"-"`
+	ChecksumAlgorithm        *string                   `json:"-"`
 	ReplicationConfiguration *ReplicationConfiguration `json:"-"`
 	Token                    *string                   `json:"-"`
+	ExpectedBucketOwner      *string                   `json:"-"`
 }
 
 // PutBucketReplicationOutput has no members.
@@ -2517,10 +2517,10 @@ type PutBucketReplicationOutput struct{}
 // PutBucketRequestPaymentInput is a structure of the s3 API.
 type PutBucketRequestPaymentInput struct {
 	Bucket                      *string                      `json:"Bucket,omitzero"`
-	ChecksumAlgorithm           *string                      `json:"-"`
 	ContentMD5                  *string                      `json:"-"`
-	ExpectedBucketOwner         *string                      `json:"-"`
+	ChecksumAlgorithm           *string                      `json:"-"`
 	RequestPaymentConfiguration *RequestPaymentConfiguration `json:"-"`
+	ExpectedBucketOwner         *string                      `json:"-"`
 }
 
 // PutBucketRequestPaymentOutput has no members.
@@ -2529,10 +2529,10 @@ type PutBucketRequestPaymentOutput struct{}
 // PutBucketTaggingInput is a structure of the s3 API.
 type PutBucketTaggingInput struct {
 	Bucket              *string  `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string  `json:"-"`
 	ContentMD5          *string  `json:"-"`
-	ExpectedBucketOwner *string  `json:"-"`
+	ChecksumAlgorithm   *string  `json:"-"`
 	Tagging             *Tagging `json:"-"`
+	ExpectedBucketOwner *string  `json:"-"`
 }
 
 // PutBucketTaggingOutput has no members.
@@ -2541,11 +2541,11 @@ type PutBucketTaggingOutput struct{}
 // PutBucketVersioningInput is a structure of the s3 API.
 type PutBucketVersioningInput struct {
 	Bucket                  *string                  `json:"Bucket,omitzero"`
-	ChecksumAlgorithm       *string                  `json:"-"`
 	ContentMD5              *string                  `json:"-"`
-	ExpectedBucketOwner     *string                  `json:"-"`
+	ChecksumAlgorithm       *string                  `json:"-"`
 	MFA                     *string                  `json:"-"`
 	VersioningConfiguration *VersioningConfiguration `json:"-"`
+	ExpectedBucketOwner     *string                  `json:"-"`
 }
 
 // PutBucketVersioningOutput has no members.
@@ -2554,10 +2554,10 @@ type PutBucketVersioningOutput struct{}
 // PutBucketWebsiteInput is a structure of the s3 API.
 type PutBucketWebsiteInput struct {
 	Bucket               *string               `json:"Bucket,omitzero"`
-	ChecksumAlgorithm    *string               `json:"-"`
 	ContentMD5           *string               `json:"-"`
-	ExpectedBucketOwner  *string               `json:"-"`
+	ChecksumAlgorithm    *string               `json:"-"`
 	WebsiteConfiguration *WebsiteConfiguration `json:"-"`
+	ExpectedBucketOwner  *string               `json:"-"`
 }
 
 // PutBucketWebsiteOutput has no members.
@@ -2568,9 +2568,8 @@ type PutObjectAclInput struct {
 	ACL                 *string              `json:"-"`
 	AccessControlPolicy *AccessControlPolicy `json:"-"`
 	Bucket              *string              `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string              `json:"-"`
 	ContentMD5          *string              `json:"-"`
-	ExpectedBucketOwner *string              `json:"-"`
+	ChecksumAlgorithm   *string              `json:"-"`
 	GrantFullControl    *string              `json:"-"`
 	GrantRead           *string              `json:"-"`
 	GrantReadACP        *string              `json:"-"`
@@ -2579,6 +2578,7 @@ type PutObjectAclInput struct {
 	Key                 *string              `json:"Key,omitzero"`
 	RequestPayer        *string              `json:"-"`
 	VersionId           *string              `json:"versionId,omitzero"`
+	ExpectedBucketOwner *string              `json:"-"`
 }
 
 // PutObjectAclOutput is a structure of the s3 API.
@@ -2591,56 +2591,56 @@ type PutObjectInput struct {
 	ACL                       *string           `json:"-"`
 	Body                      io.Reader         `json:"-"`
 	Bucket                    *string           `json:"Bucket,omitzero"`
-	BucketKeyEnabled          *bool             `json:"-"`
 	CacheControl              *string           `json:"-"`
-	ChecksumAlgorithm         *string           `json:"-"`
-	ChecksumCRC32             *string           `json:"-"`
-	ChecksumCRC32C            *string           `json:"-"`
-	ChecksumCRC64NVME         *string           `json:"-"`
-	ChecksumSHA1              *string           `json:"-"`
-	ChecksumSHA256            *string           `json:"-"`
 	ContentDisposition        *string           `json:"-"`
 	ContentEncoding           *string           `json:"-"`
 	ContentLanguage           *string           `json:"-"`
 	ContentLength             *int64            `json:"-"`
 	ContentMD5                *string           `json:"-"`
 	ContentType               *string           `json:"-"`
-	ExpectedBucketOwner       *string           `json:"-"`
+	ChecksumAlgorithm         *string           `json:"-"`
+	ChecksumCRC32             *string           `json:"-"`
+	ChecksumCRC32C            *string           `json:"-"`
+	ChecksumCRC64NVME         *string           `json:"-"`
+	ChecksumSHA1              *string           `json:"-"`
+	ChecksumSHA256            *string           `json:"-"`
 	Expires                   *string           `json:"-"`
+	IfMatch                   *string           `json:"-"`
+	IfNoneMatch               *string           `json:"-"`
 	GrantFullControl          *string           `json:"-"`
 	GrantRead                 *string           `json:"-"`
 	GrantReadACP              *string           `json:"-"`
 	GrantWriteACP             *string           `json:"-"`
-	IfMatch                   *string           `json:"-"`
-	IfNoneMatch               *string           `json:"-"`
 	Key                       *string           `json:"Key,omitzero"`
+	WriteOffsetBytes          *int64            `json:"-"`
 	Metadata                  map[string]string `json:"-"`
-	ObjectLockLegalHoldStatus *string           `json:"-"`
-	ObjectLockMode            *string           `json:"-"`
-	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
-	RequestPayer              *string           `json:"-"`
+	ServerSideEncryption      *string           `json:"-"`
+	StorageClass              *string           `json:"-"`
+	WebsiteRedirectLocation   *string           `json:"-"`
 	SSECustomerAlgorithm      *string           `json:"-"`
 	SSECustomerKey            *string           `json:"-"`
 	SSECustomerKeyMD5         *string           `json:"-"`
-	SSEKMSEncryptionContext   *string           `json:"-"`
 	SSEKMSKeyId               *string           `json:"-"`
-	ServerSideEncryption      *string           `json:"-"`
-	StorageClass              *string           `json:"-"`
+	SSEKMSEncryptionContext   *string           `json:"-"`
+	BucketKeyEnabled          *bool             `json:"-"`
+	RequestPayer              *string           `json:"-"`
 	Tagging                   *string           `json:"-"`
-	WebsiteRedirectLocation   *string           `json:"-"`
-	WriteOffsetBytes          *int64            `json:"-"`
+	ObjectLockMode            *string           `json:"-"`
+	ObjectLockRetainUntilDate *protocol.Time    `json:"-"`
+	ObjectLockLegalHoldStatus *string           `json:"-"`
+	ExpectedBucketOwner       *string           `json:"-"`
 }
 
 // PutObjectLegalHoldInput is a structure of the s3 API.
 type PutObjectLegalHoldInput struct {
 	Bucket              *string              `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string              `json:"-"`
-	ContentMD5          *string              `json:"-"`
-	ExpectedBucketOwner *string              `json:"-"`
 	Key                 *string              `json:"Key,omitzero"`
 	LegalHold           *ObjectLockLegalHold `json:"-"`
 	RequestPayer        *string              `json:"-"`
 	VersionId           *string              `json:"versionId,omitzero"`
+	ContentMD5          *string              `json:"-"`
+	ChecksumAlgorithm   *string              `json:"-"`
+	ExpectedBucketOwner *string              `json:"-"`
 }
 
 // PutObjectLegalHoldOutput is a structure of the s3 API.
@@ -2651,12 +2651,12 @@ type PutObjectLegalHoldOutput struct {
 // PutObjectLockConfigurationInput is a structure of the s3 API.
 type PutObjectLockConfigurationInput struct {
 	Bucket                  *string                  `json:"Bucket,omitzero"`
-	ChecksumAlgorithm       *string                  `json:"-"`
-	ContentMD5              *string                  `json:"-"`
-	ExpectedBucketOwner     *string                  `json:"-"`
 	ObjectLockConfiguration *ObjectLockConfiguration `json:"-"`
 	RequestPayer            *string                  `json:"-"`
 	Token                   *string                  `json:"-"`
+	ContentMD5              *string                  `json:"-"`
+	ChecksumAlgorithm       *string                  `json:"-"`
+	ExpectedBucketOwner     *string                  `json:"-"`
 }
 
 // PutObjectLockConfigurationOutput is a structure of the s3 API.
@@ -2666,36 +2666,36 @@ type PutObjectLockConfigurationOutput struct {
 
 // PutObjectOutput is a structure of the s3 API.
 type PutObjectOutput struct {
-	BucketKeyEnabled        *bool   `json:"-"`
+	Expiration              *string `json:"-"`
+	ETag                    *string `json:"-"`
 	ChecksumCRC32           *string `json:"-"`
 	ChecksumCRC32C          *string `json:"-"`
 	ChecksumCRC64NVME       *string `json:"-"`
 	ChecksumSHA1            *string `json:"-"`
 	ChecksumSHA256          *string `json:"-"`
 	ChecksumType            *string `json:"-"`
-	ETag                    *string `json:"-"`
-	Expiration              *string `json:"-"`
-	RequestCharged          *string `json:"-"`
+	ServerSideEncryption    *string `json:"-"`
+	VersionId               *string `json:"-"`
 	SSECustomerAlgorithm    *string `json:"-"`
 	SSECustomerKeyMD5       *string `json:"-"`
-	SSEKMSEncryptionContext *string `json:"-"`
 	SSEKMSKeyId             *string `json:"-"`
-	ServerSideEncryption    *string `json:"-"`
+	SSEKMSEncryptionContext *string `json:"-"`
+	BucketKeyEnabled        *bool   `json:"-"`
 	Size                    *int64  `json:"-"`
-	VersionId               *string `json:"-"`
+	RequestCharged          *string `json:"-"`
 }
 
 // PutObjectRetentionInput is a structure of the s3 API.
 type PutObjectRetentionInput struct {
 	Bucket                    *string              `json:"Bucket,omitzero"`
-	BypassGovernanceRetention *bool                `json:"-"`
-	ChecksumAlgorithm         *string              `json:"-"`
-	ContentMD5                *string              `json:"-"`
-	ExpectedBucketOwner       *string              `json:"-"`
 	Key                       *string              `json:"Key,omitzero"`
-	RequestPayer              *string              `json:"-"`
 	Retention                 *ObjectLockRetention `json:"-"`
+	RequestPayer              *string              `json:"-"`
 	VersionId                 *string              `json:"versionId,omitzero"`
+	BypassGovernanceRetention *bool                `json:"-"`
+	ContentMD5                *string              `json:"-"`
+	ChecksumAlgorithm         *string              `json:"-"`
+	ExpectedBucketOwner       *string              `json:"-"`
 }
 
 // PutObjectRetentionOutput is a structure of the s3 API.
@@ -2706,13 +2706,13 @@ type PutObjectRetentionOutput struct {
 // PutObjectTaggingInput is a structure of the s3 API.
 type PutObjectTaggingInput struct {
 	Bucket              *string  `json:"Bucket,omitzero"`
-	ChecksumAlgorithm   *string  `json:"-"`
-	ContentMD5          *string  `json:"-"`
-	ExpectedBucketOwner *string  `json:"-"`
 	Key                 *string  `json:"Key,omitzero"`
-	RequestPayer        *string  `json:"-"`
-	Tagging             *Tagging `json:"-"`
 	VersionId           *string  `json:"versionId,omitzero"`
+	ContentMD5          *string  `json:"-"`
+	ChecksumAlgorithm   *string  `json:"-"`
+	Tagging             *Tagging `json:"-"`
+	ExpectedBucketOwner *string  `json:"-"`
+	RequestPayer        *string  `json:"-"`
 }
 
 // PutObjectTaggingOutput is a structure of the s3 API.
@@ -2723,10 +2723,10 @@ type PutObjectTaggingOutput struct {
 // PutPublicAccessBlockInput is a structure of the s3 API.
 type PutPublicAccessBlockInput struct {
 	Bucket                         *string                         `json:"Bucket,omitzero"`
-	ChecksumAlgorithm              *string                         `json:"-"`
 	ContentMD5                     *string                         `json:"-"`
-	ExpectedBucketOwner            *string                         `json:"-"`
+	ChecksumAlgorithm              *string                         `json:"-"`
 	PublicAccessBlockConfiguration *PublicAccessBlockConfiguration `json:"-"`
+	ExpectedBucketOwner            *string                         `json:"-"`
 }
 
 // PutPublicAccessBlockOutput has no members.
@@ -2734,24 +2734,24 @@ type PutPublicAccessBlockOutput struct{}
 
 // QueueConfiguration is a structure of the s3 API.
 type QueueConfiguration struct {
-	Events   []string                         `json:"Event,omitzero"`
-	Filter   *NotificationConfigurationFilter `json:"Filter,omitzero"`
 	Id       *string                          `json:"Id,omitzero"`
 	QueueArn *string                          `json:"Queue,omitzero"`
+	Events   []string                         `json:"Event,omitzero"`
+	Filter   *NotificationConfigurationFilter `json:"Filter,omitzero"`
 }
 
 // QueueConfigurationDeprecated is a structure of the s3 API.
 type QueueConfigurationDeprecated struct {
+	Id     *string  `json:"Id,omitzero"`
 	Event  *string  `json:"Event,omitzero"`
 	Events []string `json:"Event,omitzero"`
-	Id     *string  `json:"Id,omitzero"`
 	Queue  *string  `json:"Queue,omitzero"`
 }
 
 // RecordExpiration is a structure of the s3 API.
 type RecordExpiration struct {
-	Days       *int32  `json:"Days,omitzero"`
 	Expiration *string `json:"Expiration,omitzero"`
+	Days       *int32  `json:"Days,omitzero"`
 }
 
 // RecordsEvent is a structure of the s3 API.
@@ -2777,17 +2777,17 @@ type RedirectAllRequestsTo struct {
 // RenameObjectInput is a structure of the s3 API.
 type RenameObjectInput struct {
 	Bucket                       *string        `json:"Bucket,omitzero"`
-	ClientToken                  *string        `json:"-"`
-	DestinationIfMatch           *string        `json:"-"`
-	DestinationIfModifiedSince   *protocol.Time `json:"-"`
-	DestinationIfNoneMatch       *string        `json:"-"`
-	DestinationIfUnmodifiedSince *protocol.Time `json:"-"`
 	Key                          *string        `json:"Key,omitzero"`
 	RenameSource                 *string        `json:"-"`
+	DestinationIfMatch           *string        `json:"-"`
+	DestinationIfNoneMatch       *string        `json:"-"`
+	DestinationIfModifiedSince   *protocol.Time `json:"-"`
+	DestinationIfUnmodifiedSince *protocol.Time `json:"-"`
 	SourceIfMatch                *string        `json:"-"`
-	SourceIfModifiedSince        *protocol.Time `json:"-"`
 	SourceIfNoneMatch            *string        `json:"-"`
+	SourceIfModifiedSince        *protocol.Time `json:"-"`
 	SourceIfUnmodifiedSince      *protocol.Time `json:"-"`
+	ClientToken                  *string        `json:"-"`
 }
 
 // RenameObjectOutput has no members.
@@ -2811,15 +2811,15 @@ type ReplicationConfigurationNotFoundError struct {
 
 // ReplicationRule is a structure of the s3 API.
 type ReplicationRule struct {
-	DeleteMarkerReplication   *DeleteMarkerReplication   `json:"DeleteMarkerReplication,omitzero"`
-	Destination               *Destination               `json:"Destination,omitzero"`
-	ExistingObjectReplication *ExistingObjectReplication `json:"ExistingObjectReplication,omitzero"`
-	Filter                    *ReplicationRuleFilter     `json:"Filter,omitzero"`
 	ID                        *string                    `json:"ID,omitzero"`
-	Prefix                    *string                    `json:"Prefix,omitzero"`
 	Priority                  *int32                     `json:"Priority,omitzero"`
-	SourceSelectionCriteria   *SourceSelectionCriteria   `json:"SourceSelectionCriteria,omitzero"`
+	Prefix                    *string                    `json:"Prefix,omitzero"`
+	Filter                    *ReplicationRuleFilter     `json:"Filter,omitzero"`
 	Status                    *string                    `json:"Status,omitzero"`
+	SourceSelectionCriteria   *SourceSelectionCriteria   `json:"SourceSelectionCriteria,omitzero"`
+	ExistingObjectReplication *ExistingObjectReplication `json:"ExistingObjectReplication,omitzero"`
+	Destination               *Destination               `json:"Destination,omitzero"`
+	DeleteMarkerReplication   *DeleteMarkerReplication   `json:"DeleteMarkerReplication,omitzero"`
 }
 
 // ReplicationRuleAndOperator is a structure of the s3 API.
@@ -2830,9 +2830,9 @@ type ReplicationRuleAndOperator struct {
 
 // ReplicationRuleFilter is a structure of the s3 API.
 type ReplicationRuleFilter struct {
-	And    *ReplicationRuleAndOperator `json:"And,omitzero"`
 	Prefix *string                     `json:"Prefix,omitzero"`
 	Tag    *Tag                        `json:"Tag,omitzero"`
+	And    *ReplicationRuleAndOperator `json:"And,omitzero"`
 }
 
 // ReplicationTime is a structure of the s3 API.
@@ -2859,12 +2859,12 @@ type RequestProgress struct {
 // RestoreObjectInput is a structure of the s3 API.
 type RestoreObjectInput struct {
 	Bucket              *string         `json:"Bucket,omitzero"`
+	Key                 *string         `json:"Key,omitzero"`
+	VersionId           *string         `json:"versionId,omitzero"`
+	RestoreRequest      *RestoreRequest `json:"-"`
+	RequestPayer        *string         `json:"-"`
 	ChecksumAlgorithm   *string         `json:"-"`
 	ExpectedBucketOwner *string         `json:"-"`
-	Key                 *string         `json:"Key,omitzero"`
-	RequestPayer        *string         `json:"-"`
-	RestoreRequest      *RestoreRequest `json:"-"`
-	VersionId           *string         `json:"versionId,omitzero"`
 }
 
 // RestoreObjectOutput is a structure of the s3 API.
@@ -2877,12 +2877,12 @@ type RestoreObjectOutput struct {
 // RestoreRequest is a structure of the s3 API.
 type RestoreRequest struct {
 	Days                 *int32                `json:"Days,omitzero"`
-	Description          *string               `json:"Description,omitzero"`
 	GlacierJobParameters *GlacierJobParameters `json:"GlacierJobParameters,omitzero"`
-	OutputLocation       *OutputLocation       `json:"OutputLocation,omitzero"`
-	SelectParameters     *SelectParameters     `json:"SelectParameters,omitzero"`
-	Tier                 *string               `json:"Tier,omitzero"`
 	Type                 *string               `json:"Type,omitzero"`
+	Tier                 *string               `json:"Tier,omitzero"`
+	Description          *string               `json:"Description,omitzero"`
+	SelectParameters     *SelectParameters     `json:"SelectParameters,omitzero"`
+	OutputLocation       *OutputLocation       `json:"OutputLocation,omitzero"`
 }
 
 // RestoreStatus is a structure of the s3 API.
@@ -2899,14 +2899,14 @@ type RoutingRule struct {
 
 // Rule is a structure of the s3 API.
 type Rule struct {
-	AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `json:"AbortIncompleteMultipartUpload,omitzero"`
 	Expiration                     *LifecycleExpiration            `json:"Expiration,omitzero"`
 	ID                             *string                         `json:"ID,omitzero"`
-	NoncurrentVersionExpiration    *NoncurrentVersionExpiration    `json:"NoncurrentVersionExpiration,omitzero"`
-	NoncurrentVersionTransition    *NoncurrentVersionTransition    `json:"NoncurrentVersionTransition,omitzero"`
 	Prefix                         *string                         `json:"Prefix,omitzero"`
 	Status                         *string                         `json:"Status,omitzero"`
 	Transition                     *Transition                     `json:"Transition,omitzero"`
+	NoncurrentVersionTransition    *NoncurrentVersionTransition    `json:"NoncurrentVersionTransition,omitzero"`
+	NoncurrentVersionExpiration    *NoncurrentVersionExpiration    `json:"NoncurrentVersionExpiration,omitzero"`
+	AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `json:"AbortIncompleteMultipartUpload,omitzero"`
 }
 
 // S3KeyFilter is a structure of the s3 API.
@@ -2916,14 +2916,14 @@ type S3KeyFilter struct {
 
 // S3Location is a structure of the s3 API.
 type S3Location struct {
-	AccessControlList []Grant         `json:"AccessControlList,omitzero"`
 	BucketName        *string         `json:"BucketName,omitzero"`
-	CannedACL         *string         `json:"CannedACL,omitzero"`
-	Encryption        *Encryption     `json:"Encryption,omitzero"`
 	Prefix            *string         `json:"Prefix,omitzero"`
-	StorageClass      *string         `json:"StorageClass,omitzero"`
+	Encryption        *Encryption     `json:"Encryption,omitzero"`
+	CannedACL         *string         `json:"CannedACL,omitzero"`
+	AccessControlList []Grant         `json:"AccessControlList,omitzero"`
 	Tagging           *Tagging        `json:"Tagging,omitzero"`
 	UserMetadata      []MetadataEntry `json:"UserMetadata,omitzero"`
+	StorageClass      *string         `json:"StorageClass,omitzero"`
 }
 
 // S3TablesDestination is a structure of the s3 API.
@@ -2934,9 +2934,9 @@ type S3TablesDestination struct {
 
 // S3TablesDestinationResult is a structure of the s3 API.
 type S3TablesDestinationResult struct {
-	TableArn       *string `json:"TableArn,omitzero"`
 	TableBucketArn *string `json:"TableBucketArn,omitzero"`
 	TableName      *string `json:"TableName,omitzero"`
+	TableArn       *string `json:"TableArn,omitzero"`
 	TableNamespace *string `json:"TableNamespace,omitzero"`
 }
 
@@ -2947,8 +2947,8 @@ type SSEKMS struct {
 
 // SSEKMSEncryption is a structure of the s3 API.
 type SSEKMSEncryption struct {
-	BucketKeyEnabled *bool   `json:"BucketKeyEnabled,omitzero"`
 	KMSKeyArn        *string `json:"KMSKeyArn,omitzero"`
+	BucketKeyEnabled *bool   `json:"BucketKeyEnabled,omitzero"`
 }
 
 // SSES3 has no members.
@@ -2956,33 +2956,33 @@ type SSES3 struct{}
 
 // ScanRange is a structure of the s3 API.
 type ScanRange struct {
-	End   *int64 `json:"End,omitzero"`
 	Start *int64 `json:"Start,omitzero"`
+	End   *int64 `json:"End,omitzero"`
 }
 
 // SelectObjectContentEventStream is a structure of the s3 API.
 type SelectObjectContentEventStream struct {
-	Cont     *ContinuationEvent `json:"Cont,omitzero"`
-	End      *EndEvent          `json:"End,omitzero"`
-	Progress *ProgressEvent     `json:"Progress,omitzero"`
 	Records  *RecordsEvent      `json:"Records,omitzero"`
 	Stats    *StatsEvent        `json:"Stats,omitzero"`
+	Progress *ProgressEvent     `json:"Progress,omitzero"`
+	Cont     *ContinuationEvent `json:"Cont,omitzero"`
+	End      *EndEvent          `json:"End,omitzero"`
 }
 
 // SelectObjectContentInput is a structure of the s3 API.
 type SelectObjectContentInput struct {
 	Bucket               *string              `json:"Bucket,omitzero"`
-	ExpectedBucketOwner  *string              `json:"-"`
-	Expression           *string              `json:"Expression,omitzero"`
-	ExpressionType       *string              `json:"ExpressionType,omitzero"`
-	InputSerialization   *InputSerialization  `json:"InputSerialization,omitzero"`
 	Key                  *string              `json:"Key,omitzero"`
-	OutputSerialization  *OutputSerialization `json:"OutputSerialization,omitzero"`
-	RequestProgress      *RequestProgress     `json:"RequestProgress,omitzero"`
 	SSECustomerAlgorithm *string              `json:"-"`
 	SSECustomerKey       *string              `json:"-"`
 	SSECustomerKeyMD5    *string              `json:"-"`
+	Expression           *string              `json:"Expression,omitzero"`
+	ExpressionType       *string              `json:"ExpressionType,omitzero"`
+	RequestProgress      *RequestProgress     `json:"RequestProgress,omitzero"`
+	InputSerialization   *InputSerialization  `json:"InputSerialization,omitzero"`
+	OutputSerialization  *OutputSerialization `json:"OutputSerialization,omitzero"`
 	ScanRange            *ScanRange           `json:"ScanRange,omitzero"`
+	ExpectedBucketOwner  *string              `json:"-"`
 }
 
 // SelectObjectContentOutput is a structure of the s3 API.
@@ -2992,16 +2992,16 @@ type SelectObjectContentOutput struct {
 
 // SelectParameters is a structure of the s3 API.
 type SelectParameters struct {
-	Expression          *string              `json:"Expression,omitzero"`
-	ExpressionType      *string              `json:"ExpressionType,omitzero"`
 	InputSerialization  *InputSerialization  `json:"InputSerialization,omitzero"`
+	ExpressionType      *string              `json:"ExpressionType,omitzero"`
+	Expression          *string              `json:"Expression,omitzero"`
 	OutputSerialization *OutputSerialization `json:"OutputSerialization,omitzero"`
 }
 
 // ServerSideEncryptionByDefault is a structure of the s3 API.
 type ServerSideEncryptionByDefault struct {
-	KMSMasterKeyID *string `json:"KMSMasterKeyID,omitzero"`
 	SSEAlgorithm   *string `json:"SSEAlgorithm,omitzero"`
+	KMSMasterKeyID *string `json:"KMSMasterKeyID,omitzero"`
 }
 
 // ServerSideEncryptionConfiguration is a structure of the s3 API.

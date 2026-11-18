@@ -22,6 +22,12 @@ func (v *ObjectLockRule) encodeXML(xw *restxml.Writer) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *ObjectPart) encodeXML(xw *restxml.Writer) {
+	if v.PartNumber != nil {
+		xw.Int("PartNumber", int64(*v.PartNumber))
+	}
+	if v.Size != nil {
+		xw.Int("Size", int64(*v.Size))
+	}
 	if v.ChecksumCRC32 != nil {
 		xw.String("ChecksumCRC32", *v.ChecksumCRC32)
 	}
@@ -37,34 +43,37 @@ func (v *ObjectPart) encodeXML(xw *restxml.Writer) {
 	if v.ChecksumSHA256 != nil {
 		xw.String("ChecksumSHA256", *v.ChecksumSHA256)
 	}
-	if v.PartNumber != nil {
-		xw.Int("PartNumber", int64(*v.PartNumber))
-	}
-	if v.Size != nil {
-		xw.Int("Size", int64(*v.Size))
-	}
 }
 
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *ObjectVersion) encodeXML(xw *restxml.Writer) {
+	if v.ETag != nil {
+		xw.String("ETag", *v.ETag)
+	}
 	for _, e1 := range v.ChecksumAlgorithm {
 		xw.String("ChecksumAlgorithm", e1)
 	}
 	if v.ChecksumType != nil {
 		xw.String("ChecksumType", *v.ChecksumType)
 	}
-	if v.ETag != nil {
-		xw.String("ETag", *v.ETag)
+	if v.Size != nil {
+		xw.Int("Size", int64(*v.Size))
 	}
-	if v.IsLatest != nil {
-		xw.Bool("IsLatest", *v.IsLatest)
+	if v.StorageClass != nil {
+		xw.String("StorageClass", *v.StorageClass)
 	}
 	if v.Key != nil {
 		xw.String("Key", *v.Key)
 	}
+	if v.VersionId != nil {
+		xw.String("VersionId", *v.VersionId)
+	}
+	if v.IsLatest != nil {
+		xw.Bool("IsLatest", *v.IsLatest)
+	}
 	if v.LastModified != nil {
-		xw.Time("LastModified", v.LastModified, "")
+		xw.Time("LastModified", v.LastModified, "s3iso8601")
 	}
 	if v.Owner != nil {
 		xw.Open("Owner")
@@ -75,15 +84,6 @@ func (v *ObjectVersion) encodeXML(xw *restxml.Writer) {
 		xw.Open("RestoreStatus")
 		v.RestoreStatus.encodeXML(xw)
 		xw.Close("RestoreStatus")
-	}
-	if v.Size != nil {
-		xw.Int("Size", int64(*v.Size))
-	}
-	if v.StorageClass != nil {
-		xw.String("StorageClass", *v.StorageClass)
-	}
-	if v.VersionId != nil {
-		xw.String("VersionId", *v.VersionId)
 	}
 }
 
@@ -230,6 +230,18 @@ func (v *ParquetInput) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *Part) encodeXML(xw *restxml.Writer) {
+	if v.PartNumber != nil {
+		xw.Int("PartNumber", int64(*v.PartNumber))
+	}
+	if v.LastModified != nil {
+		xw.Time("LastModified", v.LastModified, "s3iso8601")
+	}
+	if v.ETag != nil {
+		xw.String("ETag", *v.ETag)
+	}
+	if v.Size != nil {
+		xw.Int("Size", int64(*v.Size))
+	}
 	if v.ChecksumCRC32 != nil {
 		xw.String("ChecksumCRC32", *v.ChecksumCRC32)
 	}
@@ -244,18 +256,6 @@ func (v *Part) encodeXML(xw *restxml.Writer) {
 	}
 	if v.ChecksumSHA256 != nil {
 		xw.String("ChecksumSHA256", *v.ChecksumSHA256)
-	}
-	if v.ETag != nil {
-		xw.String("ETag", *v.ETag)
-	}
-	if v.LastModified != nil {
-		xw.Time("LastModified", v.LastModified, "")
-	}
-	if v.PartNumber != nil {
-		xw.Int("PartNumber", int64(*v.PartNumber))
-	}
-	if v.Size != nil {
-		xw.Int("Size", int64(*v.Size))
 	}
 }
 
@@ -312,39 +312,39 @@ func (v *PostObjectInput) decodeXML(d *restxml.Decoder) {
 
 // encodeBindings sets the members of v bound to headers.
 func (v *PostObjectOutput) encodeBindings(h http.Header) {
-	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "Location", v.LocationHeader)
+	rest.SetString(h, "x-amz-expiration", v.Expiration)
+	rest.SetString(h, "ETag", v.ETagHeader)
 	rest.SetString(h, "x-amz-checksum-crc32", v.ChecksumCRC32)
 	rest.SetString(h, "x-amz-checksum-crc32c", v.ChecksumCRC32C)
 	rest.SetString(h, "x-amz-checksum-crc64nvme", v.ChecksumCRC64NVME)
 	rest.SetString(h, "x-amz-checksum-sha1", v.ChecksumSHA1)
 	rest.SetString(h, "x-amz-checksum-sha256", v.ChecksumSHA256)
 	rest.SetString(h, "x-amz-checksum-type", v.ChecksumType)
-	rest.SetString(h, "ETag", v.ETagHeader)
-	rest.SetString(h, "x-amz-expiration", v.Expiration)
-	rest.SetString(h, "Location", v.LocationHeader)
-	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
-	rest.SetString(h, "x-amz-server-side-encryption-customer-algorithm", v.SSECustomerAlgorithm)
-	rest.SetString(h, "x-amz-server-side-encryption-customer-key-MD5", v.SSECustomerKeyMD5)
-	rest.SetString(h, "x-amz-server-side-encryption-context", v.SSEKMSEncryptionContext)
-	rest.SetString(h, "x-amz-server-side-encryption-aws-kms-key-id", v.SSEKMSKeyId)
 	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
 	rest.SetString(h, "x-amz-version-id", v.VersionId)
+	rest.SetString(h, "x-amz-server-side-encryption-customer-algorithm", v.SSECustomerAlgorithm)
+	rest.SetString(h, "x-amz-server-side-encryption-customer-key-MD5", v.SSECustomerKeyMD5)
+	rest.SetString(h, "x-amz-server-side-encryption-aws-kms-key-id", v.SSEKMSKeyId)
+	rest.SetString(h, "x-amz-server-side-encryption-context", v.SSEKMSEncryptionContext)
+	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
 }
 
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *PostObjectOutput) encodeXML(xw *restxml.Writer) {
+	if v.Location != nil {
+		xw.String("Location", *v.Location)
+	}
 	if v.Bucket != nil {
 		xw.String("Bucket", *v.Bucket)
-	}
-	if v.ETag != nil {
-		xw.String("ETag", *v.ETag)
 	}
 	if v.Key != nil {
 		xw.String("Key", *v.Key)
 	}
-	if v.Location != nil {
-		xw.String("Location", *v.Location)
+	if v.ETag != nil {
+		xw.String("ETag", *v.ETag)
 	}
 }
 
@@ -359,14 +359,14 @@ func (v *PreconditionFailed) encodeXML(xw *restxml.Writer) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *Progress) encodeXML(xw *restxml.Writer) {
+	if v.BytesScanned != nil {
+		xw.Int("BytesScanned", int64(*v.BytesScanned))
+	}
 	if v.BytesProcessed != nil {
 		xw.Int("BytesProcessed", int64(*v.BytesProcessed))
 	}
 	if v.BytesReturned != nil {
 		xw.Int("BytesReturned", int64(*v.BytesReturned))
-	}
-	if v.BytesScanned != nil {
-		xw.Int("BytesScanned", int64(*v.BytesScanned))
 	}
 }
 
@@ -390,10 +390,10 @@ func (v *PublicAccessBlockConfiguration) decodeXML(d *restxml.Decoder) {
 		switch name {
 		case "BlockPublicAcls":
 			v.BlockPublicAcls = d.Bool()
-		case "BlockPublicPolicy":
-			v.BlockPublicPolicy = d.Bool()
 		case "IgnorePublicAcls":
 			v.IgnorePublicAcls = d.Bool()
+		case "BlockPublicPolicy":
+			v.BlockPublicPolicy = d.Bool()
 		case "RestrictPublicBuckets":
 			v.RestrictPublicBuckets = d.Bool()
 		default:
@@ -408,11 +408,11 @@ func (v *PublicAccessBlockConfiguration) encodeXML(xw *restxml.Writer) {
 	if v.BlockPublicAcls != nil {
 		xw.Bool("BlockPublicAcls", *v.BlockPublicAcls)
 	}
-	if v.BlockPublicPolicy != nil {
-		xw.Bool("BlockPublicPolicy", *v.BlockPublicPolicy)
-	}
 	if v.IgnorePublicAcls != nil {
 		xw.Bool("IgnorePublicAcls", *v.IgnorePublicAcls)
+	}
+	if v.BlockPublicPolicy != nil {
+		xw.Bool("BlockPublicPolicy", *v.BlockPublicPolicy)
 	}
 	if v.RestrictPublicBuckets != nil {
 		xw.Bool("RestrictPublicBuckets", *v.RestrictPublicBuckets)
@@ -422,8 +422,8 @@ func (v *PublicAccessBlockConfiguration) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketAbacInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -449,8 +449,8 @@ func (v *PutBucketAbacOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketAccelerateConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -476,14 +476,14 @@ func (v *PutBucketAccelerateConfigurationOutput) encodeXML(xw *restxml.Writer) {
 func (v *PutBucketAclInput) decodeBindings(d *rest.Decoder) {
 	v.ACL = d.Header("x-amz-acl")
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.GrantFullControl = d.Header("x-amz-grant-full-control")
 	v.GrantRead = d.Header("x-amz-grant-read")
 	v.GrantReadACP = d.Header("x-amz-grant-read-acp")
 	v.GrantWrite = d.Header("x-amz-grant-write")
 	v.GrantWriteACP = d.Header("x-amz-grant-write-acp")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -508,8 +508,8 @@ func (v *PutBucketAclOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketAnalyticsConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Id = d.Query("id")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -534,8 +534,8 @@ func (v *PutBucketAnalyticsConfigurationOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketCorsInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -561,8 +561,8 @@ func (v *PutBucketCorsOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketEncryptionInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -588,8 +588,8 @@ func (v *PutBucketEncryptionOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketIntelligentTieringConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Id = d.Query("id")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -614,8 +614,8 @@ func (v *PutBucketIntelligentTieringConfigurationOutput) encodeXML(xw *restxml.W
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketInventoryConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Id = d.Query("id")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -672,8 +672,8 @@ func (v *PutBucketLifecycleConfigurationOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketLifecycleInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -699,8 +699,8 @@ func (v *PutBucketLifecycleOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketLoggingInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -726,8 +726,8 @@ func (v *PutBucketLoggingOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketMetricsConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Id = d.Query("id")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -778,8 +778,8 @@ func (v *PutBucketNotificationConfigurationOutput) encodeXML(xw *restxml.Writer)
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketNotificationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -805,9 +805,9 @@ func (v *PutBucketNotificationOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketOwnershipControlsInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -832,9 +832,9 @@ func (v *PutBucketOwnershipControlsOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketPolicyInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
+	v.ContentMD5 = d.Header("Content-MD5")
 	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ConfirmRemoveSelfBucketAccess = d.HeaderBool("x-amz-confirm-remove-self-bucket-access")
-	v.ContentMD5 = d.Header("Content-MD5")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -860,10 +860,10 @@ func (v *PutBucketPolicyOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketReplicationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.Token = d.Header("x-amz-bucket-object-lock-token")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -888,8 +888,8 @@ func (v *PutBucketReplicationOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketRequestPaymentInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -915,8 +915,8 @@ func (v *PutBucketRequestPaymentOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketTaggingInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -942,10 +942,10 @@ func (v *PutBucketTaggingOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketVersioningInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.MFA = d.Header("x-amz-mfa")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -970,8 +970,8 @@ func (v *PutBucketVersioningOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutBucketWebsiteInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -998,9 +998,8 @@ func (v *PutBucketWebsiteOutput) encodeXML(xw *restxml.Writer) {
 func (v *PutObjectAclInput) decodeBindings(d *rest.Decoder) {
 	v.ACL = d.Header("x-amz-acl")
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.GrantFullControl = d.Header("x-amz-grant-full-control")
 	v.GrantRead = d.Header("x-amz-grant-read")
 	v.GrantReadACP = d.Header("x-amz-grant-read-acp")
@@ -1009,6 +1008,7 @@ func (v *PutObjectAclInput) decodeBindings(d *rest.Decoder) {
 	v.Key = d.Label("Key")
 	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.VersionId = d.Query("versionId")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1039,44 +1039,44 @@ func (v *PutObjectAclOutput) encodeXML(xw *restxml.Writer) {
 func (v *PutObjectInput) decodeBindings(d *rest.Decoder) {
 	v.ACL = d.Header("x-amz-acl")
 	v.Bucket = d.Label("Bucket")
-	v.BucketKeyEnabled = d.HeaderBool("x-amz-server-side-encryption-bucket-key-enabled")
 	v.CacheControl = d.Header("Cache-Control")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ChecksumCRC32 = d.Header("x-amz-checksum-crc32")
-	v.ChecksumCRC32C = d.Header("x-amz-checksum-crc32c")
-	v.ChecksumCRC64NVME = d.Header("x-amz-checksum-crc64nvme")
-	v.ChecksumSHA1 = d.Header("x-amz-checksum-sha1")
-	v.ChecksumSHA256 = d.Header("x-amz-checksum-sha256")
 	v.ContentDisposition = d.Header("Content-Disposition")
 	v.ContentEncoding = d.Header("Content-Encoding")
 	v.ContentLanguage = d.Header("Content-Language")
 	v.ContentLength = d.HeaderInt64("Content-Length")
 	v.ContentMD5 = d.Header("Content-MD5")
 	v.ContentType = d.Header("Content-Type")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
+	v.ChecksumCRC32 = d.Header("x-amz-checksum-crc32")
+	v.ChecksumCRC32C = d.Header("x-amz-checksum-crc32c")
+	v.ChecksumCRC64NVME = d.Header("x-amz-checksum-crc64nvme")
+	v.ChecksumSHA1 = d.Header("x-amz-checksum-sha1")
+	v.ChecksumSHA256 = d.Header("x-amz-checksum-sha256")
 	v.Expires = d.Header("Expires")
+	v.IfMatch = d.Header("If-Match")
+	v.IfNoneMatch = d.Header("If-None-Match")
 	v.GrantFullControl = d.Header("x-amz-grant-full-control")
 	v.GrantRead = d.Header("x-amz-grant-read")
 	v.GrantReadACP = d.Header("x-amz-grant-read-acp")
 	v.GrantWriteACP = d.Header("x-amz-grant-write-acp")
-	v.IfMatch = d.Header("If-Match")
-	v.IfNoneMatch = d.Header("If-None-Match")
 	v.Key = d.Label("Key")
+	v.WriteOffsetBytes = d.HeaderInt64("x-amz-write-offset-bytes")
 	v.Metadata = d.HeaderMap("x-amz-meta-")
-	v.ObjectLockLegalHoldStatus = d.Header("x-amz-object-lock-legal-hold")
-	v.ObjectLockMode = d.Header("x-amz-object-lock-mode")
-	v.ObjectLockRetainUntilDate = d.HeaderTime("x-amz-object-lock-retain-until-date", "iso8601")
-	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.ServerSideEncryption = d.Header("x-amz-server-side-encryption")
+	v.StorageClass = d.Header("x-amz-storage-class")
+	v.WebsiteRedirectLocation = d.Header("x-amz-website-redirect-location")
 	v.SSECustomerAlgorithm = d.Header("x-amz-server-side-encryption-customer-algorithm")
 	v.SSECustomerKey = d.Header("x-amz-server-side-encryption-customer-key")
 	v.SSECustomerKeyMD5 = d.Header("x-amz-server-side-encryption-customer-key-MD5")
-	v.SSEKMSEncryptionContext = d.Header("x-amz-server-side-encryption-context")
 	v.SSEKMSKeyId = d.Header("x-amz-server-side-encryption-aws-kms-key-id")
-	v.ServerSideEncryption = d.Header("x-amz-server-side-encryption")
-	v.StorageClass = d.Header("x-amz-storage-class")
+	v.SSEKMSEncryptionContext = d.Header("x-amz-server-side-encryption-context")
+	v.BucketKeyEnabled = d.HeaderBool("x-amz-server-side-encryption-bucket-key-enabled")
+	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.Tagging = d.Header("x-amz-tagging")
-	v.WebsiteRedirectLocation = d.Header("x-amz-website-redirect-location")
-	v.WriteOffsetBytes = d.HeaderInt64("x-amz-write-offset-bytes")
+	v.ObjectLockMode = d.Header("x-amz-object-lock-mode")
+	v.ObjectLockRetainUntilDate = d.HeaderTime("x-amz-object-lock-retain-until-date", "iso8601")
+	v.ObjectLockLegalHoldStatus = d.Header("x-amz-object-lock-legal-hold")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1096,12 +1096,12 @@ func (v *PutObjectInput) decodeXML(d *restxml.Decoder) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutObjectLegalHoldInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
 	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.VersionId = d.Query("versionId")
+	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1131,11 +1131,11 @@ func (v *PutObjectLegalHoldOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutObjectLockConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.Token = d.Header("x-amz-bucket-object-lock-token")
+	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1164,23 +1164,23 @@ func (v *PutObjectLockConfigurationOutput) encodeXML(xw *restxml.Writer) {
 
 // encodeBindings sets the members of v bound to headers.
 func (v *PutObjectOutput) encodeBindings(h http.Header) {
-	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "x-amz-expiration", v.Expiration)
+	rest.SetString(h, "ETag", v.ETag)
 	rest.SetString(h, "x-amz-checksum-crc32", v.ChecksumCRC32)
 	rest.SetString(h, "x-amz-checksum-crc32c", v.ChecksumCRC32C)
 	rest.SetString(h, "x-amz-checksum-crc64nvme", v.ChecksumCRC64NVME)
 	rest.SetString(h, "x-amz-checksum-sha1", v.ChecksumSHA1)
 	rest.SetString(h, "x-amz-checksum-sha256", v.ChecksumSHA256)
 	rest.SetString(h, "x-amz-checksum-type", v.ChecksumType)
-	rest.SetString(h, "ETag", v.ETag)
-	rest.SetString(h, "x-amz-expiration", v.Expiration)
-	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
+	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
+	rest.SetString(h, "x-amz-version-id", v.VersionId)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-algorithm", v.SSECustomerAlgorithm)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-key-MD5", v.SSECustomerKeyMD5)
-	rest.SetString(h, "x-amz-server-side-encryption-context", v.SSEKMSEncryptionContext)
 	rest.SetString(h, "x-amz-server-side-encryption-aws-kms-key-id", v.SSEKMSKeyId)
-	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
+	rest.SetString(h, "x-amz-server-side-encryption-context", v.SSEKMSEncryptionContext)
+	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
 	rest.SetInt64(h, "x-amz-object-size", v.Size)
-	rest.SetString(h, "x-amz-version-id", v.VersionId)
+	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
 }
 
 // encodeXML writes the attributes and child elements of v into the element
@@ -1191,13 +1191,13 @@ func (v *PutObjectOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutObjectRetentionInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.BypassGovernanceRetention = d.HeaderBool("x-amz-bypass-governance-retention")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
 	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.VersionId = d.Query("versionId")
+	v.BypassGovernanceRetention = d.HeaderBool("x-amz-bypass-governance-retention")
+	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1227,12 +1227,12 @@ func (v *PutObjectRetentionOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutObjectTaggingInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
-	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.VersionId = d.Query("versionId")
+	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.RequestPayer = d.Header("x-amz-request-payer")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1262,8 +1262,8 @@ func (v *PutObjectTaggingOutput) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *PutPublicAccessBlockInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -1294,6 +1294,10 @@ func (v *QueueConfiguration) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
+		case "Id":
+			v.Id = d.String()
+		case "Queue":
+			v.QueueArn = d.String()
 		case "Event":
 			var e1 string
 			if x := d.String(); x != nil {
@@ -1303,10 +1307,6 @@ func (v *QueueConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Filter":
 			v.Filter = &NotificationConfigurationFilter{}
 			v.Filter.decodeXML(d)
-		case "Id":
-			v.Id = d.String()
-		case "Queue":
-			v.QueueArn = d.String()
 		default:
 			d.Skip()
 		}
@@ -1316,6 +1316,12 @@ func (v *QueueConfiguration) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *QueueConfiguration) encodeXML(xw *restxml.Writer) {
+	if v.Id != nil {
+		xw.String("Id", *v.Id)
+	}
+	if v.QueueArn != nil {
+		xw.String("Queue", *v.QueueArn)
+	}
 	for _, e1 := range v.Events {
 		xw.String("Event", e1)
 	}
@@ -1323,12 +1329,6 @@ func (v *QueueConfiguration) encodeXML(xw *restxml.Writer) {
 		xw.Open("Filter")
 		v.Filter.encodeXML(xw)
 		xw.Close("Filter")
-	}
-	if v.Id != nil {
-		xw.String("Id", *v.Id)
-	}
-	if v.QueueArn != nil {
-		xw.String("Queue", *v.QueueArn)
 	}
 }
 
@@ -1340,10 +1340,10 @@ func (v *QueueConfigurationDeprecated) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "Event":
-			v.Event = d.String()
 		case "Id":
 			v.Id = d.String()
+		case "Event":
+			v.Event = d.String()
 		case "Queue":
 			v.Queue = d.String()
 		default:
@@ -1355,14 +1355,14 @@ func (v *QueueConfigurationDeprecated) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *QueueConfigurationDeprecated) encodeXML(xw *restxml.Writer) {
+	if v.Id != nil {
+		xw.String("Id", *v.Id)
+	}
 	if v.Event != nil {
 		xw.String("Event", *v.Event)
 	}
 	for _, e1 := range v.Events {
 		xw.String("Event", e1)
-	}
-	if v.Id != nil {
-		xw.String("Id", *v.Id)
 	}
 	if v.Queue != nil {
 		xw.String("Queue", *v.Queue)
@@ -1377,10 +1377,10 @@ func (v *RecordExpiration) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "Days":
-			v.Days = d.Int32()
 		case "Expiration":
 			v.Expiration = d.String()
+		case "Days":
+			v.Days = d.Int32()
 		default:
 			d.Skip()
 		}
@@ -1390,11 +1390,11 @@ func (v *RecordExpiration) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *RecordExpiration) encodeXML(xw *restxml.Writer) {
-	if v.Days != nil {
-		xw.Int("Days", int64(*v.Days))
-	}
 	if v.Expiration != nil {
 		xw.String("Expiration", *v.Expiration)
+	}
+	if v.Days != nil {
+		xw.Int("Days", int64(*v.Days))
 	}
 }
 
@@ -1482,17 +1482,17 @@ func (v *RedirectAllRequestsTo) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *RenameObjectInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ClientToken = d.Header("x-amz-client-token")
-	v.DestinationIfMatch = d.Header("If-Match")
-	v.DestinationIfModifiedSince = d.HeaderTime("If-Modified-Since", "")
-	v.DestinationIfNoneMatch = d.Header("If-None-Match")
-	v.DestinationIfUnmodifiedSince = d.HeaderTime("If-Unmodified-Since", "")
 	v.Key = d.Label("Key")
 	v.RenameSource = d.Header("x-amz-rename-source")
+	v.DestinationIfMatch = d.Header("If-Match")
+	v.DestinationIfNoneMatch = d.Header("If-None-Match")
+	v.DestinationIfModifiedSince = d.HeaderTime("If-Modified-Since", "")
+	v.DestinationIfUnmodifiedSince = d.HeaderTime("If-Unmodified-Since", "")
 	v.SourceIfMatch = d.Header("x-amz-rename-source-if-match")
-	v.SourceIfModifiedSince = d.HeaderTime("x-amz-rename-source-if-modified-since", "rfc822")
 	v.SourceIfNoneMatch = d.Header("x-amz-rename-source-if-none-match")
+	v.SourceIfModifiedSince = d.HeaderTime("x-amz-rename-source-if-modified-since", "rfc822")
 	v.SourceIfUnmodifiedSince = d.HeaderTime("x-amz-rename-source-if-unmodified-since", "rfc822")
+	v.ClientToken = d.Header("x-amz-client-token")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1587,29 +1587,29 @@ func (v *ReplicationRule) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "DeleteMarkerReplication":
-			v.DeleteMarkerReplication = &DeleteMarkerReplication{}
-			v.DeleteMarkerReplication.decodeXML(d)
-		case "Destination":
-			v.Destination = &Destination{}
-			v.Destination.decodeXML(d)
-		case "ExistingObjectReplication":
-			v.ExistingObjectReplication = &ExistingObjectReplication{}
-			v.ExistingObjectReplication.decodeXML(d)
+		case "ID":
+			v.ID = d.String()
+		case "Priority":
+			v.Priority = d.Int32()
+		case "Prefix":
+			v.Prefix = d.String()
 		case "Filter":
 			v.Filter = &ReplicationRuleFilter{}
 			v.Filter.decodeXML(d)
-		case "ID":
-			v.ID = d.String()
-		case "Prefix":
-			v.Prefix = d.String()
-		case "Priority":
-			v.Priority = d.Int32()
+		case "Status":
+			v.Status = d.String()
 		case "SourceSelectionCriteria":
 			v.SourceSelectionCriteria = &SourceSelectionCriteria{}
 			v.SourceSelectionCriteria.decodeXML(d)
-		case "Status":
-			v.Status = d.String()
+		case "ExistingObjectReplication":
+			v.ExistingObjectReplication = &ExistingObjectReplication{}
+			v.ExistingObjectReplication.decodeXML(d)
+		case "Destination":
+			v.Destination = &Destination{}
+			v.Destination.decodeXML(d)
+		case "DeleteMarkerReplication":
+			v.DeleteMarkerReplication = &DeleteMarkerReplication{}
+			v.DeleteMarkerReplication.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -1619,42 +1619,42 @@ func (v *ReplicationRule) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *ReplicationRule) encodeXML(xw *restxml.Writer) {
-	if v.DeleteMarkerReplication != nil {
-		xw.Open("DeleteMarkerReplication")
-		v.DeleteMarkerReplication.encodeXML(xw)
-		xw.Close("DeleteMarkerReplication")
+	if v.ID != nil {
+		xw.String("ID", *v.ID)
 	}
-	if v.Destination != nil {
-		xw.Open("Destination")
-		v.Destination.encodeXML(xw)
-		xw.Close("Destination")
+	if v.Priority != nil {
+		xw.Int("Priority", int64(*v.Priority))
 	}
-	if v.ExistingObjectReplication != nil {
-		xw.Open("ExistingObjectReplication")
-		v.ExistingObjectReplication.encodeXML(xw)
-		xw.Close("ExistingObjectReplication")
+	if v.Prefix != nil {
+		xw.String("Prefix", *v.Prefix)
 	}
 	if v.Filter != nil {
 		xw.Open("Filter")
 		v.Filter.encodeXML(xw)
 		xw.Close("Filter")
 	}
-	if v.ID != nil {
-		xw.String("ID", *v.ID)
-	}
-	if v.Prefix != nil {
-		xw.String("Prefix", *v.Prefix)
-	}
-	if v.Priority != nil {
-		xw.Int("Priority", int64(*v.Priority))
+	if v.Status != nil {
+		xw.String("Status", *v.Status)
 	}
 	if v.SourceSelectionCriteria != nil {
 		xw.Open("SourceSelectionCriteria")
 		v.SourceSelectionCriteria.encodeXML(xw)
 		xw.Close("SourceSelectionCriteria")
 	}
-	if v.Status != nil {
-		xw.String("Status", *v.Status)
+	if v.ExistingObjectReplication != nil {
+		xw.Open("ExistingObjectReplication")
+		v.ExistingObjectReplication.encodeXML(xw)
+		xw.Close("ExistingObjectReplication")
+	}
+	if v.Destination != nil {
+		xw.Open("Destination")
+		v.Destination.encodeXML(xw)
+		xw.Close("Destination")
+	}
+	if v.DeleteMarkerReplication != nil {
+		xw.Open("DeleteMarkerReplication")
+		v.DeleteMarkerReplication.encodeXML(xw)
+		xw.Close("DeleteMarkerReplication")
 	}
 }
 
@@ -1699,14 +1699,14 @@ func (v *ReplicationRuleFilter) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "And":
-			v.And = &ReplicationRuleAndOperator{}
-			v.And.decodeXML(d)
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
 			v.Tag = &Tag{}
 			v.Tag.decodeXML(d)
+		case "And":
+			v.And = &ReplicationRuleAndOperator{}
+			v.And.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -1716,11 +1716,6 @@ func (v *ReplicationRuleFilter) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *ReplicationRuleFilter) encodeXML(xw *restxml.Writer) {
-	if v.And != nil {
-		xw.Open("And")
-		v.And.encodeXML(xw)
-		xw.Close("And")
-	}
 	if v.Prefix != nil {
 		xw.String("Prefix", *v.Prefix)
 	}
@@ -1728,6 +1723,11 @@ func (v *ReplicationRuleFilter) encodeXML(xw *restxml.Writer) {
 		xw.Open("Tag")
 		v.Tag.encodeXML(xw)
 		xw.Close("Tag")
+	}
+	if v.And != nil {
+		xw.Open("And")
+		v.And.encodeXML(xw)
+		xw.Close("And")
 	}
 }
 
@@ -1822,11 +1822,11 @@ func (v *RequestProgress) decodeXML(d *restxml.Decoder) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *RestoreObjectInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
+	v.Key = d.Label("Key")
+	v.VersionId = d.Query("versionId")
+	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
-	v.Key = d.Label("Key")
-	v.RequestPayer = d.Header("x-amz-request-payer")
-	v.VersionId = d.Query("versionId")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -1864,21 +1864,21 @@ func (v *RestoreRequest) decodeXML(d *restxml.Decoder) {
 		switch name {
 		case "Days":
 			v.Days = d.Int32()
-		case "Description":
-			v.Description = d.String()
 		case "GlacierJobParameters":
 			v.GlacierJobParameters = &GlacierJobParameters{}
 			v.GlacierJobParameters.decodeXML(d)
-		case "OutputLocation":
-			v.OutputLocation = &OutputLocation{}
-			v.OutputLocation.decodeXML(d)
+		case "Type":
+			v.Type = d.String()
+		case "Tier":
+			v.Tier = d.String()
+		case "Description":
+			v.Description = d.String()
 		case "SelectParameters":
 			v.SelectParameters = &SelectParameters{}
 			v.SelectParameters.decodeXML(d)
-		case "Tier":
-			v.Tier = d.String()
-		case "Type":
-			v.Type = d.String()
+		case "OutputLocation":
+			v.OutputLocation = &OutputLocation{}
+			v.OutputLocation.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -1892,7 +1892,7 @@ func (v *RestoreStatus) encodeXML(xw *restxml.Writer) {
 		xw.Bool("IsRestoreInProgress", *v.IsRestoreInProgress)
 	}
 	if v.RestoreExpiryDate != nil {
-		xw.Time("RestoreExpiryDate", v.RestoreExpiryDate, "")
+		xw.Time("RestoreExpiryDate", v.RestoreExpiryDate, "s3iso8601")
 	}
 }
 
@@ -1939,20 +1939,11 @@ func (v *Rule) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "AbortIncompleteMultipartUpload":
-			v.AbortIncompleteMultipartUpload = &AbortIncompleteMultipartUpload{}
-			v.AbortIncompleteMultipartUpload.decodeXML(d)
 		case "Expiration":
 			v.Expiration = &LifecycleExpiration{}
 			v.Expiration.decodeXML(d)
 		case "ID":
 			v.ID = d.String()
-		case "NoncurrentVersionExpiration":
-			v.NoncurrentVersionExpiration = &NoncurrentVersionExpiration{}
-			v.NoncurrentVersionExpiration.decodeXML(d)
-		case "NoncurrentVersionTransition":
-			v.NoncurrentVersionTransition = &NoncurrentVersionTransition{}
-			v.NoncurrentVersionTransition.decodeXML(d)
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Status":
@@ -1960,6 +1951,15 @@ func (v *Rule) decodeXML(d *restxml.Decoder) {
 		case "Transition":
 			v.Transition = &Transition{}
 			v.Transition.decodeXML(d)
+		case "NoncurrentVersionTransition":
+			v.NoncurrentVersionTransition = &NoncurrentVersionTransition{}
+			v.NoncurrentVersionTransition.decodeXML(d)
+		case "NoncurrentVersionExpiration":
+			v.NoncurrentVersionExpiration = &NoncurrentVersionExpiration{}
+			v.NoncurrentVersionExpiration.decodeXML(d)
+		case "AbortIncompleteMultipartUpload":
+			v.AbortIncompleteMultipartUpload = &AbortIncompleteMultipartUpload{}
+			v.AbortIncompleteMultipartUpload.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -1969,11 +1969,6 @@ func (v *Rule) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *Rule) encodeXML(xw *restxml.Writer) {
-	if v.AbortIncompleteMultipartUpload != nil {
-		xw.Open("AbortIncompleteMultipartUpload")
-		v.AbortIncompleteMultipartUpload.encodeXML(xw)
-		xw.Close("AbortIncompleteMultipartUpload")
-	}
 	if v.Expiration != nil {
 		xw.Open("Expiration")
 		v.Expiration.encodeXML(xw)
@@ -1981,16 +1976,6 @@ func (v *Rule) encodeXML(xw *restxml.Writer) {
 	}
 	if v.ID != nil {
 		xw.String("ID", *v.ID)
-	}
-	if v.NoncurrentVersionExpiration != nil {
-		xw.Open("NoncurrentVersionExpiration")
-		v.NoncurrentVersionExpiration.encodeXML(xw)
-		xw.Close("NoncurrentVersionExpiration")
-	}
-	if v.NoncurrentVersionTransition != nil {
-		xw.Open("NoncurrentVersionTransition")
-		v.NoncurrentVersionTransition.encodeXML(xw)
-		xw.Close("NoncurrentVersionTransition")
 	}
 	if v.Prefix != nil {
 		xw.String("Prefix", *v.Prefix)
@@ -2002,6 +1987,21 @@ func (v *Rule) encodeXML(xw *restxml.Writer) {
 		xw.Open("Transition")
 		v.Transition.encodeXML(xw)
 		xw.Close("Transition")
+	}
+	if v.NoncurrentVersionTransition != nil {
+		xw.Open("NoncurrentVersionTransition")
+		v.NoncurrentVersionTransition.encodeXML(xw)
+		xw.Close("NoncurrentVersionTransition")
+	}
+	if v.NoncurrentVersionExpiration != nil {
+		xw.Open("NoncurrentVersionExpiration")
+		v.NoncurrentVersionExpiration.encodeXML(xw)
+		xw.Close("NoncurrentVersionExpiration")
+	}
+	if v.AbortIncompleteMultipartUpload != nil {
+		xw.Open("AbortIncompleteMultipartUpload")
+		v.AbortIncompleteMultipartUpload.encodeXML(xw)
+		xw.Close("AbortIncompleteMultipartUpload")
 	}
 }
 
@@ -2041,6 +2041,15 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
+		case "BucketName":
+			v.BucketName = d.String()
+		case "Prefix":
+			v.Prefix = d.String()
+		case "Encryption":
+			v.Encryption = &Encryption{}
+			v.Encryption.decodeXML(d)
+		case "CannedACL":
+			v.CannedACL = d.String()
 		case "AccessControlList":
 			if v.AccessControlList == nil {
 				v.AccessControlList = []Grant{}
@@ -2053,17 +2062,6 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 				e1.decodeXML(d)
 				v.AccessControlList = append(v.AccessControlList, e1)
 			}
-		case "BucketName":
-			v.BucketName = d.String()
-		case "CannedACL":
-			v.CannedACL = d.String()
-		case "Encryption":
-			v.Encryption = &Encryption{}
-			v.Encryption.decodeXML(d)
-		case "Prefix":
-			v.Prefix = d.String()
-		case "StorageClass":
-			v.StorageClass = d.String()
 		case "Tagging":
 			v.Tagging = &Tagging{}
 			v.Tagging.decodeXML(d)
@@ -2079,6 +2077,8 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 				e1.decodeXML(d)
 				v.UserMetadata = append(v.UserMetadata, e1)
 			}
+		case "StorageClass":
+			v.StorageClass = d.String()
 		default:
 			d.Skip()
 		}
@@ -2106,14 +2106,14 @@ func (v *S3TablesDestination) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *S3TablesDestinationResult) encodeXML(xw *restxml.Writer) {
-	if v.TableArn != nil {
-		xw.String("TableArn", *v.TableArn)
-	}
 	if v.TableBucketArn != nil {
 		xw.String("TableBucketArn", *v.TableBucketArn)
 	}
 	if v.TableName != nil {
 		xw.String("TableName", *v.TableName)
+	}
+	if v.TableArn != nil {
+		xw.String("TableArn", *v.TableArn)
 	}
 	if v.TableNamespace != nil {
 		xw.String("TableNamespace", *v.TableNamespace)
@@ -2152,10 +2152,10 @@ func (v *SSEKMSEncryption) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "BucketKeyEnabled":
-			v.BucketKeyEnabled = d.Bool()
 		case "KMSKeyArn":
 			v.KMSKeyArn = d.String()
+		case "BucketKeyEnabled":
+			v.BucketKeyEnabled = d.Bool()
 		default:
 			d.Skip()
 		}
@@ -2189,10 +2189,10 @@ func (v *ScanRange) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "End":
-			v.End = d.Int64()
 		case "Start":
 			v.Start = d.Int64()
+		case "End":
+			v.End = d.Int64()
 		default:
 			d.Skip()
 		}
@@ -2202,21 +2202,6 @@ func (v *ScanRange) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *SelectObjectContentEventStream) encodeXML(xw *restxml.Writer) {
-	if v.Cont != nil {
-		xw.Open("Cont")
-		v.Cont.encodeXML(xw)
-		xw.Close("Cont")
-	}
-	if v.End != nil {
-		xw.Open("End")
-		v.End.encodeXML(xw)
-		xw.Close("End")
-	}
-	if v.Progress != nil {
-		xw.Open("Progress")
-		v.Progress.encodeXML(xw)
-		xw.Close("Progress")
-	}
 	if v.Records != nil {
 		xw.Open("Records")
 		v.Records.encodeXML(xw)
@@ -2227,16 +2212,31 @@ func (v *SelectObjectContentEventStream) encodeXML(xw *restxml.Writer) {
 		v.Stats.encodeXML(xw)
 		xw.Close("Stats")
 	}
+	if v.Progress != nil {
+		xw.Open("Progress")
+		v.Progress.encodeXML(xw)
+		xw.Close("Progress")
+	}
+	if v.Cont != nil {
+		xw.Open("Cont")
+		v.Cont.encodeXML(xw)
+		xw.Close("Cont")
+	}
+	if v.End != nil {
+		xw.Open("End")
+		v.End.encodeXML(xw)
+		xw.Close("End")
+	}
 }
 
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *SelectObjectContentInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
 	v.SSECustomerAlgorithm = d.Header("x-amz-server-side-encryption-customer-algorithm")
 	v.SSECustomerKey = d.Header("x-amz-server-side-encryption-customer-key")
 	v.SSECustomerKeyMD5 = d.Header("x-amz-server-side-encryption-customer-key-MD5")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -2251,15 +2251,15 @@ func (v *SelectObjectContentInput) decodeXML(d *restxml.Decoder) {
 			v.Expression = d.String()
 		case "ExpressionType":
 			v.ExpressionType = d.String()
+		case "RequestProgress":
+			v.RequestProgress = &RequestProgress{}
+			v.RequestProgress.decodeXML(d)
 		case "InputSerialization":
 			v.InputSerialization = &InputSerialization{}
 			v.InputSerialization.decodeXML(d)
 		case "OutputSerialization":
 			v.OutputSerialization = &OutputSerialization{}
 			v.OutputSerialization.decodeXML(d)
-		case "RequestProgress":
-			v.RequestProgress = &RequestProgress{}
-			v.RequestProgress.decodeXML(d)
 		case "ScanRange":
 			v.ScanRange = &ScanRange{}
 			v.ScanRange.decodeXML(d)
@@ -2282,13 +2282,13 @@ func (v *SelectParameters) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "Expression":
-			v.Expression = d.String()
-		case "ExpressionType":
-			v.ExpressionType = d.String()
 		case "InputSerialization":
 			v.InputSerialization = &InputSerialization{}
 			v.InputSerialization.decodeXML(d)
+		case "ExpressionType":
+			v.ExpressionType = d.String()
+		case "Expression":
+			v.Expression = d.String()
 		case "OutputSerialization":
 			v.OutputSerialization = &OutputSerialization{}
 			v.OutputSerialization.decodeXML(d)
@@ -2306,10 +2306,10 @@ func (v *ServerSideEncryptionByDefault) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "KMSMasterKeyID":
-			v.KMSMasterKeyID = d.String()
 		case "SSEAlgorithm":
 			v.SSEAlgorithm = d.String()
+		case "KMSMasterKeyID":
+			v.KMSMasterKeyID = d.String()
 		default:
 			d.Skip()
 		}
@@ -2319,11 +2319,11 @@ func (v *ServerSideEncryptionByDefault) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *ServerSideEncryptionByDefault) encodeXML(xw *restxml.Writer) {
-	if v.KMSMasterKeyID != nil {
-		xw.String("KMSMasterKeyID", *v.KMSMasterKeyID)
-	}
 	if v.SSEAlgorithm != nil {
 		xw.String("SSEAlgorithm", *v.SSEAlgorithm)
+	}
+	if v.KMSMasterKeyID != nil {
+		xw.String("KMSMasterKeyID", *v.KMSMasterKeyID)
 	}
 }
 
@@ -2366,11 +2366,11 @@ func (v *ServerSideEncryptionRule) decodeXML(d *restxml.Decoder) {
 		case "ApplyServerSideEncryptionByDefault":
 			v.ApplyServerSideEncryptionByDefault = &ServerSideEncryptionByDefault{}
 			v.ApplyServerSideEncryptionByDefault.decodeXML(d)
+		case "BucketKeyEnabled":
+			v.BucketKeyEnabled = d.Bool()
 		case "BlockedEncryptionTypes":
 			v.BlockedEncryptionTypes = &BlockedEncryptionTypes{}
 			v.BlockedEncryptionTypes.decodeXML(d)
-		case "BucketKeyEnabled":
-			v.BucketKeyEnabled = d.Bool()
 		default:
 			d.Skip()
 		}
@@ -2385,13 +2385,13 @@ func (v *ServerSideEncryptionRule) encodeXML(xw *restxml.Writer) {
 		v.ApplyServerSideEncryptionByDefault.encodeXML(xw)
 		xw.Close("ApplyServerSideEncryptionByDefault")
 	}
+	if v.BucketKeyEnabled != nil {
+		xw.Bool("BucketKeyEnabled", *v.BucketKeyEnabled)
+	}
 	if v.BlockedEncryptionTypes != nil {
 		xw.Open("BlockedEncryptionTypes")
 		v.BlockedEncryptionTypes.encodeXML(xw)
 		xw.Close("BlockedEncryptionTypes")
-	}
-	if v.BucketKeyEnabled != nil {
-		xw.Bool("BucketKeyEnabled", *v.BucketKeyEnabled)
 	}
 }
 
@@ -2401,14 +2401,14 @@ func (v *SessionCredentials) encodeXML(xw *restxml.Writer) {
 	if v.AccessKeyId != nil {
 		xw.String("AccessKeyId", *v.AccessKeyId)
 	}
-	if v.Expiration != nil {
-		xw.Time("Expiration", v.Expiration, "")
-	}
 	if v.SecretAccessKey != nil {
 		xw.String("SecretAccessKey", *v.SecretAccessKey)
 	}
 	if v.SessionToken != nil {
 		xw.String("SessionToken", *v.SessionToken)
+	}
+	if v.Expiration != nil {
+		xw.Time("Expiration", v.Expiration, "s3iso8601")
 	}
 }
 
@@ -2465,12 +2465,12 @@ func (v *SourceSelectionCriteria) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "ReplicaModifications":
-			v.ReplicaModifications = &ReplicaModifications{}
-			v.ReplicaModifications.decodeXML(d)
 		case "SseKmsEncryptedObjects":
 			v.SseKmsEncryptedObjects = &SseKmsEncryptedObjects{}
 			v.SseKmsEncryptedObjects.decodeXML(d)
+		case "ReplicaModifications":
+			v.ReplicaModifications = &ReplicaModifications{}
+			v.ReplicaModifications.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -2480,15 +2480,15 @@ func (v *SourceSelectionCriteria) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *SourceSelectionCriteria) encodeXML(xw *restxml.Writer) {
-	if v.ReplicaModifications != nil {
-		xw.Open("ReplicaModifications")
-		v.ReplicaModifications.encodeXML(xw)
-		xw.Close("ReplicaModifications")
-	}
 	if v.SseKmsEncryptedObjects != nil {
 		xw.Open("SseKmsEncryptedObjects")
 		v.SseKmsEncryptedObjects.encodeXML(xw)
 		xw.Close("SseKmsEncryptedObjects")
+	}
+	if v.ReplicaModifications != nil {
+		xw.Open("ReplicaModifications")
+		v.ReplicaModifications.encodeXML(xw)
+		xw.Close("ReplicaModifications")
 	}
 }
 
@@ -2519,14 +2519,14 @@ func (v *SseKmsEncryptedObjects) encodeXML(xw *restxml.Writer) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *Stats) encodeXML(xw *restxml.Writer) {
+	if v.BytesScanned != nil {
+		xw.Int("BytesScanned", int64(*v.BytesScanned))
+	}
 	if v.BytesProcessed != nil {
 		xw.Int("BytesProcessed", int64(*v.BytesProcessed))
 	}
 	if v.BytesReturned != nil {
 		xw.Int("BytesReturned", int64(*v.BytesReturned))
-	}
-	if v.BytesScanned != nil {
-		xw.Int("BytesScanned", int64(*v.BytesScanned))
 	}
 }
 
@@ -2575,11 +2575,11 @@ func (v *StorageClassAnalysisDataExport) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
+		case "OutputSchemaVersion":
+			v.OutputSchemaVersion = d.String()
 		case "Destination":
 			v.Destination = &AnalyticsExportDestination{}
 			v.Destination.decodeXML(d)
-		case "OutputSchemaVersion":
-			v.OutputSchemaVersion = d.String()
 		default:
 			d.Skip()
 		}
@@ -2589,13 +2589,13 @@ func (v *StorageClassAnalysisDataExport) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *StorageClassAnalysisDataExport) encodeXML(xw *restxml.Writer) {
+	if v.OutputSchemaVersion != nil {
+		xw.String("OutputSchemaVersion", *v.OutputSchemaVersion)
+	}
 	if v.Destination != nil {
 		xw.Open("Destination")
 		v.Destination.encodeXML(xw)
 		xw.Close("Destination")
-	}
-	if v.OutputSchemaVersion != nil {
-		xw.String("OutputSchemaVersion", *v.OutputSchemaVersion)
 	}
 }
 
@@ -2695,12 +2695,12 @@ func (v *TargetObjectKeyFormat) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "PartitionedPrefix":
-			v.PartitionedPrefix = &PartitionedPrefix{}
-			v.PartitionedPrefix.decodeXML(d)
 		case "SimplePrefix":
 			v.SimplePrefix = &SimplePrefix{}
 			v.SimplePrefix.decodeXML(d)
+		case "PartitionedPrefix":
+			v.PartitionedPrefix = &PartitionedPrefix{}
+			v.PartitionedPrefix.decodeXML(d)
 		default:
 			d.Skip()
 		}
@@ -2710,15 +2710,15 @@ func (v *TargetObjectKeyFormat) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *TargetObjectKeyFormat) encodeXML(xw *restxml.Writer) {
-	if v.PartitionedPrefix != nil {
-		xw.Open("PartitionedPrefix")
-		v.PartitionedPrefix.encodeXML(xw)
-		xw.Close("PartitionedPrefix")
-	}
 	if v.SimplePrefix != nil {
 		xw.Open("SimplePrefix")
 		v.SimplePrefix.encodeXML(xw)
 		xw.Close("SimplePrefix")
+	}
+	if v.PartitionedPrefix != nil {
+		xw.Open("PartitionedPrefix")
+		v.PartitionedPrefix.encodeXML(xw)
+		xw.Close("PartitionedPrefix")
 	}
 }
 
@@ -2730,10 +2730,10 @@ func (v *Tiering) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "AccessTier":
-			v.AccessTier = d.String()
 		case "Days":
 			v.Days = d.Int32()
+		case "AccessTier":
+			v.AccessTier = d.String()
 		default:
 			d.Skip()
 		}
@@ -2743,11 +2743,11 @@ func (v *Tiering) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *Tiering) encodeXML(xw *restxml.Writer) {
-	if v.AccessTier != nil {
-		xw.String("AccessTier", *v.AccessTier)
-	}
 	if v.Days != nil {
 		xw.Int("Days", int64(*v.Days))
+	}
+	if v.AccessTier != nil {
+		xw.String("AccessTier", *v.AccessTier)
 	}
 }
 
@@ -2759,6 +2759,10 @@ func (v *TopicConfiguration) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
+		case "Id":
+			v.Id = d.String()
+		case "Topic":
+			v.TopicArn = d.String()
 		case "Event":
 			var e1 string
 			if x := d.String(); x != nil {
@@ -2768,10 +2772,6 @@ func (v *TopicConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Filter":
 			v.Filter = &NotificationConfigurationFilter{}
 			v.Filter.decodeXML(d)
-		case "Id":
-			v.Id = d.String()
-		case "Topic":
-			v.TopicArn = d.String()
 		default:
 			d.Skip()
 		}
@@ -2781,6 +2781,12 @@ func (v *TopicConfiguration) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *TopicConfiguration) encodeXML(xw *restxml.Writer) {
+	if v.Id != nil {
+		xw.String("Id", *v.Id)
+	}
+	if v.TopicArn != nil {
+		xw.String("Topic", *v.TopicArn)
+	}
 	for _, e1 := range v.Events {
 		xw.String("Event", e1)
 	}
@@ -2788,12 +2794,6 @@ func (v *TopicConfiguration) encodeXML(xw *restxml.Writer) {
 		xw.Open("Filter")
 		v.Filter.encodeXML(xw)
 		xw.Close("Filter")
-	}
-	if v.Id != nil {
-		xw.String("Id", *v.Id)
-	}
-	if v.TopicArn != nil {
-		xw.String("Topic", *v.TopicArn)
 	}
 }
 
@@ -2805,10 +2805,14 @@ func (v *TopicConfigurationDeprecated) decodeXML(d *restxml.Decoder) {
 			return
 		}
 		switch name {
-		case "Event":
-			v.Event = d.String()
 		case "Id":
 			v.Id = d.String()
+		case "Event":
+			var e1 string
+			if x := d.String(); x != nil {
+				e1 = *x
+			}
+			v.Events = append(v.Events, e1)
 		case "Topic":
 			v.Topic = d.String()
 		default:
@@ -2820,14 +2824,14 @@ func (v *TopicConfigurationDeprecated) decodeXML(d *restxml.Decoder) {
 // encodeXML writes the attributes and child elements of v into the element
 // xw opened last.
 func (v *TopicConfigurationDeprecated) encodeXML(xw *restxml.Writer) {
-	if v.Event != nil {
-		xw.String("Event", *v.Event)
+	if v.Id != nil {
+		xw.String("Id", *v.Id)
 	}
 	for _, e1 := range v.Events {
 		xw.String("Event", e1)
 	}
-	if v.Id != nil {
-		xw.String("Id", *v.Id)
+	if v.Event != nil {
+		xw.String("Event", *v.Event)
 	}
 	if v.Topic != nil {
 		xw.String("Topic", *v.Topic)
@@ -2858,7 +2862,7 @@ func (v *Transition) decodeXML(d *restxml.Decoder) {
 // xw opened last.
 func (v *Transition) encodeXML(xw *restxml.Writer) {
 	if v.Date != nil {
-		xw.Time("Date", v.Date, "iso8601")
+		xw.Time("Date", v.Date, "s3iso8601")
 	}
 	if v.Days != nil {
 		xw.Int("Days", int64(*v.Days))
@@ -2871,8 +2875,8 @@ func (v *Transition) encodeXML(xw *restxml.Writer) {
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *UpdateBucketMetadataInventoryTableConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -2898,8 +2902,8 @@ func (v *UpdateBucketMetadataInventoryTableConfigurationOutput) encodeXML(xw *re
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *UpdateBucketMetadataJournalTableConfigurationInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 }
 
@@ -2925,12 +2929,12 @@ func (v *UpdateBucketMetadataJournalTableConfigurationOutput) encodeXML(xw *rest
 // decodeBindings reads the members of v bound to the uri, the query string and headers.
 func (v *UpdateObjectEncryptionInput) decodeBindings(d *rest.Decoder) {
 	v.Bucket = d.Label("Bucket")
-	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
-	v.ContentMD5 = d.Header("Content-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
 	v.Key = d.Label("Key")
-	v.RequestPayer = d.Header("x-amz-request-payer")
 	v.VersionId = d.Query("versionId")
+	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ContentMD5 = d.Header("Content-MD5")
+	v.ChecksumAlgorithm = d.Header("x-amz-sdk-checksum-algorithm")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -2966,18 +2970,18 @@ func (v *UploadPartCopyInput) decodeBindings(d *rest.Decoder) {
 	v.CopySourceIfNoneMatch = d.Header("x-amz-copy-source-if-none-match")
 	v.CopySourceIfUnmodifiedSince = d.HeaderTime("x-amz-copy-source-if-unmodified-since", "")
 	v.CopySourceRange = d.Header("x-amz-copy-source-range")
-	v.CopySourceSSECustomerAlgorithm = d.Header("x-amz-copy-source-server-side-encryption-customer-algorithm")
-	v.CopySourceSSECustomerKey = d.Header("x-amz-copy-source-server-side-encryption-customer-key")
-	v.CopySourceSSECustomerKeyMD5 = d.Header("x-amz-copy-source-server-side-encryption-customer-key-MD5")
-	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
-	v.ExpectedSourceBucketOwner = d.Header("x-amz-source-expected-bucket-owner")
 	v.Key = d.Label("Key")
 	v.PartNumber = d.QueryInt32("partNumber")
-	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.UploadId = d.Query("uploadId")
 	v.SSECustomerAlgorithm = d.Header("x-amz-server-side-encryption-customer-algorithm")
 	v.SSECustomerKey = d.Header("x-amz-server-side-encryption-customer-key")
 	v.SSECustomerKeyMD5 = d.Header("x-amz-server-side-encryption-customer-key-MD5")
-	v.UploadId = d.Query("uploadId")
+	v.CopySourceSSECustomerAlgorithm = d.Header("x-amz-copy-source-server-side-encryption-customer-algorithm")
+	v.CopySourceSSECustomerKey = d.Header("x-amz-copy-source-server-side-encryption-customer-key")
+	v.CopySourceSSECustomerKeyMD5 = d.Header("x-amz-copy-source-server-side-encryption-customer-key-MD5")
+	v.RequestPayer = d.Header("x-amz-request-payer")
+	v.ExpectedBucketOwner = d.Header("x-amz-expected-bucket-owner")
+	v.ExpectedSourceBucketOwner = d.Header("x-amz-source-expected-bucket-owner")
 }
 
 // decodeXML reads the attributes and child elements of the element d entered last.
@@ -2996,16 +3000,11 @@ func (v *UploadPartCopyInput) decodeXML(d *restxml.Decoder) {
 
 // encodeBindings sets the members of v bound to headers.
 func (v *UploadPartCopyOutput) encodeBindings(h http.Header) {
-	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
 	rest.SetString(h, "x-amz-copy-source-version-id", v.CopySourceVersionId)
-	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
+	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-algorithm", v.SSECustomerAlgorithm)
 	rest.SetString(h, "x-amz-server-side-encryption-customer-key-MD5", v.SSECustomerKeyMD5)
 	rest.SetString(h, "x-amz-server-side-encryption-aws-kms-key-id", v.SSEKMSKeyId)
-	rest.SetString(h, "x-amz-server-side-encryption", v.ServerSideEncryption)
-}
-
-// encodeXML writes the attributes and child elements of v into the element
-// xw opened last.
-func (v *UploadPartCopyOutput) encodeXML(xw *restxml.Writer) {
+	rest.SetBool(h, "x-amz-server-side-encryption-bucket-key-enabled", v.BucketKeyEnabled)
+	rest.SetString(h, "x-amz-request-charged", v.RequestCharged)
 }

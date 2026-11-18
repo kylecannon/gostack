@@ -36,7 +36,7 @@ func ApplyPatches(doc []byte, ops []Patch) ([]byte, error) {
 		}
 	}
 
-	out, err := json.Marshal(tree)
+	out, err := encodeTree(nil, tree)
 	if err != nil {
 		return nil, fmt.Errorf("encode patched document: %w", err)
 	}
@@ -44,20 +44,184 @@ func ApplyPatches(doc []byte, ops []Patch) ([]byte, error) {
 	return out, nil
 }
 
-// decodeTree reads json keeping numbers as written, so a large integer in a
-// spec comes out of a patch unchanged.
-func decodeTree(data []byte) (any, error) {
-	var v any
+// object is a json object that keeps its keys in order, with the semantics of
+// the Python dict LocalStack's jsonpatch works on: a new key goes last, and a
+// key that is set again keeps its place. The order is the order a structure's
+// members go on the wire, so a patch that removes a member and adds it back
+// moves it last, as S3's Contents and Versions are.
+type object struct {
+	keys []string
+	vals map[string]any
+}
 
+func (o *object) set(key string, value any) {
+	if _, ok := o.vals[key]; !ok {
+		o.keys = append(o.keys, key)
+	}
+
+	o.vals[key] = value
+}
+
+func (o *object) remove(key string) {
+	delete(o.vals, key)
+	o.keys = slices.DeleteFunc(o.keys, func(k string) bool { return k == key })
+}
+
+// decodeTree reads json into objects, arrays and scalars, keeping the order of
+// object keys and numbers as written, so a large integer in a spec comes out
+// of a patch unchanged.
+func decodeTree(data []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 
-	err := dec.Decode(&v)
+	v, err := decodeValue(dec)
 	if err != nil {
 		return nil, fmt.Errorf("decode json: %w", err)
 	}
 
 	return v, nil
+}
+
+func decodeValue(dec *json.Decoder) (any, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("read token: %w", err)
+	}
+
+	switch tok {
+	case json.Delim('{'):
+		return decodeObject(dec)
+	case json.Delim('['):
+		return decodeArray(dec)
+	default:
+		return tok, nil
+	}
+}
+
+// decodeObject reads the members of an object after its '{', and the '}'.
+func decodeObject(dec *json.Decoder) (any, error) {
+	o := &object{vals: map[string]any{}}
+
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("read key: %w", err)
+		}
+
+		key, ok := tok.(string)
+		if !ok {
+			return nil, fmt.Errorf("object key %v is not a string", tok)
+		}
+
+		v, err := decodeValue(dec)
+		if err != nil {
+			return nil, err
+		}
+
+		o.set(key, v)
+	}
+
+	_, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("read object end: %w", err)
+	}
+
+	return o, nil
+}
+
+// decodeArray reads the elements of an array after its '[', and the ']'. An
+// empty array stays [], never null.
+func decodeArray(dec *json.Decoder) (any, error) {
+	arr := []any{}
+
+	for dec.More() {
+		v, err := decodeValue(dec)
+		if err != nil {
+			return nil, err
+		}
+
+		arr = append(arr, v)
+	}
+
+	_, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("read array end: %w", err)
+	}
+
+	return arr, nil
+}
+
+// encodeTree appends v to buf as json, the members of each object in order.
+func encodeTree(buf []byte, v any) ([]byte, error) {
+	var err error
+
+	switch node := v.(type) {
+	case *object:
+		buf = append(buf, '{')
+
+		for i, key := range node.keys {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+
+			buf, err = encodeTree(buf, key)
+			if err != nil {
+				return nil, err
+			}
+
+			buf, err = encodeTree(append(buf, ':'), node.vals[key])
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return append(buf, '}'), nil
+	case []any:
+		buf = append(buf, '[')
+
+		for i, e := range node {
+			if i > 0 {
+				buf = append(buf, ',')
+			}
+
+			buf, err = encodeTree(buf, e)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		return append(buf, ']'), nil
+	default:
+		scalar, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("encode %v: %w", v, err)
+		}
+
+		return append(buf, scalar...), nil
+	}
+}
+
+// plain turns the objects in v into maps, for a comparison that ignores key
+// order, as Python's dict equality does.
+func plain(v any) any {
+	switch node := v.(type) {
+	case *object:
+		m := make(map[string]any, len(node.vals))
+		for k, val := range node.vals {
+			m[k] = plain(val)
+		}
+
+		return m
+	case []any:
+		out := make([]any, len(node))
+		for i, val := range node {
+			out[i] = plain(val)
+		}
+
+		return out
+	default:
+		return v
+	}
 }
 
 func applyOne(tree any, op Patch) (any, error) {
@@ -84,23 +248,46 @@ func applyOne(tree any, op Patch) (any, error) {
 	}
 }
 
+// replace sets a value that must exist, in its place: an object member keeps
+// its position among the keys.
 func replace(tree any, path string, raw json.RawMessage) (any, error) {
 	value, err := decodeTree(raw)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = get(tree, path)
+	tokens, err := pointer(path)
 	if err != nil {
 		return nil, err
 	}
 
-	tree, err = remove(tree, path)
-	if err != nil {
-		return nil, err
+	if len(tokens) == 0 {
+		return value, nil
 	}
 
-	return add(tree, path, value)
+	return update(tree, tokens, func(parent any, last string) (any, error) {
+		switch node := parent.(type) {
+		case *object:
+			if _, ok := node.vals[last]; !ok {
+				return nil, fmt.Errorf("no member %q", last)
+			}
+
+			node.set(last, value)
+
+			return node, nil
+		case []any:
+			i, err := index(last, len(node))
+			if err != nil {
+				return nil, err
+			}
+
+			node[i] = value
+
+			return node, nil
+		default:
+			return nil, fmt.Errorf("cannot replace %q", last)
+		}
+	})
 }
 
 func move(tree any, op Patch) (any, error) {
@@ -124,7 +311,7 @@ func copyValue(tree any, op Patch) (any, error) {
 	}
 
 	// A copy shares nothing with its source.
-	raw, err := json.Marshal(value)
+	raw, err := encodeTree(nil, value)
 	if err != nil {
 		return nil, fmt.Errorf("copy value: %w", err)
 	}
@@ -148,7 +335,7 @@ func testValue(tree any, op Patch) error {
 		return err
 	}
 
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(plain(got), plain(want)) {
 		return errors.New("test failed: the value differs")
 	}
 
@@ -184,8 +371,8 @@ func get(tree any, path string) (any, error) {
 
 	for _, tok := range tokens {
 		switch node := cur.(type) {
-		case map[string]any:
-			next, ok := node[tok]
+		case *object:
+			next, ok := node.vals[tok]
 			if !ok {
 				return nil, fmt.Errorf("no member %q", tok)
 			}
@@ -243,8 +430,8 @@ func add(tree any, path string, value any) (any, error) {
 
 	return update(tree, tokens, func(parent any, last string) (any, error) {
 		switch node := parent.(type) {
-		case map[string]any:
-			node[last] = value
+		case *object:
+			node.set(last, value)
 
 			return node, nil
 		case []any:
@@ -272,12 +459,12 @@ func remove(tree any, path string) (any, error) {
 
 	return update(tree, tokens, func(parent any, last string) (any, error) {
 		switch node := parent.(type) {
-		case map[string]any:
-			if _, ok := node[last]; !ok {
+		case *object:
+			if _, ok := node.vals[last]; !ok {
 				return nil, fmt.Errorf("no member %q", last)
 			}
 
-			delete(node, last)
+			node.remove(last)
 
 			return node, nil
 		case []any:
@@ -303,8 +490,8 @@ func update(tree any, tokens []string, fn func(parent any, last string) (any, er
 	head, rest := tokens[0], tokens[1:]
 
 	switch node := tree.(type) {
-	case map[string]any:
-		child, ok := node[head]
+	case *object:
+		child, ok := node.vals[head]
 		if !ok {
 			return nil, fmt.Errorf("no member %q", head)
 		}
@@ -314,7 +501,7 @@ func update(tree any, tokens []string, fn func(parent any, last string) (any, er
 			return nil, err
 		}
 
-		node[head] = updated
+		node.vals[head] = updated
 
 		return node, nil
 	case []any:

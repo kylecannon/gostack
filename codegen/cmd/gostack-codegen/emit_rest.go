@@ -421,7 +421,7 @@ func (g *generator) emitXMLWrite(p *printer, op *operation) error {
 		p.f("\t\treturn")
 		p.f("\t}")
 		p.f("\trestxml.WriteResponse(w, env, %s, func(xw *restxml.Writer) {", status(op))
-		openElement(p, "\t\t", root, f.pair.p.xmlns)
+		openElement(p, "\t\t", root, g.responseNS(f.pair.p.xmlns))
 		p.f("\t\tout.%s.encodeXML(xw)", f.goName)
 		p.f("\t\txw.Close(%q)", root)
 		p.f("\t})")

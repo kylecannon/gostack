@@ -13,6 +13,41 @@ import (
 	"github.com/kylecannon/gostack/internal/request"
 )
 
+func serveGetBucketReplication(h Handler, w http.ResponseWriter, rc *request.Context) {
+	in, err := readGetBucketReplication(rc)
+	if err != nil {
+		writeError(w, rc, err)
+		return
+	}
+	out, herr := h.GetBucketReplication(request.With(rc.Request.Context(), rc), in)
+	if herr != nil {
+		writeHandlerError(w, rc, herr)
+		return
+	}
+	if out == nil {
+		out = &GetBucketReplicationOutput{}
+	}
+	writeGetBucketReplication(w, rc, out)
+}
+
+func readGetBucketReplication(rc *request.Context) (*GetBucketReplicationInput, *awserr.Error) {
+	in := &GetBucketReplicationInput{}
+	xd := restxml.NewDecoder(rc.Request.Body)
+	if _, ok := xd.Root(); ok {
+		in.decodeXML(xd)
+	}
+	if xd.Err() != nil {
+		return nil, errMalformedBody()
+	}
+	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
+	d := rest.NewDecoder(rc.Request, labels)
+	in.decodeBindings(d)
+	if err := d.Err(); err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
 func writeGetBucketReplication(w http.ResponseWriter, rc *request.Context, out *GetBucketReplicationOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	if out.ReplicationConfiguration == nil {
@@ -21,6 +56,7 @@ func writeGetBucketReplication(w http.ResponseWriter, rc *request.Context, out *
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("ReplicationConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.ReplicationConfiguration.encodeXML(xw)
 		xw.Close("ReplicationConfiguration")
 	})
@@ -64,9 +100,10 @@ func readGetBucketRequestPayment(rc *request.Context) (*GetBucketRequestPaymentI
 func writeGetBucketRequestPayment(w http.ResponseWriter, rc *request.Context, out *GetBucketRequestPaymentOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetBucketRequestPaymentOutput")
+		xw.Open("RequestPaymentConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetBucketRequestPaymentOutput")
+		xw.Close("RequestPaymentConfiguration")
 	})
 }
 
@@ -108,9 +145,10 @@ func readGetBucketTagging(rc *request.Context) (*GetBucketTaggingInput, *awserr.
 func writeGetBucketTagging(w http.ResponseWriter, rc *request.Context, out *GetBucketTaggingOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetBucketTaggingOutput")
+		xw.Open("Tagging")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetBucketTaggingOutput")
+		xw.Close("Tagging")
 	})
 }
 
@@ -152,9 +190,10 @@ func readGetBucketVersioning(rc *request.Context) (*GetBucketVersioningInput, *a
 func writeGetBucketVersioning(w http.ResponseWriter, rc *request.Context, out *GetBucketVersioningOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetBucketVersioningOutput")
+		xw.Open("VersioningConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetBucketVersioningOutput")
+		xw.Close("VersioningConfiguration")
 	})
 }
 
@@ -196,9 +235,10 @@ func readGetBucketWebsite(rc *request.Context) (*GetBucketWebsiteInput, *awserr.
 func writeGetBucketWebsite(w http.ResponseWriter, rc *request.Context, out *GetBucketWebsiteOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetBucketWebsiteOutput")
+		xw.Open("WebsiteConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetBucketWebsiteOutput")
+		xw.Close("WebsiteConfiguration")
 	})
 }
 
@@ -287,9 +327,10 @@ func writeGetObjectAcl(w http.ResponseWriter, rc *request.Context, out *GetObjec
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetObjectAclOutput")
+		xw.Open("AccessControlPolicy")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetObjectAclOutput")
+		xw.Close("AccessControlPolicy")
 	})
 }
 
@@ -332,9 +373,10 @@ func writeGetObjectAttributes(w http.ResponseWriter, rc *request.Context, out *G
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetObjectAttributesOutput")
+		xw.Open("GetObjectAttributesResponse")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetObjectAttributesOutput")
+		xw.Close("GetObjectAttributesResponse")
 	})
 }
 
@@ -381,6 +423,7 @@ func writeGetObjectLegalHold(w http.ResponseWriter, rc *request.Context, out *Ge
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("LegalHold")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.LegalHold.encodeXML(xw)
 		xw.Close("LegalHold")
 	})
@@ -429,6 +472,7 @@ func writeGetObjectLockConfiguration(w http.ResponseWriter, rc *request.Context,
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("ObjectLockConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.ObjectLockConfiguration.encodeXML(xw)
 		xw.Close("ObjectLockConfiguration")
 	})
@@ -477,6 +521,7 @@ func writeGetObjectRetention(w http.ResponseWriter, rc *request.Context, out *Ge
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("Retention")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.Retention.encodeXML(xw)
 		xw.Close("Retention")
 	})
@@ -521,9 +566,10 @@ func writeGetObjectTagging(w http.ResponseWriter, rc *request.Context, out *GetO
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("GetObjectTaggingOutput")
+		xw.Open("Tagging")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("GetObjectTaggingOutput")
+		xw.Close("Tagging")
 	})
 }
 
@@ -616,6 +662,7 @@ func writeGetPublicAccessBlock(w http.ResponseWriter, rc *request.Context, out *
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("PublicAccessBlockConfiguration")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.PublicAccessBlockConfiguration.encodeXML(xw)
 		xw.Close("PublicAccessBlockConfiguration")
 	})
@@ -741,9 +788,10 @@ func readListBucketAnalyticsConfigurations(rc *request.Context) (*ListBucketAnal
 func writeListBucketAnalyticsConfigurations(w http.ResponseWriter, rc *request.Context, out *ListBucketAnalyticsConfigurationsOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListBucketAnalyticsConfigurationsOutput")
+		xw.Open("ListBucketAnalyticsConfigurationResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListBucketAnalyticsConfigurationsOutput")
+		xw.Close("ListBucketAnalyticsConfigurationResult")
 	})
 }
 
@@ -786,6 +834,7 @@ func writeListBucketIntelligentTieringConfigurations(w http.ResponseWriter, rc *
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("ListBucketIntelligentTieringConfigurationsOutput")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
 		xw.Close("ListBucketIntelligentTieringConfigurationsOutput")
 	})
@@ -829,9 +878,10 @@ func readListBucketInventoryConfigurations(rc *request.Context) (*ListBucketInve
 func writeListBucketInventoryConfigurations(w http.ResponseWriter, rc *request.Context, out *ListBucketInventoryConfigurationsOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListBucketInventoryConfigurationsOutput")
+		xw.Open("ListInventoryConfigurationsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListBucketInventoryConfigurationsOutput")
+		xw.Close("ListInventoryConfigurationsResult")
 	})
 }
 
@@ -873,9 +923,10 @@ func readListBucketMetricsConfigurations(rc *request.Context) (*ListBucketMetric
 func writeListBucketMetricsConfigurations(w http.ResponseWriter, rc *request.Context, out *ListBucketMetricsConfigurationsOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListBucketMetricsConfigurationsOutput")
+		xw.Open("ListMetricsConfigurationsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListBucketMetricsConfigurationsOutput")
+		xw.Close("ListMetricsConfigurationsResult")
 	})
 }
 
@@ -916,9 +967,10 @@ func readListBuckets(rc *request.Context) (*ListBucketsInput, *awserr.Error) {
 func writeListBuckets(w http.ResponseWriter, rc *request.Context, out *ListBucketsOutput) {
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListBucketsOutput")
+		xw.Open("ListAllMyBucketsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListBucketsOutput")
+		xw.Close("ListAllMyBucketsResult")
 	})
 }
 
@@ -960,6 +1012,7 @@ func writeListDirectoryBuckets(w http.ResponseWriter, rc *request.Context, out *
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("ListDirectoryBucketsOutput")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
 		xw.Close("ListDirectoryBucketsOutput")
 	})
@@ -1004,9 +1057,10 @@ func writeListMultipartUploads(w http.ResponseWriter, rc *request.Context, out *
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListMultipartUploadsOutput")
+		xw.Open("ListMultipartUploadsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListMultipartUploadsOutput")
+		xw.Close("ListMultipartUploadsResult")
 	})
 }
 
@@ -1049,9 +1103,10 @@ func writeListObjectVersions(w http.ResponseWriter, rc *request.Context, out *Li
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListObjectVersionsOutput")
+		xw.Open("ListVersionsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListObjectVersionsOutput")
+		xw.Close("ListVersionsResult")
 	})
 }
 
@@ -1094,9 +1149,10 @@ func writeListObjects(w http.ResponseWriter, rc *request.Context, out *ListObjec
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListObjectsOutput")
+		xw.Open("ListBucketResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListObjectsOutput")
+		xw.Close("ListBucketResult")
 	})
 }
 
@@ -1139,9 +1195,10 @@ func writeListObjectsV2(w http.ResponseWriter, rc *request.Context, out *ListObj
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListObjectsV2Output")
+		xw.Open("ListBucketResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListObjectsV2Output")
+		xw.Close("ListBucketResult")
 	})
 }
 
@@ -1184,9 +1241,10 @@ func writeListParts(w http.ResponseWriter, rc *request.Context, out *ListPartsOu
 	out.encodeBindings(w.Header())
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
-		xw.Open("ListPartsOutput")
+		xw.Open("ListPartsResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
-		xw.Close("ListPartsOutput")
+		xw.Close("ListPartsResult")
 	})
 }
 
@@ -1224,6 +1282,7 @@ func writePostObject(w http.ResponseWriter, rc *request.Context, out *PostObject
 	env := &restxml.Envelope{RequestID: rc.RequestID}
 	restxml.WriteResponse(w, env, rest.Status(out.StatusCode, 200), func(xw *restxml.Writer) {
 		xw.Open("PostResponse")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.encodeXML(xw)
 		xw.Close("PostResponse")
 	})
@@ -2501,6 +2560,7 @@ func writeSelectObjectContent(w http.ResponseWriter, rc *request.Context, out *S
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("SelectObjectContentEventStream")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.Payload.encodeXML(xw)
 		xw.Close("SelectObjectContentEventStream")
 	})
@@ -2709,6 +2769,7 @@ func writeUploadPartCopy(w http.ResponseWriter, rc *request.Context, out *Upload
 	}
 	restxml.WriteResponse(w, env, 200, func(xw *restxml.Writer) {
 		xw.Open("CopyPartResult")
+		xw.Namespace("", "http://s3.amazonaws.com/doc/2006-03-01/")
 		out.CopyPartResult.encodeXML(xw)
 		xw.Close("CopyPartResult")
 	})

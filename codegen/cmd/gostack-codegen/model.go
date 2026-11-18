@@ -107,9 +107,10 @@ type operation struct {
 	deprecated  bool
 	// outRoot is the root element of a rest-xml response body that has no
 	// payload member: the locationName of the operation's output reference, or
-	// of its shape, or else the shape's name. outNS is the namespace that root
-	// declares. A request body's root is read under any name, so the input
-	// reference's traits are not kept.
+	// of its shape, or else the shape's name, renamed by the service's
+	// ResponseRoots. outNS is the namespace that root declares. A request
+	// body's root is read under any name, so the input reference's traits are
+	// not kept.
 	outRoot string
 	outNS   *spec.XMLNamespace
 }
@@ -173,6 +174,16 @@ func (g *generator) hasProtocol(name string) bool {
 // isRest reports whether the service speaks rest-xml or rest-json.
 func (g *generator) isRest() bool {
 	return g.hasProtocol(protoRestXML) || g.hasProtocol(protoRestJSON)
+}
+
+// responseNS is the namespace the root element of a rest-xml response body
+// declares: the service's ResponseNamespace, or else ns, the model's.
+func (g *generator) responseNS(ns *spec.XMLNamespace) *spec.XMLNamespace {
+	if g.opts.ResponseNamespace != "" {
+		return &spec.XMLNamespace{URI: g.opts.ResponseNamespace}
+	}
+
+	return ns
 }
 
 // newGenerator reads the models of one service and works out its structs,
@@ -352,6 +363,9 @@ func (g *generator) buildOperation(name string) error {
 			out.outRoot = cmp.Or(out.outRoot, shape.LocationName, op.Output.Shape)
 			out.outNS = cmp.Or(out.outNS, shape.XMLNamespace)
 		}
+
+		out.outRoot = cmp.Or(g.opts.ResponseRoots[out.outRoot], out.outRoot)
+		out.outNS = g.responseNS(out.outNS)
 	}
 
 	var err error
