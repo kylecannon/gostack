@@ -27,6 +27,10 @@ type messageData struct {
 	AttributesMD5 string                                  `json:"attributesMD5,omitempty"`
 	System        map[string]string                       `json:"system,omitempty"`
 	Sent          time.Time                               `json:"sent"`
+	GroupID       string                                  `json:"groupID,omitempty"`
+	DedupID       string                                  `json:"dedupID,omitempty"`
+	Sequence      string                                  `json:"sequence,omitempty"`
+	ReceiveBase   int                                     `json:"receiveBase,omitempty"`
 }
 
 func (m *message) data() messageData {
@@ -34,6 +38,7 @@ func (m *message) data() messageData {
 		ID: m.id, Body: m.body, BodyMD5: m.bodyMD5,
 		Attributes: m.attributes, AttributesMD5: m.attributesMD5,
 		System: m.system, Sent: m.sent,
+		GroupID: m.groupID, DedupID: m.dedupID, Sequence: m.sequence, ReceiveBase: m.receiveBase,
 	}
 }
 
@@ -42,6 +47,7 @@ func (d *messageData) message() *message {
 		id: d.ID, body: d.Body, bodyMD5: d.BodyMD5,
 		attributes: d.Attributes, attributesMD5: d.AttributesMD5,
 		system: d.System, sent: d.Sent,
+		groupID: d.GroupID, dedupID: d.DedupID, sequence: d.Sequence, receiveBase: d.ReceiveBase,
 	}
 }
 

@@ -146,6 +146,67 @@ func (c *standardContents) peek(what listing) []peeked {
 		chosen = append(chosen, delayed...)
 	}
 
+	return peekedOf(chosen)
+}
+
+var _ peeker = (*fifoContents)(nil)
+
+// peek is peeker for a FIFO queue, in LocalStack's order: the messages in
+// flight, then the visible ones of the groups a receive locked, which only a
+// listing with the invisible ones has and which it reports as visible, then the
+// visible ones of the other groups, group by group in the order they became
+// ready, and the delayed ones last.
+func (c *fifoContents) peek(what listing) []peeked {
+	c.refresh(time.Now())
+
+	bySeq := func(a, b *entry) int { return cmp.Compare(a.seq, b.seq) }
+
+	var inflight, held, delayed []*entry
+
+	for _, g := range c.groups {
+		for e := g.head; e != nil; e = e.fifo.next {
+			inflight = append(inflight, e)
+		}
+
+		if g.locked {
+			held = append(held, g.visible.items...)
+		}
+	}
+
+	for _, e := range c.deadlines.items {
+		if e.state == stateDelayed {
+			delayed = append(delayed, e)
+		}
+	}
+
+	slices.SortFunc(inflight, bySeq)
+	slices.SortFunc(held, bySeq)
+	slices.SortFunc(delayed, bySeq)
+
+	var chosen []*entry
+
+	if what.invisible {
+		chosen = append(chosen, inflight...)
+		chosen = append(chosen, held...)
+	}
+
+	for _, g := range c.ready.items[c.ready.head:] {
+		if g.queued {
+			open := slices.Clone(g.visible.items)
+			slices.SortFunc(open, bySeq)
+			chosen = append(chosen, open...)
+		}
+	}
+
+	if what.delayed {
+		chosen = append(chosen, delayed...)
+	}
+
+	return peekedOf(chosen)
+}
+
+// peekedOf reports the entries in the order given.
+func peekedOf(chosen []*entry) []peeked {
 	out := make([]peeked, len(chosen))
 	for i, e := range chosen {
 		out[i] = peeked{

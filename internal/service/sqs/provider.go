@@ -74,11 +74,13 @@ func (p *Provider) Registration() service.Registration {
 }
 
 // mutating is the persistence rule of SQS: every operation changes state except
-// the ones that only read it. The gateway's default rule counts ReceiveMessage
-// as a read, but it hides the messages it returns, which a restart must not
-// bring back.
+// the ones that only read it. ReceiveMessage is not in the rule, because it
+// changes state only when it returns a message, moves one to a dead-letter queue
+// or drops one past retention, and it says so itself through notifyChanged. A
+// client that polls an empty queue would otherwise make persistence save the
+// same state again and again.
 func mutating(operation string) bool {
-	return !strings.HasPrefix(operation, "Get") && !strings.HasPrefix(operation, "List")
+	return operation != "ReceiveMessage" && !strings.HasPrefix(operation, "Get") && !strings.HasPrefix(operation, "List")
 }
 
 // OnChange sets the function the Provider calls after a call made to a queue
@@ -107,6 +109,15 @@ func (p *Provider) Reset(accountID, region string) {
 	})
 
 	p.states.Reset(accountID, region)
+}
+
+// notifyChanged tells persistence that state changed, for a change that no call
+// to the gateway or to a queue URL reports: a ReceiveMessage that took a
+// message, and what a message move task does after the call that started it.
+func (p *Provider) notifyChanged() {
+	if p.changed != nil {
+		p.changed()
+	}
 }
 
 // serve is the Registration's Serve: the generated dispatcher in front of p.

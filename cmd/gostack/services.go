@@ -34,9 +34,17 @@ func registrations(cfg *config.Config, p *providers) []service.Registration {
 	}
 }
 
+// close stops what the services run on their own: SQS's message move tasks.
+// It is called after the gateway has drained and before the engine's last flush,
+// so that a task's final state is saved.
+func (p *providers) close() {
+	p.sqs.Close()
+}
+
 // markDirty makes the calls that persistence cannot see tell eng that a service
 // changed. The gateway reports every call it serves itself, but a call made to
-// an SQS queue URL goes through the routes SQS mounts, so SQS reports those.
+// an SQS queue URL goes through the routes SQS mounts, so SQS reports those. SQS
+// also reports a ReceiveMessage that changed state and the work of a move task.
 func (p *providers) markDirty(eng *persist.Engine) {
 	p.sqs.OnChange(func() { eng.MarkDirty(serviceSQS) })
 }
@@ -65,6 +73,7 @@ func sqsSettings(cfg *config.Config) func() sqs.Settings {
 			DelayPurgeRetry:      current.SQSDelayPurgeRetry,
 			Host:                 current.LocalstackHost.String(),
 			ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
+			DisableCompatPaths:   !current.CompatPaths,
 
 			EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
 			DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,

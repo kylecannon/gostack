@@ -40,9 +40,10 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		eng.Register(name, snapshot)
 	}
 
-	// The engine is closed last, after the gateway has stopped, so that a
-	// request still running at shutdown has its change saved.
-	defer closeEngine(ctx, eng)
+	// The engine is closed last, after the gateway has stopped and the services
+	// have stopped their own goroutines, so that a request still running at
+	// shutdown and a move task's final state are saved.
+	defer closeEngine(ctx, eng, services)
 
 	err := eng.Load(ctx)
 	if err != nil {
@@ -150,8 +151,11 @@ func shutDown(ctx context.Context, gw *gateway.Gateway, proc *lifecycle.Process,
 	proc.Shutdown(ctx)
 }
 
-// closeEngine writes the state that is still unsaved.
-func closeEngine(ctx context.Context, eng *persist.Engine) {
+// closeEngine stops the services' own goroutines, and then writes the state that
+// is still unsaved.
+func closeEngine(ctx context.Context, eng *persist.Engine, services *providers) {
+	services.close()
+
 	err := eng.Close(context.WithoutCancel(ctx))
 	if err != nil {
 		slog.Error("save persisted state", "error", err)

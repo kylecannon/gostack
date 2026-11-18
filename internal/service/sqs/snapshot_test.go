@@ -347,7 +347,7 @@ func Test_Registration_counts_every_call_that_changes_state_as_mutating(t *testi
 	require.NotNil(t, mutating)
 
 	for _, op := range []string{
-		"CreateQueue", "DeleteQueue", "SendMessage", "SendMessageBatch", opReceiveMessage, opDeleteMessage,
+		"CreateQueue", "DeleteQueue", "SendMessage", "SendMessageBatch", opDeleteMessage,
 		opDeleteMessageBatch, opChangeMessageVisibility, opChangeMessageVisibilityBatch, "PurgeQueue",
 		"SetQueueAttributes", opTagQueue, "UntagQueue", "AddPermission", "RemovePermission",
 		"StartMessageMoveTask", "CancelMessageMoveTask",
@@ -357,7 +357,7 @@ func Test_Registration_counts_every_call_that_changes_state_as_mutating(t *testi
 
 	for _, op := range []string{
 		"GetQueueUrl", opGetQueueAttributes, opListQueues, opListQueueTags, "ListDeadLetterSourceQueues",
-		"ListMessageMoveTasks",
+		"ListMessageMoveTasks", opReceiveMessage,
 	} {
 		assert.False(t, mutating(op), op)
 	}

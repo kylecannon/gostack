@@ -65,7 +65,10 @@ type standardContents struct {
 	seq       uint64
 	delayed   int
 	inflight  int
-	redrive   redriveCache
+	// expired counts the messages retention has dropped, for Receive to tell
+	// whether its own refresh dropped some.
+	expired uint64
+	redrive redriveCache
 
 	wake  waker
 	timer deadlineTimer
@@ -133,15 +136,12 @@ func (c *standardContents) Put(m *message, delay time.Duration) {
 
 func (c *standardContents) Receive(maxMessages int, visibility time.Duration) receiveResult {
 	now := time.Now()
-	c.refresh(now)
+	out := receiveResult{expired: c.refreshed(now)}
 
 	policy, redriven := c.redrive.of(c.q)
 	redriven = redriven && policy.maxReceives > 0
 
-	var (
-		taken []*entry
-		out   receiveResult
-	)
+	var taken []*entry
 
 	for len(taken) < maxMessages {
 		e := c.visible.pop()
@@ -290,6 +290,15 @@ func (c *standardContents) refresh(now time.Time) {
 	c.sweepRetention(now)
 }
 
+// refreshed is refresh, and reports whether retention dropped messages.
+func (c *standardContents) refreshed(now time.Time) bool {
+	before := c.expired
+
+	c.refresh(now)
+
+	return c.expired != before
+}
+
 // sweepRetention drops the visible messages that are older than the queue's
 // MessageRetentionPeriod, when the setting is on. A message in flight or still
 // delayed stays until it is visible, as in LocalStack.
@@ -303,6 +312,7 @@ func (c *standardContents) sweepRetention(now time.Time) {
 
 	for top := c.visible.peek(); top != nil && !top.msg.sent.After(limit); top = c.visible.peek() {
 		c.remove(top)
+		c.expired++
 	}
 }
 

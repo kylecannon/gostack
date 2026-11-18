@@ -32,6 +32,25 @@ func nextSequence() string {
 	return strconv.FormatUint(sequenceBase()+sequenceCounter.Add(1), 10)
 }
 
+// raiseSequence makes the next SequenceNumber larger than the one given, which a
+// restored message holds. The start of the numbers is the clock, so only a clock
+// that went back since the snapshot can make this do anything.
+func raiseSequence(restored string) {
+	n, err := strconv.ParseUint(restored, 10, 64)
+	if err != nil || n < sequenceBase() {
+		return
+	}
+
+	want := n - sequenceBase()
+
+	for {
+		current := sequenceCounter.Load()
+		if current >= want || sequenceCounter.CompareAndSwap(current, want) {
+			return
+		}
+	}
+}
+
 // fifoContents is the Contents of a FIFO queue.
 //
 // Messages are in groups. A receive takes from the group that became ready first
@@ -57,7 +76,10 @@ type fifoContents struct {
 	visible   int
 	delayed   int
 	inflight  int
-	redrive   redriveCache
+	// expired counts the messages retention has dropped, for Receive to tell
+	// whether its own refresh dropped some.
+	expired uint64
+	redrive redriveCache
 
 	wake  waker
 	timer deadlineTimer
@@ -143,11 +165,10 @@ func (c *fifoContents) Put(m *message, delay time.Duration) {
 
 func (c *fifoContents) Receive(maxMessages int, visibility time.Duration) receiveResult {
 	now := time.Now()
-	c.refresh(now)
+	out := receiveResult{expired: c.refreshed(now)}
 
 	var (
 		taken   []*entry
-		out     receiveResult
 		touched []*group
 	)
 
@@ -467,6 +488,15 @@ func (c *fifoContents) refresh(now time.Time) {
 	c.sweepRetention(now)
 }
 
+// refreshed is refresh, and reports whether retention dropped messages.
+func (c *fifoContents) refreshed(now time.Time) bool {
+	before := c.expired
+
+	c.refresh(now)
+
+	return c.expired != before
+}
+
 // sweepRetention drops the visible messages that are older than the queue's
 // MessageRetentionPeriod, when the setting is on. A message in flight or still
 // delayed stays until it is visible, as in LocalStack.
@@ -483,6 +513,7 @@ func (c *fifoContents) sweepRetention(now time.Time) {
 			g.visible.remove(top)
 			c.visible--
 			c.forget(top)
+			c.expired++
 		}
 
 		c.forgetIfIdle(g)

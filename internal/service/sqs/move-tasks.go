@@ -291,6 +291,9 @@ func (p *Provider) isDeadLetterQueue(arn string) bool {
 func (p *Provider) drive(ctx context.Context, task *moveTask) {
 	err := p.moveMessages(ctx, task)
 
+	// The end of a task is a change no call reports.
+	defer p.notifyChanged()
+
 	task.mu.Lock()
 	defer task.mu.Unlock()
 
@@ -327,6 +330,8 @@ func (p *Provider) moveMessages(ctx context.Context, task *moveTask) *awserr.Err
 		task.mu.Lock()
 		task.moved++
 		task.mu.Unlock()
+
+		p.notifyChanged()
 
 		if task.rate != nil && *task.rate > 0 {
 			pause(ctx, time.Second/time.Duration(*task.rate))

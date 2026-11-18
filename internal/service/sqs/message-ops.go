@@ -303,7 +303,14 @@ func (p *Provider) ReceiveMessage(
 		return nil, err
 	}
 
-	taken, err := q.poll(ctx, params, func(dead []deadLetter) *awserr.Error { return p.deadLetter(rc, q, dead) })
+	taken, changed, err := q.poll(ctx, params, func(dead []deadLetter) *awserr.Error { return p.deadLetter(rc, q, dead) })
+
+	// A receive that found nothing and dropped nothing leaves the state as it
+	// was, so a client that polls an empty queue does not make persistence save.
+	if changed {
+		p.notifyChanged()
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -395,11 +402,12 @@ func headerInt(rc *request.Context, name string) int {
 // queue's lock while it waits: it asks the contents for a channel that is closed
 // when a message may be visible, and sleeps on that, on the end of the wait and
 // on the request.
+//
+// changed reports whether the receive changed state: it took a message, moved
+// one to a dead-letter queue or dropped one past retention.
 func (q *Queue) poll(
 	ctx context.Context, params receiveParams, deadLetter func([]deadLetter) *awserr.Error,
-) ([]delivery, *awserr.Error) {
-	var taken []delivery
-
+) (taken []delivery, changed bool, _ *awserr.Error) {
 	if params.wait > 0 {
 		var cancel context.CancelFunc
 
@@ -410,25 +418,26 @@ func (q *Queue) poll(
 	for {
 		got, wake := q.receiveOnce(params, params.count-len(taken))
 		taken = append(taken, got.taken...)
+		changed = changed || len(got.taken) > 0 || len(got.dead) > 0 || got.expired
 
 		// The lock of the queue is free again, so the dead letters can go to a
 		// queue that has a lock of its own.
 		if len(got.dead) > 0 {
 			err := deadLetter(got.dead)
 			if err != nil {
-				return nil, err
+				return nil, changed, err
 			}
 		}
 
 		done := len(taken) >= params.count || (len(taken) > 0 && !params.fill)
 		if done || wake == nil || params.wait <= 0 {
-			return taken, nil
+			return taken, changed, nil
 		}
 
 		select {
 		case <-wake:
 		case <-ctx.Done():
-			return taken, nil
+			return taken, changed, nil
 		}
 	}
 }

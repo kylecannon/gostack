@@ -74,20 +74,36 @@
 // the data of its Contents, and the names of recently deleted queues. A Contents
 // takes part by implementing persistentContents; a queue whose Contents does
 // not fails the snapshot, because it would come back empty. A new kind of
-// Contents (FIFO, with its deduplication windows and sequence counters) has to
-// implement it, and Test_every_kind_of_queue_can_be_saved fails until it does.
-// A snapshot holds absolute times, so the deadline of a delayed or in-flight
-// message holds across a restart, and restore re-arms each queue's timer from
-// them. Restore reads and checks the whole file before it replaces anything, and
-// leaves SQS empty when the file is not valid.
+// Contents has to implement it, and Test_every_kind_of_queue_can_be_saved fails
+// until it does. The FIFO Contents saves its messages by state, the order of
+// each group's in-flight messages, the locked groups and the ready order, the
+// deduplication records with the end of their window and its own sequence
+// counter. A snapshot holds absolute times, so the deadline of a delayed or
+// in-flight message holds across a restart, and restore re-arms each queue's
+// timer from them. Restore reads and checks the whole file before it replaces
+// anything, and leaves SQS empty when the file is not valid.
+//
+// Message move tasks are saved with the State. A task that was running comes
+// back FAILED (FailureReason "ServiceRestarted") and one that was being
+// cancelled comes back CANCELLED; no goroutine is started for either, as
+// LocalStack's pickled store would keep showing the task as RUNNING for good.
+//
+// A field of a message or an entry has to reach messageData or entryData, or be
+// on the skip list of Test_snapshot_data_covers_every_field_of_a_message with
+// the reason it is not saved.
 //
 // Provider.Reset(account, region) is the /_gostack/state/reset hook.
 //
 // # Dirty marking
 //
 // The gateway marks SQS dirty after an operation that went through its own /*
-// route, using Registration.Mutating: every operation but Get* and List*, so
-// ReceiveMessage counts, because it hides the messages it returns. A call made
-// to a queue URL goes through the routes of Mount, so the Provider reports it
-// itself through the function given to OnChange.
+// route, using Registration.Mutating: every operation but Get*, List* and
+// ReceiveMessage. A call made to a queue URL goes through the routes of Mount,
+// so the Provider reports it itself through the function given to OnChange.
+//
+// ReceiveMessage reports through the same function from inside the operation,
+// and only when it changed state: it returned a message, moved one to a
+// dead-letter queue or dropped one past retention. A poll of an empty queue
+// leaves persistence idle. A move task reports each message it moves and its
+// own end.
 package sqs

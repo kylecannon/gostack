@@ -43,13 +43,15 @@ type snapshotData struct {
 }
 
 // stateData is a State: the queues of one account and region, the names deleted
-// lately and the next creation sequence number.
+// lately, the next creation sequence number and the message move tasks.
 type stateData struct {
-	Account string               `json:"account"`
-	Region  string               `json:"region"`
-	Next    uint64               `json:"next"`
-	Deleted map[string]time.Time `json:"deleted,omitempty"`
-	Queues  []queueData          `json:"queues"`
+	Account   string               `json:"account"`
+	Region    string               `json:"region"`
+	Next      uint64               `json:"next"`
+	Deleted   map[string]time.Time `json:"deleted,omitempty"`
+	Queues    []queueData          `json:"queues"`
+	MoveTasks []moveTaskData       `json:"moveTasks,omitempty"`
+	MoveSeq   uint64               `json:"moveSeq,omitempty"`
 }
 
 // queueData is a Queue: what makes it up besides its name and place, and the
@@ -80,7 +82,7 @@ func (p *Provider) Snapshot(w io.Writer) error {
 			return false
 		}
 
-		if saved.Next > 0 || len(saved.Deleted) > 0 || len(saved.Queues) > 0 {
+		if saved.Next > 0 || len(saved.Deleted) > 0 || len(saved.Queues) > 0 || len(saved.MoveTasks) > 0 {
 			file.Data.States = append(file.Data.States, saved)
 		}
 
@@ -111,7 +113,10 @@ func (p *Provider) Snapshot(w io.Writer) error {
 // save reads one State.
 func (s *State) save(account, region string) (stateData, error) {
 	s.mu.RLock()
-	saved := stateData{Account: account, Region: region, Next: s.next, Deleted: maps.Clone(s.deleted)}
+	saved := stateData{
+		Account: account, Region: region, Next: s.next, Deleted: maps.Clone(s.deleted),
+		MoveTasks: s.saveMoveTasks(), MoveSeq: s.moveSeq,
+	}
 	s.mu.RUnlock()
 
 	for _, q := range s.list("") {
@@ -166,6 +171,8 @@ func (p *Provider) Restore(r io.Reader) error {
 		state.mu.Lock()
 		state.next = one.next
 		state.deleted = one.deleted
+		state.moveTasks = one.moveTasks
+		state.moveSeq = one.moveSeq
 
 		for _, q := range one.queues {
 			state.add(q)
@@ -183,6 +190,8 @@ type builtState struct {
 	next            uint64
 	deleted         map[string]time.Time
 	queues          []*Queue
+	moveTasks       map[string]*moveTask
+	moveSeq         uint64
 }
 
 // build reads a snapshot into queues with their contents restored. A queue
@@ -236,7 +245,8 @@ func (p *Provider) build(r io.Reader) (built []builtState, err error) {
 func (p *Provider) buildState(saved *stateData) (builtState, error) {
 	one := builtState{
 		account: saved.Account, region: saved.Region, next: saved.Next, deleted: saved.Deleted,
-		queues: make([]*Queue, 0, len(saved.Queues)),
+		queues:    make([]*Queue, 0, len(saved.Queues)),
+		moveTasks: make(map[string]*moveTask, len(saved.MoveTasks)), moveSeq: saved.MoveSeq,
 	}
 
 	if saved.Account == "" || saved.Region == "" {
@@ -245,6 +255,13 @@ func (p *Provider) buildState(saved *stateData) (builtState, error) {
 
 	if one.deleted == nil {
 		one.deleted = make(map[string]time.Time)
+	}
+
+	for i := range saved.MoveTasks {
+		d := &saved.MoveTasks[i]
+
+		one.moveTasks[d.ID] = d.task()
+		one.moveSeq = max(one.moveSeq, d.Order)
 	}
 
 	seen := make(map[string]bool, len(saved.Queues))

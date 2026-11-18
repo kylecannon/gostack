@@ -80,6 +80,9 @@ type receiveResult struct {
 	// to put them on the dead-letter queue, which it does without holding the
 	// source queue's lock.
 	dead []deadLetter
+	// expired is whether the receive found messages past the queue's retention
+	// period and dropped them.
+	expired bool
 }
 
 // deadLetter is a message on its way to a dead-letter queue.
