@@ -75,7 +75,7 @@ func TestOnlyAnEdgeWhitespaceHeaderOnHTTP1TakesTheConnection(t *testing.T) {
 func TestWriteRawHead(t *testing.T) {
 	header := http.Header{
 		"Content-Length":    {"5"},
-		"Content-Type":      {contentTypeXML},
+		headerContentType:   {contentTypeXML},
 		"Connection":        {"keep-alive"},
 		"Transfer-Encoding": {"chunked"},
 		"x-amz-meta-edge":   {" v\t"},
@@ -88,7 +88,7 @@ func TestWriteRawHead(t *testing.T) {
 
 	var out bytes.Buffer
 
-	require.NoError(t, writeRawHead(bufio.NewWriter(&out), http.StatusOK, header))
+	require.NoError(t, writeRawHead(bufio.NewWriter(&out), http.StatusOK, header, ""))
 	assert.Equal(t, "HTTP/1.1 200 OK\r\n"+
 		"Content-Length: 5\r\n"+
 		"Content-Type: "+contentTypeXML+"\r\n"+
@@ -96,11 +96,12 @@ func TestWriteRawHead(t *testing.T) {
 		"Multi: one\r\n"+
 		"Multi: two\r\n"+
 		"x-amz-meta-edge:  v\t\r\n"+
+		"x-amz-meta-nul: a\x00b\r\n"+
 		"x-amz-meta-split: a  Injected: yes\r\n"+
 		"Connection: close\r\n\r\n", out.String())
 
 	out.Reset()
-	require.NoError(t, writeRawHead(bufio.NewWriter(&out), http.StatusNotModified, header))
+	require.NoError(t, writeRawHead(bufio.NewWriter(&out), http.StatusNotModified, header, ""))
 	assert.NotContains(t, out.String(), "Content-Length")
 	assert.Contains(t, out.String(), "HTTP/1.1 304 Not Modified\r\n")
 }

@@ -395,6 +395,35 @@ func Test_Gateway_panicOutsideAService(t *testing.T) {
 	assert.Equal(t, []string{valueTrue}, rawHeader(resp.Header, "x-localstack"))
 }
 
+// A service that took the connection has sent its response by hand, so a panic
+// after it must abort the connection, not write a 500 into it.
+func Test_Gateway_panicAfterTheConnectionWasTaken(t *testing.T) {
+	reg := sqsRegistration(func(w http.ResponseWriter, _ *request.Context) {
+		noter, ok := w.(interface{ NoteStatus(code int) })
+		require.True(t, ok, "the gateway's writer takes a status a service sends itself")
+
+		noter.NoteStatus(http.StatusOK)
+
+		panic("late")
+	})
+	reg.Metadata.Protocols = []protocol.Kind{protocol.KindJSON, protocol.KindQuery}
+
+	g := newGateway(t, newSettings(), []service.Registration{reg})
+	server := httptest.NewServer(g.Handler())
+	t.Cleanup(server.Close)
+
+	r := sendMessage(t)
+	r.RequestURI = ""
+	r.URL = mustParse(t, server.URL+"/")
+
+	resp, err := server.Client().Do(r.WithContext(t.Context()))
+	if err == nil {
+		_ = resp.Body.Close()
+	}
+
+	require.Error(t, err, "the client sees no response, not a 500")
+}
+
 func Test_Gateway_panicAfterTheResponseStarted(t *testing.T) {
 	reg := sqsRegistration(func(w http.ResponseWriter, _ *request.Context) {
 		_, _ = io.WriteString(w, "partial")

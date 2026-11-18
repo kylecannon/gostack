@@ -69,6 +69,10 @@ type Provider struct {
 	// client delivers notifications, and checks their targets, through the
 	// gateway. Bind gives it the handler.
 	client *inproc.Client
+
+	// taken counts the responses written through a hijacked connection, which
+	// http.Server.Shutdown does not wait for (rawheader.go). Close does.
+	taken inflight
 }
 
 var _ s3api.Handler = (*Provider)(nil)
@@ -121,9 +125,13 @@ func (p *Provider) Reset(account, region string) {
 	})
 }
 
-// Close drops the notifications not yet delivered and lets go of the bodies the
-// BlobStore holds, when it is one that can be closed.
+// Close waits for the responses still being written on a hijacked connection,
+// which the gateway's drain cannot see, then drops the notifications not yet
+// delivered and lets go of the bodies the BlobStore holds, when it is one that
+// can be closed. The wait ends at the services' Close budget, because a Close
+// that overruns it is abandoned, or at drainLimit.
 func (p *Provider) Close() {
+	p.taken.drain(drainLimit)
 	p.client.Close()
 
 	if closer, ok := p.blobs.(interface{ Close() }); ok {
@@ -165,10 +173,15 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		rw := &responseWriter{ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1}
-		defer rw.finish()
+		rw := &responseWriter{ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1, inflight: &p.taken}
+		rw.trackBody(r)
+
+		// abort does nothing once finish has run; it ends a taken response whose
+		// handler panicked.
+		defer rw.abort()
 
 		p.serveAPI(rw, rc)
+		rw.finish()
 	}
 }
 
@@ -238,6 +251,11 @@ type responseWriter struct {
 
 	// raw is set once takeConn has the connection.
 	raw *takenConn
+
+	// inflight counts the taken responses, and body notes whether the request
+	// body was read to its end (see trackBody). Both belong to this response.
+	inflight *inflight
+	body     trackedBody
 }
 
 func (w *responseWriter) WriteHeader(code int) {

@@ -41,6 +41,18 @@ const (
 func startEdgeServer(t *testing.T, protocols *http.Protocols) *httptest.Server {
 	t.Helper()
 
+	srv, _ := startEdgeProvider(t, protocols, nil)
+
+	return srv
+}
+
+// startEdgeProvider is startEdgeServer for a test that also calls the provider,
+// or that wants to be told what the gateway marks dirty.
+func startEdgeProvider(
+	t *testing.T, protocols *http.Protocols, dirty gateway.Dirtier,
+) (*httptest.Server, *s3.Provider) {
+	t.Helper()
+
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		s3.NewEphemeral(t.TempDir()))
 	t.Cleanup(provider.Close)
@@ -51,7 +63,7 @@ func startEdgeServer(t *testing.T, protocols *http.Protocols) *httptest.Server {
 		},
 		[]service.Registration{provider.Registration()},
 		nil,
-		nil,
+		dirty,
 	)
 	require.NoError(t, err)
 
@@ -63,7 +75,7 @@ func startEdgeServer(t *testing.T, protocols *http.Protocols) *httptest.Server {
 	srv.Start()
 	t.Cleanup(srv.Close)
 
-	return srv
+	return srv, provider
 }
 
 // putEdgeObject stores body under /bucket/key with metadata that is edgeValue.
