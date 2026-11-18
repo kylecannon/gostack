@@ -39,19 +39,32 @@
 // Settings.EnableMessageRetentionPeriod is on: whatever looks at the queue first
 // drops the visible messages that are past it.
 //
-// A FIFO queue gets the same contents until the FIFO ticket writes its own. The
-// message operations refuse a FIFO queue with a 501 until then
-// (Queue.requireStandard), and that check goes with the ticket. Dead letters
-// are not handled yet: where standardContents.Receive takes a message off the
-// visible heap is the place to compare its receive count with the
-// RedrivePolicy's maxReceiveCount.
+// FIFO queues. A FIFO queue's contents is a fifoContents, which the Provider's
+// factory picks from the queue's type. Its messages are in message groups: a
+// receive takes from the group that became ready first, and from the next ones
+// while it wants more, and closes each group it took from until one of its
+// messages is visible again or the last one in flight is deleted. Sending to a
+// closed group does not open it. A group's in-flight messages come back in the
+// order they were received, so a message whose time is over waits behind an
+// earlier one that is not. Delayed messages, the head of each group's in-flight
+// list and the deduplication records (five minutes, exact, kept in the same heap
+// and dropped at the first whole second after) share the one heap and the one
+// timer, so a FIFO queue adds no goroutine and no wakeup of its own.
+// DeduplicationScope is read when the queue is created, as LocalStack does.
 //
-// FIFO and dead letters (W5). Queue.fifo is fixed at creation, from the
-// FifoQueue attribute. validateAttributes, defaultAttributes and
-// validateQueueName already treat FIFO queues, and newQueue passes the queue to
-// the contents factory, which picks the FIFO implementation. A dead-letter
-// queue is another Queue found through State.find, so Contents does not need to
-// reach back into the Provider.
+// Dead letters. Receive returns the messages whose receive count passed the
+// RedrivePolicy's maxReceiveCount next to the ones it hands out, and the
+// Provider puts them on the dead-letter queue after the source queue's lock is
+// released, so no call holds the lock of two queues. The message keeps its id
+// and attributes and the receives so far carry over into ApproximateReceiveCount.
+//
+// Message move tasks. A task is a goroutine that takes one message at a time
+// from a dead-letter queue and puts it on its destination (or on the queue it
+// came from), pausing 1/MaxNumberOfMessagesPerSecond between messages. It ends
+// when the source is empty, on an error or when its context is cancelled, and
+// Provider.Close waits for every one. The pause is a timer in the goroutine, not
+// an entry of the queue's heap: a task is one goroutine for as long as it runs
+// and none afterwards.
 //
 // Persistence (W5). State.Range walks the queues in creation order, and a
 // queue's persistent fields are name, account, region, fifo, seq, attrs, tags

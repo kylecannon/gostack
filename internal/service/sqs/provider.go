@@ -3,6 +3,7 @@ package sqs
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -20,6 +21,9 @@ type Provider struct {
 	states   *store.Bundle[State]
 	// contents makes the Contents of a new queue.
 	contents func(*Queue) Contents
+	// tasks holds the goroutines of the message move tasks, so that Close can
+	// wait for them.
+	tasks sync.WaitGroup
 }
 
 var _ sqsapi.Handler = (*Provider)(nil)
@@ -70,6 +74,7 @@ func (p *Provider) Registration() service.Registration {
 func (p *Provider) Reset(accountID, region string) {
 	p.states.Range(func(stateAccount, stateRegion string, state *State) bool {
 		if (accountID == "" || accountID == stateAccount) && (region == "" || region == stateRegion) {
+			state.cancelMoveTasks()
 			state.Range(func(q *Queue) bool {
 				q.close()
 

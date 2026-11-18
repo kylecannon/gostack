@@ -24,11 +24,16 @@ type State struct {
 	deleted map[string]time.Time
 	// next is the creation sequence number of the next queue.
 	next uint64
+	// moveTasks are the message move tasks by id, and moveSeq counts them.
+	moveTasks map[string]*moveTask
+	moveSeq   uint64
 }
 
 // newState returns an empty State. It is the newFn of the Provider's Bundle.
 func newState(string, string) *State {
-	return &State{queues: make(map[string]*Queue), deleted: make(map[string]time.Time)}
+	return &State{
+		queues: make(map[string]*Queue), deleted: make(map[string]time.Time), moveTasks: make(map[string]*moveTask),
+	}
 }
 
 // Range calls fn for every queue, in creation order, and stops when fn returns

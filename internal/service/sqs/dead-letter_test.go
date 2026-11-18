@@ -209,6 +209,49 @@ func sourceURLs(r result) []string {
 	return urls
 }
 
+func Test_RedriveAllowPolicy_validation(t *testing.T) {
+	tests := []struct {
+		name     string
+		givePol  string
+		wantOK   bool
+		wantKept bool
+	}{
+		{name: "allowAll", givePol: `{"redrivePermission":"allowAll"}`, wantOK: true, wantKept: true},
+		{name: "denyAll", givePol: `{"redrivePermission":"denyAll"}`, wantOK: true, wantKept: true},
+		{
+			name:    "byQueue with sources",
+			givePol: `{"redrivePermission":"byQueue","sourceQueueArns":["arn:aws:sqs:us-east-1:000000000000:a"]}`,
+			wantOK:  true, wantKept: true,
+		},
+		{name: "byQueue without sources", givePol: `{"redrivePermission":"byQueue"}`},
+		{name: "an unknown permission", givePol: `{"redrivePermission":"sometimes"}`},
+		{name: "not json", givePol: "allowAll"},
+		{name: "empty means none", givePol: "", wantOK: true},
+	}
+
+	for _, protocol := range protocols {
+		for _, tt := range tests {
+			t.Run(protocol+"/"+tt.name, func(t *testing.T) {
+				c := newStack(t).as(protocol)
+				url := c.createQueue("q", nil)
+
+				res := c.call(opSetAttributes, map[string]any{
+					paramQueueURL: url, paramAttributes: map[string]string{attrRedriveAllowPolicy: tt.givePol},
+				})
+
+				assert.Equal(t, tt.wantOK, res.ok())
+
+				if !tt.wantOK {
+					assert.Equal(t, "InvalidAttributeValue", res.errorCode())
+				}
+
+				_, kept := attributesOf(c, url)[attrRedriveAllowPolicy]
+				assert.Equal(t, tt.wantKept, kept)
+			})
+		}
+	}
+}
+
 func Test_a_changed_RedrivePolicy_applies_to_the_next_receive(t *testing.T) {
 	for _, protocol := range protocols {
 		t.Run(protocol, func(t *testing.T) {

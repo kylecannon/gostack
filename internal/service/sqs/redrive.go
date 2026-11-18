@@ -18,8 +18,7 @@ type redrivePolicy struct {
 	// target is the deadLetterTargetArn.
 	target string
 	// maxReceives is the maxReceiveCount. Zero or less switches the move off, as
-	// in LocalStack, which only reads a policy it set itself and so never meets
-	// one.
+	// in LocalStack.
 	maxReceives int
 }
 
@@ -49,6 +48,45 @@ func parseRedrive(raw string) (redrivePolicy, bool) {
 	}
 
 	return redrivePolicy{target: target, maxReceives: count}, target != ""
+}
+
+// maxAllowedSources is how many source queue ARNs a byQueue RedriveAllowPolicy
+// can name.
+const maxAllowedSources = 10
+
+// validateRedriveAllowPolicy checks the shape of a RedriveAllowPolicy: a JSON
+// object whose redrivePermission is allowAll, denyAll or byQueue, and which for
+// byQueue lists up to ten sourceQueueArns. An empty policy is none. LocalStack
+// stores the attribute without a look, so this follows AWS's documentation and
+// no recorded response. Nothing enforces the policy, as in LocalStack.
+func validateRedriveAllowPolicy(raw string) *awserr.Error {
+	if raw == "" {
+		return nil
+	}
+
+	var doc struct {
+		Permission string   `json:"redrivePermission"`
+		Sources    []string `json:"sourceQueueArns"`
+	}
+
+	if json.Unmarshal([]byte(raw), &doc) != nil {
+		return sqsapi.NewInvalidAttributeValue("Invalid value for the parameter RedriveAllowPolicy.")
+	}
+
+	const prefix = "Invalid value for the parameter RedriveAllowPolicy. Reason: "
+
+	switch doc.Permission {
+	case "allowAll", "denyAll":
+		return nil
+	case "byQueue":
+		if len(doc.Sources) == 0 || len(doc.Sources) > maxAllowedSources {
+			return sqsapi.NewInvalidAttributeValue(prefix + "sourceQueueArns must list from 1 to 10 queue ARNs.")
+		}
+
+		return nil
+	default:
+		return sqsapi.NewInvalidAttributeValue(prefix + "redrivePermission must be allowAll, denyAll or byQueue.")
+	}
 }
 
 // redriveCache remembers the parsed RedrivePolicy of a queue, so a receive does
