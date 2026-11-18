@@ -483,12 +483,8 @@ type defaultCORSWriter struct {
 }
 
 func (w *defaultCORSWriter) WriteHeader(code int) {
-	if !w.wrote && code >= http.StatusOK {
-		w.wrote = true
-
-		if op := w.rc.Operation; op == "ListBuckets" || op == "CreateBucket" {
-			w.rc.CORS.AddHeaders(w.Header(), w.rc.Request)
-		}
+	if code >= http.StatusOK {
+		w.finishHeaders()
 	}
 
 	w.ResponseWriter.WriteHeader(code)
@@ -505,6 +501,20 @@ func (w *defaultCORSWriter) Write(p []byte) (int, error) {
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (w *defaultCORSWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+// finishHeaders adds the CORS headers, once. A response written by hand
+// (takeConn) calls it, because that response never reaches WriteHeader.
+func (w *defaultCORSWriter) finishHeaders() {
+	if w.wrote {
+		return
+	}
+
+	w.wrote = true
+
+	if op := w.rc.Operation; op == "ListBuckets" || op == "CreateBucket" {
+		w.rc.CORS.AddHeaders(w.Header(), w.rc.Request)
+	}
 }
 
 // malformedConfig is the MalformedXML LocalStack raises for a configuration that

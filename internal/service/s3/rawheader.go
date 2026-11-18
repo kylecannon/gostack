@@ -119,22 +119,34 @@ func (f *inflight) drain(limit time.Duration) {
 // never reaches its WriteHeader, so the response tells it the status instead.
 type statusNoter interface{ NoteStatus(code int) }
 
-// noteStatus tells the gateway's writer, found through Unwrap, the status of a
-// response that is about to take the connection.
-func noteStatus(w http.ResponseWriter, code int) {
-	for {
-		if noter, ok := w.(statusNoter); ok {
-			noter.NoteStatus(code)
+// headerFinisher is implemented by a response writer that adds headers when its
+// own WriteHeader runs, as defaultCORSWriter does. A taken response never
+// reaches that WriteHeader, so it asks for the headers first.
+type headerFinisher interface{ finishHeaders() }
 
-			return
+// writerOf finds the writer of type T in w's chain of Unwrap.
+func writerOf[T any](w http.ResponseWriter) (T, bool) {
+	for {
+		if found, ok := w.(T); ok {
+			return found, true
 		}
 
 		next, ok := w.(interface{ Unwrap() http.ResponseWriter })
 		if !ok {
-			return
+			var none T
+
+			return none, false
 		}
 
 		w = next.Unwrap()
+	}
+}
+
+// noteStatus tells the gateway's writer, found through Unwrap, the status of a
+// response that is about to take the connection.
+func noteStatus(w http.ResponseWriter, code int) {
+	if noter, ok := writerOf[statusNoter](w); ok {
+		noter.NoteStatus(code)
 	}
 }
 
@@ -184,8 +196,8 @@ func (w *responseWriter) trackBody(r *http.Request) {
 // The headers are complete when this runs: the gateway added x-localstack and
 // x-gostack before the handler, and WriteHeader has applied the S3 spelling. The
 // ListBuckets and CreateBucket CORS headers that defaultCORSWriter adds below
-// this writer are not applied, and neither response carries a header value that
-// leads or ends in white space.
+// this writer are applied first, through headerFinisher, because the response
+// never reaches that writer's WriteHeader.
 //
 // A body of unknown length keeps its head back until the length is known: the
 // end of the body, or more of it than rawBufferLimit.
@@ -205,6 +217,12 @@ func (w *responseWriter) takeConn(code int) bool {
 	// here: a 4xx must not mark state dirty, and a panic after this point must
 	// abort the connection instead of writing a 500 into it.
 	noteStatus(w.ResponseWriter, code)
+
+	// The writers below this one add their headers in their own WriteHeader,
+	// which a taken response skips, so they add them now.
+	if finisher, ok := writerOf[headerFinisher](w.ResponseWriter); ok {
+		finisher.finishHeaders()
+	}
 
 	header := w.Header()
 	t := &takenConn{
