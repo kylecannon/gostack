@@ -384,6 +384,31 @@ func Test_gostack_compat_paths_can_be_turned_off(t *testing.T) {
 	}
 }
 
+// Test_gostack_health_persisted_flag starts gostack with persistence on. SQS has
+// state to save and reports it; STS keeps none and reports false. The
+// /_localstack alias lists both services as running, as LocalStack does.
+func Test_gostack_health_persisted_flag(t *testing.T) {
+	g := startGostack(t, "PERSISTENCE=1", "PERSIST_BASE_DIR="+t.TempDir())
+
+	status, body := g.do(t, http.MethodGet, "/_gostack/health", "")
+	require.Equal(t, http.StatusOK, status, body)
+
+	var health struct {
+		Services map[string]struct {
+			Persisted bool `json:"persisted"`
+		} `json:"services"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(body), &health))
+	assert.True(t, health.Services["sqs"].Persisted, body)
+	assert.False(t, health.Services["sts"].Persisted, body)
+
+	status, body = g.do(t, http.MethodGet, "/_localstack/health", "")
+	require.Equal(t, http.StatusOK, status, body)
+	assert.JSONEq(t, `{"services":{"sqs":"running","sts":"running"},"edition":"community",`+
+		`"version":"`+smokeVersion+`"}`, body)
+}
+
 // Test_gostack_refuses_a_state_link_out_of_the_base_dir is the ld.so.preload
 // case with a sentinel in place of /etc/ld.so.preload: sqs/store.json is a
 // link to a file outside the base dir that does not exist yet. gostack starts
@@ -419,7 +444,7 @@ func Test_gostack_refuses_a_state_link_out_of_the_base_dir(t *testing.T) {
 
 	require.NoError(t, json.Unmarshal([]byte(body), &health))
 	assert.False(t, health.Services["sqs"].Persisted, body)
-	assert.True(t, health.Services["sts"].Persisted, body)
+	assert.False(t, health.Services["sts"].Persisted, "STS has no state to save: "+body)
 
 	assert.Contains(t, g.stderr.String(), link, "the log names the refused link")
 	assert.NoFileExists(t, sentinel)

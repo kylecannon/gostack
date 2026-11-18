@@ -73,11 +73,13 @@ func persistentEngine(t *testing.T) (*persist.Engine, string) {
 
 func Test_serviceTable(t *testing.T) {
 	eng, _ := persistentEngine(t)
-	table := &serviceTable{regs: []service.Registration{registration("sqs"), registration("sts")}, eng: eng}
+	saved := registration("sqs")
+	saved.Persist = &widgets{}
+	table := &serviceTable{regs: []service.Registration{saved, registration("sts")}, eng: eng}
 
 	assert.Equal(t, map[string]internalapi.ServiceState{
 		"sqs": {State: "running", Persisted: true},
-		"sts": {State: "running", Persisted: true},
+		"sts": {State: "running", Persisted: false},
 	}, table.States())
 	assert.Equal(t, []internalapi.ServiceCapability{{Name: "sqs"}, {Name: "sts"}}, table.Capabilities())
 

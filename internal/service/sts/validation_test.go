@@ -169,6 +169,10 @@ func Test_validation_name(t *testing.T) {
 			},
 			{name: "every allowed symbol", give: "a+=,.@-_9"},
 			{name: "colon", give: "Session1:2", wantMessage: one(violation("Session1:2", op.nameMember, namePatternMsg))},
+			{name: "accented letter", give: "José", wantMessage: one(violation("José", op.nameMember, namePatternMsg))},
+			//nolint:gosmopolitan // the case is a non-ASCII name that AWS refuses
+			{name: "non-Latin letters", give: "日本", wantMessage: one(violation("日本", op.nameMember, namePatternMsg))},
+			{name: "full-width digit", give: "ab１", wantMessage: one(violation("ab１", op.nameMember, namePatternMsg))},
 			{name: "space", give: "a b", wantMessage: one(violation("a b", op.nameMember, namePatternMsg))},
 			{
 				name:        "one character and the pattern",

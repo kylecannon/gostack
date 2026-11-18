@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -202,12 +203,15 @@ func parseGatewayListen(value, defaultHost string) ([]HostPort, error) {
 	return listen, nil
 }
 
+// maxShutdownSeconds is the most seconds a time.Duration holds.
+const maxShutdownSeconds = int(math.MaxInt64 / int64(time.Second))
+
 func parseShutdownTimeout(value string) (time.Duration, error) {
 	if value == "" {
 		return DefaultShutdownTimeout, nil
 	}
 	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds < 0 {
+	if err != nil || seconds < 0 || seconds > maxShutdownSeconds {
 		return 0, fmt.Errorf("SHUTDOWN_TIMEOUT: %q is not a number of seconds", value)
 	}
 

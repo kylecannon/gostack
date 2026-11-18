@@ -27,8 +27,9 @@ var (
 	// "arn:a:a:::aaaaaaaaaa" through, as LocalStack does.
 	roleARNPattern = regexp.MustCompile(`^arn:[^:]+:[^:]+:[^:]*:[^:]*:[^:]+$`)
 	// sessionNamePattern is the pattern AWS names in its error for a RoleSessionName
-	// and a federated user Name.
-	sessionNamePattern = regexp.MustCompile(`^[\p{L}\p{N}_+=,.@-]*$`)
+	// and a federated user Name. AWS's \w is the ASCII class, so "José" and a
+	// full-width digit fail it.
+	sessionNamePattern = regexp.MustCompile(`^[A-Za-z0-9_+=,.@-]*$`)
 	accountPattern     = regexp.MustCompile(`^[0-9]{12}$`)
 )
 

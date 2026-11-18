@@ -59,6 +59,15 @@ func Test_PlanShutdown(t *testing.T) {
 		})
 	}
 
+	t.Run("the largest SHUTDOWN_TIMEOUT does not overflow", func(t *testing.T) {
+		timeout := 9223372036 * time.Second
+		got := lifecycle.PlanShutdown(start, timeout)
+
+		assert.Equal(t, start.Add(timeout-lifecycle.KillMargin), got.Save)
+		assert.True(t, got.Work.After(start))
+		assert.True(t, got.Work.Before(got.Save))
+	})
+
 	t.Run("the margin before the kill is at least KillMargin for every whole second", func(t *testing.T) {
 		for secs := 1; secs <= 120; secs++ {
 			timeout := time.Duration(secs) * time.Second

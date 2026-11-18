@@ -282,6 +282,14 @@ func Test_Load_variableForms(t *testing.T) {
 			},
 		},
 		{
+			name: "SHUTDOWN_TIMEOUT of the most seconds a Duration holds",
+			give: map[string]string{varShutdownTimeout: "9223372036"},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.Equal(t, 9223372036*time.Second, got.ShutdownTimeout)
+			},
+		},
+		{
 			name: "SHUTDOWN_TIMEOUT in seconds, zero for no limit",
 			give: map[string]string{varShutdownTimeout: "0"},
 			check: func(t *testing.T, got *Settings) {
@@ -321,6 +329,8 @@ func Test_Load_invalidValues(t *testing.T) {
 		{name: "bad LOCALSTACK_HOST port", giveK: varLocalstackHost, giveV: "host:99999"},
 		{name: "bad SHUTDOWN_TIMEOUT", giveK: varShutdownTimeout, giveV: "soon"},
 		{name: "negative SHUTDOWN_TIMEOUT", giveK: varShutdownTimeout, giveV: "-1"},
+		{name: "SHUTDOWN_TIMEOUT one second past the largest Duration", giveK: varShutdownTimeout, giveV: "9223372037"},
+		{name: "SHUTDOWN_TIMEOUT far past the largest Duration", giveK: varShutdownTimeout, giveV: "18446744074"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

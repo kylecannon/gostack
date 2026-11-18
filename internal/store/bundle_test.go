@@ -199,6 +199,12 @@ func emptyCounter(c *counter) {
 	c.held = 0
 }
 
+func Test_NewBundle_nilEmptier(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"store.NewBundle: emptyFn is nil; Reset needs a function that empties a state in place",
+		func() { store.NewBundle(func(string, string) *counter { return &counter{} }, nil) })
+}
+
 func Test_Bundle_Reset_concurrent(t *testing.T) {
 	const (
 		writers = 8

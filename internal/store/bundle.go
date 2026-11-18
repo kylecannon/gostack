@@ -45,6 +45,10 @@ type Bundle[S any] struct {
 // Bundle. emptyFn runs under no Bundle lock and takes the state's own lock: what
 // it takes out under that lock is gone, and anything added after it is kept.
 func NewBundle[S any](newFn func(account, region string) *S, emptyFn func(*S)) *Bundle[S] {
+	if emptyFn == nil {
+		panic("store.NewBundle: emptyFn is nil; Reset needs a function that empties a state in place")
+	}
+
 	b := &Bundle[S]{newFn: newFn, emptyFn: emptyFn, seed: maphash.MakeSeed()}
 	for i := range b.shards {
 		b.shards[i].states = make(map[key]*S)

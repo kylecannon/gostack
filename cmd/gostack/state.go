@@ -28,7 +28,8 @@ func (t *serviceTable) States() map[string]internalapi.ServiceState {
 
 	for i := range t.regs {
 		name := t.regs[i].Metadata.Name
-		states[name] = internalapi.ServiceState{State: stateRunning, Persisted: t.eng.Enabled(name)}
+		persisted := t.regs[i].Persist != nil && t.eng.Enabled(name)
+		states[name] = internalapi.ServiceState{State: stateRunning, Persisted: persisted}
 	}
 
 	return states
