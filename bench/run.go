@@ -38,6 +38,12 @@ const (
 
 	persistDir = "/persisted-data"
 
+	// loadgenCellFlags are the arguments of `loadgen cell` a cell always has: four
+	// flags with a value each.
+	loadgenCellFlags = 8
+	// argsPerOption is "-opt" and its key=value.
+	argsPerOption = 2
+
 	targetGostack    = "gostack"
 	targetSlim       = "gostack-slim"
 	targetLocalstack = "localstack"
@@ -47,7 +53,7 @@ const (
 )
 
 // target is one image to measure. Only a target that persists runs the cells
-// with PERSIST_SQS=1.
+// that set a persistence variable, such as PERSIST_SQS=1.
 type target struct {
 	name, image string
 	persistable bool
@@ -343,8 +349,18 @@ func (r *runner) measureTarget(ctx context.Context, t target) targetResult {
 		res.Cells = append(res.Cells, cell)
 	}
 
-	res.Agentic, err = r.agentic(ctx, t)
-	res.problem("agentic workload", err)
+	for _, w := range agenticWorkloads {
+		run, err := r.agentic(ctx, t, w)
+		res.problem("agentic workload ("+w.Service()+")", err)
+
+		if run.Cycles > 0 {
+			if res.Agentic == nil {
+				res.Agentic = map[string]agenticRun{}
+			}
+
+			res.Agentic[w.Service()] = run
+		}
+	}
 
 	return res
 }
@@ -436,7 +452,7 @@ func (r *runner) idle(ctx context.Context, t target, variant string) (idleVarian
 // memory of one run, or one cell, does not carry into the next.
 func (r *runner) cell(ctx context.Context, t target, spec cellSpec) cellResult {
 	var (
-		runs   []cellRun
+		runs   []runResult
 		failed []string
 	)
 
@@ -460,34 +476,48 @@ func (r *runner) cell(ctx context.Context, t target, spec cellSpec) cellResult {
 	return summarizeCell(spec, runs)
 }
 
-func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (cellRun, error) {
+// loadgenArgs are the flags of `loadgen cell` that describe the cell.
+func (c cellSpec) loadgenArgs() []string {
+	args := make([]string, 0, loadgenCellFlags+argsPerOption*len(c.Options))
+	args = append(args, "-service", c.Service, "-workload", c.Workload, "-payload", strconv.Itoa(c.Payload),
+		"-concurrency", strconv.Itoa(c.Concurrency))
+
+	for _, o := range c.Options {
+		args = append(args, "-opt", o.Key+"="+o.Value)
+	}
+
+	return args
+}
+
+func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResult, error) {
 	var extra []string
-	if spec.Persist {
-		extra = []string{"-e", "PERSIST_SQS=1", "--tmpfs", persistDir}
+	if spec.persists() {
+		extra = []string{"-e", spec.PersistEnv + "=1", "--tmpfs", persistDir}
 	}
 
 	inst, _, err := r.start(ctx, t, extra...)
 	if err != nil {
-		return cellRun{}, err
+		return runResult{}, err
 	}
 
 	defer inst.stop(ctx)
 
-	var run cellRun
+	var run runResult
 
 	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
-		return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run, "cell",
-			"-proto", spec.Proto, "-queue", spec.Queue, "-shape", spec.Shape, "-payload", strconv.Itoa(spec.Payload),
-			"-concurrency", strconv.Itoa(spec.Concurrency), "-duration", r.opts.duration.String())
+		args := append([]string{"cell"}, spec.loadgenArgs()...)
+
+		return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run,
+			append(args, "-duration", r.opts.duration.String())...)
 	})
 	run.Usage = used
 
 	return run, err
 }
 
-// agentic runs the create, use and delete workload on a container of its own,
-// so the peak memory is the workload's.
-func (r *runner) agentic(ctx context.Context, t target) (agenticRun, error) {
+// agentic runs a service's create, use and delete workload on a container of its
+// own, so the peak memory is the workload's.
+func (r *runner) agentic(ctx context.Context, t target, w agenticWorkload) (agenticRun, error) {
 	inst, _, err := r.start(ctx, t)
 	if err != nil {
 		return agenticRun{}, err
@@ -495,13 +525,13 @@ func (r *runner) agentic(ctx context.Context, t target) (agenticRun, error) {
 
 	defer inst.stop(ctx)
 
-	r.logf("%s: %d agentic cycles at concurrency %d", inst.name, r.opts.cycles, r.opts.cycleConcurrency)
+	r.logf("%s: %d %s agentic cycles at concurrency %d", inst.name, r.opts.cycles, w.Service(), r.opts.cycleConcurrency)
 
 	var run agenticRun
 
 	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
-		return r.loadgen(ctx, inst.name, agenticTimeout, &run,
-			"agentic", "-cycles", strconv.Itoa(r.opts.cycles), "-concurrency", strconv.Itoa(r.opts.cycleConcurrency))
+		return r.loadgen(ctx, inst.name, agenticTimeout, &run, "agentic", "-service", w.Service(),
+			"-cycles", strconv.Itoa(r.opts.cycles), "-concurrency", strconv.Itoa(r.opts.cycleConcurrency))
 	})
 	run.Usage = used
 

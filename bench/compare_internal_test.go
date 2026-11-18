@@ -23,7 +23,8 @@ func testCell(id string, p50, p99, rate, rss float64) cellResult {
 	op := opSpread{Count: 1000, P50us: around(p50), P99us: around(p99)}
 
 	return cellResult{
-		ID: id, Runs: 3, Send: op, Receive: op, Delete: op,
+		ID: id, Spec: cellSpec{Service: serviceSQS, Workload: workloadSQS}, Runs: 3,
+		Ops:          map[string]opSpread{opSend: op, opReceive: op, opDelete: op},
 		CyclesPerSec: around(rate), PeakRSSBytes: around(rss),
 	}
 }
@@ -40,7 +41,7 @@ func testReport(host fingerprint, cells ...cellResult) report {
 	}
 }
 
-const cellID = "persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16"
+const cellID = "sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16"
 
 func compared(t *testing.T, base, head report) (string, error) {
 	t.Helper()
@@ -153,7 +154,9 @@ func Test_compare_a_noisy_change_with_overlapping_runs_passes(t *testing.T) {
 	base := testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB))
 	// The median is 30% up, but one head run is as fast as the base's slowest.
 	noisy := testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB)
-	noisy.Send.P50us = spread{Min: 830, Median: 1040, Max: 1300}
+	send := noisy.Ops[opSend]
+	send.P50us = spread{Min: 830, Median: 1040, Max: 1300}
+	noisy.Ops[opSend] = send
 	head := testReport(hostA, noisy)
 
 	out, err := compared(t, base, head)
@@ -175,7 +178,7 @@ func Test_compare_an_improvement_passes(t *testing.T) {
 }
 
 func Test_compare_a_missing_cell_is_listed_and_does_not_fail(t *testing.T) {
-	other := "persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
+	other := "sqs/messaging/persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
 	base := testReport(hostA,
 		testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB), testCell(other, 5000, 9000, 100, 90*bytesPerMiB))
 	head := testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB))

@@ -158,16 +158,15 @@ func cellMetrics(target string, base, head cellResult) []metric {
 		})
 	}
 
-	for _, op := range []struct {
-		name       string
-		base, head opSpread
-	}{{opSend, base.Send, head.Send}, {opReceive, base.Receive, head.Receive}, {opDelete, base.Delete, head.Delete}} {
-		if op.base.Count == 0 || op.head.Count == 0 {
+	// Every operation the base timed, whatever the service: the cell names them.
+	for _, name := range base.opNames() {
+		b, h := base.Ops[name], head.Ops[name]
+		if b.Count == 0 || h.Count == 0 {
 			continue
 		}
 
-		add(op.name+" p50", op.base.P50us, op.head.P50us, true, limitP50, floorP50*microsPerMilli, microsPerMilli, "ms")
-		add(op.name+" p99", op.base.P99us, op.head.P99us, true, limitP99, floorP99*microsPerMilli, microsPerMilli, "ms")
+		add(name+" p50", b.P50us, h.P50us, true, limitP50, floorP50*microsPerMilli, microsPerMilli, "ms")
+		add(name+" p99", b.P99us, h.P99us, true, limitP99, floorP99*microsPerMilli, microsPerMilli, "ms")
 	}
 
 	add("throughput", base.CyclesPerSec, head.CyclesPerSec, false, limitThroughput, 0, 1, "cycles/s")

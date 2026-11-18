@@ -8,18 +8,20 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
 
-// This file is the load generator's cell workload. Each worker loops one cycle
-// of the cell's shape against one queue:
+// This file is the SQS workload. Each worker loops one cycle of the cell's
+// shape against one queue:
 //
 //	single    SendMessage, ReceiveMessage (one message), DeleteMessage
 //	batch     SendMessageBatch of 10, ReceiveMessage (up to 10), DeleteMessageBatch
@@ -32,6 +34,47 @@ import (
 // check, which neither gostack nor LocalStack makes.
 
 const (
+	serviceSQS    = "sqs"
+	workloadSQS   = "messaging"
+	persistEnvSQS = "PERSIST_SQS"
+
+	opSend    = "send"
+	opReceive = "receive"
+	opDelete  = "delete"
+
+	queueStandard = "standard"
+	queueFIFO     = "fifo"
+
+	shapeSingle   = "single"
+	shapeBatch    = "batch"
+	shapeLongPoll = "longpoll"
+
+	protoJSON  = "json"
+	protoQuery = "query"
+
+	optQueue = "queue"
+	optShape = "shape"
+	optProto = "proto"
+
+	// batchSize is the entries of a batch call, and the messages a batch cycle
+	// moves.
+	batchSize = 10
+	// maxBatchBytes is the service's limit on the bodies of one batch call.
+	maxBatchBytes = 1 << 20
+	// longPollSeconds is WaitTimeSeconds of the long-poll shape.
+	longPollSeconds = 1
+
+	payloadSmall  = 256
+	payloadMedium = 64 << 10
+	payloadMax    = 1 << 20
+
+	// fullCellsPerPersistence is 3 payloads x 2 queues x 3 shapes x 2 protocols x 3 concurrencies.
+	fullCellsPerPersistence = 108
+
+	messagesPerCycle = 10
+	maxReceiveRounds = 100
+	maxWorkerErrors  = 50
+
 	longPollHold = 2 * time.Millisecond
 	formType     = "application/x-www-form-urlencoded"
 	sqsVersion   = "2012-11-05"
@@ -40,6 +83,154 @@ const (
 	payloadAlpha  = "abcdefghijklmnopqrstuvwxyz0123456789"
 	formErrorHead = 300
 )
+
+// sqsWorkload is the send, receive and delete cycle of one queue.
+type sqsWorkload struct{}
+
+func (sqsWorkload) Service() string { return serviceSQS }
+func (sqsWorkload) Name() string    { return workloadSQS }
+func (sqsWorkload) Ops() []string   { return []string{opSend, opReceive, opDelete} }
+
+func (sqsWorkload) Run(ctx context.Context, c client, cell cellSpec, duration time.Duration) (runResult, error) {
+	spec, err := sqsCellOf(cell)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	return runCell(ctx, c.endpoint, spec, duration)
+}
+
+func (sqsWorkload) Agentic(ctx context.Context, c client, cycles, workers int) (agenticRun, error) {
+	return runAgentic(ctx, newSQSClient(c.endpoint, workers), cycles, workers)
+}
+
+// sqsCell is a cell of the SQS workload with its axes read.
+type sqsCell struct {
+	Payload     int
+	Queue       string
+	Shape       string
+	Proto       string
+	Concurrency int
+}
+
+var errBadAxis = errors.New("unknown axis value")
+
+// sqsCellOf reads the axes of a cell. A value no cycle exists for is an error,
+// not a silent default.
+func sqsCellOf(cell cellSpec) (sqsCell, error) {
+	spec := sqsCell{
+		Payload: cell.Payload, Concurrency: cell.Concurrency,
+		Queue: cell.option(optQueue), Shape: cell.option(optShape), Proto: cell.option(optProto),
+	}
+
+	for _, axis := range []struct {
+		name, value string
+		allowed     []string
+	}{
+		{optQueue, spec.Queue, []string{queueStandard, queueFIFO}},
+		{optShape, spec.Shape, []string{shapeSingle, shapeBatch, shapeLongPoll}},
+		{optProto, spec.Proto, []string{protoJSON, protoQuery}},
+	} {
+		if !slices.Contains(axis.allowed, axis.value) {
+			return sqsCell{}, fmt.Errorf("%w: %s=%q, want one of %s", errBadAxis, axis.name, axis.value,
+				strings.Join(axis.allowed, ", "))
+		}
+	}
+
+	if spec.Concurrency < 1 || spec.Payload < 1 {
+		return sqsCell{}, fmt.Errorf("%w: concurrency %d and payload %d must be at least 1", errBadAxis,
+			spec.Concurrency, spec.Payload)
+	}
+
+	return spec, nil
+}
+
+// entryBytes is the body of one message of the cell. A batch carries ten, and
+// the service takes 1 MiB of bodies in one call, so a batch of the largest
+// payload shrinks each entry.
+func (c sqsCell) entryBytes() int {
+	if c.Shape == shapeBatch {
+		return min(c.Payload, maxBatchBytes/batchSize)
+	}
+
+	return c.Payload
+}
+
+// sqsBase is the cell the quick profile varies one axis of at a time.
+func sqsBase() cellSpec {
+	return sqsCellSpec(payloadSmall, queueStandard, shapeSingle, protoJSON, "", levelMid)
+}
+
+func sqsCellSpec(payload int, queue, shape, proto, persistEnv string, concurrency int) cellSpec {
+	return cellSpec{
+		Service: serviceSQS, Workload: workloadSQS, Payload: payload,
+		Options:    []option{{optQueue, queue}, {optShape, shape}, {optProto, proto}},
+		PersistEnv: persistEnv, Concurrency: concurrency,
+	}
+}
+
+// fullSQSCells is every cell of one persistence setting: payload, queue, shape,
+// protocol and concurrency.
+func fullSQSCells(persistEnv string) []cellSpec {
+	cells := make([]cellSpec, 0, fullCellsPerPersistence)
+
+	for _, payload := range []int{payloadSmall, payloadMedium, payloadMax} {
+		for _, queue := range []string{queueStandard, queueFIFO} {
+			for _, shape := range []string{shapeSingle, shapeBatch, shapeLongPoll} {
+				for _, proto := range []string{protoJSON, protoQuery} {
+					for _, level := range []int{levelLow, levelMid, levelHigh} {
+						cells = append(cells, sqsCellSpec(payload, queue, shape, proto, persistEnv, level))
+					}
+				}
+			}
+		}
+	}
+
+	return cells
+}
+
+// quickSQSCells covers each axis once at concurrency 16 around the base cell, and
+// adds the base cell at concurrency 1 and 64. Every quick cell is a cell of the
+// full profile, with the same id.
+func quickSQSCells() []cellSpec {
+	base := sqsBase()
+	vary := func(change func(*cellSpec)) cellSpec {
+		c := base
+		c.Options = slices.Clone(base.Options)
+		change(&c)
+
+		return c
+	}
+	set := func(key, value string) func(*cellSpec) {
+		return func(c *cellSpec) {
+			i := slices.IndexFunc(c.Options, func(o option) bool { return o.Key == key })
+			c.Options[i].Value = value
+		}
+	}
+
+	return []cellSpec{
+		vary(func(c *cellSpec) { c.Concurrency = levelLow }),
+		base,
+		vary(func(c *cellSpec) { c.Concurrency = levelHigh }),
+		vary(func(c *cellSpec) { c.Payload = payloadMedium }),
+		vary(func(c *cellSpec) { c.Payload = payloadMax }),
+		vary(set(optQueue, queueFIFO)),
+		vary(set(optShape, shapeBatch)),
+		vary(set(optShape, shapeLongPoll)),
+		vary(set(optProto, protoQuery)),
+		vary(func(c *cellSpec) { c.PersistEnv = persistEnvSQS }),
+	}
+}
+
+// Cells is the matrix: every payload, queue, shape, protocol and concurrency,
+// with persistence off and on. The quick profile is a slice of it.
+func (sqsWorkload) Cells(profile string) []cellSpec {
+	if profile == profileQuick {
+		return quickSQSCells()
+	}
+
+	return append(fullSQSCells(""), fullSQSCells(persistEnvSQS)...)
+}
 
 // message is one message a worker sends.
 type message struct {
@@ -274,17 +465,8 @@ func (d formDriver) remove(ctx context.Context, queueURL string, handles []strin
 	return nil
 }
 
-// cellRun is the result of one run of a cell.
-type cellRun struct {
-	Seconds       float64 `json:"seconds"`
-	Cycles        int     `json:"cycles"`
-	CyclesPerSec  float64 `json:"cycles_per_sec"`
-	EmptyReceives int     `json:"empty_receives"`
-	Send          opStats `json:"send"`
-	Receive       opStats `json:"receive"`
-	Delete        opStats `json:"delete"`
-	Usage         usage   `json:"usage,omitzero"`
-}
+// counterEmptyReceives counts the cycles whose receive came back with no message.
+const counterEmptyReceives = "empty_receives"
 
 // samples are the timings one worker collected.
 type samples struct {
@@ -296,7 +478,7 @@ type samples struct {
 
 // worker is one goroutine of a cell.
 type worker struct {
-	spec    cellSpec
+	spec    sqsCell
 	drv     driver
 	queue   string
 	id      int
@@ -431,7 +613,7 @@ func payloadBody(n int) string {
 // runCell runs the cell's cycle on spec.Concurrency workers for the duration,
 // against a queue it creates and deletes. A call in flight at the deadline
 // finishes and counts.
-func runCell(ctx context.Context, endpoint string, spec cellSpec, duration time.Duration) (cellRun, error) {
+func runCell(ctx context.Context, endpoint string, spec sqsCell, duration time.Duration) (runResult, error) {
 	sdk := newSQSClient(endpoint, spec.Concurrency)
 
 	var drv driver = sdkDriver{client: sdk}
@@ -449,7 +631,7 @@ func runCell(ctx context.Context, endpoint string, spec cellSpec, duration time.
 
 	created, err := sdk.CreateQueue(ctx, in)
 	if err != nil {
-		return cellRun{}, fmt.Errorf("create queue: %w", err)
+		return runResult{}, fmt.Errorf("create queue: %w", err)
 	}
 
 	defer func() {
@@ -485,18 +667,21 @@ func runCell(ctx context.Context, endpoint string, spec cellSpec, duration time.
 	return summarize(results, elapsed)
 }
 
-func summarize(results []samples, elapsed time.Duration) (cellRun, error) {
+func summarize(results []samples, elapsed time.Duration) (runResult, error) {
 	var send, receive, del []time.Duration
 
-	run := cellRun{Seconds: elapsed.Seconds()}
+	run := runResult{Seconds: elapsed.Seconds()}
 
-	var failed [3]int
+	var (
+		failed [3]int
+		empty  int
+	)
 
 	for _, s := range results {
 		send = append(send, s.send...)
 		receive = append(receive, s.receive...)
 		del = append(del, s.del...)
-		run.EmptyReceives += s.empty
+		empty += s.empty
 		run.Cycles += s.cycles
 
 		for i, f := range s.failed {
@@ -504,16 +689,108 @@ func summarize(results []samples, elapsed time.Duration) (cellRun, error) {
 		}
 	}
 
-	run.Send = statsOf(send, failed[0])
-	run.Receive = statsOf(receive, failed[1])
-	run.Delete = statsOf(del, failed[2])
+	run.Ops = map[string]opStats{
+		opSend:    statsOf(send, failed[0]),
+		opReceive: statsOf(receive, failed[1]),
+		opDelete:  statsOf(del, failed[2]),
+	}
+	run.Counters = map[string]int{counterEmptyReceives: empty}
 	run.CyclesPerSec = float64(run.Cycles) / elapsed.Seconds()
 
 	if run.Cycles == 0 {
 		return run, fmt.Errorf("no cycle completed: %d failed sends, %d failed receives, %d failed deletes, "+
 			"%d empty receives",
-			failed[0], failed[1], failed[2], run.EmptyReceives)
+			failed[0], failed[1], failed[2], empty)
 	}
 
 	return run, nil
+}
+
+// newSQSClient returns an SDK client with retries off, so a failure is counted
+// and not hidden, and a connection pool sized for the workers.
+func newSQSClient(endpoint string, workers int) *sqs.Client {
+	return sqs.New(sqs.Options{
+		Region:           loadRegion,
+		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
+		BaseEndpoint:     &endpoint,
+		HTTPClient:       &http.Client{Transport: readOnlyBodies{newTransport(workers)}},
+		RetryMaxAttempts: 1,
+	})
+}
+
+// runAgentic runs cycles of create queue, send 10, receive 10, delete queue,
+// spread over the workers.
+func runAgentic(ctx context.Context, client *sqs.Client, cycles, workers int) (agenticRun, error) {
+	prefix := fmt.Sprintf("bench-agentic-%x", time.Now().UnixNano())
+	jobs := make(chan int)
+	timings := make([][]time.Duration, workers)
+	failures := make([]int, workers)
+	started := time.Now()
+
+	var wg sync.WaitGroup
+
+	for i := range workers {
+		wg.Go(func() {
+			for n := range jobs {
+				began := time.Now()
+				err := agenticCycle(ctx, client, fmt.Sprintf("%s-%d", prefix, n))
+				if err != nil {
+					failures[i]++
+
+					continue
+				}
+
+				timings[i] = append(timings[i], time.Since(began))
+			}
+		})
+	}
+
+	for n := range cycles {
+		jobs <- n
+	}
+
+	close(jobs)
+	wg.Wait()
+
+	return summarizeAgentic(slices.Concat(timings...), failures, cycles, workers, time.Since(started))
+}
+
+func agenticCycle(ctx context.Context, client *sqs.Client, name string) error {
+	created, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &name})
+	if err != nil {
+		return fmt.Errorf("create queue: %w", err)
+	}
+
+	for i := range messagesPerCycle {
+		body := fmt.Sprintf("message %d of %s", i, name)
+		_, err = client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: created.QueueUrl, MessageBody: &body})
+		if err != nil {
+			return fmt.Errorf("send message: %w", err)
+		}
+	}
+
+	received := 0
+	for round := 0; received < messagesPerCycle; round++ {
+		if round >= maxReceiveRounds {
+			return fmt.Errorf("received %d of %d messages in %d rounds", received, messagesPerCycle, round)
+		}
+
+		var got *sqs.ReceiveMessageOutput
+
+		got, err = client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+			QueueUrl: created.QueueUrl, MaxNumberOfMessages: messagesPerCycle,
+		})
+		if err != nil {
+			return fmt.Errorf("receive message: %w", err)
+		}
+
+		received += len(got.Messages)
+	}
+
+	_, err = client.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: created.QueueUrl})
+	if err != nil {
+		return fmt.Errorf("delete queue: %w", err)
+	}
+
+	return nil
 }

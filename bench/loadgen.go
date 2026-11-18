@@ -12,19 +12,13 @@ import (
 	"net"
 	"net/http"
 	"slices"
-	"sync"
+	"strings"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
 const (
 	defaultEndpoint     = "http://127.0.0.1:4566"
 	loadRegion          = "us-east-1"
-	messagesPerCycle    = 10
-	maxReceiveRounds    = 100
-	maxWorkerErrors     = 50
 	dialTimeout         = 5 * time.Second
 	idleConnTimeout     = 90 * time.Second
 	percentMedian       = 50
@@ -55,6 +49,18 @@ type usage struct {
 	CPUPercent       float64 `json:"cpu_percent"`
 }
 
+// runResult is what a workload returns for one run of a cell: the operations it
+// timed, by name, and the whole cycles it completed. Counters are the workload's
+// own tallies, such as receives that came back empty.
+type runResult struct {
+	Seconds      float64            `json:"seconds"`
+	Cycles       int                `json:"cycles"`
+	CyclesPerSec float64            `json:"cycles_per_sec"`
+	Counters     map[string]int     `json:"counters,omitempty"`
+	Ops          map[string]opStats `json:"ops"`
+	Usage        usage              `json:"usage,omitzero"`
+}
+
 // agenticRun is the create, use and delete workload.
 type agenticRun struct {
 	Cycles      int     `json:"cycles"`
@@ -69,7 +75,7 @@ type agenticRun struct {
 // loadgenMain runs inside the load generator container.
 func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bench loadgen cell|agentic [flags]")
+		return errors.New("usage: bench loadgen cell|agentic -service NAME [flags]")
 	}
 
 	var (
@@ -98,30 +104,89 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	return nil
 }
 
-func cellCommand(ctx context.Context, args []string) (cellRun, error) {
+// optionFlags collects the repeated -opt key=value flags of a cell.
+type optionFlags []option
+
+func (o *optionFlags) String() string {
+	parts := make([]string, 0, len(*o))
+	for _, opt := range *o {
+		parts = append(parts, opt.Key+"="+opt.Value)
+	}
+
+	return strings.Join(parts, ",")
+}
+
+var errBadOption = errors.New("want -opt key=value")
+
+func (o *optionFlags) Set(v string) error {
+	key, value, ok := strings.Cut(v, "=")
+	if !ok || key == "" {
+		return fmt.Errorf("%w, got %q", errBadOption, v)
+	}
+
+	*o = append(*o, option{Key: key, Value: value})
+
+	return nil
+}
+
+// parseCell reads the flags of `loadgen cell`: the endpoint and duration of the
+// run, and the cell, whose persistence the orchestrator has already set on the
+// container.
+func parseCell(args []string) (cellRequest, error) {
 	flags := flag.NewFlagSet("loadgen cell", flag.ContinueOnError)
-	endpoint := flags.String("endpoint", defaultEndpoint, "target endpoint")
-	duration := flags.Duration("duration", defaultLoadDuration, "how long to run")
+	req := cellRequest{cell: cellSpec{Service: serviceSQS, Workload: workloadSQS}}
+	spec := &req.cell
 
-	var spec cellSpec
+	var options optionFlags
 
-	flags.IntVar(&spec.Payload, "payload", payloadSmall, "message body bytes")
-	flags.StringVar(&spec.Queue, "queue", queueStandard, "standard or fifo")
-	flags.StringVar(&spec.Shape, "shape", shapeSingle, "single, batch or longpoll")
-	flags.StringVar(&spec.Proto, "proto", protoJSON, "json (through the SDK) or query (a form post)")
+	flags.StringVar(&req.endpoint, "endpoint", defaultEndpoint, "target endpoint")
+	flags.DurationVar(&req.duration, "duration", defaultLoadDuration, "how long to run")
+	flags.StringVar(&spec.Service, "service", spec.Service, "the service to load")
+	flags.StringVar(&spec.Workload, "workload", spec.Workload, "the service's workload")
+	flags.IntVar(&spec.Payload, "payload", payloadSmall, "body bytes")
 	flags.IntVar(&spec.Concurrency, "concurrency", 1, "concurrent workers")
+	flags.Var(&options, "opt", "an axis of the workload, key=value; repeat for each (sqs: queue, shape, proto)")
 
 	err := flags.Parse(args)
 	if err != nil {
-		return cellRun{}, fmt.Errorf("parse flags: %w", err)
+		return cellRequest{}, fmt.Errorf("parse flags: %w", err)
 	}
 
-	return runCell(ctx, *endpoint, spec, *duration)
+	spec.Options = options
+
+	return req, nil
+}
+
+// cellRequest is what `loadgen cell` was asked to run.
+type cellRequest struct {
+	cell     cellSpec
+	endpoint string
+	duration time.Duration
+}
+
+func cellCommand(ctx context.Context, args []string) (runResult, error) {
+	req, err := parseCell(args)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	wl, err := findWorkload(req.cell.Service, req.cell.Workload)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	res, err := wl.Run(ctx, client{endpoint: req.endpoint}, req.cell, req.duration)
+	if err != nil {
+		return res, fmt.Errorf("run %s: %w", req.cell.id(), err)
+	}
+
+	return res, nil
 }
 
 func agenticCommand(ctx context.Context, args []string) (agenticRun, error) {
 	flags := flag.NewFlagSet("loadgen agentic", flag.ContinueOnError)
 	endpoint := flags.String("endpoint", defaultEndpoint, "target endpoint")
+	service := flags.String("service", serviceSQS, "the service to load")
 	cycles := flags.Int("cycles", defaultCycles, "create, use, delete cycles")
 	concurrency := flags.Int("concurrency", defaultCycleConc, "concurrent workers")
 
@@ -130,7 +195,39 @@ func agenticCommand(ctx context.Context, args []string) (agenticRun, error) {
 		return agenticRun{}, fmt.Errorf("parse flags: %w", err)
 	}
 
-	return runAgentic(ctx, newSQSClient(*endpoint, *concurrency), *cycles, *concurrency)
+	wl, err := findAgentic(*service)
+	if err != nil {
+		return agenticRun{}, err
+	}
+
+	run, err := wl.Agentic(ctx, client{endpoint: *endpoint}, *cycles, *concurrency)
+	if err != nil {
+		return run, fmt.Errorf("agentic %s: %w", *service, err)
+	}
+
+	return run, nil
+}
+
+// summarizeAgentic folds the cycle timings of the workers of an agentic run.
+func summarizeAgentic(all []time.Duration, failures []int, cycles, workers int,
+	took time.Duration,
+) (agenticRun, error) {
+	run := agenticRun{Cycles: cycles, Concurrency: workers, Seconds: took.Seconds()}
+
+	for _, f := range failures {
+		run.Errors += f
+	}
+
+	if len(all) == 0 {
+		return run, errors.New("every cycle failed")
+	}
+
+	slices.SortFunc(all, cmp.Compare[time.Duration])
+
+	run.CycleP50ms = float64(percentile(all, percentMedian).Microseconds()) / microsPerMilli
+	run.CycleP99ms = float64(percentile(all, percentTail).Microseconds()) / microsPerMilli
+
+	return run, nil
 }
 
 // newTransport returns a connection pool sized for the workers.
@@ -141,18 +238,6 @@ func newTransport(workers int) *http.Transport {
 		MaxIdleConnsPerHost: workers * idleConnsPerWork,
 		IdleConnTimeout:     idleConnTimeout,
 	}
-}
-
-// newSQSClient returns an SDK client with retries off, so a failure is counted
-// and not hidden, and a connection pool sized for the workers.
-func newSQSClient(endpoint string, workers int) *sqs.Client {
-	return sqs.New(sqs.Options{
-		Region:           loadRegion,
-		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
-		BaseEndpoint:     &endpoint,
-		HTTPClient:       &http.Client{Transport: readOnlyBodies{newTransport(workers)}},
-		RetryMaxAttempts: 1,
-	})
 }
 
 // readOnlyBodies hands net/http a request body with only Read and Close.
@@ -211,97 +296,4 @@ func percentile(sorted []time.Duration, pct int) time.Duration {
 	rank := int(math.Ceil(float64(pct) / percentScale * float64(len(sorted))))
 
 	return sorted[min(max(rank, 1), len(sorted))-1]
-}
-
-// runAgentic runs cycles of create queue, send 10, receive 10, delete queue,
-// spread over the workers.
-func runAgentic(ctx context.Context, client *sqs.Client, cycles, workers int) (agenticRun, error) {
-	prefix := fmt.Sprintf("bench-agentic-%x", time.Now().UnixNano())
-	jobs := make(chan int)
-	timings := make([][]time.Duration, workers)
-	failures := make([]int, workers)
-	started := time.Now()
-
-	var wg sync.WaitGroup
-
-	for i := range workers {
-		wg.Go(func() {
-			for n := range jobs {
-				began := time.Now()
-				err := agenticCycle(ctx, client, fmt.Sprintf("%s-%d", prefix, n))
-				if err != nil {
-					failures[i]++
-
-					continue
-				}
-
-				timings[i] = append(timings[i], time.Since(began))
-			}
-		})
-	}
-
-	for n := range cycles {
-		jobs <- n
-	}
-
-	close(jobs)
-	wg.Wait()
-
-	run := agenticRun{Cycles: cycles, Concurrency: workers, Seconds: time.Since(started).Seconds()}
-	all := slices.Concat(timings...)
-
-	for _, f := range failures {
-		run.Errors += f
-	}
-
-	if len(all) == 0 {
-		return run, errors.New("every cycle failed")
-	}
-
-	slices.SortFunc(all, cmp.Compare[time.Duration])
-
-	run.CycleP50ms = float64(percentile(all, percentMedian).Microseconds()) / microsPerMilli
-	run.CycleP99ms = float64(percentile(all, percentTail).Microseconds()) / microsPerMilli
-
-	return run, nil
-}
-
-func agenticCycle(ctx context.Context, client *sqs.Client, name string) error {
-	created, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &name})
-	if err != nil {
-		return fmt.Errorf("create queue: %w", err)
-	}
-
-	for i := range messagesPerCycle {
-		body := fmt.Sprintf("message %d of %s", i, name)
-		_, err = client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: created.QueueUrl, MessageBody: &body})
-		if err != nil {
-			return fmt.Errorf("send message: %w", err)
-		}
-	}
-
-	received := 0
-	for round := 0; received < messagesPerCycle; round++ {
-		if round >= maxReceiveRounds {
-			return fmt.Errorf("received %d of %d messages in %d rounds", received, messagesPerCycle, round)
-		}
-
-		var got *sqs.ReceiveMessageOutput
-
-		got, err = client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl: created.QueueUrl, MaxNumberOfMessages: messagesPerCycle,
-		})
-		if err != nil {
-			return fmt.Errorf("receive message: %w", err)
-		}
-
-		received += len(got.Messages)
-	}
-
-	_, err = client.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: created.QueueUrl})
-	if err != nil {
-		return fmt.Errorf("delete queue: %w", err)
-	}
-
-	return nil
 }

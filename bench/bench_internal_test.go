@@ -190,9 +190,95 @@ func Test_cells_profiles(t *testing.T) {
 
 	assert.Len(t, cellsFor(profileFull, target{}), 108, "a target that does not persist skips the persistence cells")
 	assert.Len(t, cellsFor(profileQuick, target{}), 9)
-	assert.Equal(t, "persist=off/payload=64KiB/queue=fifo/shape=batch/proto=query/c=64",
-		cellSpec{Payload: payloadMedium, Queue: queueFIFO, Shape: shapeBatch, Proto: protoQuery, Concurrency: levelHigh}.id())
-	assert.Equal(t, 104857, cellSpec{Payload: payloadMax, Shape: shapeBatch}.entryBytes(),
+	assert.Equal(t, "sqs/messaging/persist=off/payload=64KiB/queue=fifo/shape=batch/proto=query/c=64",
+		sqsCellSpec(payloadMedium, queueFIFO, shapeBatch, protoQuery, "", levelHigh).id())
+	assert.Equal(t, "sqs/messaging/persist=on/payload=256B/queue=standard/shape=single/proto=json/c=1",
+		sqsCellSpec(payloadSmall, queueStandard, shapeSingle, protoJSON, persistEnvSQS, levelLow).id())
+	assert.Equal(t, 104857, sqsCell{Payload: payloadMax, Shape: shapeBatch}.entryBytes(),
 		"ten entries fit the batch limit")
-	assert.Equal(t, payloadMax, cellSpec{Payload: payloadMax, Shape: shapeSingle}.entryBytes())
+	assert.Equal(t, payloadMax, sqsCell{Payload: payloadMax, Shape: shapeSingle}.entryBytes())
+}
+
+func Test_cells_a_persistence_cell_names_its_variable(t *testing.T) {
+	for _, c := range cellsFor(profileFull, target{persistable: true}) {
+		if c.persists() {
+			assert.Equal(t, "PERSIST_SQS", c.PersistEnv, c.id())
+			assert.Contains(t, c.id(), "persist=on")
+		} else {
+			assert.Empty(t, c.PersistEnv, c.id())
+		}
+	}
+}
+
+func Test_workloads_are_registered_once_and_agree_with_their_cells(t *testing.T) {
+	seen := map[string]bool{}
+
+	for _, w := range workloads {
+		key := w.Service() + "/" + w.Name()
+		assert.False(t, seen[key], "%s is registered twice", key)
+
+		seen[key] = true
+
+		assert.NotEmpty(t, w.Ops(), key)
+
+		found, err := findWorkload(w.Service(), w.Name())
+		require.NoError(t, err)
+		assert.Equal(t, key, found.Service()+"/"+found.Name())
+
+		for _, profile := range []string{profileFull, profileQuick} {
+			for _, c := range w.Cells(profile) {
+				assert.Equal(t, w.Service(), c.Service, c.id())
+				assert.Equal(t, w.Name(), c.Workload, c.id())
+				assert.True(t, strings.HasPrefix(c.id(), key+"/"), c.id())
+			}
+		}
+	}
+
+	_, err := findWorkload("s3", "objects")
+	require.ErrorIs(t, err, errNoWorkload)
+
+	_, err = findAgentic("s3")
+	require.ErrorIs(t, err, errNoWorkload)
+}
+
+func Test_sqsCellOf_refuses_an_axis_value_it_has_no_cycle_for(t *testing.T) {
+	good := sqsCellSpec(payloadSmall, queueFIFO, shapeBatch, protoQuery, "", levelMid)
+
+	spec, err := sqsCellOf(good)
+	require.NoError(t, err)
+	assert.Equal(t,
+		sqsCell{Payload: payloadSmall, Queue: queueFIFO, Shape: shapeBatch, Proto: protoQuery, Concurrency: levelMid}, spec)
+
+	for _, key := range []string{optQueue, optShape, optProto} {
+		bad := good
+		bad.Options = []option{{Key: key, Value: "nope"}}
+
+		_, err = sqsCellOf(bad)
+		require.ErrorIs(t, err, errBadAxis, key)
+	}
+
+	_, err = sqsCellOf(cellSpec{Payload: payloadSmall, Concurrency: levelMid})
+	require.ErrorIs(t, err, errBadAxis, "a cell with no axes")
+}
+
+func Test_parseCell_reads_the_cell_from_the_flags(t *testing.T) {
+	const opt = "-opt"
+
+	req, err := parseCell([]string{
+		"-service", "sqs", "-workload", "messaging", "-payload", "65536", "-concurrency", "64",
+		opt, "queue=fifo", opt, "shape=batch", opt, "proto=query", "-duration", "3s", "-endpoint", "http://x:1",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, sqsCellSpec(payloadMedium, queueFIFO, shapeBatch, protoQuery, "", levelHigh), req.cell)
+	assert.Equal(t, "http://x:1", req.endpoint)
+	assert.Equal(t, 3*time.Second, req.duration)
+
+	// The flags the orchestrator writes for a cell read back as the same cell.
+	again, err := parseCell(req.cell.loadgenArgs())
+	require.NoError(t, err)
+	assert.Equal(t, req.cell, again.cell)
+
+	_, err = parseCell([]string{opt, "queue"})
+	require.Error(t, err)
 }
