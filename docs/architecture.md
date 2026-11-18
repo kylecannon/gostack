@@ -136,7 +136,9 @@ names follow conventions-go.md: no `util`, no `types`, kebab-case file names.
 
 The server is `net/http` with `github.com/go-chi/chi/v5` for routing and
 middleware composition. fasthttp stays out: it has no HTTP/2, and its request
-type breaks streaming S3 bodies and SDK event streams.
+type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
+request bodies (form and json) are capped at 16 MiB, counted after gzip
+decoding, and an oversized one answers `MalformedQueryString` (400).
 
 ### How chi is used
 

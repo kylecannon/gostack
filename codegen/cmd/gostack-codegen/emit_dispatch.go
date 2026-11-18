@@ -241,7 +241,7 @@ func (g *generator) emitHelpers(p *printer) {
 func (g *generator) emitReaders(p *printer) {
 	if g.hasProtocol(protoJSON) {
 		p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-		p.f("\tbody, err := io.ReadAll(rc.Request.Body)")
+		p.f("\tbody, err := io.ReadAll(io.LimitReader(rc.Request.Body, query.MaxFormBody+1))")
 		p.f("\tif err != nil {")
 		p.f("\t\treturn nil, &awserr.Error{")
 		p.f("\t\t\tCode: \"SerializationException\",")
@@ -249,6 +249,9 @@ func (g *generator) emitReaders(p *printer) {
 		p.f("\t\t\tStatusCode: 400,")
 		p.f("\t\t\tFault: awserr.FaultSender,")
 		p.f("\t\t}")
+		p.f("\t}")
+		p.f("\tif len(body) > query.MaxFormBody {")
+		p.f("\t\treturn nil, query.MalformedQueryString()")
 		p.f("\t}")
 		p.f("\tif !utf8.Valid(body) {")
 		p.f("\t\treturn nil, errBodyNotUTF8")

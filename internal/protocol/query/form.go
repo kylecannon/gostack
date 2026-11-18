@@ -13,7 +13,11 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 )
 
-// MaxFormBody is the largest form body RequestForm reads.
+// MaxFormBody is the largest form body RequestForm reads. It is also the cap on
+// a decoded json body (the generated readBody and the SQS developer API), and
+// every such read answers an oversized body with MalformedQueryString. The cap
+// counts decoded bytes, so a gzip bomb stops at this size. Streaming protocols
+// (rest-xml object bodies) must not go through these readers.
 const MaxFormBody = 16 << 20
 
 const (

@@ -411,12 +411,16 @@ func (c *devCall) queueURL() (string, *awserr.Error) {
 			return "", onlyReceiveMessage()
 		}
 
-		body, err := io.ReadAll(c.r.Body)
+		body, err := io.ReadAll(io.LimitReader(c.r.Body, query.MaxFormBody+1))
 		if err != nil {
 			return "", &awserr.Error{
 				Code: "SerializationException", Message: "The request body could not be read.",
 				StatusCode: http.StatusBadRequest, Fault: awserr.FaultSender,
 			}
+		}
+
+		if len(body) > query.MaxFormBody {
+			return "", query.MalformedQueryString()
 		}
 
 		in, decodeErr := awsjson.Decode[sqsapi.ReceiveMessageInput](body)

@@ -2,16 +2,19 @@ package sqs_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/kylecannon/gostack/api/openapi"
 	"github.com/kylecannon/gostack/internal/gateway"
+	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -912,4 +915,137 @@ func decodeJSON(t *testing.T, body string) any {
 	require.NoError(t, err, body)
 
 	return instance
+}
+
+const (
+	// mebibyte is the unit of the body caps.
+	mebibyte = 1 << 20
+	// bombBytes is what the bomb decodes to, eight times the cap.
+	bombBytes = 8 * query.MaxFormBody
+	// bombBound is the most a request over the cap may allocate in total. A
+	// capped read measures about 69 MiB, because io.ReadAll regrows its buffer
+	// as it reads up to the cap and every regrowth counts. An uncapped read of
+	// bombBytes allocates more than bombBytes for its last buffer alone, and
+	// several times that with the regrowth.
+	bombBound = 96 * mebibyte
+	// largeBody is a decoded body just under the cap.
+	largeBody = 15 * mebibyte
+
+	devEncoding     = "Content-Encoding"
+	devGzip         = "gzip"
+	devOverLimit    = "MalformedQueryString"
+	devTargetSend   = "AmazonSQS.SendMessage"
+	devTooLargeText = "Message must be shorter than"
+)
+
+// gzipBomb is a gzip body of many members of zeros. It is a few hundred
+// kilobytes on the wire and decodes to bombBytes.
+func gzipBomb(t *testing.T) []byte {
+	t.Helper()
+
+	return bytes.Repeat(gzipped(t, string(make([]byte, mebibyte))), bombBytes/mebibyte)
+}
+
+// gzipped compresses text into one gzip member.
+func gzipped(t *testing.T, text string) []byte {
+	t.Helper()
+
+	var out bytes.Buffer
+
+	zw := gzip.NewWriter(&out)
+	_, err := zw.Write([]byte(text))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	return out.Bytes()
+}
+
+// bytesAllocatedBy is the bytes the process allocated while fn ran. The tests of the
+// bomb do not run in parallel, so the delta belongs to fn.
+func bytesAllocatedBy(fn func()) uint64 {
+	var before, after runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+	fn()
+	runtime.ReadMemStats(&after)
+
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+func Test_BodyCap_aGzipBombStopsAtTheCap(t *testing.T) {
+	bomb := string(gzipBomb(t))
+
+	calls := map[string]httpCall{
+		"a json operation": {
+			target: "/",
+			headers: map[string]string{
+				headerAuthorization: signed("test", usEast1), devHeaderType: devTypeProtocol,
+				devHeaderTarget: devTargetSend, devEncoding: devGzip,
+			},
+			body: bomb,
+		},
+	}
+
+	for _, path := range devPaths {
+		calls[path] = httpCall{
+			method: http.MethodPost,
+			target: path,
+			headers: map[string]string{
+				devHeaderType: devTypeProtocol, devHeaderTarget: devTargetRecv, devEncoding: devGzip,
+			},
+			body: bomb,
+		}
+	}
+
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			f := newDevFixture(t, nil)
+
+			var got reply
+
+			bytesAllocated := bytesAllocatedBy(func() { got = f.s.send(call) })
+
+			require.Equal(t, http.StatusBadRequest, got.status, got.body)
+			require.Contains(t, got.body, devOverLimit)
+			require.Less(t, bytesAllocated, uint64(bombBound), "the bomb must stop at the cap")
+			t.Logf("%s: %d MiB allocated for a %d KiB body", name, bytesAllocated/mebibyte, len(bomb)/1024)
+		})
+	}
+}
+
+func Test_BodyCap_aBodyUnderTheCapStillParses(t *testing.T) {
+	f := newDevFixture(t, nil)
+
+	t.Run("a json operation answers with its own error", func(t *testing.T) {
+		body := `{"QueueUrl":"` + f.url + `","MessageBody":"` + strings.Repeat("a", largeBody) + `"}`
+		got := f.s.send(httpCall{
+			target: "/",
+			headers: map[string]string{
+				headerAuthorization: signed("test", usEast1), devHeaderType: devTypeProtocol,
+				devHeaderTarget: devTargetSend, devEncoding: devGzip,
+			},
+			body: string(gzipped(t, body)),
+		})
+
+		require.Equal(t, http.StatusBadRequest, got.status)
+		require.Contains(t, got.body, "InvalidParameterValue")
+		require.Contains(t, got.body, devTooLargeText)
+		require.NotContains(t, got.body, devOverLimit)
+	})
+
+	for _, path := range devPaths {
+		t.Run(path, func(t *testing.T) {
+			body := `{"QueueUrl":"` + f.url + `","Padding":"` + strings.Repeat("a", largeBody) + `"}`
+			got := f.s.send(httpCall{
+				method: http.MethodPost, target: path + "?ShowInvisible=true",
+				headers: map[string]string{
+					devHeaderType: devTypeProtocol, devHeaderTarget: devTargetRecv, devEncoding: devGzip,
+				},
+				body: string(gzipped(t, body)),
+			})
+
+			require.Equal(t, http.StatusOK, got.status, got.body)
+			require.Equal(t, []string{devTaken, devVisible}, bodies(f.s.as(protoJSON).decode(got).messages()))
+		})
+	}
 }
