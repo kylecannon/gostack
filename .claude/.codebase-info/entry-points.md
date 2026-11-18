@@ -1,13 +1,13 @@
 # Entry points
 
-*Last Updated: 2026-11-17*
+*Last Updated: 2026-11-18*
 
 ## Binaries
 
 | Entry | File | Notes |
 | --- | --- | --- |
 | gostack server | `cmd/gostack/main.go` (`main` → `run` → `start` in `start.go`) | `--version` flag; under PID 1 `supervise` runs a child |
-| status check | `cmd/gostack/status.go` (`statusMain`) | `localstack status services --format=json`, the image HEALTHCHECK; runs before config load |
+| status check | `cmd/gostack/status.go` (`statusMain`) | `localstack status services --format=json`, the image HEALTHCHECK; asks `/_gostack/health`, so it works with `GOSTACK_COMPAT_PATHS=0`; runs before config load |
 | codegen | `codegen/cmd/gostack-codegen/main.go` | invoked by `make gen` |
 | bench | `bench/main.go` | `make bench`, `make bench-system` |
 | parity | `parity/run.sh`, `parity/ledger.py` | `make parity`, `parity-baseline`, `parity-check`, `parity-prune` |

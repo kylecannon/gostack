@@ -1,11 +1,11 @@
 # Directory structure
 
-*Last Updated: 2026-11-17*
+*Last Updated: 2026-11-18*
 
 Organized by layer inside `internal/`, with a service-per-directory split for providers. Target layout and intent: `docs/architecture.md` "Layout". Directories listed there that do not exist yet (`sigv4`, `dns`, `container`) are not built.
 
 ```
-cmd/gostack/            main, services.go (registrations/snapshotters), start.go, status.go, settings.go, state.go
+cmd/gostack/            main, services.go (registrations, providers), start.go, status.go, settings.go, state.go
 internal/
   account/              access key to account id, region rules
   awserr/               wire error type
