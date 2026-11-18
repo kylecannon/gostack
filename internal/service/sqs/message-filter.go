@@ -6,18 +6,6 @@ import (
 	"strings"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
-	"github.com/kylecannon/gostack/internal/awserr"
-)
-
-// Names of the operations that a FIFO queue does not take yet.
-const (
-	opSendMessage                  = "SendMessage"
-	opSendMessageBatch             = "SendMessageBatch"
-	opReceiveMessage               = "ReceiveMessage"
-	opDeleteMessage                = "DeleteMessage"
-	opDeleteMessageBatch           = "DeleteMessageBatch"
-	opChangeMessageVisibility      = "ChangeMessageVisibility"
-	opChangeMessageVisibilityBatch = "ChangeMessageVisibilityBatch"
 )
 
 // The names of a message attribute filter that mean "every attribute", and the
@@ -27,16 +15,6 @@ const (
 	filterDotStar = ".*"
 	filterStar    = "*"
 )
-
-// requireStandard refuses an operation on a FIFO queue. FIFO queues arrive with
-// the FIFO ticket, which replaces the contents of the queue and this check.
-func (q *Queue) requireStandard(operation string) *awserr.Error {
-	if q.kind == kindFIFO {
-		return awserr.NotImplemented("sqs", operation)
-	}
-
-	return nil
-}
 
 // intAttr reads an attribute that holds a whole number, as the queue's lock
 // holds it. An attribute that is not a number, which LocalStack does not check

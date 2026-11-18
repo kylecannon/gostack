@@ -29,11 +29,6 @@ func (p *Provider) DeleteMessage(
 		return nil, err
 	}
 
-	err = q.requireStandard(opDeleteMessage)
-	if err != nil {
-		return nil, err
-	}
-
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -56,11 +51,6 @@ func (p *Provider) DeleteMessageBatch(
 	}
 
 	q, err := p.resolve(rc, in.QueueUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	err = q.requireStandard(opDeleteMessageBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +100,6 @@ func (p *Provider) ChangeMessageVisibility(
 		return nil, err
 	}
 
-	err = q.requireStandard(opChangeMessageVisibility)
-	if err != nil {
-		return nil, err
-	}
-
 	if in.VisibilityTimeout == nil {
 		return nil, missingParameter("VisibilityTimeout")
 	}
@@ -141,11 +126,6 @@ func (p *Provider) ChangeMessageVisibilityBatch(
 	}
 
 	q, err := p.resolve(rc, in.QueueUrl)
-	if err != nil {
-		return nil, err
-	}
-
-	err = q.requireStandard(opChangeMessageVisibilityBatch)
 	if err != nil {
 		return nil, err
 	}
@@ -195,9 +175,7 @@ func (q *Queue) deleteLocked(handle string) *awserr.Error {
 		return err
 	}
 
-	q.contents.Delete(handle)
-
-	return nil
+	return q.contents.Delete(handle)
 }
 
 // changeVisibilityLocked changes the visibility of the message of a receipt

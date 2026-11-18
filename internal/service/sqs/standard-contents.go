@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strconv"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/awserr"
 )
 
 // entryState is where a message of a standard queue is.
@@ -17,6 +19,9 @@ const (
 	// stateInflight is a message that a receive took and whose visibility
 	// timeout is not over.
 	stateInflight
+	// stateDedup is no message: it is the record of a deduplication id, which a
+	// FIFO queue keeps for the length of the deduplication window.
+	stateDedup
 )
 
 // entry is a message in a standardContents, with what changes while it is
@@ -33,6 +38,8 @@ type entry struct {
 	handles       []string
 	// visibleAt and deadlineAt are the positions in the two heaps, -1 when out.
 	visibleAt, deadlineAt int
+	// fifo is what only an entry of a FIFO queue has, nil for a standard one.
+	fifo *fifoState
 }
 
 // standardContents is the Contents of a standard queue.
@@ -58,16 +65,10 @@ type standardContents struct {
 	seq       uint64
 	delayed   int
 	inflight  int
+	redrive   redriveCache
 
-	// wake is closed and cleared when a message may have become visible, and
-	// made again when a long poll asks for it.
-	wake   chan struct{}
-	closed bool
-
-	timer *time.Timer
-	// armed is whether timer is set; armedFor is the deadline it is set for.
-	armed    bool
-	armedFor time.Time
+	wake  waker
+	timer deadlineTimer
 }
 
 var _ Contents = (*standardContents)(nil)
@@ -110,8 +111,7 @@ func (c *standardContents) Clear() {
 
 func (c *standardContents) Close() {
 	c.Clear()
-	c.closed = true
-	c.notify()
+	c.wake.shutdown()
 }
 
 func (c *standardContents) Put(m *message, delay time.Duration) {
@@ -131,11 +131,17 @@ func (c *standardContents) Put(m *message, delay time.Duration) {
 	c.makeVisible(e)
 }
 
-func (c *standardContents) Receive(maxMessages int, visibility time.Duration) []delivery {
+func (c *standardContents) Receive(maxMessages int, visibility time.Duration) receiveResult {
 	now := time.Now()
 	c.refresh(now)
 
-	var taken []*entry
+	policy, redriven := c.redrive.of(c.q)
+	redriven = redriven && policy.maxReceives > 0
+
+	var (
+		taken []*entry
+		out   receiveResult
+	)
 
 	for len(taken) < maxMessages {
 		e := c.visible.pop()
@@ -143,13 +149,23 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) []
 			break
 		}
 
+		e.receiveCount++
+
+		if redriven && e.receiveCount > policy.maxReceives {
+			c.forget(e)
+			out.dead = append(out.dead, deadLetter{
+				msg: e.msg, target: policy.target, received: e.msg.receiveBase + e.receiveCount - 1,
+			})
+
+			continue
+		}
+
 		taken = append(taken, e)
 	}
 
-	out := make([]delivery, 0, len(taken))
+	out.taken = make([]delivery, 0, len(taken))
 
 	for _, e := range taken {
-		e.receiveCount++
 		if e.firstReceived.IsZero() {
 			e.firstReceived = now
 		}
@@ -157,7 +173,9 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) []
 		handle := newReceiptHandle(c.q.arn, e.msg.id, now)
 		e.handles = append(e.handles, handle)
 		c.receipts[handle] = e
-		out = append(out, delivery{msg: e.msg, handle: handle, receiveCount: e.receiveCount, firstReceived: e.firstReceived})
+		out.taken = append(out.taken, delivery{
+			msg: e.msg, handle: handle, receiveCount: e.msg.receiveBase + e.receiveCount, firstReceived: e.firstReceived,
+		})
 
 		if visibility <= 0 {
 			c.makeVisible(e)
@@ -176,14 +194,16 @@ func (c *standardContents) Receive(maxMessages int, visibility time.Duration) []
 	return out
 }
 
-func (c *standardContents) Delete(handle string) {
+func (c *standardContents) Delete(handle string) *awserr.Error {
 	e, ok := c.receipts[handle]
 	if !ok {
-		return
+		return nil
 	}
 
 	c.remove(e)
 	c.rearm(time.Now())
+
+	return nil
 }
 
 func (c *standardContents) ChangeVisibility(handle string, visibility time.Duration) bool {
@@ -215,32 +235,14 @@ func (c *standardContents) ChangeVisibility(handle string, visibility time.Durat
 	return true
 }
 
-func (c *standardContents) Wake() <-chan struct{} {
-	if c.closed {
-		return nil
-	}
-
-	if c.wake == nil {
-		c.wake = make(chan struct{})
-	}
-
-	return c.wake
-}
-
-// notify wakes every long poll that asked for the channel.
-func (c *standardContents) notify() {
-	if c.wake != nil {
-		close(c.wake)
-		c.wake = nil
-	}
-}
+func (c *standardContents) Wake() <-chan struct{} { return c.wake.channel() }
 
 // makeVisible puts e where a receive finds it and wakes the long polls.
 func (c *standardContents) makeVisible(e *entry) {
 	e.state = stateVisible
 	e.deadline = time.Time{}
 	c.visible.push(e)
-	c.notify()
+	c.wake.notify()
 }
 
 // remove forgets e and every receipt handle that names it.
@@ -258,6 +260,11 @@ func (c *standardContents) remove(e *entry) {
 		// An entry that was never put has no place to leave.
 	}
 
+	c.forget(e)
+}
+
+// forget drops every receipt handle that names e.
+func (c *standardContents) forget(e *entry) {
 	for _, handle := range e.handles {
 		delete(c.receipts, handle)
 	}
@@ -302,29 +309,7 @@ func (c *standardContents) sweepRetention(now time.Time) {
 // rearm sets the timer for the earliest deadline, or stops it when there is
 // none.
 func (c *standardContents) rearm(now time.Time) {
-	top := c.deadlines.peek()
-	if top == nil {
-		if c.armed {
-			c.timer.Stop()
-			c.armed = false
-		}
-
-		return
-	}
-
-	if c.armed && c.armedFor.Equal(top.deadline) {
-		return
-	}
-
-	wait := max(top.deadline.Sub(now), 0)
-
-	if c.timer == nil {
-		c.timer = time.AfterFunc(wait, c.fire)
-	} else {
-		c.timer.Reset(wait)
-	}
-
-	c.armed, c.armedFor = true, top.deadline
+	c.timer.arm(c.deadlines.peek(), now, c.fire)
 }
 
 // fire is the timer callback. It takes the queue's lock like any caller.
@@ -332,13 +317,13 @@ func (c *standardContents) fire() {
 	c.q.mu.Lock()
 	defer c.q.mu.Unlock()
 
-	if c.closed {
+	if c.wake.closed {
 		return
 	}
 
 	// The timer that called this is spent: rearm sets it again if a deadline is
 	// left.
-	c.armed = false
+	c.timer.spent()
 	now := time.Now()
 	c.refresh(now)
 	c.rearm(now)
@@ -346,7 +331,7 @@ func (c *standardContents) fire() {
 
 // timerArmed reports whether a timer is set. Tests use it to check that an idle
 // queue holds none.
-func (c *standardContents) timerArmed() bool { return c.armed }
+func (c *standardContents) timerArmed() bool { return c.timer.armed }
 
 // newReceiptHandle makes a receipt handle the way LocalStack does: the base64
 // of a random id, the queue's ARN, the message id and the time of the receive.

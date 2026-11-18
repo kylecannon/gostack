@@ -36,7 +36,13 @@ func New(settings func() Settings) *Provider {
 		settings: settings,
 		states:   store.NewBundle(newState),
 	}
-	p.contents = func(q *Queue) Contents { return newStandardContents(q, p.settings) }
+	p.contents = func(q *Queue) Contents {
+		if q.kind == kindFIFO {
+			return newFIFOContents(q, p.settings)
+		}
+
+		return newStandardContents(q, p.settings)
+	}
 
 	return p
 }

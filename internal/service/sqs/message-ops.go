@@ -2,7 +2,10 @@ package sqs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
+	"strings"
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
@@ -23,11 +26,6 @@ func (p *Provider) SendMessage(ctx context.Context, in *sqsapi.SendMessageInput)
 		return nil, err
 	}
 
-	err = q.requireStandard(opSendMessage)
-	if err != nil {
-		return nil, err
-	}
-
 	req := &sendRequest{
 		body: in.MessageBody, delay: in.DelaySeconds, attributes: in.MessageAttributes,
 		system: in.MessageSystemAttributes, dedupID: in.MessageDeduplicationId, groupID: in.MessageGroupId,
@@ -44,6 +42,10 @@ func (p *Provider) SendMessage(ctx context.Context, in *sqsapi.SendMessageInput)
 	out := &sqsapi.SendMessageOutput{MessageId: &m.id, MD5OfMessageBody: &m.bodyMD5}
 	if m.attributes != nil {
 		out.MD5OfMessageAttributes = &m.attributesMD5
+	}
+
+	if m.sequence != "" {
+		out.SequenceNumber = &m.sequence
 	}
 
 	if in.MessageSystemAttributes != nil {
@@ -68,11 +70,6 @@ func (p *Provider) SendMessageBatch(
 		return nil, err
 	}
 
-	err = q.requireStandard(opSendMessageBatch)
-	if err != nil {
-		return nil, err
-	}
-
 	ids := make([]string, len(in.Entries))
 	size := 0
 
@@ -82,6 +79,11 @@ func (p *Provider) SendMessageBatch(
 	}
 
 	err = checkBatch(ids, maxBatchEntries)
+	if err != nil {
+		return nil, err
+	}
+
+	err = q.checkFIFOBatch(in.Entries)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +132,10 @@ func (q *Queue) sendEntryLocked(
 		result.MD5OfMessageAttributes = &m.attributesMD5
 	}
 
+	if m.sequence != "" {
+		result.SequenceNumber = &m.sequence
+	}
+
 	if entry.MessageSystemAttributes != nil {
 		result.MD5OfMessageSystemAttributes = new(systemAttributesMD5(entry.MessageSystemAttributes))
 	}
@@ -145,21 +151,115 @@ func (q *Queue) sendLocked(rc *request.Context, req *sendRequest) (*message, *aw
 		return nil, err
 	}
 
-	// Only a FIFO queue takes a deduplication id.
-	if req.dedupID != nil {
-		return nil, invalidParameterValue("Value " + *req.dedupID + " for parameter MessageDeduplicationId is invalid. " +
-			"Reason: The request includes a parameter that is not valid for this queue type.")
-	}
-
-	delay := q.intAttr(attrDelaySeconds)
-	if req.delay != nil {
-		delay = int(*req.delay)
-	}
-
 	m := newMessage(rc, req, time.Now())
-	q.contents.Put(m, time.Duration(delay)*time.Second)
+
+	err = q.putLocked(m, req.delay)
+	if err != nil {
+		return nil, err
+	}
 
 	return m, nil
+}
+
+// putLocked checks a message against the type of the queue and puts it on the
+// queue. delay is the DelaySeconds of the send, nil when it has none. The caller
+// holds the queue's lock.
+//
+// A standard queue takes no deduplication id, and a message's delay is its own
+// or else the queue's. A FIFO queue takes no delay on the message, wants a group
+// and a deduplication id (the queue makes one from the body with
+// ContentBasedDeduplication on), and always delays by its own DelaySeconds.
+func (q *Queue) putLocked(m *message, delay *int32) *awserr.Error {
+	seconds := q.intAttr(attrDelaySeconds)
+
+	if q.kind == kindFIFO {
+		err := q.admitFIFO(m, delay)
+		if err != nil {
+			return err
+		}
+	} else {
+		if m.dedupID != "" {
+			return invalidParameterValue("Value " + m.dedupID + " for parameter MessageDeduplicationId is invalid. " +
+				"Reason: The request includes a parameter that is not valid for this queue type.")
+		}
+
+		if delay != nil {
+			seconds = int(*delay)
+		}
+	}
+
+	q.contents.Put(m, time.Duration(seconds)*time.Second)
+
+	return nil
+}
+
+// admitFIFO runs LocalStack's checks of a message for a FIFO queue, in its order,
+// and gives the message the deduplication id the queue deduplicates it on.
+func (q *Queue) admitFIFO(m *message, delay *int32) *awserr.Error {
+	if delay != nil && *delay != 0 {
+		return invalidParameterValue("Value " + strconv.Itoa(int(*delay)) + " for parameter DelaySeconds is invalid. " +
+			"Reason: The request include parameter that is not valid for this queue type.")
+	}
+
+	if m.groupID == "" {
+		return missingParameter("MessageGroupId")
+	}
+
+	if m.dedupID == "" {
+		if q.dedupIDRequired() {
+			return invalidParameterValue(messageDedupIDRequired)
+		}
+
+		m.dedupID = sha256Hex(m.body)
+	}
+
+	return nil
+}
+
+// messageDedupIDRequired is the error of a send without a deduplication id to a
+// queue that cannot make one.
+const messageDedupIDRequired = "The queue should either have ContentBasedDeduplication enabled or " +
+	"MessageDeduplicationId provided explicitly"
+
+// dedupIDRequired reports whether a send has to name its deduplication id: the
+// queue is FIFO and its ContentBasedDeduplication is "false", in any case. The
+// caller holds the queue's lock.
+func (q *Queue) dedupIDRequired() bool {
+	value, found := q.attrs[attrContentBasedDeduplication]
+
+	return q.kind == kindFIFO && (!found || strings.EqualFold(value, "false"))
+}
+
+// checkFIFOBatch is the part of LocalStack's batch check that depends on the
+// queue: an entry of a FIFO queue has a group, and a deduplication id unless the
+// queue makes one. It refuses the whole batch, not the entry.
+func (q *Queue) checkFIFOBatch(entries []sqsapi.SendMessageBatchRequestEntry) *awserr.Error {
+	if q.kind != kindFIFO {
+		return nil
+	}
+
+	q.mu.Lock()
+	required := q.dedupIDRequired()
+	q.mu.Unlock()
+
+	for i := range entries {
+		if required && deref(entries[i].MessageDeduplicationId) == "" {
+			return invalidParameterValue(messageDedupIDRequired)
+		}
+
+		if deref(entries[i].MessageGroupId) == "" {
+			return invalidParameterValue("The request must contain the parameter MessageGroupId.")
+		}
+	}
+
+	return nil
+}
+
+// sha256Hex is the checksum a FIFO queue deduplicates a body on.
+func sha256Hex(text string) string {
+	sum := sha256.Sum256([]byte(text))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // receiveParams are the settings of one ReceiveMessage call.
@@ -198,17 +298,16 @@ func (p *Provider) ReceiveMessage(
 		return nil, err
 	}
 
-	err = q.requireStandard(opReceiveMessage)
-	if err != nil {
-		return nil, err
-	}
-
 	params, err := q.receiveParams(rc, in)
 	if err != nil {
 		return nil, err
 	}
 
-	taken := q.poll(ctx, params)
+	taken, err := q.poll(ctx, params, func(dead []deadLetter) *awserr.Error { return p.deadLetter(rc, q, dead) })
+	if err != nil {
+		return nil, err
+	}
+
 	if len(taken) == 0 {
 		return &sqsapi.ReceiveMessageOutput{}, nil
 	}
@@ -292,7 +391,9 @@ func headerInt(rc *request.Context, name string) int {
 // queue's lock while it waits: it asks the contents for a channel that is closed
 // when a message may be visible, and sleeps on that, on the end of the wait and
 // on the request.
-func (q *Queue) poll(ctx context.Context, params receiveParams) []delivery {
+func (q *Queue) poll(
+	ctx context.Context, params receiveParams, deadLetter func([]deadLetter) *awserr.Error,
+) ([]delivery, *awserr.Error) {
 	var taken []delivery
 
 	if params.wait > 0 {
@@ -303,25 +404,34 @@ func (q *Queue) poll(ctx context.Context, params receiveParams) []delivery {
 	}
 
 	for {
-		batch, wake := q.receiveOnce(params, params.count-len(taken))
-		taken = append(taken, batch...)
+		got, wake := q.receiveOnce(params, params.count-len(taken))
+		taken = append(taken, got.taken...)
+
+		// The lock of the queue is free again, so the dead letters can go to a
+		// queue that has a lock of its own.
+		if len(got.dead) > 0 {
+			err := deadLetter(got.dead)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		done := len(taken) >= params.count || (len(taken) > 0 && !params.fill)
 		if done || wake == nil || params.wait <= 0 {
-			return taken
+			return taken, nil
 		}
 
 		select {
 		case <-wake:
 		case <-ctx.Done():
-			return taken
+			return taken, nil
 		}
 	}
 }
 
 // receiveOnce takes what is visible now, and returns the wake channel to wait
 // on for more.
-func (q *Queue) receiveOnce(params receiveParams, want int) ([]delivery, <-chan struct{}) {
+func (q *Queue) receiveOnce(params receiveParams, want int) (receiveResult, <-chan struct{}) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -330,14 +440,14 @@ func (q *Queue) receiveOnce(params receiveParams, want int) ([]delivery, <-chan 
 		visibility = int(*params.visibility)
 	}
 
-	taken := q.contents.Receive(want, time.Duration(visibility)*time.Second)
+	got := q.contents.Receive(want, time.Duration(visibility)*time.Second)
 
 	var wake <-chan struct{}
 	if params.wait > 0 {
 		wake = q.contents.Wake()
 	}
 
-	return taken, wake
+	return got, wake
 }
 
 // toAPIMessage builds the message a receiver sees from a delivery, with the
