@@ -373,6 +373,27 @@ func Test_Table_Detect_owner(t *testing.T) {
 	assert.Empty(t, service.OwnerOf(signedSQS), "Own leaves the request it was given unmarked")
 }
 
+// Test_Table_Claim_s3ControlHost: S3's host claim takes a *.s3-control.* host,
+// as its virtual-host pattern does in LocalStack, so a /v20180820 call to it is
+// S3's even though s3control claims that path for any other host.
+func Test_Table_Claim_s3ControlHost(t *testing.T) {
+	s3 := s3Registration()
+	s3.ClaimHost = func(host string) bool { return strings.Contains(host, ".s3") }
+
+	table, err := route.NewTable([]service.Registration{{Metadata: sqs}, s3, s3ControlRegistration()})
+	require.NoError(t, err)
+
+	const controlHost = "000000000000.s3-control.localhost.localstack.cloud:4566"
+
+	claimed, err := table.Claim(s3Request(t, http.MethodGet, controlHost, pathControl, scope(nameS3)))
+	require.NoError(t, err)
+	assert.Equal(t, nameS3, claimed.Service, "the host claim comes before the path")
+
+	detected, err := table.Detect(s3Request(t, http.MethodGet, localHost, pathControl, scope(nameS3)), nil)
+	require.NoError(t, err)
+	assert.Equal(t, nameS3Control, detected.Service, "on any other host the path is s3control's")
+}
+
 func Test_Table_Detect_signingDefault(t *testing.T) {
 	asDefault := func(reg service.Registration) service.Registration {
 		reg.SigningDefault = true

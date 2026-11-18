@@ -67,8 +67,9 @@ type Registration struct {
 	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a
 	// Lambda function URL or an S3 website by its host alone. A claimed request
 	// skips the routes other services mount, but not the /_localstack, /_gostack
-	// and /_aws ones. A request that more than one service claims is detected as
-	// if none had.
+	// and /_aws ones, and the gateway marks it with Own for the claimant, so
+	// RawBody and OwnCORS apply to it. A request that more than one service
+	// claims is detected as if none had, and has no owner.
 	ClaimHost func(host string) bool
 	// Claim picks the service among those that share the request's signing
 	// name, as LocalStack's custom_signing_name_rules picks s3control over s3 by
@@ -89,12 +90,15 @@ type Registration struct {
 	Fallback func(r *http.Request) bool
 	// Preprocess sees every request at root step 4, after the host claims and
 	// before CORS and content decoding, as LocalStack's preprocess_request
-	// handlers do: S3 marks its own requests there with Own. It returns the
-	// request to carry on with, usually the one Own returns, or nil to keep r.
-	// The Preprocess of each service runs in registration order, each given the
-	// request the one before returned. A request a ClaimHost claimed reaches
-	// only the claimant's Preprocess, so another service's Own cannot take it,
-	// and a claim that is an error runs none.
+	// handlers do: S3 marks a path-style request to a bucket it has there with
+	// Own, and rewrites a virtual-host one. It returns the request to carry on
+	// with, usually the one Own returns, or nil to keep r. The Preprocess of
+	// each service runs in registration order, each given the request the one
+	// before returned. A request a ClaimHost claimed is marked for the claimant
+	// before its Preprocess runs, so a service that owns its host needs none, and
+	// it reaches only the claimant's Preprocess, so another service's Own cannot
+	// take it. A claim that is an error marks nothing and runs none, and neither
+	// does a request to the gateway's own paths.
 	Preprocess func(r *http.Request) *http.Request
 	// RawBody makes root content decoding skip a request the service owns (Own),
 	// so Serve reads the body as sent, gzip included, with its Content-Encoding.

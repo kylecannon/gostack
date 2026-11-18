@@ -70,6 +70,8 @@ func TestPreprocessOwnsS3RequestsAndRewritesVirtualHosts(t *testing.T) {
 		wantPath    string
 		wantEscaped string
 		wantOwner   string
+		// giveMarked is the gateway's mark for the service that claimed the host.
+		giveMarked bool
 	}{
 		{
 			name: "a key with escapes", giveHost: "bucket.s3." + testHost, giveTarget: "/dir%2Fname%20x?versionId=1",
@@ -86,8 +88,14 @@ func TestPreprocessOwnsS3RequestsAndRewritesVirtualHosts(t *testing.T) {
 			wantEscaped: "/my.dotted.bucket/k", wantOwner: serviceName,
 		},
 		{
-			name: "a path on S3's own host", giveHost: "s3." + testHost, giveTarget: objectPath, giveBucket: "",
+			name: "a path on S3's own host, which the gateway marked", giveHost: "s3." + testHost,
+			giveTarget: objectPath, giveBucket: "", giveMarked: true,
 			wantHost: "s3." + testHost, wantPath: objectPath, wantEscaped: objectPath, wantOwner: serviceName,
+		},
+		{
+			name: "a path on S3's own host is not owned by the host alone", giveHost: "s3." + testHost,
+			giveTarget: objectPath, giveBucket: "",
+			wantHost: "s3." + testHost, wantPath: objectPath, wantEscaped: objectPath, wantOwner: "",
 		},
 		{
 			name: "path style to an existing bucket", giveHost: gatewayHost, giveTarget: objectPath,
@@ -114,6 +122,10 @@ func TestPreprocessOwnsS3RequestsAndRewritesVirtualHosts(t *testing.T) {
 
 			original := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.giveTarget, nil)
 			original.Host = tt.giveHost
+
+			if tt.giveMarked {
+				original = service.Own(original, serviceName)
+			}
 
 			r := original
 			if rewritten := p.preprocess(original); rewritten != nil {
@@ -143,6 +155,10 @@ func TestIsControlCall(t *testing.T) {
 		{name: "a key under a virtual host", giveHost: "bucket.s3." + testHost, givePath: "/v20180820/x", want: false},
 		{name: "a control path on S3's own host", giveHost: "s3." + testHost, givePath: "/v20180820/x", want: false},
 		{
+			name: "a control path on an s3-control host, which S3's pattern claims", want: false,
+			giveHost: "000000000000.s3-control." + testHost, givePath: "/v20180820/configuration/publicAccessBlock",
+		},
+		{
 			name: "an existing bucket named like it", giveHost: gatewayHost, givePath: "/v20180820/key",
 			giveBucket: "v20180820", want: false,
 		},
@@ -157,6 +173,12 @@ func TestIsControlCall(t *testing.T) {
 
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.givePath, nil)
 			r.Host = tt.giveHost
+
+			// The gateway marks the service that claims the host before its
+			// Preprocess runs.
+			if p.claimHost(r.Host) {
+				r = service.Own(r, serviceName)
+			}
 
 			if rewritten := p.preprocess(r); rewritten != nil {
 				r = rewritten

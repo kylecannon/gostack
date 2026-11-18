@@ -134,11 +134,12 @@ func virtualHostBucket(host string) string {
 // preprocess owns the requests LocalStack's S3 pre-router recognizes
 // (cors.py:61-92): a host S3 claims, and a path whose first segment is an
 // existing bucket. Owned, they reach S3 before the signing name is read, with
-// their body as sent and no root CORS. A virtual-host request is rewritten to
-// path style first, so the generated router and readers see /<bucket>/<key>,
-// as LocalStack's VirtualHostRewriter does (parser.py:1420-1495). Any other
-// POST has the start of its body read for the legacy rules that look into it.
-// The gateway's own paths are left alone.
+// their body as sent and no root CORS. A host S3 claims is owned already when
+// it gets here: the gateway marks the claimant before its Preprocess runs. A
+// virtual-host request is rewritten to path style first, so the generated
+// router and readers see /<bucket>/<key>, as LocalStack's VirtualHostRewriter
+// does (parser.py:1420-1495). Any other POST has the start of its body read for
+// the legacy rules that look into it. The gateway's own paths are left alone.
 func (p *Provider) preprocess(r *http.Request) *http.Request {
 	if isGatewayPath(r.URL.Path) {
 		return nil
@@ -149,7 +150,9 @@ func (p *Provider) preprocess(r *http.Request) *http.Request {
 	}
 
 	switch {
-	case p.claimHost(r.Host) || p.isBucketPath(r.URL.Path):
+	case service.OwnerOf(r) == serviceName:
+		return nil
+	case p.isBucketPath(r.URL.Path):
 		return service.Own(r, serviceName)
 	case r.Method == http.MethodPost:
 		return sniff(r)

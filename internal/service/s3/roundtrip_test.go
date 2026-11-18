@@ -397,6 +397,21 @@ func TestRequestsS3DoesNotServeYetAnswer501(t *testing.T) {
 	}
 }
 
+// TestS3ControlHostIsS3s follows LocalStack, whose S3 pre-router takes any host
+// that matches S3's virtual-host pattern, a *.s3-control.* host among them,
+// before the signing name or the path is read: the /v20180820 path is a bucket
+// and a key to S3, not s3control's.
+func TestS3ControlHostIsS3s(t *testing.T) {
+	s := newServer(t)
+
+	got := s.do(call{
+		method: http.MethodGet, host: "000000000000.s3-control." + localstackHost,
+		target: "/v20180820/configuration/publicAccessBlock", region: regionUSEast1,
+	})
+	require.Equal(t, http.StatusNotFound, got.status, string(got.body))
+	assert.Equal(t, "NoSuchBucket", got.err(t).Code)
+}
+
 func TestOwnedRequestsReachS3AsSent(t *testing.T) {
 	s := newServer(t)
 	createBucket(t, s)

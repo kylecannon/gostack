@@ -162,15 +162,22 @@ func isInternalPath(path string) bool {
 // of each registration, in registration order, sees every request before CORS
 // and content decoding, and may replace it.
 //
-// A request that step 3 claimed by its host belongs to the claiming service, so
-// no other service's Preprocess sees it: a mark from one (service.Own) would
-// take the request from its claimant, whose gzip decoding and CORS it would
-// skip. The claimant's own Preprocess still runs, as it is how S3 rewrites a
-// virtual-host request and owns it. A claim that is an error (served as one) has
-// no claimant, and no Preprocess runs.
+// A request that step 3 claimed by its host belongs to the claiming service.
+// The gateway marks it with service.Own for the claimant, so its RawBody,
+// OwnCORS and route detection apply without a Preprocess to say so, and no
+// other service's Preprocess sees it: a mark from one would take the request
+// from its claimant, whose gzip decoding and CORS it would skip. The claimant's
+// own Preprocess still runs, as it is how S3 rewrites a virtual-host request.
+// A claim that is an error (served as one) has no claimant, so nothing is
+// marked and no Preprocess runs, and the gateway's own paths, which no claim
+// takes, are not marked.
 func (g *Gateway) preprocess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claimed, isClaimed := claimOf(r)
+
+		if isClaimed && claimed.err == nil && !isInternalPath(r.URL.Path) {
+			r = service.Own(r, g.regs[claimed.match.Index].Metadata.Name)
+		}
 
 		for i := range g.regs {
 			if isClaimed && (claimed.err != nil || claimed.match.Index != i) {

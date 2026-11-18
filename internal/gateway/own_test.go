@@ -20,6 +20,7 @@ const (
 	objectText = "an object body stored gzipped"
 
 	headerContentEncoding = "Content-Encoding"
+	encodingGzip          = "gzip"
 )
 
 // ownedCall is what a fake service's Serve was given.
@@ -114,7 +115,7 @@ func Test_Gateway_ownedRawBody(t *testing.T) {
 		t.Helper()
 
 		return newRequest(t, http.MethodPut, "http://localhost:4566/bucket/key.gz", string(zipped), map[string]string{
-			headerAuth: signed("test", usEast1, nameS3), headerContentEncoding: "gzip",
+			headerAuth: signed("test", usEast1, nameS3), headerContentEncoding: encodingGzip,
 		})
 	}
 
@@ -127,7 +128,7 @@ func Test_Gateway_ownedRawBody(t *testing.T) {
 		require.Len(t, *calls, 1)
 		assert.Equal(t, nameS3, (*calls)[0].service)
 		assert.Equal(t, zipped, (*calls)[0].body)
-		assert.Equal(t, "gzip", (*calls)[0].encoding)
+		assert.Equal(t, encodingGzip, (*calls)[0].encoding)
 		assert.Equal(t, int64(len(zipped)), (*calls)[0].length)
 	})
 
@@ -147,7 +148,7 @@ func Test_Gateway_ownedRawBody(t *testing.T) {
 
 		r := sendMessage(t)
 		r.Body = io.NopCloser(bytes.NewReader(gzipped(t, `{"QueueUrl":"q"}`)))
-		r.Header.Set(headerContentEncoding, "gzip")
+		r.Header.Set(headerContentEncoding, encodingGzip)
 
 		resp, _ := call(t, g.Handler(), r)
 
@@ -366,7 +367,7 @@ func Test_Gateway_hostClaimBeatsOwnerMark(t *testing.T) {
 	put := func(t *testing.T, target string) *http.Request {
 		t.Helper()
 
-		return newRequest(t, http.MethodPut, target, string(zipped), map[string]string{headerContentEncoding: "gzip"})
+		return newRequest(t, http.MethodPut, target, string(zipped), map[string]string{headerContentEncoding: encodingGzip})
 	}
 
 	t.Run("the claiming service gets the gzip body decoded", func(t *testing.T) {
@@ -403,9 +404,88 @@ func Test_Gateway_hostClaimBeatsOwnerMark(t *testing.T) {
 		require.Len(t, *calls, 1)
 		assert.Equal(t, nameS3, (*calls)[0].service)
 		assert.Equal(t, zipped, (*calls)[0].body, "the claimant's own Preprocess still marks it")
-		assert.Equal(t, "gzip", (*calls)[0].encoding)
+		assert.Equal(t, encodingGzip, (*calls)[0].encoding)
 
 		resp, _ = call(t, g.Handler(), preflight(t, claimedHost+bucketKey, badOrigin))
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "the claimant's own CORS")
+	})
+}
+
+// Test_Gateway_hostClaimOwns: the service that claims a host owns the request
+// without a Preprocess to say so, so its RawBody and OwnCORS apply to the host
+// it claimed. A claim that is ambiguous has no owner, and the gateway's own
+// path on a claimed host is nobody's.
+func Test_Gateway_hostClaimOwns(t *testing.T) {
+	const claimedHost = "http://s3.localhost.localstack.cloud:4566"
+
+	zipped := gzipped(t, objectText)
+
+	newClaimGateway := func(t *testing.T, regs ...func(*service.Registration)) (*gateway.Gateway, *[]ownedCall) {
+		t.Helper()
+
+		var calls []ownedCall
+
+		record := recordCalls(t, &calls)
+
+		s3, _ := s3Registration()
+		s3.Serve = record
+		s3.ClaimHost = func(host string) bool { return strings.HasPrefix(host, "s3.") }
+		selfManaged(&s3)
+
+		all := make([]service.Registration, 0, 1+len(regs))
+		all = append(all, s3)
+
+		for _, edit := range regs {
+			edge := edgeRegistration()
+			edge.Serve = record
+			edit(&edge)
+
+			all = append(all, edge)
+		}
+
+		return newGateway(t, newSettings(), all), &calls
+	}
+
+	t.Run("a claimant without a Preprocess gets its raw body", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), newRequest(t, http.MethodPut, claimedHost+"/bucket/key", string(zipped),
+			map[string]string{headerContentEncoding: encodingGzip}))
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Len(t, *calls, 1)
+		assert.Equal(t, nameS3, (*calls)[0].service)
+		assert.Equal(t, zipped, (*calls)[0].body)
+		assert.Equal(t, encodingGzip, (*calls)[0].encoding)
+	})
+
+	t.Run("a claimant without a Preprocess handles its own preflight", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), preflight(t, claimedHost+"/bucket/key", badOrigin))
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "the root CORS would answer 403")
+		require.Len(t, *calls, 1)
+		assert.Equal(t, nameS3, (*calls)[0].service)
+	})
+
+	t.Run("two claimants leave the request unowned", func(t *testing.T) {
+		g, calls := newClaimGateway(t, func(edge *service.Registration) {
+			edge.ClaimHost = func(host string) bool { return strings.HasPrefix(host, "s3.") }
+		})
+
+		resp, _ := call(t, g.Handler(), preflight(t, claimedHost+"/bucket/key", badOrigin))
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode, "the gateway's CORS answers")
+		assert.Empty(t, *calls)
+	})
+
+	t.Run("the gateway's own path is not marked", func(t *testing.T) {
+		g, calls := newClaimGateway(t)
+
+		resp, _ := call(t, g.Handler(), preflight(t, claimedHost+"/_localstack/health", badOrigin))
+
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode, "the gateway's CORS answers")
+		assert.Empty(t, *calls)
 	})
 }
