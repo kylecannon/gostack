@@ -217,10 +217,11 @@ func grantsFromHeaders(headers grantHeaders) ([]s3api.Grant, error) {
 }
 
 // validateACP is LocalStack's validate_acl_acp: an access control policy in a
-// request body needs its Owner, and every grant a permission and a grantee that
-// S3 knows.
+// request body needs its Owner and its AccessControlList, which may be empty
+// (the decoder leaves Grants nil only when the element is missing), and every
+// grant a permission and a grantee that S3 knows.
 func validateACP(acp *s3api.AccessControlPolicy) error {
-	if acp == nil || acp.Owner == nil {
+	if acp == nil || acp.Owner == nil || acp.Grants == nil {
 		return malformedACL()
 	}
 

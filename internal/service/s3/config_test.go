@@ -230,6 +230,7 @@ func TestBucketACLErrors(t *testing.T) {
 		"nothing":         {nil, "", "MissingSecurityHeader"},
 		"empty policy":    {nil, policy(""), cfgMalformedACL},
 		"no owner":        {nil, policy(group(cfgLogGroup, "WRITE")), cfgMalformedACL},
+		"no list":         {nil, policy(owner), cfgMalformedACL},
 		"bad permission":  {nil, policy(owner + group(cfgLogGroup, "NOPE")), cfgMalformedACL},
 		"bad owner id": {
 			nil, policy("<Owner><ID>wrong-id</ID></Owner>" + group(cfgLogGroup, "WRITE")), cfgInvalidArgument,
@@ -246,6 +247,22 @@ func TestBucketACLErrors(t *testing.T) {
 			cfgExpect(t, cfgPut(s, bucketAPath+"?acl", tc.body, tc.header), http.StatusBadRequest, tc.code)
 		})
 	}
+}
+
+// TestBucketACLWithAnEmptyList: an AccessControlList with no grants is a list,
+// which LocalStack's validate_acl_acp takes (it checks that "Grants" is there),
+// unlike a policy with no list at all.
+func TestBucketACLWithAnEmptyList(t *testing.T) {
+	s := cfgBucket(t)
+
+	// A bucket that takes ACLs, which ObjectWriter ownership does and the default does not.
+	cfgExpect(t, cfgDelete(s, bucketAPath+"?ownershipControls"), http.StatusNoContent, "")
+
+	owner := "<Owner><ID>" + cfgOwner + "</ID></Owner>"
+	cfgExpect(t, cfgPut(s, bucketAPath+"?acl", cfgDoc("AccessControlPolicy", owner), nil),
+		http.StatusBadRequest, cfgMalformedACL)
+	cfgExpect(t, cfgPut(s, bucketAPath+"?acl", cfgDoc("AccessControlPolicy", owner+"<AccessControlList/>"), nil),
+		http.StatusOK, "")
 }
 
 func TestBucketPolicy(t *testing.T) {
