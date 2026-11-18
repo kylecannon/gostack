@@ -332,7 +332,7 @@ func TestUploadPartCopyRefusesAnArchivedSource(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, s.do(call{
 		method: http.MethodPut, target: "/bucket/cold", region: regionUSEast1, body: []byte("frozen"),
-		header: map[string]string{headerStorageClass: "GLACIER"},
+		header: map[string]string{headerStorageClass: classGlacier},
 	}).status)
 
 	id := startUpload(t, s, multipartKey, nil)

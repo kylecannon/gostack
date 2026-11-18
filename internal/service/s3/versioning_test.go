@@ -71,7 +71,7 @@ func TestBucketVersioningStatus(t *testing.T) {
 	stored := s.do(call{method: http.MethodGet, target: versionsPath, region: regionUSEast1})
 	assert.Contains(t, string(stored.body), "<MfaDelete>Enabled</MfaDelete>")
 
-	for status, wantCode := range map[string]string{lowerEnabled: "MalformedXML", "Disabled": "MalformedXML"} {
+	for status, wantCode := range map[string]string{lowerEnabled: codeMalformedXML, "Disabled": codeMalformedXML} {
 		got := s.do(call{method: http.MethodPut, target: versionsPath, region: regionUSEast1, body: versioningBody(status)})
 		require.Equal(t, http.StatusBadRequest, got.status, status)
 		assert.Equal(t, wantCode, got.err(t).Code, status)

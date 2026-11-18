@@ -55,7 +55,7 @@ func (p *Provider) DeleteObjects(
 	out := &s3api.DeleteObjectsOutput{}
 
 	for _, object := range in.Delete.Objects {
-		deleted, failed, err := p.deleteEntry(b, object, bypass)
+		deleted, failed, err := p.deleteEntry(ctx, b, object, bypass)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +76,7 @@ func (p *Provider) DeleteObjects(
 // or the error entry of a version that is not there or that Object Lock holds;
 // the third result is the error that fails the whole call.
 func (p *Provider) deleteEntry(
-	b *Bucket, object s3api.ObjectIdentifier, bypass bool,
+	ctx context.Context, b *Bucket, object s3api.ObjectIdentifier, bypass bool,
 ) (s3api.DeletedObject, *s3api.Error, error) {
 	key, id := deref(object.Key), deref(object.VersionId)
 
@@ -95,6 +95,9 @@ func (p *Provider) deleteEntry(
 	case err != nil:
 		return s3api.DeletedObject{}, nil, err
 	}
+
+	// S3 raises the event for a key that was not there as well.
+	p.notifyDeletion(ctx, b, key, removed)
 
 	deleted := s3api.DeletedObject{Key: &key}
 

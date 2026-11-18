@@ -80,6 +80,8 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
+	p.notify(ctx, b, key, v)
+
 	return putOutput(in, b, key, v), nil
 }
 
@@ -529,6 +531,10 @@ func (p *Provider) DeleteObject(ctx context.Context, in *s3api.DeleteObjectInput
 		return nil, deniedByLock()
 	case err != nil:
 		return nil, err
+	}
+
+	if removed.changed {
+		p.notifyDeletion(ctx, b, deref(in.Key), removed)
 	}
 
 	out := &s3api.DeleteObjectOutput{VersionId: nonEmpty(removed.versionID)}

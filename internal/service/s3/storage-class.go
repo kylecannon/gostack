@@ -72,20 +72,33 @@ func (p *Provider) RestoreObject(
 	restored := *v
 	restored.Restore = `ongoing-request="false", expiry-date="` + expiry.Format(restoreExpiryFormat) + `"`
 
+	err = b.swapVersion(deref(in.Key), v, &restored)
+	if err != nil {
+		return nil, err
+	}
+
+	p.notifyRestore(ctx, b, deref(in.Key), &restored)
+
+	return &s3api.RestoreObjectOutput{StatusCode: &status}, nil
+}
+
+// swapVersion replaces a version of the key with another, unless the bucket or
+// the version is gone.
+func (b *Bucket) swapVersion(key string, old, replacement *Version) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	object, ok := b.Objects[deref(in.Key)]
+	object, ok := b.Objects[key]
 	if !ok || b.gone {
-		return nil, noSuchKey(deref(in.Key))
+		return noSuchKey(key)
 	}
 
-	i := slices.Index(object.Versions, v)
+	i := slices.Index(object.Versions, old)
 	if i < 0 {
-		return nil, noSuchKey(deref(in.Key))
+		return noSuchKey(key)
 	}
 
-	object.Versions[i] = &restored
+	object.Versions[i] = replacement
 
-	return &s3api.RestoreObjectOutput{StatusCode: &status}, nil
+	return nil
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"sync/atomic"
 
 	"github.com/kylecannon/gostack/internal/config"
@@ -16,23 +17,36 @@ import (
 // and all three have to reach the same instance.
 type providers struct {
 	regs []service.Registration
+
+	// s3 delivers its notifications through the gateway, which is built from
+	// regs and so does not exist yet: bind hands it over.
+	s3 *s3.Provider
 }
 
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	return &providers{regs: registrations(cfg, changed)}
+	p := &providers{s3: s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir))}
+	p.regs = registrations(cfg, changed, p.s3)
+
+	return p
+}
+
+// bind gives the services that call other services in this process the
+// handler to call them through, normally the gateway's.
+func (p *providers) bind(h http.Handler) {
+	p.s3.Bind(h)
 }
 
 // registrations lists the services the gateway serves. Adding a service is one
 // line here; its Registration carries everything else. A service reads its
 // settings through cfg on each call, so an update through /_localstack/config
 // reaches it.
-func registrations(cfg *config.Config, changed func(name string)) []service.Registration {
+func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
 	return []service.Registration{
 		sqs.New(sqsSettings(cfg), changed).Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
-		s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir)).Registration(),
+		s3Provider.Registration(),
 	}
 }
 

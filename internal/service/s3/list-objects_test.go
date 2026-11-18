@@ -16,6 +16,7 @@ import (
 const (
 	bucketPath      = "/bucket"
 	classStandardIA = "STANDARD_IA"
+	classGlacier    = "GLACIER"
 	keyFile1        = "folder/file1"
 	restoreDays30   = `<RestoreRequest><Days>30</Days></RestoreRequest>`
 )

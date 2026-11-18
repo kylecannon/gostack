@@ -162,6 +162,8 @@ func (p *Provider) PutObjectTagging(
 
 	out := &s3api.PutObjectTaggingOutput{}
 
+	var changed *Version
+
 	err = b.writeConfig(func() error {
 		object, index, lookupErr := b.versionTarget(deref(in.Key), deref(in.VersionId), http.MethodPut)
 		if lookupErr != nil {
@@ -179,12 +181,15 @@ func (p *Provider) PutObjectTagging(
 
 		updated := replaceVersion(object, index, func(v *Version) { v.Tags = in.Tagging.TagSet })
 		out.VersionId = b.reportedVersionID(updated)
+		changed = updated
 
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	p.notify(ctx, b, deref(in.Key), changed)
 
 	return out, nil
 }
@@ -200,6 +205,8 @@ func (p *Provider) DeleteObjectTagging(
 
 	out := &s3api.DeleteObjectTaggingOutput{}
 
+	var changed *Version
+
 	err = b.writeConfig(func() error {
 		object, index, lookupErr := b.versionTarget(deref(in.Key), deref(in.VersionId), http.MethodDelete)
 		if lookupErr != nil {
@@ -208,12 +215,15 @@ func (p *Provider) DeleteObjectTagging(
 
 		updated := replaceVersion(object, index, func(v *Version) { v.Tags = nil })
 		out.VersionId = b.reportedVersionID(updated)
+		changed = updated
 
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	p.notify(ctx, b, deref(in.Key), changed)
 
 	return out, nil
 }
@@ -265,6 +275,8 @@ func (p *Provider) PutObjectAcl(ctx context.Context, in *s3api.PutObjectAclInput
 		body: in.AccessControlPolicy,
 	}
 
+	var changed *Version
+
 	err = b.writeConfig(func() error {
 		object, index, lookupErr := b.versionTarget(deref(in.Key), deref(in.VersionId), http.MethodPut)
 		if lookupErr != nil {
@@ -280,13 +292,15 @@ func (p *Provider) PutObjectAcl(ctx context.Context, in *s3api.PutObjectAclInput
 			return aclNotSupported()
 		}
 
-		replaceVersion(object, index, func(v *Version) { v.ACL = acp })
+		changed = replaceVersion(object, index, func(v *Version) { v.ACL = acp })
 
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	p.notify(ctx, b, deref(in.Key), changed)
 
 	return &s3api.PutObjectAclOutput{}, nil
 }

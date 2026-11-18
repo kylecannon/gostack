@@ -138,6 +138,8 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
+	p.notify(ctx, plan.dest, plan.destKey, v)
+
 	result := &s3api.CopyObjectResult{ETag: new(quoted(v.ETag)), LastModified: &protocol.Time{Time: v.LastModified}}
 	c := checksumsOf(v)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme

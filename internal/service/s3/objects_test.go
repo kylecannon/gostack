@@ -695,11 +695,11 @@ func TestDeleteObjectVersionOfAnUnversionedBucket(t *testing.T) {
 
 func TestGetOfAnArchivedObject(t *testing.T) {
 	s := newServer(t)
-	seed(t, s, map[string]string{headerStorageClass: "GLACIER"})
+	seed(t, s, map[string]string{headerStorageClass: classGlacier})
 
 	head := get(s, http.MethodHead, objectPath, nil)
 	assert.Equal(t, http.StatusOK, head.status)
-	assert.Equal(t, "GLACIER", head.header.Get(headerStorageClass))
+	assert.Equal(t, classGlacier, head.header.Get(headerStorageClass))
 
 	got := get(s, http.MethodGet, objectPath, nil)
 	require.Equal(t, http.StatusForbidden, got.status)
@@ -867,7 +867,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		empty := post(s, body(false), nil)
 		require.Equal(t, http.StatusBadRequest, empty.status, string(empty.body))
-		assert.Equal(t, "MalformedXML", empty.err(t).Code)
+		assert.Equal(t, codeMalformedXML, empty.err(t).Code)
 
 		keys := make([]string, 1001)
 		for i := range keys {
@@ -876,7 +876,7 @@ func TestDeleteObjects(t *testing.T) {
 
 		long := post(s, body(false, keys...), nil)
 		require.Equal(t, http.StatusBadRequest, long.status, string(long.body))
-		assert.Equal(t, "MalformedXML", long.err(t).Code)
+		assert.Equal(t, codeMalformedXML, long.err(t).Code)
 
 		keys = keys[:1000]
 		assert.Equal(t, http.StatusOK, post(s, body(true, keys...), nil).status)

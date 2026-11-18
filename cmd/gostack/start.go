@@ -83,15 +83,12 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		OpenAPI:       openapi.Spec,
 	}
 
-	gw, err := gateway.New(
-		settingsFunc(cfg),
-		regs,
-		func(r chi.Router) { internalapi.Mount(r, deps) },
-		dirtier,
-	)
+	gw, err := gateway.New(settingsFunc(cfg), regs, func(r chi.Router) { internalapi.Mount(r, deps) }, dirtier)
 	if err != nil {
 		return fmt.Errorf("build gateway: %w", err)
 	}
+
+	services.bind(gw.Handler())
 
 	listeners, err := gw.Listen(ctx)
 	if err != nil {

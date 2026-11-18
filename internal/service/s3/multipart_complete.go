@@ -63,29 +63,17 @@ func (p *Provider) CompleteMultipartUpload(
 		return nil, err
 	}
 
-	upload := plan.upload
-	b.mu.Lock()
-
-	if b.Uploads[upload.ID] != upload {
-		b.mu.Unlock()
-		_ = p.blobs.Remove(v.BlobID)
-
-		return nil, noSuchUpload(upload.ID)
-	}
-
-	delete(b.Uploads, upload.ID)
-	parts := upload.Parts
-	upload.Parts = nil
-	b.mu.Unlock()
-
-	for _, part := range parts {
-		_ = p.blobs.Remove(part.BlobID)
+	err = p.finishUpload(b, plan.upload, v)
+	if err != nil {
+		return nil, err
 	}
 
 	err = p.commitVersion(b, key, v)
 	if err != nil {
 		return nil, err
 	}
+
+	p.notify(ctx, b, key, v)
 
 	out := completeOutput(in, v, p.bucketURL(b.Name)+quoteKey(key))
 	out.VersionId = b.versionHeader(v)
@@ -113,6 +101,31 @@ func completeOutput(
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = c.sha1, c.sha256, c.kind
 
 	return out
+}
+
+// finishUpload takes the upload out of the bucket and drops the bodies of its
+// parts, the whole body being v's. It refuses, and drops v's body, when the
+// upload is gone or was replaced since it was found.
+func (p *Provider) finishUpload(b *Bucket, upload *MultipartUpload, v *Version) error {
+	b.mu.Lock()
+
+	if b.Uploads[upload.ID] != upload {
+		b.mu.Unlock()
+		_ = p.blobs.Remove(v.BlobID)
+
+		return noSuchUpload(upload.ID)
+	}
+
+	delete(b.Uploads, upload.ID)
+	parts := upload.Parts
+	upload.Parts = nil
+	b.mu.Unlock()
+
+	for _, part := range parts {
+		_ = p.blobs.Remove(part.BlobID)
+	}
+
+	return nil
 }
 
 // prepareCompletion finds the upload, checks the request against it and opens

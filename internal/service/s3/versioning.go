@@ -250,6 +250,9 @@ type deletion struct {
 	// absent says the bucket has versioning, the delete named a version, and
 	// the key has no versions at all.
 	absent bool
+	// changed says the delete took something away or added a marker. A
+	// DeleteObject that changed nothing raises no event (SQ-113).
+	changed bool
 }
 
 // deleteFrom removes the key, or the version of it that versionID names, from
@@ -268,6 +271,8 @@ func (p *Provider) deleteFrom(b *Bucket, key, versionID string, bypass bool) (de
 
 	result, removed, err := b.deleteLocked(key, versionID, bypass, time.Now())
 	b.mu.Unlock()
+
+	result.changed = err == nil && (len(removed) > 0 || result.added)
 
 	for _, v := range removed {
 		if v.BlobID != "" {

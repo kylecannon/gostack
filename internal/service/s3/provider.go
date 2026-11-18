@@ -8,6 +8,7 @@ import (
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -64,6 +65,10 @@ type Provider struct {
 	states   *store.Bundle[State]
 	names    nameIndex
 	blobs    BlobStore
+
+	// client delivers notifications, and checks their targets, through the
+	// gateway. Bind gives it the handler.
+	client *inproc.Client
 }
 
 var _ s3api.Handler = (*Provider)(nil)
@@ -76,6 +81,7 @@ func New(settings func() Settings, blobs BlobStore) *Provider {
 		settings: settings,
 		states:   store.NewBundle(newState, emptyState),
 		blobs:    blobs,
+		client:   inproc.New(),
 	}
 }
 
@@ -115,9 +121,11 @@ func (p *Provider) Reset(account, region string) {
 	})
 }
 
-// Close lets go of the bodies the BlobStore holds, when it is one that can be
-// closed.
+// Close drops the notifications not yet delivered and lets go of the bodies the
+// BlobStore holds, when it is one that can be closed.
 func (p *Provider) Close() {
+	p.client.Close()
+
 	if closer, ok := p.blobs.(interface{ Close() }); ok {
 		closer.Close()
 	}
