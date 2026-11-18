@@ -51,9 +51,9 @@ Every package has a `doc.go` that states its contract; read it first.
 - Core and routing: provider.go, rawheader.go (HTTP/1.x responses with edge-whitespace header values written on the taken connection: linger on close, drained by `Close`), routing.go (host claim, legacy `Fallback`, virtual-host `Preprocess`), state.go, bucket.go, metadata.go, configs.go
 - Bodies: blobstore.go, chunked.go, checksum.go, range.go
 - Objects: object.go, copy.go, delete-objects.go, objectconfig.go, preconditions.go, object-attributes.go, tagging.go, acl.go, storage-class.go
-- Multipart: multipart.go, multipart_complete.go, multipart_copy.go, multipart_list.go
-- Listing: list-objects.go
-- Bucket configuration: config.go, cors.go, website.go, lifecycle.go, logging_replication.go
+- Multipart: multipart.go, multipart-complete.go, multipart-copy.go, multipart-list.go
+- Listing: list-objects.go, keyindex.go (sorted key and upload indexes kept with the maps; a page binary-searches its start)
+- Bucket configuration: config.go, cors.go, website.go, lifecycle.go, logging-replication.go
 - Versioning and Object Lock: versioning.go, object-lock.go
 - Encryption: encryption.go
 - Presigned URLs and POST: presign.go (on `internal/sigv4`), post-object.go
