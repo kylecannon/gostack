@@ -398,7 +398,9 @@ func TestStorageClass(t *testing.T) {
 		})
 	}
 
-	for _, class := range []string{classStandardIA, "GLACIER_IR", "REDUCED_REDUNDANCY", "INTELLIGENT_TIERING"} {
+	for _, class := range []string{
+		classStandardIA, "GLACIER_IR", "REDUCED_REDUNDANCY", "INTELLIGENT_TIERING", "SNOW", "EXPRESS_ONEZONE",
+	} {
 		require.Equal(t, http.StatusOK, put("k-"+class, class).status, class)
 	}
 

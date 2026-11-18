@@ -27,11 +27,14 @@ const (
 	encodedWordFrame = 13
 )
 
-// storageClasses are the classes an object may be written with
-// (VALID_STORAGE_CLASSES).
+// storageClasses are the classes a write may name: the spec's StorageClass
+// enum without OUTPOSTS, which only an Outposts bucket takes. LocalStack checks
+// PutObject, CreateMultipartUpload and PostObject against the same set
+// (provider.py:739, 2317, 4546); its VALID_STORAGE_CLASSES is not used there.
 var storageClasses = map[string]bool{
-	"STANDARD": true, "STANDARD_IA": true, "GLACIER": true, "GLACIER_IR": true,
-	"REDUCED_REDUNDANCY": true, "ONEZONE_IA": true, "INTELLIGENT_TIERING": true, "DEEP_ARCHIVE": true,
+	"STANDARD": true, "REDUCED_REDUNDANCY": true, "STANDARD_IA": true, "ONEZONE_IA": true,
+	"INTELLIGENT_TIERING": true, "GLACIER": true, "DEEP_ARCHIVE": true, "GLACIER_IR": true,
+	"SNOW": true, "EXPRESS_ONEZONE": true, "FSX_OPENZFS": true, "FSX_ONTAP": true,
 }
 
 // isArchived reports whether a class holds its objects out of reach until they

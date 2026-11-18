@@ -158,10 +158,13 @@ func (p *Provider) preprocess(r *http.Request) *http.Request {
 	}
 }
 
-// toPathStyle moves the bucket from the host to the start of the path.
-// It changes r, which must be a copy of the gateway's request, as service.Own
-// returns one.
+// toPathStyle moves the bucket from the host to the start of the path, and
+// keeps the host as sent in the request's context, as a virtualHost, because
+// a presigned URL signs that host. It changes r, which must be a copy of the
+// gateway's request, as service.Own returns one.
 func toPathStyle(r *http.Request, bucket string) *http.Request {
+	sent := virtualHost{host: r.Host, bucket: bucket}
+
 	rewritten := *r.URL
 	rewritten.Path = "/" + bucket + rewritten.Path
 
@@ -172,7 +175,24 @@ func toPathStyle(r *http.Request, bucket string) *http.Request {
 	r.URL = &rewritten
 	r.Host = strings.TrimPrefix(r.Host, bucket+".")
 
-	return r
+	return r.WithContext(context.WithValue(r.Context(), virtualHostKey{}, sent))
+}
+
+// virtualHostKey carries the virtualHost of a request toPathStyle rewrote.
+type virtualHostKey struct{}
+
+// virtualHost is the Host a virtual-host request was sent to and the bucket it
+// named there.
+type virtualHost struct {
+	host   string
+	bucket string
+}
+
+// sentVirtualHost returns the virtualHost of a request toPathStyle rewrote.
+func sentVirtualHost(r *http.Request) (virtualHost, bool) {
+	sent, ok := r.Context().Value(virtualHostKey{}).(virtualHost)
+
+	return sent, ok
 }
 
 // sniff reads up to sniffLimit bytes of a multipart form or a DeleteObjects

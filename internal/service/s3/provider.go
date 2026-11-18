@@ -36,6 +36,13 @@ type Settings struct {
 	// LocalstackHost is LOCALSTACK_HOST as host:port. S3 claims requests to
 	// s3.<host>, and a bucket created outside us-east-1 is located on it.
 	LocalstackHost string
+	// ValidateSignatures is S3_SKIP_SIGNATURE_VALIDATION=0: a presigned URL
+	// whose signature does not match, that has expired or that carries headers
+	// it did not sign is refused. The default, false, lets it through.
+	ValidateSignatures bool
+	// GatewayPort is the port of the first GATEWAY_LISTEN address. A presigned
+	// URL's host is also tried with it when its signature does not match.
+	GatewayPort int
 }
 
 // hostname is the host part of LocalstackHost.
@@ -150,7 +157,7 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		s3api.Serve(p, &responseWriter{ResponseWriter: w, method: r.Method, rc: rc}, rc)
+		p.serveAPI(&responseWriter{ResponseWriter: w, method: r.Method, rc: rc}, rc)
 	}
 }
 

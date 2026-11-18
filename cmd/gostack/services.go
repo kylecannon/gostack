@@ -55,7 +55,13 @@ func s3Settings(cfg *config.Config) func() s3.Settings {
 			return m.to
 		}
 
-		m := &mapped{from: current, to: s3.Settings{LocalstackHost: current.LocalstackHost.String()}}
+		m := &mapped{from: current, to: s3.Settings{
+			LocalstackHost:     current.LocalstackHost.String(),
+			ValidateSignatures: !current.S3SkipSignatureValidation,
+		}}
+		if len(current.GatewayListen) > 0 {
+			m.to.GatewayPort = current.GatewayListen[0].Port
+		}
 		last.Store(m)
 
 		return m.to

@@ -8,6 +8,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func Test_s3Settings(t *testing.T) {
+	t.Setenv("GATEWAY_LISTEN", "127.0.0.1:4570,127.0.0.1:4571")
+	t.Setenv("S3_SKIP_SIGNATURE_VALIDATION", "1")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	settings := s3Settings(cfg)
+	got := settings()
+
+	assert.False(t, got.ValidateSignatures)
+	assert.Equal(t, 4570, got.GatewayPort)
+
+	t.Run("the config bridge's false turns validation on", func(t *testing.T) {
+		require.NoError(t, cfg.Set("S3_SKIP_SIGNATURE_VALIDATION", false))
+
+		assert.True(t, settings().ValidateSignatures)
+	})
+}
+
 func Test_settingsFunc(t *testing.T) {
 	t.Setenv("GATEWAY_LISTEN", "127.0.0.1:4570,127.0.0.1:4571")
 	t.Setenv("PARITY_AWS_ACCESS_KEY_ID", "1")
