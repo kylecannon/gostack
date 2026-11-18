@@ -137,8 +137,9 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 // isControlCall reports whether r is an s3control call that detection gave S3
 // because the signing name is S3's and s3control is not registered: a path
 // that is /v20180820 or under it, on a host S3 does not claim. A request S3
-// claims by its host, a virtual host's included, stays S3's, as LocalStack's
-// S3 pre-router decides it before the signing name is read.
+// claims by its host, a virtual host's included, and a path to an existing
+// bucket named v20180820 stay S3's, as LocalStack's S3 pre-router decides them
+// before the signing name is read.
 func (p *Provider) isControlCall(r *http.Request) bool {
 	path := r.URL.Path
 	if path != controlPath && !strings.HasPrefix(path, controlPath+"/") {
@@ -147,7 +148,7 @@ func (p *Provider) isControlCall(r *http.Request) bool {
 
 	_, rewritten := r.Context().Value(virtualHostKey{}).(string)
 
-	return !rewritten && !p.claimHost(r.Host)
+	return !rewritten && !p.claimHost(r.Host) && !p.isBucketPath(path)
 }
 
 // retire marks a bucket that left its State as gone, so a call that found it

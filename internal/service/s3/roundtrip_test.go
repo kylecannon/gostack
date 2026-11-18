@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/gateway"
@@ -396,4 +398,78 @@ func TestRequestsS3DoesNotServeYetAnswer501(t *testing.T) {
 			assert.Contains(t, string(got.body), tt.wantBody)
 		})
 	}
+}
+
+// send is do for a spawned goroutine: it returns what went wrong instead of
+// failing the test.
+func (s *server) send(method string, body []byte) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(s.t.Context(), method, s.url+objectPath, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, fmt.Errorf("build request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, "+
+		"SignedHeaders=host, Signature=0")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("send request: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, got, fmt.Errorf("read body: %w", err)
+	}
+
+	return resp.StatusCode, got, nil
+}
+
+func TestGetsWhilePutsReplaceTheObject(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	// One body spills to a file and one stays in memory, so a GET that loses
+	// its blob to the PUT that replaces it shows on both paths.
+	bodies := [][]byte{bytes.Repeat([]byte("a"), 3<<19), []byte("small body")}
+
+	first := s.do(call{method: http.MethodPut, target: objectPath, region: regionUSEast1, body: bodies[0]})
+	require.Equal(t, http.StatusOK, first.status)
+
+	const workers, rounds = 4, 25
+
+	var wg sync.WaitGroup
+
+	for worker := range workers {
+		wg.Go(func() {
+			for round := range rounds {
+				status, _, err := s.send(http.MethodPut, bodies[(worker+round)%len(bodies)])
+				if err != nil || status != http.StatusOK {
+					t.Errorf("PUT: status %d, error %v", status, err)
+
+					return
+				}
+			}
+		})
+
+		wg.Go(func() {
+			for range rounds {
+				status, got, err := s.send(http.MethodGet, nil)
+				if err != nil || status != http.StatusOK {
+					t.Errorf("GET: status %d, error %v, body %.200s", status, err, got)
+
+					return
+				}
+
+				if !bytes.Equal(got, bodies[0]) && !bytes.Equal(got, bodies[1]) {
+					t.Errorf("GET: a body of %d bytes that no PUT wrote", len(got))
+
+					return
+				}
+			}
+		})
+	}
+
+	wg.Wait()
 }

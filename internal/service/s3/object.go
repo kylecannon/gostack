@@ -82,14 +82,20 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 // before the call returns, so a PutObject that replaces the object meanwhile
 // does not cut it short.
 func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3api.GetObjectOutput, error) {
-	v, err := p.readable(ctx, in.Bucket, in.Key, in.VersionId)
+	var body io.ReadCloser
+
+	v, err := p.readable(ctx, in.Bucket, in.Key, in.VersionId, func(v *Version) error {
+		opened, openErr := p.blobs.Open(v.BlobID)
+		if openErr != nil {
+			return fmt.Errorf("open object: %w", openErr)
+		}
+
+		body = opened
+
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	body, err := p.blobs.Open(v.BlobID)
-	if err != nil {
-		return nil, fmt.Errorf("open object: %w", err)
 	}
 
 	out := &s3api.GetObjectOutput{
@@ -120,7 +126,7 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 
 // HeadObject answers what GetObject would, without the body.
 func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*s3api.HeadObjectOutput, error) {
-	v, err := p.readable(ctx, in.Bucket, in.Key, in.VersionId)
+	v, err := p.readable(ctx, in.Bucket, in.Key, in.VersionId, func(*Version) error { return nil })
 	if err != nil {
 		return nil, err
 	}
@@ -263,8 +269,13 @@ func (p *Provider) commitVersion(b *Bucket, key string, v *Version) error {
 }
 
 // readable returns the current version of an object for a GET or HEAD, as
-// S3Bucket.get_object does outside a versioned bucket.
-func (p *Provider) readable(ctx context.Context, bucket, key, versionID *string) (*Version, error) {
+// S3Bucket.get_object does outside a versioned bucket. It calls use with the
+// version while the bucket's lock is held, so a GET opens the body before a
+// write that replaces the version can remove it. A Version never changes once
+// committed, so its fields are safe to read after the lock is gone.
+func (p *Provider) readable(
+	ctx context.Context, bucket, key, versionID *string, use func(*Version) error,
+) (*Version, error) {
 	rc, err := callOf(ctx)
 	if err != nil {
 		return nil, err
@@ -287,7 +298,14 @@ func (p *Provider) readable(ctx context.Context, bucket, key, versionID *string)
 		return nil, noSuchKey(deref(key))
 	}
 
-	return object.current(), nil
+	v := object.current()
+
+	err = use(v)
+	if err != nil {
+		return nil, err
+	}
+
+	return v, nil
 }
 
 // newVersion returns the version a PutObject makes, before its body is written.

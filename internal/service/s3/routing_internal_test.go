@@ -271,3 +271,13 @@ func TestFallbackPortsLegacyS3Rules(t *testing.T) {
 		})
 	}
 }
+
+func TestABucketNamedLikeTheControlPathStaysS3s(t *testing.T) {
+	p := newTestProvider(t)
+	p.names.claim("v20180820", "000000000000")
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v20180820/key", nil)
+	r.Host = gatewayHost
+
+	assert.False(t, p.isControlCall(r))
+}
