@@ -1,0 +1,58 @@
+name: bench
+
+# Runs every benchmark in the repo on the base and the head of a pull request,
+# compares them with benchstat, and fails on a regression over 10% at p<0.05
+# (docs/standards.md, "Benchmarks"). The comparison is `go run ./bench gate`.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  benchstat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: head/go.mod
+          cache: true
+          cache-dependency-path: |
+            head/go.sum
+            base/go.sum
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
+      # The head's Makefile runs on both trees, so a base that predates
+      # `make bench` is still measured.
+      - name: Benchmark the base
+        working-directory: base
+        run: make -f ../head/Makefile bench BENCH_OUT="$GITHUB_WORKSPACE/base.txt"
+      - name: Benchmark the head
+        working-directory: head
+        run: make bench BENCH_OUT="$GITHUB_WORKSPACE/head.txt"
+      - name: Compare
+        run: |
+          if ! grep -q '^Benchmark' base.txt; then
+            echo "The base has no benchmarks, so there is nothing to compare against." | tee -a "$GITHUB_STEP_SUMMARY"
+            : > benchstat.txt
+            exit 0
+          fi
+          benchstat base.txt head.txt | tee benchstat.txt
+          {
+            echo '```'
+            cat benchstat.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail on a regression over 10% at p<0.05
+        working-directory: head
+        run: go run ./bench gate < "$GITHUB_WORKSPACE/benchstat.txt"

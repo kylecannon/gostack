@@ -58,7 +58,20 @@ DOCKER ?= docker
 IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(VERSION)
 
 
-.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim
+# Benchmarks (docs/standards.md, "Benchmarks").
+#   make bench          every Benchmark* in the repo, BENCH_COUNT runs each, into BENCH_OUT
+#   make bench-system   the system bench: builds the images, then measures gostack, gostack-slim
+#                       and the LocalStack image the parity harness built (make parity-baseline)
+#                       and writes bench/results/<date>-<sha>.json and .md. Needs Docker, takes
+#                       about 10 minutes. BENCH_SYSTEM_ARGS passes flags to `bench run`, e.g.
+#                       BENCH_SYSTEM_ARGS="-only gostack -idle 10s -duration 5s".
+BENCH_COUNT ?= 10
+BENCH_OUT ?= bin/bench.txt
+BENCH_SYSTEM_ARGS ?=
+LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
+
+
+.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -118,3 +131,14 @@ image:
 
 image-slim:
 	$(DOCKER) build -f docker/Dockerfile.slim $(IMAGE_BUILD_ARGS) -t $(IMAGE_SLIM) .
+
+# -run '^$' skips the tests. The output goes to a file for benchstat and is
+# printed after; a failing run prints what it wrote and fails, which a pipe to
+# tee would not.
+bench:
+	@mkdir -p $(dir $(BENCH_OUT))
+	go test -run '^$$' -bench . -benchmem -count=$(BENCH_COUNT) ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
+	@cat $(BENCH_OUT)
+
+bench-system: image image-slim
+	go run ./bench run -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) $(BENCH_SYSTEM_ARGS)
