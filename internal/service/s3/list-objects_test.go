@@ -165,6 +165,14 @@ func TestListObjectsWithoutDelimiterHasNoNextMarker(t *testing.T) {
 	assert.Equal(t, 1000, s.list(t, "max-keys=5000").MaxKeys)
 }
 
+func TestS3ResponsesNameTheirServer(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	got := s.do(call{method: http.MethodGet, target: bucketPath, region: regionUSEast1})
+	assert.Equal(t, []string{"AmazonS3"}, got.header.Values("Server"))
+}
+
 func TestListObjectsV2Pages(t *testing.T) {
 	s := newServer(t)
 
