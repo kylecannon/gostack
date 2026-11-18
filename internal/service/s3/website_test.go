@@ -509,3 +509,66 @@ func TestWebsiteObjectRedirectLocationInErrorDocument(t *testing.T) {
 	head := s.do(call{method: http.MethodHead, target: "/bucket/error.html", region: regionUSEast1})
 	assert.Equal(t, "/another/error.html", head.header.Get("X-Amz-Website-Redirect-Location"))
 }
+
+// TestWebsiteRefusesObjectsItCannotRead follows LocalStack, whose website
+// handler reads the object through its own client: an SSE-C object, or an
+// archived one nobody restored, is refused there, and the handler turns the
+// refusal into a 500 InternalError that names it. The body is never served.
+func TestWebsiteRefusesObjectsItCannotRead(t *testing.T) {
+	tests := []struct {
+		name        string
+		giveHeaders map[string]string
+		wantRefusal string
+	}{
+		{"an SSE-C object", keyOne.headers(), "(InvalidRequest) when calling the GetObject operation"},
+		{"an archived object", map[string]string{headerStorageClass: "GLACIER"}, "(InvalidObjectState)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newServer(t)
+			createBucket(t, s)
+			putWebsite(t, s, indexConfig)
+			putObject(t, s, "page.html", "secret body", typeHTML, tt.giveHeaders)
+
+			got := site(s, http.MethodGet, "/page.html", nil)
+			assert.Equal(t, http.StatusInternalServerError, got.status, string(got.body))
+			assert.Contains(t, got.header.Get("Content-Type"), "application/xml")
+			assert.Contains(t, string(got.body), "<Code>InternalError</Code>")
+			assert.Contains(t, string(got.body), tt.wantRefusal)
+			assert.NotContains(t, string(got.body), "secret body")
+		})
+	}
+}
+
+// TestWebsiteRefusesAnErrorDocumentItCannotRead is the same refusal for the
+// error document, which LocalStack reads with the same client.
+func TestWebsiteRefusesAnErrorDocumentItCannotRead(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+	putWebsite(t, s, `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument>`+
+		`<ErrorDocument><Key>error.html</Key></ErrorDocument></WebsiteConfiguration>`)
+	putObject(t, s, "error.html", "secret error", typeHTML, keyOne.headers())
+
+	got := site(s, http.MethodGet, "/missing.html", nil)
+	assert.Equal(t, http.StatusInternalServerError, got.status, string(got.body))
+	assert.NotContains(t, string(got.body), "secret error")
+}
+
+// TestWebsiteServesARestoredObject keeps the archive refusal to objects that
+// are still archived.
+func TestWebsiteServesARestoredObject(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+	putWebsite(t, s, indexConfig)
+	putObject(t, s, "cold.html", "thawed", typeHTML, map[string]string{headerStorageClass: "GLACIER"})
+
+	restore := s.do(call{
+		method: http.MethodPost, target: "/bucket/cold.html?restore", region: regionUSEast1, body: []byte(restoreDays30),
+	})
+	require.Equal(t, http.StatusAccepted, restore.status, string(restore.body))
+
+	got := site(s, http.MethodGet, "/cold.html", nil)
+	require.Equal(t, http.StatusOK, got.status, string(got.body))
+	assert.Equal(t, "thawed", string(got.body))
+}

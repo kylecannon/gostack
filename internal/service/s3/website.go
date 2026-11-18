@@ -2,6 +2,8 @@ package s3
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"html"
 	"io"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"strings"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
 )
 
@@ -275,19 +278,40 @@ func siteExists(b *Bucket, key string) bool {
 	return !b.gone && ok && object.current() != nil && !object.current().DeleteMarker
 }
 
-// siteGet is GetObject for a website: the current version of the key, unless
-// it is missing or a delete marker, with its body open. The body is opened under
-// the bucket lock, so a PutObject cannot remove it first.
+// errSiteMissing is the key a website looked for not being there.
+var errSiteMissing = errors.New("no such key")
+
+// siteReadable refuses what LocalStack's website handler cannot read: it reads
+// through its own client, which holds no SSE-C key and cannot read an archived
+// object that was not restored.
+func siteReadable(v *Version) error {
+	err := checkCustomerRead(v.SSECustomerKeyMD5, customerKey{}, wrongCustomerKey)
+	if err == nil && archived(v) {
+		err = invalidObjectState(v)
+	}
+
+	return err
+}
+
+// siteGet is GetObject for a website: the current version of the key, with its
+// body open, unless it is missing or a delete marker (errSiteMissing) or the
+// website cannot read it (siteReadable). The body is opened under the bucket
+// lock, so a PutObject cannot remove it first.
 func (p *Provider) siteGet(b *Bucket, key string) (*siteObject, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
 	object, ok := b.Objects[key]
 	if b.gone || !ok || object.current() == nil || object.current().DeleteMarker {
-		return nil, noSuchKey(key)
+		return nil, errSiteMissing
 	}
 
 	v := object.current()
+
+	err := siteReadable(v)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := p.blobs.Open(v.BlobID)
 	if err != nil {
@@ -375,14 +399,26 @@ func (p *Provider) serveSite(
 	}
 
 	site, err := p.siteGet(b, key)
-	if err != nil {
+	if errors.Is(err, errSiteMissing) {
 		p.siteMissing(w, rc, b, config, page, key)
+
+		return
+	}
+
+	if err != nil {
+		writeSiteFailure(w, rc, err)
 
 		return
 	}
 
 	defer site.body.Close() //nolint:errcheck // a read-only blob.
 
+	serveObject(w, r, site)
+}
+
+// serveObject answers a request for an object that was found: its redirect
+// location, a 304 for a matching If-None-Match, or the object.
+func serveObject(w http.ResponseWriter, r *http.Request, site *siteObject) {
 	if location := site.version.WebsiteRedirectLocation; location != "" {
 		redirect(w, http.StatusMovedPermanently, location)
 
@@ -431,8 +467,14 @@ func (p *Provider) siteMissing(
 	errorKey := deref(doc.Key)
 
 	site, err := p.siteGet(b, errorKey)
-	if err != nil {
+	if errors.Is(err, errSiteMissing) {
 		writePage(w, http.StatusNotFound, notFoundPage("NoSuchKey", messageNoSuchKey, "Key", key, rc.RequestID, errorKey))
+
+		return
+	}
+
+	if err != nil {
+		writeSiteFailure(w, rc, err)
 
 		return
 	}
@@ -543,6 +585,24 @@ func writeObject(w http.ResponseWriter, status int, site *siteObject) {
 	w.WriteHeader(status)
 
 	_, _ = io.Copy(w, site.body)
+}
+
+// writeSiteFailure answers a read the website could not make as LocalStack
+// does: its handler lets the client's error escape, and the gateway renders it
+// as a 500 InternalError that names the operation and the error.
+func writeSiteFailure(w http.ResponseWriter, rc *request.Context, err error) {
+	message := err.Error()
+
+	if coded, ok := errors.AsType[*awserr.Error](err); ok {
+		message = fmt.Sprintf("An error occurred (%s) when calling the GetObject operation: %s", coded.Code, coded.Message)
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusInternalServerError)
+
+	_, _ = io.WriteString(w, "<?xml version='1.0' encoding='utf-8'?>\n<Error><Code>InternalError</Code>"+
+		"<Message>exception while calling s3 with unknown operation: "+html.EscapeString(message)+"</Message>"+
+		"<RequestId>"+html.EscapeString(rc.RequestID)+"</RequestId></Error>")
 }
 
 func writePage(w http.ResponseWriter, status int, page string) {
