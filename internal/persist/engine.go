@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -31,10 +32,14 @@ type Engine struct {
 	dir     string
 	freq    time.Duration
 	formats []Format
-	cfg     Config
-	log     *slog.Logger
+	// loadFormats is the order Load tries the formats in.
+	loadFormats []Format
+	cfg         Config
+	log         *slog.Logger
 
-	// flushMu keeps two flushes from writing the same temp file at once.
+	// flushMu keeps a flush from overlapping another flush or a load. Two
+	// flushes would write the same temp file, and a flush during a load would
+	// snapshot a service that Restore has emptied but not yet refilled.
 	flushMu sync.Mutex
 
 	mu       sync.Mutex
@@ -49,6 +54,10 @@ type Engine struct {
 type tracked struct {
 	snap  Snapshotter
 	dirty bool
+	// unsafe is set when the service's state file failed to load and could not
+	// be moved aside. The service is never written again, because a write would
+	// replace the only copy of what the file holds.
+	unsafe bool
 }
 
 type pendingService struct {
@@ -60,11 +69,12 @@ type pendingService struct {
 // still valid and all of its methods do nothing.
 func New(cfg Config) *Engine {
 	e := &Engine{
-		dir:     cfg.baseDir(),
-		freq:    cmp.Or(max(cfg.Frequency, 0), DefaultFrequency),
-		formats: cfg.listedFormats(),
-		cfg:     cfg,
-		log:     cmp.Or(cfg.Logger, slog.Default()),
+		dir:         cfg.baseDir(),
+		freq:        cfg.flushDelay(),
+		formats:     cfg.listedFormats(),
+		loadFormats: cfg.loadFormats(),
+		cfg:         cfg,
+		log:         cmp.Or(cfg.Logger, slog.Default()),
 	}
 	e.cfg.Services = maps.Clone(cfg.Services)
 
@@ -77,9 +87,20 @@ func (e *Engine) BaseDir() string {
 	return e.dir
 }
 
-// Enabled reports whether state of the service named by name is persisted.
+// Enabled reports whether state of the service named by name is persisted. It
+// is false for a service whose state file failed to load and could not be moved
+// aside, because that service is never written.
 func (e *Engine) Enabled(service string) bool {
-	return e.dir != "" && e.cfg.serviceEnabled(service)
+	if e.dir == "" || !e.cfg.serviceEnabled(service) {
+		return false
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	t, registered := e.services[service]
+
+	return !registered || !t.unsafe
 }
 
 // Register adds a service to the Engine. A service whose persistence is off is
@@ -105,7 +126,7 @@ func (e *Engine) MarkDirty(service string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.markDirtyLocked(service)
+	e.markDirtyLocked(service, e.freq)
 }
 
 // Flush writes every dirty service. It clears a service's dirty bit before it
@@ -131,13 +152,23 @@ func (e *Engine) Flush(ctx context.Context) error {
 	return err
 }
 
-// Load restores every registered service that has a state file, preferring
-// json. A service whose file cannot be read or restored is logged and left
-// empty; Load does not fail for it. Load returns an error only when ctx ends.
+// Load restores every registered service that has a state file. It tries the
+// service's formats in the order they are configured, then any other format,
+// and the first file that restores wins. A file that exists but cannot be read
+// or restored is moved aside to <name>.unloadable-<UTC time> and logged, and the
+// next format is tried; a service with no good file starts empty. If the file
+// cannot be moved aside, the service is never written, so that the next save
+// does not replace it. Load does not fail for a bad file. It returns an error
+// only when ctx ends.
+//
+// Load runs while no flush does, so a flush never sees a service half restored.
 func (e *Engine) Load(ctx context.Context) error {
 	if e.dir == "" {
 		return nil
 	}
+
+	e.flushMu.Lock()
+	defer e.flushMu.Unlock()
 
 	root, err := os.OpenRoot(e.dir)
 	if err != nil {
@@ -154,7 +185,9 @@ func (e *Engine) Load(ctx context.Context) error {
 	snaps := make(map[string]Snapshotter, len(e.services))
 
 	for name, t := range e.services {
-		snaps[name] = t.snap
+		if !t.unsafe {
+			snaps[name] = t.snap
+		}
 	}
 
 	e.mu.Unlock()
@@ -186,9 +219,11 @@ func (e *Engine) Close(ctx context.Context) error {
 	return e.Flush(ctx)
 }
 
-func (e *Engine) markDirtyLocked(service string) {
+// markDirtyLocked marks the service dirty and, unless a timer is pending, arms
+// one that fires after delay.
+func (e *Engine) markDirtyLocked(service string, delay time.Duration) {
 	t, ok := e.services[service]
-	if !ok {
+	if !ok || t.unsafe {
 		return
 	}
 
@@ -197,7 +232,7 @@ func (e *Engine) markDirtyLocked(service string) {
 	if e.timer == nil && !e.closed {
 		e.gen++
 		gen := e.gen
-		e.timer = time.AfterFunc(e.freq, func() { e.flushOnTimer(gen) })
+		e.timer = time.AfterFunc(delay, func() { e.flushOnTimer(gen) })
 	}
 }
 
@@ -241,8 +276,14 @@ func (e *Engine) takeDirty() []pendingService {
 	var pending []pendingService
 
 	for _, name := range slices.Sorted(maps.Keys(e.services)) {
-		if t := e.services[name]; t.dirty {
-			t.dirty = false
+		t := e.services[name]
+		if !t.dirty {
+			continue
+		}
+
+		t.dirty = false
+
+		if !t.unsafe {
 			pending = append(pending, pendingService{name: name, snap: t.snap})
 		}
 	}
@@ -250,7 +291,9 @@ func (e *Engine) takeDirty() []pendingService {
 	return pending
 }
 
-// redirty marks the services dirty again, which also re-arms the timer.
+// redirty marks the services dirty again, which also re-arms the timer. The
+// timer waits at least retryDelay, so a flush that keeps failing is retried at
+// that pace even when PERSIST_FREQUENCY asks for no wait.
 func (e *Engine) redirty(pending []pendingService) {
 	if len(pending) == 0 {
 		return
@@ -260,7 +303,7 @@ func (e *Engine) redirty(pending []pendingService) {
 	defer e.mu.Unlock()
 
 	for _, p := range pending {
-		e.markDirtyLocked(p.name)
+		e.markDirtyLocked(p.name, max(e.freq, retryDelay))
 	}
 }
 
@@ -316,14 +359,14 @@ func (e *Engine) save(root *os.Root, p pendingService, buf *bytes.Buffer) error 
 	}
 
 	for _, f := range e.formats {
-		err = writeAtomic(root, p.name+"/"+f.fileName(), buf.Bytes())
+		err = writeState(root, e.dir, p.name+"/"+f.fileName(), buf.Bytes())
 		if err != nil {
 			return err
 		}
 	}
 
 	// Formats that are no longer listed go only after the listed ones are safe.
-	for _, f := range loadOrder {
+	for _, f := range knownFormats {
 		if slices.Contains(e.formats, f) {
 			continue
 		}
@@ -337,25 +380,74 @@ func (e *Engine) save(root *os.Root, p pendingService, buf *bytes.Buffer) error 
 	return syncDir(root, p.name)
 }
 
+// loadService restores s from the first state file that loads. A missing file is
+// skipped; a file that exists and fails is moved aside before the next format is
+// tried.
 func (e *Engine) loadService(root *os.Root, name string, s Snapshotter) {
-	for _, f := range loadOrder {
+	for _, f := range e.loadFormats {
 		file := name + "/" + f.fileName()
 
-		r, err := root.Open(file)
-		if errors.Is(err, fs.ErrNotExist) {
+		found, err := e.restoreFile(root, file, s)
+		if !found {
 			continue
 		}
 
 		if err == nil {
-			err = s.Restore(r)
-			_ = r.Close()
+			return
 		}
 
-		if err != nil {
-			e.log.Error("persist: restore failed, service starts empty",
-				"service", name, "file", file, "error", err)
-		}
+		e.setAside(root, name, file, err)
+	}
+}
+
+// restoreFile restores s from file. It reports false when the file does not
+// exist, which is no failure.
+func (e *Engine) restoreFile(root *os.Root, file string, s Snapshotter) (bool, error) {
+	loc, err := locate(root, e.dir, file)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist), err
+	}
+
+	defer loc.close()
+
+	r, err := loc.root.Open(loc.name)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist), fmt.Errorf("open %s: %w", loc.name, err)
+	}
+
+	defer func() { _ = r.Close() }()
+
+	err = s.Restore(r)
+	if err != nil {
+		return true, fmt.Errorf("restore %s: %w", loc.name, err)
+	}
+
+	return true, nil
+}
+
+// setAside moves a state file that failed to load out of the way, so a later
+// save cannot replace it. When the file cannot be moved, it turns saving off for
+// the service instead.
+func (e *Engine) setAside(root *os.Root, service, file string, cause error) {
+	path := filepath.Join(e.dir, file)
+
+	moved, err := moveAside(root, file, time.Now())
+	if err == nil {
+		e.log.Error("persist: state file failed to load and was moved aside; the service starts without it",
+			"service", service, "file", path, "moved_to", filepath.Join(e.dir, moved), "error", cause)
 
 		return
 	}
+
+	e.mu.Lock()
+
+	t, registered := e.services[service]
+	if registered {
+		t.unsafe = true
+	}
+
+	e.mu.Unlock()
+
+	e.log.Error("persist: state file failed to load and could not be moved aside, so saving is off for the service",
+		"service", service, "file", path, "move_error", err, "error", cause)
 }

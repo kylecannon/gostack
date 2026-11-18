@@ -33,6 +33,7 @@ const (
 	stateB   = "state:b"
 	stateJ   = "state:j"
 	stateX   = "state:x"
+	garbled  = "{garbage"
 
 	flushEvery = 5 * time.Second
 )
@@ -661,6 +662,60 @@ func Test_Engine_Timer(t *testing.T) {
 			assert.Equal(t, 1, s.count())
 		})
 	})
+
+	for _, giveFrequency := range []time.Duration{persist.Immediate, -time.Second} {
+		t.Run("no wait when the frequency is "+giveFrequency.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				base := t.TempDir()
+				cfg := baseCfg(base)
+				cfg.Frequency = giveFrequency
+				e := persist.New(cfg)
+				s := &fake{state: stateA}
+				e.Register(sqs, s)
+
+				synctest.Wait()
+				assert.Zero(t, s.count(), "nothing runs while idle")
+
+				e.MarkDirty(sqs)
+				synctest.Wait()
+				assert.Equal(t, 1, s.count(), "a change is written at once")
+				assert.Equal(t, stateA, readFile(t, filepath.Join(base, sqs, jsonFile)))
+
+				time.Sleep(time.Hour)
+				synctest.Wait()
+				assert.Equal(t, 1, s.count(), "and the engine goes idle again: no polling")
+
+				s.set(stateB)
+				e.MarkDirty(sqs)
+				synctest.Wait()
+				assert.Equal(t, 2, s.count(), "every change is its own write")
+				assert.Equal(t, stateB, readFile(t, filepath.Join(base, sqs, jsonFile)))
+			})
+		})
+	}
+
+	t.Run("a failing flush is not retried in a loop when changes are written at once", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			cfg := baseCfg(t.TempDir())
+			cfg.Frequency = persist.Immediate
+			e := persist.New(cfg)
+			s := &fake{state: stateA}
+			s.fail(errSnapshot)
+			e.Register(sqs, s)
+
+			e.MarkDirty(sqs)
+			synctest.Wait()
+			assert.Equal(t, 1, s.count())
+
+			time.Sleep(time.Second - time.Nanosecond)
+			synctest.Wait()
+			assert.Equal(t, 1, s.count(), "the retry waits")
+
+			time.Sleep(time.Nanosecond)
+			synctest.Wait()
+			assert.Equal(t, 2, s.count(), "and comes after a second")
+		})
+	})
 }
 
 func Test_Engine_MarkDirty_UnknownService(t *testing.T) {
@@ -716,8 +771,14 @@ func Test_Engine_Load(t *testing.T) {
 			wantState: stateJ,
 		},
 		{
-			name:      "corrupt json leaves the service empty",
-			giveFiles: map[string]string{jsonFile: "{garbage", binFile: stateB},
+			name:      "corrupt json is logged and the other format loads",
+			giveFiles: map[string]string{jsonFile: garbled, binFile: stateB},
+			wantState: stateB,
+			wantLog:   true,
+		},
+		{
+			name:      "corrupt json alone leaves the service empty",
+			giveFiles: map[string]string{jsonFile: garbled},
 			wantState: "",
 			wantLog:   true,
 		},

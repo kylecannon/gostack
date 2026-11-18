@@ -20,6 +20,14 @@ const (
 	StateDir = "/var/lib/localstack/state"
 	// DefaultFrequency is the flush delay when PERSIST_FREQUENCY is unset.
 	DefaultFrequency = 10 * time.Second
+	// Immediate is a [Config.Frequency] that writes as soon as a change is made.
+	// It is what PERSIST_FREQUENCY=0 asks for. A zero Frequency is no setting, so
+	// it cannot say so.
+	Immediate time.Duration = -1
+
+	// retryDelay is the least wait before a failed flush is tried again, so a
+	// PERSIST_FREQUENCY of zero cannot turn a failing disk into a busy loop.
+	retryDelay = time.Second
 
 	mountinfoPath = "/proc/self/mountinfo"
 )
@@ -46,8 +54,8 @@ func (f Format) fileName() string {
 	}
 }
 
-// loadOrder lists the formats Load tries, most preferred first.
-var loadOrder = []Format{FormatJSON, FormatBinary}
+// knownFormats lists every format the engine can read and write.
+var knownFormats = []Format{FormatJSON, FormatBinary}
 
 // Config holds the persistence settings. The config package fills it from the
 // environment; this package reads no environment variable.
@@ -64,10 +72,13 @@ type Config struct {
 	// Services holds the PERSIST_<SERVICE> settings, keyed by botocore service
 	// name.
 	Services map[string]bool
-	// Frequency is PERSIST_FREQUENCY. Zero or less means DefaultFrequency.
+	// Frequency is PERSIST_FREQUENCY: how long after a change the engine waits
+	// before it writes. Zero means DefaultFrequency. Immediate, or any negative
+	// value, writes as soon as the change is made, with no wait but also no
+	// polling.
 	Frequency time.Duration
-	// Formats is PERSIST_FORMAT. Empty means json. An unknown format is
-	// ignored.
+	// Formats is PERSIST_FORMAT, in the order Load tries them. Empty means json.
+	// An unknown or repeated format is ignored.
 	Formats []Format
 	// MountDetector reports whether path is a mount point. Nil reads
 	// /proc/self/mountinfo.
@@ -107,12 +118,13 @@ func (c Config) serviceEnabled(name string) bool {
 	return c.Default == nil || *c.Default
 }
 
-// listedFormats returns the known formats of c without repeats, json when none.
+// listedFormats returns the known formats of c in the order it lists them,
+// without repeats, json when none.
 func (c Config) listedFormats() []Format {
 	var formats []Format
 
-	for _, f := range loadOrder {
-		if slices.Contains(c.Formats, f) {
+	for _, f := range c.Formats {
+		if slices.Contains(knownFormats, f) && !slices.Contains(formats, f) {
 			formats = append(formats, f)
 		}
 	}
@@ -122,6 +134,33 @@ func (c Config) listedFormats() []Format {
 	}
 
 	return formats
+}
+
+// loadFormats returns the formats Load tries, in order: the listed ones, then
+// any other known format, so state saved under a format that is no longer
+// listed is not lost.
+func (c Config) loadFormats() []Format {
+	listed := c.listedFormats()
+
+	for _, f := range knownFormats {
+		if !slices.Contains(listed, f) {
+			listed = append(listed, f)
+		}
+	}
+
+	return listed
+}
+
+// flushDelay returns how long a change waits before it is written.
+func (c Config) flushDelay() time.Duration {
+	switch {
+	case c.Frequency == 0:
+		return DefaultFrequency
+	case c.Frequency < 0:
+		return 0
+	default:
+		return c.Frequency
+	}
 }
 
 // procMounted reports whether path is a mount point in /proc/self/mountinfo.

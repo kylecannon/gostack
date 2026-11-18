@@ -250,7 +250,7 @@ func Test_Load_variableForms(t *testing.T) {
 			give: map[string]string{varServices: "sqs , sts:4566,s3=4567,"},
 			check: func(t *testing.T, got *Settings) {
 				t.Helper()
-				require.Equal(t, []string{serviceSQS, "sts", "s3"}, got.Services)
+				require.Equal(t, []string{serviceSQS, svcSTS, "s3"}, got.Services)
 			},
 		},
 		{

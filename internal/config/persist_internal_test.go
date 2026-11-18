@@ -9,7 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const persistDefaultOff = "PERSIST_DEFAULT=0"
+const (
+	persistDefaultOff        = "PERSIST_DEFAULT=0"
+	persistSecretsManagerOff = "PERSIST_SECRETSMANAGER=0"
+	persistCognitoOn         = "PERSIST_COGNITO=1"
+	persistSSMOn             = "PERSIST_SSM=1"
+	dataDir                  = "/data"
+)
 
 func Test_parsePersist(t *testing.T) {
 	tests := []struct {
@@ -67,7 +73,7 @@ func Test_parsePersist(t *testing.T) {
 			name:         "names are normalized and elasticsearch maps to es",
 			give:         []string{"PERSIST_COGNITO_IDP=0", "PERSIST_API-GATEWAY=0", "PERSIST_ELASTICSEARCH=0"},
 			wantDefault:  true,
-			wantServices: map[string]bool{"cognitoidp": false, "apigateway": false, "es": false},
+			wantServices: map[string]bool{"cognitoidp": false, svcAPIGateway: false, "es": false},
 			wantFormats:  []string{formatJSON},
 			wantFreq:     10 * time.Second,
 			wantBaseDir:  DefaultPersistBaseDir,
@@ -78,7 +84,7 @@ func Test_parsePersist(t *testing.T) {
 			give:        []string{persistDefaultOff, "PERSIST_DYNAMODB=1"},
 			wantDefault: false,
 			wantServices: map[string]bool{
-				"dynamodb": true, svcDynamoDBStreams: true, svcKinesis: true,
+				svcDynamoDB: true, svcDynamoDBStreams: true, svcKinesis: true,
 			},
 			wantFormats: []string{formatJSON},
 			wantFreq:    10 * time.Second,
@@ -86,11 +92,11 @@ func Test_parsePersist(t *testing.T) {
 			wantConfig:  true,
 		},
 		{
-			name:        "an explicit false beats dependency expansion",
-			give:        []string{persistDefaultOff, "PERSIST_SSM=1", "PERSIST_SECRETSMANAGER=0"},
+			name:        "an explicit false is kept and does not stop expansion past it",
+			give:        []string{persistDefaultOff, persistSSMOn, persistSecretsManagerOff},
 			wantDefault: false,
 			wantServices: map[string]bool{
-				"ssm": true, svcSecretsManager: false,
+				svcSSM: true, svcSecretsManager: false, svcKMS: true, svcLambda: true, "s3": true, svcSTS: true,
 			},
 			wantFormats: []string{formatJSON},
 			wantFreq:    10 * time.Second,
@@ -114,19 +120,19 @@ func Test_parsePersist(t *testing.T) {
 			wantServices: map[string]bool{},
 			wantFormats:  []string{formatJSON, "binary"},
 			wantFreq:     30 * time.Second,
-			wantBaseDir:  "/data",
+			wantBaseDir:  dataDir,
 			wantConfig:   true,
 		},
 		{
-			name:         "bad format, bad and non-positive frequency",
-			give:         []string{"PERSIST_FORMAT=yaml", "PERSIST_FREQUENCY=0", "PERSIST_FREQUENCY=soon"},
+			name:         "bad format and bad frequency",
+			give:         []string{"PERSIST_FORMAT=yaml", "PERSIST_FREQUENCY=soon"},
 			wantDefault:  true,
 			wantServices: map[string]bool{},
 			wantFormats:  []string{formatJSON},
 			wantFreq:     10 * time.Second,
 			wantBaseDir:  DefaultPersistBaseDir,
 			wantConfig:   true,
-			wantWarnings: 3,
+			wantWarnings: 2,
 		},
 		{
 			name:         "an empty value counts as unset",
@@ -159,7 +165,7 @@ func Test_Persist_Enabled(t *testing.T) {
 		give string
 		want bool
 	}{
-		{name: "hyphenated botocore name matches the underscored variable", give: "cognito-idp", want: true},
+		{name: "hyphenated botocore name matches the underscored variable", give: svcCognitoIDP, want: true},
 		{name: "es matches PERSIST_ELASTICSEARCH", give: "es", want: true},
 		{name: "dependency of es", give: "opensearch", want: true},
 		{name: "service without a setting takes the default", give: serviceSQS, want: false},
@@ -206,18 +212,30 @@ func Test_Config_PersistConfig(t *testing.T) {
 		require.Equal(t, map[string]bool{serviceSQS: true}, got.Services)
 		require.Equal(t, []persist.Format{persist.FormatJSON, persist.FormatBinary}, got.Formats)
 		require.Equal(t, 30*time.Second, got.Frequency)
-		require.Equal(t, "/data", persist.New(got).BaseDir())
+		require.Equal(t, dataDir, persist.New(got).BaseDir())
 	})
 
 	t.Run("a registered name is found under its own spelling", func(t *testing.T) {
 		got := load(t, persistDefaultOff, "PERSIST_COGNITO_IDP=1", "PERSIST_ELASTICSEARCH=1").
-			PersistConfig("cognito-idp", "es", serviceSQS)
+			PersistConfig(svcCognitoIDP, "es", serviceSQS)
 		engine := persist.New(got)
 
-		require.True(t, engine.Enabled("cognito-idp"))
+		require.True(t, engine.Enabled(svcCognitoIDP))
 		require.True(t, engine.Enabled("es"))
 		require.True(t, engine.Enabled("opensearch"), "a dependency of es")
 		require.False(t, engine.Enabled(serviceSQS), "no setting, and PERSIST_DEFAULT is off")
+	})
+
+	t.Run("a frequency of zero reaches the engine as a setting, not as unset", func(t *testing.T) {
+		got := load(t, "PERSIST_FREQUENCY=0").PersistConfig()
+
+		require.Equal(t, persist.Immediate, got.Frequency)
+	})
+
+	t.Run("a hyphenated expansion is not found under a registered name", func(t *testing.T) {
+		got := load(t, persistDefaultOff, persistCognitoOn).PersistConfig(svcCognitoIDP)
+
+		require.False(t, persist.New(got).Enabled(svcCognitoIDP), "localstack-persist never finds it either")
 	})
 
 	t.Run("PERSISTENCE=1 alone uses the state directory", func(t *testing.T) {

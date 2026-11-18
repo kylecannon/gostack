@@ -417,15 +417,31 @@ Tests split along the same line:
   Kinesis, CloudWatch and SES assets).
 - Otherwise nothing persists and state is in-memory only.
 
-**Configuration** is copied exactly:
+**Configuration** is copied exactly from localstack-persist
+(`src/localstack_persist/config.py`, `state.py`); `internal/config/persist.go`
+cites the lines.
 
-- `PERSIST_DEFAULT`.
-- `PERSIST_<SERVICE>`: matched case-insensitively, `_` and `-` stripped,
-  `elasticsearch` maps to `es`. Accepted values are exactly `1`, `0`, `true` or
-  `false`; anything else logs a warning and is ignored. Enabling a service also
-  enables the services it depends on.
-- `PERSIST_FORMAT`: `json` and/or `binary`.
-- `PERSIST_FREQUENCY`: defaults to 10 seconds.
+- `PERSIST_DEFAULT`: a service name like the others, so it is matched the same
+  way.
+- `PERSIST_<SERVICE>`: the `PERSIST_` prefix and the `FORMAT`, `FREQUENCY` and
+  `BASE_DIR` names are matched case-insensitively (`persist_sqs` works). The
+  service name has `_` and `-` stripped, and `elasticsearch` maps to `es`.
+  Accepted values are exactly `1`, `0`, `true` or `false` (any case, no
+  surrounding spaces); anything else logs a warning and is ignored.
+- Enabling a service also enables every service LocalStack's `resolve_apis`
+  returns for it, unless that service has a value of its own: `API_DEPENDENCIES`
+  followed transitively, and group names (`PERSIST_SERVERLESS`, `PERSIST_COGNITO`,
+  `PERSIST_TIMESTREAM`) replaced by their members. An explicit `0` keeps that
+  service off but does not stop the expansion behind it: `PERSIST_DEFAULT=0
+  PERSIST_SSM=1 PERSIST_SECRETSMANAGER=0` persists `ssm`, `kms`, `lambda`, `s3`
+  and `sts`. Members of a group keep LocalStack's hyphens (`cognito-idp`), which
+  localstack-persist never looks up, so neither does gostack.
+- `PERSIST_FORMAT`: `json` and/or `binary`, comma separated, in the order Load
+  tries them.
+- `PERSIST_FREQUENCY`: decimal seconds, defaults to 10. Zero or a negative number
+  saves as soon as a service changes, with a timer armed at zero and never a
+  polling loop. A value Python's `float()` rejects is ignored with a warning, and
+  so are `nan` and `inf`.
 - `PERSIST_BASE_DIR`: defaults to `/persisted-data`.
 
 **Behavior:**
@@ -436,6 +452,27 @@ Tests split along the same line:
 - State is also saved on shutdown.
 - Writes are atomic: temp file, fsync, rename. This fixes localstack-persist's
   non-atomic writes and rustack's save-only-on-shutdown.
+- A load never overlaps a save, so a state file on disk is always a whole old or
+  a whole new state.
+- If `PERSIST_FREQUENCY` is zero, a failed save is retried after one second, not
+  at once.
+
+**Loading and unloadable files:**
+
+- Load tries each format's file in the configured `PERSIST_FORMAT` order, then
+  any known format that is not configured. The first file that restores wins. A
+  missing file is skipped.
+- A file that exists but fails to load (an unknown envelope version, a truncated
+  or garbled file, one that cannot be read) is never overwritten. The engine
+  renames it to `<name>.unloadable-<UTC timestamp>` in the same directory, logs an
+  error naming both paths, and tries the next format. A service with no good file
+  starts empty.
+- If the rename fails (a read-only directory, `EACCES`), saving is off for that
+  service until the process restarts: the engine logs an error, never writes the
+  file, and `/_gostack/health` reports `persisted: false` for the service.
+- A `store.*` path that is a symlink is read through the link. A save writes the
+  temp file, fsyncs and renames in the target's directory, so the link stays. A
+  link whose target fails to load is the one moved aside; its target is untouched.
 
 **Format:**
 
