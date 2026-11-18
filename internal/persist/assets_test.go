@@ -32,7 +32,9 @@ const (
 type shelf struct {
 	mu  sync.Mutex
 	ids map[string]bool
-	// during runs once inside the next Snapshot, after the state is read.
+	// before runs once at the start of the next Snapshot, before the state is
+	// read; during runs once inside it, after the state is read.
+	before func()
 	during func()
 	fail   error
 }
@@ -42,6 +44,15 @@ func newShelf() *shelf {
 }
 
 func (s *shelf) Snapshot(w io.Writer) error {
+	s.mu.Lock()
+	before := s.before
+	s.before = nil
+	s.mu.Unlock()
+
+	if before != nil {
+		before()
+	}
+
 	s.mu.Lock()
 	fail := s.fail
 	lines := append([]string{shelfHeader}, slices.Sorted(maps.Keys(s.ids))...)
@@ -115,6 +126,13 @@ func (s *shelf) names() []string {
 	defer s.mu.Unlock()
 
 	return slices.Sorted(maps.Keys(s.ids))
+}
+
+func (s *shelf) setBefore(before func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.before = before
 }
 
 func (s *shelf) set(during func(), fail error) {
@@ -545,23 +563,35 @@ func Test_Assets_CrashBetweenSnapshotAndRemoval(t *testing.T) {
 	}
 }
 
+// plant writes a committed asset's file as an earlier run left it: this process
+// never committed it.
+func plant(t *testing.T, dir, body string) string {
+	t.Helper()
+
+	id := strings.Repeat("c0", 15) + "ff"
+	require.NoError(t, os.WriteFile(blobFile(dir, id), []byte(body), 0o600))
+
+	return id
+}
+
 // Test_Assets_LiveLoad is /_gostack/state/load while the service runs: this
-// process has written assets, so only an orphan older than the loaded snapshot
-// goes, and one a request may be about to name stays.
+// process has written assets, so an orphan an earlier run left goes, and one
+// this process committed stays, whatever its file time says.
 func Test_Assets_LiveLoad(t *testing.T) {
 	dir := t.TempDir()
 	e, s, a := openShelf(t, dir)
 
 	named := put(t, a, "named")
 	s.add(named)
-	old := put(t, a, "old orphan")
 	flush(t, e)
 
+	old := plant(t, dir, "old orphan")
 	recent := put(t, a, "committed after the snapshot")
 
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 	require.NoError(t, os.Chtimes(blobFile(dir, old), past, past))
-	require.NoError(t, os.Chtimes(blobFile(dir, recent), future, future))
+	require.NoError(t, os.Chtimes(blobFile(dir, recent), past, past))
+	require.NoError(t, os.Chtimes(filepath.Join(dir, shelfService, jsonFile), future, future))
 
 	// A delete that is not saved yet, which the load undoes.
 	s.drop(named)
@@ -581,7 +611,7 @@ func Test_Assets_LiveLoad(t *testing.T) {
 	assert.Equal(t, []string{named}, s.names())
 	assert.FileExists(t, blobFile(dir, named))
 	assert.NoFileExists(t, blobFile(dir, old))
-	assert.FileExists(t, blobFile(dir, recent), "an asset newer than the snapshot may be on its way into the state")
+	assert.FileExists(t, blobFile(dir, recent), "an asset this process committed may be on its way into the state")
 	assert.NoFileExists(t, stale)
 
 	id, _, err := live.Commit()

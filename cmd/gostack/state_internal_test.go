@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"io"
 	"iter"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/persist"
@@ -180,6 +183,88 @@ func Test_stateController_Reset_reaches_the_disk(t *testing.T) {
 	saved, err := os.ReadFile(filepath.Join(dir, testService, "store.json"))
 	require.NoError(t, err)
 	assert.Empty(t, string(saved), "the wipe was saved, so a restart does not bring the service back")
+}
+
+// blocker is a service whose snapshot waits for release, which keeps a save
+// running and the engine's guard held.
+type blocker struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blocker) Snapshot(out io.Writer) error {
+	b.once.Do(func() { close(b.started) })
+	<-b.release
+
+	_, err := io.WriteString(out, "x")
+
+	return err //nolint:wrapcheck // a test double
+}
+
+func (*blocker) Restore(io.Reader) error { return nil }
+
+// Test_stateController_Reset_tries_every_service: a reset of every service that
+// fails for one of them still resets the ones after it, and the error names each
+// service it could not reset.
+func Test_stateController_Reset_tries_every_service(t *testing.T) {
+	eng, _ := persistentEngine(t)
+
+	first, last := &bodies{data: "a"}, &bodies{data: "c"}
+	plain := &widgets{data: "b"}
+
+	firstReg, plainReg, lastReg := first.registration(), plain.registration(), last.registration()
+	firstReg.Metadata.Name, plainReg.Metadata.Name, lastReg.Metadata.Name = "first", "plain", "last"
+
+	eng.Register("first", first)
+	eng.Register("plain", plain)
+	eng.Register("last", last)
+
+	// A save is under way, so a reset of a service with assets waits for it.
+	hold := &blocker{started: make(chan struct{}), release: make(chan struct{})}
+	eng.Register("hold", hold)
+	eng.MarkDirty("hold")
+
+	flushed := make(chan error, 1)
+
+	go func() { flushed <- eng.Flush(context.Background()) }()
+
+	select {
+	case <-hold.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the save did not start")
+	}
+
+	released := false
+	release := func() {
+		if !released {
+			released = true
+
+			close(hold.release)
+		}
+	}
+
+	t.Cleanup(release)
+
+	c := &stateController{regs: []service.Registration{firstReg, plainReg, lastReg}, eng: eng}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	err := c.Reset(ctx, internalapi.StateScope{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reset first:", "the error names the first service that failed")
+	assert.Contains(t, err.Error(), "reset last:", "and the last one: the first failure did not stop the loop")
+	assert.NotContains(t, err.Error(), "plain")
+	assert.Empty(t, plain.data, "the service between them was reset")
+	assert.Equal(t, "a", first.data, "a service that could not be reset keeps its state")
+
+	release()
+	require.NoError(t, <-flushed)
+
+	require.NoError(t, c.Reset(t.Context(), internalapi.StateScope{}), "nothing holds the guard now")
+	assert.Empty(t, first.data)
+	assert.Empty(t, last.data)
 }
 
 func Test_stateController_Reset_removes_assets(t *testing.T) {

@@ -581,16 +581,11 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 			return append(failed, pending[i:]...), errors.Join(append(errs, err)...)
 		}
 
-		removed := p.assets.take()
-
-		err = e.save(root, p)
+		err = e.saveAssets(root, p)
 		if err == nil {
-			p.assets.apply(removed)
-
 			continue
 		}
 
-		p.assets.requeue(removed)
 		errs = append(errs, fmt.Errorf("persist %s: %w", p.name, err))
 
 		if leaves(root, err) {
@@ -606,6 +601,20 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 	}
 
 	return failed, errors.Join(errs...)
+}
+
+// saveAssets saves one service between begin and finish of its assets: the
+// removals queued before the snapshot is taken go once it is on disk, and the
+// assets committed while it is written are not deleted at their Remove, because
+// the snapshot may name them.
+func (e *Engine) saveAssets(root *os.Root, p pendingService) error {
+	removed := p.assets.begin()
+	err := e.save(root, p)
+
+	ref, _ := p.snap.(Referencer)
+	p.assets.finish(removed, err, ref)
+
+	return err
 }
 
 // save writes the state files of one service, removes the ones of formats that
@@ -709,10 +718,8 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 
 // loaded is what loading one service's state files did.
 type loaded struct {
-	// restored is true when a state file restored, and modTime is when that file
-	// was written.
+	// restored is true when a state file restored.
 	restored bool
-	modTime  time.Time
 	// setAside is true when a state file failed and was moved aside.
 	setAside bool
 }
@@ -746,7 +753,8 @@ func (e *Engine) loadService(root *os.Root, name string, t *tracked) {
 		switch {
 		case errors.Is(err, ErrUnsafe):
 			e.log.Error("persist: the assets directory is a link that leaves the base dir or is absolute, "+
-				"so the service is neither loaded nor saved; use a relative link inside the base dir",
+				"or holds a link or file where a directory belongs, so the service is neither loaded nor saved; "+
+				"use a relative link inside the base dir and real directories under assets/",
 				"service", name, "error", err)
 
 			return
@@ -771,13 +779,13 @@ func (e *Engine) restore(root *os.Root, name string, s Snapshotter) loaded {
 	for _, f := range e.loadFormats {
 		file := name + "/" + f.fileName()
 
-		found, modTime, err := restoreFile(root, file, s)
+		found, err := restoreFile(root, file, s)
 		if !found {
 			continue
 		}
 
 		if err == nil {
-			result.restored, result.modTime = true, modTime
+			result.restored = true
 
 			return result
 		}
@@ -789,14 +797,14 @@ func (e *Engine) restore(root *os.Root, name string, s Snapshotter) loaded {
 	return result
 }
 
-// restoreFile restores s from file and returns when the file was written. It
-// reports false when the file does not exist, which is no failure. A panic in
-// Restore is a failure like any other, with the stack in the error, so the file
-// is moved aside and gostack still starts.
-func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, modTime time.Time, err error) {
+// restoreFile restores s from file. It reports false when the file does not
+// exist, which is no failure. A panic in Restore is a failure like any other,
+// with the stack in the error, so the file is moved aside and gostack still
+// starts.
+func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, err error) {
 	r, err := root.Open(file)
 	if err != nil {
-		return !errors.Is(err, fs.ErrNotExist), time.Time{}, fmt.Errorf("open %s: %w", file, err)
+		return !errors.Is(err, fs.ErrNotExist), fmt.Errorf("open %s: %w", file, err)
 	}
 
 	defer func() { _ = r.Close() }()
@@ -810,21 +818,16 @@ func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, modTime
 
 	err = s.Restore(r)
 	if err != nil {
-		return true, time.Time{}, fmt.Errorf("restore %s: %w", file, err)
+		return true, fmt.Errorf("restore %s: %w", file, err)
 	}
 
-	info, err := r.Stat()
-	if err != nil {
-		// No time to guard by: the sweep keeps every asset this process wrote.
-		return true, time.Time{}, nil
-	}
-
-	return true, info.ModTime(), nil
+	return true, nil
 }
 
 // sweepAssets removes what a crash left in the assets of a service whose state
 // has just loaded: temp files no writer holds, and committed assets its state
-// does not name. Queued removals of assets the restored state names again are
+// does not name, except the ones this process committed, which a request may be
+// about to name. Queued removals of assets the restored state names again are
 // dropped. Every asset is kept while a state file of the service sits moved
 // aside, because that file may name them.
 func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Assets, result loaded) {
@@ -843,18 +846,14 @@ func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Asse
 	}
 
 	if result.setAside || movedAside(root, name) {
-		e.log.Warn("persist: assets are kept because a state file of the service was moved aside and may name them",
+		e.log.Warn("persist: assets are kept because a state file of the service was moved aside and may name them; "+
+			"orphaned assets build up until the file is removed",
 			"service", name, "dir", a.dir)
 
 		return
 	}
 
-	var before time.Time
-	if result.restored {
-		before = result.modTime
-	}
-
-	removed, err := a.sweep(refs, before)
+	removed, err := a.sweep(refs)
 	if err != nil {
 		e.log.Error("persist: remove orphaned assets", "service", name, "dir", a.dir, "error", err)
 	}
@@ -880,7 +879,7 @@ func (e *Engine) openAssets(service string, t *tracked) (*Assets, error) {
 	}
 
 	a, err := newAssets(e.dir, service, e.log)
-	if errors.Is(err, errLinkLeaves) {
+	if errors.Is(err, errLinkLeaves) || errors.Is(err, errNotDirectory) {
 		e.markUnsafe(service, err)
 
 		return nil, fmt.Errorf("persist %s: %w: %w", service, ErrUnsafe, err)

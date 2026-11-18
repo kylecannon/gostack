@@ -15,7 +15,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -41,6 +40,10 @@ var (
 	errNotRegistered = errors.New("the service is not registered")
 	// errWriterEnded is returned by an AssetWriter after Commit or Abort.
 	errWriterEnded = errors.New("the asset writer has ended")
+	// errNotDirectory is why an assets directory is refused when tmp, blobs or a
+	// fanout directory is a link or a file: a commit would land outside the
+	// directory it was meant for.
+	errNotDirectory = errors.New("an assets directory is a link or a file where a directory belongs")
 )
 
 // Referencer is implemented by a Snapshotter whose state names assets. A
@@ -61,8 +64,11 @@ type Referencer interface {
 // The files are ordered so that a crash never leaves a snapshot naming a file
 // that is gone. A new asset is fsynced and renamed into place before Commit
 // returns, so before any snapshot can name it, and a removed one is deleted
-// only after a snapshot that no longer names it is on disk. A crash in between
-// leaves an orphan, which the next Load removes. It is safe for concurrent use.
+// only after a snapshot that no longer names it is on disk. The exception is an
+// asset committed after the last save ended: no snapshot on disk or in flight
+// can name it, so Remove deletes it at once, which lets a full disk free what
+// the saves that cannot run would not. A crash in between leaves an orphan,
+// which the next Load removes. It is safe for concurrent use.
 type Assets struct {
 	root *os.Root
 	// dir is the directory the root is on, for the log.
@@ -76,9 +82,25 @@ type Assets struct {
 	// removed holds the ids given to Remove, deleted after the next commit of a
 	// snapshot of the service.
 	removed map[string]struct{}
-	// wrote is set by the first Create. Until then no asset can be on its way
-	// into the state, so Load removes every asset the state does not name.
-	wrote bool
+	// committed holds the ids this process committed that no load or save is
+	// known to name yet, which a sweep leaves alone: a request may be about to
+	// name one. An id leaves it once it is removed or once the state names it.
+	// Until the first Create it is empty, so Load removes every asset the state
+	// does not name.
+	committed map[string]struct{}
+	// fresh holds the ids committed since the last save ended, with no save
+	// under way. No snapshot on disk or in flight can name them, so Remove
+	// deletes them at once.
+	fresh map[string]struct{}
+	// capturing holds the ids committed before or during the save under way,
+	// whose snapshot may name them. It is emptied when the save is durable or
+	// has failed, and a Remove of one of its ids waits for the next save.
+	capturing map[string]struct{}
+	// saving is true from begin to finish of a save of the service.
+	saving bool
+	// stuck is the error of the last save or deletion that left removals queued,
+	// or "" when the queue is not stuck. It is logged once per change.
+	stuck string
 }
 
 // AssetWriter writes one asset into a temp file. Exactly one of Commit and
@@ -94,7 +116,8 @@ type AssetWriter struct {
 // newAssets opens the assets of service under baseDir, making the directories
 // that are missing and fsyncing them and their parents, so an asset committed
 // into one is not lost with its directory. A link on the way that leaves
-// baseDir is refused with errLinkLeaves.
+// baseDir is refused with errLinkLeaves, and a link or a file where tmp, blobs
+// or a fanout directory belongs with errNotDirectory.
 func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 	err := os.MkdirAll(baseDir, dirMode)
 	if err != nil {
@@ -120,11 +143,14 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 	}
 
 	return &Assets{
-		root:    root,
-		dir:     filepath.Join(baseDir, dir),
-		log:     log,
-		writing: make(map[string]struct{}),
-		removed: make(map[string]struct{}),
+		root:      root,
+		dir:       filepath.Join(baseDir, dir),
+		log:       log,
+		writing:   make(map[string]struct{}),
+		removed:   make(map[string]struct{}),
+		committed: make(map[string]struct{}),
+		fresh:     make(map[string]struct{}),
+		capturing: make(map[string]struct{}),
 	}, nil
 }
 
@@ -135,7 +161,6 @@ func (a *Assets) Create() (*AssetWriter, error) {
 	// The temp file is known to be live before it exists, so a sweep running
 	// beside Create never sees it unclaimed.
 	a.mu.Lock()
-	a.wrote = true
 	a.writing[tmp] = struct{}{}
 	a.mu.Unlock()
 
@@ -168,18 +193,41 @@ func (a *Assets) Open(id string) (*os.File, error) {
 
 // Remove deletes the asset named id once the next snapshot of the service is
 // committed, so a crash before then leaves an orphan and never a snapshot that
-// names a missing file. The service calls it only once its state no longer
-// names id. A reader that has opened the asset keeps reading it. An id the
-// engine could not have picked is refused with an error wrapping fs.ErrInvalid.
+// names a missing file. An asset committed after the last save ended is named
+// by no snapshot, so it goes at once. The service calls it only once its state
+// no longer names id. A reader that has opened the asset keeps reading it. An id
+// the engine could not have picked is refused with an error wrapping
+// fs.ErrInvalid.
 func (a *Assets) Remove(id string) error {
-	_, err := assetPath(id)
+	path, err := assetPath(id)
 	if err != nil {
 		return err
 	}
 
 	a.mu.Lock()
-	a.removed[id] = struct{}{}
+
+	_, now := a.fresh[id]
+	if now {
+		delete(a.fresh, id)
+		delete(a.committed, id)
+		delete(a.removed, id)
+	} else {
+		a.removed[id] = struct{}{}
+	}
+
 	a.mu.Unlock()
+
+	if !now {
+		return nil
+	}
+
+	err = a.root.Remove(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// The id waits for the next save like any other removal.
+		a.requeue([]string{id})
+		a.log.Warn("persist: an asset could not be removed; trying again after the next save",
+			"dir", a.dir, "error", err)
+	}
 
 	return nil
 }
@@ -274,6 +322,17 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 		return "", fmt.Errorf("commit asset: %w", err)
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.committed[id] = struct{}{}
+
+	if a.saving {
+		a.capturing[id] = struct{}{}
+	} else {
+		a.fresh[id] = struct{}{}
+	}
+
 	return id, nil
 }
 
@@ -283,16 +342,22 @@ func (a *Assets) forget(tmp string) {
 	a.mu.Unlock()
 }
 
-// take returns the ids removed so far and starts a new batch. A flush takes the
-// batch before it takes the snapshot, so the snapshot names none of them. It is
-// nil-safe, for a service with no assets.
-func (a *Assets) take() []string {
+// begin starts a save of the service: it returns the ids removed so far and
+// starts a new batch, so the snapshot, taken after it, names none of them. The
+// assets committed since the last save move to the ones the snapshot may name,
+// and so does every asset committed until finish. It is nil-safe, for a service
+// with no assets.
+func (a *Assets) begin() []string {
 	if a == nil {
 		return nil
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	a.saving = true
+	maps.Copy(a.capturing, a.fresh)
+	clear(a.fresh)
 
 	ids := make([]string, 0, len(a.removed))
 	for id := range a.removed {
@@ -302,6 +367,89 @@ func (a *Assets) take() []string {
 	clear(a.removed)
 
 	return ids
+}
+
+// finish ends the save begin started, which wrote the snapshot or failed with
+// saveErr. The assets of the batch begin returned are deleted when the snapshot
+// is on disk, and queued again when it is not. ref is the service's state when
+// it names assets. It is nil-safe.
+func (a *Assets) finish(batch []string, saveErr error, ref Referencer) {
+	if a == nil {
+		return
+	}
+
+	a.mu.Lock()
+	a.saving = false
+	clear(a.capturing)
+	a.mu.Unlock()
+
+	if saveErr != nil {
+		a.requeue(batch)
+		a.trackQueue(saveErr)
+
+		return
+	}
+
+	a.trackQueue(a.apply(batch))
+	a.settle(ref)
+}
+
+// trackQueue logs a removal queue that cannot drain, once each time the error
+// changes, with the number of ids waiting and the error, and logs once when it
+// drains again. A full disk shows here: the saves that would free the queued
+// assets cannot write.
+func (a *Assets) trackQueue(err error) {
+	a.mu.Lock()
+
+	queued, was, now := len(a.removed), a.stuck, ""
+	if err != nil && queued > 0 {
+		now = err.Error()
+	}
+
+	a.stuck = now
+	a.mu.Unlock()
+
+	switch {
+	case now != "" && now != was:
+		a.log.Warn("persist: asset removals are waiting for a save that cannot finish",
+			"dir", a.dir, "queued", queued, "error", err)
+	case now == "" && was != "":
+		a.log.Info("persist: asset removals are going through again", "dir", a.dir, "queued", queued)
+	default:
+	}
+}
+
+// settle forgets the committed ids the service's state names now: they are
+// linked, so no request is about to name them. It is what bounds committed. The
+// state is read without the lock, because a service calls Create and Remove
+// under its own locks.
+func (a *Assets) settle(ref Referencer) {
+	if ref == nil {
+		return
+	}
+
+	a.mu.Lock()
+	pending := maps.Clone(a.committed)
+	a.mu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	var named []string
+
+	for id := range ref.References() {
+		if _, ok := pending[id]; ok {
+			named = append(named, id)
+		}
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, id := range named {
+		delete(a.committed, id)
+	}
 }
 
 // requeue puts back ids a flush took and did not delete, for the next one.
@@ -331,16 +479,13 @@ func (a *Assets) keep(refs map[string]struct{}) {
 	}
 }
 
-// apply deletes the assets a flush took, once the snapshot it wrote is on disk.
-// A missing asset is no failure. One that cannot be deleted is queued again for
-// the next commit and logged.
-func (a *Assets) apply(ids []string) {
-	if a == nil {
-		return
-	}
-
+// apply deletes the assets a flush took, once the snapshot it wrote is on disk,
+// and returns the first error. A missing asset is no failure. One that cannot be
+// deleted is queued again for the next commit.
+func (a *Assets) apply(ids []string) error {
 	var (
 		failed []string
+		gone   []string
 		first  error
 	)
 
@@ -351,14 +496,27 @@ func (a *Assets) apply(ids []string) {
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			failed = append(failed, id)
 			first = cmp.Or(first, err)
+
+			continue
 		}
+
+		gone = append(gone, id)
 	}
 
-	if len(failed) > 0 {
-		a.requeue(failed)
-		a.log.Warn("persist: assets could not be removed; trying again after the next save",
-			"dir", a.dir, "count", len(failed), "error", first)
+	a.requeue(failed)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, id := range gone {
+		delete(a.committed, id)
 	}
+
+	if first != nil {
+		return fmt.Errorf("remove assets: %w", first)
+	}
+
+	return nil
 }
 
 // list returns the id of every committed asset.
@@ -406,11 +564,13 @@ func (a *Assets) removeTemps() error {
 }
 
 // sweep removes the committed assets refs does not name, and returns how many
-// it removed. Once this process has written an asset, one that a request may
-// still be about to name is kept: an asset is removed only when it is older
-// than before, the time the loaded snapshot was written, and none is removed
-// when before is zero.
-func (a *Assets) sweep(refs map[string]struct{}, before time.Time) (int, error) {
+// it removed. An asset this process committed that refs does not name is kept:
+// a request may still be about to name it. No file time decides this, because a
+// file's time is the end of its last write and says nothing about its commit.
+// Before the first Create nothing is kept, so a start removes every orphan the
+// last run left. The ids refs names leave the committed set: the state names
+// them now.
+func (a *Assets) sweep(refs map[string]struct{}) (int, error) {
 	var orphans []blobEntry
 
 	for entry, err := range a.blobs() {
@@ -424,15 +584,21 @@ func (a *Assets) sweep(refs map[string]struct{}, before time.Time) (int, error) 
 	}
 
 	// Read after the listing: an asset committed by this process is in the
-	// listing only if Create ran before this read.
+	// listing only if its commit ran before this read.
 	a.mu.Lock()
-	wrote := a.wrote
+	maps.DeleteFunc(a.committed, func(id string, _ struct{}) bool {
+		_, named := refs[id]
+
+		return named
+	})
+
+	kept := maps.Clone(a.committed)
 	a.mu.Unlock()
 
 	removed := 0
 
 	for _, orphan := range orphans {
-		if wrote && !orphan.modTime.Before(before) {
+		if _, committed := kept[orphan.name]; committed {
 			continue
 		}
 
@@ -449,9 +615,8 @@ func (a *Assets) sweep(refs map[string]struct{}, before time.Time) (int, error) 
 
 // blobEntry is one committed asset found on disk.
 type blobEntry struct {
-	name    string
-	path    string
-	modTime time.Time
+	name string
+	path string
 }
 
 // blobs yields every committed asset under blobs: each entry of a fanout
@@ -486,12 +651,7 @@ func (a *Assets) blobs() iter.Seq2[blobEntry, error] {
 					continue
 				}
 
-				info, err := entry.Info()
-				if err != nil {
-					continue // removed since the listing
-				}
-
-				if !yield(blobEntry{name: id, path: dir + "/" + id, modTime: info.ModTime()}, nil) {
+				if !yield(blobEntry{name: id, path: dir + "/" + id}, nil) {
 					return
 				}
 			}
@@ -527,6 +687,11 @@ func openAssetsRoot(base *os.Root, dir string) (*os.Root, error) {
 	return root, nil
 }
 
+// makeAssetDirs makes tmp, blobs and the fanout directories that are missing,
+// and checks that each one is a real directory, not a link or a file: a link
+// from a fanout directory to tmp would send a commit into the directory Load
+// empties. tmp and blobs are checked before the directories under blobs, so the
+// check never goes through a link.
 func makeAssetDirs(root *os.Root) error {
 	dirs := slices.Grow([]string{tmpDir, blobsDir}, fanout)
 
@@ -538,6 +703,15 @@ func makeAssetDirs(root *os.Root) error {
 		err := root.Mkdir(dir, dirMode)
 		if err != nil && !errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("create %s: %w", dir, err)
+		}
+
+		info, err := root.Lstat(dir)
+		if err != nil {
+			return fmt.Errorf("check %s: %w", dir, err)
+		}
+
+		if !info.IsDir() {
+			return fmt.Errorf("%s: %w", dir, errNotDirectory)
 		}
 	}
 

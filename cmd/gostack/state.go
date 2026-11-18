@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -60,7 +61,9 @@ type stateController struct {
 // Reset wipes the state of the service named by the scope, or of every service
 // that keeps state when the scope names none, persisted or not. A wiped service
 // is marked dirty, so the wipe reaches the disk and a restart does not bring it
-// back; the engine ignores a service it does not save.
+// back; the engine ignores a service it does not save. A reset of every service
+// tries each one, and returns the errors of the ones that failed joined, each
+// naming its service.
 func (c *stateController) Reset(ctx context.Context, scope internalapi.StateScope) error {
 	if scope.Service != "" {
 		i := slices.IndexFunc(c.regs, func(reg service.Registration) bool {
@@ -77,6 +80,10 @@ func (c *stateController) Reset(ctx context.Context, scope internalapi.StateScop
 		return c.resetService(ctx, &c.regs[i], scope)
 	}
 
+	// A service that fails does not stop the ones after it: stopping would leave
+	// the reset half done with no word of which services it reached.
+	var errs []error
+
 	for i := range c.regs {
 		if c.regs[i].Reset == nil {
 			continue
@@ -84,11 +91,11 @@ func (c *stateController) Reset(ctx context.Context, scope internalapi.StateScop
 
 		err := c.resetService(ctx, &c.regs[i], scope)
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // Save writes the state of every persisted service now, not only the services
@@ -137,7 +144,7 @@ func (c *stateController) resetService(
 	if scope.Account == "" && scope.Region == "" {
 		err := c.eng.ResetAssets(ctx, name, wipe)
 		if err != nil {
-			return fmt.Errorf("reset state: %w", err)
+			return fmt.Errorf("reset state: %w", err) // names the service
 		}
 	} else {
 		wipe()

@@ -728,28 +728,47 @@ and is untouched.
   and deletes those files once the snapshot is renamed into place and its
   directory fsynced. A failed save keeps the queue; a deletion that fails is
   retried after the next save.
+- The exception is an asset committed after the last save ended. No snapshot on
+  disk or in flight can name it, so `Remove` deletes it at once. An asset
+  committed before a save began or while it ran may be named by that snapshot,
+  so its removal waits for the next save, as does one whose save failed. This
+  is what frees space on a full disk: the saves that would delete the queue
+  cannot write, but what was written since the last one can go.
+- A queue that cannot drain is logged once each time its error changes, with
+  the number of ids waiting and the error, and once when it drains again.
 - A crash between a commit and the next snapshot leaves an orphan, and a crash
   between a snapshot and its deletions leaves a file no snapshot names. No
   order of crashes leaves a snapshot that names a missing file.
 - After a service's state loads, the engine deletes temp files no writer holds
-  and every committed asset the state does not name. Once this process has
-  written an asset, which is the case for `POST /_gostack/state/load`, only an
-  orphan older than the loaded state file goes: a newer one may be on its way
-  into the state. The load also drops queued removals of ids the restored state
-  names again.
+  and every committed asset the state does not name. The exception is an asset
+  this process committed that the state does not name: a request may be on its
+  way to naming it, as `POST /_gostack/state/load` can run beside a write. The
+  engine keeps those ids in memory, not by file time, because a file's time is
+  the end of its last write and says nothing about when it was committed. An id
+  leaves that set when it is removed or when a loaded or saved state names it,
+  so a start, which has committed nothing, removes every orphan. The load also
+  drops queued removals of ids the restored state names again.
 - The load sweep deletes nothing while a state file of the service sits moved
-  aside (`.unloadable-`), because that file may name the assets. Queued
-  removals and a reset still apply.
+  aside (`.unloadable-`), because that file may name the assets. Orphaned
+  assets build up until the file is removed by hand and gostack restarts or
+  loads again. Each Load that skips the sweep for this reason logs a warning
+  naming the service. Queued removals and a reset still apply.
 - `POST /_gostack/state/reset` of a whole service lists its assets, wipes the
   state, and deletes every listed asset after the next save. A reset scoped to
   an account or a region leaves removals to the service. A reset holds the
-  guard a save and a load hold.
+  guard a save and a load hold. A reset of every service tries each one: a
+  service that cannot be reset (the guard is held past the request) does not
+  stop the ones after it, and the answer is 500 with an error naming each
+  service that failed.
 - A missing asset fails only the object that names it, in whatever way the
   service decides. The state file is not moved aside for it.
 - Confinement: the assets are reached through an `os.Root` on the assets
   directory, kept open for the life of the process. `Open` and `Remove` accept
   only 32 lower-case hex digits. An assets directory that is a link leaving the
-  base directory turns the service off, as a state-file link does.
+  base directory turns the service off, as a state-file link does. So does a
+  link or a file where `tmp/`, `blobs/` or a `blobs/<xx>` directory belongs,
+  checked with `Lstat` when the assets open: a link from a fanout directory to
+  `tmp/` would send a commit into the directory Load empties.
 - A service calls `Remove` only once its state no longer names the id. A write
   that started before a reset or a load must fail rather than name its asset in
   the new state. S3's reset marks the buckets it drops gone, which does this;
