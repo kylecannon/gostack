@@ -151,11 +151,6 @@ func newQueue(
 		}
 	}
 
-	err = validateRedriveAllowPolicy(attrs[attrRedriveAllowPolicy])
-	if err != nil {
-		return nil, err
-	}
-
 	q := &Queue{
 		name:    name,
 		account: account,
