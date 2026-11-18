@@ -23,9 +23,18 @@
 //	bench gate      reads benchstat output on stdin and fails on a regression
 //	                over 10% with p<0.05. The bench workflow runs it.
 //
-// # The matrix
+// # Workloads and cells
 //
-// A cell is one point of these axes (cells.go):
+// A workload (workload.go) is one service's load shape: it names the service,
+// the operations it times, its cells, and how to run one cell against an
+// endpoint. sqs.go holds the only one so far. The orchestrator, the result file,
+// the report and the compare gate know nothing of the service; they read the
+// operations from the cell. A cell id is <service>/<workload>/<options...>, and
+// a cell names the environment variable that turns its persistence on.
+//
+// # The SQS matrix
+//
+// A cell of the sqs/messaging workload is one point of these axes:
 //
 //	payload      256 B, 64 KiB, 1 MiB
 //	queue        standard, fifo
@@ -75,5 +84,12 @@
 // fingerprint (OS, architecture, CPU count, Docker version, OrbStack); results
 // with different fingerprints are not compared, and compare says so and exits 0.
 // `bench run -compare-dir bench/results` runs the same comparison after the
-// measurement.
+// measurement. The scheduled CI run compares with the result the previous
+// passing run on main kept as a workflow artifact (.github/workflows/bench-system.yml).
+//
+// # The result file
+//
+// Schema 3. A cell holds its operations as a map from name to latency spread.
+// loadReport converts a schema 2 file, whose cells had send, receive and delete
+// fields and ids with no service, so the committed results still compare.
 package main

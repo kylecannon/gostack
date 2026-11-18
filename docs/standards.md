@@ -108,7 +108,8 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   at p<0.05.
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
-  manual run of the full matrix against the last committed result.
+  manual run against the previous passing run on main with the same profile
+  and host fingerprint, which is kept as a workflow artifact.
 - **Fuzz** (`fuzz.yml`, nightly and by hand) runs `make fuzz FUZZTIME=60s`, which
   runs every `Fuzz*` function for 60s. A crash uploads the new
   `testdata/fuzz` entries and the log as the `fuzz-crashes` artifact.
@@ -184,11 +185,23 @@ LocalStack image. Measured:
 
 An "agentic" workload runs many short create, use and delete cycles across
 every implemented service. Results are committed to
-`bench/results/<date>-<sha>.json`. `go run ./bench compare` checks a run
-against the newest committed result and fails when a gostack cell regresses
-past its threshold; `make bench-system` runs it after measuring. LocalStack
-cells are reference numbers and never gate. A latency also has to rise by 0.05 ms
-(p50) or 0.5 ms (p99) to regress, so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+`bench/results/<date>-<sha>.json` as human records. `go run ./bench compare`
+checks a run against the newest committed result with the same host
+fingerprint and fails when a gostack cell regresses past its threshold;
+`make bench-system` runs it after measuring. CI never compares against the
+committed files, because a runner never has the fingerprint of the machine
+they came from: the scheduled run compares with the artifact the previous
+passing run on main uploaded. LocalStack cells are reference numbers and never
+gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
+so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
+such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.
+A cell holds its operations as a map from name to latency, and declares the
+environment variable that turns its persistence on. A service is added by
+registering a workload in `bench/` (`Service`, `Name`, `Ops`, `Cells`, `Run`);
+the report and the compare gate read the operations from the result and name
+none. A file of schema 2 is converted when it is loaded.
 
 ### Runtime knobs
 

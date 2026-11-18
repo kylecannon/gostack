@@ -10,7 +10,12 @@ name: bench-system
 #
 # The weekly schedule, and a manual run with the full profile, run the whole
 # matrix for gostack, gostack-slim and LocalStack (reference only, never gating)
-# and compare the result with the newest committed one of the same host.
+# and compare the result with the last passing run on main that had the same
+# profile and host fingerprint. Each such run uploads its result as a workflow
+# artifact for the next one to download. The first run of a profile on a host
+# has no artifact, says so, and passes. The results committed under
+# bench/results are human records and no job reads them: a runner never has
+# the fingerprint of the laptop they were taken on.
 
 on:
   pull_request:
@@ -129,9 +134,15 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # actions: read lets `gh api` list the earlier artifacts and download-artifact
+    # fetch one from another run.
+    permissions:
+      contents: read
+      actions: read
     env:
       PROFILE: ${{ github.event_name == 'schedule' && 'full' || inputs.profile }}
       LOCALSTACK_IMAGE: ${{ inputs.localstack_image || 'localstack/localstack:latest' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -146,25 +157,94 @@ jobs:
             docker pull "$LOCALSTACK_IMAGE"
           fi
       # The full profile measures all three images; the quick one gostack alone.
-      # LocalStack is reference only. Either profile is compared with the newest
-      # committed result of the same host, which exits 0 with a note when no
-      # committed result was taken on a runner like this one.
-      - name: Measure and compare
+      # LocalStack is reference only. The comparison is a step of its own, below.
+      - name: Measure
         run: |
           targets=gostack
           if [ "$PROFILE" = full ]; then targets=gostack,gostack-slim,localstack; fi
-          status=0
           go run ./bench run -profile "$PROFILE" -targets "$targets" \
             -gostack-image gostack:ci -slim-image gostack:ci-slim -localstack-image "$LOCALSTACK_IMAGE" \
-            -out "$RUNNER_TEMP/bench" -compare-dir bench/results \
-            | tee "$RUNNER_TEMP/compare.md" || status=$?
+            -out "$RUNNER_TEMP/bench"
+      # The artifact is named for the profile and the host fingerprint (OS,
+      # architecture, CPUs, Docker version, OrbStack), the fields `bench compare`
+      # holds equal. A runner whose Docker or CPU count changed names a new
+      # artifact and starts a new baseline.
+      - name: Name the baseline
+        id: baseline
+        run: |
+          result=$(ls "$RUNNER_TEMP"/bench/*.json)
+          key=$(jq -r '.host.fingerprint | "\(.os)-\(.arch)-\(.cpus)cpu-docker\(.docker)-orbstack\(.orbstack)"' "$result" \
+            | tr -c 'A-Za-z0-9._\n-' '-')
+          fingerprint=$(jq -r '.host.fingerprint | "\(.os)/\(.arch), \(.cpus) CPUs, Docker \(.docker), OrbStack \(.orbstack)"' "$result")
+          {
+            echo "result=$result"
+            echo "name=bench-system-$PROFILE-$key"
+            echo "fingerprint=$fingerprint"
+          } >> "$GITHUB_OUTPUT"
+      # The newest artifact of that name that a run on main uploaded and that has
+      # not expired. Only a run that passed uploads one, so a regression is not
+      # the next run's baseline. This run's own id is left out for a re-run.
+      - name: Find the previous result
+        id: previous
+        env:
+          NAME: ${{ steps.baseline.outputs.name }}
+        run: |
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$NAME&per_page=100" --jq \
+            '[.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main" and .workflow_run.id != ($ENV.GITHUB_RUN_ID | tonumber))] | max_by(.created_at) | .workflow_run.id // empty')
+          echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        if: steps.previous.outputs.run-id != ''
+        with:
+          name: ${{ steps.baseline.outputs.name }}
+          run-id: ${{ steps.previous.outputs.run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/previous
+      # With no earlier result the step says so and passes. That is the first run
+      # of a profile on a host, or the first after the artifact expired.
+      - name: Compare with the previous result
+        env:
+          RESULT: ${{ steps.baseline.outputs.result }}
+          NAME: ${{ steps.baseline.outputs.name }}
+          FINGERPRINT: ${{ steps.baseline.outputs.fingerprint }}
+          PREVIOUS_RUN: ${{ steps.previous.outputs.run-id }}
+        run: |
+          status=0
+          if [ -z "$PREVIOUS_RUN" ]; then
+            {
+              echo "## System bench compare"
+              echo
+              echo "No earlier result from main is stored as \`$NAME\`, so there is nothing to compare against."
+              echo "It looked for the fingerprint $FINGERPRINT. This run is stored as the baseline for the next one."
+            } | tee "$RUNNER_TEMP/compare.md"
+          else
+            previous=$(find "$RUNNER_TEMP/previous" -name '*.json' | head -n 1)
+            if [ -z "$previous" ]; then
+              echo "run $PREVIOUS_RUN stored \`$NAME\` with no result file in it" | tee "$RUNNER_TEMP/compare.md"
+              status=1
+            else
+              go run ./bench compare -base "$previous" -head "$RESULT" | tee "$RUNNER_TEMP/compare.md" || status=$?
+            fi
+          fi
           cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
+      # The baseline for the next run: stored only when this run passed.
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: bench-system-${{ env.PROFILE }}
+          name: ${{ steps.baseline.outputs.name }}
           path: |
             ${{ runner.temp }}/bench/*.json
             ${{ runner.temp }}/bench/*.md
             ${{ runner.temp }}/compare.md
+          retention-days: 90
+          overwrite: true
+      # A failed run keeps its numbers for a look, under a name no run reads.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: bench-system-${{ env.PROFILE }}-failed
+          path: |
+            ${{ runner.temp }}/bench/*.json
+            ${{ runner.temp }}/bench/*.md
+            ${{ runner.temp }}/compare.md
+          if-no-files-found: ignore
+          overwrite: true
