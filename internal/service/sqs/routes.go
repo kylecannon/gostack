@@ -84,6 +84,7 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 		rc.Operation = route.Operation(r, protocol.KindJSON, nil)
 		rc.Request = r.WithContext(request.With(r.Context(), rc))
 		sqsapi.Serve(p, w, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
+		p.markChanged(rc.Operation)
 
 		return
 	}
@@ -112,6 +113,16 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 
 	rc.Request = r.WithContext(request.With(r.Context(), rc))
 	sqsapi.ServeValidated(p, w, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
+	p.markChanged(rc.Operation)
+}
+
+// markChanged tells persistence that a call made to a queue URL may have
+// changed state. It does not wait to learn whether the call succeeded: a failed
+// one costs a flush of a state that did not change, which is harmless.
+func (p *Provider) markChanged(operation string) {
+	if p.changed != nil && operation != "" && mutating(operation) {
+		p.changed()
+	}
 }
 
 // checkQueueAction refuses what a queue URL cannot do: an operation that does

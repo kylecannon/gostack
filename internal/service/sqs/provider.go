@@ -3,6 +3,7 @@ package sqs
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -20,6 +21,9 @@ type Provider struct {
 	states   *store.Bundle[State]
 	// contents makes the Contents of a new queue.
 	contents func(*Queue) Contents
+	// changed is called after a call made to a queue URL that changes state, so
+	// persistence can save it. It is set before the Provider serves.
+	changed func()
 }
 
 var _ sqsapi.Handler = (*Provider)(nil)
@@ -55,7 +59,24 @@ func (p *Provider) Registration() service.Registration {
 		Metadata: sqsapi.Metadata,
 		Serve:    p.serve,
 		Mount:    p.mount,
+		Mutating: mutating,
 	}
+}
+
+// mutating is the persistence rule of SQS: every operation changes state except
+// the ones that only read it. The gateway's default rule counts ReceiveMessage
+// as a read, but it hides the messages it returns, which a restart must not
+// bring back.
+func mutating(operation string) bool {
+	return !strings.HasPrefix(operation, "Get") && !strings.HasPrefix(operation, "List")
+}
+
+// OnChange sets the function the Provider calls after a call made to a queue
+// URL that changes state. Calls made to the gateway's own route are reported by
+// the gateway, through Registration.Mutating, and do not come here. OnChange is
+// for use before the Provider serves.
+func (p *Provider) OnChange(fn func()) {
+	p.changed = fn
 }
 
 // Reset drops the state of an account and region, closing its queues. An empty

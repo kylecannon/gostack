@@ -54,6 +54,7 @@ var variables = []variable{
 	{name: varSQSDelayRecentlyDeleted},
 	{name: varSQSEnableMessageRetentionPeriod},
 	{name: varSQSDelayPurgeRetry},
+	{name: varSQSDisableMaxMessageLimit},
 	{name: varFailFast},
 	{name: varIncludeStackTraces},
 	{name: varEnableConfigUpdates},

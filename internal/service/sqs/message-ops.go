@@ -203,7 +203,7 @@ func (p *Provider) ReceiveMessage(
 		return nil, err
 	}
 
-	params, err := q.receiveParams(rc, in)
+	params, err := q.receiveParams(rc, in, p.settings().DisableMaxNumberOfMessageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +227,11 @@ func (p *Provider) ReceiveMessage(
 }
 
 // receiveParams reads and checks the parameters of a ReceiveMessage call.
-func (q *Queue) receiveParams(rc *request.Context, in *sqsapi.ReceiveMessageInput) (receiveParams, *awserr.Error) {
+// noLimit lifts the check of MaxNumberOfMessages, as
+// SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT does.
+func (q *Queue) receiveParams(
+	rc *request.Context, in *sqsapi.ReceiveMessageInput, noLimit bool,
+) (receiveParams, *awserr.Error) {
 	params := receiveParams{visibility: in.VisibilityTimeout}
 
 	override := headerInt(rc, headerOverrideWait)
@@ -261,7 +265,7 @@ func (q *Queue) receiveParams(rc *request.Context, in *sqsapi.ReceiveMessageInpu
 		q.mu.Lock()
 		count = q.contents.Counts().Visible
 		q.mu.Unlock()
-	case count < 1 || count > maxReceiveCount:
+	case (count < 1 || count > maxReceiveCount) && !noLimit:
 		return params, invalidParameterValue("Value " + strconv.Itoa(count) +
 			" for parameter MaxNumberOfMessages is invalid. Reason: Must be between 1 and 10, if provided.")
 	default:

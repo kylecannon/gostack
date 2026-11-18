@@ -14,6 +14,7 @@ const (
 	varSQSDelayRecentlyDeleted         = "SQS_DELAY_RECENTLY_DELETED"
 	varSQSEnableMessageRetentionPeriod = "SQS_ENABLE_MESSAGE_RETENTION_PERIOD"
 	varSQSDelayPurgeRetry              = "SQS_DELAY_PURGE_RETRY"
+	varSQSDisableMaxMessageLimit       = "SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT"
 	varFailFast                        = "FAIL_FAST"
 	varIncludeStackTraces              = "INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE"
 	varEnableConfigUpdates             = "ENABLE_CONFIG_UPDATES"

@@ -10,14 +10,35 @@ import (
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
 
+// serviceSQS is the botocore name SQS registers and persists under.
+const serviceSQS = "sqs"
+
+// providers are the services that keep state. They are built once, because the
+// gateway serves them through registrations and persistence saves them through
+// snapshotters, and both have to reach the same instance.
+type providers struct {
+	sqs *sqs.Provider
+}
+
+func newProviders(cfg *config.Config) *providers {
+	return &providers{sqs: sqs.New(sqsSettings(cfg))}
+}
+
 // registrations lists the services the gateway serves. Each service ticket
 // adds one line here. A service reads its settings through cfg on each call,
 // so an update through /_localstack/config reaches it.
-func registrations(cfg *config.Config) []service.Registration {
+func registrations(cfg *config.Config, p *providers) []service.Registration {
 	return []service.Registration{
-		sqs.New(sqsSettings(cfg)).Registration(),
+		p.sqs.Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
 	}
+}
+
+// markDirty makes the calls that persistence cannot see tell eng that a service
+// changed. The gateway reports every call it serves itself, but a call made to
+// an SQS queue URL goes through the routes SQS mounts, so SQS reports those.
+func (p *providers) markDirty(eng *persist.Engine) {
+	p.sqs.OnChange(func() { eng.MarkDirty(serviceSQS) })
 }
 
 // sqsSettings maps the live configuration onto the settings of the SQS
@@ -44,6 +65,9 @@ func sqsSettings(cfg *config.Config) func() sqs.Settings {
 			DelayPurgeRetry:      current.SQSDelayPurgeRetry,
 			Host:                 current.LocalstackHost.String(),
 			ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
+
+			EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
+			DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,
 		}}
 		last.Store(m)
 
@@ -55,6 +79,8 @@ func sqsSettings(cfg *config.Config) func() sqs.Settings {
 // botocore service name. A service ticket whose state persists adds one entry.
 // A Snapshotter that also has Reset(account, region string) takes part in
 // /_gostack/state/reset.
-func snapshotters() map[string]persist.Snapshotter {
-	return nil
+func snapshotters(p *providers) map[string]persist.Snapshotter {
+	return map[string]persist.Snapshotter{
+		serviceSQS: p.sqs,
+	}
 }

@@ -122,7 +122,7 @@ func newQueue(
 		name:    name,
 		account: account,
 		region:  region,
-		arn:     "arn:" + partition(region) + ":sqs:" + region + ":" + account + ":" + name,
+		arn:     queueARN(account, region, name),
 		kind:    kind,
 		seq:     seq,
 		tags:    maps.Clone(tags),
@@ -155,6 +155,11 @@ func validateQueueName(name string, kind queueKind) *awserr.Error {
 	}
 
 	return nil
+}
+
+// queueARN is the ARN of a queue.
+func queueARN(account, region, name string) string {
+	return "arn:" + partition(region) + ":sqs:" + region + ":" + account + ":" + name
 }
 
 // partition is the ARN partition of a region.

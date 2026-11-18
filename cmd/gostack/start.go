@@ -30,10 +30,12 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	regs := registrations(cfg)
+	services := newProviders(cfg)
+	regs := registrations(cfg, services)
 	eng := persist.New(cfg.PersistConfig(serviceNames(regs)...))
+	services.markDirty(eng) //nolint:contextcheck // MarkDirty arms a timer, whose callback has no caller context
 
-	snapshots := snapshotters()
+	snapshots := snapshotters(services)
 	for name, snapshot := range snapshots {
 		eng.Register(name, snapshot)
 	}

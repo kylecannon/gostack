@@ -53,14 +53,28 @@
 // queue is another Queue found through State.find, so Contents does not need to
 // reach back into the Provider.
 //
-// Persistence (W5). State.Range walks the queues in creation order, and a
-// queue's persistent fields are name, account, region, fifo, seq, attrs, tags
-// and purgedAt, plus whatever its Contents saves. Provider.Reset(account,
-// region) is the /_gostack/state/reset hook and already closes the queues it
-// drops. Restore builds queues with newQueue-like construction under
-// State.mu, and has to keep State.next above the highest restored seq.
+// # Persistence
 //
-// Dirty marking. The gateway marks a service dirty after an operation that
-// went through its own /* route. A call made to a queue URL goes through the
-// routes of Mount and is not marked yet. Persistence needs a seam for it.
+// Provider.Snapshot and Provider.Restore implement persist.Snapshotter. The
+// snapshot is a json envelope, {"v":1,"data":...}: for each account and region
+// the queues in creation order, each with its attributes, tags, purge time and
+// the data of its Contents, and the names of recently deleted queues. A Contents
+// takes part by implementing persistentContents; a queue whose Contents does
+// not fails the snapshot, because it would come back empty. A new kind of
+// Contents (FIFO, with its deduplication windows and sequence counters) has to
+// implement it, and Test_every_kind_of_queue_can_be_saved fails until it does.
+// A snapshot holds absolute times, so the deadline of a delayed or in-flight
+// message holds across a restart, and restore re-arms each queue's timer from
+// them. Restore reads and checks the whole file before it replaces anything, and
+// leaves SQS empty when the file is not valid.
+//
+// Provider.Reset(account, region) is the /_gostack/state/reset hook.
+//
+// # Dirty marking
+//
+// The gateway marks SQS dirty after an operation that went through its own /*
+// route, using Registration.Mutating: every operation but Get* and List*, so
+// ReceiveMessage counts, because it hides the messages it returns. A call made
+// to a queue URL goes through the routes of Mount, so the Provider reports it
+// itself through the function given to OnChange.
 package sqs

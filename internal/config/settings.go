@@ -54,6 +54,9 @@ type Settings struct {
 	SQSEnableMessageRetentionPeriod bool
 	// SQSDelayPurgeRetry is SQS_DELAY_PURGE_RETRY.
 	SQSDelayPurgeRetry bool
+	// SQSDisableMaxNumberOfMessageLimit is SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT:
+	// ReceiveMessage accepts a MaxNumberOfMessages above 10.
+	SQSDisableMaxNumberOfMessageLimit bool
 	// FailFast is FAIL_FAST: a recovered panic answers 501 instead of 500.
 	FailFast bool
 	// IncludeStackTracesInHTTPResponse is INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE.
@@ -110,6 +113,7 @@ func (s *Settings) values() map[string]any {
 		varSQSDelayRecentlyDeleted:         s.SQSDelayRecentlyDeleted,
 		varSQSEnableMessageRetentionPeriod: s.SQSEnableMessageRetentionPeriod,
 		varSQSDelayPurgeRetry:              s.SQSDelayPurgeRetry,
+		varSQSDisableMaxMessageLimit:       s.SQSDisableMaxNumberOfMessageLimit,
 		varFailFast:                        s.FailFast,
 		varIncludeStackTraces:              s.IncludeStackTracesInHTTPResponse,
 		varEnableConfigUpdates:             s.EnableConfigUpdates,
@@ -149,33 +153,34 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 	logLevel := cmpLogLevel(get(varLSLog), get(varLog))
 
 	return &Settings{
-		GatewayListen:                    uniqueHostPorts(listen),
-		LocalstackHost:                   localstackHost,
-		Services:                         parseServices(get(varServices)),
-		EagerServiceLoading:              isTrue(get(varEagerServiceLoading)),
-		Debug:                            isTrue(get(varDebug)) || slices.Contains(traceLogLevels, logLevel),
-		LogLevel:                         logLevel,
-		Persistence:                      isTrue(get(varPersistence)),
-		Persist:                          base.persist,
-		InDocker:                         base.inDocker,
-		SQSEndpointStrategy:              get(varSQSEndpointStrategy),
-		SQSDelayRecentlyDeleted:          isTrue(get(varSQSDelayRecentlyDeleted)),
-		SQSEnableMessageRetentionPeriod:  isTrue(get(varSQSEnableMessageRetentionPeriod)),
-		SQSDelayPurgeRetry:               isTrue(get(varSQSDelayPurgeRetry)),
-		FailFast:                         isTrue(get(varFailFast)),
-		IncludeStackTracesInHTTPResponse: isTrue(get(varIncludeStackTraces)),
-		EnableConfigUpdates:              isTrue(get(varEnableConfigUpdates)),
-		CompatPaths:                      isNotFalse(get(varCompatPaths)),
-		ResponseHeaderEnabled:            isNotFalse(get(varResponseHeaderEnabled)),
-		CustomSSLCertPath:                get(varCustomSSLCertPath),
-		ShutdownTimeout:                  timeout,
-		DisableCORSChecks:                isTrue(get(varDisableCORSChecks)),
-		DisableCORSHeaders:               isTrue(get(varDisableCORSHeaders)),
-		DisablePreflightProcessing:       isTrue(get(varDisablePreflightProcessing)),
-		ParityAWSAccessKeyID:             isTrue(get(varParityAWSAccessKeyID)),
-		ExtraCORSAllowedHeaders:          splitList(get(varExtraCORSAllowedHeaders)),
-		ExtraCORSExposeHeaders:           splitList(get(varExtraCORSExposeHeaders)),
-		ExtraCORSAllowedOrigins:          splitList(get(varExtraCORSAllowedOrigins)),
+		GatewayListen:                     uniqueHostPorts(listen),
+		LocalstackHost:                    localstackHost,
+		Services:                          parseServices(get(varServices)),
+		EagerServiceLoading:               isTrue(get(varEagerServiceLoading)),
+		Debug:                             isTrue(get(varDebug)) || slices.Contains(traceLogLevels, logLevel),
+		LogLevel:                          logLevel,
+		Persistence:                       isTrue(get(varPersistence)),
+		Persist:                           base.persist,
+		InDocker:                          base.inDocker,
+		SQSEndpointStrategy:               get(varSQSEndpointStrategy),
+		SQSDelayRecentlyDeleted:           isTrue(get(varSQSDelayRecentlyDeleted)),
+		SQSEnableMessageRetentionPeriod:   isTrue(get(varSQSEnableMessageRetentionPeriod)),
+		SQSDelayPurgeRetry:                isTrue(get(varSQSDelayPurgeRetry)),
+		SQSDisableMaxNumberOfMessageLimit: isTrue(get(varSQSDisableMaxMessageLimit)),
+		FailFast:                          isTrue(get(varFailFast)),
+		IncludeStackTracesInHTTPResponse:  isTrue(get(varIncludeStackTraces)),
+		EnableConfigUpdates:               isTrue(get(varEnableConfigUpdates)),
+		CompatPaths:                       isNotFalse(get(varCompatPaths)),
+		ResponseHeaderEnabled:             isNotFalse(get(varResponseHeaderEnabled)),
+		CustomSSLCertPath:                 get(varCustomSSLCertPath),
+		ShutdownTimeout:                   timeout,
+		DisableCORSChecks:                 isTrue(get(varDisableCORSChecks)),
+		DisableCORSHeaders:                isTrue(get(varDisableCORSHeaders)),
+		DisablePreflightProcessing:        isTrue(get(varDisablePreflightProcessing)),
+		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
+		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
+		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),
+		ExtraCORSAllowedOrigins:           splitList(get(varExtraCORSAllowedOrigins)),
 	}, nil
 }
 

@@ -65,7 +65,8 @@ type stateController struct {
 }
 
 // Reset wipes the state of the service named by the scope, or of every service
-// that can reset itself when the scope names none.
+// that can reset itself when the scope names none. A wiped service is marked
+// dirty, so the wipe reaches the disk and a restart does not bring it back.
 func (c *stateController) Reset(scope internalapi.StateScope) error {
 	if scope.Service != "" {
 		if !c.registered(scope.Service) {
@@ -78,14 +79,16 @@ func (c *stateController) Reset(scope internalapi.StateScope) error {
 		}
 
 		target.Reset(scope.Account, scope.Region)
+		c.eng.MarkDirty(scope.Service)
 
 		return nil
 	}
 
-	for _, snapshot := range c.snapshots {
+	for name, snapshot := range c.snapshots {
 		target, ok := snapshot.(resetter)
 		if ok {
 			target.Reset(scope.Account, scope.Region)
+			c.eng.MarkDirty(name)
 		}
 	}
 

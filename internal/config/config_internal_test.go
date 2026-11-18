@@ -259,6 +259,7 @@ func Test_Load_variableForms(t *testing.T) {
 				varSQSDelayRecentlyDeleted:         "1",
 				varSQSEnableMessageRetentionPeriod: valueTrue,
 				varSQSDelayPurgeRetry:              "1",
+				varSQSDisableMaxMessageLimit:       "1",
 				varDisableCORSChecks:               "1",
 				varDisableCORSHeaders:              "1",
 				varExtraCORSAllowedOrigins:         "https://a.test, https://b.test,,",
@@ -271,6 +272,7 @@ func Test_Load_variableForms(t *testing.T) {
 				require.True(t, got.SQSDelayRecentlyDeleted)
 				require.True(t, got.SQSEnableMessageRetentionPeriod)
 				require.True(t, got.SQSDelayPurgeRetry)
+				require.True(t, got.SQSDisableMaxNumberOfMessageLimit)
 				require.True(t, got.DisableCORSChecks)
 				require.True(t, got.DisableCORSHeaders)
 				require.Equal(t, []string{"https://a.test", "https://b.test"}, got.ExtraCORSAllowedOrigins)

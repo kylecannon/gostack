@@ -124,3 +124,22 @@ func Test_stateController_SaveLoad(t *testing.T) {
 		assert.Equal(t, `{"n":1}`, w.data)
 	})
 }
+
+func Test_stateController_Reset_reaches_the_disk(t *testing.T) {
+	eng, dir := persistentEngine(t)
+	w := &widgets{data: `{"n":1}`}
+	eng.Register(testService, w)
+	c := &stateController{
+		regs:      []service.Registration{registration(testService)},
+		snapshots: map[string]persist.Snapshotter{testService: w},
+		eng:       eng,
+	}
+
+	require.NoError(t, c.Save(t.Context()))
+	require.NoError(t, c.Reset(internalapi.StateScope{Service: testService}))
+	require.NoError(t, eng.Flush(t.Context()))
+
+	saved, err := os.ReadFile(filepath.Join(dir, testService, "store.json"))
+	require.NoError(t, err)
+	assert.Empty(t, string(saved), "the wipe was saved, so a restart does not bring the service back")
+}

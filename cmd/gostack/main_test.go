@@ -87,17 +87,18 @@ func TestMain(m *testing.M) {
 }
 
 // startGostack runs the binary on a free port, with a clean environment so that
-// the developer's own PERSIST_* and LOCALSTACK_* variables stay out of it.
-func startGostack(t *testing.T) *gostack {
+// the developer's own PERSIST_* and LOCALSTACK_* variables stay out of it. env
+// adds variables, such as the PERSIST_* settings of a test.
+func startGostack(t *testing.T, env ...string) *gostack {
 	t.Helper()
 
 	cmd := exec.CommandContext(t.Context(), binary)
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
 		"GATEWAY_LISTEN=127.0.0.1:0",
 		"ENABLE_CONFIG_UPDATES=1",
-	}
+	}, env...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGKILL) }
 
 	g := &gostack{cmd: cmd, stdout: &syncBuffer{}, exited: make(chan error, 1)}

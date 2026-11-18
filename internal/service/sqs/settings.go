@@ -31,6 +31,9 @@ type Settings struct {
 	// queue drops visible messages older than its MessageRetentionPeriod.
 	// Without it the attribute is stored and ignored, as in LocalStack.
 	EnableMessageRetentionPeriod bool
+	// DisableMaxNumberOfMessageLimit is SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT:
+	// ReceiveMessage accepts a MaxNumberOfMessages above 10.
+	DisableMaxNumberOfMessageLimit bool
 	// Host is LOCALSTACK_HOST as host:port, the address clients use to reach
 	// gostack. It goes into the queue URLs.
 	Host string
