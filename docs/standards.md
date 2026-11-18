@@ -48,10 +48,10 @@ specific to gostack.
 1. **Unit tests** follow conventions-go.md: table tests, `testify/require`,
    `synctest` for time, `-race` always.
 2. **Codec conformance.** `scripts/vendor-specs.sh` fetches botocore's
-   protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json}.json`)
+   protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json,rest-xml,rest-json}.json`)
    into `internal/protocol/testdata/botocore` and records them in
-   `specs/SOURCES.lock`. Every protocol a codec implements passes them: query
-   and json so far, and rest-json, rest-xml, ec2 and cbor as their services
+   `specs/SOURCES.lock`. Every protocol a codec implements passes them: query,
+   json, rest-xml and rest-json so far, and ec2 and cbor as their services
    arrive. Every Smithy trait the codec honors gets its own test.
    aws-emulator's dropped `@timestampFormat` is the cautionary case.
 3. **Fuzzing.**

@@ -44,7 +44,8 @@ LOCALSTACK_SHA_PREFIX=8b9a79f05
 
 # Fixtures taken from the tarball, relative to tests/unit/protocols/.
 FIXTURES=(
-  input/json.json input/query.json output/json.json output/query.json
+  input/json.json input/query.json input/rest-json.json input/rest-xml.json
+  output/json.json output/query.json output/rest-json.json output/rest-xml.json
   protocol-tests-ignore-list.json
 )
 FIXTURE_DIR=internal/protocol/testdata/botocore
