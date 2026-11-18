@@ -60,12 +60,22 @@ func allocated() uint64 {
 	return stats.TotalAlloc
 }
 
+// countingWriter counts the bytes written to it.
+type countingWriter struct{ n int }
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.n += len(p)
+
+	return len(p), nil
+}
+
 func BenchmarkSnapshot(b *testing.B) {
 	for _, kind := range []queueKind{queueStandard, queueFIFO} {
 		b.Run(snapshotRow(kind), func(b *testing.B) {
 			e := bigQueue(b, kind)
 
-			var file bytes.Buffer
+			// The file is counted, not kept: the benchmark needs its size only.
+			var file countingWriter
 
 			err := e.provider.Snapshot(&file)
 			if err != nil {
@@ -78,7 +88,7 @@ func BenchmarkSnapshot(b *testing.B) {
 			}
 
 			b.ReportAllocs()
-			b.SetBytes(int64(file.Len()))
+			b.SetBytes(int64(file.n))
 			runtime.GC()
 
 			before := allocated()
@@ -91,7 +101,7 @@ func BenchmarkSnapshot(b *testing.B) {
 			}
 
 			b.ReportMetric(float64(held.Microseconds())/1000, "lock-ms")
-			b.ReportMetric(float64(allocated()-before)/float64(b.N)/float64(file.Len()), "alloc/file")
+			b.ReportMetric(float64(allocated()-before)/float64(b.N)/float64(file.n), "alloc/file")
 		})
 	}
 }
@@ -101,13 +111,24 @@ func BenchmarkRestore(b *testing.B) {
 		b.Run(snapshotRow(kind), func(b *testing.B) {
 			var file bytes.Buffer
 
-			err := bigQueue(b, kind).provider.Snapshot(&file)
+			source := bigQueue(b, kind)
+
+			err := source.provider.Snapshot(&file)
 			if err != nil {
 				b.Fatal(err)
 			}
 
+			// The file holds the state now. Emptying the source lets the heap
+			// shed it, so the benchmark holds one copy of the queue and not two.
+			source.provider.Reset("", "")
+
 			target := sqs.New(nil)
-			b.Cleanup(target.Close)
+			// Reset stops the deadline timers of the in-flight messages, which
+			// would keep the restored queue in memory for 30 seconds.
+			b.Cleanup(func() {
+				target.Close()
+				target.Reset("", "")
+			})
 
 			b.ReportAllocs()
 			b.SetBytes(int64(file.Len()))
@@ -116,6 +137,13 @@ func BenchmarkRestore(b *testing.B) {
 			before := allocated()
 
 			for b.Loop() {
+				// A restore reads a file into an empty Provider, as at start-up.
+				// Emptying it first, with the timer stopped, keeps the last
+				// restore's queue from being in memory beside the new one.
+				b.StopTimer()
+				target.Reset("", "")
+				b.StartTimer()
+
 				err = target.Restore(bytes.NewReader(file.Bytes()))
 				if err != nil {
 					b.Fatal(err)

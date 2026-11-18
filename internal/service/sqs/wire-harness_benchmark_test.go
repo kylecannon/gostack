@@ -28,6 +28,10 @@ const (
 	// queue before it purges, so a 1 MiB cell does not grow to the gigabyte.
 	benchRetainBytes = 64 << 20
 	benchMaxRetain   = 4096
+	// benchRefillCalls is how many calls a receive benchmark makes between
+	// refills of its queue. Each call adds a receipt handle to every message it
+	// takes, and the queue keeps them all until the message is deleted.
+	benchRefillCalls = 1000
 	// benchHandles is how many receipt handles a delete benchmark takes in one
 	// refill. It is a multiple of the batch size.
 	benchHandles = 1000
@@ -91,7 +95,14 @@ func newBenchEnv(b *testing.B) *benchEnv {
 		b.Fatal(err)
 	}
 
-	b.Cleanup(provider.Close)
+	// Reset closes the queues, which stops their deadline timers. An armed timer
+	// keeps its queue, and every message in it, reachable until it fires, which
+	// is 30 seconds for an in-flight message, so without it each cell would
+	// leave its queues in memory under the cells after it.
+	b.Cleanup(func() {
+		provider.Close()
+		provider.Reset("", "")
+	})
 
 	return &benchEnv{b: b, provider: provider, handler: gw.Handler(), ctx: direct(b.Context())}
 }
@@ -150,8 +161,12 @@ func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, gro
 
 	body := benchBody(bodyBytes)
 
+	// The provider keeps the map it is given and never changes it, so the
+	// messages share one, as they share the body.
+	shared := attributes(attrs)
+
 	for i := range count {
-		in := &sqsapi.SendMessageInput{QueueUrl: &url, MessageBody: &body, MessageAttributes: attributes(attrs)}
+		in := &sqsapi.SendMessageInput{QueueUrl: &url, MessageBody: &body, MessageAttributes: shared}
 
 		if kind == queueFIFO {
 			group := benchGroup + strconv.Itoa(i%groups)

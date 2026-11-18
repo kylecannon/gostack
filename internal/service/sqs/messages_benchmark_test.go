@@ -370,7 +370,10 @@ func receiveBody(c cell, queueURL string) *segmented {
 
 // BenchmarkReceiveMessage receives from a queue that holds ten messages, with a
 // visibility timeout of 0, so that each call sees the same messages and the
-// queue never runs dry.
+// queue never runs dry. A queue keeps every receipt handle it has issued for a
+// message until the message is deleted, so the queue is purged and filled again
+// every benchRefillCalls calls, with the timer stopped, and the memory of a cell
+// stays the same however long it runs.
 func BenchmarkReceiveMessage(b *testing.B) {
 	eachCell(b, cellOpts{payload: true, attrs: true, maxes: []int{1, benchBatch}}, func(b *testing.B, c cell) {
 		env := newBenchEnv(b)
@@ -383,7 +386,14 @@ func BenchmarkReceiveMessage(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(c.payload.bytes * c.max))
 
-		for b.Loop() {
+		for i := 1; b.Loop(); i++ {
+			if i%benchRefillCalls == 0 {
+				b.StopTimer()
+				env.purge(queueURL)
+				env.fill(queueURL, c.kind, benchBatch, c.payload.bytes, c.attrs, 1)
+				b.StartTimer()
+			}
+
 			caller.call()
 		}
 	})
