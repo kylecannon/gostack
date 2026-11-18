@@ -93,6 +93,7 @@ None of these exist yet. Each lands in the phase that adds the code it checks.
 | `make gen-check`: CI regenerates `internal/api` and fails on any diff | Phase 1, with codegen |
 | Parity ledger: CI runs the services a change touches and fails when a row goes from pass to fail | Phase 1, with the parity runner |
 | benchstat: `bench.yml` compares micro benchmarks on main and the PR | Phase 1, with the first benchmarks |
+| System bench regression: a scheduled and manual `bench-system.yml` runs the matrix and `bench compare` against the last committed result | Phase 1, with the matrix |
 | Fuzz: nightly CI runs each fuzz target for 60s | Phase 1, with the first parsers |
 
 ## Toolchain
@@ -119,18 +120,35 @@ in Phase 1.
 ## Benchmarks
 
 Every target is a number that gets measured. The first measurement sets the
-baseline. After that, CI holds the line. Benchmarks and `bench/` arrive in
-Phase 1.
+baseline. After that, CI holds the line.
+
+### Every feature ships its benchmark matrix
+
+A feature is not done until its benchmarks cover the variants it can be called
+with. A change that adds or alters a feature adds or updates its rows in the
+same PR. A missing row is a review blocker.
+
+| Axis | Values |
+|---|---|
+| Payload | small (under 1 KiB), medium (about 64 KiB), and the service's maximum |
+| Concurrency (system bench) | 1, 16, 64 |
+| Wire protocol | every protocol the service speaks (SQS: query and json) |
+| Feature options | each option that changes the code path, e.g. SQS standard vs FIFO, single vs batch, short vs long poll, with and without message attributes |
+| Persistence | off, and on (`PERSIST_SQS=1`) for services that persist |
+
+Name sub-benchmarks so benchstat lines them up across runs:
+`BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB`. An axis that does
+not apply to a feature is left out, not filled with a placeholder.
 
 ### Micro benchmarks
 
-- Live in `*_benchmark_test.go` and loop with `b.Loop()`.
+- Live in `*_benchmark_test.go`, loop with `b.Loop()`, and report bytes with
+  `b.SetBytes` where a payload is involved.
 - Cover:
   - routing;
-  - each protocol codec;
+  - each protocol codec, decode and encode, across the payload axis;
   - SigV4 parsing;
-  - hot operations: SQS Send and Receive, S3 Put and Get, DynamoDB PutItem and
-    Query.
+  - every service operation's handler path, across its matrix.
 - benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
   regression over 10% with p<0.05 fails the build.
 
@@ -140,14 +158,18 @@ The same workload runs against `gostack:latest`, `gostack:slim` and the
 LocalStack image. Measured:
 
 - time from container start to `Ready.`;
-- idle RSS, and idle CPU over 60s (target: no wakeups);
+- idle RSS, and idle CPU over 60s (target: no wakeups), with the image
+  HEALTHCHECK on and off;
 - RSS and CPU under load;
-- p50 and p99 per operation at concurrency 1, 16 and 64;
+- p50 and p99 per operation for each cell of the feature matrix;
 - image size.
 
-An "agentic" workload runs many short create, use and delete cycles across SQS,
-S3, DynamoDB and Lambda. Results are committed to
-`bench/results/<date>-<sha>.json`.
+An "agentic" workload runs many short create, use and delete cycles across
+every implemented service. Results are committed to
+`bench/results/<date>-<sha>.json`. `go run ./bench compare` checks a run
+against the newest committed result and fails when a gostack cell regresses
+past its threshold; `make bench-system` runs it after measuring. LocalStack
+cells are reference numbers and never gate.
 
 ### Runtime knobs
 
