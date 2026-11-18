@@ -9,7 +9,10 @@ import (
 	"syscall"
 )
 
-const usage1 = "usage: bench run|loadgen|gate [flags]"
+const (
+	cmdRun = "run"
+	usage1 = "usage: bench run|compare|loadgen|gate [flags]"
+)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -30,8 +33,10 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	}
 
 	switch args[0] {
-	case "run":
+	case cmdRun:
 		return orchestrate(ctx, args[1:], stdout, stderr)
+	case "compare":
+		return compareMain(ctx, args[1:], stdout)
 	case "loadgen":
 		return loadgenMain(ctx, args[1:], stdout)
 	case "gate":

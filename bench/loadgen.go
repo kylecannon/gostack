@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +22,6 @@ import (
 const (
 	defaultEndpoint     = "http://127.0.0.1:4566"
 	loadRegion          = "us-east-1"
-	messageBytes        = 256
 	messagesPerCycle    = 10
 	maxReceiveRounds    = 100
 	maxWorkerErrors     = 50
@@ -33,15 +31,11 @@ const (
 	percentTail         = 99
 	percentScale        = 100
 	microsPerMilli      = 1000
-	defaultLoadDuration = 30 * time.Second
+	defaultLoadDuration = 2 * time.Second
 	defaultCycles       = 200
 	defaultCycleConc    = 16
 	idleConnsPerWork    = 2
 )
-
-// errTooManyErrors stops a worker whose calls keep failing, so a dead target
-// ends a run quickly instead of spinning for the whole duration.
-var errTooManyErrors = errors.New("too many failed calls")
 
 // opStats is the latency summary of one operation.
 type opStats struct {
@@ -57,19 +51,8 @@ type usage struct {
 	BaselineRSSBytes uint64  `json:"baseline_rss_bytes"`
 	EndRSSBytes      uint64  `json:"end_rss_bytes"`
 	PeakRSSBytes     uint64  `json:"peak_rss_bytes"`
+	MedianRSSBytes   uint64  `json:"median_rss_bytes"`
 	CPUPercent       float64 `json:"cpu_percent"`
-}
-
-// latencyRun is one concurrency level of the SQS latency workload.
-type latencyRun struct {
-	Concurrency   int     `json:"concurrency"`
-	Seconds       float64 `json:"seconds"`
-	CyclesPerSec  float64 `json:"cycles_per_sec"`
-	EmptyReceives int     `json:"empty_receives"`
-	Send          opStats `json:"send"`
-	Receive       opStats `json:"receive"`
-	Delete        opStats `json:"delete"`
-	Usage         usage   `json:"usage,omitzero"`
 }
 
 // agenticRun is the create, use and delete workload.
@@ -86,7 +69,7 @@ type agenticRun struct {
 // loadgenMain runs inside the load generator container.
 func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bench loadgen sqs|agentic [flags]")
+		return errors.New("usage: bench loadgen cell|agentic [flags]")
 	}
 
 	var (
@@ -95,12 +78,12 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	)
 
 	switch args[0] {
-	case "sqs":
-		result, err = latencyCommand(ctx, args[1:])
+	case "cell":
+		result, err = cellCommand(ctx, args[1:])
 	case "agentic":
 		result, err = agenticCommand(ctx, args[1:])
 	default:
-		return fmt.Errorf("unknown workload %q, want sqs or agentic", args[0])
+		return fmt.Errorf("unknown workload %q, want cell or agentic", args[0])
 	}
 
 	if err != nil {
@@ -115,18 +98,25 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	return nil
 }
 
-func latencyCommand(ctx context.Context, args []string) (latencyRun, error) {
-	flags := flag.NewFlagSet("loadgen sqs", flag.ContinueOnError)
+func cellCommand(ctx context.Context, args []string) (cellRun, error) {
+	flags := flag.NewFlagSet("loadgen cell", flag.ContinueOnError)
 	endpoint := flags.String("endpoint", defaultEndpoint, "target endpoint")
-	concurrency := flags.Int("concurrency", 1, "concurrent workers")
 	duration := flags.Duration("duration", defaultLoadDuration, "how long to run")
+
+	var spec cellSpec
+
+	flags.IntVar(&spec.Payload, "payload", payloadSmall, "message body bytes")
+	flags.StringVar(&spec.Queue, "queue", queueStandard, "standard or fifo")
+	flags.StringVar(&spec.Shape, "shape", shapeSingle, "single, batch or longpoll")
+	flags.StringVar(&spec.Proto, "proto", protoJSON, "json (through the SDK) or query (a form post)")
+	flags.IntVar(&spec.Concurrency, "concurrency", 1, "concurrent workers")
 
 	err := flags.Parse(args)
 	if err != nil {
-		return latencyRun{}, fmt.Errorf("parse flags: %w", err)
+		return cellRun{}, fmt.Errorf("parse flags: %w", err)
 	}
 
-	return runLatency(ctx, newSQSClient(*endpoint, *concurrency), *concurrency, *duration)
+	return runCell(ctx, *endpoint, spec, *duration)
 }
 
 func agenticCommand(ctx context.Context, args []string) (agenticRun, error) {
@@ -143,153 +133,26 @@ func agenticCommand(ctx context.Context, args []string) (agenticRun, error) {
 	return runAgentic(ctx, newSQSClient(*endpoint, *concurrency), *cycles, *concurrency)
 }
 
-// newSQSClient returns an SDK client with retries off, so a failure is counted
-// and not hidden, and a connection pool sized for the workers.
-func newSQSClient(endpoint string, workers int) *sqs.Client {
-	transport := &http.Transport{
+// newTransport returns a connection pool sized for the workers.
+func newTransport(workers int) *http.Transport {
+	return &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: dialTimeout}).DialContext,
 		MaxIdleConns:        workers * idleConnsPerWork,
 		MaxIdleConnsPerHost: workers * idleConnsPerWork,
 		IdleConnTimeout:     idleConnTimeout,
 	}
+}
 
+// newSQSClient returns an SDK client with retries off, so a failure is counted
+// and not hidden, and a connection pool sized for the workers.
+func newSQSClient(endpoint string, workers int) *sqs.Client {
 	return sqs.New(sqs.Options{
 		Region:           loadRegion,
 		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
 		BaseEndpoint:     &endpoint,
-		HTTPClient:       &http.Client{Transport: transport},
+		HTTPClient:       &http.Client{Transport: newTransport(workers)},
 		RetryMaxAttempts: 1,
 	})
-}
-
-// samples are the timings one worker collected.
-type samples struct {
-	send, receive, del []time.Duration
-	failed             [3]int
-	empty              int
-}
-
-// runLatency runs workers that each loop send, receive one message, delete it,
-// against one queue for the duration. A call in flight at the deadline
-// finishes and counts.
-func runLatency(ctx context.Context, client *sqs.Client, workers int, duration time.Duration) (latencyRun, error) {
-	name := fmt.Sprintf("bench-latency-%x", time.Now().UnixNano())
-
-	created, err := client.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &name})
-	if err != nil {
-		return latencyRun{}, fmt.Errorf("create queue: %w", err)
-	}
-
-	defer func() {
-		_, _ = client.DeleteQueue(context.WithoutCancel(ctx), &sqs.DeleteQueueInput{QueueUrl: created.QueueUrl})
-	}()
-
-	body := strings.Repeat("x", messageBytes)
-	results := make([]samples, workers)
-	errs := make([]error, workers)
-	started := time.Now()
-	end := started.Add(duration)
-
-	var wg sync.WaitGroup
-
-	for i := range workers {
-		wg.Go(func() { errs[i] = latencyWorker(ctx, client, *created.QueueUrl, body, end, &results[i]) })
-	}
-
-	wg.Wait()
-
-	elapsed := time.Since(started)
-
-	err = errors.Join(errs...)
-	if err != nil {
-		return latencyRun{}, err
-	}
-
-	return summarize(results, workers, elapsed), nil
-}
-
-func latencyWorker(
-	ctx context.Context, client *sqs.Client, queueURL, body string, end time.Time, out *samples,
-) error {
-	for time.Now().Before(end) {
-		err := ctx.Err()
-		if err != nil {
-			return fmt.Errorf("stopped: %w", err)
-		}
-
-		if out.failed[0]+out.failed[1]+out.failed[2] > maxWorkerErrors {
-			return errTooManyErrors
-		}
-
-		began := time.Now()
-		_, err = client.SendMessage(ctx, &sqs.SendMessageInput{QueueUrl: &queueURL, MessageBody: &body})
-		took := time.Since(began)
-
-		if err != nil {
-			out.failed[0]++
-
-			continue
-		}
-
-		out.send = append(out.send, took)
-
-		began = time.Now()
-		got, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{QueueUrl: &queueURL, MaxNumberOfMessages: 1})
-		took = time.Since(began)
-
-		if err != nil {
-			out.failed[1]++
-
-			continue
-		}
-
-		if len(got.Messages) == 0 {
-			out.empty++
-
-			continue
-		}
-
-		out.receive = append(out.receive, took)
-
-		began = time.Now()
-		_, err = client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-			QueueUrl: &queueURL, ReceiptHandle: got.Messages[0].ReceiptHandle,
-		})
-		took = time.Since(began)
-
-		if err != nil {
-			out.failed[2]++
-
-			continue
-		}
-
-		out.del = append(out.del, took)
-	}
-
-	return nil
-}
-
-func summarize(results []samples, workers int, elapsed time.Duration) latencyRun {
-	var send, receive, del []time.Duration
-
-	run := latencyRun{Concurrency: workers, Seconds: elapsed.Seconds()}
-
-	for _, s := range results {
-		send = append(send, s.send...)
-		receive = append(receive, s.receive...)
-		del = append(del, s.del...)
-		run.EmptyReceives += s.empty
-		run.Send.Errors += s.failed[0]
-		run.Receive.Errors += s.failed[1]
-		run.Delete.Errors += s.failed[2]
-	}
-
-	run.Send = statsOf(send, run.Send.Errors)
-	run.Receive = statsOf(receive, run.Receive.Errors)
-	run.Delete = statsOf(del, run.Delete.Errors)
-	run.CyclesPerSec = float64(run.Delete.Count) / elapsed.Seconds()
-
-	return run
 }
 
 // statsOf summarizes timings. It sorts its argument.

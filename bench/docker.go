@@ -58,6 +58,7 @@ type engineInfo struct {
 	OperatingSystem string `json:"OperatingSystem"`
 	KernelVersion   string `json:"KernelVersion"`
 	Architecture    string `json:"Architecture"`
+	OSType          string `json:"OSType"`
 	NCPU            int    `json:"NCPU"`
 	MemTotal        uint64 `json:"MemTotal"`
 }
@@ -205,9 +206,10 @@ type instance struct {
 
 // launch starts a container and returns at once. The ready channel receives the
 // time from the start of `docker run` to the ready line.
-func launch(ctx context.Context, name, image string) (*instance, error) {
+func launch(ctx context.Context, name, image string, extra ...string) (*instance, error) {
+	args := append([]string{cmdRun, "--name", name, "-e", "DISABLE_EVENTS=1"}, extra...)
 	//nolint:gosec // the arguments are built by this program
-	cmd := exec.CommandContext(ctx, dockerBin, "run", "--name", name, "-e", "DISABLE_EVENTS=1", image)
+	cmd := exec.CommandContext(ctx, dockerBin, append(args, image)...)
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw

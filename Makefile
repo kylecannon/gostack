@@ -59,19 +59,30 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 
 
 # Benchmarks (docs/standards.md, "Benchmarks").
-#   make bench          every Benchmark* in the repo, BENCH_COUNT runs each, into BENCH_OUT
-#   make bench-system   the system bench: builds the images, then measures gostack, gostack-slim
-#                       and the LocalStack image the parity harness built (make parity-baseline)
-#                       and writes bench/results/<date>-<sha>.json and .md. Needs Docker, takes
-#                       about 10 minutes. BENCH_SYSTEM_ARGS passes flags to `bench run`, e.g.
-#                       BENCH_SYSTEM_ARGS="-only gostack -idle 10s -duration 5s".
+#   make bench               every Benchmark* in the repo, BENCH_COUNT runs of BENCH_TIME each, into
+#                            BENCH_OUT. BENCH_TIME is 500ms, half of go test's default, so that the
+#                            matrix at -count=10 stays inside its 15 minute budget.
+#   make bench-system        the system bench, full profile: builds the images, measures gostack,
+#                            gostack-slim and the LocalStack image the parity harness built (make
+#                            parity-baseline), writes bench/results/<date>-<sha>.json and .md, then
+#                            compares the run with the newest committed result of the same host
+#                            (go run ./bench compare). Needs Docker. Takes over an hour.
+#   make bench-system-quick  the quick profile for gostack alone: builds one image, writes under
+#                            bin/bench-system, compares the same way. Takes about 5 minutes.
+# BENCH_SYSTEM_ARGS passes flags to `bench run`, e.g. "-reps 1 -duration 1s". Container names and
+# the load generator image carry the tag of IMAGE, so runs of different tags do not collide.
 BENCH_COUNT ?= 10
+BENCH_TIME ?= 500ms
 BENCH_OUT ?= bin/bench.txt
 BENCH_SYSTEM_ARGS ?=
+BENCH_TAG = $(lastword $(subst :, ,$(IMAGE)))
+BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
+	-loadgen-image gostack-bench-loadgen:$(BENCH_TAG) -name-suffix -$(BENCH_TAG) -compare-dir bench/results \
+	$(BENCH_SYSTEM_ARGS)
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system bench-system-quick
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -147,8 +158,11 @@ image-slim:
 # tee would not.
 bench:
 	@mkdir -p $(dir $(BENCH_OUT))
-	go test -run '^$$' -bench . -benchmem -count=$(BENCH_COUNT) ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
+	go test -run '^$$' -bench . -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -timeout 30m ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
 	@cat $(BENCH_OUT)
 
 bench-system: image image-slim
-	go run ./bench run -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) $(BENCH_SYSTEM_ARGS)
+	go run ./bench run -profile full $(BENCH_RUN)
+
+bench-system-quick: image
+	go run ./bench run -profile quick -out bin/bench-system $(BENCH_RUN)

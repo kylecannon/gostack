@@ -131,15 +131,56 @@ func Test_containerStats_rss(t *testing.T) {
 }
 
 func Test_parseOptions(t *testing.T) {
-	opts, err := parseOptions([]string{"-only", "gostack,localstack", "-concurrency", "1, 8"})
+	opts, err := parseOptions([]string{"-targets", "gostack,localstack"})
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 8}, opts.concurrencies)
 	require.Len(t, opts.targets, 2)
 	assert.Equal(t, "localstack", opts.targets[1].name)
+	assert.False(t, opts.targets[1].persistable)
+	assert.Equal(t, profileFull, opts.profile)
+	assert.Equal(t, fullIdle, opts.idle)
 
-	_, err = parseOptions([]string{"-only", "nothing"})
+	quick, err := parseOptions([]string{"-profile", "quick"})
+	require.NoError(t, err)
+	require.Len(t, quick.targets, 1, "the quick profile measures gostack alone")
+	assert.Equal(t, "gostack", quick.targets[0].name)
+	assert.Equal(t, quickIdle, quick.idle)
+
+	all, err := parseOptions(nil)
+	require.NoError(t, err)
+	assert.Len(t, all.targets, 3)
+
+	_, err = parseOptions([]string{"-targets", "nothing"})
 	require.Error(t, err)
 
-	_, err = parseOptions([]string{"-concurrency", "0"})
+	_, err = parseOptions([]string{"-profile", "huge"})
 	require.Error(t, err)
+
+	_, err = parseOptions([]string{"-reps", "0"})
+	require.Error(t, err)
+}
+
+func Test_cells_profiles(t *testing.T) {
+	full := cellsFor(profileFull, target{persistable: true})
+	assert.Len(t, full, 216, "3 payloads x 2 queues x 3 shapes x 2 protocols x 3 concurrencies x 2 persistence")
+
+	ids := map[string]bool{}
+	for _, c := range full {
+		assert.False(t, ids[c.id()], c.id())
+		ids[c.id()] = true
+	}
+
+	quick := cellsFor(profileQuick, target{persistable: true})
+	assert.Len(t, quick, 10)
+
+	for _, c := range quick {
+		assert.True(t, ids[c.id()], "%s is not a cell of the full profile", c.id())
+	}
+
+	assert.Len(t, cellsFor(profileFull, target{}), 108, "a target that does not persist skips the persistence cells")
+	assert.Len(t, cellsFor(profileQuick, target{}), 9)
+	assert.Equal(t, "persist=off/payload=64KiB/queue=fifo/shape=batch/proto=query/c=64",
+		cellSpec{Payload: payloadMedium, Queue: queueFIFO, Shape: shapeBatch, Proto: protoQuery, Concurrency: levelHigh}.id())
+	assert.Equal(t, 104857, cellSpec{Payload: payloadMax, Shape: shapeBatch}.entryBytes(),
+		"ten entries fit the batch limit")
+	assert.Equal(t, payloadMax, cellSpec{Payload: payloadMax, Shape: shapeSingle}.entryBytes())
 }

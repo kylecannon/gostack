@@ -26,24 +26,48 @@ const (
 	loadgenDockerfile = "FROM scratch\nCOPY bench /bench\nENTRYPOINT [\"/bench\"]\n"
 	dateLayout        = "2006-01-02"
 	defaultStartups   = 5
-	defaultSettle     = 10 * time.Second
+	defaultIdleRuns   = 3
+	defaultReps       = 3
 	half              = 2
+
+	// Idle windows by profile. The quick profile only has to see RSS settle.
+	fullSettle  = 5 * time.Second
+	fullIdle    = 30 * time.Second
+	quickSettle = 3 * time.Second
+	quickIdle   = 8 * time.Second
+
+	persistDir = "/persisted-data"
+
+	targetGostack    = "gostack"
+	targetSlim       = "gostack-slim"
+	targetLocalstack = "localstack"
+
+	variantHealthcheck   = "healthcheck"
+	variantNoHealthcheck = "no-healthcheck"
 )
 
-// target is one image to measure.
-type target struct{ name, image string }
+// target is one image to measure. Only a target that persists runs the cells
+// with PERSIST_SQS=1.
+type target struct {
+	name, image string
+	persistable bool
+}
 
 // options are the settings of `bench run`.
 type options struct {
+	profile          string
 	targets          []target
 	outDir           string
+	compareDir       string
 	loadgenImage     string
 	suffix           string
+	commit           string
 	startupRuns      int
+	idleRuns         int
+	reps             int
 	settle           time.Duration
 	idle             time.Duration
 	duration         time.Duration
-	concurrencies    []int
 	cycles           int
 	cycleConcurrency int
 }
@@ -54,19 +78,26 @@ func parseOptions(args []string) (options, error) {
 	slim := flags.String("slim-image", "gostack:dev-slim", "the slim gostack image")
 	localstack := flags.String("localstack-image", "gostack-parity-localstack:8b9a79f",
 		"the LocalStack image the parity harness builds")
-	only := flags.String("only", "", "comma separated targets to measure: gostack, gostack-slim, localstack (default all)")
-	concurrency := flags.String("concurrency", "1,16,64", "comma separated SQS latency concurrency levels")
+	targets := flags.String("targets", "", "comma separated targets: gostack, gostack-slim, localstack "+
+		"(default: all for the full profile, gostack for the quick one)")
 
 	var opts options
 
+	flags.StringVar(&opts.profile, "profile", profileFull,
+		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64")
 	flags.StringVar(&opts.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
 		"tag for the load generator image the run builds")
 	flags.StringVar(&opts.outDir, "out", "bench/results", "directory for the result files")
+	flags.StringVar(&opts.compareDir, "compare-dir", "",
+		"after the run, compare it with the newest committed result in this directory that has this host's fingerprint")
 	flags.StringVar(&opts.suffix, "name-suffix", "", "appended to container names, to keep parallel runs apart")
+	flags.StringVar(&opts.commit, "commit", "", "the commit the images were built from (default: HEAD)")
 	flags.IntVar(&opts.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
-	flags.DurationVar(&opts.settle, "settle", defaultSettle, "wait after ready before the idle window")
-	flags.DurationVar(&opts.idle, "idle", time.Minute, "idle window")
-	flags.DurationVar(&opts.duration, "duration", defaultLoadDuration, "length of each SQS latency run")
+	flags.IntVar(&opts.idleRuns, "idle-runs", defaultIdleRuns, "containers measured for each idle variant")
+	flags.IntVar(&opts.reps, "reps", defaultReps, "times each cell runs")
+	flags.DurationVar(&opts.settle, "settle", 0, "wait after ready before the idle window (default by profile)")
+	flags.DurationVar(&opts.idle, "idle", 0, "idle window (default by profile)")
+	flags.DurationVar(&opts.duration, "duration", defaultLoadDuration, "length of each run of a cell")
 	flags.IntVar(&opts.cycles, "cycles", defaultCycles, "agentic cycles")
 	flags.IntVar(&opts.cycleConcurrency, "cycle-concurrency", defaultCycleConc, "agentic concurrency")
 
@@ -75,27 +106,60 @@ func parseOptions(args []string) (options, error) {
 		return options{}, fmt.Errorf("parse flags: %w", err)
 	}
 
-	all := []target{{"gostack", *gostack}, {"gostack-slim", *slim}, {"localstack", *localstack}}
-	for _, t := range all {
-		if *only == "" || slices.Contains(strings.Split(*only, ","), t.name) {
-			opts.targets = append(opts.targets, t)
+	if opts.profile != profileFull && opts.profile != profileQuick {
+		return options{}, fmt.Errorf("-profile %q: want %s or %s", opts.profile, profileFull, profileQuick)
+	}
+
+	opts.applyProfileDefaults()
+
+	if *targets == "" {
+		*targets = targetGostack + "," + targetSlim + "," + targetLocalstack
+		if opts.profile == profileQuick {
+			*targets = targetGostack
 		}
 	}
+
+	opts.targets = selectTargets(*targets, []target{
+		{targetGostack, *gostack, true}, {targetSlim, *slim, true}, {targetLocalstack, *localstack, false},
+	})
 
 	if len(opts.targets) == 0 {
-		return options{}, fmt.Errorf("-only %q names no target", *only)
+		return options{}, fmt.Errorf("-targets %q names no target", *targets)
 	}
 
-	for field := range strings.SplitSeq(*concurrency, ",") {
-		level, err := strconv.Atoi(strings.TrimSpace(field))
-		if err != nil || level < 1 {
-			return options{}, fmt.Errorf("-concurrency %q: %q is not a positive integer", *concurrency, field)
-		}
-
-		opts.concurrencies = append(opts.concurrencies, level)
+	if opts.reps < 1 || opts.startupRuns < 1 || opts.idleRuns < 1 {
+		return options{}, errors.New("-reps, -startup-runs and -idle-runs must be at least 1")
 	}
 
 	return opts, nil
+}
+
+// selectTargets keeps the targets of all that the comma separated list names.
+func selectTargets(list string, all []target) []target {
+	var out []target
+
+	for _, t := range all {
+		if slices.Contains(strings.Split(list, ","), t.name) {
+			out = append(out, t)
+		}
+	}
+
+	return out
+}
+
+func (o *options) applyProfileDefaults() {
+	settle, idle := fullSettle, fullIdle
+	if o.profile == profileQuick {
+		settle, idle = quickSettle, quickIdle
+	}
+
+	if o.settle == 0 {
+		o.settle = settle
+	}
+
+	if o.idle == 0 {
+		o.idle = idle
+	}
 }
 
 // runner holds what one `bench run` shares between its measurements.
@@ -130,12 +194,16 @@ func orchestrate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
-	_, err = io.WriteString(stdout, rep.markdown()+"\nresults: "+path+".json\n")
+	_, err = io.WriteString(stdout, "results: "+path+".json\n\n")
 	if err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 
-	return nil
+	if opts.compareDir == "" {
+		return nil
+	}
+
+	return compareFiles(ctx, "", opts.compareDir, path+".json", stdout)
 }
 
 func (r *runner) logf(format string, args ...any) {
@@ -145,6 +213,15 @@ func (r *runner) logf(format string, args ...any) {
 // name returns a container name no other run uses.
 func (r *runner) name(kind string) string {
 	return fmt.Sprintf("gostack-bench-%s-%d-%d%s", kind, os.Getpid(), r.seq.Add(1), r.opts.suffix)
+}
+
+func fingerprintOf(info engineInfo) fingerprint {
+	lower := strings.ToLower(info.OperatingSystem + " " + info.KernelVersion)
+
+	return fingerprint{
+		OS: info.OSType, Arch: info.Architecture, CPUs: info.NCPU, Docker: info.ServerVersion,
+		OrbStack: strings.Contains(lower, "orbstack"),
+	}
 }
 
 func (r *runner) measureAll(ctx context.Context) (report, error) {
@@ -158,6 +235,10 @@ func (r *runner) measureAll(ctx context.Context) (report, error) {
 		return report{}, err
 	}
 
+	if r.opts.commit != "" {
+		commit = r.opts.commit
+	}
+
 	err = r.buildLoadgen(ctx)
 	if err != nil {
 		return report{}, err
@@ -165,17 +246,18 @@ func (r *runner) measureAll(ctx context.Context) (report, error) {
 
 	defer func() { _, _ = dockerOutput(context.WithoutCancel(ctx), "rmi", "-f", r.opts.loadgenImage) }()
 
+	now := time.Now().UTC()
 	rep := report{
-		Date:   time.Now().UTC().Format(dateLayout),
-		Commit: commit,
-		Dirty:  dirty,
+		Schema: reportSchema, Date: now.Format(dateLayout), Time: now.Format(time.RFC3339), Commit: commit,
+		Dirty: dirty, Profile: r.opts.profile,
 		Host: hostInfo{
 			Docker: info.ServerVersion, OS: info.OperatingSystem, Kernel: info.KernelVersion,
-			Arch: info.Architecture, CPUs: info.NCPU, MemoryBytes: info.MemTotal,
+			Arch: info.Architecture, CPUs: info.NCPU, MemoryBytes: info.MemTotal, Fingerprint: fingerprintOf(info),
 		},
 		Settings: settings{
-			StartupRuns: r.opts.startupRuns, SettleSeconds: r.opts.settle.Seconds(), IdleSeconds: r.opts.idle.Seconds(),
-			LoadSeconds: r.opts.duration.Seconds(), Concurrencies: r.opts.concurrencies,
+			Profile: r.opts.profile, StartupRuns: r.opts.startupRuns, IdleRuns: r.opts.idleRuns,
+			SettleSeconds: r.opts.settle.Seconds(), IdleSeconds: r.opts.idle.Seconds(),
+			CellSeconds: r.opts.duration.Seconds(), Reps: r.opts.reps,
 			Cycles: r.opts.cycles, CycleConcurrency: r.opts.cycleConcurrency,
 		},
 	}
@@ -237,38 +319,39 @@ func (r *runner) measureTarget(ctx context.Context, t target) targetResult {
 
 	res.ImageBytes = size
 
-	startup, inst, err := r.startup(ctx, t)
-	res.Startup = startup
-
+	res.Startup, err = r.startup(ctx, t)
 	res.problem("startup", err)
 
-	if inst != nil {
-		r.measureRunning(ctx, inst, &res)
-		inst.stop(ctx)
+	res.Idle.Healthcheck, err = r.idle(ctx, t, variantHealthcheck)
+	res.problem("idle with the HEALTHCHECK", err)
+
+	if r.opts.profile == profileFull {
+		res.Idle.NoHealthcheck, err = r.idle(ctx, t, variantNoHealthcheck)
+		res.problem("idle without the HEALTHCHECK", err)
 	}
 
-	agentic, err := r.agentic(ctx, t)
-	res.Agentic = agentic
+	for _, spec := range cellsFor(r.opts.profile, t) {
+		if ctx.Err() != nil {
+			break
+		}
 
+		cell := r.cell(ctx, t, spec)
+		if cell.Problem != "" {
+			res.Problems = append(res.Problems, "cell "+cell.ID+": "+cell.Problem)
+		}
+
+		res.Cells = append(res.Cells, cell)
+	}
+
+	res.Agentic, err = r.agentic(ctx, t)
 	res.problem("agentic workload", err)
 
 	return res
 }
 
-// measureRunning takes the idle and latency measurements on a started container.
-func (r *runner) measureRunning(ctx context.Context, inst *instance, res *targetResult) {
-	var err error
-
-	res.Idle, err = r.idle(ctx, inst)
-	res.problem("idle", err)
-
-	res.Latency, err = r.latency(ctx, inst)
-	res.problem("latency", err)
-}
-
 // start launches a container of the target and waits for the ready line.
-func (r *runner) start(ctx context.Context, t target) (*instance, time.Duration, error) {
-	inst, err := launch(ctx, r.name(t.name), t.image)
+func (r *runner) start(ctx context.Context, t target, extra ...string) (*instance, time.Duration, error) {
+	inst, err := launch(ctx, r.name(t.name), t.image, extra...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -283,73 +366,127 @@ func (r *runner) start(ctx context.Context, t target) (*instance, time.Duration,
 	return inst, took, nil
 }
 
-// startup times startupRuns containers and returns the last one still running,
-// for the idle and latency measurements.
-func (r *runner) startup(ctx context.Context, t target) (startupResult, *instance, error) {
-	var (
-		res  startupResult
-		prev *instance
-	)
+// startup times startupRuns containers, each stopped at once.
+func (r *runner) startup(ctx context.Context, t target) (startupResult, error) {
+	var res startupResult
 
 	for i := range r.opts.startupRuns {
-		if prev != nil {
-			prev.stop(ctx)
-		}
-
 		inst, took, err := r.start(ctx, t)
 		if err != nil {
-			return res, nil, fmt.Errorf("run %d: %w", i+1, err)
+			return res, fmt.Errorf("run %d: %w", i+1, err)
 		}
 
+		inst.stop(ctx)
 		r.logf("%s: ready in %s (run %d of %d)", t.name, took.Round(time.Millisecond), i+1, r.opts.startupRuns)
 		res.SamplesMS = append(res.SamplesMS, float64(took.Microseconds())/microsPerMilli)
-		prev = inst
 	}
 
-	res.MedianMS = median(res.SamplesMS)
+	res.MS = spreadOf(res.SamplesMS)
 
-	return res, prev, nil
+	return res, nil
 }
 
-func (r *runner) idle(ctx context.Context, inst *instance) (idleResult, error) {
-	r.logf("%s: settling %s, then idle for %s", inst.name, r.opts.settle, r.opts.idle)
+// idle measures idleRuns containers that nothing calls: memory and CPU over the
+// window. With noHealthcheck the container runs without the image HEALTHCHECK,
+// which execs a process every ten seconds, so the difference between the two is
+// the cost of the check.
+func (r *runner) idle(ctx context.Context, t target, variant string) (idleVariant, error) {
+	result := idleVariant{SettleSeconds: r.opts.settle.Seconds(), Seconds: r.opts.idle.Seconds()}
+	noHealthcheck := variant == variantNoHealthcheck
 
-	err := sleep(ctx, r.opts.settle)
-	if err != nil {
-		return idleResult{}, err
+	var extra []string
+	if noHealthcheck {
+		extra = []string{"--no-healthcheck"}
 	}
 
-	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+	var rss, cpu []float64
 
-	return idleResult{SettleSeconds: r.opts.settle.Seconds(), Seconds: r.opts.idle.Seconds(), Usage: used}, err
-}
-
-// latency runs the SQS latency workload at each concurrency level.
-func (r *runner) latency(ctx context.Context, inst *instance) ([]latencyRun, error) {
-	var runs []latencyRun
-
-	for _, level := range r.opts.concurrencies {
-		r.logf("%s: SQS latency at concurrency %d for %s", inst.name, level, r.opts.duration)
-
-		var run latencyRun
-
-		used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
-			return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run,
-				"sqs", "-concurrency", strconv.Itoa(level), "-duration", r.opts.duration.String())
-		})
+	for i := range r.opts.idleRuns {
+		inst, _, err := r.start(ctx, t, extra...)
 		if err != nil {
-			return runs, fmt.Errorf("concurrency %d: %w", level, err)
+			return result, fmt.Errorf("run %d: %w", i+1, err)
 		}
 
-		run.Usage = used
+		r.logf("%s: idle run %d of %d (no HEALTHCHECK %t), settling %s then %s", t.name, i+1, r.opts.idleRuns,
+			noHealthcheck, r.opts.settle, r.opts.idle)
+
+		err = sleep(ctx, r.opts.settle)
+		if err == nil {
+			var used usage
+
+			used, err = r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+			rss = append(rss, float64(used.MedianRSSBytes))
+			cpu = append(cpu, used.CPUPercent)
+		}
+
+		inst.stop(ctx)
+
+		if err != nil {
+			return result, fmt.Errorf("run %d: %w", i+1, err)
+		}
+	}
+
+	result.Runs = len(rss)
+	result.RSSBytes, result.CPUPercent = spreadOf(rss), spreadOf(cpu)
+
+	return result, nil
+}
+
+// cell measures one cell: reps runs, each one on a fresh container, so that the
+// memory of one run, or one cell, does not carry into the next.
+func (r *runner) cell(ctx context.Context, t target, spec cellSpec) cellResult {
+	var (
+		runs   []cellRun
+		failed []string
+	)
+
+	for rep := range r.opts.reps {
+		run, err := r.cellRun(ctx, t, spec)
+		if err != nil {
+			failed = append(failed, fmt.Sprintf("run %d: %v", rep+1, err))
+
+			continue
+		}
+
 		runs = append(runs, run)
 	}
 
-	return runs, nil
+	r.logf("%s: %s: %d of %d runs", t.name, spec.id(), len(runs), r.opts.reps)
+
+	if len(runs) == 0 {
+		return cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed, "; ")}
+	}
+
+	return summarizeCell(spec, runs)
+}
+
+func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (cellRun, error) {
+	var extra []string
+	if spec.Persist {
+		extra = []string{"-e", "PERSIST_SQS=1", "--tmpfs", persistDir}
+	}
+
+	inst, _, err := r.start(ctx, t, extra...)
+	if err != nil {
+		return cellRun{}, err
+	}
+
+	defer inst.stop(ctx)
+
+	var run cellRun
+
+	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
+		return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run, "cell",
+			"-proto", spec.Proto, "-queue", spec.Queue, "-shape", spec.Shape, "-payload", strconv.Itoa(spec.Payload),
+			"-concurrency", strconv.Itoa(spec.Concurrency), "-duration", r.opts.duration.String())
+	})
+	run.Usage = used
+
+	return run, err
 }
 
 // agentic runs the create, use and delete workload on a container of its own,
-// so the peak memory is the workload's and not left over from the latency runs.
+// so the peak memory is the workload's.
 func (r *runner) agentic(ctx context.Context, t target) (agenticRun, error) {
 	inst, _, err := r.start(ctx, t)
 	if err != nil {
@@ -380,7 +517,7 @@ func (r *runner) loadgen(ctx context.Context, targetName string, timeout time.Du
 	name := r.name("loadgen")
 	defer removeContainer(ctx, name)
 
-	cmd := []string{"run", "--rm", "--name", name, "--network", "container:" + targetName, r.opts.loadgenImage, "loadgen"}
+	cmd := []string{cmdRun, "--rm", "--name", name, "--network", "container:" + targetName, r.opts.loadgenImage, "loadgen"}
 
 	raw, err := dockerOutput(ctx, append(cmd, args...)...)
 	if err != nil {
@@ -403,9 +540,11 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 		return usage{}, fmt.Errorf("read stats: %w", err)
 	}
 
-	var peak atomic.Uint64
-
-	peak.Store(first.rss())
+	var (
+		mu      sync.Mutex
+		peak    = first.rss()
+		samples []float64
+	)
 
 	sampleCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -423,7 +562,10 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 			case <-ticker.C:
 				now, statsErr := r.api.stats(sampleCtx, container)
 				if statsErr == nil {
-					peak.Store(max(peak.Load(), now.rss()))
+					mu.Lock()
+					peak = max(peak, now.rss())
+					samples = append(samples, float64(now.rss()))
+					mu.Unlock()
 				}
 			}
 		}
@@ -439,9 +581,12 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 		return usage{}, errors.Join(workErr, fmt.Errorf("read stats: %w", err))
 	}
 
-	peak.Store(max(peak.Load(), last.rss()))
+	peak = max(peak, last.rss())
+	used := usage{
+		BaselineRSSBytes: first.rss(), EndRSSBytes: last.rss(), PeakRSSBytes: peak,
+		MedianRSSBytes: uint64(median(samples)),
+	}
 
-	used := usage{BaselineRSSBytes: first.rss(), EndRSSBytes: last.rss(), PeakRSSBytes: peak.Load()}
 	if wall := last.Read.Sub(first.Read); wall > 0 {
 		cpuNanos := last.CPUStats.CPUUsage.TotalUsage - first.CPUStats.CPUUsage.TotalUsage
 		used.CPUPercent = float64(cpuNanos) / float64(wall.Nanoseconds()) * percentScale
