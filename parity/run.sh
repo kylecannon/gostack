@@ -145,12 +145,13 @@ docker run --rm --name "$RUNNER" --network "container:$TARGET" \
 	-e GOSTACK_PARITY_BRIDGE=1 \
 	-e GOSTACK_EXCLUSIONS=/parity/exclusions.yaml \
 	-e GOSTACK_EXCLUDED_OUT=/out/excluded.json \
+	-e GOSTACK_BRIDGEABLE=/parity/bridgeable.yaml \
+	-e GOSTACK_PARITY_TARGET="$COLUMN" \
 	-e GOSTACK_WAIT_HEALTH=http://localhost:4566/_localstack/health \
 	-e PYTHONPATH=/parity \
 	"$RUNNER_IMAGE" \
 	timeout "$TIMEOUT" python -m pytest \
 	-p pytest_gostack -p no:cacheprovider \
-	-m "not requires_in_process" \
 	-o junit_family=xunit1 --junitxml=/out/junit.xml \
 	-ra --durations=15 \
 	${extra_args[@]+"${extra_args[@]}"} \

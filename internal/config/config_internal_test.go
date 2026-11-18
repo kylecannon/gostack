@@ -381,6 +381,34 @@ func Test_Config_Set(t *testing.T) {
 		require.Equal(t, true, cfg.Value(varSQSDelayRecentlyDeleted))
 	})
 
+	t.Run("the SQS bridge values apply live and undo", func(t *testing.T) {
+		isolate(t)
+		cfg := mustLoad(t)
+		defaultHost := cfg.Settings().LocalstackHost
+		require.Equal(t, HostPort{Host: DefaultLocalstackHost, Port: DefaultPort}, defaultHost)
+
+		// The parity bridge posts a HostAndPort as "host:port" and undoes a patch by
+		// posting the old value back.
+		require.NoError(t, cfg.Set(varLocalstackHost, "external-host:12345"))
+		require.NoError(t, cfg.Set(varSQSEnableMessageRetentionPeriod, true))
+		require.NoError(t, cfg.Set(varSQSDelayPurgeRetry, true))
+
+		got := cfg.Settings()
+		require.Equal(t, HostPort{Host: "external-host", Port: 12345}, got.LocalstackHost)
+		require.True(t, got.SQSEnableMessageRetentionPeriod)
+		require.True(t, got.SQSDelayPurgeRetry)
+		require.Equal(t, "external-host:12345", cfg.Value(varLocalstackHost))
+
+		require.NoError(t, cfg.Set(varLocalstackHost, defaultHost.String()))
+		require.NoError(t, cfg.Set(varSQSEnableMessageRetentionPeriod, false))
+		require.NoError(t, cfg.Set(varSQSDelayPurgeRetry, false))
+
+		got = cfg.Settings()
+		require.Equal(t, defaultHost, got.LocalstackHost)
+		require.False(t, got.SQSEnableMessageRetentionPeriod)
+		require.False(t, got.SQSDelayPurgeRetry)
+	})
+
 	t.Run("an unknown variable is stored and reported", func(t *testing.T) {
 		isolate(t)
 		cfg := mustLoad(t)

@@ -149,7 +149,7 @@ def merge(args: argparse.Namespace) -> None:
     excluded_doc = json.loads(args.excluded.read_text(encoding="utf-8"))
     excluded: dict[str, str] = excluded_doc["excluded"]
 
-    # Excluded tests are never in the run: pytest skipped them or `-m` dropped them.
+    # Excluded tests are never in the run: the plugin skipped them.
     for nodeid in excluded:
         results.pop(nodeid, None)
 

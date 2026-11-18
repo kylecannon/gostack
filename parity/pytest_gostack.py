@@ -14,14 +14,22 @@ unchanged against a container:
 
 2. Exclusions (``GOSTACK_EXCLUSIONS``, a YAML file of ``pattern: reason``).
    Matching tests are skipped with the reason ``excluded: <reason>``. Tests
-   carrying the ``requires_in_process`` marker are always listed as excluded,
-   because ``-m "not requires_in_process"`` removes them before any report can
-   see them. ``GOSTACK_EXCLUDED_OUT`` names the JSON file that records every
-   excluded nodeid and its reason, for ``parity/ledger.py``.
+   carrying the ``requires_in_process`` marker are excluded too, unless the
+   bridge is on and ``GOSTACK_BRIDGEABLE`` (a YAML file of ``pattern: note``)
+   lists them: those tests only patch ``localstack.config``, which the bridge
+   forwards, so they run. ``GOSTACK_EXCLUDED_OUT`` names the JSON file that
+   records every excluded nodeid and its reason, for ``parity/ledger.py``.
 
    A pattern is a nodeid or a nodeid with ``*`` wildcards. A pattern without a
    wildcard matches that nodeid and all of its parametrizations
    (``nodeid[...]``).
+
+3. ``GOSTACK_PARITY_TARGET`` (``gostack`` or ``localstack``) names the container
+   under test. LocalStack's ``/_localstack/config`` stores the JSON value it is
+   given as it is, so ``LOCALSTACK_HOST`` posted as text would replace the
+   ``HostAndPort`` object that ``localstack_host()`` reads with a ``str`` and
+   break every queue URL after it. The bridge does not post that one variable
+   to a ``localstack`` target. gostack parses the text.
 """
 
 from __future__ import annotations
@@ -41,6 +49,9 @@ from _pytest.monkeypatch import MonkeyPatch, notset
 
 CONFIG_URL = os.environ.get("GOSTACK_PARITY_CONFIG_URL", "http://localhost:4566/_localstack/config")
 REQUIRES_IN_PROCESS = "requires_in_process"
+# Variables whose value LocalStack's config endpoint cannot hold as the object
+# the server reads (see the module docstring, item 3).
+NOT_POSTED_TO_LOCALSTACK = frozenset({"LOCALSTACK_HOST"})
 
 # --- config bridge ---------------------------------------------------------
 
@@ -49,9 +60,19 @@ def _bridge_enabled() -> bool:
     return os.environ.get("GOSTACK_PARITY_BRIDGE") == "1"
 
 
+def _encode_value(value: Any) -> Any:
+    """JSON form of a config value that is not JSON: a HostAndPort is ``host:port``."""
+    host_and_port = getattr(value, "host_and_port", None)
+    if callable(host_and_port):
+        return host_and_port()
+    raise TypeError(f"config bridge: cannot send {type(value).__name__} {value!r}")
+
+
 def _post_config(variable: str, value: Any) -> None:
     """POST one config variable to the target. Raises on any failure."""
-    body = json.dumps({"variable": variable, "value": value}).encode()
+    if variable in NOT_POSTED_TO_LOCALSTACK and os.environ.get("GOSTACK_PARITY_TARGET") == "localstack":
+        return
+    body = json.dumps({"variable": variable, "value": value}, default=_encode_value).encode()
     request = urllib.request.Request(
         CONFIG_URL, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
@@ -178,6 +199,8 @@ def _load_patterns(path: str) -> list[_Pattern]:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     exclusions_file = os.environ.get("GOSTACK_EXCLUSIONS")
     patterns = _load_patterns(exclusions_file) if exclusions_file else []
+    bridgeable_file = os.environ.get("GOSTACK_BRIDGEABLE")
+    bridgeable = _load_patterns(bridgeable_file) if bridgeable_file and _bridge_enabled() else []
     excluded: dict[str, str] = {}
     for item in items:
         reason = None
@@ -185,7 +208,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             if pattern.matches(item.nodeid):
                 pattern.matched = True
                 reason = reason or pattern.reason
-        if reason is None and item.get_closest_marker(REQUIRES_IN_PROCESS) is not None:
+        listed = False
+        for pattern in bridgeable:
+            if pattern.matches(item.nodeid):
+                pattern.matched = True
+                listed = True
+        if reason is None and not listed and item.get_closest_marker(REQUIRES_IN_PROCESS) is not None:
             reason = REQUIRES_IN_PROCESS
         if reason is not None:
             excluded[item.nodeid] = reason
@@ -194,7 +222,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     out = os.environ.get("GOSTACK_EXCLUDED_OUT")
     if out:
         collected_paths = {item.nodeid.split("::", 1)[0] for item in items}
-        unmatched = [p.text for p in patterns if not p.matched and p.path in collected_paths]
+        unmatched = [p.text for p in [*patterns, *bridgeable] if not p.matched and p.path in collected_paths]
         Path(out).write_text(
             json.dumps({"collected": len(items), "excluded": excluded, "unmatched": unmatched}, indent=1, sort_keys=True)
             + "\n",

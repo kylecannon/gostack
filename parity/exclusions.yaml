@@ -11,7 +11,9 @@
 # Reasons in use:
 #   requires_in_process     marked so in LocalStack; it patches state inside the
 #                           server process, which no external container can reach.
-#                           Tests carrying the marker are always excluded, listed or not.
+#                           A test carrying the marker is excluded unless
+#                           parity/bridgeable.yaml lists it, because all it patches
+#                           is localstack.config, which the bridge forwards.
 #   hard-skipped            LocalStack's own source skips the test unconditionally.
 #   depends-on:<service>    needs a service outside the current scope.
 #   engine-deferred         needs a real engine (OpenSearch, Transcribe) that gostack defers.
@@ -21,19 +23,14 @@
 # warns when a passing test turns into an exclusion.
 
 # --- requires_in_process: sqs ---------------------------------------------
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_get_queue_url_contains_localstack_host": requires_in_process
+# The other requires_in_process SQS tests run through the config bridge; see
+# parity/bridgeable.yaml. These four stay out. test_create_queue_recently_deleted_cache
+# patches the Python module constant sqs.constants.RECENTLY_DELETED_TIMEOUT and
+# reads sqs_stores in the server's process, which no external target can reach.
+# Its sibling test_create_queue_recently_deleted only patches SQS_DELAY_RECENTLY_DELETED
+# and is excluded with it by ruling, not by necessity.
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted": requires_in_process
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted_cache": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_with_inflight": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_endpoint": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_hostname_via_host_header": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_successive_purge_calls_fail": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_without_endpoint_strategy": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_with_endpoint_strategy_domain": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_endpoint_strategy_with_multi_region[off]": requires_in_process
-"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_queue_url_format_path_strategy": requires_in_process
 
 # --- hard-skipped: sqs ----------------------------------------------------
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_with_default_arguments_works_with_modified_attributes": hard-skipped (localstack/localstack#5938)
