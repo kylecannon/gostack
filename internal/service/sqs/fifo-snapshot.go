@@ -84,6 +84,11 @@ func (c *fifoContents) restore(data *contentsData) error {
 			return err
 		}
 
+		// Every message of a FIFO queue has a group, and a group has an id.
+		if d.Message.GroupID == "" {
+			return errors.New("sqs snapshot has a FIFO message without a group")
+		}
+
 		e := &entry{
 			msg: d.Message.message(), seq: d.Seq, deadline: d.Deadline,
 			receiveCount: d.ReceiveCount, firstReceived: d.FirstReceived, handles: d.Handles,
