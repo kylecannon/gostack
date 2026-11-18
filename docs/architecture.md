@@ -539,8 +539,9 @@ Tests split along the same line:
   four slots one after the other: the hooks, the drain, the save and the
   services' `Close`. `lifecycle.PlanShutdown` plans it once, from the moment
   the shutdown starts: the signal, or the failure of a listener, which starts
-  the shutdown inside the gateway. The gateway has no timeout of its own, so it
-  drains only to the time the plan gave it.
+  the shutdown inside the gateway. The gateway drains only to the time the plan
+  gave it, and a zero time is the plan's "no limit". A shutdown that nothing
+  planned, with no `DrainBy` call and no `PlanDrain`, drains for 5 s.
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
      wakes its long polls there.
