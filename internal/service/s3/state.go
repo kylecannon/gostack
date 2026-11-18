@@ -171,6 +171,10 @@ type Version struct {
 	ContentLanguage    string
 	Expires            string
 
+	// WebsiteRedirectLocation is x-amz-website-redirect-location, which a
+	// website redirects the object's URL to.
+	WebsiteRedirectLocation string
+
 	StorageClass         string
 	ServerSideEncryption string
 

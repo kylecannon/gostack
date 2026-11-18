@@ -97,20 +97,21 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 	}
 
 	out := &s3api.GetObjectOutput{
-		Body:                 body,
-		AcceptRanges:         new(acceptRangesBytes),
-		ContentLength:        new(v.Size),
-		ETag:                 new(quoted(v.ETag)),
-		LastModified:         &protocol.Time{Time: v.LastModified},
-		Metadata:             v.Metadata,
-		ContentType:          nonEmpty(v.ContentType),
-		CacheControl:         nonEmpty(v.CacheControl),
-		ContentDisposition:   nonEmpty(v.ContentDisposition),
-		ContentEncoding:      nonEmpty(v.ContentEncoding),
-		ContentLanguage:      nonEmpty(v.ContentLanguage),
-		Expires:              nonEmpty(v.Expires),
-		ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
-		StorageClass:         storageClassOf(v),
+		Body:                    body,
+		AcceptRanges:            new(acceptRangesBytes),
+		ContentLength:           new(v.Size),
+		ETag:                    new(quoted(v.ETag)),
+		LastModified:            &protocol.Time{Time: v.LastModified},
+		Metadata:                v.Metadata,
+		ContentType:             nonEmpty(v.ContentType),
+		CacheControl:            nonEmpty(v.CacheControl),
+		ContentDisposition:      nonEmpty(v.ContentDisposition),
+		ContentEncoding:         nonEmpty(v.ContentEncoding),
+		ContentLanguage:         nonEmpty(v.ContentLanguage),
+		Expires:                 nonEmpty(v.Expires),
+		ServerSideEncryption:    nonEmpty(v.ServerSideEncryption),
+		StorageClass:            storageClassOf(v),
+		WebsiteRedirectLocation: nonEmpty(v.WebsiteRedirectLocation),
 	}
 
 	if deref(in.ChecksumMode) == checksumModeEnabled {
@@ -130,19 +131,20 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 	}
 
 	out := &s3api.HeadObjectOutput{
-		AcceptRanges:         new(acceptRangesBytes),
-		ContentLength:        new(v.Size),
-		ETag:                 new(quoted(v.ETag)),
-		LastModified:         &protocol.Time{Time: v.LastModified},
-		Metadata:             v.Metadata,
-		ContentType:          nonEmpty(v.ContentType),
-		CacheControl:         nonEmpty(v.CacheControl),
-		ContentDisposition:   nonEmpty(v.ContentDisposition),
-		ContentEncoding:      nonEmpty(v.ContentEncoding),
-		ContentLanguage:      nonEmpty(v.ContentLanguage),
-		Expires:              nonEmpty(v.Expires),
-		ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
-		StorageClass:         storageClassOf(v),
+		AcceptRanges:            new(acceptRangesBytes),
+		ContentLength:           new(v.Size),
+		ETag:                    new(quoted(v.ETag)),
+		LastModified:            &protocol.Time{Time: v.LastModified},
+		Metadata:                v.Metadata,
+		ContentType:             nonEmpty(v.ContentType),
+		CacheControl:            nonEmpty(v.CacheControl),
+		ContentDisposition:      nonEmpty(v.ContentDisposition),
+		ContentEncoding:         nonEmpty(v.ContentEncoding),
+		ContentLanguage:         nonEmpty(v.ContentLanguage),
+		Expires:                 nonEmpty(v.Expires),
+		ServerSideEncryption:    nonEmpty(v.ServerSideEncryption),
+		StorageClass:            storageClassOf(v),
+		WebsiteRedirectLocation: nonEmpty(v.WebsiteRedirectLocation),
 	}
 
 	if deref(in.ChecksumMode) == checksumModeEnabled {
@@ -317,8 +319,11 @@ func newVersion(in *s3api.PutObjectInput, b *Bucket, algorithm string) *Version 
 		ContentLanguage:    deref(in.ContentLanguage),
 		Expires:            deref(in.Expires),
 		StorageClass:       deref(in.StorageClass),
-		ChecksumAlgorithm:  algorithm,
-		ChecksumType:       checksumFullObject,
+
+		WebsiteRedirectLocation: deref(in.WebsiteRedirectLocation),
+
+		ChecksumAlgorithm: algorithm,
+		ChecksumType:      checksumFullObject,
 		// The bucket's default encryption applies when the request names none.
 		ServerSideEncryption: deref(in.ServerSideEncryption),
 	}

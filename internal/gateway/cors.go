@@ -229,6 +229,52 @@ func (c *corsRules) setHeaders(header http.Header, r *http.Request, fallbackOrig
 	header.Set("Vary", headerOrigin)
 }
 
+// defaultCORS is the request.DefaultCORS a service that handles CORS itself
+// gets in request.Context.CORS.
+type defaultCORS struct {
+	rules          *corsRules
+	checksDisabled bool
+}
+
+func (d defaultCORS) OriginAllowed(header http.Header) bool { return d.rules.requestAllowed(header) }
+
+func (d defaultCORS) ChecksDisabled() bool { return d.checksDisabled }
+
+// AddHeaders is add_cors_headers in aws/handlers/cors.py: each header is set
+// only when response has not got it, and Vary is always Origin.
+func (d defaultCORS) AddHeaders(response http.Header, r *http.Request) {
+	if response.Get(headerAllowOrigin) == "" {
+		origin := r.Header.Get(headerOrigin)
+		if origin == "" || d.checksDisabled {
+			origin = "*"
+		}
+
+		response.Set(headerAllowOrigin, origin)
+	}
+
+	if !strings.Contains(response.Get(headerAllowOrigin), "*") {
+		response.Set(headerAllowCredentials, valueTrue)
+	}
+
+	if response.Get(headerAllowMethods) == "" {
+		response.Set(headerAllowMethods, corsAllowedMethods)
+	}
+
+	if response.Get(headerAllowHeaders) == "" {
+		response.Set(headerAllowHeaders, d.rules.allowHeaders)
+	}
+
+	if response.Get(headerExposeHeaders) == "" {
+		response.Set(headerExposeHeaders, d.rules.expose)
+	}
+
+	if r.Header.Get(headerRequestPrivate) == valueTrue && response.Get(headerAllowPrivate) == "" {
+		response.Set(headerAllowPrivate, valueTrue)
+	}
+
+	response.Set("Vary", headerOrigin)
+}
+
 // corsMiddleware is root step 5, LocalStack's CorsEnforcer and
 // CorsResponseEnricher in one.
 //

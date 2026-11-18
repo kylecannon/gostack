@@ -66,6 +66,10 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 		RequestID: newRequestID(),
 	}
 
+	if s := g.settings(); g.selfManagedCORS(r, s) {
+		rc.CORS = defaultCORS{rules: g.cors, checksDisabled: s.DisableCORSChecks}
+	}
+
 	r = r.WithContext(request.With(r.Context(), rc))
 	rc.Request = r
 

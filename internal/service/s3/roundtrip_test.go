@@ -381,10 +381,6 @@ func TestRequestsS3DoesNotServeYetAnswer501(t *testing.T) {
 			wantBody: "Service 's3control' is not enabled.",
 		},
 		{
-			name: "a website", giveHost: "bucket.s3-website.us-east-1.amazonaws.com", giveTarget: "/index.html",
-			wantBody: "for service 's3' not yet implemented",
-		},
-		{
 			name: "an operation not implemented yet", giveHost: "", giveTarget: "/bucket?versioning",
 			wantBody: "for service 's3' not yet implemented",
 		},

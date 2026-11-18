@@ -9,7 +9,6 @@ import (
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/query"
-	"github.com/kylecannon/gostack/internal/protocol/restxml"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/store"
@@ -115,16 +114,25 @@ func (p *Provider) Close() {
 }
 
 // serve answers one S3 call. A website host and an s3control path reach it
-// because S3 claims the host or the signing name; neither is served yet.
+// because S3 claims the host or the signing name; a website host is served
+// here, and an s3control path is refused.
 func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 	w.Header()["x-amz-id-2"] = []string{hostID}
 
 	r := rc.Request
 
+	if p.serveCORS(w, rc) {
+		return
+	}
+
+	if rc.CORS != nil {
+		w = &defaultCORSWriter{ResponseWriter: w, rc: rc}
+	}
+
 	switch {
 	case isWebsiteHost(r.Host):
-		restxml.WriteS3Error(w, &restxml.Envelope{RequestID: rc.RequestID},
-			awserr.NotImplemented("s3", "StaticWebsiteHosting"), nil)
+		delete(w.Header(), "x-amz-id-2")
+		p.serveWebsite(w, rc)
 	case isControlCall(r):
 		// gostack has no s3control, so its calls get the gateway's answer for a
 		// service that is not enabled.
