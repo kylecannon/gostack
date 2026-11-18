@@ -1,10 +1,57 @@
 package s3
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestCommitVersionThenRunsAfterEveryCheck: the step that follows a commit does
+// not run when any check refuses, the second of several included, and runs
+// once, with the version already the key's current one, when none does.
+func TestCommitVersionThenRunsAfterEveryCheck(t *testing.T) {
+	errRefused := errors.New("refused")
+	pass := func(*Object) error { return nil }
+	refuse := func(*Object) error { return errRefused }
+
+	tests := []struct {
+		name      string
+		giveCheck []func(*Object) error
+		wantErr   error
+		wantRuns  int
+	}{
+		{"no check", nil, nil, 1},
+		{"every check passes", []func(*Object) error{pass, nil, pass}, nil, 1},
+		{"the first check refuses", []func(*Object) error{refuse, pass}, errRefused, 0},
+		{"the second check refuses", []func(*Object) error{pass, refuse}, errRefused, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			b := &Bucket{Name: bucketName, Objects: map[string]*Object{}, Uploads: map[string]*MultipartUpload{}}
+
+			w, err := p.blobs.Create()
+			require.NoError(t, err)
+
+			id, _, err := w.Commit()
+			require.NoError(t, err)
+
+			runs, current := 0, false
+
+			err = p.commitVersionThen(b, "k", &Version{BlobID: id, ETag: "e"}, func() {
+				runs++
+				current = b.Objects["k"] != nil && b.Objects["k"].current() != nil
+			}, tt.giveCheck...)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantRuns, runs)
+			assert.Equal(t, tt.wantRuns == 1, current, "the step sees the committed version")
+		})
+	}
+}
 
 func TestVersionPartRange(t *testing.T) {
 	whole := &Version{Size: 7, ETag: "e"}

@@ -101,15 +101,19 @@ func completeOutput(
 // commitCompletion makes v the key's current version and takes the upload out
 // of the bucket, as one step under the bucket's write lock: the conditions are
 // checked again there against the key as it now is, since another write may
-// have landed while the parts were copied. A refused completion drops v's body
-// and leaves the upload as it was. On success the bodies of the parts go, the
-// whole body being v's.
+// have landed while the parts were copied. The check only checks: a refused
+// completion drops v's body and leaves the upload and its parts as they were,
+// and the upload goes once v is committed. On success the bodies of the parts
+// go, the whole body being v's.
 func (p *Provider) commitCompletion(
 	b *Bucket, upload *MultipartUpload, v *Version, ifMatch, ifNoneMatch string,
 ) error {
 	var parts map[int32]*Part
 
-	err := p.commitVersion(b, upload.Key, v, func(object *Object) error {
+	err := p.commitVersionThen(b, upload.Key, v, func() {
+		delete(b.Uploads, upload.ID)
+		parts, upload.Parts = upload.Parts, nil
+	}, func(object *Object) error {
 		err := completePrecondition(object, upload, ifMatch, ifNoneMatch)
 		if err != nil {
 			return err
@@ -120,9 +124,6 @@ func (p *Provider) commitCompletion(
 		if b.Uploads[upload.ID] != upload {
 			return noSuchUpload(upload.ID)
 		}
-
-		delete(b.Uploads, upload.ID)
-		parts, upload.Parts = upload.Parts, nil
 
 		return nil
 	})

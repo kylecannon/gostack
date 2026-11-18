@@ -52,6 +52,31 @@ func TestConcurrentConditionalCompletesCreateTheKeyOnce(t *testing.T) {
 	assert.Equal(t, http.StatusOK, retry.status, string(retry.body))
 }
 
+// TestRefusedCompleteLeavesTheUploadAndItsParts: a complete that a condition
+// refuses changes nothing about the upload, which can be completed again.
+func TestRefusedCompleteLeavesTheUploadAndItsParts(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	id := startUpload(t, s, multipartKey, nil)
+	etag := putPart(t, s, id, 1, []byte("part"), nil)
+
+	require.Equal(t, http.StatusOK, s.do(call{
+		method: http.MethodPut, target: multipartKey, region: regionUSEast1, body: []byte("first"),
+	}).status)
+
+	refused := complete(s, id, completeBody([]string{etag}), map[string]string{headerIfNoneMatch: "*"})
+	require.Equal(t, http.StatusPreconditionFailed, refused.status, string(refused.body))
+
+	parts := s.do(call{method: http.MethodGet, target: multipartKey + "?uploadId=" + id, region: regionUSEast1})
+	require.Equal(t, http.StatusOK, parts.status, string(parts.body))
+	assert.Contains(t, string(parts.body), etag)
+
+	done := complete(s, id, completeBody([]string{etag}), nil)
+	require.Equal(t, http.StatusOK, done.status, string(done.body))
+	assert.Equal(t, "part", string(s.do(call{method: http.MethodGet, target: multipartKey, region: regionUSEast1}).body))
+}
+
 func TestConditionalCompleteAgainstAnExistingKey(t *testing.T) {
 	s := newServer(t)
 	createBucket(t, s)

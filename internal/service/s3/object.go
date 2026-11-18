@@ -615,6 +615,17 @@ func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD
 // bucket's lock, and a non-nil answer leaves the object as it was and drops the
 // body of v. A nil check is none.
 func (p *Provider) commitVersion(b *Bucket, key string, v *Version, check ...func(*Object) error) error {
+	return p.commitVersionThen(b, key, v, nil, check...)
+}
+
+// commitVersionThen is commitVersion with a step that runs once v is the
+// object's current version, under the same hold of the bucket's lock: after
+// every check has passed, never before, so the checks only check and a
+// refused write leaves everything but its own body as it was. A nil then is
+// none.
+func (p *Provider) commitVersionThen(
+	b *Bucket, key string, v *Version, then func(), check ...func(*Object) error,
+) error {
 	b.mu.Lock()
 
 	if b.gone {
@@ -641,6 +652,11 @@ func (p *Provider) commitVersion(b *Bucket, key string, v *Version, check ...fun
 	}
 
 	replaced := b.addVersion(key, v)
+
+	if then != nil {
+		then()
+	}
+
 	b.mu.Unlock()
 
 	for _, old := range replaced {
