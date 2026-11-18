@@ -24,12 +24,9 @@
 
 # --- requires_in_process: sqs ---------------------------------------------
 # The other requires_in_process SQS tests run through the config bridge; see
-# parity/bridgeable.yaml. These four stay out. test_create_queue_recently_deleted_cache
+# parity/bridgeable.yaml. test_create_queue_recently_deleted_cache stays out: it
 # patches the Python module constant sqs.constants.RECENTLY_DELETED_TIMEOUT and
 # reads sqs_stores in the server's process, which no external target can reach.
-# Its sibling test_create_queue_recently_deleted only patches SQS_DELAY_RECENTLY_DELETED
-# and is excluded with it by ruling, not by necessity.
-"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted": requires_in_process
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted_cache": requires_in_process
 
 # --- hard-skipped: sqs ----------------------------------------------------

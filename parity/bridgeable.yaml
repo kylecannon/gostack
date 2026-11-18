@@ -15,6 +15,7 @@
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_with_inflight": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_successive_purge_calls_fail": SQS_DELAY_PURGE_RETRY
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted": SQS_DELAY_RECENTLY_DELETED
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_endpoint": SQS_ENDPOINT_STRATEGY, LOCALSTACK_HOST
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_hostname_via_host_header": SQS_ENDPOINT_STRATEGY
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_get_queue_url_contains_localstack_host": SQS_ENDPOINT_STRATEGY
