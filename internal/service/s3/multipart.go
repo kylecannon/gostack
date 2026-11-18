@@ -52,6 +52,11 @@ type MultipartUpload struct {
 	ChecksumAlgorithm    string
 	ChecksumType         string
 
+	// ACL and Tags are what the request's x-amz-acl, x-amz-grant-* and
+	// x-amz-tagging headers give the object it completes into.
+	ACL  *s3api.AccessControlPolicy
+	Tags []s3api.Tag
+
 	// KeyExisted records that the key held an object when the upload began,
 	// which an If-None-Match completion treats as a conflict.
 	KeyExisted bool
@@ -114,6 +119,18 @@ func (p *Provider) CreateMultipartUpload(
 		return nil, err
 	}
 
+	err = checkStorageClass(in.StorageClass)
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := newObjectConfig(in.ACL, grantHeaders{
+		fullControl: in.GrantFullControl, read: in.GrantRead, readACP: in.GrantReadACP, writeACP: in.GrantWriteACP,
+	}, in.Tagging)
+	if err != nil {
+		return nil, err
+	}
+
 	algorithm, kind, err := uploadChecksumType(deref(in.ChecksumAlgorithm), deref(in.ChecksumType))
 	if err != nil {
 		return nil, err
@@ -129,6 +146,7 @@ func (p *Provider) CreateMultipartUpload(
 	upload := newUpload(in, algorithm, kind)
 	enc := resolveEncryption(request, b)
 	upload.setEncryption(enc)
+	upload.ACL, upload.Tags = config.acl, config.tags
 
 	b.mu.Lock()
 
@@ -142,18 +160,26 @@ func (p *Provider) CreateMultipartUpload(
 	b.Uploads[upload.ID] = upload
 	b.mu.Unlock()
 
+	return createUploadOutput(in, upload, enc, request), nil
+}
+
+// createUploadOutput is CreateMultipartUpload's answer for the upload it
+// registered: its id, checksum settings and the encryption it echoes.
+func createUploadOutput(
+	in *s3api.CreateMultipartUploadInput, upload *MultipartUpload, enc objectEncryption, request encryptionRequest,
+) *s3api.CreateMultipartUploadOutput {
 	out := &s3api.CreateMultipartUploadOutput{
 		Bucket:                  in.Bucket,
 		Key:                     in.Key,
 		UploadId:                &upload.ID,
-		ChecksumAlgorithm:       nonEmpty(algorithm),
-		ChecksumType:            nonEmpty(kind),
+		ChecksumAlgorithm:       nonEmpty(upload.ChecksumAlgorithm),
+		ChecksumType:            nonEmpty(upload.ChecksumType),
 		SSEKMSEncryptionContext: kmsContext(enc, in.SSEKMSEncryptionContext),
 	}
 	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = uploadEncryption(upload)
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = request.customer.echo()
 
-	return out, nil
+	return out
 }
 
 // newUpload is the upload a CreateMultipartUpload starts, with the defaults

@@ -123,6 +123,11 @@ func (p *Provider) openCopySource(account, header string) (*copySource, error) {
 		return nil, err
 	}
 
+	err = checkReadableSource(v)
+	if err != nil {
+		return nil, err
+	}
+
 	body, err := p.blobs.Open(v.BlobID)
 	if err != nil {
 		return nil, fmt.Errorf("open copy source: %w", err)

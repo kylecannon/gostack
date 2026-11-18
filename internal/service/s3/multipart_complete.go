@@ -239,6 +239,8 @@ func (u *MultipartUpload) object(plan *completion) *Version {
 		SSEKMSKeyID:          u.SSEKMSKeyID,
 		BucketKeyEnabled:     u.BucketKeyEnabled,
 		SSECustomerKeyMD5:    u.SSECustomerKeyMD5,
+		ACL:                  u.ACL,
+		Tags:                 u.Tags,
 	}
 }
 

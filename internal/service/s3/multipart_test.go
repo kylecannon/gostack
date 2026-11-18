@@ -326,6 +326,48 @@ func TestUploadPartCopyStreamsARange(t *testing.T) {
 	assert.Equal(t, source[5:10], s.do(call{method: http.MethodGet, target: multipartKey, region: regionUSEast1}).body)
 }
 
+func TestUploadPartCopyRefusesAnArchivedSource(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	require.Equal(t, http.StatusOK, s.do(call{
+		method: http.MethodPut, target: "/bucket/cold", region: regionUSEast1, body: []byte("frozen"),
+		header: map[string]string{headerStorageClass: "GLACIER"},
+	}).status)
+
+	id := startUpload(t, s, multipartKey, nil)
+	got := s.do(call{
+		method: http.MethodPut, target: multipartKey + "?partNumber=1&uploadId=" + id, region: regionUSEast1,
+		header: map[string]string{"x-amz-copy-source": "/bucket/cold"},
+	})
+	assert.Equal(t, http.StatusForbidden, got.status, string(got.body))
+	assert.Equal(t, "InvalidObjectState", got.err(t).Code)
+}
+
+func TestCreateMultipartUploadCarriesItsACLAndTags(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	start := func(header map[string]string) reply {
+		return s.do(call{method: http.MethodPost, target: multipartKey + "?uploads", region: regionUSEast1, header: header})
+	}
+
+	assert.Equal(t, "InvalidStorageClass", start(map[string]string{headerStorageClass: "OUTPOSTS"}).err(t).Code)
+	assert.Equal(t, cfgInvalidArgument, start(map[string]string{cfgHeaderACL: cfgFakeACL}).err(t).Code)
+
+	id := startUpload(t, s, multipartKey, map[string]string{cfgHeaderACL: cfgPublicRead, cfgHeaderTagged: "team=a"})
+	etag := putPart(t, s, id, 1, []byte("only part"), nil)
+	require.Equal(t, http.StatusOK, complete(s, id, completeBody([]string{etag}), nil).status)
+
+	tags := s.do(call{method: http.MethodGet, target: multipartKey + "?tagging", region: regionUSEast1})
+	require.Equal(t, http.StatusOK, tags.status, string(tags.body))
+	assert.Contains(t, string(tags.body), "<Key>team</Key><Value>a</Value>")
+
+	acl := s.do(call{method: http.MethodGet, target: multipartKey + "?acl", region: regionUSEast1})
+	require.Equal(t, http.StatusOK, acl.status, string(acl.body))
+	assert.Contains(t, string(acl.body), "http://acs.amazonaws.com/groups/global/AllUsers")
+}
+
 func TestListAndAbortMultipartUploads(t *testing.T) {
 	s := newServer(t)
 	createBucket(t, s)
