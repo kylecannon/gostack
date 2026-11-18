@@ -60,7 +60,13 @@ func (p *Provider) DeleteMessageBatch(
 		ids[i] = deref(in.Entries[i].Id)
 	}
 
-	err = checkBatch(ids, maxBatchEntries)
+	// LocalStack's own clients lift the limit with a header.
+	limit := maxBatchEntries
+	if override := headerInt(rc, headerOverrideCount); override != 0 {
+		limit = override
+	}
+
+	err = checkBatch(ids, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -405,16 +405,32 @@ func headerInt(rc *request.Context, name string) int {
 	return value
 }
 
+// holdSlack is how much longer than the wait a long poll that fills its
+// response keeps the messages it took hidden. The poll sets their real
+// visibility when it ends, so the slack only matters to a state saved, or a
+// process killed, in between.
+const holdSlack = time.Minute
+
 // poll receives messages, waiting as the parameters say. It never holds the
 // queue's lock while it waits: it asks the contents for a channel that is closed
 // when a message may be visible, and sleeps on that, on the end of the wait and
 // on the request.
+//
+// A poll that fills its response keeps what it took hidden until it ends, and
+// only then gives the messages their visibility timeout, as LocalStack does:
+// otherwise a message that is visible again, or whose timeout is short, would be
+// taken a second time into the same response.
+//
+// A wait that runs out looks at the queue once more before it gives up, as
+// LocalStack's get does. A wait that the request ended does not.
 //
 // changed reports whether the receive changed state: it took a message, moved
 // one to a dead-letter queue or dropped one past retention.
 func (q *Queue) poll(
 	ctx context.Context, params receiveParams, deadLetter func([]deadLetter) *awserr.Error,
 ) (taken []delivery, changed bool, _ *awserr.Error) {
+	parent := ctx
+
 	if params.wait > 0 {
 		var cancel context.CancelFunc
 
@@ -422,10 +438,22 @@ func (q *Queue) poll(
 		defer cancel()
 	}
 
+	// held is what a poll that fills its response has to release when it ends,
+	// even when a dead letter fails and the response is dropped.
+	var held []delivery
+
+	defer func() { q.release(params, held) }()
+
+	last := false
+
 	for {
 		got, wake := q.receiveOnce(params, params.count-len(taken))
 		taken = append(taken, got.taken...)
 		changed = changed || len(got.taken) > 0 || len(got.dead) > 0 || got.expired
+
+		if params.fill {
+			held = append(held, got.taken...)
+		}
 
 		// The lock of the queue is free again, so the dead letters can go to a
 		// queue that has a lock of its own.
@@ -437,16 +465,48 @@ func (q *Queue) poll(
 		}
 
 		done := len(taken) >= params.count || (len(taken) > 0 && !params.fill)
-		if done || wake == nil || params.wait <= 0 {
+		if done || wake == nil || params.wait <= 0 || last {
 			return taken, changed, nil
 		}
 
 		select {
 		case <-wake:
 		case <-ctx.Done():
-			return taken, changed, nil
+			if parent.Err() != nil {
+				return taken, changed, nil
+			}
+
+			// The wait ran out, not the request: look once more.
+			last = true
 		}
 	}
+}
+
+// release gives the messages of a poll that filled its response the visibility
+// timeout they were held back instead of.
+func (q *Queue) release(params receiveParams, held []delivery) {
+	if len(held) == 0 {
+		return
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	visibility := q.receiveVisibility(params)
+
+	for i := range held {
+		q.contents.ChangeVisibility(held[i].handle, visibility)
+	}
+}
+
+// receiveVisibility is how long a receive hides what it takes. The caller holds
+// the queue's lock.
+func (q *Queue) receiveVisibility(params receiveParams) time.Duration {
+	if params.visibility != nil {
+		return time.Duration(*params.visibility) * time.Second
+	}
+
+	return time.Duration(q.intAttr(attrVisibilityTimeout)) * time.Second
 }
 
 // receiveOnce takes what is visible now, and returns the wake channel to wait
@@ -455,12 +515,12 @@ func (q *Queue) receiveOnce(params receiveParams, want int) (receiveResult, <-ch
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	visibility := q.intAttr(attrVisibilityTimeout)
-	if params.visibility != nil {
-		visibility = int(*params.visibility)
+	visibility := q.receiveVisibility(params)
+	if params.fill {
+		visibility = params.wait + holdSlack
 	}
 
-	got := q.contents.Receive(want, time.Duration(visibility)*time.Second)
+	got := q.contents.Receive(want, visibility)
 
 	var wake <-chan struct{}
 	if params.wait > 0 {
