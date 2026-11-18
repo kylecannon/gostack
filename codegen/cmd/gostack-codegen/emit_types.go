@@ -55,7 +55,7 @@ func (g *generator) operationsFile() (string, error) {
 	p.f("type Handler interface {")
 
 	for _, name := range g.opNames {
-		p.f("\t%s", handlerSignature(name))
+		p.f("\t%s", handlerSignature(g.ops[name]))
 	}
 
 	p.f("}")
@@ -68,8 +68,10 @@ func (g *generator) operationsFile() (string, error) {
 	p.blank()
 
 	for _, name := range g.opNames {
+		op := g.ops[name]
+
 		p.f("// %s returns awserr.NotImplemented.", name)
-		p.f("func (Unimplemented) %s(context.Context, *%sInput) (*%sOutput, error) {", name, name, name)
+		p.f("func (Unimplemented) %s(context.Context, *%s) (*%s, error) {", name, op.input.goName, op.output.goName)
 		p.f("\treturn nil, awserr.NotImplemented(%q, %q)", g.name, name)
 		p.f("}")
 		p.blank()
@@ -78,8 +80,10 @@ func (g *generator) operationsFile() (string, error) {
 	return p.buf.String(), nil
 }
 
-func handlerSignature(op string) string {
-	return fmt.Sprintf("%s(ctx context.Context, in *%sInput) (*%sOutput, error)", op, op, op)
+// handlerSignature is the Handler method of an operation. Operations that
+// share a root shape share its type.
+func handlerSignature(op *operation) string {
+	return fmt.Sprintf("%s(ctx context.Context, in *%s) (*%s, error)", op.name, op.input.goName, op.output.goName)
 }
 
 // checkJSONTimestamp rejects the timestamp forms the json codec cannot write:

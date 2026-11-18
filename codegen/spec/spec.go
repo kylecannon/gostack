@@ -60,10 +60,17 @@ func (m *Metadata) IsQueryCompatible() bool {
 // Operation is one entry of "operations".
 type Operation struct {
 	Name     string `json:"name"`
+	HTTP     *HTTP  `json:"http"`
 	AuthType string `json:"authtype"`
 	Input    *Ref   `json:"input"`
 	Output   *Ref   `json:"output"`
 	Errors   []Ref  `json:"errors"`
+
+	// The traits below are read so the rest protocols can reach them. Nothing
+	// interprets them yet.
+	HTTPChecksum        *HTTPChecksum                 `json:"httpChecksum"`
+	Endpoint            *Endpoint                     `json:"endpoint"`
+	StaticContextParams map[string]StaticContextParam `json:"staticContextParams"`
 }
 
 // Parse reads a service model from json.
