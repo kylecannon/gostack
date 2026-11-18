@@ -85,6 +85,8 @@ func Test_a_Restore_that_fails_leaves_SQS_empty_and_usable(t *testing.T) {
 		"data after it":   string(good) + `{}`,
 		"a queue twice": strings.Replace(string(good), `"queues":[{`,
 			`"queues":[{"name":"q","seq":9,"attributes":{},"contents":{"entries":[]}},{`, 1),
+		"a state twice": strings.Replace(string(good), `"states":[{`,
+			`"states":[{"account":"000000000000","region":"us-east-1","next":0,"queues":[]},{`, 1),
 		"an invalid state": strings.Replace(string(good), `"account":"000000000000"`, `"account":""`, 1),
 	}
 

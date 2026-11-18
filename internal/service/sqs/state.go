@@ -48,24 +48,45 @@ func (s *State) Range(fn func(*Queue) bool) {
 }
 
 // reset empties the State in place, as a fresh one: no queues, no deleted names,
-// no move tasks. It is the emptyFn of the Provider's Bundle. The section under
-// the lock is where the reset happens: a call that found this State before it
-// and adds a queue after it adds to the emptied State, so a queue whose
-// CreateQueue answered is either still there or was removed and closed by a
-// reset. The tasks and queues taken out are stopped after the lock is released,
-// so the State's lock is never held while a queue's is taken.
+// no move tasks. It is the emptyFn of the Provider's Bundle.
 func (s *State) reset() {
+	s.replace(&builtState{})
+}
+
+// replace puts what one holds in the State in place of what the State held. The
+// section under the lock is where it happens, in one step: a call that looks a
+// queue up finds the old one or the new one, never an empty State, and a call
+// that found this State before it and adds a queue after it adds to the new
+// contents, so a queue whose CreateQueue answered is either still there or was
+// removed and closed by a reset. The tasks and queues taken out are stopped
+// after the lock is released, so the State's lock is never held while a queue's
+// is taken.
+func (s *State) replace(one *builtState) {
+	queues := make(map[string]*Queue, len(one.queues))
+	for _, q := range one.queues {
+		queues[q.name] = q
+	}
+
+	deleted, moveTasks := one.deleted, one.moveTasks
+	if deleted == nil {
+		deleted = make(map[string]time.Time)
+	}
+
+	if moveTasks == nil {
+		moveTasks = make(map[string]*moveTask)
+	}
+
 	s.mu.Lock()
-	queues, tasks := s.queues, s.moveTasks
-	s.queues, s.deleted, s.moveTasks = make(map[string]*Queue), make(map[string]time.Time), make(map[string]*moveTask)
-	s.next, s.moveSeq = 0, 0
+	old, tasks := s.queues, s.moveTasks
+	s.queues, s.deleted, s.moveTasks = queues, deleted, moveTasks
+	s.next, s.moveSeq = one.next, one.moveSeq
 	s.mu.Unlock()
 
 	for _, task := range tasks {
 		task.cancel()
 	}
 
-	for _, q := range queues {
+	for _, q := range old {
 		q.close()
 	}
 }

@@ -197,6 +197,10 @@ func (q *Queue) save() (queueData, error) {
 // restored queue. The wait is bounded: a task ends after the message it is
 // moving, and nothing starts a new one.
 //
+// A call that only looks a queue up, as every operation does first, takes no
+// transfer lock. Each State goes from the old contents to the restored ones in
+// one step, so such a call finds the old queue or the restored one, never none.
+//
 // Whatever goes wrong, a panic included, SQS is left empty and usable, and every
 // queue that was built is closed.
 func (p *Provider) Restore(r io.Reader) error {
@@ -206,9 +210,10 @@ func (p *Provider) Restore(r io.Reader) error {
 	defer p.transfer.Unlock()
 
 	p.stopMoveTasks()
-	p.Reset("", "")
 
 	if err != nil {
+		p.Reset("", "")
+
 		return err
 	}
 
@@ -219,28 +224,33 @@ func (p *Provider) Restore(r io.Reader) error {
 		p.Reset("", "")
 	})
 
-	for _, one := range built {
-		p.install(one)
-	}
+	p.install(built)
 
 	return nil
 }
 
-// install puts a built State in the Provider.
-func (p *Provider) install(one builtState) {
-	state := p.states.Get(one.account, one.region)
+// install puts each built State in place of what its State held, and empties
+// every State the snapshot does not name.
+func (p *Provider) install(built []builtState) {
+	byPlace := make(map[[2]string]*builtState, len(built))
 
-	state.mu.Lock()
-	defer state.mu.Unlock()
+	for i := range built {
+		one := &built[i]
+		byPlace[[2]string{one.account, one.region}] = one
 
-	state.next = one.next
-	state.deleted = one.deleted
-	state.moveTasks = one.moveTasks
-	state.moveSeq = one.moveSeq
-
-	for _, q := range one.queues {
-		state.add(q)
+		// Range is sure to walk only the States that exist when it starts.
+		p.states.Get(one.account, one.region)
 	}
+
+	p.states.Range(func(account, region string, state *State) bool {
+		if one, ok := byPlace[[2]string{account, region}]; ok {
+			state.replace(one)
+		} else {
+			state.reset()
+		}
+
+		return true
+	})
 }
 
 // closeOnPanic is deferred to run fn when its caller panics. The panic goes on.
@@ -317,6 +327,11 @@ func (p *Provider) build(r io.Reader) (built []builtState, err error) {
 		}
 	}()
 
+	err = checkPlaces(file.Data.States)
+	if err != nil {
+		return nil, err
+	}
+
 	for i := range file.Data.States {
 		var one builtState
 
@@ -331,6 +346,24 @@ func (p *Provider) build(r io.Reader) (built []builtState, err error) {
 	done = true
 
 	return built, nil
+}
+
+// checkPlaces refuses a snapshot that names an account and region twice.
+// install puts one built State in each State, so the queues of a second would
+// be left running and out of reach.
+func checkPlaces(states []stateData) error {
+	places := make(map[[2]string]bool, len(states))
+
+	for i := range states {
+		place := [2]string{states[i].Account, states[i].Region}
+		if places[place] {
+			return fmt.Errorf("sqs snapshot has %s %s twice", place[0], place[1])
+		}
+
+		places[place] = true
+	}
+
+	return nil
 }
 
 // buildState makes the queues of one State. On error it returns the queues made
