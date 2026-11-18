@@ -150,10 +150,40 @@ func newSQSClient(endpoint string, workers int) *sqs.Client {
 		Region:           loadRegion,
 		Credentials:      credentials.NewStaticCredentialsProvider("test", "test", ""),
 		BaseEndpoint:     &endpoint,
-		HTTPClient:       &http.Client{Transport: newTransport(workers)},
+		HTTPClient:       &http.Client{Transport: readOnlyBodies{newTransport(workers)}},
 		RetryMaxAttempts: 1,
 	})
 }
+
+// readOnlyBodies hands net/http a request body with only Read and Close.
+//
+// The SDK closes the request body as soon as the response headers arrive.
+// net/http keeps writing in another goroutine: after the Content-Length bytes it
+// reads the body once more to check for extra data, and that read goes through
+// WriteTo when the body has one. The SDK's body (smithy-go
+// transport/http/internal/io.safeWriteToReadCloser) returns io.EOF from WriteTo
+// once it is closed, which io.Copy passes on as an error, so net/http counts the
+// request write as failed and closes the connection under the response body
+// still being read: "use of closed network connection". A server that answers
+// within microseconds of the request body, as gostack does, loses that race on
+// receives whose answer outgrows the transport's 4 KiB read buffer. On a FIFO
+// queue the failed receive leaves the worker's group in flight, so every later
+// receive of the run comes back empty. Read after Close returns a plain io.EOF,
+// which ends the check cleanly.
+type readOnlyBodies struct{ next http.RoundTripper }
+
+func (t readOnlyBodies) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil && req.Body != http.NoBody {
+		// A shallow copy: a RoundTripper must not change the caller's request.
+		req = req.WithContext(req.Context())
+		req.Body = readCloser{req.Body}
+	}
+
+	return t.next.RoundTrip(req) //nolint:wrapcheck // a RoundTripper returns its transport's error as is.
+}
+
+// readCloser hides every method of a body but Read and Close.
+type readCloser struct{ io.ReadCloser }
 
 // statsOf summarizes timings. It sorts its argument.
 func statsOf(timings []time.Duration, failed int) opStats {
