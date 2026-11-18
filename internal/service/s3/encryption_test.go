@@ -204,8 +204,37 @@ func TestSSECObjectRetrieval(t *testing.T) {
 		expectError(t, get(s, http.MethodGet, objectPath, noMD5), http.StatusBadRequest, codeInvalidReq, msgKeyForRead)
 	})
 
+	t.Run("the key's MD5 alone does not open it", func(t *testing.T) {
+		onlyMD5 := map[string]string{headerCustomerMD5: keyOne.md5}
+		noKey := map[string]string{headerCustomerAlgo: sseAES256, headerCustomerMD5: keyOne.md5}
+		noAlgo := map[string]string{headerCustomerKey: keyOne.key, headerCustomerMD5: keyOne.md5}
+		otherKey := map[string]string{
+			headerCustomerAlgo: sseAES256, headerCustomerKey: keyTwo.key, headerCustomerMD5: keyOne.md5,
+		}
+
+		for name, header := range map[string]map[string]string{
+			"md5 only": onlyMD5, "no key": noKey, "no algorithm": noAlgo, "another key, the right md5": otherKey,
+		} {
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				got := get(s, method, objectPath, header)
+				assert.Equal(t, http.StatusBadRequest, got.status, name+" "+method)
+				assert.Empty(t, got.header.Get(headerCustomerMD5), name+" "+method)
+			}
+
+			expectError(t, get(s, http.MethodGet, objectPath+"?attributes",
+				with(map[string]string{headerAttributes: headerETag}, header)), http.StatusBadRequest, codeInvalidArg, "")
+			expectError(t, copyTo(s, sourceRef, map[string]string{
+				headerSourceMD5: header[headerCustomerMD5], headerSourceKey: header[headerCustomerKey],
+				headerSourceAlgo: header[headerCustomerAlgo],
+			}), http.StatusBadRequest, codeInvalidArg, "")
+		}
+
+		expectError(t, get(s, http.MethodGet, objectPath, onlyMD5), http.StatusBadRequest, codeInvalidArg,
+			"must provide a valid encryption algorithm.")
+	})
+
 	t.Run("GetObjectAttributes asks for the key too", func(t *testing.T) {
-		attributes := map[string]string{headerAttributes: "ETag"}
+		attributes := map[string]string{headerAttributes: headerETag}
 		target := objectPath + "?attributes"
 
 		expectError(t, get(s, http.MethodGet, target, attributes), http.StatusBadRequest, codeInvalidReq, msgKeyForRead)
@@ -351,6 +380,10 @@ func TestSSECMultipart(t *testing.T) {
 
 		expectError(t, sendPart(id, nil), http.StatusBadRequest, codeInvalidReq, msgPartsNeedKey)
 		expectError(t, sendPart(id, keyTwo.headers()), http.StatusBadRequest, codeInvalidReq, msgPartsDifferent)
+		expectError(t, sendPart(id, map[string]string{headerCustomerMD5: keyOne.md5}), http.StatusBadRequest,
+			codeInvalidArg, "must provide a valid encryption algorithm.")
+		expectError(t, sendPart(id, with(keyTwo.headers(), map[string]string{headerCustomerMD5: keyOne.md5})),
+			http.StatusBadRequest, codeInvalidArg, msgNoMD5Match)
 		assert.Equal(t, http.StatusOK, sendPart(id, keyOne.headers()).status)
 	})
 

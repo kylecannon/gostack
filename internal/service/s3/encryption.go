@@ -48,9 +48,9 @@ func customerKeyOf(algorithm, key, keyMD5 *string) customerKey {
 }
 
 // echo is the SSE-C members an answer carries: LocalStack sets them from the
-// MD5 the request sent.
+// MD5 the request sent. A request without a key has not used SSE-C.
 func (c customerKey) echo() (algorithm, keyMD5 *string) {
-	if c.md5 == "" {
+	if c.md5 == "" || c.key == "" {
 		return nil, nil
 	}
 
@@ -113,7 +113,25 @@ func checkCustomerRead(storedMD5 string, c customerKey, denied string) error {
 		}
 	}
 
-	return validateCustomerKey(c, "")
+	err := validateCustomerKey(c, "")
+	if err != nil || storedMD5 == "" {
+		return err
+	}
+
+	return requireCustomerKey(c)
+}
+
+// requireCustomerKey refuses a request that names no SSE-C key and no
+// algorithm, which validateCustomerKey lets through for an object that has
+// none. For an SSE-C object the key's MD5 alone is no proof of holding the
+// key.
+func requireCustomerKey(c customerKey) error {
+	if c.key != "" || c.algorithm != "" {
+		return nil
+	}
+
+	return invalidArgument("Requests specifying Server Side Encryption with Customer provided keys "+
+		"must provide a valid encryption algorithm.", sseArgumentName, nil)
 }
 
 // checkPartKey holds an UploadPart to the key its upload was created with: the
@@ -131,6 +149,8 @@ func checkPartKey(upload *MultipartUpload, c customerKey) error {
 			"Subsequent part requests must include the appropriate encryption parameters.")
 	case stored != "" && stored != c.md5:
 		return s3api.NewInvalidRequest("The provided encryption parameters did not match the ones used originally.")
+	case stored != "":
+		return requireCustomerKey(c)
 	default:
 		return nil
 	}
