@@ -255,3 +255,14 @@ func jsonMarshal(v any) ([]byte, error) {
 
 	return raw, nil
 }
+
+func Test_report_markdown_lists_the_slow_cells_and_needs_no_reference(t *testing.T) {
+	slow := testCell(cellID, 800, 60000, 2700, 50*bytesPerMiB)
+	slow.Spec.Concurrency = levelMid
+
+	md := testReport(hostA, slow).markdown()
+
+	assert.Contains(t, md, "## Cells with p99 above 50 ms at concurrency 16")
+	assert.Contains(t, md, "send p99 60.0 ms")
+	assert.Contains(t, md, "none (or LocalStack was not measured)")
+}

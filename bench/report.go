@@ -383,9 +383,11 @@ func (r report) attention(b *strings.Builder) {
 				continue
 			}
 
-			if ref, ok := reference.cell(c.ID); hasReference && ok && ref.Problem == "" {
-				if why := slowerThan(c, ref); why != "" {
-					slower = append(slower, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, why))
+			if hasReference {
+				if ref, ok := reference.cell(c.ID); ok && ref.Problem == "" {
+					if why := slowerThan(c, ref); why != "" {
+						slower = append(slower, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, why))
+					}
 				}
 			}
 
