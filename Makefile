@@ -13,10 +13,11 @@ export GOTOOLCHAIN
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # golangci-lint lives in its own module, tools/go.mod. It requires the previous
-# Go release, and sonic (arriving in Phase 1) caps the product at Go 1.26, so
-# the two modules carry separate `go` lines and the product go.mod holds none
-# of the linter's dependencies. Raise the product pin once sonic supports a
-# newer release.
+# Go release, so the two modules carry separate `go` lines and the product
+# go.mod holds none of the linter's dependencies. sonic v1.15.5 caps the
+# product at Go 1.27: its native build tag is !go1.28, and on Go 1.28 it falls
+# back to encoding/json, which Test_sonic_native in internal/protocol catches.
+# Raise the product pin past 1.27 only with a sonic release that supports it.
 LINT := go tool -modfile=tools/go.mod golangci-lint
 
 # The pre-commit gate narrows these to the staged files:
