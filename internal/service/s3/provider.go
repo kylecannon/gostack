@@ -26,6 +26,9 @@ const (
 	controlPath = "/v20180820"
 
 	contentTypeXML = "application/xml"
+
+	// serverName is the Server header AWS's S3 sends.
+	serverName = "AmazonS3"
 )
 
 // Settings is what S3 reads from the configuration on every call.
@@ -118,6 +121,10 @@ func (p *Provider) Close() {
 // here, and an s3control path is refused.
 func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 	w.Header()["x-amz-id-2"] = []string{hostID}
+	// S3 names itself in Server, as AWS does. It sends no x-amzn-RequestId: with
+	// one, botocore reads the request id from it and drops HostId, so the
+	// recorded snapshots of aws.validated tests, which have HostId, would differ.
+	w.Header().Set("Server", serverName)
 
 	r := rc.Request
 
@@ -143,7 +150,7 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		s3api.Serve(p, &responseWriter{ResponseWriter: w, method: r.Method}, rc)
+		s3api.Serve(p, &responseWriter{ResponseWriter: w, method: r.Method, rc: rc}, rc)
 	}
 }
 
@@ -204,16 +211,33 @@ type responseWriter struct {
 	http.ResponseWriter
 
 	method string
-	wrote  bool
+	// rc is the call, whose Operation the generated dispatcher sets once it has
+	// routed the request.
+	rc    *request.Context
+	wrote bool
+	// started is set by the first Write.
+	started bool
 }
 
 func (w *responseWriter) WriteHeader(code int) {
 	if !w.wrote && code >= http.StatusOK {
 		w.wrote = true
 
-		bodiless := code == http.StatusNoContent || (w.method == http.MethodPut && code == http.StatusOK)
-		if header := w.Header(); !bodiless && header.Get("Content-Type") == "" {
+		header := w.Header()
+
+		// AWS sends no body, Content-Type or Content-Length with a 204 or a
+		// 304 (s3_response_handler strips them), and no Content-Type with an
+		// empty 200 PUT.
+		stripped := code == http.StatusNoContent || code == http.StatusNotModified
+		bodiless := stripped || (w.method == http.MethodPut && code == http.StatusOK)
+
+		if !bodiless && header.Get("Content-Type") == "" {
 			header.Set("Content-Type", contentTypeXML)
+		}
+
+		if stripped {
+			header.Del("Content-Type")
+			header.Del("Content-Length")
 		}
 	}
 
@@ -223,6 +247,28 @@ func (w *responseWriter) WriteHeader(code int) {
 func (w *responseWriter) Write(p []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
+	}
+
+	if !w.started {
+		w.started = true
+
+		// An XML body is written whole by the encoder, so the first Write is the
+		// document: S3 names its root differently from the model. An object's
+		// own bytes are never touched, whatever its Content-Type.
+		if w.Header().Get("Content-Type") != contentTypeXML || w.rc.Operation == "GetObject" {
+			return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
+		}
+
+		if parts, ok := renamedRoot(p); ok {
+			for _, part := range parts {
+				_, err := w.ResponseWriter.Write(part)
+				if err != nil {
+					return 0, err //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
+				}
+			}
+
+			return len(p), nil
+		}
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
