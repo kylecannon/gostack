@@ -52,6 +52,7 @@ const (
 	fieldKey           = "key"
 	fieldBucket        = "bucket"
 	fieldETag          = "etag"
+	fieldPolicy        = "policy"
 	fieldAccessKeyID   = "AWSAccessKeyId"
 	accessKeyTest      = "test"
 	headerCacheControl = "Cache-Control"
@@ -338,7 +339,7 @@ func TestPostObject(t *testing.T) {
 		},
 		{
 			name:       "a policy without its signature fields",
-			fields:     [][2]string{{fieldKey, "knosig"}, {"policy", policy(t, nil)}},
+			fields:     [][2]string{{fieldKey, "knosig"}, {fieldPolicy, policy(t, nil)}},
 			wantStatus: http.StatusForbidden, wantCode: codeAccessDenied,
 		},
 		{
@@ -493,7 +494,7 @@ func signedForm(t testing.TB, key string, conditions ...any) [][2]string {
 	t.Helper()
 
 	return [][2]string{
-		{fieldKey, key}, {fieldAccessKeyID, accessKeyTest}, {"signature", "x"}, {"policy", policy(t, conditions)},
+		{fieldKey, key}, {fieldAccessKeyID, accessKeyTest}, {"signature", "x"}, {fieldPolicy, policy(t, conditions)},
 	}
 }
 
