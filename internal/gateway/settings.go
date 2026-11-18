@@ -1,7 +1,5 @@
 package gateway
 
-import "time"
-
 // Settings is what the gateway reads from the configuration. It is a struct of
 // the gateway's own so the package does not depend on internal/config: the
 // caller maps the configuration onto it.
@@ -18,9 +16,6 @@ type Settings struct {
 	// CustomSSLCertPath is CUSTOM_SSL_CERT_PATH: a PEM file with the
 	// certificate and its key. Empty means a generated self-signed certificate.
 	CustomSSLCertPath string
-	// ShutdownTimeout is how long a graceful shutdown waits for requests to
-	// finish. Zero means five seconds.
-	ShutdownTimeout time.Duration
 
 	// FailFast is FAIL_FAST: a panic answers 501 instead of 500.
 	FailFast bool

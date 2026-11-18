@@ -421,23 +421,29 @@ Tests split along the same line:
   overrun. `T` is `SHUTDOWN_TIMEOUT`, which the supervisor counts from the
   SIGTERM it sends. The child counts from the moment it sees the signal, which
   is microseconds later, and reads `T` once at start, so an update through
-  `/_localstack/config` does not move the deadline. `Save` is the end of the
-  save, not of the process: the exit follows it by the time to close the
-  engine.
+  `/_localstack/config` does not move the deadline. The budget is one, with
+  four slots one after the other: the hooks, the drain, the save and the
+  services' `Close`. `lifecycle.PlanShutdown` plans it once, from the moment
+  the shutdown starts: the signal, or the failure of a listener, which starts
+  the shutdown inside the gateway. The gateway has no timeout of its own, so it
+  drains only to the time the plan gave it.
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
      wakes its long polls there.
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
      connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then the services
-     stop their own goroutines (SQS's move tasks), and a second save writes
-     whatever that or a request cut at `Work` changed.
+  4. The persisted state is saved, with a deadline of `Save`. Then each
+     registration's `Close` stops the service's own goroutines (SQS's move
+     tasks), with a deadline of `Close`. A `Close` that overruns is abandoned
+     with a warning and never delays the save. When every `Close` returned in
+     time, a last save writes whatever they or a request cut at `Work` changed.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
-  | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
   | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
+  | `Close` | 4.9 s | `T` minus 100 ms: the time between `Save` and here is `Close`'s |
   | SIGKILL | 5 s | the supervisor, unchanged |
 
   The hooks, the drain and the service `Shutdown` functions share the time up
@@ -445,10 +451,11 @@ Tests split along the same line:
   that never returns is left behind at `Work`, the hooks that follow it are
   skipped, and the drain and the save go on without it. A request still running
   when the save starts can have its effect saved or not, and the file is whole
-  either way, since the snapshot takes the service locks. `SHUTDOWN_TIMEOUT=0` has no `Work` and no `Save`: hooks and the save
-  take what they need, and the drain keeps its 5-second cap. With the
-  supervisor's timer off nothing kills the child, so a stuck hook is the
-  user's to fix.
+  either way, since the snapshot takes the service locks. For a `T` too short
+  to leave room, `Close` falls together with `Save`. `SHUTDOWN_TIMEOUT=0` has
+  no deadline at all: the hooks, the drain, the save and `Close` take what they
+  need. With the supervisor's timer off nothing kills the child, so a stuck
+  hook is the user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at
   `/_gostack/init`. The process prints `Ready.` on stdout, which testcontainers

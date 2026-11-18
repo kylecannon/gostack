@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,7 +104,7 @@ func Test_serve_savesBeforeTheKill(t *testing.T) {
 			done := make(chan error, 1)
 
 			go func() {
-				done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx context.Context) {
+				done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx, _ context.Context) {
 					deadline, hasLimit := saveCtx.Deadline()
 					saves <- saved{at: time.Now(), deadline: deadline, hasLimit: hasLimit}
 				})
@@ -184,9 +186,10 @@ func Test_serve_withoutATimeoutHasNoDeadline(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- serve(ctx, gw, listeners, proc, 0, func(saveCtx context.Context) {
-			_, hasLimit := saveCtx.Deadline()
-			limits <- hasLimit
+		done <- serve(ctx, gw, listeners, proc, 0, func(saveCtx, closeCtx context.Context) {
+			_, saveLimit := saveCtx.Deadline()
+			_, closeLimit := closeCtx.Deadline()
+			limits <- saveLimit || closeLimit
 		})
 	}()
 
@@ -194,4 +197,326 @@ func Test_serve_withoutATimeoutHasNoDeadline(t *testing.T) {
 
 	require.NoError(t, <-done)
 	assert.False(t, <-limits)
+}
+
+// hangingGateway is a gateway whose one service holds every call until release
+// closes or the connection ends. started closes when the first call arrives.
+func hangingGateway(t *testing.T, release <-chan struct{}) (gw *gateway.Gateway, started chan struct{}) {
+	t.Helper()
+
+	started = make(chan struct{})
+
+	var once sync.Once
+
+	reg := service.Registration{
+		Metadata: service.Metadata{
+			Name: testService, SigningName: testService, EndpointPrefix: testService,
+			Protocols: []protocol.Kind{protocol.KindQuery},
+		},
+		Serve: func(w http.ResponseWriter, rc *request.Context) {
+			once.Do(func() { close(started) })
+
+			select {
+			case <-release:
+				_, _ = io.WriteString(w, "done")
+			case <-rc.Request.Context().Done():
+			}
+		},
+	}
+
+	gw, err := gateway.New(
+		func() gateway.Settings { return gateway.Settings{Listen: []string{anyLoopbackPort}} },
+		[]service.Registration{reg}, nil, nil,
+	)
+	require.NoError(t, err)
+
+	return gw, started
+}
+
+// callHangingService sends one call to addr and reports the body it got, or the
+// empty string when the call was cut.
+func callHangingService(t *testing.T, addr string) <-chan string {
+	t.Helper()
+
+	got := make(chan string, 1)
+
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+"/",
+			strings.NewReader("Action=Hang"))
+		if err != nil {
+			got <- ""
+
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=t/20240101/us-east-1/"+testService+
+			"/aws4_request, SignedHeaders=host, Signature=abc")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- ""
+
+			return
+		}
+
+		defer func() { _ = resp.Body.Close() }()
+
+		body, _ := io.ReadAll(resp.Body)
+		got <- string(body)
+	}()
+
+	return got
+}
+
+// Test_serve_listenerFailureKeepsToOneBudget: a listener that fails starts the
+// shutdown inside the gateway. The drain, the hooks, the save and Close then
+// share the one budget counted from the failure, and the save has its deadline
+// KillMargin before the end of it. Before the plan was shared, the gateway
+// drained on a timeout of its own, and a second full budget followed.
+func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
+	const (
+		timeout = 2 * time.Second
+		// The plan for 2 seconds: work ends at 1s, the save at 1.5s, Close at 1.9s.
+		workAt  = time.Second
+		saveBy  = timeout - lifecycle.KillMargin
+		closeBy = timeout - lifecycle.CloseMargin
+		slack   = 100 * time.Millisecond
+	)
+
+	gw, started := hangingGateway(t, make(chan struct{}))
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+
+	listeners, err := gw.Listen(ctx)
+	require.NoError(t, err)
+
+	type saved struct {
+		at           time.Time
+		saveBy       time.Time
+		closeBy      time.Time
+		hasSaveLimit bool
+	}
+
+	saves := make(chan saved, 1)
+	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx, closeCtx context.Context) {
+			saveDeadline, hasLimit := saveCtx.Deadline()
+			closeDeadline, _ := closeCtx.Deadline()
+
+			saves <- saved{at: time.Now(), saveBy: saveDeadline, closeBy: closeDeadline, hasSaveLimit: hasLimit}
+		})
+	}()
+
+	call := callHangingService(t, listeners[0].Addr().String())
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request never reached the service")
+	}
+
+	// The listener fails; ctx is still live, so nothing but the failure starts the
+	// shutdown.
+	failedAt := time.Now()
+
+	require.NoError(t, listeners[0].Close())
+
+	var got saved
+
+	select {
+	case got = <-saves:
+	case <-time.After(timeout + 5*time.Second):
+		t.Fatal("the state was never saved")
+	}
+
+	assert.GreaterOrEqual(t, got.at.Sub(failedAt), workAt-slack, "the drain waited for the planned Work deadline")
+	assert.Less(t, got.at.Sub(failedAt), saveBy, "the save started inside one budget, not after a second one")
+	require.True(t, got.hasSaveLimit)
+	assert.LessOrEqual(t, got.saveBy.Sub(failedAt), saveBy+slack, "the save ends KillMargin before the kill")
+	assert.LessOrEqual(t, got.closeBy.Sub(failedAt), closeBy+slack, "Close ends CloseMargin before the kill")
+	assert.Empty(t, <-call, "the request in flight was cut at Work")
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "the failed listener is serve's error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return")
+	}
+
+	assert.Less(t, time.Since(failedAt), timeout, "serve returned before the supervisor's SIGKILL")
+}
+
+// Test_serve_withoutATimeoutWaitsForEverything: SHUTDOWN_TIMEOUT=0 is no limit
+// for the hooks, the drain, the save and Close alike. The gateway has no cap of
+// its own to cut a request that takes a while.
+func Test_serve_withoutATimeoutWaitsForEverything(t *testing.T) {
+	const held = 500 * time.Millisecond
+
+	release := make(chan struct{})
+	gw, started := hangingGateway(t, release)
+
+	root := t.TempDir()
+	hook := filepath.Join(root, "shutdown.d", "slow.sh")
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(hook), 0o750))
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\nexec sleep 0.3\n"), 0o700))
+
+	ctx, stop := context.WithCancel(t.Context())
+	defer stop()
+
+	listeners, err := gw.Listen(ctx)
+	require.NoError(t, err)
+
+	type saved struct {
+		at     time.Time
+		limits bool
+	}
+
+	saves := make(chan saved, 1)
+	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(root), Out: io.Discard}
+	done := make(chan error, 1)
+
+	go func() {
+		done <- serve(ctx, gw, listeners, proc, 0, func(saveCtx, closeCtx context.Context) {
+			_, saveLimit := saveCtx.Deadline()
+			_, closeLimit := closeCtx.Deadline()
+
+			saves <- saved{at: time.Now(), limits: saveLimit || closeLimit}
+		})
+	}()
+
+	call := callHangingService(t, listeners[0].Addr().String())
+
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request never reached the service")
+	}
+
+	begin := time.Now()
+
+	stop()
+	time.AfterFunc(held, func() { close(release) })
+
+	var got saved
+
+	select {
+	case got = <-saves:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the state was never saved")
+	}
+
+	assert.GreaterOrEqual(t, got.at.Sub(begin), held, "the save waited for the request in flight")
+	assert.False(t, got.limits, "neither the save nor Close has a deadline")
+	assert.Equal(t, "done", <-call, "the request finished instead of being cut")
+	require.NoError(t, <-done)
+}
+
+// stamped is a persisted service whose snapshots are counted and timed.
+type stamped struct {
+	snapshots atomic.Int32
+	last      atomic.Int64 // UnixNano of the latest snapshot
+}
+
+func (s *stamped) Snapshot(out io.Writer) error {
+	s.snapshots.Add(1)
+	s.last.Store(time.Now().UnixNano())
+
+	_, err := io.WriteString(out, "state")
+
+	return err //nolint:wrapcheck // a test double
+}
+
+func (*stamped) Restore(io.Reader) error { return nil }
+
+func Test_saver_save(t *testing.T) {
+	newSaver := func(t *testing.T, closeFn func()) (*saver, *stamped) {
+		t.Helper()
+
+		eng, _ := persistentEngine(t)
+		snap := &stamped{}
+		reg := registration(testService)
+		reg.Persist = snap
+		reg.Close = closeFn
+
+		eng.Register(testService, snap)
+		eng.MarkDirty(testService)
+
+		return &saver{eng: eng, services: &providers{regs: []service.Registration{reg}}}, snap
+	}
+
+	t.Run("a Close that never returns does not delay the save and is abandoned at its deadline", func(t *testing.T) {
+		stuck := make(chan struct{})
+		entered := make(chan time.Time, 1)
+
+		t.Cleanup(func() { close(stuck) })
+
+		s, snap := newSaver(t, func() {
+			entered <- time.Now()
+
+			<-stuck
+		})
+
+		begin := time.Now()
+
+		saveCtx, cancelSave := context.WithDeadline(t.Context(), begin.Add(time.Second))
+		defer cancelSave()
+
+		closeCtx, cancelClose := context.WithDeadline(t.Context(), begin.Add(400*time.Millisecond))
+		defer cancelClose()
+
+		s.save(saveCtx, closeCtx)
+
+		elapsed := time.Since(begin)
+
+		assert.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "save waited for Close until its deadline")
+		assert.Less(t, elapsed, time.Second, "and no longer")
+		assert.EqualValues(t, 1, snap.snapshots.Load(), "the state was saved")
+
+		select {
+		case enteredAt := <-entered:
+			assert.Less(t, snap.last.Load(), enteredAt.UnixNano(), "the save was done before Close began")
+		default:
+			t.Fatal("Close never ran")
+		}
+	})
+
+	t.Run("a Close that finishes in time is followed by a last save of what it changed", func(t *testing.T) {
+		var s *saver
+
+		s, snap := newSaver(t, func() { s.eng.MarkDirty(testService) })
+
+		s.save(t.Context(), t.Context())
+
+		assert.EqualValues(t, 2, snap.snapshots.Load(), "the save, and the last save after Close")
+	})
+
+	t.Run("without a deadline Close takes the time it needs", func(t *testing.T) {
+		var finished atomic.Bool
+
+		s, snap := newSaver(t, func() {
+			time.Sleep(300 * time.Millisecond)
+			finished.Store(true)
+		})
+
+		s.save(t.Context(), context.WithoutCancel(t.Context()))
+
+		assert.True(t, finished.Load(), "save waited for Close to return")
+		assert.EqualValues(t, 1, snap.snapshots.Load())
+	})
+
+	t.Run("it runs once", func(t *testing.T) {
+		s, snap := newSaver(t, nil)
+
+		s.save(t.Context(), t.Context())
+		s.eng.MarkDirty(testService)
+		s.save(t.Context(), t.Context())
+
+		assert.EqualValues(t, 1, snap.snapshots.Load())
+	})
 }

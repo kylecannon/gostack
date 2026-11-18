@@ -23,9 +23,6 @@ const (
 	// headers, and to send its first byte. There is no write timeout: SQS
 	// long-polls for 20 seconds and responses stream.
 	readHeaderTimeout = 30 * time.Second
-	// defaultShutdownTimeout is how long a graceful shutdown waits when the
-	// settings name no timeout.
-	defaultShutdownTimeout = 5 * time.Second
 )
 
 const (
@@ -56,8 +53,11 @@ type Gateway struct {
 	tlsConfig *tls.Config
 
 	// drainBy is the Unix time in nanoseconds at which Serve stops waiting for
-	// requests in flight. Zero means it was not set.
+	// requests in flight. Zero means no limit.
 	drainBy atomic.Int64
+
+	// planDrain, when set, is asked for drainBy when a listener fails.
+	planDrain func(failedAt time.Time) time.Time
 }
 
 // New builds a gateway for the given registrations. settings is asked for on
@@ -109,12 +109,28 @@ func (g *Gateway) BeginShutdown() {
 }
 
 // DrainBy sets the time at which Serve stops waiting for requests in flight and
-// closes what is left. Without it Serve waits Settings.ShutdownTimeout from the
-// moment it starts to drain, which is only right when nothing else shares that
-// time: the runtime sets it so that the shutdown hooks, the drain and the save of
-// persisted state keep to one deadline. Call it before Serve's context ends.
+// closes what is left. It is the only limit the drain has: the gateway keeps no
+// timeout of its own, so that the shutdown hooks, the drain, the save of
+// persisted state and the services' Close keep to the one budget that the
+// caller planned. Without it, or with a zero deadline, Serve waits for the
+// requests without limit. Call it before Serve's context ends.
 func (g *Gateway) DrainBy(deadline time.Time) {
+	if deadline.IsZero() {
+		g.drainBy.Store(0)
+
+		return
+	}
+
 	g.drainBy.Store(deadline.UnixNano())
+}
+
+// PlanDrain sets plan, which Serve calls once, with the current time, when a
+// listener fails and Serve starts the shutdown itself. Its result is what
+// DrainBy takes. A shutdown that Serve's context asks for does not call it: the
+// caller starts that one, runs the hooks, and sets DrainBy before the context
+// ends. Call it before Serve.
+func (g *Gateway) PlanDrain(plan func(failedAt time.Time) time.Time) {
+	g.planDrain = plan
 }
 
 // buildRouter builds the root router of g. The middleware runs in the order of
@@ -190,8 +206,8 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
 // down: it refuses new work, waits for running requests until the time DrainBy
-// set, or Settings.ShutdownTimeout from now, and closes what is left. It returns
-// nil after a shutdown that ctx asked for.
+// set (without limit when it set none), and closes what is left. It returns nil
+// after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
 // prior knowledge) on the same port. Serve uses the certificate that Listen
@@ -241,6 +257,9 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 	select {
 	case <-ctx.Done():
 	case serveErr = <-failed:
+		if g.planDrain != nil {
+			g.DrainBy(g.planDrain(time.Now()))
+		}
 	}
 
 	g.BeginShutdown()
@@ -272,17 +291,12 @@ func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	return nil
 }
 
-// drainContext limits ctx to the time DrainBy set, or to Settings.ShutdownTimeout
-// from now when it was not set.
+// drainContext limits ctx to the time DrainBy set, and leaves it unlimited when
+// DrainBy set none.
 func (g *Gateway) drainContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if nanos := g.drainBy.Load(); nanos != 0 {
 		return context.WithDeadline(ctx, time.Unix(0, nanos))
 	}
 
-	timeout := g.settings().ShutdownTimeout
-	if timeout <= 0 {
-		timeout = defaultShutdownTimeout
-	}
-
-	return context.WithTimeout(ctx, timeout)
+	return ctx, func() {}
 }

@@ -106,7 +106,9 @@ type Registration struct {
 	// keeps no state.
 	Reset func(account, region string)
 	// Close stops the goroutines the service runs on its own. It is called
-	// once, after the gateway has drained and before persistence's last save, so
-	// the state they leave is saved.
+	// once, after the gateway has drained and after persistence's save, with a
+	// budget of its own (lifecycle.Deadlines.Close). A Close that overruns it is
+	// abandoned, so it must not be what a save waits for. A last save follows
+	// when every Close returned in time, so the state they leave is saved.
 	Close func()
 }

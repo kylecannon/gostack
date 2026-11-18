@@ -6,11 +6,16 @@ import (
 )
 
 const (
-	// KillMargin is the least time between the end of the child's own shutdown
-	// and the supervisor's SIGKILL. The supervisor starts its timer when it sends
-	// SIGTERM, and the child starts its own when it sees the signal, so the margin
-	// covers that delay and the exit itself.
+	// KillMargin is the least time between the end of the save and the
+	// supervisor's SIGKILL. The supervisor starts its timer when it sends SIGTERM,
+	// and the child starts its own when it sees the signal, so the margin covers
+	// that delay and the exit itself.
 	KillMargin = 500 * time.Millisecond
+
+	// CloseMargin is the least time between the end of the services' Close and the
+	// supervisor's SIGKILL. A Close still running then is abandoned and the
+	// process exits.
+	CloseMargin = 100 * time.Millisecond
 
 	// minSaveReserve is the least time kept for saving persisted state.
 	minSaveReserve = 500 * time.Millisecond
@@ -24,21 +29,34 @@ type Deadlines struct {
 	// Work ends the shutdown hooks and the drain of requests in flight. Both
 	// share it, in that order, and whatever overruns is cut.
 	Work time.Time
-	// Save ends the save of persisted state, and the shutdown with it. It is
-	// KillMargin before the supervisor's SIGKILL.
+	// Save ends the save of persisted state. It is KillMargin before the
+	// supervisor's SIGKILL.
 	Save time.Time
+	// Close ends the services' Close functions, and the shutdown with them. It
+	// falls after Save, CloseMargin before the supervisor's SIGKILL, so a slow
+	// Close cannot take time from the save.
+	Close time.Time
 }
 
 // PlanShutdown splits timeout, the SHUTDOWN_TIMEOUT the supervisor gives its
-// child between SIGTERM and SIGKILL, for a shutdown that starts at start:
+// child between SIGTERM and SIGKILL, for a shutdown that starts at start. The
+// budget has four slots, one after the other: hooks, drain, save and Close.
 //
-//	start          Work                Save           start+timeout
-//	  | hooks, drain |  save (reserved)  | KillMargin |  SIGKILL
+//	start          Work                 Save    Close  start+timeout
+//	  | hooks, drain |  save (reserved)  | Close | kill |
 //
 // The save is reserved first. Hooks and drain end at Work, however long they
-// take, so state is written before the kill even when they overrun. The reserve
-// is a quarter of the time before Save, and at least half a second when the time
-// allows. A timeout of zero or less is no limit, as it is for the supervisor.
+// take, so state is written before the kill even when they overrun. The
+// services' Close functions get what is left after the save. For a timeout T:
+//
+//	Save  = start + T - KillMargin    (start + T/4 when T <= KillMargin)
+//	Work  = Save - reserve            the reserve is a quarter of the time before
+//	                                  Save, at least 500 ms when the time allows,
+//	                                  at most half
+//	Close = start + T - CloseMargin   (Save, when T is too short to leave room)
+//
+// A timeout of zero or less is no limit, as it is for the supervisor: every
+// deadline is zero, so the hooks, the drain, the save and Close all wait.
 func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 	if timeout <= 0 {
 		return Deadlines{}
@@ -55,7 +73,12 @@ func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 
 	save := start.Add(budget)
 
-	return Deadlines{Work: save.Add(-reserve), Save: save}
+	closeBy := start.Add(timeout - CloseMargin)
+	if closeBy.Before(save) {
+		closeBy = save
+	}
+
+	return Deadlines{Work: save.Add(-reserve), Save: save, Close: closeBy}
 }
 
 // Until returns ctx limited to deadline, or ctx itself when deadline is zero.

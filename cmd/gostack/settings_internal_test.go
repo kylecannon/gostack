@@ -2,7 +2,6 @@ package main
 
 import (
 	"testing"
-	"time"
 
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +14,6 @@ func Test_settingsFunc(t *testing.T) {
 	t.Setenv("DISABLE_PREFLIGHT_PROCESSING", "1")
 	t.Setenv("EXTRA_CORS_ALLOWED_ORIGINS", "https://a.example,https://b.example")
 	t.Setenv("GOSTACK_LOCALSTACK_HOST", "stack.test:4570")
-	t.Setenv("SHUTDOWN_TIMEOUT", "7")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -28,7 +26,6 @@ func Test_settingsFunc(t *testing.T) {
 	assert.True(t, got.DisablePreflightProcessing)
 	assert.Equal(t, "https://a.example,https://b.example", got.ExtraCORSAllowedOrigins)
 	assert.Equal(t, "stack.test", got.LocalstackHost)
-	assert.Equal(t, 7*time.Second, got.ShutdownTimeout)
 	assert.True(t, got.ResponseHeaderEnabled)
 
 	t.Run("an update through the config shows from the next call on", func(t *testing.T) {

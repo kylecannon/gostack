@@ -315,12 +315,12 @@ func Test_Gateway_shutdown(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "a stopped gateway answers 503")
 }
 
-// Test_Gateway_drainBy: the time DrainBy names, and not Settings.ShutdownTimeout,
-// ends the wait for requests in flight, so the runtime's one deadline holds.
+// Test_Gateway_drainBy: the time DrainBy names ends the wait for requests in
+// flight, so the runtime's one deadline holds.
 func Test_Gateway_drainBy(t *testing.T) {
 	const drainWait = 150 * time.Millisecond
 
-	t.Run("a request that outlives the deadline is cut at it, not at the settings timeout", func(t *testing.T) {
+	t.Run("a request that outlives the deadline is cut at it", func(t *testing.T) {
 		started := make(chan struct{})
 
 		hang := func(_ http.ResponseWriter, rc *request.Context) {
@@ -328,7 +328,7 @@ func Test_Gateway_drainBy(t *testing.T) {
 			<-rc.Request.Context().Done()
 		}
 
-		s := serve(t, newSettings(func(s *gateway.Settings) { s.ShutdownTimeout = time.Hour }), sqsRegistration(hang))
+		s := serve(t, newSettings(), sqsRegistration(hang))
 		c := client(t, protoHTTP1)
 		failed := make(chan error, 1)
 
@@ -344,7 +344,8 @@ func Test_Gateway_drainBy(t *testing.T) {
 		s.gateway.DrainBy(begin.Add(drainWait))
 		require.NoError(t, s.stop(t))
 		require.Error(t, <-failed)
-		assert.Less(t, time.Since(begin), 5*time.Second, "the hour-long settings timeout did not apply")
+		assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the deadline")
+		assert.Less(t, time.Since(begin), 5*time.Second)
 	})
 
 	t.Run("a request that ends before the deadline finishes", func(t *testing.T) {
@@ -357,7 +358,7 @@ func Test_Gateway_drainBy(t *testing.T) {
 			_, _ = io.WriteString(w, "finished")
 		}
 
-		s := serve(t, newSettings(func(s *gateway.Settings) { s.ShutdownTimeout = time.Millisecond }), sqsRegistration(slow))
+		s := serve(t, newSettings(), sqsRegistration(slow))
 		c := client(t, protoHTTP1)
 		result := make(chan string, 1)
 
@@ -370,7 +371,7 @@ func Test_Gateway_drainBy(t *testing.T) {
 
 		s.gateway.DrainBy(time.Now().Add(10 * time.Second))
 		require.NoError(t, s.stop(t))
-		assert.Equal(t, "finished", <-result, "the settings timeout of 1ms did not cut it")
+		assert.Equal(t, "finished", <-result, "the deadline is 10 s away, so nothing cut it")
 	})
 }
 
@@ -382,8 +383,7 @@ func Test_Gateway_shutdownCutsLongRequests(t *testing.T) {
 		<-rc.Request.Context().Done()
 	}
 
-	s := serve(t, newSettings(func(s *gateway.Settings) { s.ShutdownTimeout = 50 * time.Millisecond }),
-		sqsRegistration(hang))
+	s := serve(t, newSettings(), sqsRegistration(hang))
 
 	failed := make(chan error, 1)
 
@@ -396,6 +396,124 @@ func Test_Gateway_shutdownCutsLongRequests(t *testing.T) {
 
 	<-started
 
-	require.NoError(t, s.stop(t), "cutting a request after the timeout is not an error")
+	s.gateway.DrainBy(time.Now().Add(50 * time.Millisecond))
+
+	require.NoError(t, s.stop(t), "cutting a request at the deadline is not an error")
 	require.Error(t, <-failed)
+}
+
+// Test_Gateway_drainHasNoTimeoutOfItsOwn: without DrainBy, or with a zero one,
+// Serve waits for the requests in flight as long as they take.
+func Test_Gateway_drainHasNoTimeoutOfItsOwn(t *testing.T) {
+	const held = 400 * time.Millisecond
+
+	tests := []struct {
+		name string
+		// giveDrainBy is called before the shutdown; nil leaves DrainBy unset.
+		giveDrainBy func(*gateway.Gateway)
+	}{
+		{name: "DrainBy never called"},
+		{name: "DrainBy with a zero time", giveDrainBy: func(g *gateway.Gateway) { g.DrainBy(time.Time{}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+
+			slow := func(w http.ResponseWriter, _ *request.Context) {
+				close(started)
+				<-release
+
+				_, _ = io.WriteString(w, "finished")
+			}
+
+			s := serve(t, newSettings(), sqsRegistration(slow))
+			c := client(t, protoHTTP1)
+			result := make(chan string, 1)
+
+			go func() {
+				_, body, _ := fetch(t.Context(), c, "http://"+s.addr+"/")
+				result <- body
+			}()
+
+			<-started
+
+			if tt.giveDrainBy != nil {
+				tt.giveDrainBy(s.gateway)
+			}
+
+			time.AfterFunc(held, func() { close(release) })
+
+			begin := time.Now()
+
+			require.NoError(t, s.stop(t))
+			assert.GreaterOrEqual(t, time.Since(begin), held, "Serve waited for the request, as long as it took")
+			assert.Equal(t, "finished", <-result)
+		})
+	}
+}
+
+// Test_Gateway_planDrain: a listener that fails starts the shutdown inside
+// Serve, which asks the plan for the drain deadline once, at the failure.
+func Test_Gateway_planDrain(t *testing.T) {
+	const drainWait = 200 * time.Millisecond
+
+	started := make(chan struct{})
+
+	hang := func(_ http.ResponseWriter, rc *request.Context) {
+		close(started)
+		<-rc.Request.Context().Done()
+	}
+
+	g := newGateway(t, newSettings(), []service.Registration{sqsRegistration(hang)})
+
+	var config net.ListenConfig
+
+	listener, err := config.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	type planned struct{ at time.Time }
+
+	plans := make(chan planned, 2)
+
+	g.PlanDrain(func(failedAt time.Time) time.Time {
+		plans <- planned{at: failedAt}
+
+		return failedAt.Add(drainWait)
+	})
+
+	done := make(chan error, 1)
+
+	go func() { done <- g.Serve(t.Context(), listener) }()
+
+	c := client(t, protoHTTP1)
+	failed := make(chan error, 1)
+
+	go func() {
+		_, _, fetchErr := fetch(t.Context(), c, "http://"+listener.Addr().String()+"/")
+		failed <- fetchErr
+	}()
+
+	<-started
+
+	// The listener fails: Accept returns an error that is not a server shutdown.
+	begin := time.Now()
+
+	require.NoError(t, listener.Close())
+
+	select {
+	case err = <-done:
+		require.Error(t, err, "the failure of a listener is Serve's error")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return")
+	}
+
+	require.Error(t, <-failed, "the request still in flight was cut")
+	assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the planned deadline")
+	assert.Less(t, time.Since(begin), 5*time.Second)
+
+	require.Len(t, plans, 1, "the plan is asked for once")
+
+	got := <-plans
+	assert.WithinDuration(t, begin, got.at, 2*time.Second, "the plan counts from the moment of the failure")
 }
