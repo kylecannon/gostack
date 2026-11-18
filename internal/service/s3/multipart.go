@@ -230,10 +230,12 @@ func newUpload(in *s3api.CreateMultipartUploadInput, algorithm, kind string) *Mu
 // CreateMultipartUpload names and returns them, the type defaulted: FULL_OBJECT
 // for CRC64NVME and COMPOSITE for the others (provider.py:2337-2363).
 func uploadChecksumType(algorithm, kind string) (string, string, error) {
+	err := checkChecksumAlgorithm(algorithm)
+	if err != nil {
+		return "", "", err
+	}
+
 	switch {
-	case algorithm != "" && !knownAlgorithm(algorithm):
-		return "", "", s3api.NewInvalidRequest("Checksum algorithm provided is unsupported. Please try again " +
-			"with any of the valid types: [CRC32, CRC32C, CRC64NVME, SHA1, SHA256]")
 	case kind != "" && algorithm == "":
 		return "", "", s3api.NewInvalidRequest(
 			"The x-amz-checksum-type header can only be used with the x-amz-checksum-algorithm header.")

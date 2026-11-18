@@ -83,6 +83,18 @@ func knownAlgorithm(algorithm string) bool {
 	}
 }
 
+// checkChecksumAlgorithm refuses an x-amz-checksum-algorithm S3 does not
+// know, with the error CreateMultipartUpload and CopyObject share. An empty
+// algorithm is none and passes.
+func checkChecksumAlgorithm(algorithm string) error {
+	if algorithm == "" || knownAlgorithm(algorithm) {
+		return nil
+	}
+
+	return s3api.NewInvalidRequest("Checksum algorithm provided is unsupported. Please try again " +
+		"with any of the valid types: [CRC32, CRC32C, CRC64NVME, SHA1, SHA256]")
+}
+
 // invalidChecksumValue is the error for a checksum value that is not one of
 // algorithm's size.
 func invalidChecksumValue(algorithm string) error {
