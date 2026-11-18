@@ -260,7 +260,7 @@ func TestPresignedURLRoundTrip(t *testing.T) {
 		require.Equal(t, "GET\n\n\n"+strconv.FormatInt(expires.Unix(), 10)+"\n"+sigv4.EscapePath(path), e.StringToSign)
 	})
 
-	t.Run("GetObject answers ETag in S3's case", func(t *testing.T) {
+	t.Run("GetObject answers ETag and x-amz- headers in S3's case", func(t *testing.T) {
 		t.Parallel()
 
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
@@ -272,6 +272,8 @@ func TestPresignedURLRoundTrip(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		require.Contains(t, rec.Header(), "ETag")
 		require.NotContains(t, rec.Header(), "Etag")
+		require.Contains(t, rec.Header(), "x-amz-server-side-encryption")
+		require.NotContains(t, rec.Header(), "X-Amz-Server-Side-Encryption")
 	})
 }
 

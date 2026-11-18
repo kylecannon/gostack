@@ -250,14 +250,28 @@ func (w *responseWriter) WriteHeader(code int) {
 			header.Del("Content-Length")
 		}
 
-		// S3 spells it ETag; Header.Set canonicalizes it to Etag.
-		if etag, ok := header["Etag"]; ok {
-			delete(header, "Etag")
-			header["ETag"] = etag
-		}
+		spellHeaders(header)
 	}
 
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// spellHeaders spells the header names Header.Set canonicalized as the S3
+// model and LocalStack's serializer do: Etag as ETag, and X-Amz-* in lower
+// case, the case of every x-amz- header in the model. Clients that compare
+// header names exactly, as the CORS snapshots do, see the difference.
+func spellHeaders(header http.Header) {
+	if etag, ok := header["Etag"]; ok {
+		delete(header, "Etag")
+		header["ETag"] = etag
+	}
+
+	for name, values := range header {
+		if strings.HasPrefix(name, "X-Amz-") {
+			delete(header, name)
+			header[strings.ToLower(name)] = values
+		}
+	}
 }
 
 func (w *responseWriter) Write(p []byte) (int, error) {
