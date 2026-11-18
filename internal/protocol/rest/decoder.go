@@ -21,25 +21,27 @@ const (
 	decimalBase = 10
 )
 
-// MaxBody is how many bytes of a request body that is not streamed a rest
-// service reads: a json body, an xml body (through CapBody, as it is decoded
-// element by element) or a blob or string payload. A streamed payload has no
-// limit.
-const MaxBody = 16 << 20
+// ErrBodyTooLarge is what a read of a body longer than protocol.MaxBody fails
+// with.
+var ErrBodyTooLarge = errors.New("rest: request body is longer than protocol.MaxBody")
 
-// ErrBodyTooLarge is what a read of a body longer than MaxBody fails with.
-var ErrBodyTooLarge = errors.New("rest: request body is longer than MaxBody")
-
-// CapBody returns r limited to MaxBody bytes: a read that finds more fails with
-// ErrBodyTooLarge, where io.LimitReader would end the body as if it were
-// complete. A body of exactly MaxBody bytes reads whole.
+// CapBody returns r limited to protocol.MaxBody bytes, which is how a rest
+// service reads an xml body as it decodes it element by element: a read that
+// finds more fails with ErrBodyTooLarge, where io.LimitReader would end the
+// body as if it were complete. A body of exactly MaxBody bytes reads whole. It
+// returns r itself when there is no limit.
 func CapBody(r io.Reader) io.Reader {
-	return &cappedBody{r: r, left: MaxBody}
+	limit := protocol.MaxBody()
+	if limit == 0 {
+		return r
+	}
+
+	return &cappedBody{r: r, left: limit}
 }
 
 type cappedBody struct {
 	r    io.Reader
-	left int
+	left int64
 }
 
 func (c *cappedBody) Read(p []byte) (int, error) {
@@ -54,10 +56,10 @@ func (c *cappedBody) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
-	p = p[:min(len(p), c.left)]
+	p = p[:min(int64(len(p)), c.left)]
 
 	n, err := c.r.Read(p)
-	c.left -= n
+	c.left -= int64(n)
 
 	return n, err
 }

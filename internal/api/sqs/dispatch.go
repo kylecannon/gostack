@@ -1474,7 +1474,7 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 }
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(io.LimitReader(rc.Request.Body, query.MaxFormBody+1))
+	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",
@@ -1483,7 +1483,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 			Fault:      awserr.FaultSender,
 		}
 	}
-	if len(body) > query.MaxFormBody {
+	if protocol.OverBody(len(body)) {
 		return nil, query.MalformedQueryString()
 	}
 	if !utf8.Valid(body) {

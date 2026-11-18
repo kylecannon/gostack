@@ -14,7 +14,7 @@ import (
 
 	"github.com/kylecannon/gostack/api/openapi"
 	"github.com/kylecannon/gostack/internal/gateway"
-	"github.com/kylecannon/gostack/internal/protocol/query"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -921,7 +921,7 @@ const (
 	// mebibyte is the unit of the body caps.
 	mebibyte = 1 << 20
 	// bombBytes is what the bomb decodes to, eight times the cap.
-	bombBytes = 8 * query.MaxFormBody
+	bombBytes = 8 * int(protocol.DefaultMaxBody)
 	// bombBound is the most a request over the cap may allocate in total. A
 	// capped read measures about 69 MiB, because io.ReadAll regrows its buffer
 	// as it reads up to the cap and every regrowth counts. An uncapped read of

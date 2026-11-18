@@ -11,14 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
-
-// MaxFormBody is the largest form body RequestForm reads. It is also the cap on
-// a decoded json body (the generated readBody and the SQS developer API), and
-// every such read answers an oversized body with MalformedQueryString. The cap
-// counts decoded bytes, so a gzip bomb stops at this size. Streaming protocols
-// (rest-xml object bodies) must not go through these readers.
-const MaxFormBody = 16 << 20
 
 const (
 	asciiLimit = 0x80
@@ -26,7 +20,7 @@ const (
 )
 
 // ErrForm is the error RequestForm returns for a request whose parameters
-// cannot be read: a body over MaxFormBody, an unreadable body, or text that is
+// cannot be read: a body over protocol.MaxBody, an unreadable body, or text that is
 // not valid UTF-8.
 var ErrForm = errors.New("query: form cannot be read")
 
@@ -189,15 +183,15 @@ func requestValues(r *http.Request) (url.Values, error) {
 
 	original := r.Body
 
-	body, err := io.ReadAll(io.LimitReader(original, MaxFormBody+1))
+	body, err := io.ReadAll(protocol.LimitBody(original))
 	r.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(body), original), Closer: original}
 
 	if err != nil {
 		return values, fmt.Errorf("%w: %w", ErrForm, err)
 	}
 
-	if len(body) > MaxFormBody {
-		return values, fmt.Errorf("%w: the body is over %d bytes", ErrForm, MaxFormBody)
+	if protocol.OverBody(len(body)) {
+		return values, fmt.Errorf("%w: the body is over %d bytes", ErrForm, protocol.MaxBody())
 	}
 
 	if !utf8.Valid(body) {

@@ -261,7 +261,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 		p.f("\t\tin.%s.decodeXML(xd)", f.goName)
 		p.f("\t}")
 		p.f("\tif xd.Err() != nil {")
-		p.f("\t\treturn nil, errMalformedBody()")
+		p.f("\t\treturn nil, %s", g.xmlBodyError())
 		p.f("\t}")
 
 		return nil
@@ -307,7 +307,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\t\tin.decodeXML(xd)")
 		p.f("\t}")
 		p.f("\tif xd.Err() != nil {")
-		p.f("\t\treturn nil, errMalformedBody()")
+		p.f("\t\treturn nil, %s", g.xmlBodyError())
 		p.f("\t}")
 	default:
 		p.f("\tbody, err := readBody(rc)")
@@ -575,7 +575,8 @@ func (g *generator) emitErrorHelpers(p *printer) {
 	p.f("\t}")
 	p.f("}")
 	p.blank()
-	emitReadBody(p)
+	g.emitBodyTooLarge(p)
+	g.emitReadBody(p)
 	g.emitMessageName(p)
 
 	if g.hasModeledErrors() {
@@ -583,16 +584,65 @@ func (g *generator) emitErrorHelpers(p *printer) {
 	}
 }
 
-func emitReadBody(p *printer) {
-	p.f("// readBody reads a request body that is not streamed, up to rest.MaxBody bytes.")
+func (g *generator) emitReadBody(p *printer) {
+	p.f("// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.")
 	p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-	p.f("\tbody, err := io.ReadAll(io.LimitReader(rc.Request.Body, rest.MaxBody+1))")
-	p.f("\tif err != nil || len(body) > rest.MaxBody {")
+	p.f("\tbody, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))")
+
+	if g.opts.S3Errors {
+		p.f("\tif protocol.OverBody(len(body)) {")
+		p.f("\t\treturn nil, errBodyTooLarge()")
+		p.f("\t}")
+		p.f("\tif err != nil {")
+	} else {
+		p.f("\tif err != nil || protocol.OverBody(len(body)) {")
+	}
+
 	p.f("\t\treturn nil, errMalformedBody()")
 	p.f("\t}")
 	p.f("\treturn body, nil")
 	p.f("}")
 	p.blank()
+}
+
+// emitBodyTooLarge writes what an S3 request body over protocol.MaxBody is
+// answered with. S3 has no such limit on a configuration document; LocalStack
+// accepts any size, so this error is gostack's own, and the code and message
+// are AWS's for a request that is too big.
+func (g *generator) emitBodyTooLarge(p *printer) {
+	if !g.opts.S3Errors {
+		return
+	}
+
+	p.f("// errBodyTooLarge is the error for a request body over protocol.MaxBody.")
+	p.f("func errBodyTooLarge() *awserr.Error {")
+	p.f("\treturn &awserr.Error{")
+	p.f("\t\tCode: \"MaxMessageLengthExceeded\",")
+	p.f("\t\tMessage: \"Your request was too big.\",")
+	p.f("\t\tStatusCode: 400,")
+	p.f("\t\tFault: awserr.FaultSender,")
+	p.f("\t}")
+	p.f("}")
+	p.blank()
+	p.f("// errXMLBody is the error for an xml request body that failed to decode: too")
+	p.f("// large when the read hit protocol.MaxBody, malformed otherwise.")
+	p.f("func errXMLBody(err error) *awserr.Error {")
+	p.f("\tif errors.Is(err, rest.ErrBodyTooLarge) {")
+	p.f("\t\treturn errBodyTooLarge()")
+	p.f("\t}")
+	p.f("\treturn errMalformedBody()")
+	p.f("}")
+	p.blank()
+}
+
+// xmlBodyError is the Go expression a reader returns for an xml decoder whose
+// Err is set.
+func (g *generator) xmlBodyError() string {
+	if g.opts.S3Errors {
+		return "errXMLBody(xd.Err())"
+	}
+
+	return "errMalformedBody()"
 }
 
 func emitModeledError(p *printer) {

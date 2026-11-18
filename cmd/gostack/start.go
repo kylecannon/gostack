@@ -17,6 +17,7 @@ import (
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/lifecycle"
 	"github.com/kylecannon/gostack/internal/persist"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/service"
 )
 
@@ -30,6 +31,9 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	// Cancelling ctx is how the kill action stops the process.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// GOSTACK_MAX_REQUEST_BODY is read once, before anything serves.
+	protocol.SetMaxBody(cfg.Settings().MaxRequestBody)
 
 	// The services report changes to the engine, and the engine is configured
 	// from the services' names. Nothing reports a change before the engine is
