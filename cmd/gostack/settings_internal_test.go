@@ -14,6 +14,7 @@ func Test_settingsFunc(t *testing.T) {
 	t.Setenv("DISABLE_PREFLIGHT_PROCESSING", "1")
 	t.Setenv("EXTRA_CORS_ALLOWED_ORIGINS", "https://a.example,https://b.example")
 	t.Setenv("GOSTACK_LOCALSTACK_HOST", "stack.test:4570")
+	t.Setenv("DISABLE_CUSTOM_CORS_S3", "1")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -27,6 +28,7 @@ func Test_settingsFunc(t *testing.T) {
 	assert.Equal(t, "https://a.example,https://b.example", got.ExtraCORSAllowedOrigins)
 	assert.Equal(t, "stack.test", got.LocalstackHost)
 	assert.True(t, got.ResponseHeaderEnabled)
+	assert.Equal(t, []string{"s3"}, got.DisableCustomCORS)
 
 	t.Run("an update through the config shows from the next call on", func(t *testing.T) {
 		require.NoError(t, cfg.Set("FAIL_FAST", true))

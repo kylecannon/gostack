@@ -57,5 +57,6 @@ func gatewaySettings(s *config.Settings) gateway.Settings {
 		ExtraCORSAllowedHeaders:    strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		ExtraCORSExposeHeaders:     strings.Join(s.ExtraCORSExposeHeaders, ","),
 		LocalstackHost:             s.LocalstackHost.Host,
+		DisableCustomCORS:          s.CustomCORSDisabled(),
 	}
 }
