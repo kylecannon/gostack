@@ -38,6 +38,8 @@ const (
 )
 
 const (
+	// attrValueTrue is how SQS spells a true attribute value.
+	attrValueTrue = "true"
 	// defaultMaximumMessageSize is the largest message a queue takes by default.
 	defaultMaximumMessageSize = "1048576"
 	// defaultRetentionPeriod is four days, in seconds.
@@ -93,7 +95,7 @@ func defaultAttributes(arn string, kind queueKind, now time.Time) map[string]str
 		attrQueueArn:                      arn,
 		attrReceiveMessageWaitTimeSeconds: "0",
 		attrVisibilityTimeout:             defaultVisibilityTimeout,
-		attrSqsManagedSseEnabled:          "true",
+		attrSqsManagedSseEnabled:          attrValueTrue,
 	}
 
 	if kind == kindFIFO {
@@ -118,7 +120,7 @@ func validateAttributes(kind queueKind, attrs map[string]string) *awserr.Error {
 
 	if kind == kindFIFO {
 		// A FIFO queue cannot become a standard one.
-		if value, ok := attrs[attrFifoQueue]; ok && !strings.EqualFold(value, "true") {
+		if value, ok := attrs[attrFifoQueue]; ok && !strings.EqualFold(value, attrValueTrue) {
 			return sqsapi.NewInvalidAttributeValue(
 				"Invalid value for the parameter FifoQueue. Reason: Modifying queue type is not supported.")
 		}

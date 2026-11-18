@@ -70,7 +70,7 @@ func Test_every_kind_of_queue_can_be_saved(t *testing.T) {
 
 	for name, attrs := range map[string]map[string]string{
 		"standard":   nil,
-		"first.fifo": {attrFifoQueue: "true"},
+		"first.fifo": {attrFifoQueue: attrValueTrue},
 	} {
 		_, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new(name), Attributes: attrs})
 		require.NoError(t, err)

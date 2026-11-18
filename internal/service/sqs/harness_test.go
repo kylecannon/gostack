@@ -22,6 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testListen is the gateway listen address the in-process tests advertise.
+const testListen = "0.0.0.0:4566"
+
 const (
 	defaultAccount = "000000000000"
 	usEast1        = "us-east-1"
@@ -77,7 +80,7 @@ func newStack(t *testing.T) *stack {
 	provider := sqs.New(settings.get)
 
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
+		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },
 		[]service.Registration{provider.Registration()},
 		nil,
 		nil,

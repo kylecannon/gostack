@@ -104,7 +104,7 @@ func newQueue(
 	name, account, region string, attrs, tags map[string]string, seq uint64, now time.Time, contents func(*Queue) Contents,
 ) (*Queue, *awserr.Error) {
 	kind := kindStandard
-	if strings.EqualFold(attrs[attrFifoQueue], "true") {
+	if strings.EqualFold(attrs[attrFifoQueue], attrValueTrue) {
 		kind = kindFIFO
 	}
 

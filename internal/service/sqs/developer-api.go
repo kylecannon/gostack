@@ -314,7 +314,7 @@ func listedMessage(l *peeked, what listing) sqsapi.Message {
 // as true for "true" in any case and for "1".
 func flagSet(r *http.Request, name string) bool {
 	switch strings.ToLower(requestValue(r, name)) {
-	case "true", "1":
+	case attrValueTrue, "1":
 		return true
 	default:
 		return false
