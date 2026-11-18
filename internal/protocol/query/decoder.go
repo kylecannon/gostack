@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -74,6 +75,10 @@ type Entry struct {
 type Decoder struct {
 	vals url.Values
 	err  *awserr.Error
+	// keys is every key of vals in sorted order. The first Has that misses a
+	// whole key builds it, so a request that never asks for a key below another
+	// pays for no sort. It goes stale if vals changes, which NewDecoder rules out.
+	keys []string
 }
 
 // NewDecoder returns a Decoder over vals. It never changes vals, and the
@@ -109,14 +114,7 @@ func (d *Decoder) Has(key string) bool {
 		return true
 	}
 
-	below := key + "."
-	for k := range d.vals {
-		if strings.HasPrefix(k, below) {
-			return true
-		}
-	}
-
-	return false
+	return d.hasBelow(key + ".")
 }
 
 // String returns the value of key, or nil when the request has none.
@@ -349,6 +347,26 @@ func (d *Decoder) resolve(prefix string, names, probes []string) string {
 	}
 
 	return primary
+}
+
+// hasBelow reports whether some key starts with below. Those keys are one run in
+// the sorted index, which starts at the first key that is not less than below,
+// so one binary search answers it. The sort costs n log n once per Decoder and a
+// lookup costs log n; scanning the form per lookup made a list of n complex
+// elements quadratic.
+func (d *Decoder) hasBelow(below string) bool {
+	if d.keys == nil {
+		d.keys = make([]string, 0, len(d.vals))
+		for k := range d.vals {
+			d.keys = append(d.keys, k)
+		}
+
+		slices.Sort(d.keys)
+	}
+
+	i, _ := slices.BinarySearch(d.keys, below)
+
+	return i < len(d.keys) && strings.HasPrefix(d.keys[i], below)
 }
 
 func (d *Decoder) hasKey(key string) bool {
