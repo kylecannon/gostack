@@ -76,12 +76,12 @@ func Test_parseStatus(t *testing.T) {
 	}
 }
 
-// healthServer answers GET /_localstack/health with the given status and body.
+// healthServer answers GET /_gostack/health with the given status and body.
 func healthServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/_localstack/health" {
+		if r.URL.Path != healthPath {
 			http.NotFound(w, r)
 
 			return
@@ -95,7 +95,8 @@ func healthServer(t *testing.T, status int, body string) *httptest.Server {
 	return srv
 }
 
-const healthBody = `{"services":{"kms":"running","sns":"available"},"edition":"community","version":"1"}`
+const healthBody = `{"status":"ok","version":"1","services":{` +
+	`"kms":{"state":"running","persisted":false},"sns":{"state":"available","persisted":true}}}`
 
 func Test_runStatus(t *testing.T) {
 	tests := []struct {

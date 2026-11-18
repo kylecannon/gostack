@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -48,6 +49,13 @@ type Gateway struct {
 
 	phase   atomic.Int32
 	handler http.Handler
+
+	// tlsConfig is the certificate Listen loaded, for Serve.
+	tlsConfig *tls.Config
+
+	// drainBy is the Unix time in nanoseconds at which Serve stops waiting for
+	// requests in flight. Zero means it was not set.
+	drainBy atomic.Int64
 }
 
 // New builds a gateway for the given registrations. settings is asked for on
@@ -105,6 +113,15 @@ func (g *Gateway) BeginShutdown() {
 	}
 }
 
+// DrainBy sets the time at which Serve stops waiting for requests in flight and
+// closes what is left. Without it Serve waits Settings.ShutdownTimeout from the
+// moment it starts to drain, which is only right when nothing else shares that
+// time: the runtime sets it so that the shutdown hooks, the drain and the save of
+// persisted state keep to one deadline. Call it before Serve's context ends.
+func (g *Gateway) DrainBy(deadline time.Time) {
+	g.drainBy.Store(deadline.UnixNano())
+}
+
 // buildRouter builds the root router of g. The middleware runs in the order of
 // docs/architecture.md, which is the order of LocalStack's aws/app.py handler
 // chain. CleanPath, StripSlashes, RedirectSlashes, Timeout and RequestID stay
@@ -143,9 +160,18 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	return r
 }
 
-// Listen opens the addresses of Settings.Listen. The caller hands the result to
-// Serve, which closes them.
+// Listen loads the TLS certificate and opens the addresses of Settings.Listen.
+// The certificate comes first, so that one that cannot be used fails here, before
+// the runtime has run a hook or printed Ready. The caller hands the result to
+// Serve, which closes the listeners.
 func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
+	tlsConfig, err := tlscert.Config(g.settings().CustomSSLCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("tls certificate: %w", err)
+	}
+
+	g.tlsConfig = tlsConfig
+
 	var (
 		config    net.ListenConfig
 		listeners []net.Listener
@@ -168,20 +194,26 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 }
 
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
-// down: it refuses new work, waits up to Settings.ShutdownTimeout for running
-// requests, and closes what is left. It returns nil after a shutdown that ctx
-// asked for.
+// down: it refuses new work, waits for running requests until the time DrainBy
+// set, or Settings.ShutdownTimeout from now, and closes what is left. It returns
+// nil after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
-// prior knowledge) on the same port.
+// prior knowledge) on the same port. Serve uses the certificate that Listen
+// loaded, and loads it itself for listeners that did not come from Listen.
 func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
-	tlsConfig, err := tlscert.Config(g.settings().CustomSSLCertPath)
-	if err != nil {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
+	tlsConfig := g.tlsConfig
+	if tlsConfig == nil {
+		var err error
 
-		return fmt.Errorf("tls certificate: %w", err)
+		tlsConfig, err = tlscert.Config(g.settings().CustomSSLCertPath)
+		if err != nil {
+			for _, listener := range listeners {
+				_ = listener.Close()
+			}
+
+			return fmt.Errorf("tls certificate: %w", err)
+		}
 	}
 
 	server := &http.Server{
@@ -227,13 +259,8 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 }
 
 func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
-	timeout := g.settings().ShutdownTimeout
-	if timeout <= 0 {
-		timeout = defaultShutdownTimeout
-	}
-
 	// The caller's context has ended; the shutdown still gets its own time.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	ctx, cancel := g.drainContext(context.WithoutCancel(ctx))
 	defer cancel()
 
 	err := server.Shutdown(ctx)
@@ -248,4 +275,19 @@ func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	}
 
 	return nil
+}
+
+// drainContext limits ctx to the time DrainBy set, or to Settings.ShutdownTimeout
+// from now when it was not set.
+func (g *Gateway) drainContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if nanos := g.drainBy.Load(); nanos != 0 {
+		return context.WithDeadline(ctx, time.Unix(0, nanos))
+	}
+
+	timeout := g.settings().ShutdownTimeout
+	if timeout <= 0 {
+		timeout = defaultShutdownTimeout
+	}
+
+	return context.WithTimeout(ctx, timeout)
 }

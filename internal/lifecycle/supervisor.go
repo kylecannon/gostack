@@ -91,14 +91,16 @@ func (s *Supervisor) Run(ctx context.Context) (int, error) {
 
 // runWith is Run with the signals supplied, so tests can send them.
 func (s *Supervisor) runWith(ctx context.Context, signals <-chan os.Signal) (int, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The reaper outlives ctx. A ctx that ends stops the child like a SIGTERM
+	// does, and the supervisor learns that the child is gone from the reaper.
+	reapCtx, stopReaping := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopReaping()
 
 	exits := make(chan exitStatus)
 	reaped := make(chan struct{})
 	go func() {
 		defer close(reaped)
-		reapOnSIGCHLD(ctx, waitNoHang, exits)
+		reapOnSIGCHLD(reapCtx, waitNoHang, exits)
 	}()
 	start := func() (childProcess, error) {
 		child, err := s.startCommand()
@@ -109,7 +111,7 @@ func (s *Supervisor) runWith(ctx context.Context, signals <-chan os.Signal) (int
 		return child, nil
 	}
 	code, err := s.supervise(ctx, start, signals, exits)
-	cancel()
+	stopReaping()
 	<-reaped
 
 	return code, err

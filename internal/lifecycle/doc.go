@@ -10,6 +10,14 @@
 // SUCCESSFUL or ERROR state. A failing script is logged and does not stop the
 // stage.
 //
+// # Shutdown deadline
+//
+// [PlanShutdown] splits SHUTDOWN_TIMEOUT for the child's own shutdown: the hooks
+// and the drain share the time up to [Deadlines.Work], and the save of persisted
+// state has the rest, to [Deadlines.Save], which is [KillMargin] before the
+// supervisor's SIGKILL. docs/architecture.md, under the container contract,
+// has the numbers.
+//
 // # Ready
 //
 // [Process.Ready] runs the ready hooks, prints "Ready." on stdout, which

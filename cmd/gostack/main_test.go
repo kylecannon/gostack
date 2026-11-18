@@ -97,7 +97,7 @@ func startGostack(t *testing.T, env ...string) *gostack {
 	cmd.Env = append([]string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + t.TempDir(),
-		"GATEWAY_LISTEN=127.0.0.1:0",
+		envListenAnyPort,
 		"ENABLE_CONFIG_UPDATES=1",
 	}, env...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGKILL) }

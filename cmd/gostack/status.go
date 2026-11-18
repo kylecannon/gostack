@@ -138,13 +138,17 @@ func runStatus(ctx context.Context, baseURL, format string, stdout, stderr io.Wr
 	return 0
 }
 
-// fetchServices returns the "services" object of GET /_localstack/health, which
-// maps each service name to its state.
+// healthPath is gostack's own health route. Unlike /_localstack/health it is
+// mounted whatever GOSTACK_COMPAT_PATHS says, and the image's healthcheck cannot
+// depend on a compatibility path that a user may switch off.
+const healthPath = "/_gostack/health"
+
+// fetchServices returns the state of each service from GET /_gostack/health.
 func fetchServices(ctx context.Context, baseURL string) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
 
-	url := baseURL + "/_localstack/health"
+	url := baseURL + healthPath
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -163,7 +167,9 @@ func fetchServices(ctx context.Context, baseURL string) (map[string]any, error) 
 	}
 
 	var doc struct {
-		Services map[string]any `json:"services"`
+		Services map[string]struct {
+			State string `json:"state"`
+		} `json:"services"`
 	}
 
 	err = json.NewDecoder(io.LimitReader(resp.Body, maxHealthBody)).Decode(&doc)
@@ -171,11 +177,14 @@ func fetchServices(ctx context.Context, baseURL string) (map[string]any, error) 
 		return nil, fmt.Errorf("read the health document from %s: %w", url, err)
 	}
 
-	if doc.Services == nil {
-		doc.Services = map[string]any{}
+	// Print the states the way LocalStack's CLI does, a name and a state, and
+	// leave out the persisted flag that /_gostack/health adds.
+	services := make(map[string]any, len(doc.Services))
+	for name, service := range doc.Services {
+		services[name] = service.State
 	}
 
-	return doc.Services, nil
+	return services, nil
 }
 
 // writeServiceTable prints one line per service, sorted by name.

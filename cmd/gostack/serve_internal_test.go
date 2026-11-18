@@ -39,7 +39,7 @@ func Test_serve_refusesCallsWhileTheServicesAreToldToStop(t *testing.T) {
 	}
 
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{"127.0.0.1:0"}} },
+		func() gateway.Settings { return gateway.Settings{Listen: []string{anyLoopbackPort}} },
 		[]service.Registration{reg}, nil, nil,
 	)
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func Test_serve_refusesCallsWhileTheServicesAreToldToStop(t *testing.T) {
 	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
 	done := make(chan error, 1)
 
-	go func() { done <- serve(ctx, gw, listeners, proc, 5*time.Second) }()
+	go func() { done <- serve(ctx, gw, listeners, proc, 5*time.Second, func(context.Context) {}) }()
 
 	// SIGTERM.
 	stop()

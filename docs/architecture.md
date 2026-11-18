@@ -388,7 +388,10 @@ Tests split along the same line:
 - **Entrypoint.** The image runs the gostack binary directly. There is no
   shell entrypoint. Startup is in `internal/config` and `internal/lifecycle`:
   - `internal/config` resolves env vars (see Other compatibility aliases).
-  - `internal/lifecycle` runs the `boot.d` hooks, then starts the gateway.
+  - `internal/lifecycle` runs the `boot.d` hooks, then starts the gateway. The
+    gateway loads its TLS certificate and binds its ports before the `start.d`
+    and `ready.d` hooks run, so a `CUSTOM_SSL_CERT_PATH` that cannot be used
+    exits non-zero without `Ready.`.
   - `internal/lifecycle` also supervises. When gostack runs as PID 1, it starts
     itself as a child process and acts as LocalStack's
     `bin/localstack-supervisor`:
@@ -405,6 +408,47 @@ Tests split along the same line:
     community-image notice when `LOCALSTACK_AUTH_TOKEN` is unset, and the
     wrong-image notice when `LOCALSTACK_API_KEY` or `LOCALSTACK_AUTH_TOKEN` is
     set.
+- **Shutdown.** SIGTERM, SIGINT, a `restart` and a `kill` action all take one
+  path, and it ends before the supervisor's SIGKILL. LocalStack runs one
+  `on_infra_shutdown` hook list (`runtime/runtime.py`, `runtime/shutdown.py`):
+  the init `shutdown.d` scripts at default priority, then the services' stop at
+  priority -10 (SQS wakes its long polls there, and persistence saves), and
+  only then `runtime_server.shutdown()`. gostack keeps the hooks-before-save
+  order and differs in two places. The services are told to let go first, with
+  the 503 guard, because the gateway owns that call (SQ-44). And the gateway
+  drains before the save, so a request still in flight is in the saved state
+  where it can finish in time. The save is reserved ahead of everything that can
+  overrun. `T` is `SHUTDOWN_TIMEOUT`, which the supervisor counts from the
+  SIGTERM it sends. The child counts from the moment it sees the signal, which
+  is microseconds later, and reads `T` once at start, so an update through
+  `/_localstack/config` does not move the deadline. `Save` is the end of the
+  save, not of the process: the exit follows it by the time to close the
+  engine.
+  1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
+     developer paths stay up), and each service's `Shutdown` function runs. SQS
+     wakes its long polls there.
+  2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
+  3. The gateway drains the requests in flight. At `Work` it closes the
+     connections that are left.
+  4. The persisted state is saved, with a deadline of `Save`. Then the services
+     stop their own goroutines (SQS's move tasks), and a second save writes
+     whatever that or a request cut at `Work` changed.
+
+  | Point | Time after the signal, with `T` = 5 s | Rule |
+  | --- | --- | --- |
+  | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
+  | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | SIGKILL | 5 s | the supervisor, unchanged |
+
+  The hooks, the drain and the service `Shutdown` functions share the time up
+  to `Work`, and a slow one cannot take the save's reserve: a service function
+  that never returns is left behind at `Work`, the hooks that follow it are
+  skipped, and the drain and the save go on without it. A request still running
+  when the save starts can have its effect saved or not, and the file is whole
+  either way, since the snapshot takes the service locks. `SHUTDOWN_TIMEOUT=0` has no `Work` and no `Save`: hooks and the save
+  take what they need, and the drain keeps its 5-second cap. With the
+  supervisor's timer off nothing kills the child, so a stuck hook is the
+  user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at
   `/_gostack/init`. The process prints `Ready.` on stdout, which testcontainers
@@ -424,8 +468,11 @@ Tests split along the same line:
     A hook that imports `localstack.*` does not work under gostack, because
     there is no such package.
 - **Healthcheck:** the HEALTHCHECK runs `localstack status services
-  --format=json`, and `localstack` is a symlink to gostack. `curl` is present in
-  the full image for compose healthchecks that use it.
+  --format=json`, and `localstack` is a symlink to gostack. The command asks
+  `GET /_gostack/health`, which is mounted whatever `GOSTACK_COMPAT_PATHS` says,
+  and prints each service's `state` as LocalStack's CLI does, so the output is
+  the same with the compat paths on or off. `curl` is present in the full image
+  for compose healthchecks that use it.
 - **Lambda:**
   - Runs `public.ecr.aws/lambda/<runtime>` containers through the Docker
     socket.

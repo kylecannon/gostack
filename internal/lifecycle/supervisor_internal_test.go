@@ -463,6 +463,29 @@ func Test_Supervisor_Run(t *testing.T) {
 		require.Equal(t, "terminated", lines[1])
 	})
 
+	t.Run("an ended context stops a real child and the exit is seen", func(t *testing.T) {
+		log := filepath.Join(t.TempDir(), "log")
+		ctx, cancel := context.WithCancel(t.Context())
+		supervisor := Supervisor{Command: helperCommand(t, "wait-term", log), ShutdownTimeout: shutdownTimeout}
+		done := make(chan supervised, 1)
+		go func() {
+			code, err := supervisor.runWith(ctx, make(chan os.Signal))
+			done <- supervised{code: code, err: err}
+		}()
+
+		waitForLines(t, log, 1)
+		cancel()
+
+		select {
+		case got := <-done:
+			require.NoError(t, got.err)
+			require.Zero(t, got.code, "the child ended on the SIGTERM the context sent")
+			require.Equal(t, "terminated", readLines(t, log)[1])
+		case <-time.After(shutdownTimeout):
+			t.Fatal("the supervisor never saw the child exit: its reaper stopped with the context")
+		}
+	})
+
 	t.Run("the restart signal replaces a real child", func(t *testing.T) {
 		log := filepath.Join(t.TempDir(), "log")
 		signals := make(chan os.Signal, 2)

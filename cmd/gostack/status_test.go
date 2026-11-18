@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,15 +59,46 @@ func localstackLink(t *testing.T) string {
 	return link
 }
 
+// Test_status_againstGostack is the image's healthcheck against a real server:
+// the status command asks /_gostack/health, which is mounted whether or not the
+// LocalStack compatibility paths are, and prints the same states either way.
+func Test_status_againstGostack(t *testing.T) {
+	tests := []struct {
+		name           string
+		giveCompat     string
+		wantLocalstack int
+	}{
+		{name: "compat paths on", giveCompat: "1", wantLocalstack: http.StatusOK},
+		{name: "compat paths off", giveCompat: "0", wantLocalstack: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := startGostack(t, "GOSTACK_COMPAT_PATHS="+tt.giveCompat)
+
+			status, _ := g.do(t, http.MethodGet, "/_localstack/health", "")
+			require.Equal(t, tt.wantLocalstack, status, "the compat path is %s", tt.name)
+
+			for _, name := range []string{binary, localstackLink(t)} {
+				stdout, stderr, code := statusBinary(t, name, strings.TrimPrefix(g.base, "http://"),
+					cmdStatus, cmdServices, jsonArg)
+
+				assert.Zero(t, code, stderr)
+				assert.JSONEq(t, `{"sqs":"running","sts":"running"}`, stdout)
+			}
+		})
+	}
+}
+
 func Test_status_binary(t *testing.T) {
 	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/_localstack/health" {
+		if r.URL.Path != "/_gostack/health" {
 			http.NotFound(w, r)
 
 			return
 		}
 
-		_, _ = w.Write([]byte(`{"services":{"kms":"running","sns":"available"},"edition":"community","version":"1"}`))
+		_, _ = w.Write([]byte(`{"status":"ok","version":"1","services":{` +
+			`"kms":{"state":"running","persisted":false},"sns":{"state":"available","persisted":false}}}`))
 	}))
 	t.Cleanup(healthy.Close)
 

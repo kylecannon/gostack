@@ -248,6 +248,20 @@ func Test_Gateway_serveFailsOnAnUnreadableCertificate(t *testing.T) {
 	require.Error(t, err, "Serve closes the listeners it was given")
 }
 
+// Test_Gateway_listenFailsOnAnUnreadableCertificate: the certificate is loaded by
+// Listen, before the runtime runs a ready hook, and no port is left open.
+func Test_Gateway_listenFailsOnAnUnreadableCertificate(t *testing.T) {
+	g := newGateway(t, newSettings(func(s *gateway.Settings) {
+		s.Listen = []string{"127.0.0.1:0"}
+		s.CustomSSLCertPath = filepath.Join(t.TempDir(), "absent.pem")
+	}), []service.Registration{sqsRegistration(okServe)})
+
+	listeners, err := g.Listen(t.Context())
+
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Empty(t, listeners)
+}
+
 func Test_Gateway_shutdown(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -299,6 +313,65 @@ func Test_Gateway_shutdown(t *testing.T) {
 
 	resp, _ := call(t, s.gateway.Handler(), sendMessage(t))
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "a stopped gateway answers 503")
+}
+
+// Test_Gateway_drainBy: the time DrainBy names, and not Settings.ShutdownTimeout,
+// ends the wait for requests in flight, so the runtime's one deadline holds.
+func Test_Gateway_drainBy(t *testing.T) {
+	const drainWait = 150 * time.Millisecond
+
+	t.Run("a request that outlives the deadline is cut at it, not at the settings timeout", func(t *testing.T) {
+		started := make(chan struct{})
+
+		hang := func(_ http.ResponseWriter, rc *request.Context) {
+			close(started)
+			<-rc.Request.Context().Done()
+		}
+
+		s := serve(t, newSettings(func(s *gateway.Settings) { s.ShutdownTimeout = time.Hour }), sqsRegistration(hang))
+		c := client(t, protoHTTP1)
+		failed := make(chan error, 1)
+
+		go func() {
+			_, _, err := fetch(t.Context(), c, "http://"+s.addr+"/")
+			failed <- err
+		}()
+
+		<-started
+
+		begin := time.Now()
+
+		s.gateway.DrainBy(begin.Add(drainWait))
+		require.NoError(t, s.stop(t))
+		require.Error(t, <-failed)
+		assert.Less(t, time.Since(begin), 5*time.Second, "the hour-long settings timeout did not apply")
+	})
+
+	t.Run("a request that ends before the deadline finishes", func(t *testing.T) {
+		started := make(chan struct{})
+
+		slow := func(w http.ResponseWriter, _ *request.Context) {
+			close(started)
+			time.Sleep(drainWait)
+
+			_, _ = io.WriteString(w, "finished")
+		}
+
+		s := serve(t, newSettings(func(s *gateway.Settings) { s.ShutdownTimeout = time.Millisecond }), sqsRegistration(slow))
+		c := client(t, protoHTTP1)
+		result := make(chan string, 1)
+
+		go func() {
+			_, body, _ := fetch(t.Context(), c, "http://"+s.addr+"/")
+			result <- body
+		}()
+
+		<-started
+
+		s.gateway.DrainBy(time.Now().Add(10 * time.Second))
+		require.NoError(t, s.stop(t))
+		assert.Equal(t, "finished", <-result, "the settings timeout of 1ms did not cut it")
+	})
 }
 
 func Test_Gateway_shutdownCutsLongRequests(t *testing.T) {
