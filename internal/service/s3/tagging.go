@@ -31,8 +31,13 @@ const (
 )
 
 // tagPattern is LocalStack's TAG_REGEX: word characters, whitespace and
-// . : / = + - @, which RE2 spells with Unicode classes.
-var tagPattern = regexp.MustCompile(`^[\p{L}\p{N}_\s.:/=+\-@]*$`)
+// . : / = + - @, which RE2 spells with Unicode classes. Its \s is Python 3's
+// for a str, every Unicode space (Py_UNICODE_ISSPACE: str.isspace), where RE2's
+// is ASCII only: \t \n \v \f \r, the separators \x1c-\x1f, space, NEL, no-break
+// space, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F and U+3000.
+var tagPattern = regexp.MustCompile(
+	`^[\p{L}\p{N}_\t\n\x0b\f\r\x1c-\x1f \x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}` +
+		`.:/=+\-@]*$`)
 
 func invalidTag(message string, key, value *string) error {
 	return (&s3api.InvalidTag{TagKey: key, TagValue: value}).Err(message)

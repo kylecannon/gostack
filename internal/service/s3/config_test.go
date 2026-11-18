@@ -150,6 +150,32 @@ func TestBucketTaggingValidation(t *testing.T) {
 	}
 }
 
+// TestTagCharactersFollowPythonWhitespace: LocalStack's TAG_REGEX is
+// ^[\w\s.:/=+\-@]*$ over a str, whose \s is every Unicode space: a no-break
+// space is a character a tag may hold, a zero-width space is not.
+func TestTagCharactersFollowPythonWhitespace(t *testing.T) {
+	s := cfgBucket(t)
+
+	for name, tc := range map[string]struct {
+		char rune
+		want int
+	}{
+		"no-break space":    {0xa0, http.StatusNoContent},
+		"em space":          {0x2003, http.StatusNoContent},
+		"ideographic space": {0x3000, http.StatusNoContent},
+		"line separator":    {0x2028, http.StatusNoContent},
+		"next line":         {0x85, http.StatusNoContent},
+		"zero-width space":  {0x200b, http.StatusBadRequest},
+		"comma":             {',', http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			char := string(tc.char)
+			got := cfgPut(s, bucketAPath+"?tagging", cfgTagging(cfgTag("k"+char+"x", "a"+char+"b")), nil)
+			require.Equal(t, tc.want, got.status, string(got.body))
+		})
+	}
+}
+
 func TestCreateBucketWithTagsAndACL(t *testing.T) {
 	s := newServer(t)
 
