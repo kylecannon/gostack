@@ -43,6 +43,12 @@ func (p *Provider) GetObjectAttributes(
 	var out *s3api.GetObjectAttributesOutput
 
 	_, err = readableIn(b, deref(in.Key), in.VersionId, func(v *Version) error {
+		keyErr := checkCustomerRead(v.SSECustomerKeyMD5,
+			customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5), accessDenied)
+		if keyErr != nil {
+			return keyErr
+		}
+
 		out = attributesOf(v, in)
 
 		if b.Versioning != nil && deref(b.Versioning.Status) != "" {

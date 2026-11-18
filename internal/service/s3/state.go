@@ -112,26 +112,31 @@ type Bucket struct {
 	// Uploads maps an upload id to the multipart upload in progress.
 	Uploads map[string]*MultipartUpload
 
-	Versioning         *s3api.VersioningConfiguration
-	ACL                *s3api.AccessControlPolicy
-	Policy             *string
-	PublicAccessBlock  *s3api.PublicAccessBlockConfiguration
-	OwnershipControls  *s3api.OwnershipControls
-	CORS               *s3api.CORSConfiguration
-	Website            *s3api.WebsiteConfiguration
-	Lifecycle          *s3api.BucketLifecycleConfiguration
-	Logging            *s3api.BucketLoggingStatus
-	Notification       *s3api.GetBucketNotificationConfigurationOutput
-	Replication        *s3api.ReplicationConfiguration
-	Encryption         *s3api.ServerSideEncryptionConfiguration
-	Tags               []s3api.Tag
-	ObjectLock         *s3api.ObjectLockConfiguration
-	Accelerate         *s3api.AccelerateConfiguration
-	RequestPayment     *s3api.RequestPaymentConfiguration
-	Inventory          map[string]*s3api.InventoryConfiguration
-	Analytics          map[string]*s3api.AnalyticsConfiguration
-	Metrics            map[string]*s3api.MetricsConfiguration
-	IntelligentTiering map[string]*s3api.IntelligentTieringConfiguration
+	Versioning        *s3api.VersioningConfiguration
+	ACL               *s3api.AccessControlPolicy
+	Policy            *string
+	PublicAccessBlock *s3api.PublicAccessBlockConfiguration
+	OwnershipControls *s3api.OwnershipControls
+	CORS              *s3api.CORSConfiguration
+	Website           *s3api.WebsiteConfiguration
+	Lifecycle         *s3api.BucketLifecycleConfiguration
+	Logging           *s3api.BucketLoggingStatus
+	Notification      *s3api.GetBucketNotificationConfigurationOutput
+	Replication       *s3api.ReplicationConfiguration
+	Encryption        *s3api.ServerSideEncryptionConfiguration
+	// EncryptionConfigured is set once a PutBucketEncryption has replaced the
+	// SSE-S3 default every bucket starts with, even by an identical rule.
+	// LocalStack tells the two apart by the identity of the rule, which a saved
+	// bucket does not keep; CopyObject reads it to decide an in-place copy.
+	EncryptionConfigured bool
+	Tags                 []s3api.Tag
+	ObjectLock           *s3api.ObjectLockConfiguration
+	Accelerate           *s3api.AccelerateConfiguration
+	RequestPayment       *s3api.RequestPaymentConfiguration
+	Inventory            map[string]*s3api.InventoryConfiguration
+	Analytics            map[string]*s3api.AnalyticsConfiguration
+	Metrics              map[string]*s3api.MetricsConfiguration
+	IntelligentTiering   map[string]*s3api.IntelligentTieringConfiguration
 
 	// LifecycleMinObjectSize is the TransitionDefaultMinimumObjectSize the
 	// lifecycle configuration was put with; empty for the default.
@@ -179,8 +184,16 @@ type Version struct {
 	// website redirects the object's URL to.
 	WebsiteRedirectLocation string
 
-	StorageClass         string
+	StorageClass string
+	// The server-side encryption the object is stored with; its bytes are
+	// stored plain, as LocalStack does. ServerSideEncryption is the algorithm
+	// ("" for none, and for SSE-C), SSEKMSKeyID the key ARN of an aws:kms
+	// object, and SSECustomerKeyMD5 the MD5 of the SSE-C key a request must
+	// present. See encryption.go.
 	ServerSideEncryption string
+	SSEKMSKeyID          string
+	BucketKeyEnabled     bool
+	SSECustomerKeyMD5    string
 	// Restore is the Restore header of an archived object that was restored,
 	// "" for one that was not.
 	Restore string

@@ -87,18 +87,29 @@ func (p *Provider) CompleteMultipartUpload(
 		return nil, err
 	}
 
+	return completeOutput(in, v, p.bucketURL(b.Name)+quoteKey(key)), nil
+}
+
+// completeOutput is the answer to a CompleteMultipartUpload that made v. S3
+// leaves the checksum out of it for an object with a KMS key, though a GET
+// still has it (provider.py:2870).
+func completeOutput(
+	in *s3api.CompleteMultipartUploadInput, v *Version, location string,
+) *s3api.CompleteMultipartUploadOutput {
 	out := &s3api.CompleteMultipartUploadOutput{
-		Bucket:               in.Bucket,
-		Key:                  in.Key,
-		ETag:                 new(quoted(v.ETag)),
-		Location:             new(p.bucketURL(b.Name) + quoteKey(key)),
-		ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
+		Bucket: in.Bucket, Key: in.Key, ETag: new(quoted(v.ETag)), Location: &location,
 	}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
+
+	if v.SSEKMSKeyID != "" {
+		return out
+	}
+
 	c := checksumsOf(v)
 	out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = c.sha1, c.sha256, c.kind
 
-	return out, nil
+	return out
 }
 
 // prepareCompletion finds the upload, checks the request against it and opens
@@ -152,7 +163,9 @@ func (p *Provider) prepareCompletion(
 func (p *Provider) assemble(plan *completion) (*Version, error) {
 	upload, readers := plan.upload, plan.readers
 	algorithm, kind := upload.ChecksumAlgorithm, upload.ChecksumType
-	if algorithm == "" {
+	// An SSE-C upload that named none keeps none: S3 drops the default
+	// checksum there, though not for a PutObject (provider.py:2420).
+	if algorithm == "" && upload.SSECustomerKeyMD5 == "" {
 		algorithm, kind = algorithmCRC64NVME, checksumFullObject
 	}
 
@@ -209,19 +222,23 @@ func (p *Provider) assemble(plan *completion) (*Version, error) {
 // object is the version an upload completes into, before its body is stored.
 func (u *MultipartUpload) object(plan *completion) *Version {
 	return &Version{
-		ID:                   versionNull,
-		ETag:                 plan.etag,
-		LastModified:         time.Now().UTC(),
-		Metadata:             u.Metadata,
-		ContentType:          u.ContentType,
-		CacheControl:         u.CacheControl,
-		ContentDisposition:   u.ContentDisposition,
-		ContentEncoding:      u.ContentEncoding,
-		ContentLanguage:      u.ContentLanguage,
-		Expires:              u.Expires,
-		StorageClass:         u.StorageClass,
+		ID:                 versionNull,
+		ETag:               plan.etag,
+		LastModified:       time.Now().UTC(),
+		Metadata:           u.Metadata,
+		ContentType:        u.ContentType,
+		CacheControl:       u.CacheControl,
+		ContentDisposition: u.ContentDisposition,
+		ContentEncoding:    u.ContentEncoding,
+		ContentLanguage:    u.ContentLanguage,
+		Expires:            u.Expires,
+		StorageClass:       u.StorageClass,
+		Parts:              plan.layout,
+
 		ServerSideEncryption: u.ServerSideEncryption,
-		Parts:                plan.layout,
+		SSEKMSKeyID:          u.SSEKMSKeyID,
+		BucketKeyEnabled:     u.BucketKeyEnabled,
+		SSECustomerKeyMD5:    u.SSECustomerKeyMD5,
 	}
 }
 

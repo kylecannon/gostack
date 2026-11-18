@@ -43,8 +43,12 @@ type MultipartUpload struct {
 	ContentLanguage    string
 	Expires            string
 
-	StorageClass         string
+	StorageClass string
+	// The server-side encryption the object completes with, as Version holds it.
 	ServerSideEncryption string
+	SSEKMSKeyID          string
+	BucketKeyEnabled     bool
+	SSECustomerKeyMD5    string
 	ChecksumAlgorithm    string
 	ChecksumType         string
 
@@ -115,10 +119,16 @@ func (p *Provider) CreateMultipartUpload(
 		return nil, err
 	}
 
-	upload := newUpload(in, algorithm, kind)
-	if upload.ServerSideEncryption == "" {
-		upload.ServerSideEncryption = defaultEncryption(b)
+	request := uploadEncryptionRequest(in)
+
+	err = validateCustomerKey(request.customer, request.algorithm)
+	if err != nil {
+		return nil, err
 	}
+
+	upload := newUpload(in, algorithm, kind)
+	enc := resolveEncryption(request, b)
+	upload.setEncryption(enc)
 
 	b.mu.Lock()
 
@@ -132,14 +142,18 @@ func (p *Provider) CreateMultipartUpload(
 	b.Uploads[upload.ID] = upload
 	b.mu.Unlock()
 
-	return &s3api.CreateMultipartUploadOutput{
-		Bucket:               in.Bucket,
-		Key:                  in.Key,
-		UploadId:             &upload.ID,
-		ChecksumAlgorithm:    nonEmpty(algorithm),
-		ChecksumType:         nonEmpty(kind),
-		ServerSideEncryption: nonEmpty(upload.ServerSideEncryption),
-	}, nil
+	out := &s3api.CreateMultipartUploadOutput{
+		Bucket:                  in.Bucket,
+		Key:                     in.Key,
+		UploadId:                &upload.ID,
+		ChecksumAlgorithm:       nonEmpty(algorithm),
+		ChecksumType:            nonEmpty(kind),
+		SSEKMSEncryptionContext: kmsContext(enc, in.SSEKMSEncryptionContext),
+	}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = uploadEncryption(upload)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = request.customer.echo()
+
+	return out, nil
 }
 
 // newUpload is the upload a CreateMultipartUpload starts, with the defaults
@@ -149,21 +163,20 @@ func newUpload(in *s3api.CreateMultipartUploadInput, algorithm, kind string) *Mu
 	_, _ = rand.Read(id) // crypto/rand.Read never fails.
 
 	upload := &MultipartUpload{
-		ID:                   base64.RawURLEncoding.EncodeToString(id),
-		Key:                  deref(in.Key),
-		Initiated:            time.Now().UTC(),
-		Metadata:             in.Metadata,
-		ContentType:          deref(in.ContentType),
-		CacheControl:         deref(in.CacheControl),
-		ContentDisposition:   deref(in.ContentDisposition),
-		ContentEncoding:      deref(in.ContentEncoding),
-		ContentLanguage:      deref(in.ContentLanguage),
-		Expires:              deref(in.Expires),
-		StorageClass:         deref(in.StorageClass),
-		ServerSideEncryption: deref(in.ServerSideEncryption),
-		ChecksumAlgorithm:    algorithm,
-		ChecksumType:         kind,
-		Parts:                make(map[int32]*Part),
+		ID:                 base64.RawURLEncoding.EncodeToString(id),
+		Key:                deref(in.Key),
+		Initiated:          time.Now().UTC(),
+		Metadata:           in.Metadata,
+		ContentType:        deref(in.ContentType),
+		CacheControl:       deref(in.CacheControl),
+		ContentDisposition: deref(in.ContentDisposition),
+		ContentEncoding:    deref(in.ContentEncoding),
+		ContentLanguage:    deref(in.ContentLanguage),
+		Expires:            deref(in.Expires),
+		StorageClass:       deref(in.StorageClass),
+		ChecksumAlgorithm:  algorithm,
+		ChecksumType:       kind,
+		Parts:              make(map[int32]*Part),
 	}
 
 	if upload.ContentType == "" {
@@ -236,6 +249,13 @@ func (p *Provider) UploadPart(ctx context.Context, in *s3api.UploadPartInput) (*
 		return nil, err
 	}
 
+	customer := customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5)
+
+	err = checkPartKey(upload, customer)
+	if err != nil {
+		return nil, err
+	}
+
 	body, algorithm, err := streamingBody(rc.Request.Header, in.Body, algorithm)
 	if err != nil {
 		return nil, err
@@ -262,14 +282,20 @@ func (p *Provider) UploadPart(ctx context.Context, in *s3api.UploadPartInput) (*
 		return nil, err
 	}
 
-	out := &s3api.UploadPartOutput{
-		ETag: new(quoted(part.ETag)), ServerSideEncryption: nonEmpty(upload.ServerSideEncryption),
-	}
+	return partOutput(part, upload, customer), nil
+}
+
+// partOutput is the answer to an UploadPart that stored part.
+func partOutput(part *Part, upload *MultipartUpload, customer customerKey) *s3api.UploadPartOutput {
+	out := &s3api.UploadPartOutput{ETag: new(quoted(part.ETag))}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = uploadEncryption(upload)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customer.echo()
+
 	c := partChecksums(part)
 	out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256 = c.sha1, c.sha256
 
-	return out, nil
+	return out
 }
 
 // AbortMultipartUpload drops an upload and its parts.

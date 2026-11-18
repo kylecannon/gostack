@@ -79,9 +79,9 @@ func copyPartOutput(part *Part, upload *MultipartUpload, source *copySource) *s3
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	result.ChecksumSHA1, result.ChecksumSHA256 = c.sha1, c.sha256
 
-	out := &s3api.UploadPartCopyOutput{
-		CopyPartResult: result, ServerSideEncryption: nonEmpty(upload.ServerSideEncryption),
-	}
+	out := &s3api.UploadPartCopyOutput{CopyPartResult: result}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = uploadEncryption(upload)
+
 	if source.versioned {
 		out.CopySourceVersionId = &source.version.ID
 	}

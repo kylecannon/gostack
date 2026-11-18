@@ -65,7 +65,6 @@ func (p *Provider) openSource(plan copyPlan, in *s3api.CopyObjectInput) (*Versio
 	var body io.ReadSeekCloser
 
 	selfCopy := plan.srcBucket == plan.dest && plan.src.key == plan.destKey
-	refused := selfCopy && !changesObject(in, hasEncryption(plan.dest))
 
 	source, err := readableIn(plan.srcBucket, plan.src.key, &plan.src.versionID, func(source *Version) error {
 		checkErr := checkSource(in, source)
@@ -73,7 +72,8 @@ func (p *Provider) openSource(plan copyPlan, in *s3api.CopyObjectInput) (*Versio
 			return checkErr
 		}
 
-		if refused {
+		// A self-copy's destination is this bucket, whose lock is held.
+		if selfCopy && !changesObject(in) && !copyAllowedInPlace(plan.dest, source) {
 			return s3api.NewInvalidRequest("This copy request is illegal because it is trying to copy an object to " +
 				"itself without changing the object's metadata, storage class, website redirect location or " +
 				"encryption attributes.")
@@ -136,11 +136,16 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	result.ChecksumSHA1, result.ChecksumSHA256, result.ChecksumType = c.sha1, c.sha256, c.kind
 
-	return &s3api.CopyObjectOutput{
-		CopyObjectResult:     result,
-		ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
-		Expiration:           plan.dest.expiration(plan.destKey, v),
-	}, nil
+	out := &s3api.CopyObjectOutput{
+		CopyObjectResult: result,
+		Expiration:       plan.dest.expiration(plan.destKey, v),
+		SSEKMSEncryptionContext: kmsContext(objectEncryption{algorithm: v.ServerSideEncryption},
+			in.SSEKMSEncryptionContext),
+	}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = copyEncryption(in).customer.echo()
+
+	return out, nil
 }
 
 // checkSource holds the source version to what a copy needs of it: not
@@ -156,7 +161,16 @@ func checkSource(in *s3api.CopyObjectInput, source *Version) error {
 		return preconditionFailed(condition)
 	}
 
-	return nil
+	// The source's key, then the target's own parameters.
+	err = checkCustomerRead(source.SSECustomerKeyMD5, customerKeyOf(
+		in.CopySourceSSECustomerAlgorithm, in.CopySourceSSECustomerKey, in.CopySourceSSECustomerKeyMD5), accessDenied)
+	if err != nil {
+		return err
+	}
+
+	target := copyEncryption(in)
+
+	return validateCustomerKey(target.customer, target.algorithm)
 }
 
 // checkReadableSource is checkReadable for the source of a copy.
@@ -171,36 +185,11 @@ func checkReadableSource(source *Version) error {
 
 // changesObject reports whether a copy onto the same key changes the object:
 // its metadata, storage class, website redirect location or encryption. A
-// bucket with encryption configured allows it, as S3 does.
-func changesObject(in *s3api.CopyObjectInput, bucketEncrypted bool) bool {
+// bucket with encryption configured allows it too (copyAllowedInPlace).
+func changesObject(in *s3api.CopyObjectInput) bool {
 	return deref(in.StorageClass) != "" || deref(in.ServerSideEncryption) != "" ||
 		deref(in.SSECustomerKeyMD5) != "" || deref(in.MetadataDirective) == directiveReplace ||
-		deref(in.WebsiteRedirectLocation) != "" || bucketEncrypted
-}
-
-// hasEncryption reports whether the bucket has default encryption configured
-// beyond the AES256 every bucket starts with. LocalStack tells the two apart by
-// the identity of the rule; gostack's bucket keeps only the configuration, so a
-// PutBucketEncryption that restates AES256 with the bucket key off reads as the
-// default here. SQ-112, which owns PutBucketEncryption, can mark an explicit
-// one; test_copy_in_place_with_bucket_encryption waits for that.
-func hasEncryption(b *Bucket) bool {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	cfg := b.Encryption
-	if cfg == nil || len(cfg.Rules) != 1 {
-		return cfg != nil
-	}
-
-	rule := cfg.Rules[0]
-	if (rule.BucketKeyEnabled != nil && *rule.BucketKeyEnabled) || rule.ApplyServerSideEncryptionByDefault == nil {
-		return true
-	}
-
-	byDefault := rule.ApplyServerSideEncryptionByDefault
-
-	return deref(byDefault.SSEAlgorithm) != sseAES256 || byDefault.KMSMasterKeyID != nil
+		deref(in.WebsiteRedirectLocation) != ""
 }
 
 // newCopiedVersion returns the version a CopyObject makes with what the request
@@ -231,8 +220,12 @@ func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error)
 		ID:                      versionNull,
 		StorageClass:            deref(in.StorageClass),
 		WebsiteRedirectLocation: deref(in.WebsiteRedirectLocation),
-		ServerSideEncryption:    deref(in.ServerSideEncryption),
 	}
+
+	// The target takes the encryption the request names or the bucket's
+	// default, never the source's. The request's SSE-C parameters are checked
+	// with the source's (checkSource), once the source has been found.
+	v.setEncryption(resolveEncryption(copyEncryption(in), dest))
 
 	if in.Tagging != nil {
 		v.Tags, err = parseTaggingHeader(*in.Tagging)
@@ -251,10 +244,6 @@ func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error)
 
 	if v.StorageClass == "" {
 		v.StorageClass = storageClassDefault
-	}
-
-	if v.ServerSideEncryption == "" {
-		v.ServerSideEncryption = defaultEncryption(dest)
 	}
 
 	return v, nil

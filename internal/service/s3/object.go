@@ -75,9 +75,13 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 	}
 
 	out := &s3api.PutObjectOutput{
-		ETag: new(quoted(v.ETag)), ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
-		Expiration: b.expiration(key, v),
+		ETag: new(quoted(v.ETag)), Expiration: b.expiration(key, v),
+		SSEKMSEncryptionContext: kmsContext(objectEncryption{algorithm: v.ServerSideEncryption},
+			in.SSEKMSEncryptionContext),
 	}
+	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = putEncryption(in).customer.echo()
+
 	c := checksumsOf(v)
 	out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = c.sha1, c.sha256, c.kind
@@ -168,6 +172,8 @@ type objectFields struct {
 
 	contentType, cacheControl, contentDisposition, contentEncoding, contentLanguage, expires *string
 	serverSideEncryption, storageClass, websiteRedirect                                      *string
+	sseKMSKeyID                                                                              *string
+	bucketKeyEnabled                                                                         *bool
 
 	tagCount, partsCount *int32
 	checksum             checksumFields
@@ -180,21 +186,22 @@ type objectFields struct {
 // a COMPOSITE object answers its own.
 func fieldsOf(v *Version, rng *byteRange, part *int32, checksumMode *string) objectFields {
 	f := objectFields{
-		contentLength:        new(v.Size),
-		etag:                 new(quoted(v.ETag)),
-		lastModified:         &protocol.Time{Time: v.LastModified},
-		metadata:             encodeUserMetadata(v.Metadata),
-		contentType:          nonEmpty(v.ContentType),
-		cacheControl:         nonEmpty(v.CacheControl),
-		contentDisposition:   nonEmpty(v.ContentDisposition),
-		contentEncoding:      nonEmpty(v.ContentEncoding),
-		contentLanguage:      nonEmpty(v.ContentLanguage),
-		expires:              nonEmpty(v.Expires),
-		serverSideEncryption: nonEmpty(v.ServerSideEncryption),
-		storageClass:         storageClassOf(v),
-		websiteRedirect:      nonEmpty(v.WebsiteRedirectLocation),
-		tagCount:             tagCountOf(v),
+		contentLength:      new(v.Size),
+		etag:               new(quoted(v.ETag)),
+		lastModified:       &protocol.Time{Time: v.LastModified},
+		metadata:           encodeUserMetadata(v.Metadata),
+		contentType:        nonEmpty(v.ContentType),
+		cacheControl:       nonEmpty(v.CacheControl),
+		contentDisposition: nonEmpty(v.ContentDisposition),
+		contentEncoding:    nonEmpty(v.ContentEncoding),
+		contentLanguage:    nonEmpty(v.ContentLanguage),
+		expires:            nonEmpty(v.Expires),
+		storageClass:       storageClassOf(v),
+		websiteRedirect:    nonEmpty(v.WebsiteRedirectLocation),
+		tagCount:           tagCountOf(v),
 	}
+
+	f.serverSideEncryption, f.sseKMSKeyID, f.bucketKeyEnabled = versionEncryption(v)
 
 	if rng != nil {
 		f.contentLength = new(rng.length())
@@ -277,6 +284,8 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 	out := getOutput(fieldsOf(v, rng, in.PartNumber, in.ChecksumMode), body, in)
 	out.Expiration = p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v)
 	out.Restore = nonEmpty(v.Restore)
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customerKeyOf(
+		in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5).echo()
 
 	return out, nil
 }
@@ -286,6 +295,12 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 // then opens the body.
 func (p *Provider) prepareGet(in *s3api.GetObjectInput, v *Version) (*byteRange, io.ReadCloser, error) {
 	err := checkReadable(v)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = checkCustomerRead(v.SSECustomerKeyMD5,
+		customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5), wrongCustomerKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -332,6 +347,8 @@ func getOutput(f objectFields, body io.ReadCloser, in *s3api.GetObjectInput) *s3
 		ContentLanguage:         f.contentLanguage,
 		Expires:                 f.expires,
 		ServerSideEncryption:    f.serverSideEncryption,
+		SSEKMSKeyId:             f.sseKMSKeyID,
+		BucketKeyEnabled:        f.bucketKeyEnabled,
 		StorageClass:            f.storageClass,
 		WebsiteRedirectLocation: f.websiteRedirect,
 		TagCount:                f.tagCount,
@@ -356,6 +373,12 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 			ifMatch: in.IfMatch, ifNoneMatch: in.IfNoneMatch,
 			ifModifiedSince: in.IfModifiedSince, ifUnmodifiedSince: in.IfUnmodifiedSince,
 		}.check(v)
+		if err != nil {
+			return err
+		}
+
+		err = checkCustomerRead(v.SSECustomerKeyMD5,
+			customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5), wrongCustomerKey)
 		if err != nil {
 			return err
 		}
@@ -385,6 +408,8 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 		ContentLanguage:         f.contentLanguage,
 		Expires:                 f.expires,
 		ServerSideEncryption:    f.serverSideEncryption,
+		SSEKMSKeyId:             f.sseKMSKeyID,
+		BucketKeyEnabled:        f.bucketKeyEnabled,
 		StorageClass:            f.storageClass,
 		WebsiteRedirectLocation: f.websiteRedirect,
 		TagCount:                f.tagCount,
@@ -396,6 +421,8 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 	out.ChecksumCRC32, out.ChecksumCRC32C = f.checksum.crc32, f.checksum.crc32c
 	out.ChecksumCRC64NVME = f.checksum.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = f.checksum.sha1, f.checksum.sha256, f.checksum.kind
+	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customerKeyOf(
+		in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5).echo()
 
 	return out, nil
 }
@@ -730,14 +757,22 @@ func newVersion(in *s3api.PutObjectInput, b *Bucket) (*Version, error) {
 		ChecksumAlgorithm:       algorithmCRC64NVME,
 		ChecksumType:            checksumFullObject,
 		WebsiteRedirectLocation: deref(in.WebsiteRedirectLocation),
-		// The bucket's default encryption applies when the request names none.
-		ServerSideEncryption: deref(in.ServerSideEncryption),
 	}
 
 	err := checkMetadataSize(v.Metadata)
 	if err != nil {
 		return nil, err
 	}
+
+	// The bucket's default encryption applies where the request names none.
+	request := putEncryption(in)
+
+	err = validateCustomerKey(request.customer, request.algorithm)
+	if err != nil {
+		return nil, err
+	}
+
+	v.setEncryption(resolveEncryption(request, b))
 
 	err = checkWebsiteRedirect(v.WebsiteRedirectLocation)
 	if err != nil {
@@ -752,27 +787,7 @@ func newVersion(in *s3api.PutObjectInput, b *Bucket) (*Version, error) {
 		v.StorageClass = storageClassDefault
 	}
 
-	if v.ServerSideEncryption == "" {
-		v.ServerSideEncryption = defaultEncryption(b)
-	}
-
 	return v, nil
-}
-
-// defaultEncryption is the SSE algorithm of the bucket's default encryption.
-func defaultEncryption(b *Bucket) string {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	if b.Encryption == nil || len(b.Encryption.Rules) == 0 {
-		return ""
-	}
-
-	if rule := b.Encryption.Rules[0].ApplyServerSideEncryptionByDefault; rule != nil {
-		return deref(rule.SSEAlgorithm)
-	}
-
-	return ""
 }
 
 // checkDigests compares the checksum and Content-MD5 the client sent with the

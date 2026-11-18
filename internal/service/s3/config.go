@@ -441,7 +441,7 @@ func (p *Provider) PutBucketEncryption(
 	}
 
 	err = b.writeConfig(func() error {
-		b.Encryption = config
+		b.Encryption, b.EncryptionConfigured = config, true
 
 		return nil
 	})
@@ -462,7 +462,7 @@ func (p *Provider) DeleteBucketEncryption(
 	}
 
 	err = b.writeConfig(func() error {
-		b.Encryption = nil
+		b.Encryption, b.EncryptionConfigured = nil, false
 
 		return nil
 	})
