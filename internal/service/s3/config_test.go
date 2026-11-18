@@ -328,7 +328,7 @@ func TestAccelerateRequestPaymentAndEncryption(t *testing.T) {
 	assert.NotContains(t, string(cfgGet(s, accelerate).body), "Status")
 	cfgExpect(t, cfgPut(s, accelerate, status("Enabled"), nil), http.StatusOK, "")
 	assert.Contains(t, string(cfgGet(s, accelerate).body), "<Status>Enabled</Status>")
-	cfgExpect(t, cfgPut(s, accelerate, status("enabled"), nil), http.StatusBadRequest, cfgMalformedXML)
+	cfgExpect(t, cfgPut(s, accelerate, status(lowerEnabled), nil), http.StatusBadRequest, cfgMalformedXML)
 
 	assert.Contains(t, string(cfgGet(s, payment).body), "BucketOwner")
 	cfgExpect(t, cfgPut(s, payment, payer("Requester"), nil), http.StatusOK, "")

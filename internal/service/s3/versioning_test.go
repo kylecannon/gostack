@@ -10,6 +10,9 @@ import (
 )
 
 const (
+	// lowerEnabled is "enabled": a status or mode in the wrong case, which S3
+	// refuses, and a plain key or case name in a few tests.
+	lowerEnabled       = "enabled"
 	headerVersionID    = "X-Amz-Version-Id"
 	headerDeleteMarker = "X-Amz-Delete-Marker"
 	versionsPath       = "/bucket?versioning"
@@ -68,7 +71,7 @@ func TestBucketVersioningStatus(t *testing.T) {
 	stored := s.do(call{method: http.MethodGet, target: versionsPath, region: regionUSEast1})
 	assert.Contains(t, string(stored.body), "<MfaDelete>Enabled</MfaDelete>")
 
-	for status, wantCode := range map[string]string{"enabled": "MalformedXML", "Disabled": "MalformedXML"} {
+	for status, wantCode := range map[string]string{lowerEnabled: "MalformedXML", "Disabled": "MalformedXML"} {
 		got := s.do(call{method: http.MethodPut, target: versionsPath, region: regionUSEast1, body: versioningBody(status)})
 		require.Equal(t, http.StatusBadRequest, got.status, status)
 		assert.Equal(t, wantCode, got.err(t).Code, status)
@@ -171,7 +174,7 @@ func TestSuspendedVersioningKeepsOneNullVersion(t *testing.T) {
 	pre := get(s, http.MethodGet, objectPath, nil)
 	assert.Equal(t, "null", pre.header.Get(headerVersionID), "an object from before versioning is the null version")
 
-	enabled := putVersion(t, s, "enabled")
+	enabled := putVersion(t, s, lowerEnabled)
 	require.NotEmpty(t, enabled)
 
 	setVersioning(t, s, "Suspended")
@@ -195,7 +198,7 @@ func TestSuspendedVersioningKeepsOneNullVersion(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(string(listed.body), "<DeleteMarker>"))
 
 	kept := get(s, http.MethodGet, objectPath+"?versionId="+enabled, nil)
-	assert.Equal(t, "enabled", string(kept.body))
+	assert.Equal(t, lowerEnabled, string(kept.body))
 }
 
 func TestDeleteObjectsInAVersionedBucket(t *testing.T) {

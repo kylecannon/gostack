@@ -35,7 +35,7 @@ var versionedBenchCells = []struct {
 	name, status string
 	payloads     []benchPayload
 }{
-	{"enabled", "Enabled", benchPayloads[:1]},
+	{lowerEnabled, "Enabled", benchPayloads[:1]},
 	{"suspended", "Suspended", benchPayloads[:2]},
 }
 

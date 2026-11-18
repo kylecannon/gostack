@@ -409,7 +409,7 @@ func TestGetObjectTakesChecksumModeInAnyCase(t *testing.T) {
 		method: http.MethodPut, target: multipartKey, region: regionUSEast1, body: []byte("checked"),
 	}).status)
 
-	for _, mode := range []string{"ENABLED", "enabled"} {
+	for _, mode := range []string{"ENABLED", lowerEnabled} {
 		got := s.do(call{
 			method: http.MethodGet, target: multipartKey, region: regionUSEast1,
 			header: map[string]string{headerChecksumMode: mode},
