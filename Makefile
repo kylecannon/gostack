@@ -130,7 +130,7 @@ gen:
 # generated file that is not tracked yet, which git diff alone would not show.
 gen-check: gen
 	git diff --exit-code -- $(GEN_DIRS)
-	@untracked=$(git ls-files --others --exclude-standard -- $(GEN_DIRS)); \
+	@untracked=$$(git ls-files --others --exclude-standard -- $(GEN_DIRS)); \
 	if [ -n "$$untracked" ]; then echo "untracked generated files:" >&2; echo "$$untracked" >&2; exit 1; fi
 
 # Runs every Fuzz* function in a *_test.go file for FUZZTIME each, e.g.
