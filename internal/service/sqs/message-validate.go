@@ -187,14 +187,16 @@ func checkAttributeType(name string, value sqsapi.MessageAttributeValue) *awserr
 
 	text := deref(value.StringValue)
 
+	// The families are told apart by the same prefix rule that accepted the
+	// type above, so no accepted type ("Stringx" included) skips its checks.
 	switch {
-	case inTypeFamily(dataType, typeString):
+	case strings.HasPrefix(dataType, typeString):
 		// A custom type such as "String.x" follows the rules of String.
 		if text == "" {
 			return invalidParameterValue("Message (user) attribute '" + name +
 				"' must contain a non-empty value of type 'String'.")
 		}
-	case inTypeFamily(dataType, typeNumber):
+	case strings.HasPrefix(dataType, typeNumber):
 		// LocalStack looks at no Number value and no AWS response is recorded
 		// for one, so a number only has to be text that XML can carry.
 	default:
@@ -206,12 +208,6 @@ func checkAttributeType(name string, value sqsapi.MessageAttributeValue) *awserr
 	}
 
 	return nil
-}
-
-// inTypeFamily reports whether dataType is the family's own type or a custom one
-// made of it, "String" and "String.x".
-func inTypeFamily(dataType, family string) bool {
-	return dataType == family || strings.HasPrefix(dataType, family+".")
 }
 
 // systemAsUser views system attributes as user ones, which have the same shape

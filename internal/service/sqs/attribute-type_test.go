@@ -18,6 +18,8 @@ func Test_custom_attribute_types_follow_their_family(t *testing.T) {
 	const (
 		customString = "String.x"
 		customNumber = "Number.x"
+		badString    = "a\x01b"
+		badNumber    = "1\x01"
 	)
 
 	tests := []struct {
@@ -25,10 +27,13 @@ func Test_custom_attribute_types_follow_their_family(t *testing.T) {
 		give        attr
 		wantMessage string
 	}{
-		{name: "String", give: attr{DataType: "String", StringValue: "a\x01b"}, wantMessage: invalidContents},
-		{name: customString, give: attr{DataType: customString, StringValue: "a\x01b"}, wantMessage: invalidContents},
-		{name: "Number", give: attr{DataType: "Number", StringValue: "1\x01"}, wantMessage: invalidContents},
-		{name: customNumber, give: attr{DataType: customNumber, StringValue: "1\x01"}, wantMessage: invalidContents},
+		{name: "String", give: attr{DataType: "String", StringValue: badString}, wantMessage: invalidContents},
+		{name: customString, give: attr{DataType: customString, StringValue: badString}, wantMessage: invalidContents},
+		{name: "Number", give: attr{DataType: "Number", StringValue: badNumber}, wantMessage: invalidContents},
+		{name: customNumber, give: attr{DataType: customNumber, StringValue: badNumber}, wantMessage: invalidContents},
+		// A type the prefix rule accepts without a dot gets the same checks.
+		{name: "Stringx", give: attr{DataType: "Stringx", StringValue: badString}, wantMessage: invalidContents},
+		{name: "Numberx", give: attr{DataType: "Numberx", StringValue: badNumber}, wantMessage: invalidContents},
 		{
 			name: "String.x without a value", give: attr{DataType: customString},
 			wantMessage: "Message (user) attribute 'k' must contain a non-empty value of type 'String'.",
