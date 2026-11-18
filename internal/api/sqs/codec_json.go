@@ -14,117 +14,140 @@ const (
 	awsQueryCompatible = true
 )
 
-// decodeAddPermissionJSON reads the json body of a AddPermission request.
+// decodeAddPermissionJSON reads the json body of a AddPermission request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeAddPermissionJSON(body []byte) (*AddPermissionInput, *awserr.Error) {
 	return awsjson.Decode[AddPermissionInput](body)
 }
 
-// decodeCancelMessageMoveTaskJSON reads the json body of a CancelMessageMoveTask request.
+// decodeCancelMessageMoveTaskJSON reads the json body of a CancelMessageMoveTask request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeCancelMessageMoveTaskJSON(body []byte) (*CancelMessageMoveTaskInput, *awserr.Error) {
 	return awsjson.Decode[CancelMessageMoveTaskInput](body)
 }
 
-// decodeChangeMessageVisibilityJSON reads the json body of a ChangeMessageVisibility request.
+// decodeChangeMessageVisibilityJSON reads the json body of a ChangeMessageVisibility request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeChangeMessageVisibilityJSON(body []byte) (*ChangeMessageVisibilityInput, *awserr.Error) {
 	return awsjson.Decode[ChangeMessageVisibilityInput](body)
 }
 
-// decodeChangeMessageVisibilityBatchJSON reads the json body of a ChangeMessageVisibilityBatch request.
+// decodeChangeMessageVisibilityBatchJSON reads the json body of a ChangeMessageVisibilityBatch request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeChangeMessageVisibilityBatchJSON(body []byte) (*ChangeMessageVisibilityBatchInput, *awserr.Error) {
 	return awsjson.Decode[ChangeMessageVisibilityBatchInput](body)
 }
 
-// decodeCreateQueueJSON reads the json body of a CreateQueue request.
+// decodeCreateQueueJSON reads the json body of a CreateQueue request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateQueueJSON(body []byte) (*CreateQueueInput, *awserr.Error) {
 	return awsjson.Decode[CreateQueueInput](body)
 }
 
-// decodeDeleteMessageJSON reads the json body of a DeleteMessage request.
+// decodeDeleteMessageJSON reads the json body of a DeleteMessage request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteMessageJSON(body []byte) (*DeleteMessageInput, *awserr.Error) {
 	return awsjson.Decode[DeleteMessageInput](body)
 }
 
-// decodeDeleteMessageBatchJSON reads the json body of a DeleteMessageBatch request.
+// decodeDeleteMessageBatchJSON reads the json body of a DeleteMessageBatch request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteMessageBatchJSON(body []byte) (*DeleteMessageBatchInput, *awserr.Error) {
 	return awsjson.Decode[DeleteMessageBatchInput](body)
 }
 
-// decodeDeleteQueueJSON reads the json body of a DeleteQueue request.
+// decodeDeleteQueueJSON reads the json body of a DeleteQueue request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteQueueJSON(body []byte) (*DeleteQueueInput, *awserr.Error) {
 	return awsjson.Decode[DeleteQueueInput](body)
 }
 
-// decodeGetQueueAttributesJSON reads the json body of a GetQueueAttributes request.
+// decodeGetQueueAttributesJSON reads the json body of a GetQueueAttributes request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeGetQueueAttributesJSON(body []byte) (*GetQueueAttributesInput, *awserr.Error) {
 	return awsjson.Decode[GetQueueAttributesInput](body)
 }
 
-// decodeGetQueueUrlJSON reads the json body of a GetQueueUrl request.
+// decodeGetQueueUrlJSON reads the json body of a GetQueueUrl request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeGetQueueUrlJSON(body []byte) (*GetQueueUrlInput, *awserr.Error) {
 	return awsjson.Decode[GetQueueUrlInput](body)
 }
 
-// decodeListDeadLetterSourceQueuesJSON reads the json body of a ListDeadLetterSourceQueues request.
+// decodeListDeadLetterSourceQueuesJSON reads the json body of a ListDeadLetterSourceQueues request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeListDeadLetterSourceQueuesJSON(body []byte) (*ListDeadLetterSourceQueuesInput, *awserr.Error) {
 	return awsjson.Decode[ListDeadLetterSourceQueuesInput](body)
 }
 
-// decodeListMessageMoveTasksJSON reads the json body of a ListMessageMoveTasks request.
+// decodeListMessageMoveTasksJSON reads the json body of a ListMessageMoveTasks request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeListMessageMoveTasksJSON(body []byte) (*ListMessageMoveTasksInput, *awserr.Error) {
 	return awsjson.Decode[ListMessageMoveTasksInput](body)
 }
 
-// decodeListQueueTagsJSON reads the json body of a ListQueueTags request.
+// decodeListQueueTagsJSON reads the json body of a ListQueueTags request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeListQueueTagsJSON(body []byte) (*ListQueueTagsInput, *awserr.Error) {
 	return awsjson.Decode[ListQueueTagsInput](body)
 }
 
-// decodeListQueuesJSON reads the json body of a ListQueues request.
+// decodeListQueuesJSON reads the json body of a ListQueues request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeListQueuesJSON(body []byte) (*ListQueuesInput, *awserr.Error) {
 	return awsjson.Decode[ListQueuesInput](body)
 }
 
-// decodePurgeQueueJSON reads the json body of a PurgeQueue request.
+// decodePurgeQueueJSON reads the json body of a PurgeQueue request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodePurgeQueueJSON(body []byte) (*PurgeQueueInput, *awserr.Error) {
 	return awsjson.Decode[PurgeQueueInput](body)
 }
 
-// decodeReceiveMessageJSON reads the json body of a ReceiveMessage request.
+// decodeReceiveMessageJSON reads the json body of a ReceiveMessage request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeReceiveMessageJSON(body []byte) (*ReceiveMessageInput, *awserr.Error) {
 	return awsjson.Decode[ReceiveMessageInput](body)
 }
 
-// decodeRemovePermissionJSON reads the json body of a RemovePermission request.
+// decodeRemovePermissionJSON reads the json body of a RemovePermission request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeRemovePermissionJSON(body []byte) (*RemovePermissionInput, *awserr.Error) {
 	return awsjson.Decode[RemovePermissionInput](body)
 }
 
-// decodeSendMessageJSON reads the json body of a SendMessage request.
+// decodeSendMessageJSON reads the json body of a SendMessage request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeSendMessageJSON(body []byte) (*SendMessageInput, *awserr.Error) {
 	return awsjson.Decode[SendMessageInput](body)
 }
 
-// decodeSendMessageBatchJSON reads the json body of a SendMessageBatch request.
+// decodeSendMessageBatchJSON reads the json body of a SendMessageBatch request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeSendMessageBatchJSON(body []byte) (*SendMessageBatchInput, *awserr.Error) {
 	return awsjson.Decode[SendMessageBatchInput](body)
 }
 
-// decodeSetQueueAttributesJSON reads the json body of a SetQueueAttributes request.
+// decodeSetQueueAttributesJSON reads the json body of a SetQueueAttributes request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeSetQueueAttributesJSON(body []byte) (*SetQueueAttributesInput, *awserr.Error) {
 	return awsjson.Decode[SetQueueAttributesInput](body)
 }
 
-// decodeStartMessageMoveTaskJSON reads the json body of a StartMessageMoveTask request.
+// decodeStartMessageMoveTaskJSON reads the json body of a StartMessageMoveTask request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeStartMessageMoveTaskJSON(body []byte) (*StartMessageMoveTaskInput, *awserr.Error) {
 	return awsjson.Decode[StartMessageMoveTaskInput](body)
 }
 
-// decodeTagQueueJSON reads the json body of a TagQueue request.
+// decodeTagQueueJSON reads the json body of a TagQueue request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeTagQueueJSON(body []byte) (*TagQueueInput, *awserr.Error) {
 	return awsjson.Decode[TagQueueInput](body)
 }
 
-// decodeUntagQueueJSON reads the json body of a UntagQueue request.
+// decodeUntagQueueJSON reads the json body of a UntagQueue request, for a caller that has
+// the body alone. A call's own reader goes through decodeJSON.
 func decodeUntagQueueJSON(body []byte) (*UntagQueueInput, *awserr.Error) {
 	return awsjson.Decode[UntagQueueInput](body)
 }

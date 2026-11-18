@@ -2,6 +2,7 @@ package sqs_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/url"
 	"testing"
 
@@ -110,12 +111,28 @@ func Test_numbers_are_read_the_way_LocalStack_reads_them(t *testing.T) {
 func Test_numbers_past_int32_reach_the_range_check(t *testing.T) {
 	t.Parallel()
 
+	// A bound sent as itself is echoed as itself. The json-only forms reach the
+	// clamp through the lenient reader alone, which keeps the body for the echo.
+	sentAs := map[string]string{
+		"3000000000":           "3000000000",
+		"-3000000000":          "-3000000000",
+		"99999999999999999999": "99999999999999999999",
+		"2147483647":           "2147483647",
+		"-2147483648":          "-2147483648",
+	}
+	jsonSentAs := map[string]string{
+		`"3000000000"`: "3000000000",
+		`3e9`:          "3000000000",
+		`-3.5e9`:       "-3500000000",
+	}
+
 	for _, protocol := range protocols {
-		for raw, sent := range map[string]string{
-			"3000000000":           "3000000000",
-			"-3000000000":          "-3000000000",
-			"99999999999999999999": "99999999999999999999",
-		} {
+		cases := maps.Clone(sentAs)
+		if protocol == protoJSON {
+			maps.Copy(cases, jsonSentAs)
+		}
+
+		for raw, sent := range cases {
 			for param, reason := range map[string]string{
 				paramMaxMessages: "Must be between 1 and 10, if provided.",
 				paramWaitTime:    "Must be >= 0 and <= 20, if provided.",

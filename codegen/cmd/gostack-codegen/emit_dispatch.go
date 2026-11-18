@@ -164,7 +164,7 @@ func (g *generator) emitRead(p *printer, op *operation) {
 		p.f("\t\tif err != nil {")
 		p.f("\t\t\treturn nil, err")
 		p.f("\t\t}")
-		p.f("\t\treturn decode%sJSON(body)", op.name)
+		p.f("\t\treturn decodeJSON[%s](rc, body)", op.input.goName)
 	}
 
 	if g.hasProtocol(protoQuery) {
@@ -262,11 +262,10 @@ func (g *generator) emitReaders(p *printer) {
 		p.f("\tif !utf8.Valid(body) {")
 		p.f("\t\treturn nil, errBodyNotUTF8")
 		p.f("\t}")
-		p.f("\t// A handler that refuses a number echoes the text sent, which only the body holds.")
-		p.f("\trc.Request.Body = io.NopCloser(bytes.NewReader(body))")
 		p.f("\treturn body, nil")
 		p.f("}")
 		p.blank()
+		emitDecodeJSON(p)
 		p.f("// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8: the same as")
 		p.f("// broken json and a lone surrogate escape (awsjson.Decode). LocalStack answers 500")
 		p.f("// here, which is a crash in its parser and not an answer to copy.")
@@ -280,6 +279,24 @@ func (g *generator) emitReaders(p *printer) {
 	}
 
 	g.emitFormReader(p)
+}
+
+// emitDecodeJSON writes the function every operation's reader decodes a json
+// body with. It keeps the body on the request only when the lenient pass was
+// needed, the one case a handler reads it again (sentNumber in sqs).
+func emitDecodeJSON(p *printer) {
+	p.f("// decodeJSON reads the json body of a call into a T. A body that only the lenient")
+	p.f("// reading takes stays on the request: only that reading clamps an integer past the")
+	p.f("// int32 range, and a handler that refuses one echoes the text sent, which only the")
+	p.f("// body holds. Any other body is dropped once decoded.")
+	p.f("func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {")
+	p.f("\tin, lenient, err := awsjson.DecodeLenient[T](body)")
+	p.f("\tif lenient {")
+	p.f("\t\trc.Request.Body = io.NopCloser(bytes.NewReader(body))")
+	p.f("\t}")
+	p.f("\treturn in, err")
+	p.f("}")
+	p.blank()
 }
 
 // emitFormReader writes the function that reads the parameters of a query call.
