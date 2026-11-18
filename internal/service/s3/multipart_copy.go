@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -166,7 +167,7 @@ func (p *Provider) openCopySource(account, header string) (*copySource, error) {
 // extract_bucket_key_version_id_from_copy_source does. A path that does not
 // decode is taken as it is, as Python's unquote takes it.
 func parseCopySource(header string) (copySourceName, error) {
-	path, query, _ := strings.Cut(stripURLPrefix(header), "?")
+	path, query := splitCopySource(header)
 	path = strings.ReplaceAll(path, "+", " ")
 
 	unescaped, err := url.PathUnescape(path)
@@ -186,25 +187,55 @@ func parseCopySource(header string) (copySourceName, error) {
 	return copySourceName{bucket: bucket, key: key, versionID: values.Get("versionId")}, nil
 }
 
-// stripURLPrefix drops the scheme and host of a copy source sent as a whole
-// URL, http://host/bucket/key, leaving /bucket/key, as Python's urlparse
-// reads it. AWS takes one (test_response_structure is aws.validated). A
-// scheme is what urlparse takes for one: a letter, then letters, digits,
-// "+", "-" or ".". A bucket name holds no ":", so a plain bucket/key never
-// has one.
-func stripURLPrefix(source string) string {
-	scheme, rest, found := strings.Cut(source, "://")
-	if !found || scheme == "" || !isLetter(rune(scheme[0])) ||
-		strings.ContainsFunc(scheme, func(r rune) bool { return !isSchemeChar(r) }) {
-		return source
+// paramSchemes are the URL schemes whose last path segment may carry ";params",
+// which urlparse splits from the path (urllib.parse.uses_params).
+// The empty scheme has them too.
+var paramSchemes = strings.Fields("ftp hdl prospero http imap https shttp rtsp rtspu sip sips mms sftp tel")
+
+// urlUnsafe holds the bytes urlsplit removes from a URL wherever they are.
+var urlUnsafe = strings.NewReplacer("\t", "", "\r", "", "\n", "")
+
+// splitCopySource returns the path and the query of a copy source as Python's
+// urllib.parse.urlparse reads it, which is how LocalStack reads it
+// (s3/utils.py:162). AWS takes a whole URL too (test_response_structure is
+// aws.validated). In order it drops leading control characters and spaces, a
+// scheme (a letter, then letters, digits, "+", "-" or "." up to the first
+// ":"), a "//host" after it, a "#fragment", which hides a "?versionId" that
+// follows it, the "?query", and the ";params" of the last path segment for
+// the schemes that have them.
+func splitCopySource(source string) (string, string) {
+	source = urlUnsafe.Replace(strings.TrimLeftFunc(source, func(r rune) bool { return r <= ' ' }))
+
+	scheme := ""
+
+	i := strings.IndexByte(source, ':')
+	if i > 0 && isLetter(rune(source[0])) && !strings.ContainsFunc(source[:i], notSchemeChar) {
+		scheme, source = strings.ToLower(source[:i]), source[i+1:]
 	}
 
-	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-		return rest[i:]
+	if rest, found := strings.CutPrefix(source, "//"); found {
+		source = ""
+
+		if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+			source = rest[end:]
+		}
 	}
 
-	return ""
+	source, _, _ = strings.Cut(source, "#")
+	path, query, _ := strings.Cut(source, "?")
+
+	if scheme == "" || slices.Contains(paramSchemes, scheme) {
+		start := max(strings.LastIndexByte(path, '/'), 0)
+
+		if i := strings.IndexByte(path[start:], ';'); i >= 0 {
+			path = path[:start+i]
+		}
+	}
+
+	return path, query
 }
+
+func notSchemeChar(r rune) bool { return !isSchemeChar(r) }
 
 func isLetter(r rune) bool {
 	return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z'
