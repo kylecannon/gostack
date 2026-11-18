@@ -71,7 +71,7 @@ change applies from the next one.
 | `PERSIST_FREQUENCY` | Decimal seconds a change waits before the save. Defaults to 10. |
 | `PERSIST_BASE_DIR` | Where the state lives. Defaults to `/persisted-data`. |
 
-S3 does not persist yet (see "S3 limits").
+S3 persists its buckets, objects, versions and uploads in progress, bodies included. Its on-disk layout differs from localstack-persist's, so a data directory does not move between the two.
 
 ## Image and init
 
@@ -162,7 +162,6 @@ What S3 does not do, or does in part, so a client's expectations can be set.
 | `SelectObjectContent` | Answers | `501 NotImplemented`. No test covers it. |
 | KMS | Validates and creates keys | There is no KMS. A key id is not validated. An `aws:kms` write with no key id gets a managed-key ARN derived from the account and region, the same one every call and after a restart. The encryption context is not stored. |
 | Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS only. SNS, Lambda and EventBridge targets are accepted and stored, and nothing is sent. |
-| S3 persistence | Kept by `localstack-persist` | Not yet available. S3 state is lost on restart even when `PERSIST_S3` is set. Once it is, the `PERSIST_*` settings stay the same, and the on-disk layout under the base directory differs from localstack-persist's, so a data directory does not move between the two. |
 
 ## S3 wire details
 

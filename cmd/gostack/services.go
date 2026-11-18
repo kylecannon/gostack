@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 
@@ -12,6 +15,9 @@ import (
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
+
+// s3Service is S3's name in the catalog and in PERSIST_*.
+const s3Service = "s3"
 
 // providers are the registered services. They are built once, because the
 // gateway serves them, persistence saves them and the state routes reset them,
@@ -95,13 +101,33 @@ func (p *providers) close() {
 }
 
 // persist hands eng the services whose state is saved. The engine leaves out
-// the ones PERSIST_* does not enable.
-func (p *providers) persist(eng *persist.Engine) {
+// the ones PERSIST_* does not enable. A persisted S3 then keeps its bodies as
+// the engine's assets, opened here: after S3 is registered, and before its
+// state loads or is first saved, so no body is written anywhere else. With S3
+// not persisted, or its assets directory unsafe (the engine has logged it and
+// neither loads nor saves S3), the bodies stay in the ephemeral store. Any
+// other failure to open the assets is returned: S3's state would be saved
+// naming bodies that a restart loses.
+func (p *providers) persist(eng *persist.Engine) error {
 	for i := range p.regs {
 		if snapshotter := p.regs[i].Persist; snapshotter != nil {
 			eng.Register(p.regs[i].Metadata.Name, snapshotter)
 		}
 	}
+
+	assets, err := eng.Assets(s3Service)
+
+	switch {
+	case errors.Is(err, persist.ErrUnsafe):
+		slog.Error("s3 bodies are not persisted", "error", err)
+	case err != nil:
+		return fmt.Errorf("persist s3: %w", err)
+	case assets != nil:
+		p.s3.UseBlobs(persist.NewBlobStore(assets))
+	default:
+	}
+
+	return nil
 }
 
 // sqsSettings maps the live configuration onto the settings of the SQS

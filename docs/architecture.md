@@ -377,8 +377,8 @@ made), unlinked at creation. A reader that has opened a blob keeps reading it
 after `Remove`. A range read or a part copy opens one blob, seeks and copies
 into a new one.
 
-A persisted service keeps its bodies as assets of the persistence engine (see
-Assets under Persistence). S3 is not wired to them yet; that is SQ-114.
+A persisted service keeps its bodies as assets of the persistence engine, through
+`persist.BlobStore` (see Assets and S3 under Persistence).
 
 ## Internal API
 
@@ -771,8 +771,37 @@ and is untouched.
   `tmp/` would send a commit into the directory Load empties.
 - A service calls `Remove` only once its state no longer names the id. A write
   that started before a reset or a load must fail rather than name its asset in
-  the new state. S3's reset marks the buckets it drops gone, which does this;
-  its restore has to do the same (SQ-114).
+  the new state. S3's reset and its restore mark the buckets they drop gone,
+  which does this.
+
+**S3.** `PERSIST_S3=1` (or `PERSISTENCE=1`, or `PERSIST_DEFAULT`) persists S3:
+its state at `<base>/s3/store.json` and its object and part bodies as assets.
+
+- gostack opens S3's assets after the engine registers S3 and before the state
+  loads, and S3 writes every body through `persist.NewBlobStore`, the
+  `blob.Store` over them. An assets directory that is unsafe leaves S3 off for
+  saving and loading, with its bodies in memory as without persistence; any
+  other failure to open it stops gostack from starting, since the state would
+  name bodies a restart loses.
+- The snapshot holds every bucket of every account with all of its
+  subresources, each key's version chain, and each upload in progress with its
+  parts. Bodies are named by blob id. A string that is not valid UTF-8, such as
+  a key, is kept as its bytes, base64 behind a `\u0000b64:` prefix, so two
+  keys never become one. `References` names the body of every version and of
+  every part.
+- Snapshot copies under S3's transfer lock and each bucket's lock in turn, and
+  encodes once they are released. Restore checks the whole file first, then,
+  under the transfer lock, puts each account's restored buckets in place in one
+  step and rebuilds the name index. Each bucket it replaces is marked gone, so a
+  write that found it fails with `NoSuchBucket` and removes its own body, and
+  the bodies the replaced buckets named that the restored state does not are
+  removed. A file that does not load leaves S3 empty and removes nothing, since
+  the engine sets the file aside and it may name them. The version id sequence
+  moves past the newest restored id.
+- A body missing from disk makes only the version that names it answer 500
+  `InternalError` when read, and is logged once per id.
+- A reset scoped to an account or a region removes the bodies of the buckets it
+  drops, through `Remove`, once the reset is saved.
 
 **Format:**
 

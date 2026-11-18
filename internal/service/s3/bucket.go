@@ -90,11 +90,6 @@ func (p *Provider) CreateBucket(ctx context.Context, in *s3api.CreateBucketInput
 
 	region := bucketRegion(constraint)
 
-	holder, claimed := p.names.claim(name, rc.AccountID)
-	if !claimed {
-		return p.existingBucket(rc.AccountID, holder, name, region, tags)
-	}
-
 	b := newBucket(name, rc.AccountID, region, constraint, in.ObjectOwnership)
 	b.Tags, b.ACL = tags, acl
 
@@ -102,10 +97,10 @@ func (p *Provider) CreateBucket(ctx context.Context, in *s3api.CreateBucketInput
 		b.enableObjectLock()
 	}
 
-	s := p.state(rc.AccountID)
-	s.mu.Lock()
-	s.buckets[name] = b
-	s.mu.Unlock()
+	holder, claimed := p.addBucket(b)
+	if !claimed {
+		return p.existingBucket(rc.AccountID, holder, name, region, tags)
+	}
 
 	location := "/" + name
 	if region != regionUSEast1 {
@@ -171,6 +166,41 @@ func (p *Provider) DeleteBucket(ctx context.Context, in *s3api.DeleteBucketInput
 		return nil, err
 	}
 
+	err = p.removeBucket(b)
+	if err != nil {
+		return nil, err
+	}
+
+	p.retire(b)
+
+	return &s3api.DeleteBucketOutput{}, nil
+}
+
+// addBucket gives b's name to its account and puts b in the account's State,
+// unless the name is held already. It returns the holder.
+func (p *Provider) addBucket(b *Bucket) (string, bool) {
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
+	holder, claimed := p.names.claim(b.Name, b.Account)
+	if !claimed {
+		return holder, false
+	}
+
+	s := p.state(b.Account)
+	s.mu.Lock()
+	s.buckets[b.Name] = b
+	s.mu.Unlock()
+
+	return holder, true
+}
+
+// removeBucket takes an empty bucket out of its State, marks it gone and frees
+// its name. The bucket's bodies are the caller's to remove.
+func (p *Provider) removeBucket(b *Bucket) error {
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	s := p.state(b.Account)
 	s.mu.Lock()
 	b.mu.Lock()
@@ -182,21 +212,20 @@ func (p *Provider) DeleteBucket(ctx context.Context, in *s3api.DeleteBucketInput
 		s.mu.Unlock()
 
 		if gone {
-			return nil, noSuchBucket(name)
+			return noSuchBucket(b.Name)
 		}
 
-		return nil, bucketNotEmpty(name, versioning)
+		return bucketNotEmpty(b.Name, versioning)
 	}
 
-	delete(s.buckets, name)
+	delete(s.buckets, b.Name)
 	b.gone = true
 	b.mu.Unlock()
 	s.mu.Unlock()
 
-	p.names.release(name, b.Account)
-	p.retire(b)
+	p.names.release(b.Name, b.Account)
 
-	return &s3api.DeleteBucketOutput{}, nil
+	return nil
 }
 
 // ListBuckets lists the caller's buckets in name order, filtered by prefix and
