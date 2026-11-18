@@ -114,8 +114,9 @@ func parseAuthorization(authorization string) (Credential, bool) {
 // completeScopeFields counts the fields of a complete credential scope.
 const completeScopeFields = 5
 
-// Scope is the credential scope of a SigV4 request, "<key>/<date>/<region>/<service>/<terminator>",
-// as ParseScope reads it. Its fields may be empty.
+// Scope holds the first four fields of a SigV4 credential scope,
+// "<key>/<date>/<region>/<service>/<terminator>", as ParseScope reads them. A
+// field may be empty. The terminator is counted and not kept: nothing reads it.
 type Scope struct {
 	// AccessKey is the access key ID.
 	AccessKey string
@@ -125,46 +126,80 @@ type Scope struct {
 	Region string
 	// Service is the signing name.
 	Service string
-	// Terminator is the last field, aws4_request for SigV4.
-	Terminator string
 }
 
-// ParseScope splits a credential scope into its five fields. It is false when
-// the scope does not have exactly five, and it does not judge their values.
-// Presigned-URL validation reads the scope of X-Amz-Credential through it;
-// FromRequest, which runs on every request, reads the same scope without
-// allocating.
-func ParseScope(scope string) (Scope, bool) {
-	fields := strings.Split(scope, "/")
-	if len(fields) != completeScopeFields {
-		return Scope{}, false
+// maxScopeFields is the count splitScope reports for a scope with more than
+// completeScopeFields fields.
+const maxScopeFields = completeScopeFields + 1
+
+// splitScope is the one reader of a credential scope. It returns the fields it
+// found, up to four, and how many the scope has: up to five, or maxScopeFields
+// for a longer one. It does not allocate, as FromRequest runs it on every
+// request.
+func splitScope(scope string) (Scope, int) {
+	var (
+		s          Scope
+		terminator string
+	)
+
+	slots := [...]*string{&s.AccessKey, &s.Date, &s.Region, &s.Service, &terminator}
+	rest := scope
+
+	for n, slot := range slots {
+		field, tail, more := strings.Cut(rest, "/")
+		*slot = field
+
+		if !more {
+			return s, n + 1
+		}
+
+		rest = tail
 	}
 
-	return Scope{
-		AccessKey: fields[0], Date: fields[1], Region: fields[2], Service: fields[3], Terminator: fields[4],
-	}, true
+	return s, maxScopeFields
+}
+
+// ParseScope splits a credential scope. It is true when the scope has exactly
+// five fields, and it does not judge their values. A scope that is not complete
+// still gives the leading fields it has. Presigned-URL validation and the
+// POST form's credential read X-Amz-Credential through it; FromRequest reads
+// the same scope through the same split.
+func ParseScope(scope string) (Scope, bool) {
+	s, fields := splitScope(scope)
+
+	return s, fields == completeScopeFields
+}
+
+// QueryScope returns the X-Amz-Credential of r's query string, decoded as
+// FromRequest decodes it, "" when there is none. A caller that validates a
+// presigned URL reads the credential from here, so it sees the one FromRequest
+// takes the account and region from.
+func QueryScope(r *http.Request) string {
+	if r.URL.RawQuery == "" {
+		return ""
+	}
+
+	return r.URL.Query().Get(queryCredential)
 }
 
 // fromScope reads a credential scope, "<key>/<date>/<region>/<signing
 // name>/aws4_request".
 func fromScope(scope string) (Credential, bool) {
-	key, rest, _ := strings.Cut(scope, "/")
-	date, rest, _ := strings.Cut(rest, "/")
-	region, rest, found := strings.Cut(rest, "/")
+	s, fields := splitScope(scope)
 
 	var cred Credential
 
-	// The signing name and the terminator, and nothing after them, whatever
-	// the fields before them hold.
-	if signingName, terminator, ok := strings.Cut(rest, "/"); ok && !strings.Contains(terminator, "/") {
-		cred.SigningName = signingName
+	// The signing name is the fourth field of a scope with exactly five,
+	// whatever the fields before it hold.
+	if fields == completeScopeFields {
+		cred.SigningName = s.Service
 	}
 
-	if key == "" || date == "" || region == "" || !found {
+	if s.AccessKey == "" || s.Date == "" || s.Region == "" || fields < completeScopeFields-1 {
 		return cred, false
 	}
 
-	cred.AccessKey, cred.Region = key, region
+	cred.AccessKey, cred.Region = s.AccessKey, s.Region
 
 	return cred, true
 }

@@ -208,7 +208,7 @@ func (p *Provider) checkSignatureV2(r *http.Request, args queryArgs) *refusal {
 // then come the headers present but not signed, the signature, which is tried
 // again with other ports on the host, and expiry.
 func (p *Provider) checkSignatureV4(r *http.Request, args queryArgs) *refusal {
-	params, refused := readV4Params(args)
+	params, refused := readV4Params(args, account.QueryScope(r))
 	if refused != nil {
 		return refused
 	}
@@ -267,9 +267,11 @@ type paramsV4 struct {
 }
 
 // readV4Params reads the parameters, which are checked whether or not
-// signatures are.
-func readV4Params(args queryArgs) (paramsV4, *refusal) {
-	scope, complete := account.ParseScope(args.get(paramCredential))
+// signatures are. credential is the X-Amz-Credential that account.FromRequest
+// reads the account and region from, so a credential its decoder cannot read
+// is malformed here too.
+func readV4Params(args queryArgs, credential string) (paramsV4, *refusal) {
+	scope, complete := account.ParseScope(credential)
 	if !complete {
 		return paramsV4{}, refuse(s3api.NewAuthorizationQueryParametersError("Error parsing the X-Amz-Credential "+
 			`parameter; the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request".`),

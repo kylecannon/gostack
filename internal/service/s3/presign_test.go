@@ -277,6 +277,28 @@ func TestPresignedURLRoundTrip(t *testing.T) {
 	})
 }
 
+// TestPresignedURLReadsTheCredentialAsTheAccountDoes: a credential the account
+// parser drops, a ';' or an escape that is not hex, is malformed to the presign
+// check too, not read under another account and region by a decoder of its own.
+func TestPresignedURLReadsTheCredentialAsTheAccountDoes(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newPresignServer(t)
+
+	for _, tail := range []string{";x", "%zz"} {
+		t.Run(tail, func(t *testing.T) {
+			t.Parallel()
+
+			query := strings.Replace(goldenQuery, "aws4_request", "aws4_request"+tail, 1) + "&X-Amz-Signature=" + pathSignature
+
+			got := s.do(call{method: http.MethodGet, host: pathHost, target: presignBucket + "/k?" + query})
+			require.Equal(t, http.StatusBadRequest, got.status, string(got.body))
+			require.Equal(t, "AuthorizationQueryParametersError", got.presignErr(t).Code)
+			require.Contains(t, string(got.body), "the Credential is mal-formed")
+		})
+	}
+}
+
 func TestPostObject(t *testing.T) {
 	t.Parallel()
 

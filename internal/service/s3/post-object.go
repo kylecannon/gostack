@@ -21,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/kylecannon/gostack/internal/account"
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/sigv4"
@@ -274,7 +275,9 @@ func readPolicy(form map[string]string) (map[string]json.RawMessage, error) {
 		signature = form[fieldSignatureV2]
 	}
 
-	credential, _, _ := strings.Cut(form[fieldCredentialsV4], "/")
+	// Whatever the credential's shape, its first field is the access key.
+	scope, _ := account.ParseScope(form[fieldCredentialsV4])
+	credential := scope.AccessKey
 
 	return nil, (&s3api.SignatureDoesNotMatch{
 		AWSAccessKeyId:    new(cmp.Or(form[fieldAccessKeyV2], credential, presignAccessKey)),

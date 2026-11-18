@@ -189,9 +189,54 @@ func Test_FromRequest(t *testing.T) {
 	}
 }
 
-// Test_FromAuthorization reads the header as FromRequest does, and never the
-// query string of a presigned URL.
+// Test_QueryScope: the credential a presigned URL is validated with is the one
+// FromRequest takes the account and region from, on any query, including the
+// ones Go's decoder drops a pair of: a ';' or an escape that is not hex.
+func Test_QueryScope(t *testing.T) {
+	const scope = "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/s3/aws4_request"
+
+	tests := []struct {
+		name      string
+		giveQuery string
+		want      string
+	}{
+		{name: "a credential", giveQuery: presignedV4(scope), want: scope},
+		{
+			name: "a plus is a space", giveQuery: "X-Amz-Credential=a+b/20130524/" + euWest1 + "/s3/aws4_request",
+			want: "a b/20130524/" + euWest1 + "/s3/aws4_request",
+		},
+		{name: "a semicolon drops the pair", giveQuery: "X-Amz-Credential=" + scope + ";x&other=1"},
+		{name: "a bad escape drops the pair", giveQuery: "X-Amz-Credential=" + scope + "%zz&other=1"},
+		{name: "a semicolon elsewhere keeps the credential", giveQuery: "other=a;b&X-Amz-Credential=" + scope, want: scope},
+		{name: "no credential", giveQuery: "versioning"},
+		{name: "no query"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := credentialRequest(t, "", tt.giveQuery)
+
+			got := account.QueryScope(r)
+			assert.Equal(t, tt.want, got)
+
+			cred, ok := account.FromRequest(r)
+
+			parsed, _ := account.ParseScope(got)
+			if got == "" {
+				assert.False(t, ok, "FromRequest sees no credential where QueryScope sees none")
+
+				return
+			}
+
+			assert.Equal(t, parsed.AccessKey, cred.AccessKey)
+			assert.Equal(t, parsed.Region, cred.Region)
+		})
+	}
+}
+
 func Test_ParseScope(t *testing.T) {
+	const shortKey = "key"
+
 	tests := []struct {
 		name   string
 		give   string
@@ -202,13 +247,20 @@ func Test_ParseScope(t *testing.T) {
 			name: "a complete scope",
 			give: "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/s3/aws4_request",
 			want: account.Scope{
-				AccessKey: "AKIAIOSFODNN7EXAMPLE", Date: "20130524", Region: euWest1, Service: "s3", Terminator: "aws4_request",
+				AccessKey: "AKIAIOSFODNN7EXAMPLE", Date: "20130524", Region: euWest1, Service: "s3",
 			},
 			wantOK: true,
 		},
 		{name: "empty fields are the caller's to judge", give: "///s3/", want: account.Scope{Service: "s3"}, wantOK: true},
-		{name: "four fields", give: "key/20130524/" + euWest1 + "/s3"},
-		{name: "six fields", give: "key/20130524/" + euWest1 + "/s3/aws4_request/extra"},
+		{
+			name: "four fields keep the ones they have", give: shortKey + "/20130524/" + euWest1 + "/s3",
+			want: account.Scope{AccessKey: shortKey, Date: "20130524", Region: euWest1, Service: "s3"},
+		},
+		{
+			name: "six fields keep the first four", give: shortKey + "/20130524/" + euWest1 + "/s3/aws4_request/extra",
+			want: account.Scope{AccessKey: shortKey, Date: "20130524", Region: euWest1, Service: "s3"},
+		},
+		{name: "a bare key", give: "key", want: account.Scope{AccessKey: "key"}},
 		{name: "empty"},
 	}
 
