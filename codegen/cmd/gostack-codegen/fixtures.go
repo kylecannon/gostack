@@ -105,18 +105,13 @@ func fixtureGroupFiles(pkg string, grp *spec.FixtureGroup) (map[string][]byte, e
 	md := grp.Metadata
 	md.EndpointPrefix = pkg
 
-	var opts serviceOptions
-	if grp.Gostack != nil {
-		opts.S3Errors, opts.HostRoutes = grp.Gostack.S3Errors, grp.Gostack.HostRoutes
-	}
-
 	svc := &spec.Service{
 		Metadata:   md,
 		Operations: map[string]*spec.Operation{given.Name: &given},
 		Shapes:     grp.Shapes,
 	}
 
-	g, err := newModel(pkg, opts, svc, nil)
+	g, err := newModel(pkg, serviceOptions{}, svc, nil)
 	if err != nil {
 		return nil, err
 	}

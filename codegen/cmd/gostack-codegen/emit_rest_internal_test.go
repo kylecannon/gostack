@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -91,6 +92,63 @@ func Test_files_S3Shards(t *testing.T) {
 	}
 
 	funcs(t, files) // every shard parses, in package s3
+}
+
+// Test_files_S3Router checks the router the S3 source declares against
+// routeRules, which Test_routeRules_S3Groups drives: the same operations in
+// the same order, each rule with the query, params, headers and host its
+// operation is told apart by.
+func Test_files_S3Router(t *testing.T) {
+	t.Parallel()
+
+	g, files := s3Files(t)
+
+	rules, err := g.routeRules()
+	require.NoError(t, err)
+
+	var src string
+
+	for _, file := range files {
+		if i := strings.Index(string(file), "var router = rest.NewRouter("); i >= 0 {
+			src, _, _ = strings.Cut(string(file[i:]), "\n)\n")
+		}
+	}
+
+	require.NotEmpty(t, src, "no router in the S3 source")
+
+	// gofmt aligns the field values, so each rule's spacing is collapsed.
+	blocks := strings.Split(src, "rest.Rule{")[1:]
+	for i, block := range blocks {
+		blocks[i] = strings.Join(strings.Fields(block), " ")
+	}
+
+	require.Len(t, blocks, len(rules))
+
+	for i, r := range rules {
+		block := blocks[i]
+
+		assert.Contains(t, block, fmt.Sprintf("Operation: %q,", r.op), "rule %d", i)
+		assert.Contains(t, block, fmt.Sprintf("Method: %q,", r.method), r.op)
+		assert.Equal(t, len(r.query) > 0, strings.Contains(block, "Query:"), r.op)
+		assert.Equal(t, len(r.params) > 0, strings.Contains(block, "Params:"), r.op)
+		assert.Equal(t, len(r.headers) > 0, strings.Contains(block, "Headers:"), r.op)
+		assert.Equal(t, r.host != "", strings.Contains(block, "Host:"), r.op)
+	}
+
+	rule := func(op string) string {
+		for _, block := range blocks {
+			if strings.Contains(block, fmt.Sprintf("Operation: %q,", op)) {
+				return block
+			}
+		}
+
+		return ""
+	}
+
+	assert.Contains(t, rule("UploadPartCopy"), `Params: []string{"partNumber", "uploadId"},`)
+	assert.Contains(t, rule("UploadPartCopy"), `Headers: []string{"x-amz-copy-source"},`)
+	assert.Contains(t, rule("CopyObject"), `Headers: []string{"x-amz-copy-source"},`)
+	assert.Contains(t, rule("ListDirectoryBuckets"), `Host: "s3express-control.",`)
 }
 
 func Test_files_S3Codec(t *testing.T) {

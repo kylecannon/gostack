@@ -13,16 +13,6 @@ type FixtureGroup struct {
 	Metadata    Metadata          `json:"metadata"`
 	Shapes      map[string]*Shape `json:"shapes"`
 	Cases       []FixtureCase     `json:"cases"`
-	// Gostack holds the generator options of a group in gostack's own
-	// fixtures, which botocore's do not have.
-	Gostack *FixtureOptions `json:"gostack"`
-}
-
-// FixtureOptions are the per-service generator options a gostack fixture
-// group sets: the S3 error envelope, and operations told apart by host.
-type FixtureOptions struct {
-	S3Errors   bool              `json:"s3Errors"`
-	HostRoutes map[string]string `json:"hostRoutes"`
 }
 
 // FixtureCase is one case of a group. An input case gives the params a client
