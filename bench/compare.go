@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +18,8 @@ import (
 //
 // A metric regresses when both hold:
 //
-//   - its median moved the wrong way by more than the limit below, and
+//   - its median moved the wrong way by more than the limit below, and, for a
+//     latency, by at least the absolute floor below, and
 //   - the ranges of the runs do not overlap: for a cost, the head's lowest run
 //     is above the base's highest; for a throughput, the head's highest run is
 //     below the base's lowest.
@@ -36,6 +38,12 @@ const (
 	limitP50 = 0.15
 	// limitP99 is how much a p99 latency may rise.
 	limitP99 = 0.30
+	// floorP50 is how many milliseconds a p50 latency must also rise by to
+	// regress. The results hold latency at 0.01 ms, so at c=1 one tick is a
+	// 14% move of a 0.07 ms median.
+	floorP50 = 0.05
+	// floorP99 is the same for a p99 latency, in milliseconds.
+	floorP99 = 0.5
 	// limitThroughput is how much the cycles a second may fall.
 	limitThroughput = 0.15
 	// limitRSS is how much the peak RSS of a cell, or the idle RSS, may rise.
@@ -58,6 +66,9 @@ type metric struct {
 	// lowerIsBetter is true for latencies, memory and startup, false for throughput.
 	lowerIsBetter bool
 	limit         float64
+	// floor is the least the median must move the wrong way, in the unit of the
+	// results file, for the metric to count. Zero means no floor.
+	floor float64
 	// scale and unit render the numbers.
 	scale float64
 	unit  string
@@ -90,6 +101,11 @@ func (m metric) judge() outcome {
 	change := m.change()
 	if !m.lowerIsBetter {
 		change = -change
+	}
+
+	// A move under the floor is a tick of the clock, not a change.
+	if change > 0 && math.Abs(m.head.Median-m.base.Median) < m.floor {
+		return steady
 	}
 
 	switch {
@@ -131,14 +147,14 @@ func (m metric) render(s spread) string {
 func cellMetrics(target string, base, head cellResult) []metric {
 	var out []metric
 
-	add := func(name string, b, h spread, lower bool, limit, scale float64, unit string) {
+	add := func(name string, b, h spread, lower bool, limit, floor, scale float64, unit string) {
 		if b.zero() || h.zero() {
 			return
 		}
 
 		out = append(out, metric{
 			target: target, cell: base.ID, name: name, base: b, head: h,
-			lowerIsBetter: lower, limit: limit, scale: scale, unit: unit,
+			lowerIsBetter: lower, limit: limit, floor: floor, scale: scale, unit: unit,
 		})
 	}
 
@@ -150,12 +166,12 @@ func cellMetrics(target string, base, head cellResult) []metric {
 			continue
 		}
 
-		add(op.name+" p50", op.base.P50us, op.head.P50us, true, limitP50, microsPerMilli, "ms")
-		add(op.name+" p99", op.base.P99us, op.head.P99us, true, limitP99, microsPerMilli, "ms")
+		add(op.name+" p50", op.base.P50us, op.head.P50us, true, limitP50, floorP50*microsPerMilli, microsPerMilli, "ms")
+		add(op.name+" p99", op.base.P99us, op.head.P99us, true, limitP99, floorP99*microsPerMilli, microsPerMilli, "ms")
 	}
 
-	add("throughput", base.CyclesPerSec, head.CyclesPerSec, false, limitThroughput, 1, "cycles/s")
-	add("peak RSS", base.PeakRSSBytes, head.PeakRSSBytes, true, limitRSS, bytesPerMiB, "MiB")
+	add("throughput", base.CyclesPerSec, head.CyclesPerSec, false, limitThroughput, 0, 1, "cycles/s")
+	add("peak RSS", base.PeakRSSBytes, head.PeakRSSBytes, true, limitRSS, 0, bytesPerMiB, "MiB")
 
 	return out
 }
@@ -253,10 +269,11 @@ func compareReports(base, head report, out io.Writer) error {
 	}
 
 	fmt.Fprintf(&b, "Host: %s.\n\nCompared %d cells and %d metrics of the gostack targets. Limits: p50 +%.0f%%, "+
-		"p99 +%.0f%%, throughput -%.0f%%, RSS +%.0f%%, startup +%.0f%%; a metric fails only when the ranges of "+
-		"the runs do not overlap.\n\n", head.Host.Fingerprint, cmp.compared, cmp.metrics,
+		"p99 +%.0f%%, throughput -%.0f%%, RSS +%.0f%%, startup +%.0f%%; a latency must also rise by %.2f ms (p50) "+
+		"or %.1f ms (p99); a metric fails only when the ranges of the runs do not overlap.\n\n",
+		head.Host.Fingerprint, cmp.compared, cmp.metrics,
 		limitP50*percentScale, limitP99*percentScale, limitThroughput*percentScale, limitRSS*percentScale,
-		limitStartup*percentScale)
+		limitStartup*percentScale, floorP50, floorP99)
 
 	table(&b, "Regressions", cmp.regressions)
 	table(&b, "Changes past the limit with overlapping ranges (noise, not failing)", cmp.noise)

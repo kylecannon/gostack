@@ -94,6 +94,42 @@ func Test_compare_each_metric_has_its_own_limit(t *testing.T) {
 	}
 }
 
+func Test_compare_latency_needs_an_absolute_rise_as_well(t *testing.T) {
+	// Latency is held in microseconds in the results.
+	tests := []struct {
+		name     string
+		base     float64
+		head     float64
+		p99, bad bool
+	}{
+		{name: "p50 0.07 to 0.08 ms is a tick", base: 70, head: 80},
+		{name: "p50 1.0 to 1.5 ms regresses", base: 1000, head: 1500, bad: true},
+		{name: "p99 1.17 to 1.79 ms passes both rules", base: 1170, head: 1790, p99: true, bad: true},
+		{name: "p99 1.17 to 1.40 ms is under the floor", base: 1170, head: 1400, p99: true},
+		{name: "p50 0.06 to 0.08 ms is +33% but under the floor", base: 60, head: 80},
+		{name: "p99 1.0 to 1.4 ms is +40% but under the floor", base: 1000, head: 1400, p99: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cell := func(v float64) cellResult {
+				if tt.p99 {
+					return testCell(cellID, 100, v, 2700, 50*bytesPerMiB)
+				}
+
+				return testCell(cellID, v, 100000, 2700, 50*bytesPerMiB)
+			}
+
+			_, err := compared(t, testReport(hostA, cell(tt.base)), testReport(hostA, cell(tt.head)))
+			if tt.bad {
+				require.ErrorIs(t, err, errRegression)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func Test_compare_startup_and_idle_rss_gate(t *testing.T) {
 	base := testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB))
 

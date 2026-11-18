@@ -187,7 +187,8 @@ every implemented service. Results are committed to
 `bench/results/<date>-<sha>.json`. `go run ./bench compare` checks a run
 against the newest committed result and fails when a gostack cell regresses
 past its threshold; `make bench-system` runs it after measuring. LocalStack
-cells are reference numbers and never gate.
+cells are reference numbers and never gate. A latency also has to rise by 0.05 ms
+(p50) or 0.5 ms (p99) to regress, so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
 
 ### Runtime knobs
 
