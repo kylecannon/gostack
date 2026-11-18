@@ -70,7 +70,7 @@ func (p *Provider) CompleteMultipartUpload(
 
 	p.notify(ctx, b, key, v)
 
-	out := completeOutput(in, v, p.bucketURL(b.Name)+quoteKey(key))
+	out := completeOutput(in, v, p.bucketURL(b.Name)+quote(key))
 	out.VersionId = b.versionHeader(v)
 
 	return out, nil
@@ -498,23 +498,6 @@ func checksumMembers(crc32Value, crc32cValue, crc64nvmeValue, sha1Value, sha256V
 	}
 
 	return sent
-}
-
-// quoteKey is urllib.parse.quote of a key: every byte but the unreserved
-// characters and the slash is percent-encoded.
-func quoteKey(key string) string {
-	var b strings.Builder
-
-	for i := range len(key) {
-		c := key[i]
-		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("_.-~/", c) >= 0 {
-			b.WriteByte(c)
-		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
-		}
-	}
-
-	return b.String()
 }
 
 func deref32(n *int32) int32 {

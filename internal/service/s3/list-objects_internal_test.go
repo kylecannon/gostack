@@ -210,6 +210,11 @@ func Test_quote(t *testing.T) {
 		{give: "é", want: "%C3%A9"},
 		{give: "a/\xf0\x9f\x98\x80/", want: "a/%F0%9F%98%80/"},
 		{give: "", want: ""},
+		// What CompleteMultipartUpload's Location, a ListMultipartUploads
+		// EncodingType and an event's key used to get from quoteKey, which was
+		// a second copy of this function.
+		{give: "dir/a+b?c#d%e", want: "dir/a%2Bb%3Fc%23d%25e"},
+		{give: "\xff\x00", want: "%FF%00"},
 	}
 
 	for _, tt := range tests {

@@ -113,7 +113,7 @@ func (p *Provider) ListMultipartUploads(
 
 	encode := func(s string) string { return s }
 	if encoding != "" {
-		encode = quoteKey
+		encode = quote
 	}
 
 	keyMarker, uploadIDMarker := deref(in.KeyMarker), deref(in.UploadIdMarker)
