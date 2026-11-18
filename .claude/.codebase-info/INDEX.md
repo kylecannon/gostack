@@ -1,10 +1,10 @@
 # gostack codebase map
 
-*Last Updated: 2026-11-17*
+*Last Updated: 2026-11-18*
 
-gostack is a Go drop-in replacement for LocalStack Community (and for gresau/localstack-persist). One Go module, `github.com/kylecannon/gostack`, Go 1.27 (toolchain pinned in `go.mod`, run Go through `make`). Phase 1 serves STS and SQS on :4566 over HTTP/1.1, TLS and h2c. Rules and contracts live in `AGENTS.md`, `docs/architecture.md` and `docs/standards.md`; this map only says where things are.
+gostack is a Go drop-in replacement for LocalStack Community (and for gresau/localstack-persist). One Go module, `github.com/kylecannon/gostack`, Go 1.27 (toolchain pinned in `go.mod`, run Go through `make`). It serves STS and SQS (Phase 1) and S3 (Phase 2) on :4566 over HTTP/1.1, TLS and h2c. Rules and contracts live in `AGENTS.md`, `docs/architecture.md` and `docs/standards.md`; this map only says where things are.
 
-Flow in one line: `cmd/gostack` builds config, services and the persist engine, hands them to `internal/gateway`, which detects the service (`internal/route`), calls the generated `internal/api/<svc>` dispatcher, which calls the hand-written provider in `internal/service/<svc>`.
+Flow in one line: `cmd/gostack` builds config, services and the persist engine, hands them to `internal/gateway`, which detects the service (`internal/route`), calls the generated `internal/api/<svc>` dispatcher, which calls the hand-written provider in `internal/service/<svc>`. A service that calls another (S3 notifications to SQS) goes back through the gateway's handler via `internal/inproc`.
 
 | Doc | Read it for |
 | --- | --- |
