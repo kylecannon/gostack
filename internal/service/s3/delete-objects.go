@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
@@ -12,7 +13,8 @@ import (
 // maxDeleteObjects is how many keys one DeleteObjects takes.
 const maxDeleteObjects = 1000
 
-// DeleteObjects removes up to 1000 keys of an unversioned bucket in one call.
+// DeleteObjects removes up to 1000 keys, or versions of keys, in one call. A
+// bucket with versioning gets a delete marker for a key named without a version.
 // It answers each key it removed, or none in quiet mode, and each key it could
 // not remove as an error.
 func (p *Provider) DeleteObjects(
@@ -49,28 +51,66 @@ func (p *Provider) DeleteObjects(
 	}
 
 	quiet := in.Delete.Quiet != nil && *in.Delete.Quiet
+	bypass := in.BypassGovernanceRetention != nil && *in.BypassGovernanceRetention
 	out := &s3api.DeleteObjectsOutput{}
 
 	for _, object := range in.Delete.Objects {
-		key := deref(object.Key)
-
-		if id := deref(object.VersionId); id != "" && id != versionNull {
-			out.Errors = append(out.Errors, s3api.Error{
-				Code: new("NoSuchVersion"), Key: &key, Message: new("The specified version does not exist."),
-				VersionId: &id,
-			})
-
-			continue
+		deleted, failed, err := p.deleteEntry(b, object, bypass)
+		if err != nil {
+			return nil, err
 		}
 
-		p.removeKey(b, key)
-
-		if !quiet {
-			out.Deleted = append(out.Deleted, s3api.DeletedObject{Key: &key})
+		switch {
+		case failed != nil:
+			out.Errors = append(out.Errors, *failed)
+		case !quiet:
+			out.Deleted = append(out.Deleted, deleted)
+		default:
 		}
 	}
 
 	return out, nil
+}
+
+// deleteEntry deletes one key of a DeleteObjects. It answers what was deleted,
+// or the error entry of a version that is not there or that Object Lock holds;
+// the third result is the error that fails the whole call.
+func (p *Provider) deleteEntry(
+	b *Bucket, object s3api.ObjectIdentifier, bypass bool,
+) (s3api.DeletedObject, *s3api.Error, error) {
+	key, id := deref(object.Key), deref(object.VersionId)
+
+	removed, err := p.deleteFrom(b, key, id, bypass)
+
+	switch {
+	case errors.Is(err, errObjectLocked):
+		return s3api.DeletedObject{}, &s3api.Error{
+			Code: new("AccessDenied"), Key: &key, Message: new(lockedObjectMessage), VersionId: &id,
+		}, nil
+	case errors.Is(err, errNoSuchVersion) || removed.absent:
+		return s3api.DeletedObject{}, &s3api.Error{
+			Code: new("NoSuchVersion"), Key: &key, Message: new("The specified version does not exist."),
+			VersionId: &id,
+		}, nil
+	case err != nil:
+		return s3api.DeletedObject{}, nil, err
+	}
+
+	deleted := s3api.DeletedObject{Key: &key}
+
+	switch {
+	case removed.added:
+		deleted.DeleteMarker, deleted.DeleteMarkerVersionId = new(true), &removed.versionID
+	case removed.versionID != "":
+		deleted.VersionId = &removed.versionID
+
+		if removed.marker {
+			deleted.DeleteMarker, deleted.DeleteMarkerVersionId = new(true), &removed.versionID
+		}
+	default:
+	}
+
+	return deleted, nil, nil
 }
 
 // checkContentMD5 refuses a Content-MD5 that is not the base64 of 16 bytes. AWS

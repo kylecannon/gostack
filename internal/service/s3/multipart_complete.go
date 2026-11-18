@@ -87,7 +87,10 @@ func (p *Provider) CompleteMultipartUpload(
 		return nil, err
 	}
 
-	return completeOutput(in, v, p.bucketURL(b.Name)+quoteKey(key)), nil
+	out := completeOutput(in, v, p.bucketURL(b.Name)+quoteKey(key))
+	out.VersionId = b.versionHeader(v)
+
+	return out, nil
 }
 
 // completeOutput is the answer to a CompleteMultipartUpload that made v. S3
@@ -241,6 +244,7 @@ func (u *MultipartUpload) object(plan *completion) *Version {
 		SSECustomerKeyMD5:    u.SSECustomerKeyMD5,
 		ACL:                  u.ACL,
 		Tags:                 u.Tags,
+		Lock:                 u.Lock,
 	}
 }
 

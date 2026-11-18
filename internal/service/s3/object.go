@@ -5,6 +5,7 @@ import (
 	"crypto/md5" //nolint:gosec // S3's ETag and Content-MD5 are MD5 by definition.
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,11 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
+	v.Lock, err = b.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
+	if err != nil {
+		return nil, err
+	}
+
 	check := req.cond.checker(key)
 
 	err = precheck(b, key, check)
@@ -74,6 +80,12 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
+	return putOutput(in, b, key, v), nil
+}
+
+// putOutput is PutObject's answer for the version it stored: its ETag,
+// expiration, encryption, version id and checksum.
+func putOutput(in *s3api.PutObjectInput, b *Bucket, key string, v *Version) *s3api.PutObjectOutput {
 	out := &s3api.PutObjectOutput{
 		ETag: new(quoted(v.ETag)), Expiration: b.expiration(key, v),
 		SSEKMSEncryptionContext: kmsContext(objectEncryption{algorithm: v.ServerSideEncryption},
@@ -82,11 +94,17 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = putEncryption(in).customer.echo()
 
+	// Only a version made while versioning is Enabled has an id to report; a
+	// suspended bucket's null version does not.
+	if v.ID != versionNull {
+		out.VersionId = &v.ID
+	}
+
 	c := checksumsOf(v)
 	out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = c.sha1, c.sha256, c.kind
 
-	return out, nil
+	return out
 }
 
 // newPutVersion returns the version a PutObject makes and the payload to write
@@ -287,6 +305,10 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customerKeyOf(
 		in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5).echo()
 
+	h := p.versionHeadersOf(ctx, in.Bucket, v)
+	out.VersionId, out.ObjectLockMode, out.ObjectLockRetainUntilDate, out.ObjectLockLegalHoldStatus =
+		h.versionID, h.lockMode, h.retainUntil, h.legalHold
+
 	return out, nil
 }
 
@@ -393,36 +415,18 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 
 	f := fieldsOf(v, rng, in.PartNumber, in.ChecksumMode)
 
-	out := &s3api.HeadObjectOutput{
-		AcceptRanges:            new(acceptRangesBytes),
-		ContentLength:           f.contentLength,
-		ContentRange:            f.contentRange,
-		StatusCode:              f.statusCode,
-		ETag:                    f.etag,
-		LastModified:            f.lastModified,
-		Metadata:                f.metadata,
-		ContentType:             f.contentType,
-		CacheControl:            f.cacheControl,
-		ContentDisposition:      f.contentDisposition,
-		ContentEncoding:         f.contentEncoding,
-		ContentLanguage:         f.contentLanguage,
-		Expires:                 f.expires,
-		ServerSideEncryption:    f.serverSideEncryption,
-		SSEKMSKeyId:             f.sseKMSKeyID,
-		BucketKeyEnabled:        f.bucketKeyEnabled,
-		StorageClass:            f.storageClass,
-		WebsiteRedirectLocation: f.websiteRedirect,
-		TagCount:                f.tagCount,
-		PartsCount:              f.partsCount,
-		Expiration:              p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v),
-		Restore:                 nonEmpty(v.Restore),
-	}
+	out := headOutput(f, v)
+	out.Expiration = p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v)
 
 	out.ChecksumCRC32, out.ChecksumCRC32C = f.checksum.crc32, f.checksum.crc32c
 	out.ChecksumCRC64NVME = f.checksum.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = f.checksum.sha1, f.checksum.sha256, f.checksum.kind
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = customerKeyOf(
 		in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5).echo()
+
+	h := p.versionHeadersOf(ctx, in.Bucket, v)
+	out.VersionId, out.ObjectLockMode, out.ObjectLockRetainUntilDate, out.ObjectLockLegalHoldStatus =
+		h.versionID, h.lockMode, h.retainUntil, h.legalHold
 
 	return out, nil
 }
@@ -512,13 +516,27 @@ func (p *Provider) DeleteObject(ctx context.Context, in *s3api.DeleteObjectInput
 		return nil, notImplementedHeader("x-amz-if-match-last-modified-time", "")
 	}
 
-	if id := deref(in.VersionId); id != "" && id != versionNull {
+	bypass := in.BypassGovernanceRetention != nil && *in.BypassGovernanceRetention
+
+	removed, err := p.deleteFrom(b, deref(in.Key), deref(in.VersionId), bypass)
+
+	switch {
+	case errors.Is(err, errNoSuchVersion):
+		id := deref(in.VersionId)
+
 		return nil, invalidArgument(invalidVersionMessage, "versionId", &id)
+	case errors.Is(err, errObjectLocked):
+		return nil, deniedByLock()
+	case err != nil:
+		return nil, err
 	}
 
-	p.removeKey(b, deref(in.Key))
+	out := &s3api.DeleteObjectOutput{VersionId: nonEmpty(removed.versionID)}
+	if removed.marker {
+		out.DeleteMarker = new(true)
+	}
 
-	return &s3api.DeleteObjectOutput{}, nil
+	return out, nil
 }
 
 // objectLockOn reports whether the bucket has Object Lock turned on.
@@ -527,27 +545,6 @@ func objectLockOn(b *Bucket) bool {
 	defer b.mu.RUnlock()
 
 	return b.ObjectLock != nil && deref(b.ObjectLock.ObjectLockEnabled) == "Enabled"
-}
-
-// removeKey deletes an unversioned key and its bodies. It reports whether the
-// key held an object.
-func (p *Provider) removeKey(b *Bucket, key string) bool {
-	b.mu.Lock()
-
-	object, found := b.Objects[key]
-	delete(b.Objects, key)
-
-	b.mu.Unlock()
-
-	if found {
-		for _, v := range object.Versions {
-			if v.BlobID != "" {
-				_ = p.blobs.Remove(v.BlobID)
-			}
-		}
-	}
-
-	return found
 }
 
 // writeBody streams body into a new blob of v, computing its ETag and
@@ -604,8 +601,10 @@ func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD
 	return nil
 }
 
-// commitVersion makes v the object's current version. Outside a versioned
-// bucket it replaces the one there was, whose body goes. A write with a
+// commitVersion makes v the object's current version and gives it its id
+// (addVersion). A bucket without versioning, or with it suspended, replaces the
+// null version there was, whose body goes; one with it enabled keeps every
+// version. A write with a
 // condition passes it as check: it is called with the key's object under the
 // bucket's lock, and a non-nil answer leaves the object as it was and drops the
 // body of v. A nil check is none.
@@ -619,12 +618,7 @@ func (p *Provider) commitVersion(b *Bucket, key string, v *Version, check ...fun
 		return noSuchBucket(b.Name)
 	}
 
-	var replaced []*Version
-
 	object := b.Objects[key]
-	if object != nil {
-		replaced = object.Versions
-	}
 
 	for _, condition := range check {
 		if condition == nil {
@@ -640,7 +634,7 @@ func (p *Provider) commitVersion(b *Bucket, key string, v *Version, check ...fun
 		}
 	}
 
-	b.Objects[key] = &Object{Versions: []*Version{v}}
+	replaced := b.addVersion(key, v)
 	b.mu.Unlock()
 
 	for _, old := range replaced {
@@ -676,20 +670,16 @@ func (c writeConditions) checker(key string) func(*Object) error {
 }
 
 // lookupVersion returns the version of a key that a GET, HEAD or copy source
-// names, as S3Bucket.get_object does for a bucket that never had versioning:
-// only the current version, which a delete marker makes a missing key. The
-// caller holds b.mu.
+// names, as S3Bucket.get_object does: the current version, or the one a version
+// id names. A current delete marker makes a missing key, and a delete marker
+// named by its id is a method that is not allowed. The caller holds b.mu.
 func lookupVersion(b *Bucket, key string, versionID *string) (*Version, error) {
-	if id := deref(versionID); id != "" && id != versionNull {
-		return nil, invalidArgument(invalidVersionMessage, "versionId", &id)
+	object, index, err := b.versionTarget(key, deref(versionID), http.MethodGet)
+	if err != nil {
+		return nil, err
 	}
 
-	object, ok := b.Objects[key]
-	if !ok || object.current() == nil || object.current().DeleteMarker {
-		return nil, noSuchKey(key)
-	}
-
-	return object.current(), nil
+	return object.Versions[index], nil
 }
 
 // readable returns the current version of an object for a GET or HEAD. It
@@ -840,4 +830,32 @@ func nonEmpty(s string) *string {
 	}
 
 	return &s
+}
+
+// headOutput is HeadObject's answer before the checksum, SSE-C echo, expiration
+// and version headers, which the caller adds.
+func headOutput(f objectFields, v *Version) *s3api.HeadObjectOutput {
+	return &s3api.HeadObjectOutput{
+		AcceptRanges:            new(acceptRangesBytes),
+		ContentLength:           f.contentLength,
+		ContentRange:            f.contentRange,
+		StatusCode:              f.statusCode,
+		ETag:                    f.etag,
+		LastModified:            f.lastModified,
+		Metadata:                f.metadata,
+		ContentType:             f.contentType,
+		CacheControl:            f.cacheControl,
+		ContentDisposition:      f.contentDisposition,
+		ContentEncoding:         f.contentEncoding,
+		ContentLanguage:         f.contentLanguage,
+		Expires:                 f.expires,
+		ServerSideEncryption:    f.serverSideEncryption,
+		SSEKMSKeyId:             f.sseKMSKeyID,
+		BucketKeyEnabled:        f.bucketKeyEnabled,
+		StorageClass:            f.storageClass,
+		WebsiteRedirectLocation: f.websiteRedirect,
+		TagCount:                f.tagCount,
+		PartsCount:              f.partsCount,
+		Restore:                 nonEmpty(v.Restore),
+	}
 }

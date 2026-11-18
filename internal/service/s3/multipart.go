@@ -58,6 +58,10 @@ type MultipartUpload struct {
 	ACL  *s3api.AccessControlPolicy
 	Tags []s3api.Tag
 
+	// Lock is the Object Lock the completed object gets, worked out when the
+	// upload began.
+	Lock Lock
+
 	// KeyExisted records that the key held an object when the upload began,
 	// which an If-None-Match completion treats as a conflict.
 	KeyExisted bool
@@ -148,6 +152,11 @@ func (p *Provider) CreateMultipartUpload(
 	enc := resolveEncryption(request, b)
 	upload.setEncryption(enc)
 	upload.ACL, upload.Tags = config.acl, config.tags
+
+	upload.Lock, err = b.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
+	if err != nil {
+		return nil, err
+	}
 
 	b.mu.Lock()
 

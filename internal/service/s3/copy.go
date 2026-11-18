@@ -112,9 +112,16 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
-	source, body, err := p.openSource(plan, in)
+	// The copy keeps no lock from its source: it takes the one the request names,
+	// or the bucket's default retention.
+	v.Lock, err = plan.dest.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
 	if err != nil {
 		return nil, err
+	}
+
+	source, body, err := p.openSource(plan, in)
+	if err != nil {
+		return nil, copySourceError(err)
 	}
 
 	defer func() { _ = body.Close() }()
@@ -137,8 +144,10 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	result.ChecksumSHA1, result.ChecksumSHA256, result.ChecksumType = c.sha1, c.sha256, c.kind
 
 	out := &s3api.CopyObjectOutput{
-		CopyObjectResult: result,
-		Expiration:       plan.dest.expiration(plan.destKey, v),
+		CopyObjectResult:    result,
+		Expiration:          plan.dest.expiration(plan.destKey, v),
+		VersionId:           plan.dest.versionHeader(v),
+		CopySourceVersionId: sourceVersionHeader(source),
 		SSEKMSEncryptionContext: kmsContext(objectEncryption{algorithm: v.ServerSideEncryption},
 			in.SSEKMSEncryptionContext),
 	}

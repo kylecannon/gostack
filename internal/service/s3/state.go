@@ -206,6 +206,10 @@ type Version struct {
 	// lies in its body, in part order; nil for an object put whole.
 	Parts []ObjectPart
 
+	// Lock is the version's Object Lock retention and legal hold. PutObjectRetention
+	// and PutObjectLegalHold replace the Version under the bucket lock.
+	Lock Lock
+
 	// ACL is the object's access control policy; nil is the private default.
 	// Tags is its tag set. Neither changes in place: PutObjectAcl and
 	// PutObjectTagging replace the Version under the bucket lock.

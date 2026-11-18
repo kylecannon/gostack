@@ -98,6 +98,10 @@ func (p *Provider) CreateBucket(ctx context.Context, in *s3api.CreateBucketInput
 	b := newBucket(name, rc.AccountID, region, constraint, in.ObjectOwnership)
 	b.Tags, b.ACL = tags, acl
 
+	if in.ObjectLockEnabledForBucket != nil && *in.ObjectLockEnabledForBucket {
+		b.enableObjectLock()
+	}
+
 	s := p.state(rc.AccountID)
 	s.mu.Lock()
 	s.buckets[name] = b
