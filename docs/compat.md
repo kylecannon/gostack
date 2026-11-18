@@ -175,6 +175,17 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
   of LocalStack's S3 serializer, and body timestamps end in `.000Z`.
 - A `PostObject` form's fields before the file are capped at 20 KiB (see the
   `PostObject` row above).
+- `GetObject` and `HeadObject` with `partNumber` name a part by the number it
+  was uploaded as, the way `GetObjectAttributes` lists them. An object completed
+  from parts 1, 3 and 5 answers `partNumber=3` with its second part and
+  `partNumber=2` with `416 InvalidPartNumber` (`ActualPartCount` 3). Probed on
+  LocalStack 8b9a79f (SQ-152).
+- `CopyObject` refuses an `x-amz-checksum-algorithm` that is not `CRC32`,
+  `CRC32C`, `CRC64NVME`, `SHA1` or `SHA256` (the names are case-sensitive) with
+  `400 InvalidRequest`, as `CreateMultipartUpload` does.
+- A `PostObject` policy condition that fails is quoted in the `AccessDenied`
+  message as Python's `str()` writes it: an object keeps the policy's key
+  order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
 
 ## Accepted LocalStack-only behavior
 
