@@ -277,7 +277,7 @@
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_tags[list]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_tags[notxml]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_tags[single]": {"gostack": "pass", "localstack": "pass", "reason": ""},
-"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_unicode_metadata": {"gostack": "fail", "localstack": "pass", "reason": ""},
+"tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_unicode_metadata": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_object_with_wrong_content_type": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_expires": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_malformed_policy[s3]": {"gostack": "pass", "localstack": "pass", "reason": ""},

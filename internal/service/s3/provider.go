@@ -165,7 +165,10 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		p.serveAPI(&responseWriter{ResponseWriter: w, method: r.Method}, rc)
+		rw := &responseWriter{ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1}
+		defer rw.finish()
+
+		p.serveAPI(rw, rc)
 	}
 }
 
@@ -222,14 +225,26 @@ func (p *Provider) bucket(account, name string) (*Bucket, error) {
 // responseWriter gives an S3 response the Content-Type LocalStack's does:
 // application/xml unless the handler set one, except on a 204 and on a
 // successful PUT, which carry no body (s3_response_handler).
+//
+// A response over HTTP/1.x that has a header value starting or ending in a space
+// or tab takes the connection and writes itself (rawheader.go), because net/http
+// would trim the value.
 type responseWriter struct {
 	http.ResponseWriter
 
 	method string
+	http1  bool
 	wrote  bool
+
+	// raw is set once takeConn has the connection.
+	raw *takenConn
 }
 
 func (w *responseWriter) WriteHeader(code int) {
+	if w.raw != nil {
+		return
+	}
+
 	if !w.wrote && code >= http.StatusOK {
 		w.wrote = true
 
@@ -250,7 +265,11 @@ func (w *responseWriter) WriteHeader(code int) {
 			header.Del("Content-Length")
 		}
 
-		spellHeaders(header)
+		trims := spellHeaders(header)
+
+		if trims && w.http1 && w.takeConn(code) {
+			return
+		}
 	}
 
 	w.ResponseWriter.WriteHeader(code)
@@ -259,8 +278,12 @@ func (w *responseWriter) WriteHeader(code int) {
 // spellHeaders spells the header names Header.Set canonicalized as the S3
 // model and LocalStack's serializer do: Etag as ETag, and X-Amz-* in lower
 // case, the case of every x-amz- header in the model. Clients that compare
-// header names exactly, as the CORS snapshots do, see the difference.
-func spellHeaders(header http.Header) {
+// header names exactly, as the CORS snapshots do, see the difference. It
+// reports whether a header value starts or ends with a space or tab, which
+// net/http would trim.
+func spellHeaders(header http.Header) bool {
+	trims := false
+
 	if etag, ok := header["Etag"]; ok {
 		delete(header, "Etag")
 		header["ETag"] = etag
@@ -271,12 +294,22 @@ func spellHeaders(header http.Header) {
 			delete(header, name)
 			header[strings.ToLower(name)] = values
 		}
+
+		for _, value := range values {
+			trims = trims || edgeSpace(value)
+		}
 	}
+
+	return trims
 }
 
 func (w *responseWriter) Write(p []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
+	}
+
+	if w.raw != nil {
+		return w.raw.write(p)
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
