@@ -172,7 +172,7 @@ func Test_parseOptions(t *testing.T) {
 }
 
 func Test_cells_profiles(t *testing.T) {
-	full := cellsFor(profileFull, target{persistable: true})
+	full := cellsFor(profileFull, target{persistable: true}, serviceSQS)
 	assert.Len(t, full, 216, "3 payloads x 2 queues x 3 shapes x 2 protocols x 3 concurrencies x 2 persistence")
 
 	ids := map[string]bool{}
@@ -181,15 +181,16 @@ func Test_cells_profiles(t *testing.T) {
 		ids[c.id()] = true
 	}
 
-	quick := cellsFor(profileQuick, target{persistable: true})
+	quick := cellsFor(profileQuick, target{persistable: true}, serviceSQS)
 	assert.Len(t, quick, 10)
 
 	for _, c := range quick {
 		assert.True(t, ids[c.id()], "%s is not a cell of the full profile", c.id())
 	}
 
-	assert.Len(t, cellsFor(profileFull, target{}), 108, "a target that does not persist skips the persistence cells")
-	assert.Len(t, cellsFor(profileQuick, target{}), 9)
+	assert.Len(t, cellsFor(profileFull, target{}, serviceSQS), 108,
+		"a target that does not persist skips the persistence cells")
+	assert.Len(t, cellsFor(profileQuick, target{}, serviceSQS), 9)
 	assert.Equal(t, "sqs/messaging/persist=off/payload=64KiB/queue=fifo/shape=batch/proto=query/c=64",
 		sqsCellSpec(payloadMedium, queueFIFO, shapeBatch, protoQuery, "", levelHigh).id())
 	assert.Equal(t, "sqs/messaging/persist=on/payload=256B/queue=standard/shape=single/proto=json/c=1",
@@ -200,7 +201,7 @@ func Test_cells_profiles(t *testing.T) {
 }
 
 func Test_cells_a_persistence_cell_names_its_variable(t *testing.T) {
-	for _, c := range cellsFor(profileFull, target{persistable: true}) {
+	for _, c := range cellsFor(profileFull, target{persistable: true}, serviceSQS) {
 		if c.persists() {
 			assert.Equal(t, "PERSIST_SQS", c.PersistEnv, c.id())
 			assert.Contains(t, c.id(), "persist=on")
@@ -234,10 +235,10 @@ func Test_workloads_are_registered_once_and_agree_with_their_cells(t *testing.T)
 		}
 	}
 
-	_, err := findWorkload("s3", "objects")
+	_, err := findWorkload("kv", "objects")
 	require.ErrorIs(t, err, errNoWorkload)
 
-	_, err = findAgentic("s3")
+	_, err = findAgentic("kv")
 	require.ErrorIs(t, err, errNoWorkload)
 }
 

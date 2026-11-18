@@ -53,7 +53,7 @@ func Test_schema_2_ids_are_the_ids_of_the_matrix(t *testing.T) {
 	require.True(t, ok)
 
 	for _, profile := range []string{profileFull, profileQuick} {
-		for _, c := range cellsFor(profile, target{persistable: true}) {
+		for _, c := range cellsFor(profile, target{persistable: true}, serviceSQS) {
 			_, found := gostack.cell(c.id())
 			assert.True(t, found, "%s is not a cell of the converted result", c.id())
 		}
@@ -61,7 +61,7 @@ func Test_schema_2_ids_are_the_ids_of_the_matrix(t *testing.T) {
 
 	localstack, ok := rep.target(targetLocalstack)
 	require.True(t, ok)
-	assert.Len(t, cellsFor(profileFull, target{}), len(localstack.Cells), "a target that does not persist")
+	assert.Len(t, cellsFor(profileFull, target{}, serviceSQS), len(localstack.Cells), "a target that does not persist")
 }
 
 func Test_a_converted_result_compares_cleanly_with_itself(t *testing.T) {
@@ -153,20 +153,16 @@ func Test_compare_and_report_take_the_operations_from_the_cell(t *testing.T) {
 
 	md := testReport(hostA, fakeCell(800)).markdown()
 	assert.Contains(t, md, "### kv/objects")
-	assert.Contains(t, md, "| Cell | get | list | put | Cycles/s | Peak RSS |", "name order, for an unknown workload")
+	assert.Contains(t, md, "| Cell | get | list | put | Cycles/s | Ops/s | Peak RSS |",
+		"name order, for an unknown workload")
 	assert.NotContains(t, md, "Send")
-
-	slow := fakeCell(800)
-	slow.Ops["get"] = opSpread{Count: 1, P50us: around(300), P99us: around(60_000)}
-
-	assert.Contains(t, testReport(hostA, slow).markdown(), "get p99 60.0 ms")
 }
 
 func Test_report_shows_the_operations_of_a_known_workload_in_cycle_order(t *testing.T) {
 	md := testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB)).markdown()
 
 	assert.Contains(t, md, "### sqs/messaging")
-	assert.Contains(t, md, "| Cell | send | receive | delete | Cycles/s | Peak RSS |")
+	assert.Contains(t, md, "| Cell | send | receive | delete | Cycles/s | Ops/s | Peak RSS |")
 }
 
 func Test_summarizeCell_folds_the_operations_and_counters_of_its_runs(t *testing.T) {

@@ -27,10 +27,12 @@
 //
 // A workload (workload.go) is one service's load shape: it names the service,
 // the operations it times, its cells, and how to run one cell against an
-// endpoint. sqs.go holds the only one so far. The orchestrator, the result file,
+// endpoint. sqs.go and s3.go hold them. The orchestrator, the result file,
 // the report and the compare gate know nothing of the service; they read the
 // operations from the cell. A cell id is <service>/<workload>/<options...>, and
 // a cell names the environment variable that turns its persistence on.
+// `bench run -services s3` runs the cells and the agentic cycle of the named
+// services only.
 //
 // # The SQS matrix
 //
@@ -57,6 +59,29 @@
 // carry into a later one. The result keeps, for every figure, the minimum,
 // median and maximum of the runs.
 //
+// # The S3 matrix
+//
+// s3.go speaks S3 over plain HTTP, path style, with a SigV4 header the services
+// route on and nobody checks. It has three workloads, each with persistence off
+// and on (PERSIST_S3=1 with a tmpfs at /persisted-data):
+//
+//	s3/objects    a PutObject then a GetObject of one key a worker, at 1 KiB,
+//	              64 KiB, 1 MiB and 16 MiB, at concurrency 1, 16 and 64
+//	s3/listing    ListObjectsV2 over a bucket seeded with 1000 or 10000 keys,
+//	              flat or with delimiter "/", at concurrency 1, 16 and 64. A cycle
+//	              pages through every key, 1000 a page; each page is timed
+//	s3/multipart  CreateMultipartUpload, eight 8 MiB UploadPart and
+//	              CompleteMultipartUpload: a 64 MiB object, at concurrency 1 and 4
+//	              (64 workers would hold 4 GiB in flight)
+//
+// A listing cell seeds its bucket inside the load generator's run, so the RSS and
+// CPU the orchestrator reads for it include the seeding. The latencies do not.
+//
+// -profile full runs 52 cells per gostack image and 26 on LocalStack, whose image
+// cannot persist. -profile quick runs 9 of them. The agentic workload is 200
+// cycles of create bucket, put 10 objects, list them, delete them, delete the
+// bucket, at concurrency 16.
+//
 // # What else is measured
 //
 // For each target, in a container of its own:
@@ -73,6 +98,13 @@
 //   - an agentic workload: 200 cycles of create queue, 10 SendMessage,
 //     receive 10, delete queue, at concurrency 16;
 //   - image size.
+//
+// # The flags
+//
+// The markdown report flags three things (flags.go) and leaves every other gap to
+// the tables: a gostack cell ten times slower than its LocalStack twin, memory
+// that grows with object size (RSS above the start of the run that follows the
+// payload and not the runtime warming up), and CPU over 1% of a core while idle.
 //
 // # The gate
 //

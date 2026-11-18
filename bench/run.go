@@ -62,6 +62,8 @@ type target struct {
 // options are the settings of `bench run`.
 type options struct {
 	profile          string
+	services         []string
+	notes            []string
 	targets          []target
 	outDir           string
 	compareDir       string
@@ -87,42 +89,31 @@ func parseOptions(args []string) (options, error) {
 	targets := flags.String("targets", "", "comma separated targets: gostack, gostack-slim, localstack "+
 		"(default: all for the full profile, gostack for the quick one)")
 
+	services := flags.String("services", "", "comma separated services whose cells and agentic cycle run (default: all)")
+
 	var opts options
 
-	flags.StringVar(&opts.profile, "profile", profileFull,
-		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64")
-	flags.StringVar(&opts.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
-		"tag for the load generator image the run builds")
-	flags.StringVar(&opts.outDir, "out", "bench/results", "directory for the result files")
-	flags.StringVar(&opts.compareDir, "compare-dir", "",
-		"after the run, compare it with the newest committed result in this directory that has this host's fingerprint")
-	flags.StringVar(&opts.suffix, "name-suffix", "", "appended to container names, to keep parallel runs apart")
-	flags.StringVar(&opts.commit, "commit", "", "the commit the images were built from (default: HEAD)")
-	flags.IntVar(&opts.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
-	flags.IntVar(&opts.idleRuns, "idle-runs", defaultIdleRuns, "containers measured for each idle variant")
-	flags.IntVar(&opts.reps, "reps", defaultReps, "times each cell runs")
-	flags.DurationVar(&opts.settle, "settle", 0, "wait after ready before the idle window (default by profile)")
-	flags.DurationVar(&opts.idle, "idle", 0, "idle window (default by profile)")
-	flags.DurationVar(&opts.duration, "duration", defaultLoadDuration, "length of each run of a cell")
-	flags.IntVar(&opts.cycles, "cycles", defaultCycles, "agentic cycles")
-	flags.IntVar(&opts.cycleConcurrency, "cycle-concurrency", defaultCycleConc, "agentic concurrency")
+	opts.bind(flags)
 
 	err := flags.Parse(args)
 	if err != nil {
 		return options{}, fmt.Errorf("parse flags: %w", err)
 	}
 
-	if opts.profile != profileFull && opts.profile != profileQuick {
-		return options{}, fmt.Errorf("-profile %q: want %s or %s", opts.profile, profileFull, profileQuick)
+	err = opts.check()
+	if err != nil {
+		return options{}, err
 	}
 
 	opts.applyProfileDefaults()
 
+	opts.services, err = parseServices(*services)
+	if err != nil {
+		return options{}, err
+	}
+
 	if *targets == "" {
-		*targets = targetGostack + "," + targetSlim + "," + targetLocalstack
-		if opts.profile == profileQuick {
-			*targets = targetGostack
-		}
+		*targets = defaultTargets(opts.profile)
 	}
 
 	opts.targets = selectTargets(*targets, []target{
@@ -133,11 +124,75 @@ func parseOptions(args []string) (options, error) {
 		return options{}, fmt.Errorf("-targets %q names no target", *targets)
 	}
 
-	if opts.reps < 1 || opts.startupRuns < 1 || opts.idleRuns < 1 {
-		return options{}, errors.New("-reps, -startup-runs and -idle-runs must be at least 1")
+	return opts, nil
+}
+
+// bind registers the flags that fill o.
+func (o *options) bind(flags *flag.FlagSet) {
+	flags.Func("note", "a line for the Notes of the report; repeat for each", func(note string) error {
+		o.notes = append(o.notes, note)
+
+		return nil
+	})
+	flags.StringVar(&o.profile, "profile", profileFull,
+		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64")
+	flags.StringVar(&o.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
+		"tag for the load generator image the run builds")
+	flags.StringVar(&o.outDir, "out", "bench/results", "directory for the result files")
+	flags.StringVar(&o.compareDir, "compare-dir", "",
+		"after the run, compare it with the newest committed result in this directory that has this host's fingerprint")
+	flags.StringVar(&o.suffix, "name-suffix", "", "appended to container names, to keep parallel runs apart")
+	flags.StringVar(&o.commit, "commit", "", "the commit the images were built from (default: HEAD)")
+	flags.IntVar(&o.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
+	flags.IntVar(&o.idleRuns, "idle-runs", defaultIdleRuns, "containers measured for each idle variant")
+	flags.IntVar(&o.reps, "reps", defaultReps, "times each cell runs")
+	flags.DurationVar(&o.settle, "settle", 0, "wait after ready before the idle window (default by profile)")
+	flags.DurationVar(&o.idle, "idle", 0, "idle window (default by profile)")
+	flags.DurationVar(&o.duration, "duration", defaultLoadDuration, "length of each run of a cell")
+	flags.IntVar(&o.cycles, "cycles", defaultCycles, "agentic cycles")
+	flags.IntVar(&o.cycleConcurrency, "cycle-concurrency", defaultCycleConc, "agentic concurrency")
+}
+
+// check refuses a setting no run can use.
+func (o *options) check() error {
+	if o.profile != profileFull && o.profile != profileQuick {
+		return fmt.Errorf("-profile %q: want %s or %s", o.profile, profileFull, profileQuick)
 	}
 
-	return opts, nil
+	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
+		return errors.New("-reps, -startup-runs and -idle-runs must be at least 1")
+	}
+
+	return nil
+}
+
+// defaultTargets are the images a profile measures when -targets is not set.
+func defaultTargets(profile string) string {
+	if profile == profileQuick {
+		return targetGostack
+	}
+
+	return targetGostack + "," + targetSlim + "," + targetLocalstack
+}
+
+// parseServices reads -services: a comma separated list of services some
+// workload is registered for, or nothing for all of them.
+func parseServices(list string) ([]string, error) {
+	if list == "" {
+		return nil, nil
+	}
+
+	var out []string
+
+	for name := range strings.SplitSeq(list, ",") {
+		if !slices.ContainsFunc(workloads, func(w workload) bool { return w.Service() == name }) {
+			return nil, fmt.Errorf("-services %q: %w: %s", list, errNoWorkload, name)
+		}
+
+		out = append(out, name)
+	}
+
+	return out, nil
 }
 
 // selectTargets keeps the targets of all that the comma separated list names.
@@ -261,7 +316,8 @@ func (r *runner) measureAll(ctx context.Context) (report, error) {
 			Arch: info.Architecture, CPUs: info.NCPU, MemoryBytes: info.MemTotal, Fingerprint: fingerprintOf(info),
 		},
 		Settings: settings{
-			Profile: r.opts.profile, StartupRuns: r.opts.startupRuns, IdleRuns: r.opts.idleRuns,
+			Profile: r.opts.profile, Services: r.opts.services, Notes: r.opts.notes,
+			StartupRuns: r.opts.startupRuns, IdleRuns: r.opts.idleRuns,
 			SettleSeconds: r.opts.settle.Seconds(), IdleSeconds: r.opts.idle.Seconds(),
 			CellSeconds: r.opts.duration.Seconds(), Reps: r.opts.reps,
 			Cycles: r.opts.cycles, CycleConcurrency: r.opts.cycleConcurrency,
@@ -336,7 +392,7 @@ func (r *runner) measureTarget(ctx context.Context, t target) targetResult {
 		res.problem("idle without the HEALTHCHECK", err)
 	}
 
-	for _, spec := range cellsFor(r.opts.profile, t) {
+	for _, spec := range cellsFor(r.opts.profile, t, r.opts.services...) {
 		if ctx.Err() != nil {
 			break
 		}
@@ -350,6 +406,10 @@ func (r *runner) measureTarget(ctx context.Context, t target) targetResult {
 	}
 
 	for _, w := range agenticWorkloads {
+		if len(r.opts.services) > 0 && !slices.Contains(r.opts.services, w.Service()) {
+			continue
+		}
+
 		run, err := r.agentic(ctx, t, w)
 		res.problem("agentic workload ("+w.Service()+")", err)
 

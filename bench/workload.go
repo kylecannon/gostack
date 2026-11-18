@@ -63,8 +63,8 @@ type client struct{ endpoint string }
 
 // workloads and agenticWorkloads are what this program can run.
 var (
-	workloads        = []workload{sqsWorkload{}}
-	agenticWorkloads = []agenticWorkload{sqsWorkload{}}
+	workloads        = []workload{sqsWorkload{}, objectsWorkload{}, listingWorkload{}, multipartWorkload{}}
+	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )
 
 var errNoWorkload = errors.New("no such workload")
@@ -145,7 +145,12 @@ func (c cellSpec) id() string {
 	}
 
 	parts := make([]string, 0, idFixedParts+len(c.Options))
-	parts = append(parts, c.Service, c.Workload, "persist="+persist, "payload="+payloadName(c.Payload))
+	parts = append(parts, c.Service, c.Workload, "persist="+persist)
+
+	// A workload with no body of its own, such as a listing, has no payload axis.
+	if c.Payload > 0 {
+		parts = append(parts, "payload="+payloadName(c.Payload))
+	}
 
 	for _, o := range c.Options {
 		parts = append(parts, o.Key+"="+o.Value)
@@ -156,12 +161,17 @@ func (c cellSpec) id() string {
 	return strings.Join(parts, "/")
 }
 
-// cellsFor lists the cells of a profile that a target runs. A target that does
-// not persist leaves the persistence-on cells out.
-func cellsFor(profile string, t target) []cellSpec {
+// cellsFor lists the cells of a profile that a target runs, for the services
+// named, or for every service when none is. A target that does not persist
+// leaves the persistence-on cells out.
+func cellsFor(profile string, t target, services ...string) []cellSpec {
 	var out []cellSpec
 
 	for _, w := range workloads {
+		if len(services) > 0 && !slices.Contains(services, w.Service()) {
+			continue
+		}
+
 		for _, c := range w.Cells(profile) {
 			if c.persists() && !t.persistable {
 				continue

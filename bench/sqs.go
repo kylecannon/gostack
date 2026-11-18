@@ -722,6 +722,17 @@ func newSQSClient(endpoint string, workers int) *sqs.Client {
 // spread over the workers.
 func runAgentic(ctx context.Context, client *sqs.Client, cycles, workers int) (agenticRun, error) {
 	prefix := fmt.Sprintf("bench-agentic-%x", time.Now().UnixNano())
+
+	return runAgenticCycles(ctx, cycles, workers, func(ctx context.Context, n int) error {
+		return agenticCycle(ctx, client, fmt.Sprintf("%s-%d", prefix, n))
+	})
+}
+
+// runAgenticCycles runs cycle for 0 to cycles-1, spread over the workers, and
+// times each whole cycle.
+func runAgenticCycles(ctx context.Context, cycles, workers int,
+	cycle func(ctx context.Context, n int) error,
+) (agenticRun, error) {
 	jobs := make(chan int)
 	timings := make([][]time.Duration, workers)
 	failures := make([]int, workers)
@@ -733,7 +744,8 @@ func runAgentic(ctx context.Context, client *sqs.Client, cycles, workers int) (a
 		wg.Go(func() {
 			for n := range jobs {
 				began := time.Now()
-				err := agenticCycle(ctx, client, fmt.Sprintf("%s-%d", prefix, n))
+
+				err := cycle(ctx, n)
 				if err != nil {
 					failures[i]++
 

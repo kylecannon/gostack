@@ -26,13 +26,9 @@ const (
 	// service and workload; loadReport converts version 2.
 	reportSchema = 3
 
-	// slowP99us is the p99 above which a cell at concurrency 16 is listed.
-	slowP99us   = 50_000
-	attentionAt = levelMid
-
 	// cycleColumns are the columns of a cell table after its operations: cycles a
-	// second and peak RSS.
-	cycleColumns = 2
+	// second, operations a second and peak RSS.
+	cycleColumns = 3
 )
 
 // report is the content of bench/results/<date>-<sha>.json.
@@ -74,15 +70,17 @@ type hostInfo struct {
 }
 
 type settings struct {
-	Profile          string  `json:"profile"`
-	StartupRuns      int     `json:"startup_runs"`
-	IdleRuns         int     `json:"idle_runs"`
-	SettleSeconds    float64 `json:"settle_seconds"`
-	IdleSeconds      float64 `json:"idle_seconds"`
-	CellSeconds      float64 `json:"cell_seconds"`
-	Reps             int     `json:"reps"`
-	Cycles           int     `json:"cycles"`
-	CycleConcurrency int     `json:"cycle_concurrency"`
+	Profile          string   `json:"profile"`
+	Services         []string `json:"services,omitempty"`
+	Notes            []string `json:"notes,omitempty"`
+	StartupRuns      int      `json:"startup_runs"`
+	IdleRuns         int      `json:"idle_runs"`
+	SettleSeconds    float64  `json:"settle_seconds"`
+	IdleSeconds      float64  `json:"idle_seconds"`
+	CellSeconds      float64  `json:"cell_seconds"`
+	Reps             int      `json:"reps"`
+	Cycles           int      `json:"cycles"`
+	CycleConcurrency int      `json:"cycle_concurrency"`
 }
 
 // spread is the minimum, median and maximum of the runs of one measurement.
@@ -120,10 +118,14 @@ type cellResult struct {
 	Runs         int                 `json:"runs"`
 	Ops          map[string]opSpread `json:"ops"`
 	CyclesPerSec spread              `json:"cycles_per_sec"`
-	PeakRSSBytes spread              `json:"peak_rss_bytes"`
-	CPUPercent   spread              `json:"cpu_percent"`
-	Counters     map[string]int      `json:"counters,omitempty"`
-	Problem      string              `json:"problem,omitempty"`
+	// OpsPerSec counts every timed operation of every kind, so a cycle of a put
+	// and a get is two.
+	OpsPerSec        spread         `json:"ops_per_sec"`
+	BaselineRSSBytes spread         `json:"baseline_rss_bytes"`
+	PeakRSSBytes     spread         `json:"peak_rss_bytes"`
+	CPUPercent       spread         `json:"cpu_percent"`
+	Counters         map[string]int `json:"counters,omitempty"`
+	Problem          string         `json:"problem,omitempty"`
 }
 
 // summarizeCell folds the runs of one cell.
@@ -139,31 +141,17 @@ func summarizeCell(spec cellSpec, runs []runResult) cellResult {
 	}
 
 	for name := range names {
-		p50, p99 := make([]float64, 0, len(runs)), make([]float64, 0, len(runs))
-
-		var out opSpread
-
-		for _, run := range runs {
-			stats, ok := run.Ops[name]
-			if !ok {
-				continue
-			}
-
-			out.Count += stats.Count
-			out.Errors += stats.Errors
-
-			p50 = append(p50, float64(stats.P50us))
-			p99 = append(p99, float64(stats.P99us))
-		}
-
-		out.P50us, out.P99us = spreadOf(p50), spreadOf(p99)
-		cell.Ops[name] = out
+		cell.Ops[name] = foldOp(runs, name)
 	}
 
-	rate, peak, cpu := make([]float64, 0, len(runs)), make([]float64, 0, len(runs)), make([]float64, 0, len(runs))
+	n := len(runs)
+	rate, opsRate, base := make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
+	peak, cpu := make([]float64, 0, n), make([]float64, 0, n)
 
 	for _, run := range runs {
 		rate = append(rate, run.CyclesPerSec)
+		opsRate = append(opsRate, run.opsPerSec())
+		base = append(base, float64(run.Usage.BaselineRSSBytes))
 		peak = append(peak, float64(run.Usage.PeakRSSBytes))
 		cpu = append(cpu, run.Usage.CPUPercent)
 
@@ -176,9 +164,49 @@ func summarizeCell(spec cellSpec, runs []runResult) cellResult {
 		}
 	}
 
-	cell.CyclesPerSec, cell.PeakRSSBytes, cell.CPUPercent = spreadOf(rate), spreadOf(peak), spreadOf(cpu)
+	cell.CyclesPerSec, cell.OpsPerSec = spreadOf(rate), spreadOf(opsRate)
+	cell.BaselineRSSBytes, cell.PeakRSSBytes, cell.CPUPercent = spreadOf(base), spreadOf(peak), spreadOf(cpu)
 
 	return cell
+}
+
+// foldOp folds the latency of one operation over the runs that timed it.
+func foldOp(runs []runResult, name string) opSpread {
+	var (
+		out      opSpread
+		p50, p99 []float64
+	)
+
+	for _, run := range runs {
+		stats, ok := run.Ops[name]
+		if !ok {
+			continue
+		}
+
+		out.Count += stats.Count
+		out.Errors += stats.Errors
+
+		p50 = append(p50, float64(stats.P50us))
+		p99 = append(p99, float64(stats.P99us))
+	}
+
+	out.P50us, out.P99us = spreadOf(p50), spreadOf(p99)
+
+	return out
+}
+
+// opsPerSec is the operations of the run, of every kind, a second.
+func (r runResult) opsPerSec() float64 {
+	if r.Seconds <= 0 {
+		return 0
+	}
+
+	total := 0
+	for _, stats := range r.Ops {
+		total += stats.Count
+	}
+
+	return float64(total) / r.Seconds
 }
 
 // targetResult holds every measurement of one image. A measurement that could
@@ -330,10 +358,27 @@ func (r report) markdown() string {
 	}
 
 	r.agenticTable(&b)
-	r.attention(&b)
+	r.notes(&b)
+	r.flags(&b)
 	r.problemList(&b)
 
 	return b.String()
+}
+
+// notes writes the lines the run was given with -note: what the person who ran
+// it knows about the host or the build that the numbers do not say.
+func (r report) notes(b *strings.Builder) {
+	if len(r.Settings.Notes) == 0 {
+		return
+	}
+
+	b.WriteString("## Notes\n\n")
+
+	for _, note := range r.Settings.Notes {
+		b.WriteString("- " + note + "\n")
+	}
+
+	b.WriteString("\n")
 }
 
 func (r report) footprintTable(b *strings.Builder) {
@@ -389,7 +434,8 @@ func cellTable(b *strings.Builder, t targetResult) {
 	}
 
 	b.WriteString("Milliseconds, p50 / p99, of each operation of the cell's cycle. Cycles/s is whole cycles " +
-		"(a batch cycle moves ten messages).\n\n")
+		"(a batch cycle moves ten messages, a listing cycle pages through every key). Ops/s counts every " +
+		"timed operation.\n\n")
 
 	heads, groups := workloadCells(t.Cells)
 	for i, cells := range groups {
@@ -397,7 +443,7 @@ func cellTable(b *strings.Builder, t targetResult) {
 
 		ops := orderedOps(heads[i].Service, heads[i].Workload, cells)
 
-		b.WriteString("| Cell | " + strings.Join(ops, " | ") + " | Cycles/s | Peak RSS |\n")
+		b.WriteString("| Cell | " + strings.Join(ops, " | ") + " | Cycles/s | Ops/s | Peak RSS |\n")
 		b.WriteString("|---|" + strings.Repeat("---:|", len(ops)+cycleColumns) + "\n")
 
 		for _, c := range cells {
@@ -413,7 +459,8 @@ func cellTable(b *strings.Builder, t targetResult) {
 				fmt.Fprintf(b, " %s |", opPair(c.Ops[op]))
 			}
 
-			fmt.Fprintf(b, " %.0f | %s |\n", c.CyclesPerSec.Median, mib(uint64(c.PeakRSSBytes.Median)))
+			fmt.Fprintf(b, " %.0f | %.0f | %s |\n", c.CyclesPerSec.Median, c.OpsPerSec.Median,
+				mib(uint64(c.PeakRSSBytes.Median)))
 		}
 
 		fmt.Fprintln(b)
@@ -426,7 +473,9 @@ func (r report) agenticServices() []string {
 	seen := map[string]bool{}
 
 	for _, w := range agenticWorkloads {
-		seen[w.Service()] = true
+		if len(r.Settings.Services) == 0 || slices.Contains(r.Settings.Services, w.Service()) {
+			seen[w.Service()] = true
+		}
 	}
 
 	for _, t := range r.Targets {
@@ -463,59 +512,6 @@ func (r report) agenticTable(b *strings.Builder) {
 	fmt.Fprintln(b)
 }
 
-// attention lists the cells the task asks to see: where a gostack target is
-// slower than LocalStack, and where its p99 is over 50 ms at concurrency 16.
-// Both are observations, not failures.
-func (r report) attention(b *strings.Builder) {
-	var slower, slow []string
-
-	reference, hasReference := r.target(targetLocalstack)
-
-	for _, t := range r.Targets {
-		if !strings.HasPrefix(t.Name, targetGostack) {
-			continue
-		}
-
-		for _, c := range t.Cells {
-			if c.Problem != "" {
-				continue
-			}
-
-			if hasReference {
-				if ref, ok := reference.cell(c.ID); ok && ref.Problem == "" {
-					if why := slowerThan(c, ref); why != "" {
-						slower = append(slower, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, why))
-					}
-				}
-			}
-
-			slow = append(slow, slowTail(t.Name, c)...)
-		}
-	}
-
-	b.WriteString("## Cells where gostack is slower than LocalStack\n\n")
-	writeList(b, slower, "none (or LocalStack was not measured)")
-	b.WriteString("## Cells with p99 above 50 ms at concurrency 16\n\n")
-	writeList(b, slow, "none")
-}
-
-// slowTail lists the operations of a cell at concurrency 16 whose p99 is over 50 ms.
-func slowTail(target string, c cellResult) []string {
-	if c.Spec.Concurrency != attentionAt {
-		return nil
-	}
-
-	var lines []string
-
-	for _, name := range c.opNames() {
-		if p99 := c.Ops[name].P99us.Median; p99 > slowP99us {
-			lines = append(lines, fmt.Sprintf("- %s `%s`: %s p99 %.1f ms", target, c.ID, name, p99/microsPerMilli))
-		}
-	}
-
-	return lines
-}
-
 // opNames lists the operations of the cell in report order.
 func (c cellResult) opNames() []string {
 	return orderedOps(c.Spec.Service, c.Spec.Workload, []cellResult{c})
@@ -529,27 +525,6 @@ func writeList(b *strings.Builder, lines []string, none string) {
 	}
 
 	b.WriteString(strings.Join(lines, "\n") + "\n\n")
-}
-
-// slowerThan says how a gostack cell is slower than its LocalStack twin, by
-// median: fewer cycles a second, or a higher p50 on some operation. It returns
-// "" when it is not.
-func slowerThan(c, ref cellResult) string {
-	var reasons []string
-
-	if c.CyclesPerSec.Median < ref.CyclesPerSec.Median {
-		reasons = append(reasons, fmt.Sprintf("%.0f cycles/s against %.0f", c.CyclesPerSec.Median, ref.CyclesPerSec.Median))
-	}
-
-	for _, name := range c.opNames() {
-		got, want := c.Ops[name].P50us.Median, ref.Ops[name].P50us.Median
-		if got > want && want > 0 {
-			reasons = append(reasons, fmt.Sprintf("%s p50 %.2f ms against %.2f", name,
-				got/microsPerMilli, want/microsPerMilli))
-		}
-	}
-
-	return strings.Join(reasons, "; ")
 }
 
 func (r report) problemList(b *strings.Builder) {
