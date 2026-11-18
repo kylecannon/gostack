@@ -95,18 +95,22 @@ type ObjectPart struct {
 	Checksum string
 }
 
-// partRange returns where part number lies in v's body. An object that was
-// not uploaded in parts has one part, its whole body.
+// partRange returns where the part uploaded as number lies in v's body, by the
+// part's own number, not its position: an object completed from parts 1, 3 and
+// 5 answers partNumber 3 with its second part and refuses 2, as LocalStack's
+// get_part does and as GetObjectAttributes lists them. An object that was not
+// uploaded in parts has one part, its whole body.
 func (v *Version) partRange(number int32) (ObjectPart, bool) {
 	if len(v.Parts) == 0 {
 		return ObjectPart{Number: 1, Size: v.Size, ETag: v.ETag}, number == 1
 	}
 
-	if number < 1 || int(number) > len(v.Parts) {
+	i := slices.IndexFunc(v.Parts, func(part ObjectPart) bool { return part.Number == number })
+	if i < 0 {
 		return ObjectPart{}, false
 	}
 
-	return v.Parts[number-1], true
+	return v.Parts[i], true
 }
 
 // CreateMultipartUpload starts an upload. The object's headers are taken now
