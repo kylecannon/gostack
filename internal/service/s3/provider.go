@@ -16,6 +16,9 @@ import (
 )
 
 const (
+	// serviceName is S3's name in the catalog, which service.Own marks.
+	serviceName = "s3"
+
 	// hostID is the x-amz-id-2 LocalStack's S3 serializer sends on every
 	// response (S3_HOST_ID).
 	hostID = "9Gjjt1m+cjU4OPvX9O9/8RuvnG41MRb/18Oux2o5H5MY7ISNTlXN+Dz9IG62/ILVxhAGI0qyPfg="
@@ -76,8 +79,10 @@ func (p *Provider) Registration() service.Registration {
 		Serve:          p.serve,
 		ClaimHost:      p.claimHost,
 		SigningDefault: true,
-		Fallback:       p.fallback,
-		Preprocess:     preprocess,
+		Fallback:       fallback,
+		Preprocess:     p.preprocess,
+		RawBody:        true,
+		OwnCORS:        true,
 		Reset:          p.Reset,
 		Close:          p.Close,
 	}
@@ -120,7 +125,7 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 	case isWebsiteHost(r.Host):
 		restxml.WriteS3Error(w, &restxml.Envelope{RequestID: rc.RequestID},
 			awserr.NotImplemented("s3", "StaticWebsiteHosting"), nil)
-	case p.isControlCall(r):
+	case isControlCall(r):
 		// gostack has no s3control, so its calls get the gateway's answer for a
 		// service that is not enabled.
 		query.WriteError(w, &query.Envelope{RequestID: rc.RequestID}, &awserr.Error{
@@ -136,19 +141,17 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 
 // isControlCall reports whether r is an s3control call that detection gave S3
 // because the signing name is S3's and s3control is not registered: a path
-// that is /v20180820 or under it, on a host S3 does not claim. A request S3
-// claims by its host, a virtual host's included, and a path to an existing
-// bucket named v20180820 stay S3's, as LocalStack's S3 pre-router decides them
+// that is /v20180820 or under it that preprocess did not own. A request to a
+// host S3 claims, a virtual host's included, or to an existing bucket named
+// v20180820 is owned, and stays S3's, as LocalStack's S3 pre-router decides it
 // before the signing name is read.
-func (p *Provider) isControlCall(r *http.Request) bool {
+func isControlCall(r *http.Request) bool {
 	path := r.URL.Path
 	if path != controlPath && !strings.HasPrefix(path, controlPath+"/") {
 		return false
 	}
 
-	_, rewritten := r.Context().Value(virtualHostKey{}).(string)
-
-	return !rewritten && !p.claimHost(r.Host) && !p.isBucketPath(path)
+	return service.OwnerOf(r) != serviceName
 }
 
 // retire marks a bucket that left its State as gone, so a call that found it

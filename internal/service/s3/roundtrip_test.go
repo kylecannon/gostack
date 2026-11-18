@@ -2,6 +2,7 @@ package s3_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -398,6 +399,42 @@ func TestRequestsS3DoesNotServeYetAnswer501(t *testing.T) {
 			assert.Contains(t, string(got.body), tt.wantBody)
 		})
 	}
+}
+
+func TestOwnedRequestsReachS3AsSent(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	var gzipped bytes.Buffer
+
+	zw := gzip.NewWriter(&gzipped)
+	_, err := zw.Write([]byte("compressed object"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+
+	// The root decodes a gzip body for every service but the one that owns
+	// the request with RawBody: S3 stores what was sent.
+	put := s.do(call{
+		method: http.MethodPut, target: objectPath, region: regionUSEast1, body: gzipped.Bytes(),
+		header: map[string]string{"Content-Encoding": "gzip"},
+	})
+	require.Equal(t, http.StatusOK, put.status, string(put.body))
+
+	got := s.do(call{
+		method: http.MethodGet, target: objectPath, region: regionUSEast1,
+		header: map[string]string{"Accept-Encoding": "identity"},
+	})
+	require.Equal(t, http.StatusOK, got.status)
+	assert.Equal(t, "gzip", got.header.Get("Content-Encoding"))
+	assert.Equal(t, gzipped.Bytes(), got.body)
+
+	// No legacy rule takes an unsigned DELETE; the existing bucket in its path
+	// does.
+	deleted := s.do(call{method: http.MethodDelete, target: objectPath})
+	assert.Equal(t, http.StatusNoContent, deleted.status, string(deleted.body))
+
+	gone := s.do(call{method: http.MethodHead, target: objectPath, region: regionUSEast1})
+	assert.Equal(t, http.StatusNotFound, gone.status)
 }
 
 // send is do for a spawned goroutine: it returns what went wrong instead of

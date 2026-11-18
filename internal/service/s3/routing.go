@@ -12,16 +12,14 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/kylecannon/gostack/internal/service"
 )
 
 // sniffLimit bounds how much of a POST body preprocess reads for the two legacy
 // rules that look into the body. A multipart form names its fields before the
 // file, and a DeleteObjects body opens with <Delete> and its first <Key>.
 const sniffLimit = 64 << 10
-
-// virtualHostKey marks a request preprocess rewrote from virtual-host to path
-// style. Its value is the bucket.
-type virtualHostKey struct{}
 
 // bodyKey carries what preprocess found at the start of a POST body to
 // fallback, as a sniffed.
@@ -65,21 +63,14 @@ func (p *Provider) claimHost(host string) bool {
 	return strings.Contains(host, ".s3") && virtualHostPattern.MatchString(host)
 }
 
-// fallback takes a request for S3 when no other detection step settles on one
-// service. It is LocalStack's S3 pre-router for a path whose first segment is
-// an existing bucket (cors.py:79-86), then legacy_s3_rules
-// (service_router.py:232-297) in their order.
-//
-// SQ-125: the existing-bucket rule belongs in preprocess, through
-// service.Own(r, "s3"), where it takes the request before the signing name is
-// read, as LocalStack's pre-router does.
-func (p *Provider) fallback(r *http.Request) bool {
+// fallback is LocalStack's legacy_s3_rules (service_router.py:232-297), which
+// take a request for S3 when no other detection step settles on one service.
+// The rules run in LocalStack's order.
+func fallback(r *http.Request) bool {
 	stripped := strings.Trim(r.URL.Path, "/")
 	values := requestValues(r)
 
 	switch {
-	case p.isBucketPath(r.URL.Path):
-		return true
 	case (r.Method == http.MethodGet || r.Method == http.MethodHead) && stripped != "":
 		// :244, GET or HEAD of /<bucket>/<key...>.
 		return true
@@ -140,34 +131,37 @@ func virtualHostBucket(host string) string {
 	return match[1]
 }
 
-// preprocess rewrites a virtual-host request to path style, so the generated
-// router and readers see /<bucket>/<key>, as LocalStack's VirtualHostRewriter
-// does (parser.py:1420-1495), and reads the start of a POST body that a legacy
-// rule looks into. The gateway's own paths are left alone.
-//
-// SQ-125: mark the requests S3 recognizes, through service.Own(r, "s3"), so root
-// CORS and gzip decoding skip them: a host S3 claims, and a path whose first
-// segment is an existing bucket (cors.py:61-92, Provider.isBucketPath).
-func preprocess(r *http.Request) *http.Request {
+// preprocess owns the requests LocalStack's S3 pre-router recognizes
+// (cors.py:61-92): a host S3 claims, and a path whose first segment is an
+// existing bucket. Owned, they reach S3 before the signing name is read, with
+// their body as sent and no root CORS. A virtual-host request is rewritten to
+// path style first, so the generated router and readers see /<bucket>/<key>,
+// as LocalStack's VirtualHostRewriter does (parser.py:1420-1495). Any other
+// POST has the start of its body read for the legacy rules that look into it.
+// The gateway's own paths are left alone.
+func (p *Provider) preprocess(r *http.Request) *http.Request {
 	if isGatewayPath(r.URL.Path) {
 		return nil
 	}
 
 	if bucket := virtualHostBucket(r.Host); bucket != "" {
-		return toPathStyle(r, bucket)
+		return toPathStyle(service.Own(r, serviceName), bucket)
 	}
 
-	if r.Method == http.MethodPost {
+	switch {
+	case p.claimHost(r.Host) || p.isBucketPath(r.URL.Path):
+		return service.Own(r, serviceName)
+	case r.Method == http.MethodPost:
 		return sniff(r)
+	default:
+		return nil
 	}
-
-	return nil
 }
 
 // toPathStyle moves the bucket from the host to the start of the path.
+// It changes r, which must be a copy of the gateway's request, as service.Own
+// returns one.
 func toPathStyle(r *http.Request, bucket string) *http.Request {
-	r = r.WithContext(context.WithValue(r.Context(), virtualHostKey{}, bucket))
-
 	rewritten := *r.URL
 	rewritten.Path = "/" + bucket + rewritten.Path
 

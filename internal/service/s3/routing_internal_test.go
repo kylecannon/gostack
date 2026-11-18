@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/protocol/query"
+	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,86 +60,109 @@ func TestClaimHost(t *testing.T) {
 	}
 }
 
-func TestPreprocessRewritesVirtualHostsToPathStyle(t *testing.T) {
+func TestPreprocessOwnsS3RequestsAndRewritesVirtualHosts(t *testing.T) {
 	tests := []struct {
 		name        string
 		giveHost    string
 		giveTarget  string
+		giveBucket  string
 		wantHost    string
 		wantPath    string
 		wantEscaped string
-		wantBucket  string
+		wantOwner   string
 	}{
 		{
 			name: "a key with escapes", giveHost: "bucket.s3." + testHost, giveTarget: "/dir%2Fname%20x?versionId=1",
-			wantHost: "s3." + testHost, wantPath: "/bucket/dir/name x", wantEscaped: "/bucket/dir%2Fname%20x",
-			wantBucket: bucketName,
+			giveBucket: "", wantHost: "s3." + testHost, wantPath: "/bucket/dir/name x",
+			wantEscaped: "/bucket/dir%2Fname%20x", wantOwner: serviceName,
 		},
 		{
-			name: "the bucket itself", giveHost: "bucket.s3." + testHost, giveTarget: "/",
-			wantHost: "s3." + testHost, wantPath: "/bucket/", wantEscaped: "/bucket/", wantBucket: bucketName,
+			name: "the bucket itself", giveHost: "bucket.s3." + testHost, giveTarget: "/", giveBucket: "",
+			wantHost: "s3." + testHost, wantPath: "/bucket/", wantEscaped: "/bucket/", wantOwner: serviceName,
 		},
 		{
 			name: "a dotted bucket on a regional host", giveHost: "my.dotted.bucket.s3.eu-west-1.amazonaws.com",
-			giveTarget: "/k", wantHost: "s3.eu-west-1.amazonaws.com", wantPath: "/my.dotted.bucket/k",
-			wantEscaped: "/my.dotted.bucket/k", wantBucket: "my.dotted.bucket",
+			giveTarget: "/k", giveBucket: "", wantHost: "s3.eu-west-1.amazonaws.com", wantPath: "/my.dotted.bucket/k",
+			wantEscaped: "/my.dotted.bucket/k", wantOwner: serviceName,
 		},
 		{
-			name: "path style is left alone", giveHost: testHost, giveTarget: objectPath,
-			wantHost: testHost, wantPath: objectPath, wantEscaped: objectPath, wantBucket: "",
+			name: "a path on S3's own host", giveHost: "s3." + testHost, giveTarget: objectPath, giveBucket: "",
+			wantHost: "s3." + testHost, wantPath: objectPath, wantEscaped: objectPath, wantOwner: serviceName,
 		},
 		{
-			name: "the gateway's own path is left alone", giveHost: "bucket.s3." + testHost,
-			giveTarget: healthPath, wantHost: "bucket.s3." + testHost, wantPath: healthPath,
-			wantEscaped: healthPath, wantBucket: "",
+			name: "path style to an existing bucket", giveHost: gatewayHost, giveTarget: objectPath,
+			giveBucket: bucketName, wantHost: gatewayHost, wantPath: objectPath, wantEscaped: objectPath,
+			wantOwner: serviceName,
+		},
+		{
+			name: "path style to an unknown bucket", giveHost: gatewayHost, giveTarget: objectPath, giveBucket: "",
+			wantHost: gatewayHost, wantPath: objectPath, wantEscaped: objectPath, wantOwner: "",
+		},
+		{
+			name: "the gateway's own path", giveHost: "bucket.s3." + testHost, giveTarget: healthPath,
+			giveBucket: "", wantHost: "bucket.s3." + testHost, wantPath: healthPath, wantEscaped: healthPath,
+			wantOwner: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.giveTarget, nil)
-			r.Host = tt.giveHost
-
-			if rewritten := preprocess(r); rewritten != nil {
-				r = rewritten
+			p := newTestProvider(t)
+			if tt.giveBucket != "" {
+				p.names.claim(tt.giveBucket, "000000000000")
 			}
 
-			bucket, _ := r.Context().Value(virtualHostKey{}).(string)
+			original := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.giveTarget, nil)
+			original.Host = tt.giveHost
+
+			r := original
+			if rewritten := p.preprocess(original); rewritten != nil {
+				r = rewritten
+			}
 
 			assert.Equal(t, tt.wantHost, r.Host)
 			assert.Equal(t, tt.wantPath, r.URL.Path)
 			assert.Equal(t, tt.wantEscaped, r.URL.EscapedPath())
-			assert.Equal(t, tt.wantBucket, bucket)
+			assert.Equal(t, tt.wantOwner, service.OwnerOf(r))
+			assert.Equal(t, tt.giveHost, original.Host, "the gateway's request is left as it was")
 		})
 	}
 }
 
 func TestIsControlCall(t *testing.T) {
 	tests := []struct {
-		name     string
-		giveHost string
-		givePath string
-		want     bool
+		name       string
+		giveHost   string
+		givePath   string
+		giveBucket string
+		want       bool
 	}{
 		{name: "an s3control path", giveHost: gatewayHost, givePath: "/v20180820/configuration/x", want: true},
 		{name: "the s3control root", giveHost: gatewayHost, givePath: "/v20180820", want: true},
 		{name: "a bucket that starts like it", giveHost: gatewayHost, givePath: "/v20180820abc/k", want: false},
 		{name: "a key under a virtual host", giveHost: "bucket.s3." + testHost, givePath: "/v20180820/x", want: false},
-		{name: "S3's own host", giveHost: "s3." + testHost, givePath: "/v20180820/x", want: false},
+		{name: "a control path on S3's own host", giveHost: "s3." + testHost, givePath: "/v20180820/x", want: false},
+		{
+			name: "an existing bucket named like it", giveHost: gatewayHost, givePath: "/v20180820/key",
+			giveBucket: "v20180820", want: false,
+		},
 	}
-
-	p := newTestProvider(t)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			p := newTestProvider(t)
+			if tt.giveBucket != "" {
+				p.names.claim(tt.giveBucket, "000000000000")
+			}
+
 			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.givePath, nil)
 			r.Host = tt.giveHost
 
-			if rewritten := preprocess(r); rewritten != nil {
+			if rewritten := p.preprocess(r); rewritten != nil {
 				r = rewritten
 			}
 
-			assert.Equal(t, tt.want, p.isControlCall(r))
+			assert.Equal(t, tt.want, isControlCall(r))
 		})
 	}
 }
@@ -171,14 +195,13 @@ func TestFallbackPortsLegacyS3Rules(t *testing.T) {
 	formPresigned, formPresignedType := multipartBody(t, []string{"X-Amz-Signature"}, "file")
 
 	tests := []struct {
-		name        string
-		giveMethod  string
-		giveTarget  string
-		giveHost    string
-		giveHeader  map[string]string
-		giveBody    string
-		giveBuckets []string
-		want        bool
+		name       string
+		giveMethod string
+		giveTarget string
+		giveHost   string
+		giveHeader map[string]string
+		giveBody   string
+		want       bool
 	}{
 		{name: "GET of a key", giveMethod: http.MethodGet, giveTarget: objectPath, want: true},
 		{name: "HEAD of a bucket", giveMethod: http.MethodHead, giveTarget: bucketPath, want: true},
@@ -207,10 +230,6 @@ func TestFallbackPortsLegacyS3Rules(t *testing.T) {
 			giveHeader: map[string]string{"User-Agent": "aws-cli/2.15.0 Python/3.11"}, want: true,
 		},
 		{name: "unsigned DELETE of an unknown bucket", giveMethod: http.MethodDelete, giveTarget: objectPath},
-		{
-			name: "unsigned DELETE of an existing bucket", giveMethod: http.MethodDelete, giveTarget: objectPath,
-			giveBuckets: []string{bucketName}, want: true,
-		},
 		{
 			name: "a presigned URL", giveMethod: http.MethodDelete, giveTarget: "/bucket/key?X-Amz-Signature=abc",
 			want: true,
@@ -241,11 +260,6 @@ func TestFallbackPortsLegacyS3Rules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := newTestProvider(t)
-			for _, name := range tt.giveBuckets {
-				p.names.claim(name, "000000000000")
-			}
-
 			r := httptest.NewRequestWithContext(t.Context(), tt.giveMethod, tt.giveTarget, strings.NewReader(tt.giveBody))
 			if tt.giveHost != "" {
 				r.Host = tt.giveHost
@@ -263,21 +277,11 @@ func TestFallbackPortsLegacyS3Rules(t *testing.T) {
 
 			_, _ = query.RequestForm(r)
 
-			assert.Equal(t, tt.want, p.fallback(r))
+			assert.Equal(t, tt.want, fallback(r))
 
 			body, err := io.ReadAll(r.Body)
 			require.NoError(t, err)
 			assert.Equal(t, tt.giveBody, string(body))
 		})
 	}
-}
-
-func TestABucketNamedLikeTheControlPathStaysS3s(t *testing.T) {
-	p := newTestProvider(t)
-	p.names.claim("v20180820", "000000000000")
-
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v20180820/key", nil)
-	r.Host = gatewayHost
-
-	assert.False(t, p.isControlCall(r))
 }
