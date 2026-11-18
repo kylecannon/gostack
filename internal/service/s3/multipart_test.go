@@ -368,6 +368,58 @@ func TestCreateMultipartUploadCarriesItsACLAndTags(t *testing.T) {
 	assert.Contains(t, string(acl.body), "http://acs.amazonaws.com/groups/global/AllUsers")
 }
 
+func TestUploadPartReportsTheContentMD5AsSent(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	id := startUpload(t, s, multipartKey, nil)
+	body := []byte("the part")
+	other, _ := md5Of([]byte("another body"))
+	sent := base64.StdEncoding.EncodeToString(other)
+
+	got := s.do(call{
+		method: http.MethodPut, target: multipartKey + "?partNumber=1&uploadId=" + id, region: regionUSEast1,
+		body: body, header: map[string]string{headerContentMD5: sent},
+	})
+	require.Equal(t, http.StatusBadRequest, got.status, string(got.body))
+
+	var digest struct {
+		Code             string `xml:"Code"`
+		ExpectedDigest   string `xml:"ExpectedDigest"`
+		CalculatedDigest string `xml:"CalculatedDigest"`
+	}
+	require.NoError(t, xml.Unmarshal(got.body, &digest), string(got.body))
+
+	sum, _ := md5Of(body)
+	assert.Equal(t, "BadDigest", digest.Code)
+	assert.Equal(t, sent, digest.ExpectedDigest, "a part names the Content-MD5 as sent, where PutObject names its hex")
+	assert.Equal(t, base64.StdEncoding.EncodeToString(sum), digest.CalculatedDigest)
+
+	listed := decodeXML[listedParts](t, s.do(call{
+		method: http.MethodGet, target: multipartKey + "?uploadId=" + id, region: regionUSEast1,
+	}))
+	assert.Empty(t, listed.Parts, "a refused part is not kept")
+}
+
+func TestGetObjectTakesChecksumModeInAnyCase(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	require.Equal(t, http.StatusOK, s.do(call{
+		method: http.MethodPut, target: multipartKey, region: regionUSEast1, body: []byte("checked"),
+	}).status)
+
+	for _, mode := range []string{"ENABLED", "enabled"} {
+		got := s.do(call{
+			method: http.MethodGet, target: multipartKey, region: regionUSEast1,
+			header: map[string]string{headerChecksumMode: mode},
+		})
+		require.Equal(t, http.StatusOK, got.status, mode)
+		assert.NotEmpty(t, got.header.Get("X-Amz-Checksum-Crc64nvme"), mode)
+		assert.Equal(t, typeFullObject, got.header.Get(readChecksumType), mode)
+	}
+}
+
 func TestListAndAbortMultipartUploads(t *testing.T) {
 	s := newServer(t)
 	createBucket(t, s)

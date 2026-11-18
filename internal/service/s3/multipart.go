@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"slices"
@@ -296,7 +297,7 @@ func (p *Provider) UploadPart(ctx context.Context, in *s3api.UploadPartInput) (*
 	// writeBody stores a version; a part is its body, ETag and checksum.
 	written := &Version{ChecksumAlgorithm: algorithm}
 
-	err = p.writeBody(written, body, wantChecksum, contentMD5)
+	err = p.writePart(written, body, wantChecksum, contentMD5)
 	if err != nil {
 		return nil, err
 	}
@@ -322,6 +323,28 @@ func partOutput(part *Part, upload *MultipartUpload, customer customerKey) *s3ap
 	out.ChecksumSHA1, out.ChecksumSHA256 = c.sha1, c.sha256
 
 	return out
+}
+
+// writePart is writeBody for a part, which checks Content-MD5 itself and
+// drops the blob when it differs: unlike PutObject's, the error names the
+// digest as the client sent it, in base64 (provider.py:2563-2571).
+func (p *Provider) writePart(written *Version, body io.Reader, wantChecksum, contentMD5 string) error {
+	err := p.writeBody(written, body, wantChecksum, "")
+	if err != nil || contentMD5 == "" {
+		return err
+	}
+
+	sum, _ := hex.DecodeString(written.ETag) // writeBody wrote the ETag as hex.
+	calculated := base64.StdEncoding.EncodeToString(sum)
+
+	if calculated == contentMD5 {
+		return nil
+	}
+
+	_ = p.blobs.Remove(written.BlobID)
+
+	return (&s3api.BadDigest{ExpectedDigest: &contentMD5, CalculatedDigest: &calculated}).Err(
+		"The Content-MD5 you specified did not match what we received.")
 }
 
 // AbortMultipartUpload drops an upload and its parts.

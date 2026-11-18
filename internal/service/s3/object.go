@@ -213,7 +213,7 @@ func fieldsOf(v *Version, rng *byteRange, part *int32, checksumMode *string) obj
 		f.partsCount = new(int32(len(v.Parts))) //nolint:gosec // a multipart object has at most 10000 parts.
 	}
 
-	if deref(checksumMode) != checksumModeEnabled {
+	if !checksumRequested(checksumMode) {
 		return f
 	}
 

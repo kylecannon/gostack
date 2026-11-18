@@ -167,3 +167,10 @@ func checksumsOf(v *Version) checksumFields {
 
 	return fields
 }
+
+// checksumRequested reports whether a GET or HEAD asks for the object's
+// checksum. The spec's only value is ENABLED, but S3 takes it in any case
+// (provider.py:1042).
+func checksumRequested(mode *string) bool {
+	return strings.EqualFold(deref(mode), checksumModeEnabled)
+}
