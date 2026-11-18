@@ -92,7 +92,9 @@ type Registration struct {
 	// handlers do: S3 marks its own requests there with Own. It returns the
 	// request to carry on with, usually the one Own returns, or nil to keep r.
 	// The Preprocess of each service runs in registration order, each given the
-	// request the one before returned.
+	// request the one before returned. A request a ClaimHost claimed reaches
+	// only the claimant's Preprocess, so another service's Own cannot take it,
+	// and a claim that is an error runs none.
 	Preprocess func(r *http.Request) *http.Request
 	// RawBody makes root content decoding skip a request the service owns (Own),
 	// so Serve reads the body as sent, gzip included, with its Content-Encoding.

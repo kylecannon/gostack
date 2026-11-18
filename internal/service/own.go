@@ -13,6 +13,10 @@ type ownerKey struct{}
 // earlier handler set (aws/handlers/service.py:38). Content decoding skips the
 // request when the service's Registration sets RawBody, and CORS skips it when
 // the Registration sets OwnCORS. A later Own replaces an earlier one.
+//
+// A host claim wins over a mark: gateway.preprocess hands a request that
+// ClaimHost claimed only to the claimant's own Preprocess, so another service's
+// Own never reaches it.
 func Own(r *http.Request, service string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), ownerKey{}, service))
 }

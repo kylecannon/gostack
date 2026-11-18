@@ -158,7 +158,9 @@ decoding, and an oversized one answers `MalformedQueryString` (400).
      services mount. The `/_localstack`, `/_gostack` and `/_aws` routes keep
      their own.
   4. Preprocess hooks, one per registration, in registration order (see
-     "Service registration"). S3 marks a request as S3 when it is host-style, or
+     "Service registration"). A request step 3 claimed by host runs only the
+     claimant's own Preprocess, and none runs when the claim is an error, so a
+     host claim wins over an owner mark. S3 marks a request as S3 when it is host-style, or
      path-style to an existing bucket (`services/s3/cors.py`).
   5. CORS, skipped for a request whose owner sets `OwnCORS`: S3 and API
      Gateway.
@@ -304,7 +306,8 @@ with, and S3 sets all of them:
 
 - **`Preprocess`** runs for every request at root step 4, internal paths
   included, once per registration in registration order, each given the request
-  the one before returned. It returns `service.Own(r, name)` to mark the request
+  the one before returned. A request a `ClaimHost` claimed runs only the
+  claimant's own `Preprocess`, and none runs for an error claim. It returns `service.Own(r, name)` to mark the request
   as the service's, or nil to keep `r`. S3's reads at most 64 KiB of a multipart
   or `?delete` POST body and replays it, so the legacy rules below can look
   into it, and rewrites a virtual-host request to path style.
