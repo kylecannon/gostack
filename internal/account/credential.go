@@ -131,8 +131,9 @@ type Scope struct {
 
 // ParseScope splits a credential scope into its five fields. It is false when
 // the scope does not have exactly five, and it does not judge their values.
-// Presigned-URL validation reads the scope of X-Amz-Credential through it, with
-// the same five-field rule FromRequest applies to the signing name.
+// Presigned-URL validation reads the scope of X-Amz-Credential through it;
+// FromRequest, which runs on every request, reads the same scope without
+// allocating.
 func ParseScope(scope string) (Scope, bool) {
 	fields := strings.Split(scope, "/")
 	if len(fields) != completeScopeFields {
@@ -147,23 +148,23 @@ func ParseScope(scope string) (Scope, bool) {
 // fromScope reads a credential scope, "<key>/<date>/<region>/<signing
 // name>/aws4_request".
 func fromScope(scope string) (Credential, bool) {
+	key, rest, _ := strings.Cut(scope, "/")
+	date, rest, _ := strings.Cut(rest, "/")
+	region, rest, found := strings.Cut(rest, "/")
+
 	var cred Credential
 
-	fields := strings.Split(scope, "/")
-
-	// The signing name is the fourth of exactly five fields, whatever the
-	// fields before it hold.
-	if len(fields) == completeScopeFields {
-		cred.SigningName = fields[3]
+	// The signing name and the terminator, and nothing after them, whatever
+	// the fields before them hold.
+	if signingName, terminator, ok := strings.Cut(rest, "/"); ok && !strings.Contains(terminator, "/") {
+		cred.SigningName = signingName
 	}
 
-	// The key, date and region, then a fourth field, which a longer scope has
-	// too.
-	if len(fields) < completeScopeFields-1 || fields[0] == "" || fields[1] == "" || fields[2] == "" {
+	if key == "" || date == "" || region == "" || !found {
 		return cred, false
 	}
 
-	cred.AccessKey, cred.Region = fields[0], fields[2]
+	cred.AccessKey, cred.Region = key, region
 
 	return cred, true
 }
