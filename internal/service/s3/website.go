@@ -193,6 +193,8 @@ func validateRedirectAll(config *s3api.WebsiteConfiguration, redirectAll *s3api.
 	return nil
 }
 
+// validateRoutingRules checks the rules of a website configuration. It takes
+// any HttpRedirectCode, as LocalStack does.
 func validateRoutingRules(rules []s3api.RoutingRule) error {
 	if len(rules) == 0 || len(rules) > maxRoutingRules {
 		return malformedConfig()
@@ -216,26 +218,32 @@ func validateRoutingRules(rules []s3api.RoutingRule) error {
 		if protocol := deref(redirect.Protocol); protocol != "" && !slices.Contains(websiteProtocols, protocol) {
 			return invalidConfigRequest(messageBadProtocol)
 		}
-
-		// net/http panics on a status code outside 100 to 999, which the rule would
-		// otherwise reach at the first request it matches. A redirect is a 3xx;
-		// AWS documents no range, so this is the narrowest one that keeps a rule
-		// from being unserveable. A value that is not a number is served as 301.
-		code, err := strconv.Atoi(deref(redirect.HttpRedirectCode))
-		if err == nil && (code < minRedirectCode || code > maxRedirectCode) {
-			return invalidConfigRequest("The HTTP redirect code must be a 3xx status code.")
-		}
 	}
 
 	return nil
 }
 
-// minRedirectCode and maxRedirectCode bound the HttpRedirectCode of a routing
-// rule.
+// minServedCode and maxServedCode bound the HttpRedirectCode a rule is served
+// with. LocalStack hands the value to its HTTP server as the status, which
+// answers 100 as a final status, answers a malformed status line for 42, 0,
+// 1000 or text, and fails with a 500 for an empty one. net/http cannot send
+// any of those, as a 1xx is interim and a status outside 100 to 999 panics.
+// A rule with such a code is served as 301, which is also what a rule with no
+// code gets.
 const (
-	minRedirectCode = 300
-	maxRedirectCode = 399
+	minServedCode = 200
+	maxServedCode = 999
 )
+
+// redirectStatus is the status a routing rule answers with.
+func redirectStatus(code *string) int {
+	n, err := strconv.Atoi(deref(code))
+	if err != nil || n < minServedCode || n > maxServedCode {
+		return http.StatusMovedPermanently
+	}
+
+	return n
+}
 
 // websiteBucket returns the bucket a website host names, whichever account owns
 // it, and its website configuration. A website request is not signed.
@@ -559,13 +567,7 @@ func redirectByRule(w http.ResponseWriter, page *url.URL, key string, rule *s3ap
 		// The path stays as it was.
 	}
 
-	code := http.StatusMovedPermanently
-	n, err := strconv.Atoi(deref(target.HttpRedirectCode))
-	if err == nil {
-		code = n
-	}
-
-	redirect(w, code, to.String())
+	redirect(w, redirectStatus(target.HttpRedirectCode), to.String())
 }
 
 func redirect(w http.ResponseWriter, code int, location string) {
