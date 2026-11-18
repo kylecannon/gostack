@@ -222,7 +222,7 @@ func TestObjectRoundTrip(t *testing.T) {
 			put := s.do(call{
 				method: http.MethodPut, host: tt.giveHost, target: target, region: regionUSEast1, body: body,
 				header: map[string]string{
-					"Content-Type": "text/plain", "X-Amz-Meta-Color": "Blue",
+					headerContentType: "text/plain", "X-Amz-Meta-Color": "Blue",
 					headerContentMD5: base64.StdEncoding.EncodeToString(sum),
 				},
 			})

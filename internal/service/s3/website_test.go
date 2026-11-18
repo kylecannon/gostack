@@ -32,7 +32,7 @@ func putWebsite(t *testing.T, s *server, body string) {
 func putObject(t *testing.T, s *server, key, body, contentType string, header map[string]string) {
 	t.Helper()
 
-	all := map[string]string{"Content-Type": contentType}
+	all := map[string]string{headerContentType: contentType}
 	maps.Copy(all, header)
 
 	put := s.do(call{

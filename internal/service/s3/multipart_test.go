@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	keyPath  = "/bucket/big"
-	mib      = 1 << 20
-	partSize = 5 * mib
+	multipartKey = "/bucket/big"
+	mib          = 1 << 20
+	partSize     = 5 * mib
 
 	headerChecksumType = "x-amz-checksum-type"
 
@@ -31,8 +31,8 @@ const (
 	headerChecksumCRC32   = "x-amz-checksum-crc32"
 	headerChecksumCRC32C  = "x-amz-checksum-crc32c"
 	typeFullObject        = "FULL_OBJECT"
-	codeInvalidRequest    = "InvalidRequest"
 	headerContentEncoding = "Content-Encoding"
+	headerContentType     = "Content-Type"
 )
 
 type initiated struct {
@@ -99,7 +99,7 @@ func putPart(t *testing.T, s *server, id string, number int, body []byte, header
 	t.Helper()
 
 	got := s.do(call{
-		method: http.MethodPut, target: fmt.Sprintf("%s?partNumber=%d&uploadId=%s", keyPath, number, id),
+		method: http.MethodPut, target: fmt.Sprintf("%s?partNumber=%d&uploadId=%s", multipartKey, number, id),
 		region: regionUSEast1, body: body, header: header,
 	})
 	require.Equal(t, http.StatusOK, got.status, string(got.body))
@@ -130,7 +130,7 @@ func completeBody(etags []string, extra ...string) []byte {
 
 func complete(s *server, id string, body []byte, header map[string]string) reply {
 	return s.do(call{
-		method: http.MethodPost, target: keyPath + "?uploadId=" + id, region: regionUSEast1, body: body, header: header,
+		method: http.MethodPost, target: multipartKey + "?uploadId=" + id, region: regionUSEast1, body: body, header: header,
 	})
 }
 
@@ -155,12 +155,12 @@ func TestMultipartUploadRoundTrip(t *testing.T) {
 	createBucket(t, s)
 
 	first, second := bytes.Repeat([]byte("a"), partSize), []byte("tail of the object")
-	id := startUpload(t, s, keyPath, map[string]string{"Content-Type": "text/plain", "x-amz-meta-color": "blue"})
+	id := startUpload(t, s, multipartKey, map[string]string{headerContentType: "text/plain", "x-amz-meta-color": "blue"})
 
 	etags := []string{putPart(t, s, id, 1, first, nil), putPart(t, s, id, 2, second, nil)}
 
 	listed := decodeXML[listedParts](t, s.do(call{
-		method: http.MethodGet, target: keyPath + "?uploadId=" + id + "&max-parts=1", region: regionUSEast1,
+		method: http.MethodGet, target: multipartKey + "?uploadId=" + id + "&max-parts=1", region: regionUSEast1,
 	}))
 	require.Len(t, listed.Parts, 1)
 	assert.True(t, listed.IsTruncated)
@@ -176,7 +176,7 @@ func TestMultipartUploadRoundTrip(t *testing.T) {
 	assert.NotEmpty(t, done.ChecksumCRC64)
 	assert.Equal(t, "http://bucket.s3."+localstackHost+"/big", done.Location)
 
-	object := s.do(call{method: http.MethodGet, target: keyPath, region: regionUSEast1})
+	object := s.do(call{method: http.MethodGet, target: multipartKey, region: regionUSEast1})
 	require.Equal(t, http.StatusOK, object.status)
 	assert.Equal(t, slices.Concat(first, second), object.body)
 	assert.Equal(t, done.ETag, object.header.Get("ETag"))
@@ -191,7 +191,7 @@ func TestCompleteRefusesALaterPartUnderTheMinimumAndKeepsTheUpload(t *testing.T)
 	s := newServer(t)
 	createBucket(t, s)
 
-	id := startUpload(t, s, keyPath, nil)
+	id := startUpload(t, s, multipartKey, nil)
 	etags := []string{putPart(t, s, id, 1, []byte("small"), nil), putPart(t, s, id, 2, []byte("x"), nil)}
 
 	tests := []struct {
@@ -229,7 +229,7 @@ func TestMultipartChecksums(t *testing.T) {
 		s := newServer(t)
 		createBucket(t, s)
 
-		id := startUpload(t, s, keyPath, map[string]string{headerAlgorithm: "CRC32"})
+		id := startUpload(t, s, multipartKey, map[string]string{headerAlgorithm: "CRC32"})
 		etags := []string{
 			putPart(t, s, id, 1, first, map[string]string{headerChecksumCRC32: crcBase64(crc1)}),
 			putPart(t, s, id, 2, second, map[string]string{headerChecksumCRC32: crcBase64(crc2)}),
@@ -250,7 +250,7 @@ func TestMultipartChecksums(t *testing.T) {
 		createBucket(t, s)
 
 		castagnoli := crc32.MakeTable(crc32.Castagnoli)
-		id := startUpload(t, s, keyPath, map[string]string{
+		id := startUpload(t, s, multipartKey, map[string]string{
 			headerAlgorithm: "CRC32C", headerChecksumType: typeFullObject,
 		})
 		etags := []string{
@@ -277,9 +277,9 @@ func TestMultipartChecksums(t *testing.T) {
 		s := newServer(t)
 		createBucket(t, s)
 
-		id := startUpload(t, s, keyPath, map[string]string{headerAlgorithm: "SHA256"})
+		id := startUpload(t, s, multipartKey, map[string]string{headerAlgorithm: "SHA256"})
 		got := s.do(call{
-			method: http.MethodPut, target: keyPath + "?partNumber=1&uploadId=" + id, region: regionUSEast1,
+			method: http.MethodPut, target: multipartKey + "?partNumber=1&uploadId=" + id, region: regionUSEast1,
 			body: second, header: map[string]string{headerChecksumCRC32: crcBase64(crc2)},
 		})
 		assert.Equal(t, codeInvalidRequest, got.err(t).Code)
@@ -296,12 +296,12 @@ func TestUploadPartCopyStreamsARange(t *testing.T) {
 		method: http.MethodPut, target: "/bucket/source", region: regionUSEast1, body: source,
 	}).status)
 
-	id := startUpload(t, s, keyPath, nil)
+	id := startUpload(t, s, multipartKey, nil)
 	copyPart := func(header map[string]string) reply {
 		header["x-amz-copy-source"] = "/bucket/source"
 
 		return s.do(call{
-			method: http.MethodPut, target: keyPath + "?partNumber=1&uploadId=" + id, region: regionUSEast1, header: header,
+			method: http.MethodPut, target: multipartKey + "?partNumber=1&uploadId=" + id, region: regionUSEast1, header: header,
 		})
 	}
 
@@ -323,7 +323,7 @@ func TestUploadPartCopyStreamsARange(t *testing.T) {
 	assert.Equal(t, etag, result.ETag)
 
 	require.Equal(t, http.StatusOK, complete(s, id, completeBody([]string{result.ETag}), nil).status)
-	assert.Equal(t, source[5:10], s.do(call{method: http.MethodGet, target: keyPath, region: regionUSEast1}).body)
+	assert.Equal(t, source[5:10], s.do(call{method: http.MethodGet, target: multipartKey, region: regionUSEast1}).body)
 }
 
 func TestListAndAbortMultipartUploads(t *testing.T) {
@@ -362,7 +362,7 @@ func TestUploadPartWithExpectContinueAndEmptyBody(t *testing.T) {
 	s := newServer(t)
 	createBucket(t, s)
 
-	id := startUpload(t, s, keyPath, nil)
+	id := startUpload(t, s, multipartKey, nil)
 	etag := putPart(t, s, id, 1, nil, map[string]string{"Expect": "100-continue"})
 
 	_, empty := md5Of(nil)
@@ -483,8 +483,8 @@ func TestAWSChunkedBodies(t *testing.T) {
 		s := newServer(t)
 		createBucket(t, s)
 
-		id := startUpload(t, s, keyPath, nil)
-		target := keyPath + "?partNumber=1&uploadId=" + id
+		id := startUpload(t, s, multipartKey, nil)
+		target := multipartKey + "?partNumber=1&uploadId=" + id
 		payload := "Hello Blob"
 
 		broken := s.do(call{
