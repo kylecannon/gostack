@@ -10,7 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const euWest1 = "eu-west-1"
+const (
+	euWest1    = "eu-west-1"
+	signingSQS = "sqs"
+)
 
 // presignedV4 is the query string of a presigned SigV4 URL, URL-encoded as
 // botocore writes it.
@@ -58,13 +61,13 @@ func Test_FromRequest(t *testing.T) {
 		{
 			name:     "sigv4",
 			giveAuth: sign(key, usEast1),
-			want:     account.Credential{AccessKey: key, SigningName: "sqs", Region: usEast1},
+			want:     account.Credential{AccessKey: key, SigningName: signingSQS, Region: usEast1},
 			wantOK:   true,
 		},
 		{
 			name:     "sigv4 account as key",
 			giveAuth: sign("123456789012", euWest1),
-			want:     account.Credential{AccessKey: "123456789012", SigningName: "sqs", Region: euWest1},
+			want:     account.Credential{AccessKey: "123456789012", SigningName: signingSQS, Region: euWest1},
 			wantOK:   true,
 		},
 		{
@@ -101,8 +104,18 @@ func Test_FromRequest(t *testing.T) {
 		},
 		{name: "sigv4 without a credential", giveAuth: "AWS4-HMAC-SHA256 SignedHeaders=host"},
 		{name: "sigv4 with a short scope", giveAuth: "AWS4-HMAC-SHA256 Credential=AKIA/20130524/us-east-1"},
-		{name: "sigv4 with an empty region", giveAuth: "AWS4-HMAC-SHA256 Credential=K/20130524//sqs/aws4_request"},
-		{name: "sigv4 with an empty key", giveAuth: "AWS4-HMAC-SHA256 Credential=/20130524/us-east-1/sqs/aws4_request"},
+		{
+			// The service router reads any five fields; the account and region
+			// regexes need a key, date and region.
+			name:     "sigv4 with an empty region keeps its signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=K/20130524//sqs/aws4_request",
+			want:     account.Credential{SigningName: signingSQS},
+		},
+		{
+			name:     "sigv4 with an empty key keeps its signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=/20130524/us-east-1/sqs/aws4_request",
+			want:     account.Credential{SigningName: signingSQS},
+		},
 		{name: "sigv4 scheme alone", giveAuth: "AWS4-HMAC-SHA256"},
 
 		// A SigV2 Authorization header.
@@ -126,7 +139,11 @@ func Test_FromRequest(t *testing.T) {
 			wantOK: true,
 		},
 		{name: "presigned sigv4 with a short scope", giveQS: presignedV4(key + "/20130524/" + euWest1)},
-		{name: "presigned sigv4 with an empty region", giveQS: presignedV4(key + "/20130524//s3/aws4_request")},
+		{
+			name:   "presigned sigv4 with an empty region",
+			giveQS: presignedV4(key + "/20130524//s3/aws4_request"),
+			want:   account.Credential{SigningName: "s3"},
+		},
 		{name: "presigned sigv4 with an empty credential", giveQS: "X-Amz-Credential=&AWSAccessKeyId=" + key},
 
 		// The query string of a presigned SigV2 URL.

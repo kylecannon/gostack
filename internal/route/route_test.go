@@ -141,6 +141,17 @@ func Test_Detect(t *testing.T) {
 			wantProtocol: protocol.KindQuery,
 		},
 		{
+			// service_router.py:74 reads any five fields, empty ones too.
+			name:         "a scope with an empty key still names its signing name",
+			giveServices: []service.Metadata{sqs, sts},
+			giveHost:     anyHost,
+			giveHeaders: map[string]string{
+				headerAuth: "AWS4-HMAC-SHA256 Credential=/20130524/us-east-1/sts/aws4_request, Signature=abc",
+			},
+			wantService:  nameSTS,
+			wantProtocol: protocol.KindQuery,
+		},
+		{
 			name:         "target prefix alone picks sqs json",
 			giveServices: []service.Metadata{sqs, sts},
 			giveHost:     anyHost,

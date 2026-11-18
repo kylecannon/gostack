@@ -48,12 +48,13 @@ type Credential struct {
 // A scope is "<key>/<date>/<region>/<signing name>/aws4_request". It gives the
 // key and region when its first three fields are not empty and a fourth
 // follows, as LocalStack's account and region regexes read it; it gives the
-// signing name only when it has exactly five fields, as LocalStack's service
+// signing name whenever it has exactly five fields, as LocalStack's service
 // router reads it.
 //
 // The result is false when there is no credential, or the one that decides is
 // malformed: a scope short of four fields or with an empty key, date or region,
-// or a SigV2 key that is empty.
+// or a SigV2 key that is empty. A malformed five-field scope still gives its
+// signing name.
 func FromRequest(r *http.Request) (Credential, bool) {
 	if authorization := r.Header.Get("Authorization"); authorization != "" {
 		return fromAuthorization(authorization)
@@ -108,16 +109,19 @@ func fromScope(scope string) (Credential, bool) {
 	date, rest, _ := strings.Cut(rest, "/")
 	region, rest, found := strings.Cut(rest, "/")
 
-	if key == "" || date == "" || region == "" || !found {
-		return Credential{}, false
-	}
+	var cred Credential
 
-	cred := Credential{AccessKey: key, Region: region}
-
-	// The signing name and the terminator, and nothing after them.
+	// The signing name and the terminator, and nothing after them, whatever
+	// the fields before them hold.
 	if signingName, terminator, ok := strings.Cut(rest, "/"); ok && !strings.Contains(terminator, "/") {
 		cred.SigningName = signingName
 	}
+
+	if key == "" || date == "" || region == "" || !found {
+		return cred, false
+	}
+
+	cred.AccessKey, cred.Region = key, region
 
 	return cred, true
 }
