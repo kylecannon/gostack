@@ -8,7 +8,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
-	"maps"
 	"mime"
 	"net/http"
 	"net/url"
@@ -472,32 +471,9 @@ func (c *devCall) respond(ctx context.Context, h *previewHandler) {
 		return
 	}
 
-	// The query writer only writes text/xml. A caller that asked for another
-	// type gets the same document in it.
 	held := &heldResponse{header: http.Header{}}
 	sqsapi.Serve(h, held, c.rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
-
-	out := c.w.Header()
-	maps.Copy(out, held.header)
-
-	body := held.body.Bytes()
-
-	if c.mime == mimeJSON {
-		converted, err := xmlToJSON(body)
-		if err == nil {
-			body = converted
-		}
-	}
-
-	out.Set(headerType, c.mime)
-
-	status := held.status
-	if status == 0 {
-		status = http.StatusOK
-	}
-
-	c.w.WriteHeader(status)
-	_, _ = c.w.Write(body)
+	held.sendAs(c.w, c.mime)
 }
 
 // heldResponse keeps a response so it can be rewritten before it is sent.

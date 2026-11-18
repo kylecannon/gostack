@@ -114,7 +114,11 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rc.Request = r.WithContext(request.With(r.Context(), rc))
-	sqsapi.ServeValidated(p, w, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
+
+	held := &heldResponse{header: http.Header{}}
+	sqsapi.ServeValidated(p, held, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
+	held.markSenderFault()
+	held.sendAs(w, negotiateMime(r))
 	p.markChanged(rc.Operation)
 }
 

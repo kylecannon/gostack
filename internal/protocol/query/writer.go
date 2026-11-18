@@ -45,8 +45,19 @@ func (w *Writer) Open(name string) {
 	w.buf = append(w.buf, '>')
 }
 
-// Close writes an end tag.
+// Close writes an end tag. An element with no content becomes <name/>, as
+// LocalStack's ElementTree writes it; a client reads both forms alike, but a
+// test of LocalStack looks for the short one.
 func (w *Writer) Close(name string) {
+	const tagMarks = 2 // the "<" and ">" around the name of the start tag
+
+	start := len(w.buf) - len(name) - tagMarks
+	if start >= 0 && w.buf[start] == '<' && w.buf[len(w.buf)-1] == '>' && string(w.buf[start+1:len(w.buf)-1]) == name {
+		w.buf = append(w.buf[:len(w.buf)-1], '/', '>')
+
+		return
+	}
+
 	w.buf = append(w.buf, '<', '/')
 	w.buf = append(w.buf, name...)
 	w.buf = append(w.buf, '>')

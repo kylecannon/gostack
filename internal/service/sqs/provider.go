@@ -120,11 +120,6 @@ func (p *Provider) notifyChanged() {
 	}
 }
 
-// serve is the Registration's Serve: the generated dispatcher in front of p.
-func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
-	sqsapi.Serve(p, w, rc)
-}
-
 // callOf returns the request context the gateway put in ctx.
 func callOf(ctx context.Context) (*request.Context, *awserr.Error) {
 	rc, ok := request.From(ctx)

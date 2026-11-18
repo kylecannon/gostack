@@ -126,7 +126,7 @@ func Test_WriteResponse(t *testing.T) {
 		rec := httptest.NewRecorder()
 		query.WriteResponse(rec, &query.Envelope{Action: "A", Result: "AResult", RequestID: "r"}, nil)
 
-		assert.Contains(t, rec.Body.String(), "<AResult></AResult>")
+		assert.Contains(t, rec.Body.String(), "<AResult/>")
 	})
 }
 
