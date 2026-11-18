@@ -85,6 +85,15 @@ func (w *Writer) Close(name string) {
 	w.buf = append(w.buf, '>')
 }
 
+// Text writes escaped text into the element Open wrote last, for a scalar
+// whose start tag carries an attribute or a namespace.
+func (w *Writer) Text(value string) {
+	if value != "" {
+		w.escape(value, textEscapes)
+		w.open = -1
+	}
+}
+
 // String writes <name>value</name>, escaping value.
 func (w *Writer) String(name, value string) {
 	w.Open(name)
