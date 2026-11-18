@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -226,16 +227,17 @@ func Test_Assets_StuckRemovalsAreLogged(t *testing.T) {
 		require.NoError(t, a.Remove(id))
 	}
 
-	s.set(nil, errSnapshot)
-
-	for range 3 {
+	// The disk is full. Each save names a different random temp file in its
+	// error, and the cause is the same.
+	for i := range 3 {
+		s.set(nil, fmt.Errorf("write store.json.tmp-%d: %w", i, syscall.ENOSPC))
 		e.MarkDirty(shelfService)
-		require.ErrorIs(t, e.Flush(t.Context()), errSnapshot)
+		require.ErrorIs(t, e.Flush(t.Context()), syscall.ENOSPC)
 	}
 
 	const stuck = "asset removals are waiting for a save that cannot finish"
 
-	assert.Equal(t, 1, strings.Count(logs.String(), stuck), "once, not once per failed save")
+	assert.Equal(t, 1, strings.Count(logs.String(), stuck), "once for the cause, not once per failed save")
 	assert.Contains(t, logs.String(), "queued=2")
 	assert.Contains(t, logs.String(), "error=")
 

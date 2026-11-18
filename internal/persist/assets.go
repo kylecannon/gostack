@@ -98,8 +98,8 @@ type Assets struct {
 	capturing map[string]struct{}
 	// saving is true from begin to finish of a save of the service.
 	saving bool
-	// stuck is the error of the last save or deletion that left removals queued,
-	// or "" when the queue is not stuck. It is logged once per change.
+	// stuck is the cause of the last save or deletion error that left removals
+	// queued, or "" when the queue is not stuck. It is logged once per change.
 	stuck string
 }
 
@@ -403,7 +403,7 @@ func (a *Assets) trackQueue(err error) {
 
 	queued, was, now := len(a.removed), a.stuck, ""
 	if err != nil && queued > 0 {
-		now = err.Error()
+		now = rootCause(err).Error()
 	}
 
 	a.stuck = now
@@ -416,6 +416,20 @@ func (a *Assets) trackQueue(err error) {
 	case now == "" && was != "":
 		a.log.Info("persist: asset removals are going through again", "dir", a.dir, "queued", queued)
 	default:
+	}
+}
+
+// rootCause is the innermost error of err's chain. A state file's temp name is
+// random and is part of the error text, so only the cause, such as "no space
+// left on device", says whether the error is the same one again.
+func rootCause(err error) error {
+	for {
+		inner := errors.Unwrap(err)
+		if inner == nil {
+			return err
+		}
+
+		err = inner
 	}
 }
 
