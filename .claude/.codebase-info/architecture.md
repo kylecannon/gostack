@@ -34,14 +34,15 @@ client ──► gateway listener (TLS / HTTP1 / h2c on one port)   internal/gat
 ## Startup (`cmd/gostack/start.go`)
 
 1. `config.Load()` (viper-backed LocalStack env vars) in `main.go`; PID 1 runs `lifecycle.Supervisor`, which re-execs gostack as a child.
-2. `newProviders` (builds `s3.Provider` with the ephemeral `BlobStore`), `registrations`, `persist.New`; every registration with a `Persist` is registered with the engine (`providers.persist`). Once the gateway exists, `providers.bind(gw.Handler())` hands S3 the handler its in-process client calls through.
+2. `newProviders` (builds `s3.Provider` on `blob.NewEphemeral`; when S3 persists, `eng.Assets("s3")` opens `<base>/s3/assets` and `Provider.UseBlobs(persist.NewBlobStore(assets))` swaps the store before load), `registrations`, `persist.New`; every registration with a `Persist` is registered with the engine (`providers.persist`). Once the gateway exists, `providers.bind(gw.Handler())` hands S3 the handler its in-process client calls through.
 3. `eng.Load`, then boot init hooks, then `Gateway.Listen` (cert loaded, listeners bound), then start/ready hooks, then "Ready.".
 4. Shutdown on one deadline from `lifecycle.PlanShutdown`, which returns `Deadlines{Work, Save, Close}`: `BeginShutdown` (503 guard, services' `Shutdown`), shutdown hooks, drain until `Work` (`DrainBy`), save by `Save`, then `Close` on every registration by `Close`, which falls after the save so a slow Close cannot take its time, then save again. Restart and kill take the same path. Budget table: `docs/architecture.md`, container contract.
 
 ## State and persistence
 
 - `internal/store.Bundle[S]` holds per-service state keyed by account and region. `/_gostack/state/reset` calls every registration's `Reset`, persisted or not; `Reset` empties states in place.
-- `internal/persist.Engine` takes `Snapshotter`s per service; `MarkDirty` arms a flush timer; `Flush` writes temp + fsync + rename under `PERSIST_BASE_DIR`. SQS snapshot code: `internal/service/sqs/snapshot*.go`, `standard-snapshot.go`, `fifo-snapshot.go`, `move-task-snapshot.go`.
+- `internal/persist.Engine` takes `Snapshotter`s per service; `MarkDirty` arms a flush timer; `Flush` writes temp + fsync + rename under `PERSIST_BASE_DIR`. SQS snapshot code: `internal/service/sqs/snapshot*.go`, `standard-snapshot.go`, `fifo-snapshot.go`, `move-task-snapshot.go`. S3: `internal/service/s3/snapshot.go` writes buckets, versions and uploads to `store.json` with body ids only; `bucketData.bucket()` restores them and calls `reindex()` for the listing indexes.
+- `internal/persist/assets.go`: `Engine.Assets(svc)` is an `os.Root`-confined directory of immutable blob files. A new asset is renamed into place before any snapshot can name it; a removed one is deleted once a snapshot that no longer names it is on disk, or at once if no save could have named it. After the state loads, the engine removes every asset the `Referencer` does not name. `ResetAssets` wipes it on `/_gostack/state/reset`.
 
 ## Codegen
 
@@ -62,7 +63,7 @@ Runtime codec support is in `internal/protocol/{query,awsjson,rest,restxml}`; `i
 
 - `Provider` (provider.go) builds the `Registration`: `ClaimHost`, `Fallback` and `Preprocess` from routing.go, `SigningDefault`, `RawBody` and `OwnCORS` set. Its response writer is where S3's wire quirks are applied (`Server: AmazonS3`, ETag header casing).
 - State (state.go, bucket.go): one `State` per account in a `store.Bundle` (empty region); bucket names are unique across accounts through a name index. Each `Bucket` has its own lock; `Object.Versions` is the version chain, oldest first.
-- Bodies go through `BlobStore` (blobstore.go): the ephemeral store keeps up to 512 KiB in memory and spills to an unlinked temp file under `DefaultSpillDir` (`/var/lib/localstack/tmp`). Writes go `writeBody` then `commitVersion`; reads open the blob under the bucket lock.
+- Bodies go through `blob.Store` (`internal/blob`): the ephemeral store keeps up to 512 KiB in memory and spills to an unlinked temp file under `DefaultSpillDir` (`/var/lib/localstack/tmp`); the persisted store is `persist.NewBlobStore` over the assets directory. Writes go `writeBody` then `commitVersion`; reads open the blob under the bucket lock.
 - Notifications: notifications.go stores the configuration; events.go builds the records and queues SQS `SendMessage` calls on the provider's `inproc.Client`.
 
 ## Cross-service calls (`internal/inproc`)

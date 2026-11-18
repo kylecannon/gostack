@@ -14,7 +14,8 @@ internal/
   inproc/               in-process client for service-to-service calls
   internalapi/          /_gostack, /_localstack, /_aws handlers
   lifecycle/            supervisor (PID 1), init hooks, stages, startup warnings
-  persist/              engine, config, files (atomic write, load)
+  blob/                 blob.Store interface and the ephemeral store
+  persist/              engine, config, files (atomic write, load), assets seam
   protocol/             Kind, Time; query/, awsjson/, rest/, restxml/ runtime codecs; awschunked/;
                         testdata/botocore fixtures; restxml/ and restjson/ fixturegen_test/ (generated)
   request/              per-request Context in ctx
