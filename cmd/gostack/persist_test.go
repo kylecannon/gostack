@@ -405,7 +405,7 @@ func Test_gostack_health_persisted_flag(t *testing.T) {
 
 	status, body = g.do(t, http.MethodGet, "/_localstack/health", "")
 	require.Equal(t, http.StatusOK, status, body)
-	assert.JSONEq(t, `{"services":{"sqs":"running","sts":"running"},"edition":"community",`+
+	assert.JSONEq(t, `{"services":{"s3":"running","sqs":"running","sts":"running"},"edition":"community",`+
 		`"version":"`+smokeVersion+`"}`, body)
 }
 

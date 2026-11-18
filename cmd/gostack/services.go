@@ -6,6 +6,7 @@ import (
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
@@ -31,6 +32,33 @@ func registrations(cfg *config.Config, changed func(name string)) []service.Regi
 	return []service.Registration{
 		sqs.New(sqsSettings(cfg), changed).Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
+		s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir)).Registration(),
+	}
+}
+
+// s3Settings maps the live configuration onto the settings of the S3 provider.
+// S3 asks for them on every request, to claim its hosts, so the mapping is
+// redone only when an update through /_localstack/config has replaced the
+// snapshot.
+func s3Settings(cfg *config.Config) func() s3.Settings {
+	type mapped struct {
+		from *config.Settings
+		to   s3.Settings
+	}
+
+	var last atomic.Pointer[mapped]
+
+	return func() s3.Settings {
+		current := cfg.Settings()
+
+		if m := last.Load(); m != nil && m.from == current {
+			return m.to
+		}
+
+		m := &mapped{from: current, to: s3.Settings{LocalstackHost: current.LocalstackHost.String()}}
+		last.Store(m)
+
+		return m.to
 	}
 }
 

@@ -47,7 +47,7 @@ space := $(subst ,, )
 
 # The services gen regenerates, as botocore service names. A later service adds
 # its name here and an entry in codegen/cmd/gostack-codegen/config.go.
-GEN_SERVICES ?= sts sqs
+GEN_SERVICES ?= sts sqs s3
 
 # How long each fuzz target runs under `make fuzz`.
 FUZZTIME ?= 30s
