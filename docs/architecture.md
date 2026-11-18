@@ -32,13 +32,19 @@ implementation.
 
 ### Behavior the suite does not pin
 
-When gostack passes every test but behaves differently from LocalStack, the AWS
-specification decides: the vendored botocore model in `specs/`, then the AWS
-API reference for the operation. gostack follows AWS, and `docs/compat.md`
-lists the divergence from LocalStack. When neither settles it, the case is
-filed on the board for triage and the current behavior stays. A case on a core
-path (request routing, a protocol codec, persistence, or a service's main
-operations) is decided before the phase ships.
+When gostack passes every test but behaves differently from LocalStack:
+
+1. Request and response shapes follow the vendored botocore model in `specs/`.
+2. Behavior follows AWS when AWS's behavior is verified: a LocalStack
+   `@markers.aws.validated` test records it in a snapshot or an assertion, or
+   AWS documentation states it outright. `docs/compat.md` lists the divergence
+   from LocalStack with that evidence.
+3. Otherwise gostack matches LocalStack. This covers behavior that is
+   inferred rather than verified, and any range, limit or error code AWS
+   doesn't document.
+
+A gostack safety bound that is not API behavior, such as the request body cap,
+is decided case by case.
 
 ### Baseline
 
