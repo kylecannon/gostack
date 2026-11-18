@@ -348,5 +348,7 @@ func accessKeyOf(rc *request.Context) string {
 		return ""
 	}
 
-	return account.AccessKeyFromAuthorization(rc.Request.Header.Get("Authorization"))
+	cred, _ := account.FromRequest(rc.Request)
+
+	return cred.AccessKey
 }

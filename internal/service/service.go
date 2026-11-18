@@ -76,6 +76,24 @@ type Registration struct {
 	// and the request is the service's when it is the only one of them to
 	// claim it.
 	Claim func(r *http.Request) bool
+	// SigningDefault marks the service that takes a request when the signing
+	// name is shared and no Claim claims it, as custom_signing_name_rules sends
+	// such a request to the service named after the signing name: s3, not
+	// s3control. At most one service per signing name sets it; route.NewTable
+	// panics on two.
+	SigningDefault bool
+	// Fallback claims a request after every other detection step has failed to
+	// settle on one service, LocalStack's legacy_s3_rules: S3 takes an unsigned
+	// path-style call this way. The first Fallback in registration order to
+	// return true wins.
+	Fallback func(r *http.Request) bool
+	// Preprocess sees every request at root step 4, after the host claims and
+	// before CORS and content decoding, as LocalStack's preprocess_request
+	// handlers do: S3 marks its own requests there. It returns the request to
+	// carry on with, usually r with a value added to its context, or nil to keep
+	// r. The Preprocess of each service runs in registration order, each given
+	// the request the one before returned.
+	Preprocess func(r *http.Request) *http.Request
 
 	// Persist saves and restores the service's state. The persistence engine
 	// uses it only when PERSIST_* enables the service. It is nil for a service

@@ -45,7 +45,9 @@ type Gateway struct {
 	corsEnforced *cors.Cors
 	corsOpen     *cors.Cors
 
-	preprocess Hook
+	// unnamed records, by registration, that markDirty has logged a rest call
+	// that succeeded without naming its operation, so it logs only the first.
+	unnamed []atomic.Bool
 
 	phase   atomic.Int32
 	handler http.Handler
@@ -75,7 +77,7 @@ func New(
 		return nil, fmt.Errorf("build service table: %w", err)
 	}
 
-	g := &Gateway{settings: settings, regs: regs, table: table, eng: eng}
+	g := &Gateway{settings: settings, regs: regs, table: table, eng: eng, unnamed: make([]atomic.Bool, len(regs))}
 	g.cors = newCORSRules(settings())
 	g.corsEnforced, g.corsOpen = newCORSHandlers(g.cors)
 	g.handler = buildRouter(g, internal)
@@ -86,13 +88,6 @@ func New(
 // Handler returns the root router.
 func (g *Gateway) Handler() http.Handler {
 	return g.handler
-}
-
-// SetPreprocessHook sets the seam at root step 4, where a service can mark a
-// request it handles itself before CORS and content decoding. Call it before
-// Serve.
-func (g *Gateway) SetPreprocessHook(h Hook) {
-	g.preprocess = h
 }
 
 // BeginShutdown makes the gateway refuse every request except internal calls
@@ -135,15 +130,15 @@ func (g *Gateway) DrainBy(deadline time.Time) {
 func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(markInternal)                                // 1
-	r.Use(g.shutdownGuard)                             // 2
-	r.Use(g.claimService)                              // 3
-	r.Use(hooked(func() Hook { return g.preprocess })) // 4
-	r.Use(g.corsMiddleware)                            // 5
-	r.Use(decodeContent)                               // 6
-	r.Use(g.responseHeaders)                           // 7
-	r.Use(g.recoverPanic)                              // 8
-	r.Use(g.serveClaimed)                              // 3, continued
+	r.Use(markInternal)      // 1
+	r.Use(g.shutdownGuard)   // 2
+	r.Use(g.claimService)    // 3
+	r.Use(g.preprocess)      // 4
+	r.Use(g.corsMiddleware)  // 5
+	r.Use(decodeContent)     // 6
+	r.Use(g.responseHeaders) // 7
+	r.Use(g.recoverPanic)    // 8
+	r.Use(g.serveClaimed)    // 3, continued
 
 	if internal != nil {
 		internal(r)

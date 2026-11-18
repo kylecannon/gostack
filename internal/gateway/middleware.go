@@ -157,20 +157,21 @@ func isInternalPath(path string) bool {
 	return isDeveloperPath(path) || strings.HasPrefix(path, "/_aws")
 }
 
-// hooked wraps a seam in the middleware chain. The hook is read when a request
-// arrives, so it can be set after the router is built.
-func hooked(hook func() Hook) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if h := hook(); h != nil {
-				if replaced := h(r); replaced != nil {
+// preprocess is root step 4, LocalStack's preprocess_request: the Preprocess
+// of each registration, in registration order, sees every request before CORS
+// and content decoding, and may replace it.
+func (g *Gateway) preprocess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := range g.regs {
+			if preprocess := g.regs[i].Preprocess; preprocess != nil {
+				if replaced := preprocess(r); replaced != nil {
 					r = replaced
 				}
 			}
+		}
 
-			next.ServeHTTP(w, r)
-		})
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // decodeContent is root step 6: a gzip request body is decoded before anyone

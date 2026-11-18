@@ -1,9 +1,6 @@
 package gateway
 
-import (
-	"net/http"
-	"time"
-)
+import "time"
 
 // Settings is what the gateway reads from the configuration. It is a struct of
 // the gateway's own so the package does not depend on internal/config: the
@@ -62,8 +59,3 @@ type Settings struct {
 type Dirtier interface {
 	MarkDirty(service string)
 }
-
-// Hook sees a request before routing and returns the request to carry on with,
-// usually the same one with a value added to its context. Returning nil keeps
-// the request unchanged.
-type Hook func(*http.Request) *http.Request

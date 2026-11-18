@@ -255,7 +255,7 @@ func (p *Provider) beginDevCall(w http.ResponseWriter, r *http.Request) *devCall
 		r.Form = url.Values{}
 	}
 
-	identity := account.Resolve(r.Header.Get("Authorization"), p.settings().ParityAWSAccessKeyID)
+	identity := account.Resolve(r, p.settings().ParityAWSAccessKeyID)
 
 	rc := &request.Context{
 		Service:   sqsapi.Metadata.Name,

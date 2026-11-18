@@ -35,6 +35,11 @@ func Test_Gateway_middlewareOrder(t *testing.T) {
 
 		return false
 	}
+	reg.Preprocess = func(r *http.Request) *http.Request {
+		events = append(events, eventPreprocess)
+
+		return r
+	}
 
 	g := newGateway(t, newSettings(), []service.Registration{reg}, func(r chi.Router) {
 		r.Get("/_localstack/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -42,11 +47,6 @@ func Test_Gateway_middlewareOrder(t *testing.T) {
 
 			_, _ = io.WriteString(w, "up")
 		})
-	})
-	g.SetPreprocessHook(func(r *http.Request) *http.Request {
-		events = append(events, eventPreprocess)
-
-		return r
 	})
 
 	build := func(t *testing.T, headers map[string]string) *http.Request {
@@ -122,29 +122,57 @@ func Test_Gateway_middlewareOrder(t *testing.T) {
 	})
 }
 
-func Test_Gateway_hooksReplaceTheRequest(t *testing.T) {
+// Test_Gateway_preprocessReplacesTheRequest runs the Preprocess of every
+// registration in registration order, each on the request the one before
+// returned, whichever service the call is for.
+func Test_Gateway_preprocessReplacesTheRequest(t *testing.T) {
 	var got any
 
-	g := newGateway(t, newSettings(), []service.Registration{
-		sqsRegistration(func(w http.ResponseWriter, rc *request.Context) {
-			got = rc.Request.Context().Value(hookKey{})
+	serve := func(w http.ResponseWriter, rc *request.Context) {
+		got = rc.Request.Context().Value(hookKey{})
 
-			_, _ = io.WriteString(w, "ok")
-		}),
-	})
+		_, _ = io.WriteString(w, "ok")
+	}
+	mark := func(value string) func(*http.Request) *http.Request {
+		return func(r *http.Request) *http.Request {
+			before, _ := r.Context().Value(hookKey{}).(string)
 
-	g.SetPreprocessHook(func(r *http.Request) *http.Request {
-		return r.WithContext(context.WithValue(r.Context(), hookKey{}, "marked"))
-	})
-	call(t, g.Handler(), sendMessage(t))
-	assert.Equal(t, "marked", got)
+			return r.WithContext(context.WithValue(r.Context(), hookKey{}, before+value))
+		}
+	}
 
-	g.SetPreprocessHook(func(*http.Request) *http.Request { return nil })
+	tests := []struct {
+		name    string
+		giveSQS func(*http.Request) *http.Request
+		giveSTS func(*http.Request) *http.Request
+		want    any
+	}{
+		{name: "one service marks", giveSTS: mark("sts"), want: "sts"},
+		{name: "both mark, in registration order", giveSQS: mark("sqs,"), giveSTS: mark("sts"), want: "sqs,sts"},
+		{
+			name: "a nil result keeps the request as it was", giveSQS: mark("sqs"),
+			giveSTS: func(*http.Request) *http.Request { return nil }, want: "sqs",
+		},
+		{name: "no service preprocesses"},
+	}
 
-	got = nil
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got = nil
 
-	call(t, g.Handler(), sendMessage(t))
-	assert.Nil(t, got, "a nil result keeps the request as it was")
+			sqs := sqsRegistration(serve)
+			sqs.Preprocess = tt.giveSQS
+			sts := stsRegistration(okServe)
+			sts.Preprocess = tt.giveSTS
+
+			g := newGateway(t, newSettings(), []service.Registration{sqs, sts})
+
+			resp, _ := call(t, g.Handler(), sendMessage(t))
+
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func Test_Gateway_internalMarking(t *testing.T) {
