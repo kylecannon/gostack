@@ -1,11 +1,13 @@
 package gateway_test
 
 import (
+	"io"
 	"maps"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/assert"
@@ -275,6 +277,121 @@ func Test_Gateway_corsExtraHeaders(t *testing.T) {
 	assert.Contains(t, strings.Split(resp.Header.Get(allowHeaders), ","), "x-extra-allowed")
 	assert.True(t, strings.HasSuffix(resp.Header.Get(exposeHeaders), ",x-extra-exposed"))
 	assert.Equal(t, valueTrue, resp.Header.Get("Access-Control-Allow-Private-Network"))
+}
+
+// Test_Gateway_corsMethodOutsideTheList is CorsResponseEnricher.add_cors_headers
+// in aws/handlers/cors.py: whatever the method, a request with an Origin gets
+// Allow-Origin, and Allow-Credentials unless the origin is "*". go-chi/cors
+// sets neither for a method that is not in its list.
+func Test_Gateway_corsMethodOutsideTheList(t *testing.T) {
+	const propfind = "PROPFIND"
+
+	tests := []struct {
+		name         string
+		giveSettings func(*gateway.Settings)
+		giveHeaders  map[string]string
+		wantOrigin   string
+		wantCreds    bool
+	}{
+		{
+			name:        "a preflight for the method",
+			giveHeaders: map[string]string{headerOrigin: appOrigin, headerRequestMethod: propfind},
+			wantOrigin:  appOrigin,
+			wantCreds:   true,
+		},
+		{
+			name:        "the method itself",
+			giveHeaders: map[string]string{headerOrigin: appOrigin},
+			wantOrigin:  appOrigin,
+			wantCreds:   true,
+		},
+		{
+			name:         "DISABLE_CORS_CHECKS answers * without credentials",
+			giveSettings: func(s *gateway.Settings) { s.DisableCORSChecks = true },
+			giveHeaders:  map[string]string{headerOrigin: appOrigin, headerRequestMethod: propfind},
+			wantOrigin:   "*",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mutate []func(*gateway.Settings)
+			if tt.giveSettings != nil {
+				mutate = append(mutate, tt.giveSettings)
+			}
+
+			g := newGateway(t, newSettings(mutate...), []service.Registration{sqsRegistration(okServe)})
+
+			method := propfind
+			if _, preflight := tt.giveHeaders[headerRequestMethod]; preflight {
+				method = http.MethodOptions
+			}
+
+			resp, _ := call(t, g.Handler(), corsRequest(t, method, tt.giveHeaders))
+
+			assert.Equal(t, []string{tt.wantOrigin}, resp.Header.Values(allowOrigin))
+			assert.Equal(t, []string{"Origin"}, resp.Header.Values("Vary"))
+
+			if tt.wantCreds {
+				assert.Equal(t, []string{valueTrue}, resp.Header.Values(allowCredentials))
+			} else {
+				assert.Empty(t, resp.Header.Values(allowCredentials))
+			}
+		})
+	}
+}
+
+// Test_Gateway_preflightProcessingOff: with DISABLE_PREFLIGHT_PROCESSING the
+// CorsEnforcer does not answer an OPTIONS request (aws/handlers/cors.py, the
+// elif in CorsEnforcer.__call__), so it goes down the chain. A request that no
+// service claims then ends in 200 with an empty body, where any other request
+// ends in 404. Probed on LocalStack 8b9a79f, see the SQ-44 ticket.
+func Test_Gateway_preflightProcessingOff(t *testing.T) {
+	settings := newSettings(func(s *gateway.Settings) { s.DisablePreflightProcessing = true })
+	g := newGateway(t, settings, []service.Registration{sqsRegistration(okServe)},
+		func(r chi.Router) {
+			r.Get("/_localstack/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "up") })
+		})
+
+	tests := []struct {
+		name        string
+		givePath    string
+		giveHeaders map[string]string
+		wantStatus  int
+		wantOrigin  string
+	}{
+		{name: "an unsigned root request", givePath: "/", wantStatus: http.StatusOK},
+		{name: "a path nobody serves", givePath: "/nothing/here", wantStatus: http.StatusOK},
+		{
+			name:        "a preflight keeps its CORS headers",
+			givePath:    "/",
+			giveHeaders: map[string]string{headerOrigin: appOrigin, headerRequestMethod: http.MethodPost},
+			wantStatus:  http.StatusOK,
+			wantOrigin:  appOrigin,
+		},
+		{name: "an internal path keeps its 404", givePath: "/_localstack/health", wantStatus: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := "http://localhost:4566" + tt.givePath
+			resp, body := call(t, g.Handler(), newRequest(t, http.MethodOptions, target, "", tt.giveHeaders))
+
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
+			assert.Equal(t, []string{valueTrue}, rawHeader(resp.Header, "x-localstack"))
+
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+
+			assert.Empty(t, body)
+			assert.Equal(t, "text/plain; charset=utf-8", resp.Header.Get(headerType))
+
+			if tt.wantOrigin != "" {
+				assert.Equal(t, []string{tt.wantOrigin}, resp.Header.Values(allowOrigin))
+			}
+		})
+	}
 }
 
 func Test_Gateway_corsFollowsTheSettings(t *testing.T) {

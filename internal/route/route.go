@@ -52,6 +52,9 @@ type Table struct {
 	// endpoints are ordered longest prefix first, so that a prefix that
 	// contains dots wins over a shorter one it starts with.
 	endpoints []endpoint
+	// known detects the services LocalStack has, registered or not. It is nil in
+	// that table itself.
+	known *Table
 }
 
 type endpoint struct {
@@ -62,6 +65,20 @@ type endpoint struct {
 // NewTable builds the detection table for services. It fails on a service
 // without a name or protocol, and on two services with the same name.
 func NewTable(services []service.Metadata) (*Table, error) {
+	t, err := buildTable(services)
+	if err != nil {
+		return nil, err
+	}
+
+	t.known, err = buildTable(knownServices)
+	if err != nil {
+		return nil, fmt.Errorf("known services: %w", err)
+	}
+
+	return t, nil
+}
+
+func buildTable(services []service.Metadata) (*Table, error) {
 	t := &Table{
 		services:  slices.Clone(services),
 		bySigning: make(map[string][]int),
@@ -118,10 +135,10 @@ func NewTable(services []service.Metadata) (*Table, error) {
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.
 //
-// Detect needs no operation list, which service.Metadata does not carry, so
-// the form step cannot tell which query service an Action belongs to. It
-// narrows the query services by Version alone, and reports AmbiguousError when
-// more than one is left.
+// The form step is LocalStack's service_router.py step 5: the query services
+// that have the Action are the candidates, and Version narrows them when more
+// than one is left. A service whose Metadata lists no Operations has any
+// Action. Detect reports AmbiguousError when more than one service is left.
 func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
 	var candidates []int
 
@@ -203,16 +220,19 @@ func Operation(r *http.Request, kind protocol.Kind, form func() url.Values) stri
 }
 
 // queryCandidates returns the services that can answer a form request with
-// the given Action and Version.
+// the given Action and Version, as service_router.py does: the query services
+// that have the Action, then, when that leaves more than one, the ones whose
+// API version is the Version.
 func (t *Table) queryCandidates(values url.Values) []int {
-	if values.Get("Action") == "" {
+	action := values.Get("Action")
+	if action == "" {
 		return nil
 	}
 
 	var found []int
 
 	for i := range t.services {
-		if queryKind(&t.services[i]) != 0 {
+		if queryKind(&t.services[i]) != 0 && t.hasOperation(i, action) {
 			found = append(found, i)
 		}
 	}
@@ -226,6 +246,14 @@ func (t *Table) queryCandidates(values url.Values) []int {
 	}
 
 	return found
+}
+
+// hasOperation reports whether the service at index i has the operation. A
+// service that lists none has every operation.
+func (t *Table) hasOperation(i int, operation string) bool {
+	operations := t.services[i].Operations
+
+	return len(operations) == 0 || slices.Contains(operations, operation)
 }
 
 func (t *Table) jsonOnly(i int) bool {

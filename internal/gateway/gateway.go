@@ -101,10 +101,21 @@ func (g *Gateway) SetPreprocessHook(h Hook) {
 }
 
 // BeginShutdown makes the gateway refuse every request except internal calls
-// and the developer paths. Serve calls it when its context ends; the runtime
-// calls it first when it has shutdown hooks to run.
+// and the developer paths, and then calls the Shutdown function of each
+// registration that has one, so that work holding a request open, such as an
+// SQS long poll, lets it go. Serve calls it when its context ends; the runtime
+// calls it first when it has shutdown hooks to run. Only the first call does
+// anything.
 func (g *Gateway) BeginShutdown() {
-	g.phase.CompareAndSwap(phaseRunning, phaseStopping)
+	if !g.phase.CompareAndSwap(phaseRunning, phaseStopping) {
+		return
+	}
+
+	for i := range g.regs {
+		if shutdown := g.regs[i].Shutdown; shutdown != nil {
+			shutdown()
+		}
+	}
 }
 
 // buildRouter builds the root router of g. The middleware runs in the order of

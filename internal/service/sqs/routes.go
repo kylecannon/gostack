@@ -12,6 +12,7 @@ import (
 	"github.com/kylecannon/gostack/internal/account"
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
@@ -78,6 +79,9 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 		Region:    queueURLRegion(r, identity.Region),
 		RequestID: newRequestID(),
 	}
+
+	// A panic below is answered by the gateway, in the protocol of this call.
+	gateway.Record(r, rc)
 
 	if strings.EqualFold(r.Header.Get("Content-Type"), jsonContentType) {
 		// Some SDKs send the json protocol to the queue URL. The call carries

@@ -23,6 +23,11 @@ type Metadata struct {
 	APIVersion string
 	// Protocols lists the wire protocols the service accepts.
 	Protocols []protocol.Kind
+	// Operations lists the service's operation names. The router uses it to
+	// pick the service of an unsigned query request that has an Action and no
+	// other hint. It is empty when the list is not known, and the service then
+	// stays a candidate for any Action.
+	Operations []string
 }
 
 // Registration is what a service hands the gateway.
@@ -38,4 +43,10 @@ type Registration struct {
 	// save. It is nil for the default rule: every operation whose name does not
 	// start with Get, Head, Query, List, Describe or Receive.
 	Mutating func(operation string) bool
+	// Shutdown is called once when the gateway starts to shut down, after it has
+	// begun refusing new AWS calls and before the listeners close. It wakes work
+	// that would otherwise keep a request open, such as long polls. It does not
+	// stop the service and does not drop its state. It is nil when there is
+	// nothing to do.
+	Shutdown func()
 }

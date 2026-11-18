@@ -34,6 +34,9 @@ const (
 	targetSendMessage = "AmazonSQS.SendMessage"
 	opSendMessage     = "SendMessage"
 
+	contentJSON         = "application/json"
+	contentXML          = "text/xml"
+	opGetCallerIdentity = "GetCallerIdentity"
 	valueTrue           = "true"
 	headerReferer       = "Referer"
 	headerRequestMethod = "Access-Control-Request-Method"

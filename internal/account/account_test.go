@@ -195,6 +195,15 @@ func Test_Resolve(t *testing.T) {
 			want: account.Identity{AccountID: zeroAccount, Region: usEast1, Authorization: sign("test", usEast1)},
 		},
 		{
+			// botocore's get_available_regions("s3", "aws") has no aws-global, so
+			// LocalStack rewrites it as it does any other unknown region.
+			name: "aws-global is rewritten",
+			give: sign("123456789012", "aws-global"),
+			want: account.Identity{
+				AccountID: "123456789012", Region: usEast1, Authorization: sign("123456789012", usEast1),
+			},
+		},
+		{
 			name: "sigv2 has account and no region",
 			give: "AWS 123456789012:sig",
 			want: account.Identity{AccountID: "123456789012", Region: usEast1, Authorization: "AWS 123456789012:sig"},
@@ -218,6 +227,7 @@ func Test_RewriteRegion(t *testing.T) {
 func Test_KnownRegion(t *testing.T) {
 	assert.True(t, account.KnownRegion(usEast1))
 	assert.True(t, account.KnownRegion("eu-central-2"))
+	assert.False(t, account.KnownRegion("aws-global"))
 	assert.False(t, account.KnownRegion("xx-south-1"))
 	assert.False(t, account.KnownRegion(""))
 }

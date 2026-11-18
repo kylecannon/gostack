@@ -290,7 +290,7 @@ func Test_Gateway_panics(t *testing.T) {
 			name:       "json service",
 			give:       sendMessage,
 			wantStatus: http.StatusInternalServerError,
-			wantType:   "application/json",
+			wantType:   contentJSON,
 			wantBody:   `{"__type":"InternalError","message":"exception while calling sqs.SendMessage: boom"}`,
 			wantHeader: "InternalError",
 		},
@@ -299,7 +299,7 @@ func Test_Gateway_panics(t *testing.T) {
 			give:       sendMessage,
 			giveFail:   true,
 			wantStatus: http.StatusNotImplemented,
-			wantType:   "application/json",
+			wantType:   contentJSON,
 			wantBody:   `{"__type":"InternalError","message":"exception while calling sqs.SendMessage: boom"}`,
 			wantHeader: "InternalError",
 		},
@@ -312,7 +312,7 @@ func Test_Gateway_panics(t *testing.T) {
 					map[string]string{headerAuth: signed("test", usEast1, nameSQS), headerType: formType})
 			},
 			wantStatus: http.StatusInternalServerError,
-			wantType:   "text/xml",
+			wantType:   contentXML,
 		},
 	}
 
@@ -341,7 +341,7 @@ func Test_Gateway_panics(t *testing.T) {
 				assert.Equal(t, tt.wantHeader, resp.Header.Get("X-Amzn-Errortype"))
 				assert.NotEmpty(t, resp.Header.Get("X-Amzn-Requestid"))
 
-				if tt.wantType == "text/xml" {
+				if tt.wantType == contentXML {
 					assert.Equal(t, "<?xml version='1.0' encoding='utf-8'?>\n<ErrorResponse><Error><Code>InternalError</Code>"+
 						"<Message>exception while calling sqs.SendMessage: boom</Message></Error>"+
 						"<RequestId>"+resp.Header.Get("X-Amzn-Requestid")+"</RequestId></ErrorResponse>", string(data))

@@ -16,6 +16,7 @@ const (
 	headerOrigin            = "Origin"
 	headerReferer           = "Referer"
 	headerAllowOrigin       = "Access-Control-Allow-Origin"
+	headerAllowCredentials  = "Access-Control-Allow-Credentials"
 	headerAllowMethods      = "Access-Control-Allow-Methods"
 	headerAllowHeaders      = "Access-Control-Allow-Headers"
 	headerExposeHeaders     = "Access-Control-Expose-Headers"
@@ -199,8 +200,21 @@ func (c *corsRules) hasPort(port string) bool {
 
 // setHeaders adds the headers LocalStack's CorsResponseEnricher sends to a
 // request that has an Origin. go-chi/cors has set the Allow-Origin and
-// Allow-Credentials already.
-func (c *corsRules) setHeaders(header http.Header, r *http.Request) {
+// Allow-Credentials already, except for a method that is not in its list, which
+// it leaves without either; LocalStack sends them for any method
+// (add_cors_headers in aws/handlers/cors.py), so they are set here when missing.
+// fallbackOrigin is the Allow-Origin it then sends.
+func (c *corsRules) setHeaders(header http.Header, r *http.Request, fallbackOrigin string) {
+	if header.Get(headerAllowOrigin) == "" {
+		header.Set(headerAllowOrigin, fallbackOrigin)
+	}
+
+	// A "*" origin cannot carry credentials, because the browser would refuse
+	// the response.
+	if !strings.Contains(header.Get(headerAllowOrigin), "*") {
+		header.Set(headerAllowCredentials, valueTrue)
+	}
+
 	// go-chi/cors answers a preflight with the one method and the headers
 	// asked for. LocalStack lists everything it allows, on every request.
 	header.Set(headerAllowMethods, corsAllowedMethods)
@@ -230,7 +244,14 @@ func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 		s := g.settings()
 
 		if _, hasOrigin := r.Header[headerOrigin]; hasOrigin && !s.DisableCORSHeaders {
-			g.cors.setHeaders(w.Header(), r)
+			// The origin LocalStack answers with: the request's, or "*" when the
+			// checks are off or the Origin is empty.
+			origin := r.Header.Get(headerOrigin)
+			if origin == "" || s.DisableCORSChecks {
+				origin = "*"
+			}
+
+			g.cors.setHeaders(w.Header(), r, origin)
 		}
 
 		if r.Method == http.MethodOptions && !s.DisablePreflightProcessing {

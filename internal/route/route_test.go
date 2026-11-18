@@ -20,6 +20,12 @@ const (
 	nameSNS  = "sns"
 	nameTwin = "sqs-twin"
 
+	nameDynamoDB          = "dynamodb"
+	localHost             = "localhost:4566"
+	targetListTables      = "DynamoDB_20120810.ListTables"
+	formListQueues        = "Action=ListQueues"
+	formGetCallerIdentity = "Action=GetCallerIdentity"
+
 	headerAuth   = "Authorization"
 	headerTarget = "X-Amz-Target"
 	headerType   = "Content-Type"
@@ -75,7 +81,7 @@ func Test_Detect(t *testing.T) {
 	const (
 		formType = "application/x-www-form-urlencoded; charset=utf-8"
 		jsonType = "application/x-amz-json-1.0"
-		anyHost  = "localhost:4566"
+		anyHost  = localHost
 	)
 
 	tests := []struct {
@@ -179,7 +185,7 @@ func Test_Detect(t *testing.T) {
 			giveServices: []service.Metadata{sts},
 			giveHost:     anyHost,
 			giveHeaders:  map[string]string{headerType: formType},
-			giveForm:     "Action=GetCallerIdentity",
+			giveForm:     formGetCallerIdentity,
 			wantService:  nameSTS,
 			wantProtocol: protocol.KindQuery,
 		},
@@ -238,7 +244,7 @@ func Test_Detect_errors(t *testing.T) {
 		Name: "x", SigningName: "x", Protocols: []protocol.Kind{protocol.KindJSON, protocol.KindRestXML},
 	}
 	jsonOnly := service.Metadata{
-		Name: "dynamodb", SigningName: "dynamodb", TargetPrefix: "DynamoDB_20120810",
+		Name: nameDynamoDB, SigningName: nameDynamoDB, TargetPrefix: "DynamoDB_20120810",
 		Protocols: []protocol.Kind{protocol.KindJSON, protocol.KindRestJSON},
 	}
 
@@ -254,7 +260,7 @@ func Test_Detect_errors(t *testing.T) {
 			name:         "an Action without Version is ambiguous between query services",
 			giveServices: []service.Metadata{sqs, sts, sns},
 			giveHeaders:  map[string]string{headerType: formType},
-			giveForm:     "Action=GetCallerIdentity",
+			giveForm:     formGetCallerIdentity,
 			wantServices: []string{nameSNS, nameSQS, nameSTS},
 		},
 		{
@@ -318,7 +324,7 @@ func Test_Detect_errors(t *testing.T) {
 			table, err := route.NewTable(tt.giveServices)
 			require.NoError(t, err)
 
-			_, err = table.Detect(newRequest(t, "localhost:4566", tt.giveHeaders), formOf(tt.giveForm))
+			_, err = table.Detect(newRequest(t, localHost, tt.giveHeaders), formOf(tt.giveForm))
 			require.Error(t, err)
 
 			if tt.wantErr != nil {
@@ -346,11 +352,11 @@ func Test_Detect_formIsLazy(t *testing.T) {
 		return nil
 	}
 
-	_, err = table.Detect(newRequest(t, "localhost:4566", map[string]string{headerAuth: scope(nameSTS)}), form)
+	_, err = table.Detect(newRequest(t, localHost, map[string]string{headerAuth: scope(nameSTS)}), form)
 	require.NoError(t, err)
 	assert.Zero(t, calls, "a signing name decides, so the body is not read")
 
-	_, err = table.Detect(newRequest(t, "localhost:4566", map[string]string{headerTarget: targetListQueues}), form)
+	_, err = table.Detect(newRequest(t, localHost, map[string]string{headerTarget: targetListQueues}), form)
 	require.NoError(t, err)
 	assert.Zero(t, calls, "a target prefix decides, so the body is not read")
 

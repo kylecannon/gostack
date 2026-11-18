@@ -34,6 +34,16 @@ type call struct {
 	rc *request.Context
 }
 
+// Record tells the recovery middleware which call r is, so that a panic is
+// answered in the protocol of the service. The gateway does it for the calls it
+// routes itself; a handler mounted by a service, which builds its own
+// request.Context, does it with the request it was given.
+func Record(r *http.Request, rc *request.Context) {
+	if state, ok := r.Context().Value(callKey{}).(*call); ok {
+		state.rc = rc
+	}
+}
+
 // IsInternal reports whether ctx belongs to a call that a service made to
 // another one, as marked by the x-localstack-data header.
 func IsInternal(ctx context.Context) bool {

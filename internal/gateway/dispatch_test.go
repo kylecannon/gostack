@@ -108,7 +108,7 @@ func Test_Gateway_requestContext(t *testing.T) {
 				})
 			},
 			wantService: nameSTS,
-			wantOp:      "GetCallerIdentity",
+			wantOp:      opGetCallerIdentity,
 			wantProto:   protocol.KindQuery,
 			wantAccount: "000000000000",
 			wantRegion:  usEast1,
@@ -140,7 +140,7 @@ func Test_Gateway_requestContext(t *testing.T) {
 					"", map[string]string{headerAuth: signed("test", usEast1, nameSTS)})
 			},
 			wantService: nameSTS,
-			wantOp:      "GetCallerIdentity",
+			wantOp:      opGetCallerIdentity,
 			wantProto:   protocol.KindQuery,
 			wantAccount: "000000000000",
 			wantRegion:  usEast1,

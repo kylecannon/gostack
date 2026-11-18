@@ -28,6 +28,9 @@ type Provider struct {
 	// tasks holds the goroutines of the message move tasks, so that Close can
 	// wait for them.
 	tasks sync.WaitGroup
+	// stopping is closed by Shutdown, once.
+	stopping chan struct{}
+	stopOnce sync.Once
 }
 
 var _ sqsapi.Handler = (*Provider)(nil)
@@ -43,6 +46,7 @@ func New(settings func() Settings) *Provider {
 	p := &Provider{
 		settings: settings,
 		states:   store.NewBundle(newState),
+		stopping: make(chan struct{}),
 	}
 	p.contents = func(q *Queue) Contents {
 		if q.kind == kindFIFO {
@@ -70,6 +74,7 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mount:    p.mount,
 		Mutating: mutating,
+		Shutdown: p.Shutdown,
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/account"
+	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
 )
@@ -36,7 +38,7 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 
 	match, err := g.table.Detect(r, form.values)
 	if err != nil {
-		refuseDetection(w, r, err)
+		g.refuseDetection(w, r, err)
 
 		return
 	}
@@ -60,9 +62,7 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(request.With(r.Context(), rc))
 	rc.Request = r
 
-	if state, ok := r.Context().Value(callKey{}).(*call); ok {
-		state.rc = rc
-	}
+	Record(r, rc)
 
 	reg.Serve(w, rc)
 
@@ -102,18 +102,52 @@ func defaultMutating(operation string) bool {
 }
 
 // refuseDetection answers a request that no single service claims.
-func refuseDetection(w http.ResponseWriter, r *http.Request, err error) {
+func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error) {
 	var ambiguous *route.AmbiguousError
 
 	switch {
 	case errors.Is(err, route.ErrNoService):
-		writeJSON(w, http.StatusNotFound, []byte(notFoundBody))
+		g.refuseUnclaimed(w, r)
 	case errors.As(err, &ambiguous), errors.Is(err, route.ErrProtocol):
 		slog.WarnContext(r.Context(), "cannot route request", "error", err)
 		writeFailure(w, http.StatusBadRequest, failure{Error: "Bad Request", Message: err.Error()})
 	default:
 		writeFailure(w, http.StatusInternalServerError, failure{Error: "Unexpected exception", Message: err.Error()})
 	}
+}
+
+// refuseUnclaimed answers a request that no registered service claims.
+//
+// A call for a service that LocalStack has and gostack does not serve gets
+// ServiceLoader's answer (aws/handlers/service_plugin.py): 501 InternalFailure,
+// in the protocol of that service. An OPTIONS request that reaches this point
+// with DISABLE_PREFLIGHT_PROCESSING set is answered 200 with no body: the
+// CorsEnforcer in aws/handlers/cors.py answers it with 204 only when the setting
+// is off, otherwise it goes down the handler chain and LocalStack's chain ends it
+// that way, where any other request ends in 404. Internal paths keep their 404.
+func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
+	if match, ok := g.table.Unregistered(r); ok {
+		rc := &request.Context{Service: match.Service, Protocol: match.Protocol, RequestID: newRequestID(), Request: r}
+
+		writeAWSError(w, rc, &awserr.Error{
+			Code: "InternalFailure",
+			Message: fmt.Sprintf(
+				"Service '%s' is not enabled. Please check your 'SERVICES' configuration variable.", match.Service),
+			StatusCode: http.StatusNotImplemented,
+			Fault:      awserr.FaultReceiver,
+		})
+
+		return
+	}
+
+	if r.Method == http.MethodOptions && g.settings().DisablePreflightProcessing && !isDeveloperPath(r.URL.Path) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+
+		return
+	}
+
+	writeJSON(w, http.StatusNotFound, []byte(notFoundBody))
 }
 
 // formReader gives the query string and form body parameters of a request, the

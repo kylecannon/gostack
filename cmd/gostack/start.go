@@ -135,8 +135,11 @@ func serve(
 	return nil
 }
 
-// shutDown makes the gateway refuse AWS calls and runs the shutdown hooks. They
-// run even though ctx has ended, within SHUTDOWN_TIMEOUT (zero means no limit).
+// shutDown makes the gateway refuse AWS calls, tells each service to let go of
+// the requests it is holding (BeginShutdown does both), and runs the init
+// shutdown hooks. The listeners are still open while it runs, so a call that
+// arrives meanwhile is answered 503. The init hooks run even though ctx has
+// ended, within SHUTDOWN_TIMEOUT (zero means no limit).
 func shutDown(ctx context.Context, gw *gateway.Gateway, proc *lifecycle.Process, timeout time.Duration) {
 	gw.BeginShutdown()
 

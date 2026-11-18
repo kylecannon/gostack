@@ -303,6 +303,13 @@ func (p *Provider) ReceiveMessage(
 		return nil, err
 	}
 
+	if params.wait > 0 {
+		var release context.CancelFunc
+
+		ctx, release = p.untilShutdown(ctx)
+		defer release()
+	}
+
 	taken, changed, err := q.poll(ctx, params, func(dead []deadLetter) *awserr.Error { return p.deadLetter(rc, q, dead) })
 
 	// A receive that found nothing and dropped nothing leaves the state as it
