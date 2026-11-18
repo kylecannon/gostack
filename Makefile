@@ -180,12 +180,15 @@ image:
 image-slim:
 	$(DOCKER) build -f docker/Dockerfile.slim $(IMAGE_BUILD_ARGS) -t $(IMAGE_SLIM) .
 
-# -run '^$' skips the tests. The output goes to a file for benchstat and is
-# printed after; a failing run prints what it wrote and fails, which a pipe to
-# tee would not.
+# -run '^$' skips the tests. -vet=off because go test starts the first
+# package's benchmarks once every test binary is linked, while vet of the later
+# packages still runs: on a 2-CPU runner that halves the speed of the first
+# cells measured (SQ-160). make test and make lint run vet. The output goes to a
+# file for benchstat and is printed after; a failing run prints what it wrote
+# and fails, which a pipe to tee would not.
 bench:
 	@mkdir -p $(dir $(BENCH_OUT))
-	go test -run '^$$' -bench . -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -timeout 30m ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
+	go test -run '^$$' -vet=off -bench . -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -timeout 30m ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
 	@cat $(BENCH_OUT)
 
 bench-system: image image-slim
