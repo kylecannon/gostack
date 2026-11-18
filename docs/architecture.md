@@ -30,6 +30,16 @@ About 85 to 90% of tests are pure boto3 or HTTP. Snapshot comparison
 (`localstack-snapshot`) sees only parsed responses, so it works against any
 implementation.
 
+### Behavior the suite does not pin
+
+When gostack passes every test but behaves differently from LocalStack, the AWS
+specification decides: the vendored botocore model in `specs/`, then the AWS
+API reference for the operation. gostack follows AWS, and `docs/compat.md`
+lists the divergence from LocalStack. When neither settles it, the case is
+filed on the board for triage and the current behavior stays. A case on a core
+path (request routing, a protocol codec, persistence, or a service's main
+operations) is decided before the phase ships.
+
 ### Baseline
 
 Build the LocalStack image from `../localstack@8b9a79f`, then run the same
