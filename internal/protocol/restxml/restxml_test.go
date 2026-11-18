@@ -110,7 +110,6 @@ func Test_Decoder_Malformed(t *testing.T) {
 		{name: "body ends inside an element", giveBody: "<a><b>"},
 		{name: "not xml", giveBody: "<a><<"},
 		{name: "unknown entity", giveBody: "<a>&ent;</a>"},
-		{name: "too deep", giveBody: strings.Repeat("<a>", restxml.MaxDepth+1)},
 		{name: "wrong type", giveBody: "<a><n>x</n></a>"},
 	}
 
@@ -127,6 +126,56 @@ func Test_Decoder_Malformed(t *testing.T) {
 
 			require.ErrorIs(t, d.Err(), restxml.ErrMalformed)
 		})
+	}
+}
+
+func Test_Decoder_Depth(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		giveDepth int
+		giveSkip  bool
+		wantErr   bool
+	}{
+		{name: "walked at the limit", giveDepth: restxml.MaxDepth},
+		{name: "walked past the limit", giveDepth: restxml.MaxDepth + 1, wantErr: true},
+		{name: "skipped at the limit", giveDepth: restxml.MaxDepth, giveSkip: true},
+		{name: "skipped past the limit", giveDepth: restxml.MaxDepth + 1, giveSkip: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := strings.Repeat("<a>", tt.giveDepth) + "x" + strings.Repeat("</a>", tt.giveDepth)
+			d := restxml.NewDecoder(strings.NewReader(body))
+
+			_, ok := d.Root()
+			require.True(t, ok)
+
+			if tt.giveSkip {
+				d.Skip()
+			} else {
+				descend(d)
+			}
+
+			if tt.wantErr {
+				require.ErrorIs(t, d.Err(), restxml.ErrMalformed)
+
+				return
+			}
+
+			require.NoError(t, d.Err())
+		})
+	}
+}
+
+// descend enters every child of the element entered last, recursively, as
+// generated code walks nested structures.
+func descend(d *restxml.Decoder) {
+	for _, ok := d.Next(); ok; _, ok = d.Next() {
+		descend(d)
 	}
 }
 

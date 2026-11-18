@@ -16,6 +16,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(`<?xml version="1.0"?><R><T>2019-12-16T23:48:18Z</T><B>aGk=</B><E/></R>`)
 	f.Add(`<a><b></a></b>`)
 	f.Add(strings.Repeat("<a>", restxml.MaxDepth+2))
+	f.Add(strings.Repeat("<a>", restxml.MaxDepth+1) + strings.Repeat("</a>", restxml.MaxDepth+1))
 
 	f.Fuzz(func(t *testing.T, body string) {
 		d := restxml.NewDecoder(strings.NewReader(body))
