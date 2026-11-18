@@ -111,7 +111,7 @@ func (p *Provider) commitCompletion(
 	var parts map[int32]*Part
 
 	err := p.commitVersionThen(b, upload.Key, v, func() {
-		delete(b.Uploads, upload.ID)
+		b.removeUpload(upload.ID)
 		parts, upload.Parts = upload.Parts, nil
 	}, func(object *Object) error {
 		err := completePrecondition(object, upload, ifMatch, ifNoneMatch)

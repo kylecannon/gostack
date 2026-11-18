@@ -208,8 +208,8 @@ func (p *Provider) retire(b *Bucket) {
 	b.mu.Lock()
 	b.gone = true
 	ids := b.blobIDs()
-	clear(b.Objects)
-	clear(b.Uploads)
+	b.clearObjects()
+	b.clearUploads()
 	b.mu.Unlock()
 
 	for _, id := range ids {

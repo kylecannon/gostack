@@ -167,7 +167,7 @@ func (p *Provider) CreateMultipartUpload(
 	}
 
 	upload.KeyExisted = hasCurrentObject(b, upload.Key)
-	b.Uploads[upload.ID] = upload
+	b.addUpload(upload)
 	b.mu.Unlock()
 
 	return createUploadOutput(in, upload, enc, request), nil
@@ -379,7 +379,7 @@ func (p *Provider) AbortMultipartUpload(
 		return nil, noSuchUpload(deref(in.UploadId))
 	}
 
-	delete(b.Uploads, upload.ID)
+	b.removeUpload(upload.ID)
 	parts := upload.Parts
 	upload.Parts = nil
 	b.mu.Unlock()
