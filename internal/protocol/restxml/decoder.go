@@ -23,6 +23,11 @@ const (
 	decimalBase = 10
 )
 
+// MalformedXMLMessage is AWS's message for the MalformedXML error a rest-xml
+// service answers a request body that does not parse or does not match the
+// model.
+const MalformedXMLMessage = "The XML you provided was not well-formed or did not validate against our published schema"
+
 // ErrMalformed marks every error a Decoder reports: a body that is not
 // well-formed XML, nests past MaxDepth, or holds a value of the wrong type.
 var ErrMalformed = errors.New("malformed xml")

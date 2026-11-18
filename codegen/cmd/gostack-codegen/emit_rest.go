@@ -558,16 +558,18 @@ func (g *generator) emitErrorHelpers(p *printer) {
 	p.f("}")
 	p.blank()
 
-	code := "SerializationException"
+	// A rest-xml service answers with AWS's MalformedXML and its message, which
+	// the restxml runtime holds.
+	code, message := "SerializationException", `"The request body is not well-formed or does not match the model."`
 	if g.hasProtocol(protoRestXML) {
-		code = "MalformedXML"
+		code, message = "MalformedXML", "restxml.MalformedXMLMessage"
 	}
 
 	p.f("// errMalformedBody is the error for a request body that does not parse.")
 	p.f("func errMalformedBody() *awserr.Error {")
 	p.f("\treturn &awserr.Error{")
 	p.f("\t\tCode: %q,", code)
-	p.f("\t\tMessage: \"The request body is not well-formed or does not match the model.\",")
+	p.f("\t\tMessage: %s,", message)
 	p.f("\t\tStatusCode: 400,")
 	p.f("\t\tFault: awserr.FaultSender,")
 	p.f("\t}")

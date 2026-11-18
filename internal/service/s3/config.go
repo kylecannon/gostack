@@ -10,6 +10,7 @@ import (
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol/restxml"
 )
 
 const (
@@ -46,9 +47,7 @@ func configError(code, message string, status int) *awserr.Error {
 }
 
 func malformedXMLError() *awserr.Error {
-	return configError("MalformedXML",
-		"The XML you provided was not well-formed or did not validate against our published schema",
-		http.StatusBadRequest)
+	return configError("MalformedXML", restxml.MalformedXMLMessage, http.StatusBadRequest)
 }
 
 func noSuchConfigurationError() *awserr.Error {

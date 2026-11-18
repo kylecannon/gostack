@@ -193,6 +193,21 @@ func TestXMLBodyIsCappedAtMaxBody(t *testing.T) {
 	cfgExpect(t, cfgPut(s, bucketAPath+"?tagging", cfgTagging(cfgTags(51)), nil), http.StatusBadRequest, cfgInvalidTag)
 }
 
+// TestMalformedXMLBodyAnswersAWSText: the generated reader of an XML body that
+// does not parse answers MalformedXML with AWS's message, as the hand-written
+// configuration readers do.
+func TestMalformedXMLBodyAnswersAWSText(t *testing.T) {
+	s := cfgBucket(t)
+
+	got := cfgPut(s, bucketAPath+"?tagging", "<Tagging><TagSet><Tag><Key>k</Key>", nil)
+	cfgExpect(t, got, http.StatusBadRequest, cfgMalformedXML)
+
+	var e s3Error
+
+	require.NoError(t, xml.Unmarshal(got.body, &e))
+	assert.Equal(t, "The XML you provided was not well-formed or did not validate against our published schema", e.Message)
+}
+
 func TestCreateBucketWithTagsAndACL(t *testing.T) {
 	s := newServer(t)
 

@@ -141,7 +141,7 @@ func errUnknownOperation() *awserr.Error {
 func errMalformedBody() *awserr.Error {
 	return &awserr.Error{
 		Code:       "MalformedXML",
-		Message:    "The request body is not well-formed or does not match the model.",
+		Message:    restxml.MalformedXMLMessage,
 		StatusCode: 400,
 		Fault:      awserr.FaultSender,
 	}
