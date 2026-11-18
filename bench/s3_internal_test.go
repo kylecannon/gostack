@@ -270,9 +270,11 @@ func Test_agentic_cycle_leaves_no_bucket_behind(t *testing.T) {
 func Test_s3_cells(t *testing.T) {
 	full := cellsFor(profileFull, target{persistable: true}, serviceS3)
 	// 4 payloads x 3 concurrencies, 2 sizes x 2 modes x 3 concurrencies, and a
-	// 64 MiB object at 2 concurrencies; each with persistence off and on.
-	assert.Len(t, full, 2*(12+12+2))
+	// 64 MiB object at 2 concurrencies. Persistence is off in all of them until
+	// S3 persists (SQ-114).
+	assert.Len(t, full, 12+12+2)
 	assert.Len(t, cellsFor(profileFull, target{}, serviceS3), 12+12+2, "a target that does not persist")
+	assert.Len(t, cellsFor(profileQuick, target{persistable: true}, serviceS3), 8)
 
 	ids := map[string]bool{}
 

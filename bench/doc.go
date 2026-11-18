@@ -62,8 +62,7 @@
 // # The S3 matrix
 //
 // s3.go speaks S3 over plain HTTP, path style, with a SigV4 header the services
-// route on and nobody checks. It has three workloads, each with persistence off
-// and on (PERSIST_S3=1 with a tmpfs at /persisted-data):
+// route on and nobody checks. It has three workloads:
 //
 //	s3/objects    a PutObject then a GetObject of one key a worker, at 1 KiB,
 //	              64 KiB, 1 MiB and 16 MiB, at concurrency 1, 16 and 64
@@ -77,10 +76,13 @@
 // A listing cell seeds its bucket inside the load generator's run, so the RSS and
 // CPU the orchestrator reads for it include the seeding. The latencies do not.
 //
-// -profile full runs 52 cells per gostack image and 26 on LocalStack, whose image
-// cannot persist. -profile quick runs 9 of them. The agentic workload is 200
-// cycles of create bucket, put 10 objects, list them, delete them, delete the
-// bucket, at concurrency 16.
+// There are no persistence-on cells yet: gostack's S3 does not persist (SQ-114
+// adds PERSIST_S3=1 cells through s3Persistence), and the LocalStack Community
+// image does not restore S3 under PERSISTENCE=1.
+//
+// -profile full runs 26 cells per image. -profile quick runs 8 of them. The
+// agentic workload is 200 cycles of create bucket, put 10 objects, list them,
+// delete them, delete the bucket, at concurrency 16.
 //
 // # What else is measured
 //

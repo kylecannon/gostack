@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,6 +99,50 @@ func Test_flags_name_memory_that_grows_with_the_payload(t *testing.T) {
 
 	assert.Contains(t, flagged(t, held), "- gostack `"+upload.id()+"`: peak RSS 75.0 MiB, 70.0 MiB above the start")
 	assert.NotContains(t, flagged(t, streamed), upload.id())
+}
+
+// A result of one service must not hide the cells another service has in an
+// older result: each cell of the base comes from the newest result that has it.
+func Test_the_base_takes_each_cell_from_the_newest_result_that_has_it(t *testing.T) {
+	dir, head := t.TempDir(), testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB))
+	t.Chdir(t.TempDir())
+
+	put := func(name, when string, cells ...cellResult) {
+		rep := testReport(hostA, cells...)
+		rep.Time, rep.Commit = when, name
+		raw, err := jsonMarshal(rep)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name+".json"), raw, fileMode))
+	}
+
+	s3 := s3Cell(objectsCell(s3Payload64KiB, "", levelMid), 500, 100, 5*bytesPerMiB, 40*bytesPerMiB)
+	staleSQS := testCell(cellID, 900, 10000, 2000, 50*bytesPerMiB)
+	newSQS := testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB)
+
+	put("sqs-old", "2026-11-10T10:00:00Z", staleSQS)
+	put("sqs-new", "2026-11-12T10:00:00Z", newSQS)
+	put("s3-only", "2026-11-18T10:00:00Z", s3)
+
+	base, found, err := newestComparable(t.Context(), dir, filepath.Join(t.TempDir(), "head.json"), head)
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "s3-only", base.Commit, "the base is the newest result")
+
+	cells := base.Targets[0].Cells
+	require.Len(t, cells, 2, "the S3 cells of the newest result and the SQS cell of an older one")
+
+	got, ok := base.Targets[0].cell(cellID)
+	require.True(t, ok)
+	assert.InDelta(t, 2700, got.CyclesPerSec.Median, 0, "the newer of the two SQS results")
+
+	_, ok = base.Targets[0].cell(s3.ID)
+	assert.True(t, ok)
+
+	// A head of SQS alone is held against the SQS cell, not against nothing.
+	out, err := compared(t, base, head)
+	require.NoError(t, err)
+	assert.Contains(t, out, "Compared 1 cells")
 }
 
 func Test_notes_of_the_run_are_in_the_report(t *testing.T) {

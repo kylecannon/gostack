@@ -86,6 +86,11 @@ const (
 	statusClassScale  = 100
 )
 
+// s3Persistence are the persistence settings of the S3 cells, "" being off.
+// gostack's S3 does not persist yet (SQ-114), so a PERSIST_S3=1 cell would run
+// the same code as the cell without it. SQ-114 adds persistEnvS3 here.
+var s3Persistence = []string{""}
+
 var (
 	errS3      = errors.New("s3")
 	errNoCycle = errors.New("the run ended before a cycle began")
@@ -409,13 +414,12 @@ func (objectsWorkload) Cells(profile string) []cellSpec {
 			objectsCell(s3Payload64KiB, "", levelHigh),
 			objectsCell(s3Payload1KiB, "", levelMid),
 			objectsCell(s3Payload16MiB, "", levelMid),
-			objectsCell(s3Payload64KiB, persistEnvS3, levelMid),
 		}
 	}
 
 	var cells []cellSpec
 
-	for _, persistEnv := range []string{"", persistEnvS3} {
+	for _, persistEnv := range s3Persistence {
 		for _, payload := range []int{s3Payload1KiB, s3Payload64KiB, s3Payload1MiB, s3Payload16MiB} {
 			for _, level := range []int{levelLow, levelMid, levelHigh} {
 				cells = append(cells, objectsCell(payload, persistEnv, level))
@@ -661,7 +665,7 @@ func (listingWorkload) Cells(profile string) []cellSpec {
 
 	var cells []cellSpec
 
-	for _, persistEnv := range []string{"", persistEnvS3} {
+	for _, persistEnv := range s3Persistence {
 		for _, keys := range []int{listSmall, listLarge} {
 			for _, mode := range []string{modeFlat, modeDelimiter} {
 				for _, level := range []int{levelLow, levelMid, levelHigh} {
@@ -776,7 +780,7 @@ func (multipartWorkload) Cells(profile string) []cellSpec {
 
 	var cells []cellSpec
 
-	for _, persistEnv := range []string{"", persistEnvS3} {
+	for _, persistEnv := range s3Persistence {
 		for _, level := range []int{levelLow, levelMultipart} {
 			cells = append(cells, multipartCell(persistEnv, level))
 		}

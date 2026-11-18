@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -385,9 +386,12 @@ func compareFiles(ctx context.Context, basePath, baseDir, headPath string, out i
 	return compareReports(base, head, out)
 }
 
-// newestComparable returns the newest result in dir that git tracks, that has
-// cells, and that was taken on a host with head's fingerprint. Newest is by the
-// time inside the file, not by file name or modification time.
+// newestComparable returns the base for head from the results in dir that git
+// tracks and that were taken on a host with head's fingerprint. Each cell comes
+// from the newest of those results that holds it, so a result of one service
+// does not hide the cells of another that an older result has. The date, commit
+// and the rest of the base are the newest result's. Newest is by the time
+// inside the file, not by file name or modification time.
 func newestComparable(ctx context.Context, dir, headPath string, head report) (report, bool, error) {
 	paths, err := committedResults(ctx, dir)
 	if err != nil {
@@ -396,11 +400,7 @@ func newestComparable(ctx context.Context, dir, headPath string, head report) (r
 
 	headAbs, _ := filepath.Abs(headPath)
 
-	var (
-		best  report
-		stamp string
-		found bool
-	)
+	var reports []report
 
 	for _, path := range paths {
 		abs, _ := filepath.Abs(path)
@@ -413,12 +413,55 @@ func newestComparable(ctx context.Context, dir, headPath string, head report) (r
 			continue
 		}
 
-		if when := rep.Time; !found || when > stamp {
-			best, stamp, found = rep, when, true
+		reports = append(reports, rep)
+	}
+
+	if len(reports) == 0 {
+		return report{}, false, nil
+	}
+
+	slices.SortStableFunc(reports, func(a, b report) int { return strings.Compare(b.Time, a.Time) })
+
+	return mergeCells(reports), true, nil
+}
+
+// mergeCells takes the first report, the newest, and adds to each of its targets
+// the cells that only an older report has, from the newest of them. A cell that
+// failed to run counts as missing.
+func mergeCells(newestFirst []report) report {
+	base := newestFirst[0]
+	base.Targets = slices.Clone(base.Targets)
+
+	for i := range base.Targets {
+		base.Targets[i].Cells = slices.Clone(base.Targets[i].Cells)
+	}
+
+	for _, older := range newestFirst[1:] {
+		for _, from := range older.Targets {
+			i := slices.IndexFunc(base.Targets, func(t targetResult) bool { return t.Name == from.Name })
+			if i < 0 {
+				continue
+			}
+
+			cells := &base.Targets[i].Cells
+
+			for _, c := range from.Cells {
+				if c.Problem != "" {
+					continue
+				}
+
+				at := slices.IndexFunc(*cells, func(have cellResult) bool { return have.ID == c.ID })
+
+				if at < 0 {
+					*cells = append(*cells, c)
+				} else if (*cells)[at].Problem != "" {
+					(*cells)[at] = c
+				}
+			}
 		}
 	}
 
-	return best, found, nil
+	return base
 }
 
 // committedResults lists the result files git tracks in dir. Outside a git
