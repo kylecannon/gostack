@@ -35,8 +35,8 @@ type Credential struct {
 }
 
 // FromRequest returns the credential r is signed with. It is the one parser of
-// credentials: route detection reads the signing name from it, and Resolve the
-// account and region.
+// credentials: Resolve reads the account and region from it, and route
+// detection reads the signing name from FromAuthorization, its header half.
 //
 // A request with an Authorization header is read from the header alone: a SigV4
 // header ("AWS4-HMAC-SHA256 Credential=<scope>, ...", the scheme in any case) or
@@ -57,7 +57,7 @@ type Credential struct {
 // signing name.
 func FromRequest(r *http.Request) (Credential, bool) {
 	if authorization := r.Header.Get("Authorization"); authorization != "" {
-		return fromAuthorization(authorization)
+		return parseAuthorization(authorization)
 	}
 
 	if r.URL.RawQuery == "" {
@@ -79,8 +79,17 @@ func FromRequest(r *http.Request) (Credential, bool) {
 	return Credential{}, false
 }
 
-// fromAuthorization reads a SigV4 or SigV2 Authorization header.
-func fromAuthorization(authorization string) (Credential, bool) {
+// FromAuthorization returns the credential of r's Authorization header, as
+// FromRequest reads it, and ignores the query string of a presigned URL. Route
+// detection takes the signing name from it alone, as LocalStack's service
+// router reads only the header (service_router.py:64-77): a presigned URL is
+// routed by its path and host.
+func FromAuthorization(r *http.Request) (Credential, bool) {
+	return parseAuthorization(r.Header.Get("Authorization"))
+}
+
+// parseAuthorization reads a SigV4 or SigV2 Authorization header.
+func parseAuthorization(authorization string) (Credential, bool) {
 	if key, ok := strings.CutPrefix(authorization, sigV2Prefix); ok {
 		key, _, _ = strings.Cut(key, ":")
 

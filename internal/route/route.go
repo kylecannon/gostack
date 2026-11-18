@@ -210,18 +210,28 @@ func buildTable(services []service.Metadata) (*Table, error) {
 }
 
 // Detect finds the service and protocol that r is addressed to. It looks, in
-// this order, at the signing name of the credential (account.FromRequest), the
-// X-Amz-Target prefix, the host, the form Action with Version as the
-// tie-break, and last each Registration.Fallback. It returns at the first step
-// that leaves a single service.
+// this order, at the signing name of the Authorization header
+// (account.FromAuthorization), the X-Amz-Target prefix, the host, the form
+// Action with Version as the tie-break, and last each Registration.Fallback.
+// It returns at the first step that leaves a single service.
 //
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.
+//
+// The signing name is the header's alone, as service_router.py:64-77 reads it:
+// the scope of a presigned URL names no service here.
 //
 // A signing name that several services share goes to the one of them whose
 // Registration.Claim alone claims r, and when none claims it to the one marked
 // SigningDefault, as service_router.py's custom_signing_name_rules does right
 // after its signing-name step.
+//
+// A signing name that no registered service has and a service LocalStack has
+// does is that service's call, which Unregistered names: Detect returns
+// ErrNoService at once, before any Fallback can take the request, as LocalStack
+// routes it to the service and then answers that it is not enabled
+// (service_router.py:374-379). When the other indicators point at a registered
+// service instead, Unregistered names none and detection goes on.
 //
 // The host step skips a host that contains ".s3.", so a virtual-host bucket
 // named after another service's endpoint prefix is not that service's
@@ -237,19 +247,13 @@ func buildTable(services []service.Metadata) (*Table, error) {
 // in registration order to claim r wins. Detect reports AmbiguousError when no
 // Fallback claims r and more than one service is left.
 func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
-	var candidates []int
+	signed, candidates, err := t.bySigningName(r)
+	if err != nil {
+		return Match{}, err
+	}
 
-	if cred, _ := account.FromRequest(r); cred.SigningName != "" {
-		found := t.bySigning[cred.SigningName]
-		if len(found) == 1 {
-			return t.match(found[0], r)
-		}
-
-		if i, ok := t.claimedAmong(cred.SigningName, found, r); ok {
-			return t.match(i, r)
-		}
-
-		candidates = union(candidates, found)
+	if signed >= 0 {
+		return t.match(signed, r)
 	}
 
 	if prefix, operation := target(r.Header.Get("X-Amz-Target")); prefix != "" && operation != "" {
@@ -297,6 +301,35 @@ func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
 	}
 
 	return Match{}, t.ambiguous(candidates)
+}
+
+// bySigningName is Detect's signing-name step. It returns the index of the
+// service the signing name settles on, or -1 and the services that share it. It
+// returns ErrNoService for a call to a service LocalStack has and gostack does
+// not run.
+func (t *Table) bySigningName(r *http.Request) (int, []int, error) {
+	signing := signingName(r)
+	if signing == "" {
+		return -1, nil, nil
+	}
+
+	found := t.bySigning[signing]
+	if len(found) == 1 {
+		return found[0], nil, nil
+	}
+
+	if i, ok := t.claimedAmong(signing, found, r); ok {
+		return i, nil, nil
+	}
+
+	if len(found) == 0 && t.known != nil && len(t.known.bySigning[signing]) > 0 {
+		if _, ok := t.Unregistered(r); ok {
+			return -1, nil, ErrNoService
+		}
+	}
+
+	// A copy, since Detect edits its candidates in place.
+	return -1, slices.Clone(found), nil
 }
 
 // byHost returns the services whose endpoint prefix starts host. Prefixes are
@@ -446,6 +479,11 @@ func (t *Table) ambiguous(candidates []int) *AmbiguousError {
 	return &AmbiguousError{Services: names}
 }
 
+// index returns the position of the service named name, or -1.
+func (t *Table) index(name string) int {
+	return slices.IndexFunc(t.services, func(meta service.Metadata) bool { return meta.Name == name })
+}
+
 // match settles the protocol for the service at index i.
 func (t *Table) match(i int, r *http.Request) (Match, error) {
 	meta := &t.services[i]
@@ -513,6 +551,13 @@ func union(a, b []int) []int {
 	slices.Sort(a)
 
 	return a
+}
+
+// signingName returns the signing name of r's Authorization header, or "".
+func signingName(r *http.Request) string {
+	cred, _ := account.FromAuthorization(r)
+
+	return cred.SigningName
 }
 
 // target splits an X-Amz-Target value into its service prefix and operation.

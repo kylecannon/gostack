@@ -278,9 +278,9 @@ func Test_Gateway_noService(t *testing.T) {
 		{name: "root", give: newRequest(t, http.MethodGet, "http://localhost:4566/", "", nil)},
 		{name: "unknown path", give: newRequest(t, http.MethodGet, "http://localhost:4566/nothing/here", "", nil)},
 		{
-			name: "an unregistered service",
+			name: "a signing name no service has",
 			give: newRequest(t, http.MethodPost, "http://localhost:4566/", "", map[string]string{
-				headerAuth: signed("test", usEast1, "s3"),
+				headerAuth: signed("test", usEast1, "bogus"),
 			}),
 		},
 		{

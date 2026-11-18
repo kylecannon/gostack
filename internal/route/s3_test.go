@@ -15,12 +15,15 @@ import (
 )
 
 const (
-	nameS3        = "s3"
-	nameS3Control = "s3control"
-	pathObject    = "/bucket/key"
-	pathControl   = "/v20180820/configuration/publicAccessBlock"
-	vhostSQS      = "sqs.s3.localhost.localstack.cloud:4566"
-	presignedV4   = "?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
+	nameS3         = "s3"
+	nameS3Control  = "s3control"
+	nameLambda     = "lambda"
+	nameKinesis    = "kinesis"
+	nameAPIGateway = "apigateway"
+	pathObject     = "/bucket/key"
+	pathControl    = "/v20180820/configuration/publicAccessBlock"
+	vhostSQS       = "sqs.s3.localhost.localstack.cloud:4566"
+	presignedV4    = "?X-Amz-Algorithm=AWS4-HMAC-SHA256" +
 		"&X-Amz-Credential=test%2F20130524%2Fus-east-1%2Fs3%2Faws4_request" +
 		"&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc"
 	presignedV2 = "?AWSAccessKeyId=test&Expires=1700000000&Signature=abc"
@@ -104,14 +107,30 @@ func Test_Table_Detect_s3(t *testing.T) {
 			giveTarget: pathControl, giveAuth: signedS3, wantService: nameS3Control,
 		},
 		{
-			// LocalStack takes it at :263 from its presign parameters; gostack
-			// reads the signing name from X-Amz-Credential first.
+			// The router reads no signing name from X-Amz-Credential
+			// (service_router.py:64-77); the Fallback takes it at :244.
 			name: "a presigned GET", giveMethod: http.MethodGet, giveHost: localHost,
 			giveTarget: pathObject + presignedV4, wantService: nameS3,
 		},
 		{
-			name: "a presigned GET of /v20180820 is s3control", giveMethod: http.MethodGet, giveHost: localHost,
-			giveTarget: pathControl + presignedV4, wantService: nameS3Control,
+			name: "a presigned GET of /v20180820 is s3's", giveMethod: http.MethodGet, giveHost: localHost,
+			giveTarget: pathControl + presignedV4, wantService: nameS3,
+		},
+		{
+			name: "a presigned GET of a bucket that starts v20180820 is not s3control's", giveMethod: http.MethodGet,
+			giveHost: localHost, giveTarget: "/v20180820abc/k" + presignedV4, wantService: nameS3,
+		},
+		{
+			name: "a presigned GET with an sqs scope is not sqs's", giveMethod: http.MethodGet, giveHost: localHost,
+			giveTarget: pathObject + "?X-Amz-Credential=test%2F20130524%2Fus-east-1%2Fsqs%2Faws4_request" +
+				"&X-Amz-Signature=x",
+			wantService: nameS3,
+		},
+		{
+			name: "a SigV2 header keeps an sqs scope in the query out", giveMethod: http.MethodGet,
+			giveHost: localHost, giveAuth: "AWS test:sig",
+			giveTarget:  pathObject + "?X-Amz-Credential=test%2F20130524%2Fus-east-1%2Fsqs%2Faws4_request",
+			wantService: nameS3,
 		},
 		{
 			// SigV2 has no signing name: only the Fallback can take it.
@@ -243,6 +262,83 @@ func Test_Table_Detect_fallback(t *testing.T) {
 		var ambiguous *route.AmbiguousError
 		require.ErrorAs(t, err, &ambiguous)
 		assert.Equal(t, []string{nameTwinA, nameTwinB}, ambiguous.Services)
+	})
+}
+
+// Test_Table_Detect_unregisteredSigningName covers service_router.py:374-379: a
+// call signed for a service LocalStack has and gostack does not run is that
+// service's, so the gateway answers that it is not enabled. A Fallback that
+// claims every request never sees it.
+func Test_Table_Detect_unregisteredSigningName(t *testing.T) {
+	const awsCLI = "aws-cli/2.15.0 Python/3.11"
+
+	tests := []struct {
+		name        string
+		giveMethod  string
+		giveTarget  string
+		giveSigning string
+		giveHeaders map[string]string
+		wantService string
+	}{
+		{
+			name: nameLambda, giveMethod: http.MethodGet, giveTarget: "/2015-03-31/functions/f",
+			giveSigning: nameLambda, wantService: nameLambda,
+		},
+		{
+			// dynamodb shares its signing name with dynamodbstreams; the target
+			// tells them apart.
+			name: "dynamodb through the aws cli", giveMethod: http.MethodPost, giveTarget: "/",
+			giveSigning: nameDynamoDB,
+			giveHeaders: map[string]string{
+				headerTarget: targetListTables, headerType: "application/x-amz-json-1.0", "User-Agent": awsCLI,
+			},
+			wantService: nameDynamoDB,
+		},
+		{name: nameKinesis, giveMethod: http.MethodGet, giveTarget: "/x", giveSigning: nameKinesis, wantService: nameKinesis},
+		{
+			// apigatewayv2 shares the signing name and nothing tells them apart:
+			// the service named after it (service_router.py:496-497).
+			name: nameAPIGateway, giveMethod: http.MethodGet, giveTarget: "/restapis",
+			giveSigning: nameAPIGateway, wantService: nameAPIGateway,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var asked int
+
+			s3 := s3Registration()
+			s3.Fallback = func(*http.Request) bool { asked++; return true }
+
+			table, err := route.NewTable([]service.Registration{{Metadata: sqs}, {Metadata: sts}, s3ControlRegistration(), s3})
+			require.NoError(t, err)
+
+			r := s3Request(t, tt.giveMethod, localHost, tt.giveTarget, scope(tt.giveSigning))
+			for name, value := range tt.giveHeaders {
+				r.Header.Set(name, value)
+			}
+
+			_, err = table.Detect(r, formOf(""))
+			require.ErrorIs(t, err, route.ErrNoService)
+			assert.Zero(t, asked, "the Fallback is not asked")
+
+			got, found := table.Unregistered(r)
+			require.True(t, found)
+			assert.Equal(t, tt.wantService, got.Service)
+		})
+	}
+
+	t.Run("a target of a registered service still finds it", func(t *testing.T) {
+		table, err := route.NewTable([]service.Registration{{Metadata: sqs}, {Metadata: sts}, s3Registration()})
+		require.NoError(t, err)
+
+		r := s3Request(t, http.MethodPost, localHost, "/", scope(nameDynamoDB))
+		r.Header.Set(headerTarget, targetSendMessage)
+		r.Header.Set(headerType, "application/x-amz-json-1.0")
+
+		got, err := table.Detect(r, formOf(""))
+		require.NoError(t, err)
+		assert.Equal(t, nameSQS, got.Service)
 	})
 }
 

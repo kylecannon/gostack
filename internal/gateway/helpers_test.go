@@ -25,6 +25,7 @@ const (
 
 	nameSQS = "sqs"
 	nameSTS = "sts"
+	nameS3  = "s3"
 
 	headerAuth   = "Authorization"
 	headerType   = "Content-Type"
@@ -132,6 +133,24 @@ func stsRegistration(serve func(http.ResponseWriter, *request.Context)) service.
 		},
 		Serve: serve,
 	}
+}
+
+// s3Registration is a fake s3: the SigningDefault of signing name s3, speaking
+// rest-xml. It answers 200 and counts the calls it serves.
+func s3Registration() (service.Registration, *atomic.Int64) {
+	served := new(atomic.Int64)
+
+	return service.Registration{
+		Metadata: service.Metadata{
+			Name: nameS3, SigningName: nameS3, EndpointPrefix: nameS3,
+			APIVersion: "2006-03-01", Protocols: []protocol.Kind{protocol.KindRestXML},
+		},
+		SigningDefault: true,
+		Serve: func(w http.ResponseWriter, _ *request.Context) {
+			served.Add(1)
+			w.WriteHeader(http.StatusOK)
+		},
+	}, served
 }
 
 // okServe answers 200 with the body "ok".

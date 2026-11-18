@@ -189,6 +189,39 @@ func Test_FromRequest(t *testing.T) {
 	}
 }
 
+// Test_FromAuthorization reads the header as FromRequest does, and never the
+// query string of a presigned URL.
+func Test_FromAuthorization(t *testing.T) {
+	const scope = "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/" + signingSQS + "/aws4_request"
+
+	tests := []struct {
+		name     string
+		giveAuth string
+		giveQS   string
+		want     account.Credential
+		wantOK   bool
+	}{
+		{
+			name:     "a sigv4 header",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=" + scope + ", SignedHeaders=host, Signature=abc",
+			giveQS:   presignedV4("OTHER/20130524/us-west-2/s3/aws4_request"),
+			want:     account.Credential{AccessKey: "AKIAIOSFODNN7EXAMPLE", SigningName: signingSQS, Region: euWest1},
+			wantOK:   true,
+		},
+		{name: "a presigned sigv4 URL", giveQS: presignedV4(scope)},
+		{name: "a presigned sigv2 URL", giveQS: presignedV2("AKIAIOSFODNN7EXAMPLE")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := account.FromAuthorization(credentialRequest(t, tt.giveAuth, tt.giveQS))
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func Test_Resolve(t *testing.T) {
 	tests := []struct {
 		name       string
