@@ -18,7 +18,10 @@ import (
 
 const (
 	hugeBatchEntries = 65_536
-	hugeBatchBudget  = time.Second
+	// The quadratic decoder took about 30 s here; the indexed one about
+	// 0.74 s under -race. 10 s keeps that regression caught on a loaded
+	// CI runner without failing on the runner's speed.
+	hugeBatchBudget = 10 * time.Second
 	queueURLPath     = "http://localhost.localstack.cloud:4566/000000000000/huge-batch"
 )
 
