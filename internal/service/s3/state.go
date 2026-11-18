@@ -132,6 +132,10 @@ type Bucket struct {
 	Analytics          map[string]*s3api.AnalyticsConfiguration
 	Metrics            map[string]*s3api.MetricsConfiguration
 	IntelligentTiering map[string]*s3api.IntelligentTieringConfiguration
+
+	// LifecycleMinObjectSize is the TransitionDefaultMinimumObjectSize the
+	// lifecycle configuration was put with; empty for the default.
+	LifecycleMinObjectSize string
 }
 
 // Object is one key of a bucket and its version chain, oldest first: the last
@@ -185,6 +189,12 @@ type Version struct {
 	// Parts is where each part of an object completed from a multipart upload
 	// lies in its body, in part order; nil for an object put whole.
 	Parts []ObjectPart
+
+	// ACL is the object's access control policy; nil is the private default.
+	// Tags is its tag set. Neither changes in place: PutObjectAcl and
+	// PutObjectTagging replace the Version under the bucket lock.
+	ACL  *s3api.AccessControlPolicy
+	Tags []s3api.Tag
 }
 
 // blobIDs returns the id of every body the bucket holds: object versions and

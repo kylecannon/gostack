@@ -60,8 +60,14 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
+	config, err := putObjectConfig(in)
+	if err != nil {
+		return nil, err
+	}
+
 	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	v := newVersion(in, b, algorithm)
+	v.ACL, v.Tags = config.acl, config.tags
 
 	err = p.writeBody(v, body, wantChecksum, contentMD5)
 	if err != nil {
@@ -73,7 +79,10 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
-	out := &s3api.PutObjectOutput{ETag: new(quoted(v.ETag)), ServerSideEncryption: nonEmpty(v.ServerSideEncryption)}
+	out := &s3api.PutObjectOutput{
+		ETag: new(quoted(v.ETag)), ServerSideEncryption: nonEmpty(v.ServerSideEncryption),
+		Expiration: b.expiration(key, v),
+	}
 	c := checksumsOf(v)
 	out.ChecksumCRC32, out.ChecksumCRC32C, out.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	out.ChecksumSHA1, out.ChecksumSHA256, out.ChecksumType = c.sha1, c.sha256, c.kind
@@ -117,6 +126,8 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 		ServerSideEncryption:    nonEmpty(v.ServerSideEncryption),
 		StorageClass:            storageClassOf(v),
 		WebsiteRedirectLocation: nonEmpty(v.WebsiteRedirectLocation),
+		TagCount:                tagCountOf(v),
+		Expiration:              p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v),
 	}
 
 	if deref(in.ChecksumMode) == checksumModeEnabled {
@@ -150,6 +161,8 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 		ServerSideEncryption:    nonEmpty(v.ServerSideEncryption),
 		StorageClass:            storageClassOf(v),
 		WebsiteRedirectLocation: nonEmpty(v.WebsiteRedirectLocation),
+		TagCount:                tagCountOf(v),
+		Expiration:              p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v),
 	}
 
 	if deref(in.ChecksumMode) == checksumModeEnabled {

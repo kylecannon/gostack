@@ -83,14 +83,20 @@ func (p *Provider) CreateBucket(ctx context.Context, in *s3api.CreateBucketInput
 			"x-amz-object-ownership", nil)
 	}
 
+	tags, acl, err := newBucketConfig(in)
+	if err != nil {
+		return nil, err
+	}
+
 	region := bucketRegion(constraint)
 
 	holder, claimed := p.names.claim(name, rc.AccountID)
 	if !claimed {
-		return p.existingBucket(rc.AccountID, holder, name, region)
+		return p.existingBucket(rc.AccountID, holder, name, region, tags)
 	}
 
 	b := newBucket(name, rc.AccountID, region, constraint, in.ObjectOwnership)
+	b.Tags, b.ACL = tags, acl
 
 	s := p.state(rc.AccountID)
 	s.mu.Lock()
@@ -246,7 +252,9 @@ func (p *Provider) ListBuckets(ctx context.Context, in *s3api.ListBucketsInput) 
 }
 
 // existingBucket answers a CreateBucket of a name that is taken.
-func (p *Provider) existingBucket(caller, holder, name, region string) (*s3api.CreateBucketOutput, error) {
+func (p *Provider) existingBucket(
+	caller, holder, name, region string, tags []s3api.Tag,
+) (*s3api.CreateBucketOutput, error) {
 	if holder != caller {
 		return nil, s3api.NewBucketAlreadyExists(
 			"The requested bucket name is not available. The bucket namespace is shared by all users of the " +
@@ -254,7 +262,7 @@ func (p *Provider) existingBucket(caller, holder, name, region string) (*s3api.C
 	}
 
 	existing := p.state(caller).get(name)
-	if region != regionUSEast1 || existing == nil {
+	if region != regionUSEast1 || len(tags) > 0 || existing == nil {
 		return nil, (&s3api.BucketAlreadyOwnedByYou{BucketName: &name}).Err(
 			"Your previous request to create the named bucket succeeded and you already own it.")
 	}
