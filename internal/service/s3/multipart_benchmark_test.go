@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
@@ -85,7 +86,7 @@ func benchServer(b *testing.B) string {
 	b.Helper()
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
-		s3.NewEphemeral(b.TempDir()))
+		blob.NewEphemeral(b.TempDir()))
 	b.Cleanup(provider.Close)
 
 	gw, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },

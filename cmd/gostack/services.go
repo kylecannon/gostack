@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
@@ -26,7 +27,7 @@ type providers struct {
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	p := &providers{s3: s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir))}
+	p := &providers{s3: s3.New(s3Settings(cfg), blob.NewEphemeral(blob.DefaultSpillDir))}
 	p.regs = registrations(cfg, changed, p.s3)
 
 	return p

@@ -8,6 +8,7 @@ import (
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
@@ -64,7 +65,7 @@ type Provider struct {
 	settings func() Settings
 	states   *store.Bundle[State]
 	names    nameIndex
-	blobs    BlobStore
+	blobs    blob.Store
 
 	// client delivers notifications, and checks their targets, through the
 	// gateway. Bind gives it the handler.
@@ -76,7 +77,7 @@ var _ s3api.Handler = (*Provider)(nil)
 // New returns a Provider with no buckets that keeps bodies in blobs. settings
 // is called on every operation, so a configuration change applies to the next
 // one.
-func New(settings func() Settings, blobs BlobStore) *Provider {
+func New(settings func() Settings, blobs blob.Store) *Provider {
 	return &Provider{
 		settings: settings,
 		states:   store.NewBundle(newState, emptyState),
@@ -122,7 +123,7 @@ func (p *Provider) Reset(account, region string) {
 }
 
 // Close drops the notifications not yet delivered and lets go of the bodies the
-// BlobStore holds, when it is one that can be closed.
+// store holds, when it is one that can be closed.
 func (p *Provider) Close() {
 	p.client.Close()
 

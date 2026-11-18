@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func benchProvider(tb testing.TB) *Provider {
 	tb.Helper()
 
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
-		NewEphemeral(tb.TempDir()))
+		blob.NewEphemeral(tb.TempDir()))
 	tb.Cleanup(p.Close)
 
 	b := newBucket(benchBucket, benchAccount, regionUSEast1, "", nil)

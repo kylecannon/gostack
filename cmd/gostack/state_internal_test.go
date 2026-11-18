@@ -2,8 +2,10 @@ package main
 
 import (
 	"io"
+	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/internalapi"
@@ -43,6 +45,28 @@ func (w *widgets) registration() service.Registration {
 	reg := registration(testService)
 	reg.Persist = w
 	reg.Reset = w.Reset
+
+	return reg
+}
+
+// bodies is a service whose state names assets, like S3.
+type bodies struct {
+	widgets
+
+	ids []string
+}
+
+func (b *bodies) References() iter.Seq[string] {
+	return slices.Values(b.ids)
+}
+
+func (b *bodies) registration() service.Registration {
+	reg := b.widgets.registration()
+	reg.Persist = b
+	reg.Reset = func(account, region string) {
+		b.Reset(account, region)
+		b.ids = nil
+	}
 
 	return reg
 }
@@ -96,22 +120,25 @@ func Test_stateController_Reset(t *testing.T) {
 		eng:  persist.New(persist.Config{}),
 	}
 
-	require.NoError(t, c.Reset(internalapi.StateScope{Service: testService, Account: "111111111111", Region: "eu-west-1"}))
+	ctx := t.Context()
+
+	scoped := internalapi.StateScope{Service: testService, Account: "111111111111", Region: "eu-west-1"}
+	require.NoError(t, c.Reset(ctx, scoped))
 	assert.Equal(t, [][2]string{{"111111111111", "eu-west-1"}}, w.resets)
 
-	require.NoError(t, c.Reset(internalapi.StateScope{Service: "sessions"}), "a service that is not saved resets too")
+	require.NoError(t, c.Reset(ctx, internalapi.StateScope{Service: "sessions"}), "a service that is not saved resets too")
 	assert.Equal(t, 1, s.resets)
 
-	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "nope"}), internalapi.ErrUnknownService)
-	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "stateless"}), internalapi.ErrNotSupported)
+	require.ErrorIs(t, c.Reset(ctx, internalapi.StateScope{Service: "nope"}), internalapi.ErrUnknownService)
+	require.ErrorIs(t, c.Reset(ctx, internalapi.StateScope{Service: "stateless"}), internalapi.ErrNotSupported)
 
-	require.NoError(t, c.Reset(internalapi.StateScope{}), "every service that keeps state resets, saved or not")
+	require.NoError(t, c.Reset(ctx, internalapi.StateScope{}), "every service that keeps state resets, saved or not")
 	assert.Len(t, w.resets, 2)
 	assert.Equal(t, 2, s.resets)
 
 	empty := &stateController{eng: persist.New(persist.Config{})}
-	require.NoError(t, empty.Reset(internalapi.StateScope{}))
-	require.ErrorIs(t, empty.Reset(internalapi.StateScope{Service: testService}), internalapi.ErrUnknownService)
+	require.NoError(t, empty.Reset(ctx, internalapi.StateScope{}))
+	require.ErrorIs(t, empty.Reset(ctx, internalapi.StateScope{Service: testService}), internalapi.ErrUnknownService)
 }
 
 func Test_stateController_SaveLoad(t *testing.T) {
@@ -147,10 +174,41 @@ func Test_stateController_Reset_reaches_the_disk(t *testing.T) {
 	c := &stateController{regs: []service.Registration{w.registration()}, eng: eng}
 
 	require.NoError(t, c.Save(t.Context()))
-	require.NoError(t, c.Reset(internalapi.StateScope{Service: testService}))
+	require.NoError(t, c.Reset(t.Context(), internalapi.StateScope{Service: testService}))
 	require.NoError(t, eng.Flush(t.Context()))
 
 	saved, err := os.ReadFile(filepath.Join(dir, testService, "store.json"))
 	require.NoError(t, err)
 	assert.Empty(t, string(saved), "the wipe was saved, so a restart does not bring the service back")
+}
+
+func Test_stateController_Reset_removes_assets(t *testing.T) {
+	eng, dir := persistentEngine(t)
+	b := &bodies{data: "x"}
+	eng.Register(testService, b)
+	c := &stateController{regs: []service.Registration{b.registration()}, eng: eng}
+
+	assets, err := eng.Assets(testService)
+	require.NoError(t, err)
+
+	w, err := assets.Create()
+	require.NoError(t, err)
+
+	id, _, err := w.Commit()
+	require.NoError(t, err)
+
+	b.ids = []string{id}
+	blob := filepath.Join(dir, testService, "assets", "blobs", id[:2], id)
+
+	require.NoError(t, c.Save(t.Context()))
+
+	require.NoError(t, c.Reset(t.Context(), internalapi.StateScope{Service: testService, Account: "111111111111"}))
+	require.NoError(t, eng.Flush(t.Context()))
+	assert.FileExists(t, blob, "a reset of one account leaves the removals to the service")
+
+	require.NoError(t, c.Reset(t.Context(), internalapi.StateScope{Service: testService}))
+	assert.FileExists(t, blob, "nothing goes before the wipe is saved")
+
+	require.NoError(t, eng.Flush(t.Context()))
+	assert.NoFileExists(t, blob, "a reset of the whole service removes every asset it kept")
 }

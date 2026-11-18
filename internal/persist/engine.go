@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +50,10 @@ type Engine struct {
 	// emptied but not yet refilled. It is a channel, so a Flush, Load or Close
 	// stops waiting when its context ends.
 	sem chan struct{}
+
+	// openMu is held while a service's assets are opened, so they are opened
+	// once. It is taken before mu.
+	openMu sync.Mutex
 
 	mu       sync.Mutex
 	services map[string]*tracked
@@ -96,11 +101,14 @@ type tracked struct {
 	// service is then never loaded or written again, because a write could reach
 	// outside the base dir or replace the only copy of what the file holds.
 	unsafe error
+	// assets are the service's assets once opened, or nil.
+	assets *Assets
 }
 
 type pendingService struct {
-	name string
-	snap Snapshotter
+	name   string
+	snap   Snapshotter
+	assets *Assets
 }
 
 // New returns an Engine for cfg. When cfg turns persistence off, the Engine is
@@ -157,6 +165,69 @@ func (e *Engine) Register(service string, s Snapshotter) {
 	}
 
 	e.services[service] = &tracked{snap: s}
+}
+
+// Assets returns the assets of the service named by service, and opens
+// <base>/<service>/assets on the first call; later calls return the same
+// Assets, which stay open for the life of the process. It returns nil when the
+// service's state is not persisted, as Enabled reports, so a nil Assets goes
+// with health's persisted false. The service must be registered, and its
+// Snapshotter must be a [Referencer]. When the directory is, or is reached
+// through, a link that leaves the base dir, the service is neither loaded nor
+// saved, as for a state file, and the error wraps [ErrUnsafe].
+func (e *Engine) Assets(service string) (*Assets, error) {
+	if !e.Enabled(service) {
+		return nil, nil //nolint:nilnil // a nil Assets is the answer for a service that is not persisted
+	}
+
+	e.mu.Lock()
+	t, registered := e.services[service]
+	e.mu.Unlock()
+
+	if !registered {
+		return nil, fmt.Errorf("assets of %s: %w", service, errNotRegistered)
+	}
+
+	if _, ok := t.snap.(Referencer); !ok {
+		return nil, fmt.Errorf("assets of %s: %w", service, errNoReferencer)
+	}
+
+	return e.openAssets(service, t)
+}
+
+// ResetAssets runs wipe, which empties the state of the service named by
+// service, and then removes every asset the service held before wipe ran, after
+// the next commit of its snapshot, as Remove does. An asset committed after the
+// listing stays, so the service has to make a write that began before wipe fail
+// and Remove its asset itself. It holds the guard Load and Flush hold, waiting
+// for it only until ctx ends, so a reset never falls between a load's restore
+// and its sweep. A service whose assets the engine does not keep is wiped and
+// nothing else.
+func (e *Engine) ResetAssets(ctx context.Context, service string, wipe func()) error {
+	a := e.resettable(service)
+	if a == nil {
+		wipe()
+
+		return nil
+	}
+
+	err := e.acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("reset %s: %w", service, err)
+	}
+
+	defer e.release()
+
+	ids, err := a.list()
+	if err != nil {
+		e.log.Error("persist: list the assets to reset; the service removes the ones it names",
+			"service", service, "dir", a.dir, "error", err)
+	}
+
+	wipe()
+	a.requeue(ids)
+
+	return nil
 }
 
 // MarkDirty records that a service changed. Nothing runs while no service is
@@ -243,23 +314,23 @@ func (e *Engine) Load(ctx context.Context) error {
 	defer func() { _ = root.Close() }()
 
 	e.mu.Lock()
-	snaps := make(map[string]Snapshotter, len(e.services))
+	safe := make(map[string]*tracked, len(e.services))
 
 	for name, t := range e.services {
 		if t.unsafe == nil {
-			snaps[name] = t.snap
+			safe[name] = t
 		}
 	}
 
 	e.mu.Unlock()
 
-	for _, name := range slices.Sorted(maps.Keys(snaps)) {
+	for _, name := range slices.Sorted(maps.Keys(safe)) {
 		err = ctx.Err()
 		if err != nil {
 			return fmt.Errorf("load: %w", err)
 		}
 
-		e.loadService(root, name, snaps[name])
+		e.loadService(root, name, safe[name])
 	}
 
 	return e.unsafeErr()
@@ -421,7 +492,7 @@ func (e *Engine) takeDirty() []pendingService {
 		t.dirty = false
 
 		if t.unsafe == nil {
-			pending = append(pending, pendingService{name: name, snap: t.snap})
+			pending = append(pending, pendingService{name: name, snap: t.snap, assets: t.assets})
 		}
 	}
 
@@ -483,6 +554,9 @@ func (e *Engine) backoffLocked() time.Duration {
 // writeAll saves each pending service. It returns the services to try again,
 // and the errors joined. A service whose file turns out to be a link that
 // leaves the base dir is not tried again: saving is turned off for it.
+//
+// The assets a service removed before its snapshot is taken are deleted once
+// that snapshot is on disk, and kept for the next save when it is not.
 func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pendingService, error) {
 	err := os.MkdirAll(e.dir, dirMode)
 	if err != nil {
@@ -507,11 +581,16 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 			return append(failed, pending[i:]...), errors.Join(append(errs, err)...)
 		}
 
+		removed := p.assets.take()
+
 		err = e.save(root, p)
 		if err == nil {
+			p.assets.apply(removed)
+
 			continue
 		}
 
+		p.assets.requeue(removed)
 		errs = append(errs, fmt.Errorf("persist %s: %w", p.name, err))
 
 		if leaves(root, err) {
@@ -628,11 +707,22 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 	return dirs, nil
 }
 
-// loadService restores s from the first state file that loads. A missing file
-// is skipped; a file that exists and fails is moved aside before the next format
-// is tried. Before any file is read, every format's path is checked, so a link
-// that leaves the base dir refuses the service whichever format it is.
-func (e *Engine) loadService(root *os.Root, name string, s Snapshotter) {
+// loaded is what loading one service's state files did.
+type loaded struct {
+	// restored is true when a state file restored, and modTime is when that file
+	// was written.
+	restored bool
+	modTime  time.Time
+	// setAside is true when a state file failed and was moved aside.
+	setAside bool
+}
+
+// loadService restores the service from the first state file that loads, then
+// sweeps its assets when it keeps any. A missing file is skipped; a file that
+// exists and fails is moved aside before the next format is tried. Before any
+// file is read, every format's path and the assets directory are checked, so a
+// link that leaves the base dir refuses the service whichever path it is.
+func (e *Engine) loadService(root *os.Root, name string, t *tracked) {
 	for _, f := range e.loadFormats {
 		file := name + "/" + f.fileName()
 
@@ -644,30 +734,69 @@ func (e *Engine) loadService(root *os.Root, name string, s Snapshotter) {
 		}
 	}
 
+	ref, keepsAssets := t.snap.(Referencer)
+
+	var assets *Assets
+
+	if keepsAssets {
+		var err error
+
+		assets, err = e.openAssets(name, t)
+
+		switch {
+		case errors.Is(err, ErrUnsafe):
+			e.log.Error("persist: the assets directory is a link that leaves the base dir or is absolute, "+
+				"so the service is neither loaded nor saved; use a relative link inside the base dir",
+				"service", name, "error", err)
+
+			return
+		case err != nil:
+			e.log.Error("persist: assets could not be opened; the service loads without removing orphans",
+				"service", name, "error", err)
+		default:
+		}
+	}
+
+	result := e.restore(root, name, t.snap)
+
+	if assets != nil {
+		e.sweepAssets(root, name, ref, assets, result)
+	}
+}
+
+// restore restores s from the first of the service's state files that loads.
+func (e *Engine) restore(root *os.Root, name string, s Snapshotter) loaded {
+	var result loaded
+
 	for _, f := range e.loadFormats {
 		file := name + "/" + f.fileName()
 
-		found, err := restoreFile(root, file, s)
+		found, modTime, err := restoreFile(root, file, s)
 		if !found {
 			continue
 		}
 
 		if err == nil {
-			return
+			result.restored, result.modTime = true, modTime
+
+			return result
 		}
 
 		e.setAside(root, name, file, err)
+		result.setAside = true
 	}
+
+	return result
 }
 
-// restoreFile restores s from file. It reports false when the file does not
-// exist, which is no failure. A panic in Restore is a failure like any other,
-// with the stack in the error, so the file is moved aside and gostack still
-// starts.
-func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, err error) {
+// restoreFile restores s from file and returns when the file was written. It
+// reports false when the file does not exist, which is no failure. A panic in
+// Restore is a failure like any other, with the stack in the error, so the file
+// is moved aside and gostack still starts.
+func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, modTime time.Time, err error) {
 	r, err := root.Open(file)
 	if err != nil {
-		return !errors.Is(err, fs.ErrNotExist), fmt.Errorf("open %s: %w", file, err)
+		return !errors.Is(err, fs.ErrNotExist), time.Time{}, fmt.Errorf("open %s: %w", file, err)
 	}
 
 	defer func() { _ = r.Close() }()
@@ -681,10 +810,134 @@ func restoreFile(root *os.Root, file string, s Snapshotter) (found bool, err err
 
 	err = s.Restore(r)
 	if err != nil {
-		return true, fmt.Errorf("restore %s: %w", file, err)
+		return true, time.Time{}, fmt.Errorf("restore %s: %w", file, err)
 	}
 
-	return true, nil
+	info, err := r.Stat()
+	if err != nil {
+		// No time to guard by: the sweep keeps every asset this process wrote.
+		return true, time.Time{}, nil
+	}
+
+	return true, info.ModTime(), nil
+}
+
+// sweepAssets removes what a crash left in the assets of a service whose state
+// has just loaded: temp files no writer holds, and committed assets its state
+// does not name. Queued removals of assets the restored state names again are
+// dropped. Every asset is kept while a state file of the service sits moved
+// aside, because that file may name them.
+func (e *Engine) sweepAssets(root *os.Root, name string, ref Referencer, a *Assets, result loaded) {
+	err := a.removeTemps()
+	if err != nil {
+		e.log.Error("persist: remove asset temp files", "service", name, "dir", a.dir, "error", err)
+	}
+
+	refs := make(map[string]struct{})
+	for id := range ref.References() {
+		refs[id] = struct{}{}
+	}
+
+	if result.restored {
+		a.keep(refs)
+	}
+
+	if result.setAside || movedAside(root, name) {
+		e.log.Warn("persist: assets are kept because a state file of the service was moved aside and may name them",
+			"service", name, "dir", a.dir)
+
+		return
+	}
+
+	var before time.Time
+	if result.restored {
+		before = result.modTime
+	}
+
+	removed, err := a.sweep(refs, before)
+	if err != nil {
+		e.log.Error("persist: remove orphaned assets", "service", name, "dir", a.dir, "error", err)
+	}
+
+	if removed > 0 {
+		e.log.Info("persist: removed assets that no snapshot names", "service", name, "count", removed)
+	}
+}
+
+// openAssets returns the open Assets of a registered service, and opens them when
+// they are not. A link that leaves the base dir turns the service off, and the
+// error wraps [ErrUnsafe].
+func (e *Engine) openAssets(service string, t *tracked) (*Assets, error) {
+	e.openMu.Lock()
+	defer e.openMu.Unlock()
+
+	e.mu.Lock()
+	a := t.assets
+	e.mu.Unlock()
+
+	if a != nil {
+		return a, nil
+	}
+
+	a, err := newAssets(e.dir, service, e.log)
+	if errors.Is(err, errLinkLeaves) {
+		e.markUnsafe(service, err)
+
+		return nil, fmt.Errorf("persist %s: %w: %w", service, ErrUnsafe, err)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("assets of %s: %w", service, err)
+	}
+
+	e.mu.Lock()
+	t.assets = a
+	e.mu.Unlock()
+
+	return a, nil
+}
+
+// resettable returns the assets ResetAssets removes for the service, or nil
+// when the engine keeps none for it.
+func (e *Engine) resettable(service string) *Assets {
+	if !e.Enabled(service) {
+		return nil
+	}
+
+	e.mu.Lock()
+	t, registered := e.services[service]
+	e.mu.Unlock()
+
+	if !registered {
+		return nil
+	}
+
+	if _, ok := t.snap.(Referencer); !ok {
+		return nil
+	}
+
+	a, err := e.openAssets(service, t)
+	if err != nil {
+		e.log.Error("persist: open the assets to reset; the service removes the ones it names",
+			"service", service, "error", err)
+
+		return nil
+	}
+
+	return a
+}
+
+// movedAside reports whether the service's directory holds a state file moved
+// aside, or cannot be read to tell.
+func movedAside(root *os.Root, service string) bool {
+	entries, err := readDir(root, service)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+
+	return slices.ContainsFunc(entries, func(entry fs.DirEntry) bool {
+		return strings.Contains(entry.Name(), unloadableInfix)
+	})
 }
 
 // refuse turns a service off whose state file is, or is reached through, a link

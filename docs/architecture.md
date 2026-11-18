@@ -123,7 +123,8 @@ internal/
   inproc/                    a service's calls to another service of the same process, through the gateway's handler
   config/                    viper-backed LocalStack env vars and their lookup order, PERSIST_* validator, config updates
   store/                     Bundle[State] (account x region), cross-region and cross-account attributes
-  persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats
+  persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats, assets
+  blob/                      body store contract and the ephemeral store (memory, then unlinked temp files)
   lifecycle/                 lifecycle, init hooks (boot/start/ready/shutdown .d, .sh/.py as subprocesses), startup warnings, "Ready." marker, signals
   internalapi/               /_gostack/* canonical handlers, /_localstack/* and /_aws/* developer aliases, always-on protocol paths
   dns/                       DNS server for *.localhost.localstack.cloud (DNS_ADDRESS=0 disables it)
@@ -365,19 +366,19 @@ while idle; the queue holds `inproc.MaxQueued` (4,096) calls and refuses the
 next. A call made before `Bind` gives the client a handler returns
 `ErrNotBound`. S3 uses it to deliver event notifications to SQS.
 
-### S3 body store (`internal/service/s3`)
+### Body store (`internal/blob`)
 
-Object and part bodies live behind `BlobStore` (`Create`, `Open`, `Remove`),
-under ids the store picks, and are streamed in and out. `Ephemeral`, the store
-when S3 is not persisted, keeps a body up to 512 KiB in memory and spills a
-larger one to a temporary file under `/var/lib/localstack/tmp` (the system
-temporary directory when that cannot be made), unlinked at creation. A reader
-that has opened a blob keeps reading it after `Remove`. A range read or a part
-copy opens one blob, seeks and copies into a new one.
+S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,
+`Remove`), under ids the store picks, and are streamed in and out.
+`blob.Ephemeral`, the store when S3 is not persisted, keeps a body up to 512 KiB
+in memory and spills a larger one to a temporary file under
+`/var/lib/localstack/tmp` (the system temporary directory when that cannot be
+made), unlinked at creation. A reader that has opened a blob keeps reading it
+after `Remove`. A range read or a part copy opens one blob, seeks and copies
+into a new one.
 
-S3 persistence is not built. The proposed layout, blobs as files under
-`<base>/s3/assets/blobs/` with immutable ids, is pending the user's ruling
-(SQ-101); nothing in this section depends on it.
+A persisted service keeps its bodies as assets of the persistence engine (see
+Assets under Persistence). S3 is not wired to them yet; that is SQ-114.
 
 ## Internal API
 
@@ -709,10 +710,55 @@ outside the base directory.
 - A link whose target fails to load is the one moved aside; its target is
   untouched.
 
+**Assets.** A service whose state names large files, such as S3's object
+bodies, keeps them beside its state through `Engine.Assets(service)`. The
+answer is nil when the service is not persisted, which is when
+`/_gostack/health` reports `persisted: false`. The service's Snapshotter must
+also be a `Referencer`, which yields the ids its state names; SQS is neither
+and is untouched.
+
+- Layout: `<base>/<service>/assets/blobs/<id[0:2]>/<id>`, under a random
+  128-bit hex id the engine picks. A file is written once and never changed.
+  Writes in progress live in `assets/tmp/`. The 256 `blobs/` subdirectories are
+  made and fsynced, with their parents, when the assets are opened.
+- Writing happens at request time. `Create` opens a temp file; `Commit` fsyncs
+  it, renames it into `blobs/`, fsyncs that directory and returns the id, all
+  before any snapshot can name the id.
+- `Remove` queues the id. A flush takes the queue before it takes the snapshot,
+  and deletes those files once the snapshot is renamed into place and its
+  directory fsynced. A failed save keeps the queue; a deletion that fails is
+  retried after the next save.
+- A crash between a commit and the next snapshot leaves an orphan, and a crash
+  between a snapshot and its deletions leaves a file no snapshot names. No
+  order of crashes leaves a snapshot that names a missing file.
+- After a service's state loads, the engine deletes temp files no writer holds
+  and every committed asset the state does not name. Once this process has
+  written an asset, which is the case for `POST /_gostack/state/load`, only an
+  orphan older than the loaded state file goes: a newer one may be on its way
+  into the state. The load also drops queued removals of ids the restored state
+  names again.
+- Nothing is deleted while a state file of the service sits moved aside
+  (`.unloadable-`), because that file may name the assets.
+- `POST /_gostack/state/reset` of a whole service lists its assets, wipes the
+  state, and deletes every listed asset after the next save. A reset scoped to
+  an account or a region leaves removals to the service. A reset holds the
+  guard a save and a load hold.
+- A missing asset fails only the object that names it, in whatever way the
+  service decides. The state file is not moved aside for it.
+- Confinement: the assets are reached through an `os.Root` on the assets
+  directory, kept open for the life of the process. `Open` and `Remove` accept
+  only 32 lower-case hex digits. An assets directory that is a link leaving the
+  base directory turns the service off, as a state-file link does.
+- A service calls `Remove` only once its state no longer names the id. A write
+  that started before a reset or a load must fail rather than name its asset in
+  the new state. S3's reset marks the buckets it drops gone, which does this;
+  its restore has to do the same (SQ-114).
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus
-  `assets/`. S3 objects are stored as files, not in the snapshot.
+  `assets/` for a service that keeps assets. S3 object bodies are assets, not
+  part of the snapshot.
 - Old localstack-persist data cannot be read, because those files are pickled
   Python objects.
 - The promise covers the compose file. It does not cover the data directory.
