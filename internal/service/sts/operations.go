@@ -322,32 +322,6 @@ func validateAssumeRole(in *api.AssumeRoleInput) *awserr.Error {
 		return validationError(*in.RoleArn + " is invalid")
 	}
 
-	return validateTags(in)
-}
-
-// validateTags checks the session tags of AssumeRole the way LocalStack does.
-func validateTags(in *api.AssumeRoleInput) *awserr.Error {
-	seen := make(map[string]struct{}, len(in.Tags))
-
-	for _, tag := range in.Tags {
-		if tag.Key == nil {
-			continue
-		}
-
-		key := strings.ToLower(*tag.Key)
-		if _, dup := seen[key]; dup {
-			return invalidParameter("Duplicate tag keys found. Please note that Tag keys are case insensitive.")
-		}
-
-		seen[key] = struct{}{}
-	}
-
-	for _, key := range in.TransitiveTagKeys {
-		if _, ok := seen[strings.ToLower(key)]; !ok {
-			return invalidParameter("The specified transitive tag key must be included in the requested tags.")
-		}
-	}
-
 	return nil
 }
 
