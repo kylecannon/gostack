@@ -102,7 +102,6 @@ func requestChecksum(in *s3api.PutObjectInput) (string, string, error) {
 	}
 
 	if found > 1 {
-		//nolint:wrapcheck // the S3 error is the reply itself.
 		return "", "", s3api.NewInvalidRequest(
 			"Expecting a single x-amz-checksum- header. Multiple checksum Types are not allowed.")
 	}

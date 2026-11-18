@@ -41,7 +41,6 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 
 	key := deref(in.Key)
 	if len(key) > maxKeyBytes {
-		//nolint:wrapcheck // the modeled S3 error is the reply itself.
 		return nil, (&s3api.KeyTooLongError{
 			MaxSizeAllowed: new(strconv.Itoa(maxKeyBytes)), Size: new(strconv.Itoa(len(key))),
 		}).Err("Your key is too long")
@@ -49,7 +48,6 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 
 	contentMD5 := deref(in.ContentMD5)
 	if contentMD5 != "" && !validContentMD5(contentMD5) {
-		//nolint:wrapcheck // the modeled S3 error is the reply itself.
 		return nil, (&s3api.InvalidDigest{Content_MD5: &contentMD5}).Err("The Content-MD5 you specified was invalid.")
 	}
 
@@ -196,7 +194,6 @@ func (p *Provider) DeleteObject(ctx context.Context, in *s3api.DeleteObjectInput
 // blob is dropped.
 func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD5 string) error {
 	if wantChecksum != "" && !validChecksum(v.ChecksumAlgorithm, wantChecksum) {
-		//nolint:wrapcheck // the S3 error is the reply itself.
 		return s3api.NewInvalidRequest(fmt.Sprintf("Value for x-amz-checksum-%s header is invalid.",
 			strings.ToLower(v.ChecksumAlgorithm)))
 	}
@@ -365,7 +362,6 @@ func defaultEncryption(b *Bucket) string {
 // ones the body has. calculatedMD5 is the base64 of the body's MD5.
 func checkDigests(v *Version, wantChecksum, contentMD5, calculatedMD5 string) error {
 	if wantChecksum != "" && wantChecksum != v.ChecksumValue {
-		//nolint:wrapcheck // the S3 error is the reply itself.
 		return s3api.NewBadDigest(fmt.Sprintf("The %s you specified did not match the calculated checksum.",
 			v.ChecksumAlgorithm))
 	}
@@ -373,7 +369,6 @@ func checkDigests(v *Version, wantChecksum, contentMD5, calculatedMD5 string) er
 	if contentMD5 != "" && calculatedMD5 != contentMD5 {
 		expected := etagOfContentMD5(contentMD5)
 
-		//nolint:wrapcheck // the modeled S3 error is the reply itself.
 		return (&s3api.BadDigest{ExpectedDigest: &expected, CalculatedDigest: &calculatedMD5}).Err(
 			"The Content-MD5 you specified did not match what we received.")
 	}

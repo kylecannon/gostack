@@ -65,7 +65,6 @@ func (p *Provider) CreateBucket(ctx context.Context, in *s3api.CreateBucketInput
 
 	name := deref(in.Bucket)
 	if !validBucketName(name) {
-		//nolint:wrapcheck // the modeled S3 error is the reply itself.
 		return nil, (&s3api.InvalidBucketName{BucketName: &name}).Err("The specified bucket is not valid.")
 	}
 
@@ -249,7 +248,6 @@ func (p *Provider) ListBuckets(ctx context.Context, in *s3api.ListBucketsInput) 
 // existingBucket answers a CreateBucket of a name that is taken.
 func (p *Provider) existingBucket(caller, holder, name, region string) (*s3api.CreateBucketOutput, error) {
 	if holder != caller {
-		//nolint:wrapcheck // the S3 error is the reply itself.
 		return nil, s3api.NewBucketAlreadyExists(
 			"The requested bucket name is not available. The bucket namespace is shared by all users of the " +
 				"system. Please select a different name and try again.")
@@ -257,7 +255,6 @@ func (p *Provider) existingBucket(caller, holder, name, region string) (*s3api.C
 
 	existing := p.state(caller).get(name)
 	if region != regionUSEast1 || existing == nil {
-		//nolint:wrapcheck // the modeled S3 error is the reply itself.
 		return nil, (&s3api.BucketAlreadyOwnedByYou{BucketName: &name}).Err(
 			"Your previous request to create the named bucket succeeded and you already own it.")
 	}
@@ -318,7 +315,6 @@ func bucketNotEmpty(name string, versioning *s3api.VersioningConfiguration) erro
 		message += ". You must delete all versions in the bucket."
 	}
 
-	//nolint:wrapcheck // the modeled S3 error is the reply itself.
 	return (&s3api.BucketNotEmpty{BucketName: &name}).Err(message)
 }
 
@@ -334,7 +330,6 @@ func validateLocationConstraint(region, constraint string) error {
 		return nil
 	case region == regionUSEast1:
 		if !slices.Contains(locationConstraints, constraint) {
-			//nolint:wrapcheck // the modeled S3 error is the reply itself.
 			return (&s3api.InvalidLocationConstraint{LocationConstraint: &constraint}).Err(
 				"The specified location-constraint is not valid")
 		}

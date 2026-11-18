@@ -229,7 +229,6 @@ func (w *responseWriter) Unwrap() http.ResponseWriter {
 func callOf(ctx context.Context) (*request.Context, error) {
 	rc, ok := request.From(ctx)
 	if !ok {
-		//nolint:wrapcheck // the S3 error is the reply itself.
 		return nil, awserr.Internal("the request context is missing")
 	}
 
@@ -240,18 +239,15 @@ func callOf(ctx context.Context) (*request.Context, error) {
 // generated package builds them, unwrapped.
 
 func noSuchBucket(name string) error {
-	//nolint:wrapcheck // the modeled S3 error is the reply itself.
 	return (&s3api.NoSuchBucket{BucketName: &name}).Err("The specified bucket does not exist")
 }
 
 func noSuchKey(key string) error {
-	//nolint:wrapcheck // the modeled S3 error is the reply itself.
 	return (&s3api.NoSuchKey{Key: &key}).Err("The specified key does not exist.")
 }
 
 // invalidArgument names the argument, and its value when value is not nil.
 func invalidArgument(message, name string, value *string) error {
-	//nolint:wrapcheck // the modeled S3 error is the reply itself.
 	return (&s3api.InvalidArgument{ArgumentName: &name, ArgumentValue: value}).Err(message)
 }
 
