@@ -333,7 +333,7 @@ func Test_Gostack_openapi(t *testing.T) {
 
 // Test_Gostack_contractMatchesRoutes keeps api/openapi/gostack.yaml and the
 // mounted routes in step: every operation in the file is served, and every
-// canonical route is in the file.
+// canonical route is in the file. The routes of the services are left out.
 func Test_Gostack_contractMatchesRoutes(t *testing.T) {
 	h := newHarness(t, func(d *internalapi.Deps) { d.OpenAPI = openapi.Spec })
 
@@ -347,7 +347,11 @@ func Test_Gostack_contractMatchesRoutes(t *testing.T) {
 	}
 	require.NoError(t, chi.Walk(h.router, walk))
 	slices.Sort(served)
-	documented := specOperations(t, openapi.Spec)
+	// The developer endpoints under /_gostack/services/<svc>/ are mounted by the
+	// service that owns them, and that service's tests check them.
+	documented := slices.DeleteFunc(specOperations(t, openapi.Spec), func(operation string) bool {
+		return strings.Contains(operation, " /_gostack/services/")
+	})
 	slices.Sort(documented)
 
 	require.Equal(t, documented, served)

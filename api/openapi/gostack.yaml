@@ -264,8 +264,169 @@ paths:
             application/yaml:
               schema:
                 type: string
+  /_gostack/services/sqs/messages:
+    get: &listSqsMessages
+      operationId: listSqsMessages
+      summary: List the messages of an SQS queue without receiving them.
+      description: &listSqsMessagesDescription >-
+        A peek with no side effect: it changes no visibility timeout, receive
+        count or timestamp, and every message carries the receipt handle
+        SQS/BACKDOOR/ACCESS. The queue is the QueueUrl, as a query or form
+        parameter. LocalStack serves the same call at /_aws/sqs/messages, unless
+        GOSTACK_COMPAT_PATHS=0. The response has the form of a ReceiveMessage
+        response. The json protocol (Content-Type application/x-amz-json-1.0, with
+        an X-Amz-Target of AmazonSQS.ReceiveMessage on this path) answers with
+        Messages, and any other call answers with XML, or with that XML converted to
+        JSON when the Accept header asks for application/json.
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SqsQueueUrl'
+        - $ref: '#/components/parameters/SqsShowInvisible'
+        - $ref: '#/components/parameters/SqsShowDelayed'
+      responses: &sqsMessagesResponses
+        '200':
+          description: The messages of the queue, visible ones first in sending order.
+          content:
+            text/xml:
+              schema:
+                type: string
+            application/xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+            application/x-amz-json-1.0:
+              schema:
+                $ref: '#/components/schemas/SqsMessages'
+        '400':
+          description: The queue does not exist or the call is not a ReceiveMessage call. An SQS error.
+          content:
+            text/xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: The QueueUrl is not the URL of a queue (InvalidAddress). An SQS error.
+          content:
+            text/xml:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: object
+    post:
+      <<: *listSqsMessages
+      operationId: listSqsMessagesByCall
+      summary: List the messages of an SQS queue, with the QueueUrl in a ReceiveMessage request.
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SqsReceiveMessageRequest'
+          application/x-amz-json-1.0:
+            schema:
+              $ref: '#/components/schemas/SqsReceiveMessageRequest'
+  /_gostack/services/sqs/messages/{region}/{account_id}/{queue_name}:
+    get: &listSqsQueueMessages
+      operationId: listSqsQueueMessages
+      summary: List the messages of the SQS queue the path names, without receiving them.
+      description: *listSqsMessagesDescription
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SqsRegion'
+        - $ref: '#/components/parameters/SqsAccountId'
+        - $ref: '#/components/parameters/SqsQueueName'
+        - $ref: '#/components/parameters/SqsShowInvisible'
+        - $ref: '#/components/parameters/SqsShowDelayed'
+      responses: *sqsMessagesResponses
+    post:
+      <<: *listSqsQueueMessages
+      operationId: listSqsQueueMessagesByPost
 components:
+  parameters:
+    SqsQueueUrl:
+      name: QueueUrl
+      in: query
+      required: false
+      description: The URL of the queue, in any of the SQS_ENDPOINT_STRATEGY forms. A form field of the same name works too.
+      schema:
+        type: string
+    SqsShowInvisible:
+      name: ShowInvisible
+      in: query
+      required: false
+      description: >-
+        true or 1 (any case) adds the messages in flight, ahead of the others, and
+        an IsVisible attribute to every message.
+      schema:
+        type: string
+    SqsShowDelayed:
+      name: ShowDelayed
+      in: query
+      required: false
+      description: >-
+        true or 1 (any case) adds the delayed messages, after the others, and an
+        IsDelayed attribute to every message.
+      schema:
+        type: string
+    SqsRegion:
+      name: region
+      in: path
+      required: true
+      schema:
+        type: string
+    SqsAccountId:
+      name: account_id
+      in: path
+      required: true
+      schema:
+        type: string
+    SqsQueueName:
+      name: queue_name
+      in: path
+      required: true
+      schema:
+        type: string
   schemas:
+    SqsReceiveMessageRequest:
+      type: object
+      description: A ReceiveMessage request. Only QueueUrl is read, and the Action of a form must be ReceiveMessage.
+      properties:
+        Action:
+          const: ReceiveMessage
+        QueueUrl:
+          type: string
+      required: [QueueUrl]
+    SqsMessages:
+      type: object
+      description: The json protocol response, a ReceiveMessage result.
+      properties:
+        Messages:
+          type: array
+          items:
+            type: object
+            properties:
+              MessageId:
+                type: string
+              ReceiptHandle:
+                const: SQS/BACKDOOR/ACCESS
+              MD5OfBody:
+                type: string
+              Body:
+                type: string
+              Attributes:
+                type: object
+                additionalProperties:
+                  type: string
+              MD5OfMessageAttributes:
+                type: string
+              MessageAttributes:
+                type: object
+      required: [Messages]
     StateDone:
       type: object
       additionalProperties: false

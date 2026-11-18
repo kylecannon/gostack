@@ -42,7 +42,7 @@ const (
 // /<account>/<queue> or /queue/<region>/<account>/<queue>, by GET or POST, is a
 // query call on that queue whose QueueUrl defaults to the URL it was sent to.
 // The patterns match only a 12-digit account and a queue name, so no other path
-// is taken.
+// is taken. The developer API routes come with them (see mountDeveloperAPI).
 func (p *Provider) mount(r chi.Router) {
 	const (
 		accountPattern = `{account:[0-9]{12}}`
@@ -56,6 +56,8 @@ func (p *Provider) mount(r chi.Router) {
 		r.Get(pattern, p.serveQueueURL)
 		r.Post(pattern, p.serveQueueURL)
 	}
+
+	p.mountDeveloperAPI(r)
 }
 
 // serveQueueURL answers a call sent to a queue URL. It builds the request
