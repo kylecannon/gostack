@@ -116,7 +116,6 @@ func (s *entryStore) add(d entryData) *entryData {
 // lock, and sort puts it in the order above.
 type contentsData struct {
 	Seq     uint64       `json:"seq"`
-	Scope   string       `json:"scope,omitempty"`
 	Entries []*entryData `json:"entries"`
 	Dedup   []dedupData  `json:"dedup,omitempty"`
 	Locked  []string     `json:"locked,omitempty"`

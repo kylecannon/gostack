@@ -343,8 +343,8 @@ func (p *Provider) ReceiveMessage(
 }
 
 // receiveParams reads and checks the parameters of a ReceiveMessage call.
-// noLimit lifts the check of MaxNumberOfMessages, as
-// SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT does.
+// noLimit lifts the upper bound of MaxNumberOfMessages, as
+// SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT does; a count below one stays invalid.
 func (q *Queue) receiveParams(
 	rc *request.Context, in *sqsapi.ReceiveMessageInput, noLimit bool,
 ) (receiveParams, *awserr.Error) {
@@ -367,9 +367,10 @@ func (q *Queue) receiveParams(
 		params.wait = time.Duration(*in.WaitTimeSeconds) * time.Second
 	}
 
-	// An absent or zero count is one message, as in LocalStack.
+	// An absent count is one message. A zero is out of range, as AWS has it
+	// ("Valid values: 1 to 10"); LocalStack turns it into one.
 	count := 1
-	if in.MaxNumberOfMessages != nil && *in.MaxNumberOfMessages != 0 {
+	if in.MaxNumberOfMessages != nil {
 		count = int(*in.MaxNumberOfMessages)
 	}
 
@@ -381,7 +382,7 @@ func (q *Queue) receiveParams(
 		q.mu.Lock()
 		count = q.contents.Counts().Visible
 		q.mu.Unlock()
-	case (count < 1 || count > maxReceiveCount) && !noLimit:
+	case count < 1 || (count > maxReceiveCount && !noLimit):
 		return params, invalidParameterValue("Value " + strconv.Itoa(count) +
 			" for parameter MaxNumberOfMessages is invalid. Reason: Must be between 1 and 10, if provided.")
 	default:

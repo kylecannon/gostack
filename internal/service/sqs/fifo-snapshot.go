@@ -24,7 +24,7 @@ var _ persistentContents = (*fifoContents)(nil)
 
 func (c *fifoContents) snapshot() contentsData {
 	data := contentsData{
-		Seq: c.seq, Scope: c.scope, Entries: make([]*entryData, 0, c.visible+c.delayed+c.inflight),
+		Seq: c.seq, Entries: make([]*entryData, 0, c.visible+c.delayed+c.inflight),
 		Dedup: make([]dedupData, 0, len(c.dedup)),
 	}
 	store := newEntryStore(c.visible + c.delayed + c.inflight)
@@ -74,7 +74,6 @@ func (c *fifoContents) snapshot() contentsData {
 // are settled by the time the queue is used.
 func (c *fifoContents) restore(data *contentsData) error {
 	c.seq = data.Seq
-	c.scope = data.Scope
 
 	for i := range data.Entries {
 		d := data.Entries[i]

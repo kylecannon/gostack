@@ -150,6 +150,11 @@ func (q *Queue) setAttributes(attrs map[string]string) *awserr.Error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	err = validateThroughputPairing(attrs, q.attrs)
+	if err != nil {
+		return err
+	}
+
 	for name, value := range attrs {
 		if def, ok := deleteIfDefault[name]; ok && value == def {
 			delete(q.attrs, name)

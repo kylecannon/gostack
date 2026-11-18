@@ -223,10 +223,12 @@ func Test_ReceiveMessage_MaxNumberOfMessages(t *testing.T) {
 	tests := []struct {
 		name     string
 		give     int
+		omit     bool
 		wantErr  bool
 		wantSize int
 	}{
-		{name: "the default is one", give: 0, wantSize: 1},
+		{name: "the default is one", omit: true, wantSize: 1},
+		{name: "zero is out of range", give: 0, wantErr: true},
 		{name: "three", give: 3, wantSize: 3},
 		{name: "ten", give: 10, wantSize: 10},
 		{name: "eleven", give: 11, wantErr: true},
@@ -245,7 +247,7 @@ func Test_ReceiveMessage_MaxNumberOfMessages(t *testing.T) {
 				}
 
 				params := map[string]any{paramQueueURL: url}
-				if tt.give != 0 {
+				if !tt.omit {
 					params[paramMaxMessages] = tt.give
 				}
 

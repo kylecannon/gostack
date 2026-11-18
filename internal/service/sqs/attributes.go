@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -100,21 +101,107 @@ func defaultAttributes(arn string, kind queueKind, now time.Time) map[string]str
 
 	if kind == kindFIFO {
 		attrs[attrContentBasedDeduplication] = "false"
-		attrs[attrDeduplicationScope] = "queue"
-		attrs[attrFifoThroughputLimit] = "perQueue"
+		attrs[attrDeduplicationScope] = scopeQueue
+		attrs[attrFifoThroughputLimit] = throughputPerQueue
 	}
 
 	return attrs
 }
 
+// attrRange is the whole numbers a numeric queue attribute takes, from botocore's
+// CreateQueue.Attributes documentation. LocalStack has no range checks; AWS
+// answers InvalidAttributeValue outside them.
+type attrRange struct {
+	name     string
+	min, max int64
+}
+
+// attributeRanges lists the numeric attributes in the order the botocore
+// documentation does. MessageRetentionPeriod has no lower bound although AWS
+// documents 60: LocalStack's SQS_ENABLE_MESSAGE_RETENTION_PERIOD parity tests
+// set it to 2 seconds.
+var attributeRanges = []attrRange{
+	{attrDelaySeconds, 0, 900},
+	{attrMaximumMessageSize, 1024, 1048576},
+	{attrMessageRetentionPeriod, math.MinInt64, 1209600},
+	{attrReceiveMessageWaitTimeSeconds, 0, 20},
+	{attrVisibilityTimeout, 0, 43200},
+	{attrKmsDataKeyReusePeriodSeconds, 60, 86400},
+}
+
+// reason is the Reason of the error for a value outside the range.
+func (r attrRange) reason() string {
+	if r.min == math.MinInt64 {
+		return "Must be at most " + strconv.FormatInt(r.max, 10)
+	}
+
+	return "Must be between " + strconv.FormatInt(r.min, 10) + " and " + strconv.FormatInt(r.max, 10)
+}
+
+const (
+	// scopeQueue is the DeduplicationScope that keeps one id per queue.
+	scopeQueue = "queue"
+	// throughputPerQueue is the FifoThroughputLimit that applies the quota to the
+	// whole queue.
+	throughputPerQueue = "perQueue"
+	// throughputPerGroup is the FifoThroughputLimit that botocore allows only
+	// with the messageGroup scope.
+	throughputPerGroup = "perMessageGroupId"
+)
+
+// validateThroughputPairing checks that FifoThroughputLimit perMessageGroupId
+// goes with DeduplicationScope messageGroup, as botocore documents. attrs is
+// what the call sets and current what the queue already has, nil for a new one.
+// Anything else is normal throughput, which every other pair gets.
+func validateThroughputPairing(attrs, current map[string]string) *awserr.Error {
+	_, setScope := attrs[attrDeduplicationScope]
+	_, setLimit := attrs[attrFifoThroughputLimit]
+
+	if !setScope && !setLimit {
+		return nil
+	}
+
+	scope, limit := scopeQueue, throughputPerQueue
+
+	for _, source := range []map[string]string{current, attrs} {
+		if value, ok := source[attrDeduplicationScope]; ok {
+			scope = value
+		}
+
+		if value, ok := source[attrFifoThroughputLimit]; ok {
+			limit = value
+		}
+	}
+
+	if limit == throughputPerGroup && scope != scopeMessageGroup {
+		return sqsapi.NewInvalidAttributeValue("Invalid value for the parameter FifoThroughputLimit. " +
+			"Reason: " + throughputPerGroup + " is allowed only when DeduplicationScope is " + scopeMessageGroup + ".")
+	}
+
+	return nil
+}
+
 // validateAttributes checks the attribute names of a CreateQueue or
-// SetQueueAttributes call against the queue type, as LocalStack does. It does
-// not look at the values: LocalStack has no range checks.
+// SetQueueAttributes call against the queue type, as LocalStack does, and the
+// values of the numeric ones against their range, as AWS does.
 func validateAttributes(kind queueKind, attrs map[string]string) *awserr.Error {
 	for _, name := range slices.Sorted(maps.Keys(attrs)) {
 		err := validateName(kind, name)
 		if err != nil {
 			return err
+		}
+	}
+
+	for _, r := range attributeRanges {
+		value, ok := attrs[r.name]
+		if !ok {
+			continue
+		}
+
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < r.min || n > r.max {
+			return sqsapi.NewInvalidAttributeValue(
+				"Invalid value for the parameter " + r.name + ". Reason: " + r.reason() + ".")
 		}
 	}
 

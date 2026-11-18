@@ -132,6 +132,11 @@ func newQueue(
 		return nil, err
 	}
 
+	err = validateThroughputPairing(attrs, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	err = validateRedriveAllowPolicy(attrs[attrRedriveAllowPolicy])
 	if err != nil {
 		return nil, err
