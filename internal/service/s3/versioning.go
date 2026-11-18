@@ -160,7 +160,7 @@ func (b *Bucket) addVersion(key string, v *Version) []*Version {
 	object := b.Objects[key]
 	if object == nil {
 		object = &Object{}
-		b.Objects[key] = object
+		b.putObject(key, object)
 	}
 
 	v.ID = b.newVersionID()
@@ -292,7 +292,7 @@ func (b *Bucket) deleteLocked(key, versionID string, bypass bool, now time.Time)
 		}
 
 		object := b.Objects[key]
-		delete(b.Objects, key)
+		b.dropObject(key)
 
 		if object == nil {
 			return deletion{}, nil, nil
@@ -327,7 +327,7 @@ func (b *Bucket) deleteLocked(key, versionID string, bypass bool, now time.Time)
 
 	object.Versions = slices.Delete(object.Versions, index, index+1)
 	if len(object.Versions) == 0 {
-		delete(b.Objects, key)
+		b.dropObject(key)
 	}
 
 	return deletion{versionID: versionID, marker: v.DeleteMarker}, []*Version{v}, nil

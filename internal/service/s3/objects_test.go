@@ -370,6 +370,80 @@ func TestPartNumberGetOfAMultipartObject(t *testing.T) {
 	assert.Contains(t, string(third.body), "<ActualPartCount>2</ActualPartCount>")
 }
 
+// TestPartNumberReadsPartsByTheirOwnNumber completes an upload from parts 1,
+// 3 and 5, as SQ-152 probed it on LocalStack 8b9a79f: GET and HEAD with
+// partNumber, and GetObjectAttributes, all name a part by the number it was
+// uploaded as, and a number no part has answers InvalidPartNumber.
+func TestPartNumberReadsPartsByTheirOwnNumber(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+
+	bodies := map[int][]byte{
+		1: bytes.Repeat([]byte("a"), partSize), 3: bytes.Repeat([]byte("b"), partSize), 5: []byte("tail5"),
+	}
+	numbers := []int{1, 3, 5}
+	id := startUpload(t, s, multipartKey, map[string]string{headerAlgorithm: nameCRC32})
+
+	var manifest strings.Builder
+
+	manifest.WriteString("<CompleteMultipartUpload>")
+
+	for _, number := range numbers {
+		sum := crcBase64(crc32.ChecksumIEEE(bodies[number]))
+		etag := putPart(t, s, id, number, bodies[number], map[string]string{headerChecksumCRC32: sum})
+		fmt.Fprintf(&manifest, "<Part><PartNumber>%d</PartNumber><ETag>%s</ETag><ChecksumCRC32>%s</ChecksumCRC32></Part>",
+			number, etag, sum)
+	}
+
+	manifest.WriteString("</CompleteMultipartUpload>")
+
+	done := complete(s, id, []byte(manifest.String()), nil)
+	require.Equal(t, http.StatusOK, done.status, string(done.body))
+
+	size := len(bodies[1]) + len(bodies[3]) + len(bodies[5])
+	offsets := map[int]int{1: 0, 3: partSize, 5: 2 * partSize}
+	enabled := map[string]string{headerChecksumMode: checksumModeOn}
+
+	for _, number := range []int{1, 2, 3, 4, 5, 6} {
+		body, found := bodies[number]
+
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			name := fmt.Sprintf("%s partNumber=%d", method, number)
+			got := get(s, method, fmt.Sprintf("%s?partNumber=%d", multipartKey, number), enabled)
+
+			if !found {
+				require.Equal(t, http.StatusRequestedRangeNotSatisfiable, got.status, name)
+
+				if method == http.MethodGet {
+					assert.Equal(t, "InvalidPartNumber", got.err(t).Code, name)
+					assert.Contains(t, string(got.body), "<ActualPartCount>3</ActualPartCount>", name)
+				}
+
+				continue
+			}
+
+			require.Equal(t, http.StatusPartialContent, got.status, name)
+			assert.Equal(t, fmt.Sprintf("bytes %d-%d/%d", offsets[number], offsets[number]+len(body)-1, size),
+				got.header.Get("Content-Range"), name)
+			assert.Equal(t, "3", got.header.Get(readPartsCount), name)
+			assert.Equal(t, crcBase64(crc32.ChecksumIEEE(body)), got.header.Get(readChecksumCRC32), name)
+
+			if method == http.MethodGet {
+				assert.Equal(t, body, got.body, name)
+			}
+		}
+	}
+
+	attrs := decodeXML[objectAttributes](t, get(s, http.MethodGet, multipartKey+"?attributes",
+		map[string]string{headerAttributes: "ObjectParts"}))
+	require.NotNil(t, attrs.ObjectParts)
+	require.Len(t, attrs.ObjectParts.Parts, 3)
+
+	for i, number := range numbers {
+		assert.Equal(t, int32(number), attrs.ObjectParts.Parts[i].Number)
+	}
+}
+
 type attributesChecksum struct {
 	CRC32 string `xml:"ChecksumCRC32"`
 	Type  string `xml:"ChecksumType"`

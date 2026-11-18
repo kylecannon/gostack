@@ -1,12 +1,15 @@
 package s3
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
 
+	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/require"
@@ -24,6 +27,13 @@ const (
 func benchProvider(tb testing.TB) *Provider {
 	tb.Helper()
 
+	return benchProviderOf(tb, benchKeyCount)
+}
+
+// benchProviderOf is benchProvider with n keys.
+func benchProviderOf(tb testing.TB, n int) *Provider {
+	tb.Helper()
+
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
 		blob.NewEphemeral(tb.TempDir()))
 	tb.Cleanup(p.Close)
@@ -33,7 +43,7 @@ func benchProvider(tb testing.TB) *Provider {
 
 	now := time.Now().UTC()
 
-	for i := range benchKeyCount {
+	for i := range n {
 		key := "folder-" + strconv.Itoa(i/100) + "/object-" + strconv.Itoa(i%100)
 		b.Objects[key] = &Object{Versions: []*Version{{
 			ID: versionNull, ETag: "d41d8cd98f00b204e9800998ecf8427e", Size: 11, LastModified: now,
@@ -41,7 +51,86 @@ func benchProvider(tb testing.TB) *Provider {
 		}}}
 	}
 
+	b.reindex()
+
 	return p
+}
+
+// BenchmarkIndexInsert is the cost a new key adds to a write: a binary search
+// and the memmove of the keys above it, into a bucket of 100,000. The keys sort
+// before every key already there, so each insert moves the whole index: the
+// worst case.
+func BenchmarkIndexInsert(b *testing.B) {
+	p := benchProviderOf(b, 100_000)
+	bucket := p.state(benchAccount).buckets[benchBucket]
+	object := &Object{}
+
+	b.ReportAllocs()
+
+	i := 0
+
+	for b.Loop() {
+		key := "a-" + strconv.Itoa(i*7919%1_000_003)
+		i++
+
+		bucket.mu.Lock()
+		bucket.putObject(key, object)
+		bucket.mu.Unlock()
+	}
+}
+
+// BenchmarkListObjectsV2Paging pages through a whole bucket with ListObjectsV2
+// calls: flat, a thousand keys to the page, and with a delimiter, which lists
+// the folders (a hundred keys to a folder) a hundred to the page. An op is the
+// whole paging.
+func BenchmarkListObjectsV2Paging(b *testing.B) {
+	for _, keys := range []int{10_000, 100_000} {
+		p := benchProviderOf(b, keys)
+
+		r := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/"+benchBucket, http.NoBody)
+		rc := &request.Context{
+			Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: benchBucket, Request: r,
+		}
+		ctx := request.With(b.Context(), rc)
+
+		for _, tt := range []struct{ name, delimiter string }{{"none", ""}, {"slash", "/"}} {
+			b.Run(fmt.Sprintf("keys=%d/delimiter=%s", keys, tt.name), func(b *testing.B) {
+				for b.Loop() {
+					in := &s3api.ListObjectsV2Input{Bucket: new(benchBucket)}
+					if tt.delimiter != "" {
+						in.Delimiter, in.MaxKeys = new(tt.delimiter), new(int32(100))
+					}
+
+					listed, pages := pageThrough(ctx, b, p, in)
+					if tt.delimiter == "" && listed != keys {
+						b.Fatalf("listed %d keys in %d pages, want %d", listed, pages, keys)
+					}
+				}
+			})
+		}
+	}
+}
+
+// pageThrough lists a bucket to its end, continuing each page from the last,
+// and returns how many entries and pages it took.
+func pageThrough(ctx context.Context, b *testing.B, p *Provider, in *s3api.ListObjectsV2Input) (listed, pages int) {
+	b.Helper()
+
+	for {
+		out, err := p.ListObjectsV2(ctx, in)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		pages++
+		listed += len(out.Contents) + len(out.CommonPrefixes)
+
+		if !*out.IsTruncated {
+			return listed, pages
+		}
+
+		in.ContinuationToken = out.NextContinuationToken
+	}
 }
 
 // BenchmarkListObjectsV2 serves a ListObjectsV2 of a bucket of 10,000 keys
@@ -64,7 +153,7 @@ func BenchmarkListObjectsV2(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			r := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/"+benchBucket+"?"+tt.query, http.NoBody)
 			rc := &request.Context{
-				Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: "bench", Request: r,
+				Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: benchBucket, Request: r,
 			}
 
 			var size int

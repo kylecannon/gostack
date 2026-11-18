@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -114,16 +113,11 @@ func (p *Provider) ListMultipartUploads(
 
 	encode := func(s string) string { return s }
 	if encoding != "" {
-		encode = quoteKey
+		encode = quote
 	}
 
 	keyMarker, uploadIDMarker := deref(in.KeyMarker), deref(in.UploadIdMarker)
 	prefix, delimiter := encode(deref(in.Prefix)), encode(deref(in.Delimiter))
-
-	uploads, err := sortedUploads(b, keyMarker, uploadIDMarker, encode)
-	if err != nil {
-		return nil, err
-	}
 
 	maxUploads := deref32(in.MaxUploads)
 	if maxUploads == 0 {
@@ -142,41 +136,24 @@ func (p *Provider) ListMultipartUploads(
 
 	page := uploadPage{
 		keyMarker: keyMarker, uploadIDMarker: uploadIDMarker, prefix: prefix, delimiter: delimiter,
-		encode: encode, max: int(maxUploads),
+		encode: encode, max: int(maxUploads), raw: encoding == "",
 	}
-	page.fill(out, uploads)
 
-	return out, nil
-}
-
-// sortedUploads returns the bucket's uploads by key, then by start time,
-// after checking that an upload-id-marker names an upload of the key-marker.
-func sortedUploads(
-	b *Bucket, keyMarker, uploadIDMarker string, encode func(string) string,
-) ([]*MultipartUpload, error) {
+	// The page is filled under the read lock, which it holds for the page and no
+	// longer: the uploads it names are read in place, from the index.
 	b.mu.RLock()
+	defer b.mu.RUnlock()
 
 	if keyMarker != "" && uploadIDMarker != "" {
 		marked := b.Uploads[uploadIDMarker]
 		if marked == nil || encode(marked.Key) != keyMarker {
-			b.mu.RUnlock()
-
 			return nil, invalidArgument("Invalid uploadId marker", "upload-id-marker", &uploadIDMarker)
 		}
 	}
 
-	uploads := make([]*MultipartUpload, 0, len(b.Uploads))
-	for _, upload := range b.Uploads {
-		uploads = append(uploads, upload)
-	}
+	page.fill(out, b.uploadOrder[page.start(b.uploadOrder):])
 
-	b.mu.RUnlock()
-
-	slices.SortFunc(uploads, func(x, y *MultipartUpload) int {
-		return cmp.Or(strings.Compare(x.Key, y.Key), x.Initiated.Compare(y.Initiated))
-	})
-
-	return uploads, nil
+	return out, nil
 }
 
 // uploadPage is one page of ListMultipartUploads being filled.
@@ -185,8 +162,29 @@ type uploadPage struct {
 	prefix, delimiter         string
 	encode                    func(string) string
 	max                       int
+	// raw is set when keys are compared as they are stored, so the uploads, in
+	// key order, are also in the order of the keys the page compares.
+	raw bool
 }
 
+// start is the position in uploads, which are in key order, of the first one the
+// page can list: a key below the marker or the prefix is neither listed nor
+// the marker's. Under an encoding the order of the compared keys is not the
+// order of the stored ones, and the page starts at the first upload.
+func (pg uploadPage) start(uploads []*MultipartUpload) int {
+	if !pg.raw {
+		return 0
+	}
+
+	i, _ := slices.BinarySearchFunc(uploads, max(pg.keyMarker, pg.prefix), func(u *MultipartUpload, key string) int {
+		return strings.Compare(u.Key, key)
+	})
+
+	return i
+}
+
+// fill lists the page from uploads, in order by key, then by start time. The
+// caller holds the bucket's lock.
 func (pg uploadPage) fill(out *s3api.ListMultipartUploadsOutput, uploads []*MultipartUpload) {
 	owner, initiator := owner()
 	prefixes := make(map[string]bool)
@@ -209,6 +207,11 @@ func (pg uploadPage) fill(out *s3api.ListMultipartUploadsOutput, uploads []*Mult
 		}
 
 		if !strings.HasPrefix(key, pg.prefix) {
+			// Past the prefix, no key that follows has it.
+			if pg.raw && key > pg.prefix {
+				break
+			}
+
 			continue
 		}
 

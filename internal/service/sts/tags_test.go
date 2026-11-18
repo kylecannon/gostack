@@ -444,6 +444,26 @@ func Test_AssumeRole_transitiveTags(t *testing.T) {
 			name: "role 3 overrides it and makes the override transitive", giveKey: keyTwo, giveRole: roleThree,
 			giveTags: override, giveTrans: []string{sessionTag1}, wantMessage: overrideMessage,
 		},
+		{
+			// LocalStack refuses duplicate keys before it looks at the session.
+			name: "role 3 passes duplicate keys, one of them the inherited tag", giveKey: keyTwo, giveRole: roleThree,
+			giveTags:    [][2]string{{sessionTag1, "v"}, {"SESSIONTAG1", "w"}},
+			wantMessage: "Duplicate tag keys found. Please note that Tag keys are case insensitive.",
+		},
+		{
+			// The override check comes before the transitive keys are matched to tags.
+			name: "role 3 overrides the inherited tag and names a transitive key that is no tag", giveKey: keyTwo,
+			giveRole: roleThree, giveTags: override, giveTrans: []string{otherTag}, wantMessage: overrideMessage,
+		},
+		{
+			name: "role 3 names a transitive key that is no tag", giveKey: keyTwo, giveRole: roleThree,
+			giveTags: another, giveTrans: []string{notPassedTag},
+			wantMessage: "The specified transitive tag key must be included in the requested tags.",
+		},
+		{
+			name: "role 3 passes no tags but a transitive key", giveKey: keyTwo, giveRole: roleThree,
+			giveTrans: []string{otherTag},
+		},
 		{name: "role 3 sets a tag that role 1 kept back", giveKey: keyTwo, giveRole: roleThree, giveTags: keptToItself},
 		{
 			name: "role 3 passes another tag", giveKey: keyTwo, giveRole: roleThree,

@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -817,13 +818,86 @@ func redirectTo(base, bucket, key, etag string) (string, bool) {
 // conditionText is a condition as Python's str() writes it, with ' made ",
 // as LocalStack reports a failed one.
 func conditionText(raw json.RawMessage) string {
-	var value any
-
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	_ = decoder.Decode(&value)
 
-	return strings.ReplaceAll(pythonRepr(value), "'", `"`)
+	return strings.ReplaceAll(pythonRepr(decodeOrdered(decoder)), "'", `"`)
+}
+
+// orderedObject is a JSON object in document order, as Python's json.loads
+// builds a dict: a repeated name keeps its first place and takes the last value.
+type orderedObject struct {
+	names  []string
+	values map[string]any
+}
+
+// decodeOrdered reads one JSON value: nil, bool, json.Number, string, []any or
+// *orderedObject. A condition is a RawMessage that already parsed, so a token
+// error cannot happen; if one did, the value read so far is what is returned.
+func decodeOrdered(decoder *json.Decoder) any {
+	token, _ := decoder.Token()
+
+	switch token {
+	case json.Delim('['):
+		items := []any{}
+
+		for decoder.More() {
+			items = append(items, decodeOrdered(decoder))
+		}
+
+		_, _ = decoder.Token()
+
+		return items
+	case json.Delim('{'):
+		object := &orderedObject{values: map[string]any{}}
+
+		for decoder.More() {
+			name, _ := decoder.Token()
+			key, _ := name.(string)
+
+			if _, seen := object.values[key]; !seen {
+				object.names = append(object.names, key)
+			}
+
+			object.values[key] = decodeOrdered(decoder)
+		}
+
+		_, _ = decoder.Token()
+
+		return object
+	default:
+		return token
+	}
+}
+
+// pythonFloat is Python's repr of a float: the shortest text that reads back
+// as the same value, positional from 1e-4 up to (not including) 1e16 and
+// exponent form outside it, always with a '.0' or an exponent.
+func pythonFloat(f float64) string {
+	switch {
+	case math.IsInf(f, 1):
+		return "inf"
+	case math.IsInf(f, -1):
+		return "-inf"
+	case math.IsNaN(f):
+		return "nan"
+	}
+
+	text := strconv.FormatFloat(f, 'e', -1, 64)
+
+	_, exponent, _ := strings.Cut(text, "e")
+
+	power, _ := strconv.Atoi(exponent)
+	if power < -4 || power >= 16 {
+		return text
+	}
+
+	text = strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(text, ".") {
+		text += ".0"
+	}
+
+	return text
 }
 
 func pythonRepr(value any) string {
@@ -842,13 +916,8 @@ func pythonRepr(value any) string {
 		}
 
 		f, _ := v.Float64()
-		text := strconv.FormatFloat(f, 'g', -1, 64)
 
-		if !strings.ContainsAny(text, ".eIN") {
-			text += ".0"
-		}
-
-		return text
+		return pythonFloat(f)
 	case string:
 		return pythonString(v)
 	case []any:
@@ -858,10 +927,10 @@ func pythonRepr(value any) string {
 		}
 
 		return "[" + strings.Join(items, ", ") + "]"
-	case map[string]any:
-		items := make([]string, 0, len(v))
-		for name, item := range v {
-			items = append(items, pythonString(name)+": "+pythonRepr(item))
+	case *orderedObject:
+		items := make([]string, 0, len(v.names))
+		for _, name := range v.names {
+			items = append(items, pythonString(name)+": "+pythonRepr(v.values[name]))
 		}
 
 		return "{" + strings.Join(items, ", ") + "}"

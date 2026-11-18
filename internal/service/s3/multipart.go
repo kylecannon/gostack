@@ -95,18 +95,22 @@ type ObjectPart struct {
 	Checksum string
 }
 
-// partRange returns where part number lies in v's body. An object that was
-// not uploaded in parts has one part, its whole body.
+// partRange returns where the part uploaded as number lies in v's body, by the
+// part's own number, not its position: an object completed from parts 1, 3 and
+// 5 answers partNumber 3 with its second part and refuses 2, as LocalStack's
+// get_part does and as GetObjectAttributes lists them. An object that was not
+// uploaded in parts has one part, its whole body.
 func (v *Version) partRange(number int32) (ObjectPart, bool) {
 	if len(v.Parts) == 0 {
 		return ObjectPart{Number: 1, Size: v.Size, ETag: v.ETag}, number == 1
 	}
 
-	if number < 1 || int(number) > len(v.Parts) {
+	i := slices.IndexFunc(v.Parts, func(part ObjectPart) bool { return part.Number == number })
+	if i < 0 {
 		return ObjectPart{}, false
 	}
 
-	return v.Parts[number-1], true
+	return v.Parts[i], true
 }
 
 // CreateMultipartUpload starts an upload. The object's headers are taken now
@@ -167,7 +171,7 @@ func (p *Provider) CreateMultipartUpload(
 	}
 
 	upload.KeyExisted = hasCurrentObject(b, upload.Key)
-	b.Uploads[upload.ID] = upload
+	b.addUpload(upload)
 	b.mu.Unlock()
 
 	return createUploadOutput(in, upload, enc, request), nil
@@ -230,10 +234,12 @@ func newUpload(in *s3api.CreateMultipartUploadInput, algorithm, kind string) *Mu
 // CreateMultipartUpload names and returns them, the type defaulted: FULL_OBJECT
 // for CRC64NVME and COMPOSITE for the others (provider.py:2337-2363).
 func uploadChecksumType(algorithm, kind string) (string, string, error) {
+	err := checkChecksumAlgorithm(algorithm)
+	if err != nil {
+		return "", "", err
+	}
+
 	switch {
-	case algorithm != "" && !knownAlgorithm(algorithm):
-		return "", "", s3api.NewInvalidRequest("Checksum algorithm provided is unsupported. Please try again " +
-			"with any of the valid types: [CRC32, CRC32C, CRC64NVME, SHA1, SHA256]")
 	case kind != "" && algorithm == "":
 		return "", "", s3api.NewInvalidRequest(
 			"The x-amz-checksum-type header can only be used with the x-amz-checksum-algorithm header.")
@@ -379,7 +385,7 @@ func (p *Provider) AbortMultipartUpload(
 		return nil, noSuchUpload(deref(in.UploadId))
 	}
 
-	delete(b.Uploads, upload.ID)
+	b.removeUpload(upload.ID)
 	parts := upload.Parts
 	upload.Parts = nil
 	b.mu.Unlock()

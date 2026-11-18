@@ -222,6 +222,11 @@ func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error)
 		return nil, err
 	}
 
+	err = checkChecksumAlgorithm(deref(in.ChecksumAlgorithm))
+	if err != nil {
+		return nil, err
+	}
+
 	err = checkWebsiteRedirect(deref(in.WebsiteRedirectLocation))
 	if err != nil {
 		return nil, err

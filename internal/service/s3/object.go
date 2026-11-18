@@ -239,7 +239,9 @@ func fieldsOf(v *Version, rng *byteRange, part *int32, checksumMode *string) obj
 
 	switch {
 	case part != nil && len(v.Parts) > 0 && v.ChecksumType == checksumComposite:
-		f.checksum = partChecksumFields(v, v.Parts[*part-1])
+		// partNumberRange has found this part, by its number.
+		found, _ := v.partRange(*part)
+		f.checksum = partChecksumFields(v, found)
 	case rng == nil || rng.length() == v.Size:
 		f.checksum = checksumsOf(v)
 	default:

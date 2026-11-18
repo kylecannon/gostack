@@ -14,6 +14,7 @@ const (
 
 	colorBlue            = "blue"
 	headerChecksumMode   = "X-Amz-Checksum-Mode"
+	headerChecksumAlg    = "X-Amz-Checksum-Algorithm"
 	checksumModeOn       = "ENABLED"
 	nameCRC32            = "CRC32"
 	benchListen          = "0.0.0.0:4566"

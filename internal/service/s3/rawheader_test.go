@@ -130,8 +130,9 @@ func putEdgeObject(t *testing.T, srv *httptest.Server, body []byte) {
 }
 
 // rawExchange sends one HTTP/1.1 request over a fresh connection, as bytes, and
-// returns everything the server writes until it closes the connection.
-func rawExchange(t *testing.T, srv *httptest.Server, method string) (head string, body []byte) {
+// returns everything the server writes until it closes the connection. Each of
+// extra is one more header line, "Name: value".
+func rawExchange(t *testing.T, srv *httptest.Server, method string, extra ...string) (head string, body []byte) {
 	t.Helper()
 
 	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", srv.Listener.Addr().String())
@@ -140,9 +141,13 @@ func rawExchange(t *testing.T, srv *httptest.Server, method string) (head string
 	t.Cleanup(func() { _ = conn.Close() })
 	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
 
-	request := method + " " + bucketPath + "/key HTTP/1.1\r\nHost: " + srv.Listener.Addr().String() +
-		"\r\nAuthorization: " + rawAuthorization + headEnd
-	_, err = io.WriteString(conn, request)
+	lines := append([]string{
+		method + " " + bucketPath + "/key HTTP/1.1",
+		"Host: " + srv.Listener.Addr().String(),
+		"Authorization: " + rawAuthorization,
+	}, extra...)
+
+	_, err = io.WriteString(conn, strings.Join(lines, "\r\n")+headEnd)
 	require.NoError(t, err)
 
 	all, err := io.ReadAll(conn)
@@ -177,6 +182,29 @@ func TestEdgeWhitespaceHeadersAreSentUnchangedOverHTTP1(t *testing.T) {
 			} else {
 				assert.Empty(t, got, "a HEAD response has no body")
 			}
+		})
+	}
+}
+
+// TestEdgeWhitespaceResponseCarriesTheCORSHeaders: a response taken for its
+// edge-white-space header goes out with the CORS headers the same request gets
+// when net/http writes it, on a bucket with no CORS configuration.
+func TestEdgeWhitespaceResponseCarriesTheCORSHeaders(t *testing.T) {
+	srv := startEdgeServer(t, nil)
+	putEdgeObject(t, srv, []byte("hello"))
+
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method+" from an allowed origin", func(t *testing.T) {
+			head, _ := rawExchange(t, srv, method, "Origin: "+appOrigin)
+
+			require.Contains(t, head, "\r\n"+edgeHeader+": "+edgeValue+"\r\n", "this response was taken")
+			assert.Contains(t, head, "\r\nAccess-Control-Allow-Origin: "+appOrigin+"\r\n")
+		})
+
+		t.Run(method+" without an Origin", func(t *testing.T) {
+			head, _ := rawExchange(t, srv, method)
+
+			assert.NotContains(t, head, "Access-Control-Allow-Origin")
 		})
 	}
 }

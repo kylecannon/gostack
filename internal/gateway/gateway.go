@@ -23,6 +23,16 @@ const (
 	// headers, and to send its first byte. There is no write timeout: SQS
 	// long-polls for 20 seconds and responses stream.
 	readHeaderTimeout = 30 * time.Second
+
+	// defaultDrainTimeout is how long Serve waits for requests in flight when
+	// nothing planned the drain: DrainBy was never called and no PlanDrain
+	// plan applied. A client holding a request open cannot stall a shutdown
+	// longer than this.
+	defaultDrainTimeout = 5 * time.Second
+
+	// drainUnlimited is the drainBy value DrainBy stores for a zero deadline,
+	// an explicit request to wait without limit (SHUTDOWN_TIMEOUT=0).
+	drainUnlimited int64 = -1
 )
 
 const (
@@ -53,7 +63,8 @@ type Gateway struct {
 	tlsConfig *tls.Config
 
 	// drainBy is the Unix time in nanoseconds at which Serve stops waiting for
-	// requests in flight. Zero means no limit.
+	// requests in flight. Zero means DrainBy was never called, and the drain
+	// takes defaultDrainTimeout; drainUnlimited means no limit.
 	drainBy atomic.Int64
 
 	// planDrain, when set, is asked for drainBy when a listener fails.
@@ -109,14 +120,15 @@ func (g *Gateway) BeginShutdown() {
 }
 
 // DrainBy sets the time at which Serve stops waiting for requests in flight and
-// closes what is left. It is the only limit the drain has: the gateway keeps no
-// timeout of its own, so that the shutdown hooks, the drain, the save of
-// persisted state and the services' Close keep to the one budget that the
-// caller planned. Without it, or with a zero deadline, Serve waits for the
-// requests without limit. Call it before Serve's context ends.
+// closes what is left. The caller plans the drain so that the shutdown hooks,
+// the drain, the save of persisted state and the services' Close keep to one
+// budget. A zero deadline is that plan's "no limit" (SHUTDOWN_TIMEOUT=0), and
+// Serve then waits for the requests as long as they take. Without a call, Serve
+// waits defaultDrainTimeout from the moment it starts to drain. Call it before
+// Serve's context ends.
 func (g *Gateway) DrainBy(deadline time.Time) {
 	if deadline.IsZero() {
-		g.drainBy.Store(0)
+		g.drainBy.Store(drainUnlimited)
 
 		return
 	}
@@ -210,8 +222,8 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
 // down: it refuses new work, waits for running requests until the time DrainBy
-// set (without limit when it set none), and closes what is left. It returns nil
-// after a shutdown that ctx asked for.
+// set (defaultDrainTimeout from now when it was never called), and closes what
+// is left. It returns nil after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
 // prior knowledge) on the same port. Serve uses the certificate that Listen
@@ -295,12 +307,16 @@ func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	return nil
 }
 
-// drainContext limits ctx to the time DrainBy set, and leaves it unlimited when
-// DrainBy set none.
+// drainContext limits ctx to the time DrainBy set, to defaultDrainTimeout from
+// now when DrainBy was never called, and leaves it unlimited when DrainBy took a
+// zero deadline.
 func (g *Gateway) drainContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if nanos := g.drainBy.Load(); nanos != 0 {
+	switch nanos := g.drainBy.Load(); nanos {
+	case 0:
+		return context.WithTimeout(ctx, defaultDrainTimeout)
+	case drainUnlimited:
+		return ctx, func() {}
+	default:
 		return context.WithDeadline(ctx, time.Unix(0, nanos))
 	}
-
-	return ctx, func() {}
 }

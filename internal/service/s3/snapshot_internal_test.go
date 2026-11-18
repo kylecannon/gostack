@@ -191,6 +191,51 @@ func Test_Restore_RefusesABrokenSnapshot(t *testing.T) {
 	}
 }
 
+// Test_Restore_RebuildsTheKeyIndexes restores a bucket built out of key order:
+// its sorted key and upload indexes, which every listing walks, come back in
+// listing order, for a bucket that has keys and for one that has none.
+func Test_Restore_RebuildsTheKeyIndexes(t *testing.T) {
+	first := newSnapshotProvider(t)
+	b := newBucket("indexed", "111111111111", regionUSEast1, "", nil)
+
+	for _, key := range []string{"m", "a", "z", "b/c"} {
+		b.putObject(key, &Object{Versions: []*Version{{ID: versionNull, Size: 1}}})
+	}
+
+	started := time.Now().UTC()
+	b.addUpload(&MultipartUpload{ID: "u2", Key: "k", Initiated: started.Add(time.Second)})
+	b.addUpload(&MultipartUpload{ID: "u1", Key: "k", Initiated: started})
+	b.addUpload(&MultipartUpload{ID: "u0", Key: "a", Initiated: started.Add(time.Minute)})
+
+	_, claimed := first.addBucket(b)
+	require.True(t, claimed)
+
+	_, claimed = first.addBucket(newBucket("empty", "111111111111", regionUSEast1, "", nil))
+	require.True(t, claimed)
+
+	second := newSnapshotProvider(t)
+	require.NoError(t, second.Restore(bytes.NewReader(snapshotOf(t, first))))
+
+	restored := second.state("111111111111").get("indexed")
+	require.NotNil(t, restored)
+
+	restored.mu.RLock()
+	defer restored.mu.RUnlock()
+
+	assert.Equal(t, []string{"a", "b/c", "m", "z"}, restored.keys)
+
+	order := make([]string, 0, len(restored.uploadOrder))
+	for _, upload := range restored.uploadOrder {
+		order = append(order, upload.ID)
+	}
+
+	assert.Equal(t, []string{"u0", "u1", "u2"}, order, "by key, then start time")
+
+	empty := second.state("111111111111").get("empty")
+	require.NotNil(t, empty)
+	assert.Empty(t, empty.keys)
+}
+
 // Test_Restore_MovesTheVersionSequencePastRestoredIDs makes a version made
 // after a restore sort after every restored one.
 func Test_Restore_MovesTheVersionSequencePastRestoredIDs(t *testing.T) {

@@ -45,7 +45,7 @@ func BenchmarkMultipartUpload(b *testing.B) {
 		{"checksum=none", http.Header{}, http.Header{}, ""},
 		{
 			"checksum=crc32-composite",
-			http.Header{"X-Amz-Checksum-Algorithm": {"CRC32"}},
+			http.Header{headerChecksumAlg: {"CRC32"}},
 			http.Header{headerCRC32: {crc}},
 			"<ChecksumCRC32>" + crc + "</ChecksumCRC32>",
 		},

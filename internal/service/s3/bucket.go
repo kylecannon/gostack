@@ -122,6 +122,12 @@ func (p *Provider) HeadBucket(ctx context.Context, in *s3api.HeadBucketInput) (*
 		return nil, err
 	}
 
+	// A DeleteBucket that ran after the lookup has retired the bucket.
+	err = b.readConfig(func() error { return nil })
+	if err != nil {
+		return nil, err
+	}
+
 	return &s3api.HeadBucketOutput{BucketRegion: &b.Region, BucketArn: new(bucketARN(b.Name, b.Region))}, nil
 }
 
@@ -137,6 +143,11 @@ func (p *Provider) GetBucketLocation(
 	}
 
 	b, err := p.bucket(rc.AccountID, deref(in.Bucket))
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.readConfig(func() error { return nil })
 	if err != nil {
 		return nil, err
 	}
@@ -420,16 +431,5 @@ func validBucketName(name string) bool {
 
 // bucketARN is the bucket's ARN in the partition of its region.
 func bucketARN(name, region string) string {
-	var partition string
-
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		partition = "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		partition = "aws-us-gov"
-	default:
-		partition = "aws"
-	}
-
-	return "arn:" + partition + ":s3:::" + name
+	return "arn:" + partitionOf(region) + ":s3:::" + name
 }

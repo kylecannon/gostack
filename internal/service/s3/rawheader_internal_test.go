@@ -78,7 +78,7 @@ func TestWriteRawHead(t *testing.T) {
 		headerContentType:   {contentTypeXML},
 		"Connection":        {"keep-alive"},
 		"Transfer-Encoding": {"chunked"},
-		"x-amz-meta-edge":   {" v\t"},
+		"x-amz-meta-edge":   {edgePadded},
 		"x-amz-meta-split":  {"a\r\nInjected: yes"},
 		"x-amz-meta-nul":    {"a\x00b"},
 		"bad name":          {"x"},

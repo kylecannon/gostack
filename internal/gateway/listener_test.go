@@ -402,55 +402,75 @@ func Test_Gateway_shutdownCutsLongRequests(t *testing.T) {
 	require.Error(t, <-failed)
 }
 
-// Test_Gateway_drainHasNoTimeoutOfItsOwn: without DrainBy, or with a zero one,
-// Serve waits for the requests in flight as long as they take.
-func Test_Gateway_drainHasNoTimeoutOfItsOwn(t *testing.T) {
+// Test_Gateway_drainUnlimited: DrainBy with a zero time is the plan's "no limit"
+// (SHUTDOWN_TIMEOUT=0), and Serve waits for the requests in flight as long as
+// they take.
+func Test_Gateway_drainUnlimited(t *testing.T) {
 	const held = 400 * time.Millisecond
 
-	tests := []struct {
-		name string
-		// giveDrainBy is called before the shutdown; nil leaves DrainBy unset.
-		giveDrainBy func(*gateway.Gateway)
-	}{
-		{name: "DrainBy never called"},
-		{name: "DrainBy with a zero time", giveDrainBy: func(g *gateway.Gateway) { g.DrainBy(time.Time{}) }},
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	slow := func(w http.ResponseWriter, _ *request.Context) {
+		close(started)
+		<-release
+
+		_, _ = io.WriteString(w, "finished")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			started := make(chan struct{})
-			release := make(chan struct{})
 
-			slow := func(w http.ResponseWriter, _ *request.Context) {
-				close(started)
-				<-release
+	s := serve(t, newSettings(), sqsRegistration(slow))
+	c := client(t, protoHTTP1)
+	result := make(chan string, 1)
 
-				_, _ = io.WriteString(w, "finished")
-			}
+	go func() {
+		_, body, _ := fetch(t.Context(), c, "http://"+s.addr+"/")
+		result <- body
+	}()
 
-			s := serve(t, newSettings(), sqsRegistration(slow))
-			c := client(t, protoHTTP1)
-			result := make(chan string, 1)
+	<-started
 
-			go func() {
-				_, body, _ := fetch(t.Context(), c, "http://"+s.addr+"/")
-				result <- body
-			}()
+	s.gateway.DrainBy(time.Time{})
+	time.AfterFunc(held, func() { close(release) })
 
-			<-started
+	begin := time.Now()
 
-			if tt.giveDrainBy != nil {
-				tt.giveDrainBy(s.gateway)
-			}
+	require.NoError(t, s.stop(t))
+	assert.GreaterOrEqual(t, time.Since(begin), held, "Serve waited for the request, as long as it took")
+	assert.Equal(t, "finished", <-result)
+}
 
-			time.AfterFunc(held, func() { close(release) })
+// Test_Gateway_drainDefaultTimeout: a shutdown that nothing planned, with no
+// DrainBy and no PlanDrain, still ends while a client holds a request open. The
+// default is five seconds, as it was before DrainBy existed.
+func Test_Gateway_drainDefaultTimeout(t *testing.T) {
+	const defaultDrain = 5 * time.Second
 
-			begin := time.Now()
+	started := make(chan struct{})
 
-			require.NoError(t, s.stop(t))
-			assert.GreaterOrEqual(t, time.Since(begin), held, "Serve waited for the request, as long as it took")
-			assert.Equal(t, "finished", <-result)
-		})
+	hang := func(_ http.ResponseWriter, rc *request.Context) {
+		close(started)
+		<-rc.Request.Context().Done()
 	}
+
+	s := serve(t, newSettings(), sqsRegistration(hang))
+	c := client(t, protoHTTP1)
+	failed := make(chan error, 1)
+
+	go func() {
+		_, _, fetchErr := fetch(t.Context(), c, "http://"+s.addr+"/")
+		failed <- fetchErr
+	}()
+
+	<-started
+
+	begin := time.Now()
+
+	require.NoError(t, s.stop(t), "cutting a request at the default timeout is not an error")
+	require.Error(t, <-failed, "the request still in flight was cut")
+
+	elapsed := time.Since(begin)
+	assert.GreaterOrEqual(t, elapsed, defaultDrain-time.Second, "the drain waited for the request first")
+	assert.Less(t, elapsed, 2*defaultDrain, "the drain did not wait without limit")
 }
 
 // Test_Gateway_planDrain: a listener that fails starts the shutdown inside

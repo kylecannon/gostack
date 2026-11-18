@@ -188,7 +188,7 @@ func newEvent(rc *request.Context, b *Bucket, name, key string, v *Version) even
 		bucket:       b.Name,
 		account:      b.Account,
 		bucketRegion: b.Region,
-		key:          quoteKey(key),
+		key:          quote(key),
 	}
 
 	b.mu.RLock()

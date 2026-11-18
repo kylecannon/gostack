@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -317,25 +318,47 @@ func (w *responseWriter) WriteHeader(code int) {
 // reports whether a header value starts or ends with a space or tab, which
 // net/http would trim.
 func spellHeaders(header http.Header) bool {
-	trims := false
+	// The names are collected first, so the map is not changed while it is
+	// ranged over, and in order, so a repeated name keeps its values in a
+	// fixed order.
+	var respelled []string
 
-	if etag, ok := header["Etag"]; ok {
-		delete(header, "Etag")
-		header["ETag"] = etag
+	for name := range header {
+		if spelledName(name) != name {
+			respelled = append(respelled, name)
+		}
 	}
 
-	for name, values := range header {
-		if strings.HasPrefix(name, "X-Amz-") {
-			delete(header, name)
-			header[strings.ToLower(name)] = values
-		}
+	slices.Sort(respelled)
 
+	for _, name := range respelled {
+		// Both spellings can be present, so the values are joined, not replaced.
+		spelled := spelledName(name)
+		header[spelled] = append(header[spelled], header[name]...)
+		delete(header, name)
+	}
+
+	trims := false
+
+	for _, values := range header {
 		for _, value := range values {
 			trims = trims || edgeSpace(value)
 		}
 	}
 
 	return trims
+}
+
+// spelledName is name as the S3 model spells it (see spellHeaders).
+func spelledName(name string) string {
+	switch {
+	case name == "Etag":
+		return "ETag"
+	case strings.HasPrefix(name, "X-Amz-"):
+		return strings.ToLower(name)
+	default:
+		return name
+	}
 }
 
 func (w *responseWriter) Write(p []byte) (int, error) {

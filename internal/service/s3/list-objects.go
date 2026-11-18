@@ -34,9 +34,10 @@ var (
 	versionIDEncoding = tokenEncoding.WithPadding(base64.NoPadding)
 )
 
-// listed is one key a listing walks: the key, its current version, and, for a
-// listing of versions, its whole chain as it was when the listing took it,
-// oldest first.
+// listed is one key a listing walks: the key, its current version, and its
+// whole chain, oldest first, which is valid only while the bucket lock the walk
+// runs under is held. A page keeps the versions, which never change, and not the
+// chain.
 type listed struct {
 	key      string
 	current  *Version
@@ -123,9 +124,9 @@ func (p *Provider) ListObjects(ctx context.Context, in *s3api.ListObjectsInput) 
 
 	marker := deref(in.Marker)
 	w := r.walk()
-	w.marker = marker
+	w.marker, w.from = marker, marker
 
-	pg := walkKeys(r.bucket.snapshot(snapshotQuery{prefix: r.prefix, from: marker}), w)
+	pg := r.bucket.listKeys(w)
 
 	out := &s3api.ListObjectsOutput{
 		IsTruncated:    &pg.truncated,
@@ -159,19 +160,20 @@ func (p *Provider) ListObjectsV2(
 		return nil, err
 	}
 
-	query := snapshotQuery{prefix: r.prefix, from: deref(in.StartAfter)}
+	w := r.walk()
+	w.from = deref(in.StartAfter)
 
 	if in.ContinuationToken != nil {
 		// An empty token is as wrong as one that does not decode.
-		query.from, err = decodeToken(*in.ContinuationToken)
+		w.from, err = decodeToken(*in.ContinuationToken)
 		if err != nil {
 			return nil, err
 		}
 
-		query.inclusive = true
+		w.inclusive = true
 	}
 
-	pg := walkKeys(r.bucket.snapshot(query), r.walk())
+	pg := r.bucket.listKeys(w)
 
 	var owner *s3api.Owner
 	if in.FetchOwner != nil && *in.FetchOwner {
@@ -223,10 +225,9 @@ func (p *Provider) ListObjectVersions(
 
 	w := r.walk()
 	w.marker, w.versionMarker = keyMarker, versionMarker
+	w.from, w.inclusive = keyMarker, true
 
-	pg := walkVersions(r.bucket.snapshot(snapshotQuery{
-		prefix: r.prefix, from: keyMarker, inclusive: true, versions: true,
-	}), w)
+	pg := r.bucket.listVersions(w)
 
 	out := &s3api.ListObjectVersionsOutput{
 		IsTruncated:     &pg.truncated,
@@ -293,6 +294,10 @@ func versionsOf(entries []versionEntry, enc encoding) ([]s3api.ObjectVersion, []
 type walk struct {
 	prefix, delimiter string
 	limit             int
+	// from is the key the walk starts at: after it, or at it when inclusive. A
+	// key under prefix is all a walk lists, so it starts at the later of the two.
+	from      string
+	inclusive bool
 	// marker is the ListObjects marker or the ListObjectVersions key marker.
 	// A key inside a common prefix that begins with the marker is skipped with
 	// the rest of that prefix.
@@ -301,29 +306,44 @@ type walk struct {
 	versionMarker string
 }
 
-// walkKeys is the walk of ListObjects and ListObjectsV2 over the keys, whose
-// current version is not a delete marker, that snapshot returned in key order.
-func walkKeys(keys []listed, w walk) listPage {
+// start is the position of the first key the walk may list.
+func (w walk) start(src keySource) int {
+	return src.seek(max(w.prefix, w.from))
+}
+
+// before reports whether key is a key the walk starts after rather than at.
+func (w walk) before(key string) bool {
+	return !w.inclusive && key == w.from
+}
+
+// walkKeysFrom is the walk of ListObjects and ListObjectsV2 over the keys of
+// src, in key order, whose current version is not a delete marker. A common
+// prefix is emitted once and the walk then steps past all of its keys with one
+// search, so a page costs the page and not the bucket.
+func walkKeysFrom(src keySource, w walk) listPage {
 	var pg listPage
 
 	if w.limit == 0 {
 		return pg
 	}
 
-	var lastPrefix string
+	for i := w.start(src); i < src.len(); {
+		k := src.at(i)
+		if !strings.HasPrefix(k.key, w.prefix) {
+			break
+		}
 
-	for _, k := range keys {
+		i++
+
+		if k.current == nil || k.current.DeleteMarker || w.before(k.key) {
+			continue
+		}
+
 		cp := w.commonPrefix(k.key)
-		if cp != "" {
-			if cp == lastPrefix {
-				continue
-			}
+		if cp != "" && w.marker != "" && strings.HasPrefix(w.marker, cp) {
+			i = prefixEnd(src, cp)
 
-			if w.marker != "" && strings.HasPrefix(w.marker, cp) {
-				lastPrefix = cp
-
-				continue
-			}
+			continue
 		}
 
 		if len(pg.keys)+len(pg.prefixes) >= w.limit {
@@ -334,14 +354,15 @@ func walkKeys(keys []listed, w walk) listPage {
 		}
 
 		if cp != "" {
-			lastPrefix = cp
 			pg.prefixes = append(pg.prefixes, cp)
 			pg.last = cp
+			i = prefixEnd(src, cp)
 
 			continue
 		}
 
-		pg.keys = append(pg.keys, k)
+		// The chain is only valid under the lock; the version it ends in is not.
+		pg.keys = append(pg.keys, listed{key: k.key, current: k.current})
 		pg.last = k.key
 	}
 
@@ -368,29 +389,48 @@ type versionPage struct {
 	last      versionMark
 }
 
-// walkVersions is the walk of ListObjectVersions: every version of a key, the
-// newest first, until the limit.
-func walkVersions(keys []listed, w walk) versionPage {
+// walkVersionsFrom is the walk of ListObjectVersions over the keys of src:
+// every version of a key, the newest first, until the limit. Like walkKeysFrom
+// it steps past a common prefix with one search.
+func walkVersionsFrom(src keySource, w walk) versionPage {
 	var pg versionPage
 
 	if w.limit == 0 {
 		return pg
 	}
 
-	var (
-		lastPrefix  string
-		markerFound bool
-	)
+	var markerFound bool
 
-	for _, k := range keys {
-		cp := w.commonPrefix(k.key)
-		if cp != "" && (cp == lastPrefix || (w.marker != "" && strings.HasPrefix(w.marker, cp))) {
-			lastPrefix = cp
+	for i := w.start(src); i < src.len(); {
+		k := src.at(i)
+		if !strings.HasPrefix(k.key, w.prefix) {
+			break
+		}
+
+		i++
+
+		if k.current == nil || w.before(k.key) {
+			continue
+		}
+
+		if cp := w.commonPrefix(k.key); cp != "" {
+			if w.marker == "" || !strings.HasPrefix(w.marker, cp) {
+				if len(pg.entries)+len(pg.prefixes) >= w.limit {
+					pg.truncated = true
+
+					return pg
+				}
+
+				pg.prefixes = append(pg.prefixes, cp)
+				pg.last = versionMark{key: cp}
+			}
+
+			i = prefixEnd(src, cp)
 
 			continue
 		}
 
-		for i, v := range slices.Backward(k.versions) {
+		for j, v := range slices.Backward(k.versions) {
 			if w.marker != "" && k.key == w.marker {
 				skip, found := w.skipVersion(v, markerFound)
 				markerFound = found
@@ -406,15 +446,7 @@ func walkVersions(keys []listed, w walk) versionPage {
 				return pg
 			}
 
-			if cp != "" {
-				lastPrefix = cp
-				pg.prefixes = append(pg.prefixes, cp)
-				pg.last = versionMark{key: cp}
-
-				break
-			}
-
-			pg.entries = append(pg.entries, versionEntry{key: k.key, version: v, latest: i == len(k.versions)-1})
+			pg.entries = append(pg.entries, versionEntry{key: k.key, version: v, latest: j == len(k.versions)-1})
 			pg.last = versionMark{key: k.key, versionID: v.ID}
 		}
 	}
@@ -455,47 +487,6 @@ func (w walk) commonPrefix(key string) string {
 	}
 
 	return key[:len(w.prefix)+i+len(w.delimiter)]
-}
-
-// snapshotQuery says which keys of a bucket a listing takes: those that start
-// with prefix and come after from, or from it on when inclusive. A key whose
-// current version is a delete marker is left out unless versions is set, which
-// also keeps every key's whole chain.
-type snapshotQuery struct {
-	prefix, from        string
-	inclusive, versions bool
-}
-
-// snapshot returns the keys the query selects in byte order. Versions never
-// change once committed, so the result is safe to read after the lock is gone.
-func (b *Bucket) snapshot(q snapshotQuery) []listed {
-	b.mu.RLock()
-
-	keys := make([]listed, 0, len(b.Objects))
-
-	for key, object := range b.Objects {
-		if !strings.HasPrefix(key, q.prefix) || key < q.from || (key == q.from && !q.inclusive) {
-			continue
-		}
-
-		current := object.current()
-		if current == nil || (!q.versions && current.DeleteMarker) {
-			continue
-		}
-
-		entry := listed{key: key, current: current}
-		if q.versions {
-			entry.versions = slices.Clone(object.Versions)
-		}
-
-		keys = append(keys, entry)
-	}
-
-	b.mu.RUnlock()
-
-	slices.SortFunc(keys, func(a, b listed) int { return strings.Compare(a.key, b.key) })
-
-	return keys
 }
 
 // objectsOf is the Contents of a listing. owner is set on each object, nil for

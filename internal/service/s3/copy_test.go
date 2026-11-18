@@ -465,7 +465,7 @@ func TestCopyOfASpilledObjectWithAnotherChecksum(t *testing.T) {
 	body := strings.Repeat("0123456789abcdef", (2<<20)/16)
 	put(t, s, objectPath, body, nil)
 
-	got := copyTo(s, sourceRef, map[string]string{"X-Amz-Checksum-Algorithm": "SHA256"})
+	got := copyTo(s, sourceRef, map[string]string{headerChecksumAlg: "SHA256"})
 	require.Equal(t, http.StatusOK, got.status, string(got.body))
 	assert.Contains(t, string(got.body), "<ChecksumSHA256>")
 
@@ -474,4 +474,25 @@ func TestCopyOfASpilledObjectWithAnotherChecksum(t *testing.T) {
 	assert.Equal(t, body, string(read.body))
 	assert.NotEmpty(t, read.header.Get("X-Amz-Checksum-Sha256"))
 	assert.Empty(t, read.header.Get("X-Amz-Checksum-Crc64nvme"))
+}
+
+// TestCopyRefusesAnUnknownChecksumAlgorithm: CopyObject checks
+// x-amz-checksum-algorithm as CreateMultipartUpload does, and the refused copy
+// leaves no object.
+func TestCopyRefusesAnUnknownChecksumAlgorithm(t *testing.T) {
+	for _, algorithm := range []string{"MD5", "crc32", "sha256", "CRC64", "bogus"} {
+		t.Run(algorithm, func(t *testing.T) {
+			s := newServer(t)
+			seed(t, s, nil)
+
+			got := copyTo(s, sourceRef, map[string]string{headerChecksumAlg: algorithm})
+			require.Equal(t, http.StatusBadRequest, got.status, string(got.body))
+
+			e := got.err(t)
+			assert.Equal(t, cfgInvalidRequest, e.Code)
+			assert.Contains(t, e.Message, "Checksum algorithm provided is unsupported")
+
+			assert.Equal(t, http.StatusNotFound, get(s, http.MethodGet, destPath, nil).status)
+		})
+	}
 }

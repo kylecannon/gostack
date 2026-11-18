@@ -112,6 +112,12 @@ type Bucket struct {
 	// Uploads maps an upload id to the multipart upload in progress.
 	Uploads map[string]*MultipartUpload
 
+	// keys and uploadOrder are sorted indexes of Objects and Uploads that
+	// listings page through; see keyindex.go. They are not state: a bucket built
+	// by filling the maps calls reindex.
+	keys        []string
+	uploadOrder []*MultipartUpload
+
 	Versioning        *s3api.VersioningConfiguration
 	ACL               *s3api.AccessControlPolicy
 	Policy            *string

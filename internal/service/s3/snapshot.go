@@ -414,8 +414,8 @@ func (b *Bucket) drop() []string {
 
 	b.gone = true
 	ids := b.blobIDs()
-	clear(b.Objects)
-	clear(b.Uploads)
+	b.clearObjects()
+	b.clearUploads()
 
 	return ids
 }
@@ -510,6 +510,10 @@ func (d *bucketData) bucket() (*Bucket, error) {
 
 		b.Uploads[upload.ID] = upload
 	}
+
+	// The maps are filled directly, so build the sorted indexes every listing
+	// walks before the bucket becomes visible.
+	b.reindex()
 
 	return b, nil
 }

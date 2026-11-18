@@ -17,12 +17,12 @@ func snapshotBenchProvider(b *testing.B, objects int) *Provider {
 
 	p := newSnapshotProvider(b)
 
-	bucket := newBucket("bench", "000000000000", regionUSEast1, "", nil)
+	bucket := newBucket(benchBucket, "000000000000", regionUSEast1, "", nil)
 	for i := range objects {
 		bucket.Objects["key-"+strconv.Itoa(i)] = &Object{Versions: []*Version{{
 			ID: versionNull, BlobID: "0123456789abcdef0123456789abcdef", Size: 1024, ETag: "etag",
 			LastModified: time.Now().UTC(), ContentType: defaultContentType, StorageClass: storageClassDefault,
-			Metadata: map[string]string{"owner": "bench"},
+			Metadata: map[string]string{"owner": benchBucket},
 		}}}
 	}
 
