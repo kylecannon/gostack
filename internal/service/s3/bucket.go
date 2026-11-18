@@ -127,6 +127,12 @@ func (p *Provider) HeadBucket(ctx context.Context, in *s3api.HeadBucketInput) (*
 		return nil, err
 	}
 
+	// A DeleteBucket that ran after the lookup has retired the bucket.
+	err = b.readConfig(func() error { return nil })
+	if err != nil {
+		return nil, err
+	}
+
 	return &s3api.HeadBucketOutput{BucketRegion: &b.Region, BucketArn: new(bucketARN(b.Name, b.Region))}, nil
 }
 
@@ -142,6 +148,11 @@ func (p *Provider) GetBucketLocation(
 	}
 
 	b, err := p.bucket(rc.AccountID, deref(in.Bucket))
+	if err != nil {
+		return nil, err
+	}
+
+	err = b.readConfig(func() error { return nil })
 	if err != nil {
 		return nil, err
 	}
