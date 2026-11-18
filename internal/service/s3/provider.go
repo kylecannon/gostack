@@ -241,6 +241,12 @@ func (w *responseWriter) WriteHeader(code int) {
 			header.Del("Content-Type")
 			header.Del("Content-Length")
 		}
+
+		// S3 spells it ETag; Header.Set canonicalizes it to Etag.
+		if etag, ok := header["Etag"]; ok {
+			delete(header, "Etag")
+			header["ETag"] = etag
+		}
 	}
 
 	w.ResponseWriter.WriteHeader(code)

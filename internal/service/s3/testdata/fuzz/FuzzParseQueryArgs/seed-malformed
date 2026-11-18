@@ -1,0 +1,2 @@
+go test fuzz v1
+string("X-Amz-Credential=a%2Fb&X-Amz-Algorithm&%&%%41=%G1&;=;&X-Amz-Date=2026111T1Z&X-Amz-Expires=1e3&X-Amz-SignedHeaders=&X-Amz-Signature")

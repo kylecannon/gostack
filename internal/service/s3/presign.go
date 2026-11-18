@@ -392,14 +392,16 @@ func newPresignedV4(r *http.Request, args queryArgs) presignedV4 {
 	req.query = sigv4.CanonicalQuery(query)
 	req.payload = sigv4.UnsignedPayload
 
+	contentSHA256 := strings.ToLower(headerContentSHA256)
+
 	for _, name := range slices.Sorted(maps.Keys(present)) {
 		isSigned := slices.Contains(signed, name)
 
 		switch {
-		case strings.HasPrefix(name, "x-amz-") && !isSigned && name != headerContentSHA256:
+		case strings.HasPrefix(name, "x-amz-") && !isSigned && name != contentSHA256:
 			req.unsigned = append(req.unsigned, name)
 		case !isSigned || name == "host" || slices.Contains(unsignableHeaders, name):
-		case name == headerContentSHA256:
+		case name == contentSHA256:
 			req.payload = strings.Join(present[name], ",")
 
 			fallthrough

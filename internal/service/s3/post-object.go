@@ -12,11 +12,13 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
@@ -25,8 +27,13 @@ import (
 )
 
 const (
-	// maxFormFields bounds the bytes of the form fields read before the file.
-	maxFormFields = 1 << 20
+	// maxPreData is what the form may hold before its file: S3's 20 KB of "form
+	// data and boundaries (excluding the contents of the file)".
+	maxPreData = 20 << 10
+	// partOverhead is charged for each part besides its boundary, headers and
+	// value: the CRLFs around them. With the boundary it is at least
+	// partOverhead, so maxPreData also caps the part count.
+	partOverhead = 8
 
 	formFile           = "file"
 	fieldAccessKeyV2   = "awsaccesskeyid"
@@ -112,7 +119,9 @@ func (p *Provider) PostObject(ctx context.Context, in *s3api.PostObjectInput) (*
 
 // readForm reads the fields of a multipart form up to its file part, which it
 // returns unread; nil when the form has none. Names are in lower case, and a
-// name's first value wins.
+// name's first value wins. Each field is charged its boundary, its headers and
+// its value against maxPreData, so many empty fields are refused as a few long
+// ones are.
 func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Part, error) {
 	if boundary == "" || body == nil {
 		return nil, nil, malformedPost()
@@ -120,7 +129,7 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 
 	reader := multipart.NewReader(body, boundary)
 	form := make(map[string]string)
-	budget := int64(maxFormFields)
+	budget := int64(maxPreData)
 
 	for {
 		part, err := reader.NextPart()
@@ -137,6 +146,11 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 			return form, part, nil
 		}
 
+		budget -= int64(partOverhead + len(boundary) + headerSize(part.Header))
+		if budget < 0 {
+			return nil, nil, preDataTooLarge()
+		}
+
 		value, err := io.ReadAll(io.LimitReader(part, budget+1))
 		if err != nil {
 			return nil, nil, malformedPost()
@@ -144,14 +158,31 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 
 		budget -= int64(len(value))
 		if budget < 0 {
-			return nil, nil, configError("MaxPostPreDataLengthExceeded",
-				"Your POST request fields preceding the upload file were too large.", http.StatusBadRequest)
+			return nil, nil, preDataTooLarge()
 		}
 
 		if _, seen := form[name]; !seen {
 			form[name] = string(value)
 		}
 	}
+}
+
+// headerSize is the bytes of a part's header lines: name, ": ", value, CRLF.
+func headerSize(header textproto.MIMEHeader) int {
+	size := 0
+
+	for name, values := range header {
+		for _, value := range values {
+			size += len(name) + len(value) + len(": \r\n")
+		}
+	}
+
+	return size
+}
+
+func preDataTooLarge() *awserr.Error {
+	return configError("MaxPostPreDataLengthExceeded",
+		"Your POST request fields preceding the upload file were too large.", http.StatusBadRequest)
 }
 
 func malformedPost() *awserr.Error {
@@ -572,10 +603,10 @@ func putInput(form map[string]string, bucket, key string) (*s3api.PutObjectInput
 		Bucket:                  new(bucket),
 		Key:                     new(key),
 		ACL:                     nonEmpty(form["acl"]),
-		CacheControl:            nonEmpty(form["cache-control"]),
-		ContentType:             nonEmpty(form["content-type"]),
-		ContentDisposition:      nonEmpty(form["content-disposition"]),
-		ContentEncoding:         nonEmpty(form["content-encoding"]),
+		CacheControl:            nonEmpty(latin1(form["cache-control"])),
+		ContentType:             nonEmpty(latin1(form["content-type"])),
+		ContentDisposition:      nonEmpty(latin1(form["content-disposition"])),
+		ContentEncoding:         nonEmpty(latin1(form["content-encoding"])),
 		Expires:                 nonEmpty(form["expires"]),
 		StorageClass:            nonEmpty(form["x-amz-storage-class"]),
 		ServerSideEncryption:    nonEmpty(form["x-amz-server-side-encryption"]),
@@ -591,7 +622,7 @@ func putInput(form map[string]string, bucket, key string) (*s3api.PutObjectInput
 				in.Metadata = make(map[string]string)
 			}
 
-			in.Metadata[metaKey] = value
+			in.Metadata[metaKey] = asSent(value)
 		}
 	}
 
@@ -613,6 +644,39 @@ func putInput(form map[string]string, bucket, key string) (*s3api.PutObjectInput
 	}
 
 	return in, nil
+}
+
+// latin1 is a form field as S3 sends it back in a header: in ISO-8859-1, with
+// each character outside it made a space (LocalStack's
+// replace_non_iso_8859_1_characters). A header PutObject reads is bytes
+// already, so only a form field needs this.
+func latin1(value string) string {
+	if !strings.ContainsFunc(value, func(r rune) bool { return r >= utf8.RuneSelf }) {
+		return value
+	}
+
+	out := make([]byte, 0, len(value))
+
+	for _, r := range value {
+		if r > unicode.MaxLatin1 {
+			r = ' '
+		}
+
+		out = append(out, byte(r))
+	}
+
+	return string(out)
+}
+
+// asSent is a metadata field that PutObject stores as it is. PutObject decodes
+// the RFC 2047 words of a header; S3 keeps those of a form field, so a value
+// that would decode is handed over as one base64 word of itself.
+func asSent(value string) string {
+	if decodeHeaderRFC2047(value) == value {
+		return value
+	}
+
+	return "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(value)) + "?="
 }
 
 // postTagging is the Tagging document of a form.

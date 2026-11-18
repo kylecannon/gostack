@@ -198,7 +198,8 @@ func checkStorageClass(class *string) error {
 func checkLatin1(argument, value string) error {
 	for _, r := range value {
 		if r > unicode.MaxLatin1 {
-			return invalidArgument("Header value cannot be represented using ISO-8859-1.", argument, &value)
+			return (&s3api.InvalidArgument{ArgumentName: &argument, ArgumentValue: &value, HostId: new(hostID)}).Err(
+				"Header value cannot be represented using ISO-8859-1.")
 		}
 	}
 
