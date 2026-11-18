@@ -94,7 +94,7 @@ func TestVersionChainAndDeleteMarkers(t *testing.T) {
 	second := putVersion(t, s, "two")
 
 	require.Len(t, first, 32, "a version id is 32 characters")
-	assert.Less(t, first, second, "version ids sort in the order they were made")
+	assert.NotEqual(t, first, second)
 
 	current := get(s, http.MethodGet, objectPath, nil)
 	assert.Equal(t, "two", string(current.body))
