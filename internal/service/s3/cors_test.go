@@ -3,6 +3,7 @@ package s3_test
 import (
 	"encoding/xml"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -380,6 +381,8 @@ func TestCORSDefaultsForCreateBucketAndListBuckets(t *testing.T) {
 		header: map[string]string{hOrigin: "http://evil.example"},
 	})
 	assert.Equal(t, http.StatusForbidden, denied.status)
+	assertNoCORSHeaders(t, denied)
+	assertNoBucket(t, s, "newbucket")
 
 	allowed := s.do(call{
 		method: http.MethodPut, host: "newbucket2.s3." + localstackHost, target: "/", region: regionUSEast1,
@@ -388,4 +391,163 @@ func TestCORSDefaultsForCreateBucketAndListBuckets(t *testing.T) {
 	require.Equal(t, http.StatusOK, allowed.status)
 	assert.Equal(t, appOrigin, allowed.header.Get("Access-Control-Allow-Origin"))
 	assert.Equal(t, "true", allowed.header.Get("Access-Control-Allow-Credentials"))
+}
+
+const (
+	evilOrigin    = "http://evil.example"
+	writtenTarget = "/written"
+)
+
+// assertNoCORSHeaders checks that the response has no Access-Control-* header,
+// which a response to an origin that is not allowed never carries.
+func assertNoCORSHeaders(t *testing.T, got reply) {
+	t.Helper()
+
+	for name := range got.header {
+		assert.False(t, strings.HasPrefix(strings.ToLower(name), "access-control-"), "unexpected header %s", name)
+	}
+}
+
+// assertNoBucket checks through an allowed origin that the bucket was never created.
+func assertNoBucket(t *testing.T, s *server, bucket string) {
+	t.Helper()
+
+	got := s.do(call{method: http.MethodHead, target: "/" + bucket, region: regionUSEast1})
+	assert.Equal(t, http.StatusNotFound, got.status)
+}
+
+// An actual request from an origin the gateway does not allow, to a bucket with
+// no CORS rules, runs and gets no CORS headers, as LocalStack's handle_cors
+// returns at cors.py:176 and leaves the same-origin policy to keep the response
+// from the page.
+func TestCORSDisallowedOriginBucketWithoutRules(t *testing.T) {
+	s := corsServer(t)
+
+	// The virtual host and the path-style request each write their own key.
+	for host, target := range map[string]string{vhost: writtenTarget, "": "/bucket/written-path"} {
+		put := s.do(call{
+			method: http.MethodPut, host: host, target: target, region: regionUSEast1, body: []byte("body"),
+			header: map[string]string{hOrigin: evilOrigin},
+		})
+		require.Equal(t, http.StatusOK, put.status, "host %q: %s", host, put.body)
+		assertNoCORSHeaders(t, put)
+	}
+
+	for _, target := range []string{writtenTarget, "/written-path"} {
+		got := s.do(call{
+			method: http.MethodGet, host: vhost, target: target, region: regionUSEast1,
+			header: map[string]string{hOrigin: evilOrigin},
+		})
+		require.Equal(t, http.StatusOK, got.status, target)
+		assert.Equal(t, "body", string(got.body))
+		assertNoCORSHeaders(t, got)
+	}
+}
+
+// The same request to a bucket whose rules match nothing runs and gets no CORS
+// headers either (cors.py:190-192).
+func TestCORSDisallowedOriginBucketWithRulesThatMatchNothing(t *testing.T) {
+	s := corsServer(t)
+	putCORS(t, s, `<CORSConfiguration><CORSRule><AllowedOrigin>https://good.example</AllowedOrigin>`+
+		`<AllowedMethod>GET</AllowedMethod></CORSRule></CORSConfiguration>`)
+
+	put := s.do(call{
+		method: http.MethodPut, host: vhost, target: writtenTarget, region: regionUSEast1, body: []byte("body"),
+		header: map[string]string{hOrigin: evilOrigin},
+	})
+	require.Equal(t, http.StatusOK, put.status, string(put.body))
+	assertNoCORSHeaders(t, put)
+
+	got := s.do(call{
+		method: http.MethodGet, host: vhost, target: writtenTarget, region: regionUSEast1,
+		header: map[string]string{hOrigin: evilOrigin},
+	})
+	require.Equal(t, http.StatusOK, got.status)
+	assertNoCORSHeaders(t, got)
+
+	// The rule still serves the origin it names.
+	matched := s.do(call{
+		method: http.MethodGet, host: vhost, target: writtenTarget, region: regionUSEast1,
+		header: map[string]string{hOrigin: "https://good.example"},
+	})
+	require.Equal(t, http.StatusOK, matched.status)
+	assert.Equal(t, "https://good.example", matched.header.Get("Access-Control-Allow-Origin"))
+}
+
+// A bucket that does not exist: a virtual host is S3's by the pre-router, so the
+// call runs and fails as NoSuchBucket with no CORS headers (cors.py:149-176). A
+// path-style call is not S3's, so the gateway's CORS refuses it before any
+// operation runs, whatever the operation.
+func TestCORSDisallowedOriginBucketThatDoesNotExist(t *testing.T) {
+	s := newServer(t)
+
+	missing := s.do(call{
+		method: http.MethodGet, host: "nobucket.s3." + localstackHost, target: "/key", region: regionUSEast1,
+		header: map[string]string{hOrigin: evilOrigin},
+	})
+	require.Equal(t, http.StatusNotFound, missing.status)
+	assert.Equal(t, "NoSuchBucket", missing.err(t).Code)
+	assertNoCORSHeaders(t, missing)
+
+	refused := s.do(call{
+		method: http.MethodPut, target: "/pathbucket", region: regionUSEast1,
+		header: map[string]string{hOrigin: evilOrigin},
+	})
+	assert.Equal(t, http.StatusForbidden, refused.status)
+	assertNoCORSHeaders(t, refused)
+	assertNoBucket(t, s, "pathbucket")
+}
+
+// ListBuckets and CreateBucket from an origin the gateway does not allow are
+// refused with 403 before the operation runs (cors.py:301-310), on a host S3
+// claims and on a plain one. The refusal has no CORS headers, and a refused
+// CreateBucket creates nothing.
+func TestCORSDisallowedOriginListAndCreateBucket(t *testing.T) {
+	s := corsServer(t)
+
+	for _, host := range []string{"s3." + localstackHost, ""} {
+		list := s.do(call{
+			method: http.MethodGet, host: host, target: "/", region: regionUSEast1,
+			header: map[string]string{hOrigin: evilOrigin},
+		})
+		assert.Equal(t, http.StatusForbidden, list.status, "ListBuckets on host %q", host)
+		assert.Empty(t, list.body)
+		assertNoCORSHeaders(t, list)
+	}
+
+	for _, host := range []string{"newbucket.s3." + localstackHost, "s3." + localstackHost} {
+		target := "/newbucket"
+		if strings.HasPrefix(host, "newbucket.") {
+			target = "/"
+		}
+
+		create := s.do(call{
+			method: http.MethodPut, host: host, target: target, region: regionUSEast1,
+			header: map[string]string{hOrigin: evilOrigin},
+		})
+		assert.Equal(t, http.StatusForbidden, create.status, "CreateBucket on host %q", host)
+		assert.Empty(t, create.body)
+		assertNoCORSHeaders(t, create)
+		assertNoBucket(t, s, "newbucket")
+	}
+
+	// A rule that names the origin does not make CreateBucket on its bucket
+	// allowed: LocalStack refuses it from s3_cors_request_handler.
+	putCORS(t, s, `<CORSConfiguration><CORSRule><AllowedOrigin>`+evilOrigin+`</AllowedOrigin>`+
+		`<AllowedMethod>PUT</AllowedMethod></CORSRule></CORSConfiguration>`)
+
+	exists := s.do(call{
+		method: http.MethodPut, host: vhost, target: "/", region: regionUSEast1,
+		header: map[string]string{hOrigin: evilOrigin},
+	})
+	assert.Equal(t, http.StatusForbidden, exists.status)
+	assertNoCORSHeaders(t, exists)
+
+	// An allowed origin lists the buckets and gets the gateway's CORS headers.
+	allowed := s.do(call{
+		method: http.MethodGet, host: "s3." + localstackHost, target: "/", region: regionUSEast1,
+		header: map[string]string{hOrigin: appOrigin},
+	})
+	require.Equal(t, http.StatusOK, allowed.status)
+	assert.Equal(t, appOrigin, allowed.header.Get("Access-Control-Allow-Origin"))
 }

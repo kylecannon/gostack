@@ -194,10 +194,24 @@ func corsBucketName(r *http.Request) string {
 	return first
 }
 
-// serveCORS is LocalStack's S3CorsHandler (services/s3/cors.py:134-290) for a
-// request S3 owns, run before the request is parsed. It reports whether it has
-// answered the request, which only a preflight (OPTIONS) is. For any other
-// request it puts the CORS headers on w, and the handler adds the rest.
+// serveCORS is LocalStack's S3CorsHandler (services/s3/cors.py:94-222) and
+// s3_cors_request_handler (:290-312) for a request S3 owns, run before the
+// request is dispatched. It reports whether it has answered the request: a
+// preflight (OPTIONS), or a refusal. For any other request it puts the CORS
+// headers on w, and the handler adds the rest.
+//
+// What LocalStack does with an actual (non-preflight) request from an origin
+// the gateway does not allow when no bucket rule matches (a bucket with no
+// rules, one whose rules match nothing, and one that does not exist):
+// handle_cors returns without CORS headers (:175-176, :190-192) and the
+// request runs. The browser's same-origin policy then keeps the response from
+// the page, so S3 adds no header and refuses nothing. The exception is
+// ListBuckets and CreateBucket, which s3_cors_request_handler (:301-310)
+// refuses with 403 before the operation runs. A request the pre-router
+// (:61-92) does not take for S3, such as a path-style call to a bucket that
+// does not exist, never reaches this code; the gateway's own CORS answers it
+// with 403 for any operation. One difference from LocalStack: its 403 still
+// carries the default CORS headers (:312); a refused origin gets none here.
 func (p *Provider) serveCORS(w http.ResponseWriter, rc *request.Context) bool {
 	r := rc.Request
 	if rc.CORS == nil || service.OwnerOf(r) != serviceName {
@@ -205,6 +219,10 @@ func (p *Provider) serveCORS(w http.ResponseWriter, rc *request.Context) bool {
 	}
 
 	preflight := r.Method == http.MethodOptions
+
+	if !preflight && refuseBeforeDispatch(w, rc) {
+		return true
+	}
 
 	origin := r.Header.Get(headerOrigin)
 	if origin == "" {
@@ -251,6 +269,35 @@ func (p *Provider) serveCORS(w http.ResponseWriter, rc *request.Context) bool {
 	}
 
 	return false
+}
+
+// refuseBeforeDispatch answers ListBuckets and CreateBucket from an origin the
+// gateway does not allow with 403 and no body, before the operation runs, so a
+// refused CreateBucket never creates the bucket. The 403 carries no CORS
+// header and no identification header, as LocalStack's terminated chain sends
+// none. When it does not refuse, it leaves the operation it found in
+// rc.Operation so the dispatcher does not route twice.
+func refuseBeforeDispatch(w http.ResponseWriter, rc *request.Context) bool {
+	r := rc.Request
+	if rc.CORS.ChecksDisabled() || rc.CORS.OriginAllowed(r.Header) || isWebsiteHost(r.Host) || isControlCall(r) {
+		return false
+	}
+
+	op, ok := s3api.Route(r)
+	if !ok {
+		return false
+	}
+
+	if op != "ListBuckets" && op != "CreateBucket" {
+		rc.Operation = op
+
+		return false
+	}
+
+	delete(w.Header(), "x-amz-id-2")
+	w.WriteHeader(http.StatusForbidden)
+
+	return true
 }
 
 // defaultCORS is what S3 does for a bucket that has no rules or does not exist:
@@ -423,10 +470,11 @@ func setCORSHeaders(header http.Header, r *http.Request, rule *s3api.CORSRule, o
 	}
 }
 
-// defaultCORSWriter applies the gateway's CORS policy to the operations
-// LocalStack's s3_cors_request_handler covers, ListBuckets and CreateBucket,
-// when S3 owns the request: an origin the gateway does not allow gets 403, and
-// the response gets the gateway's CORS headers.
+// defaultCORSWriter puts the gateway's CORS headers on the response to the
+// operations LocalStack's s3_cors_request_handler covers, ListBuckets and
+// CreateBucket, when S3 owns the request. refuseBeforeDispatch has already
+// refused an origin the gateway does not allow, so these headers only reach an
+// allowed origin.
 type defaultCORSWriter struct {
 	http.ResponseWriter
 
@@ -439,10 +487,6 @@ func (w *defaultCORSWriter) WriteHeader(code int) {
 		w.wrote = true
 
 		if op := w.rc.Operation; op == "ListBuckets" || op == "CreateBucket" {
-			if !w.rc.CORS.ChecksDisabled() && !w.rc.CORS.OriginAllowed(w.rc.Request.Header) {
-				code = http.StatusForbidden
-			}
-
 			w.rc.CORS.AddHeaders(w.Header(), w.rc.Request)
 		}
 	}

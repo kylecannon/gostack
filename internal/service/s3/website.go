@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -541,16 +542,16 @@ func notFoundPage(code, message, resource, name, requestID, errorDocument string
 	var page strings.Builder
 
 	page.WriteString("<html>\n<head><title>404 Not Found</title></head>\n<body>\n<h1>404 Not Found</h1>\n<ul>\n")
-	page.WriteString("<li>Code: " + code + "</li>\n")
-	page.WriteString("<li>Message: " + message + "</li>\n")
-	page.WriteString("<li>" + resource + ": " + name + "</li>\n")
-	page.WriteString("<li>RequestId: " + requestID + "</li>\n")
+	page.WriteString("<li>Code: " + html.EscapeString(code) + "</li>\n")
+	page.WriteString("<li>Message: " + html.EscapeString(message) + "</li>\n")
+	page.WriteString("<li>" + html.EscapeString(resource) + ": " + html.EscapeString(name) + "</li>\n")
+	page.WriteString("<li>RequestId: " + html.EscapeString(requestID) + "</li>\n")
 	page.WriteString("<li>HostId: " + websiteHostID + "</li>\n</ul>\n")
 
 	if errorDocument != "" {
 		page.WriteString("<h3>An Error Occurred While Attempting to Retrieve a Custom Error Document</h3>\n<ul>\n")
-		page.WriteString("<li>Code: NoSuchKey</li>\n<li>Message: " + messageNoSuchKey + "</li>\n")
-		page.WriteString("<li>Key: " + errorDocument + "</li>\n</ul>\n")
+		page.WriteString("<li>Code: NoSuchKey</li>\n<li>Message: " + html.EscapeString(messageNoSuchKey) + "</li>\n")
+		page.WriteString("<li>Key: " + html.EscapeString(errorDocument) + "</li>\n</ul>\n")
 	}
 
 	page.WriteString("<hr/>\n</body>\n</html>\n")
@@ -563,8 +564,8 @@ func methodNotAllowedPage(method, requestID string) string {
 	return "<html>\n<head><title>405 Method Not Allowed</title></head>\n<body>\n<h1>405 Method Not Allowed</h1>\n<ul>\n" +
 		"<li>Code: MethodNotAllowed</li>\n" +
 		"<li>Message: The specified method is not allowed against this resource.</li>\n" +
-		"<li>Method: " + strings.ToUpper(method) + "</li>\n" +
+		"<li>Method: " + html.EscapeString(strings.ToUpper(method)) + "</li>\n" +
 		"<li>ResourceType: OBJECT</li>\n" +
-		"<li>RequestId: " + requestID + "</li>\n" +
+		"<li>RequestId: " + html.EscapeString(requestID) + "</li>\n" +
 		"<li>HostId: " + websiteHostID + "</li>\n</ul>\n<hr/>\n</body>\n</html>\n"
 }

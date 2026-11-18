@@ -344,6 +344,36 @@ func TestWebsiteErrorPages(t *testing.T) {
 	}
 }
 
+// TestWebsiteErrorPagesEscapeTheKey checks that a key, and the error document's
+// key, reach the 404 page as text and never as markup.
+func TestWebsiteErrorPagesEscapeTheKey(t *testing.T) {
+	const (
+		script        = "<script>x</script>"
+		escaped       = "&lt;script&gt;x&lt;/script&gt;"
+		errorDocument = "<img src=x onerror=alert(1)>"
+	)
+
+	s := newServer(t)
+	createBucket(t, s)
+	putWebsite(t, s, indexConfig)
+
+	noKey := site(s, http.MethodGet, "/%3Cscript%3Ex%3C/script%3E", nil)
+	require.Equal(t, http.StatusNotFound, noKey.status)
+	assert.Contains(t, string(noKey.body), "<li>Key: "+escaped+"</li>")
+	assert.Contains(t, string(noKey.body), "&lt;script&gt;")
+	assert.NotContains(t, string(noKey.body), "<script>")
+
+	putWebsite(t, s, `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument>`+
+		`<ErrorDocument><Key>&lt;img src=x onerror=alert(1)&gt;</Key></ErrorDocument></WebsiteConfiguration>`)
+
+	noErrorDocument := site(s, http.MethodGet, "/%3Cscript%3Ex%3C/script%3E", nil)
+	require.Equal(t, http.StatusNotFound, noErrorDocument.status)
+	assert.Contains(t, string(noErrorDocument.body), "<li>Key: "+escaped+"</li>")
+	assert.Contains(t, string(noErrorDocument.body), "<li>Key: &lt;img src=x onerror=alert(1)&gt;</li>")
+	assert.NotContains(t, string(noErrorDocument.body), "<img")
+	assert.NotContains(t, string(noErrorDocument.body), errorDocument)
+}
+
 // requestIDOf reads the RequestId line of an error page.
 func requestIDOf(t *testing.T, page []byte) string {
 	t.Helper()
