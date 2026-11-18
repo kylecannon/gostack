@@ -77,23 +77,23 @@ func streamingBody(h http.Header, body io.Reader, algorithm string) (io.Reader, 
 }
 
 // bodyReadError is what a failed read of a PutObject or UploadPart body answers.
-// A body that is not valid aws-chunked, or whose payload is not the decoded
-// length it declared, is the client's, so it answers 400 where an SDK does not
-// retry: IncompleteBody, S3's code for a body that is not the length sent, and
-// InvalidRequest for a chunk that cannot be parsed. LocalStack has no mapping
-// for either; its decoder's EOFError and ValueError answer 500. Any other
-// error is the server's.
+// A payload that is not the decoded length the request declared is the
+// client's, so it answers 400 IncompleteBody, S3's code for a body that is not
+// the length sent, where an SDK does not retry. LocalStack has no mapping: its
+// decoder's EOFError answers 500.
+//
+// A body that cannot be parsed as aws-chunked (awschunked.ErrMalformed) stays a
+// 500, as LocalStack answers it: TestS3::test_upload_part_chunked_cancelled_valid_etag
+// pins 500 for a chunk header that is not a size, the shape an in-flight
+// cancelled request leaves, which a client should retry.
 func bodyReadError(err error) error {
-	switch {
-	case errors.Is(err, awschunked.ErrLength):
+	if errors.Is(err, awschunked.ErrLength) {
 		return configError("IncompleteBody",
 			"You did not provide the number of bytes specified by the x-amz-decoded-content-length HTTP header.",
 			http.StatusBadRequest)
-	case errors.Is(err, awschunked.ErrMalformed):
-		return s3api.NewInvalidRequest("The request body is not valid aws-chunked content.")
-	default:
-		return fmt.Errorf("read object body: %w", err)
 	}
+
+	return fmt.Errorf("read object body: %w", err)
 }
 
 // trailerAlgorithm returns the checksum algorithm an x-amz-trailer header

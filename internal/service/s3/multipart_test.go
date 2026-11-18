@@ -586,17 +586,18 @@ func TestAWSChunkedBodies(t *testing.T) {
 			method: http.MethodPut, target: target, region: regionUSEast1, header: headers(payload),
 			body: []byte("\r\n" + payload + "\r\n0;chunk-signature=0\r\n"),
 		})
-		require.Equal(t, http.StatusBadRequest, broken.status, string(broken.body))
-		assert.Equal(t, codeInvalidReq, broken.err(t).Code)
+		require.Equal(t, http.StatusInternalServerError, broken.status, string(broken.body))
 
 		etag := putPart(t, s, id, 1, chunked(payload, ""), headers(payload))
 		_, want := md5Of([]byte(payload))
 		assert.Equal(t, want, etag)
 	})
 
-	// A client's malformed body is a 400, which an SDK does not retry, and the
-	// object is not written. LocalStack answers 500 for both.
-	t.Run("a malformed body answers 400 and writes nothing", func(t *testing.T) {
+	// A payload that is not its declared decoded length is the client's: 400,
+	// which an SDK does not retry, and the object is not written. LocalStack
+	// answers 500. A body that does not parse stays 500, as LocalStack's test
+	// of a cancelled upload pins.
+	t.Run("a payload that is not the declared length answers 400 and writes nothing", func(t *testing.T) {
 		const unsigned = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 
 		tests := []struct {
@@ -607,8 +608,6 @@ func TestAWSChunkedBodies(t *testing.T) {
 		}{
 			{"a decoded length longer than the bytes sent", "5\r\nhello\r\n0\r\n\r\n", "10", "IncompleteBody"},
 			{"a decoded length shorter than the bytes sent", "5\r\nhello\r\n0\r\n\r\n", "3", "IncompleteBody"},
-			{"a chunk size that is not hexadecimal", "zz\r\nhello\r\n0\r\n\r\n", "", codeInvalidReq},
-			{"a body that ends inside a chunk", "5\r\nhel", "", codeInvalidReq},
 		}
 
 		for _, tt := range tests {
