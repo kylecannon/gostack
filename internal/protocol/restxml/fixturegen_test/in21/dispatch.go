@@ -87,7 +87,7 @@ func serveHttpRequestWithLabels(h Handler, w http.ResponseWriter, rc *request.Co
 
 func readHttpRequestWithLabels(rc *request.Context) (*HttpRequestWithLabelsInput, *awserr.Error) {
 	in := &HttpRequestWithLabelsInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

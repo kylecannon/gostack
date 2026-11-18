@@ -87,7 +87,7 @@ func servePutWithContentEncoding(h Handler, w http.ResponseWriter, rc *request.C
 
 func readPutWithContentEncoding(rc *request.Context) (*PutWithContentEncodingInput, *awserr.Error) {
 	in := &PutWithContentEncodingInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

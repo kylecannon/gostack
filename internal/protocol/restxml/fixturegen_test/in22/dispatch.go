@@ -87,7 +87,7 @@ func serveHttpRequestWithLabelsAndTimestampFormat(h Handler, w http.ResponseWrit
 
 func readHttpRequestWithLabelsAndTimestampFormat(rc *request.Context) (*HttpRequestWithLabelsAndTimestampFormatInput, *awserr.Error) {
 	in := &HttpRequestWithLabelsAndTimestampFormatInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

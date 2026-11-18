@@ -2,7 +2,9 @@ package rest
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -20,9 +22,45 @@ const (
 )
 
 // MaxBody is how many bytes of a request body that is not streamed a rest
-// service reads: a json body or a blob or string payload. A streamed payload
-// has no limit, and an xml body is read element by element.
+// service reads: a json body, an xml body (through CapBody, as it is decoded
+// element by element) or a blob or string payload. A streamed payload has no
+// limit.
 const MaxBody = 16 << 20
+
+// ErrBodyTooLarge is what a read of a body longer than MaxBody fails with.
+var ErrBodyTooLarge = errors.New("rest: request body is longer than MaxBody")
+
+// CapBody returns r limited to MaxBody bytes: a read that finds more fails with
+// ErrBodyTooLarge, where io.LimitReader would end the body as if it were
+// complete. A body of exactly MaxBody bytes reads whole.
+func CapBody(r io.Reader) io.Reader {
+	return &cappedBody{r: r, left: MaxBody}
+}
+
+type cappedBody struct {
+	r    io.Reader
+	left int
+}
+
+func (c *cappedBody) Read(p []byte) (int, error) {
+	if c.left == 0 {
+		var next [1]byte
+
+		n, err := c.r.Read(next[:])
+		if n > 0 {
+			return 0, ErrBodyTooLarge
+		}
+
+		return 0, err
+	}
+
+	p = p[:min(len(p), c.left)]
+
+	n, err := c.r.Read(p)
+	c.left -= n
+
+	return n, err
+}
 
 // Decoder reads the members a request carries outside its body: headers, the
 // querystring and URI labels. A malformed value does not stop decoding: the

@@ -87,7 +87,7 @@ func serveXmlEmptyLists(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlEmptyLists(rc *request.Context) (*XmlEmptyListsInput, *awserr.Error) {
 	in := &XmlEmptyListsInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

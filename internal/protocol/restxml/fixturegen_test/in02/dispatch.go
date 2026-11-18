@@ -88,7 +88,7 @@ func serveConstantAndVariableQueryString(h Handler, w http.ResponseWriter, rc *r
 
 func readConstantAndVariableQueryString(rc *request.Context) (*ConstantAndVariableQueryStringInput, *awserr.Error) {
 	in := &ConstantAndVariableQueryStringInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

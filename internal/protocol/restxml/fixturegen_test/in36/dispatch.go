@@ -87,7 +87,7 @@ func serveSimpleScalarProperties(h Handler, w http.ResponseWriter, rc *request.C
 
 func readSimpleScalarProperties(rc *request.Context) (*SimpleScalarPropertiesInput, *awserr.Error) {
 	in := &SimpleScalarPropertiesInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

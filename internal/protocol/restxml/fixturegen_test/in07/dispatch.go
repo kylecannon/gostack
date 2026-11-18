@@ -87,7 +87,7 @@ func serveEndpointWithHostLabelOperation(h Handler, w http.ResponseWriter, rc *r
 
 func readEndpointWithHostLabelOperation(rc *request.Context) (*EndpointWithHostLabelOperationInput, *awserr.Error) {
 	in := &EndpointWithHostLabelOperationInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

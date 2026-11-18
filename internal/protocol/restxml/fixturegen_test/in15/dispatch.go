@@ -87,7 +87,7 @@ func serveHttpPayloadWithXmlName(h Handler, w http.ResponseWriter, rc *request.C
 
 func readHttpPayloadWithXmlName(rc *request.Context) (*HttpPayloadWithXmlNameInput, *awserr.Error) {
 	in := &HttpPayloadWithXmlNameInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.Nested = &PayloadWithXmlName{}
 		in.Nested.decodeXML(xd)

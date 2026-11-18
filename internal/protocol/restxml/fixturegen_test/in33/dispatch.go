@@ -87,7 +87,7 @@ func serveQueryParamsAsStringListMap(h Handler, w http.ResponseWriter, rc *reque
 
 func readQueryParamsAsStringListMap(rc *request.Context) (*QueryParamsAsStringListMapInput, *awserr.Error) {
 	in := &QueryParamsAsStringListMapInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

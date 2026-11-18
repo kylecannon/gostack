@@ -87,7 +87,7 @@ func serveXmlMaps(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlMaps(rc *request.Context) (*XmlMapsInput, *awserr.Error) {
 	in := &XmlMapsInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

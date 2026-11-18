@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/protocol/rest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -174,6 +175,22 @@ func TestTagCharactersFollowPythonWhitespace(t *testing.T) {
 			require.Equal(t, tc.want, got.status, string(got.body))
 		})
 	}
+}
+
+// TestXMLBodyIsCappedAtMaxBody: the generated reader of an XML payload stops at
+// rest.MaxBody (16 MiB), as the readers of json bodies do. Decoded whole, this
+// body would reach the 50-tag limit and answer InvalidTag.
+func TestXMLBodyIsCappedAtMaxBody(t *testing.T) {
+	s := cfgBucket(t)
+
+	tag := cfgTag("k", "v")
+	over := cfgTagging(strings.Repeat(tag, rest.MaxBody/len(tag)+1000))
+	require.Greater(t, len(over), rest.MaxBody)
+
+	cfgExpect(t, cfgPut(s, bucketAPath+"?tagging", over, nil), http.StatusBadRequest, cfgMalformedXML)
+
+	// A document that fits is decoded as before.
+	cfgExpect(t, cfgPut(s, bucketAPath+"?tagging", cfgTagging(cfgTags(51)), nil), http.StatusBadRequest, cfgInvalidTag)
 }
 
 func TestCreateBucketWithTagsAndACL(t *testing.T) {

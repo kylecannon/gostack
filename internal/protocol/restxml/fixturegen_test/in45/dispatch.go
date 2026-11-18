@@ -87,7 +87,7 @@ func serveXmlIntEnums(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlIntEnums(rc *request.Context) (*XmlIntEnumsInput, *awserr.Error) {
 	in := &XmlIntEnumsInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

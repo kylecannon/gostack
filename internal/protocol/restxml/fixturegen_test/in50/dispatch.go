@@ -87,7 +87,7 @@ func serveXmlNamespaces(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlNamespaces(rc *request.Context) (*XmlNamespacesInput, *awserr.Error) {
 	in := &XmlNamespacesInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

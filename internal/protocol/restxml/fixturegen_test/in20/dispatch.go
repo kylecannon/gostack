@@ -87,7 +87,7 @@ func serveHttpRequestWithGreedyLabelInPath(h Handler, w http.ResponseWriter, rc 
 
 func readHttpRequestWithGreedyLabelInPath(rc *request.Context) (*HttpRequestWithGreedyLabelInPathInput, *awserr.Error) {
 	in := &HttpRequestWithGreedyLabelInPathInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

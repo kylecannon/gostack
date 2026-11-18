@@ -87,7 +87,7 @@ func serveXmlEmptyMaps(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlEmptyMaps(rc *request.Context) (*XmlEmptyMapsInput, *awserr.Error) {
 	in := &XmlEmptyMapsInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

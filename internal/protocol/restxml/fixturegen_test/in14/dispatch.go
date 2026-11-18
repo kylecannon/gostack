@@ -87,7 +87,7 @@ func serveHttpPayloadWithUnion(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readHttpPayloadWithUnion(rc *request.Context) (*HttpPayloadWithUnionInput, *awserr.Error) {
 	in := &HttpPayloadWithUnionInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.Nested = &UnionPayload{}
 		in.Nested.decodeXML(xd)

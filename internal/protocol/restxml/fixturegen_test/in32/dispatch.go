@@ -87,7 +87,7 @@ func serveQueryIdempotencyTokenAutoFill(h Handler, w http.ResponseWriter, rc *re
 
 func readQueryIdempotencyTokenAutoFill(rc *request.Context) (*QueryIdempotencyTokenAutoFillInput, *awserr.Error) {
 	in := &QueryIdempotencyTokenAutoFillInput{}
-	xd := restxml.NewDecoder(rc.Request.Body)
+	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
