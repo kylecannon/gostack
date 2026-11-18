@@ -40,14 +40,14 @@ func Test_gostack_reset_clears_sts_sessions(t *testing.T) {
 	for _, path := range []string{"/_gostack/state/reset", "/_gostack/state/reset?service=sts"} {
 		t.Run(path, func(t *testing.T) {
 			assumed := g.stsCall(t, "test",
-				"Action=AssumeRole&RoleArn=arn:aws:iam::000000000000:role/r&RoleSessionName=s")
+				"Action=AssumeRole&RoleArn=arn:aws:iam::000000000000:role/r&RoleSessionName=session")
 
 			key := accessKeyIDElement.FindStringSubmatch(assumed)
 			require.NotNil(t, key, assumed)
 
 			identity := arnElement.FindStringSubmatch(g.stsCall(t, key[1], "Action=GetCallerIdentity"))
 			require.NotNil(t, identity)
-			assert.Equal(t, "arn:aws:sts::000000000000:assumed-role/r/s", identity[1], "the session is kept")
+			assert.Equal(t, "arn:aws:sts::000000000000:assumed-role/r/session", identity[1], "the session is kept")
 
 			reset := g.request(t, http.MethodPost, path, "", nil)
 			require.NoError(t, reset.err)
