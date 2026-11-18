@@ -16,6 +16,17 @@ specific to gostack.
   - The generator splits each service's output across several files (types,
     codecs, operations) and never writes one giant file. A single 93k-line
     file costs the `whitespace` linter 16s per lint.
+  - Sharded: a file whose declarations run past about 3,000 lines (`maxShardLines`
+    in `codegen/cmd/gostack-codegen/emit.go`) becomes `<name>_1.go`,
+    `<name>_2.go` and so on, cut at declaration boundaries. `make gen` deletes
+    a generated file it no longer writes, so a shard that is no longer needed
+    does not linger, and `make gen-check` fails on one that does.
+  - A rest service's routing table is checked every time the generator runs: it
+    refuses two operations that bind the same request. The per-operation test,
+    `Test_routeRules_EveryOperation` in
+    `codegen/cmd/gostack-codegen/route_internal_test.go`, sends each rule its
+    own request and expects the operation back. It is built on the S3 model
+    today, so a second rest service needs its own router builder there first.
 - **Handler files.** One file per operation or tight operation group, for
   example `internal/service/sqs/send-message.go`.
 - **Unimplemented operations** return 501 through the embedded generated

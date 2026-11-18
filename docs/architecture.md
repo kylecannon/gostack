@@ -107,7 +107,8 @@ internal/
   route/                     service detection: signing name, X-Amz-Target, path rules, host, form Action; explicit ambiguity error
   protocol/                  runtime codec support: query, json, restjson, restxml, ec2, cbor, aws-chunked, event-stream
   sigv4/                     credential scope, presigned URLs (SigV2/V4), optional verification
-  account/                   access key to account id (accounts.py rules), region rewrite
+  account/                   credential parser (FromRequest), access key to account id (accounts.py rules), region rewrite
+  inproc/                    a service's calls to another service of the same process, through the gateway's handler
   config/                    viper-backed LocalStack env vars and their lookup order, PERSIST_* validator, config updates
   store/                     Bundle[State] (account x region), cross-region and cross-account attributes
   persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats
@@ -156,24 +157,23 @@ decoding, and an oversized one answers `MalformedQueryString` (400).
      detected again later, and its request is served before the routes other
      services mount. The `/_localstack`, `/_gostack` and `/_aws` routes keep
      their own.
-  4. Preprocess hooks. S3 marks a request as S3 when it is host-style, or
+  4. Preprocess hooks, one per registration, in registration order (see
+     "Service registration"). S3 marks a request as S3 when it is host-style, or
      path-style to an existing bucket (`services/s3/cors.py`).
-  5. CORS, skipped for requests marked S3 or API Gateway.
-  6. Content decoding, skipped for S3. LocalStack's own comment says it depends
-     on the preprocess step for S3.
+  5. CORS, skipped for a request whose owner sets `OwnCORS`: S3 and API
+     Gateway.
+  6. Content decoding, skipped for a request whose owner sets `RawBody`: S3.
+     LocalStack's own comment says it depends on the preprocess step for S3.
   7. The `/_gostack`, `/_localstack` and `/_aws` routes.
   8. The `/*` AWS mount, which carries service detection onward.
 
   The response handlers that add `x-localstack` and `x-gostack` also run on the
   root router, so every response carries them, `/_localstack/health` included.
-- **Per-service REST routers.** Codegen emits one `chi.Router` per rest-json or
-  rest-xml service from each operation's `http.requestUri`. Greedy labels like
-  `{Key+}` become chi wildcards. The gateway first works out the service from
-  headers (signing name, `X-Amz-Target`, path rules, host, form `Action`), then
-  hands off to that service's router. Generated code breaks the ties chi cannot
-  see, such as S3 `?uploads` or `?tagging`, using the query string and headers.
-  json, query and ec2 services skip the REST router and dispatch on operation
-  name.
+- **Per-service REST routing.** The gateway first works out the service (see
+  "Service registration"), then hands the request to it. A generated rest-json
+  or rest-xml service names its operation with `Route`, not with chi (see
+  "REST routing and sharding"). json, query and ec2 services dispatch on
+  operation name.
 - **Middleware** is plain `func(http.Handler) http.Handler` registered with
   `r.Use`, in LocalStack's handler order from `aws/app.py` and
   `aws/handlers/__init__.py`. The root layer is listed above. The AWS mount
@@ -243,7 +243,41 @@ written by hand.
   base64 blobs, and `__type` error codes. One option set in
   `internal/protocol/awsjson` serves every encode and decode.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
-  output.
+  output (`internal/protocol/restxml`). The REST bindings (header, query, URI
+  label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
+  generated code calls only these packages.
+
+#### REST routing and sharding
+
+For each rest service the generator emits `Route(r *http.Request) (op string,
+ok bool)`, and the service's `Serve` calls it and sets `rc.Operation` before it
+decodes, so dirty marking and logging see the operation. A service whose
+`Serve` is called with `rc.Operation` already set keeps it. When no rule
+matches, the answer is 404 `UnknownOperationException`.
+
+`Route` is a `rest.Router`: rules grouped by method, tried in the order
+`routeRules` (`codegen/cmd/gostack-codegen/route.go`) gives them. A rule
+discriminates on, in this order:
+
+1. The method and the shape of the path, literal segments before labels and
+   greedy labels (`{Key+}`) last.
+2. The literal query keys of the `requestUri` (`?uploads`, `?tagging`), more of
+   them first.
+3. Among operations that share both, the querystring members and headers they
+   require (`x-amz-copy-source` separates `CopyObject` from `PutObject`).
+4. The host. It separates `ListBuckets` from `ListDirectoryBuckets`.
+
+A deprecated twin (`GetBucketLifecycle`, `PutBucketNotification` and their
+siblings) sorts after the operation that replaced it, so a request both bind
+reaches the `Configuration` form, as in LocalStack. The generator refuses to
+build a service when two operations that are not twins bind the same requests.
+No step reads the request body.
+
+Generated output is split into files of about 3,000 lines at declaration
+boundaries: `types_1.go`, `types_2.go`, and so on. `make gen` writes the
+shards and removes the generated files it no longer writes
+(`removeStale` in `codegen/cmd/gostack-codegen/main.go`), so `make gen-check`
+fails on a stale shard. See `standards.md`.
 
 ### Service registration (`internal/service`)
 
@@ -264,6 +298,65 @@ save. A service that reports changes the gateway cannot see, such as SQS calls
 to a queue URL, takes a `changed(service)` callback in its constructor.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
+
+Five more fields serve a service that others share a signing name or a host
+with, and S3 sets all of them:
+
+- **`Preprocess`** runs for every request at root step 4, internal paths
+  included, once per registration in registration order, each given the request
+  the one before returned. It returns `service.Own(r, name)` to mark the request
+  as the service's, or nil to keep `r`. S3's reads at most 64 KiB of a multipart
+  or `?delete` POST body and replays it, so the legacy rules below can look
+  into it, and rewrites a virtual-host request to path style.
+- **`RawBody`** and **`OwnCORS`** make root content decoding and root CORS skip
+  a request the registration owns, so S3 reads the body as sent and answers
+  CORS itself. `DISABLE_CUSTOM_CORS_<NAME>` turns the `OwnCORS` skip off.
+- **`Fallback`** is asked last, after every other detection step has left other
+  than one service, in registration order, and the first `true` wins. S3's is
+  LocalStack's `legacy_s3_rules` (`service_router.py:232-297`) plus the
+  existing-bucket first path segment.
+- **`SigningDefault`** names the registration that takes a shared signing name
+  when no `Claim` matches. S3 holds `s3`, so a signed request is S3's unless it
+  carries s3control's `/v20180820` prefix. Two defaults for one signing name
+  panic in `route.NewTable`.
+
+`route.Detect` therefore reads, in order: the owner a `Preprocess` marked, the
+signing name, `X-Amz-Target`, the host, the form `Action`, then the `Fallback`s.
+It stops at the first step that leaves one service.
+
+**`account.FromRequest`** is the one credential parser. It returns the access
+key, signing name and region from the first source that has them: the SigV4
+`Authorization` header, a SigV2 `AWS <key>:<sig>` header, the presigned
+`X-Amz-Credential` query parameter, then the SigV2 `AWSAccessKeyId` parameter.
+A request with any `Authorization` header is read from the header alone. Route
+detection reads only the header's signing name (`account.FromAuthorization`);
+account and region derivation call `FromRequest`.
+
+### In-process client (`internal/inproc`)
+
+A service calls another one through `inproc.Client`, which builds an HTTP request
+with a credential scope for the caller's account and region and serves it
+through the gateway's own handler. Detection, account resolution, logging and
+dirty marking all apply, and a service never reaches into another's state. `Do`
+makes a call synchronously. `Enqueue` queues it behind one worker that starts
+with the first queued call and ends when the queue is empty, so nothing runs
+while idle; the queue holds `inproc.MaxQueued` (4,096) calls and refuses the
+next. A call made before `Bind` gives the client a handler returns
+`ErrNotBound`. S3 uses it to deliver event notifications to SQS.
+
+### S3 body store (`internal/service/s3`)
+
+Object and part bodies live behind `BlobStore` (`Create`, `Open`, `Remove`),
+under ids the store picks, and are streamed in and out. `Ephemeral`, the store
+when S3 is not persisted, keeps a body up to 512 KiB in memory and spills a
+larger one to a temporary file under `/var/lib/localstack/tmp` (the system
+temporary directory when that cannot be made), unlinked at creation. A reader
+that has opened a blob keeps reading it after `Remove`. A range read or a part
+copy opens one blob, seeks and copies into a new one.
+
+S3 persistence is not built. The proposed layout, blobs as files under
+`<base>/s3/assets/blobs/` with immutable ids, is pending the user's ruling
+(SQ-101); nothing in this section depends on it.
 
 ## Internal API
 

@@ -70,6 +70,8 @@ change applies from the next one.
 | `PERSIST_FREQUENCY` | Decimal seconds a change waits before the save. Defaults to 10. |
 | `PERSIST_BASE_DIR` | Where the state lives. Defaults to `/persisted-data`. |
 
+S3 does not persist yet (see "S3 limits").
+
 ## Image and init
 
 | Variable | Effect |
@@ -106,6 +108,39 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | `PostObject` with `success_action_status` 200, or a value other than 200, 201 or 204 | 200 with an empty `<PostResponse/>`; any other value is echoed as the status | 200 with no body; any other value answers 204 | POST Object: "If the value is set to 200 or 204, Amazon S3 returns an empty document ... If the value is not set or if it is set to an invalid value, Amazon S3 returns an empty document with a 204 status code." |
 | `PostObject` form fields after the `file` field | Read | Ignored | POST Object: "The file or text content must be the last field in the form. Any fields below it are ignored." |
 | `PostObject` form fields before the file over 20 KiB | Accepted | `400 MaxPostPreDataLengthExceeded`, without the `MaxPostPreDataLengthBytes` member. Each field counts its value, its part headers, its boundary and 8 bytes of line breaks. | HTML forms: "The form data and boundaries (excluding the contents of the file) cannot exceed 20 KB." |
+
+### S3 versioning and Object Lock
+
+| Behavior | LocalStack | gostack | AWS source |
+|---|---|---|---|
+| Changing the retention of a version after its retain-until date has passed | Still needs the bypass header, and `COMPLIANCE` refuses | Allowed without `x-amz-bypass-governance-retention` | S3 User Guide, Object Lock: a retention mode protects a version until its retain-until date; after it the version can be overwritten or deleted |
+| A default retention with `Days` or `Years` of 0 or less | 500 | `400 MalformedXML` | `PutObjectLockConfiguration` takes a number of days or years for the default period; a period of 0 or less has no meaning. No recorded AWS error code. |
+| A write to a bucket whose versioning is `Suspended` | The new null version keeps the slot of the old one | The new null version replaces the old one and is the newest in the chain | S3 User Guide, versioning-suspended buckets: a write adds a version with the ID `null` and overwrites an existing null version, which makes it the current one |
+| `GetBucketVersioning` on a bucket that stored `MfaDelete` | Drops it | Returns it | `GetBucketVersioning`: "MfaDelete ... is only returned if the bucket has been configured with MFA delete." gostack stores and reports it and checks no MFA code. |
+
+## S3 limits
+
+What S3 does not do, or does in part, so a client's expectations can be set.
+
+| Area | LocalStack | gostack |
+|---|---|---|
+| `SelectObjectContent` | Answers | `501 NotImplemented`. No test covers it. |
+| KMS | Validates and creates keys | There is no KMS. A key id is not validated. An `aws:kms` write with no key id gets a managed-key ARN derived from the account and region, the same one every call and after a restart. The encryption context is not stored. |
+| Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS only. SNS, Lambda and EventBridge targets are accepted and stored, and nothing is sent. |
+| `x-amz-object-lock-retain-until-date` | Written with `.000Z` | Written without milliseconds. SDKs parse both. |
+| S3 persistence | Kept by `localstack-persist` | Not yet available. S3 state is lost on restart even when `PERSIST_S3` is set. Once it is, the `PERSIST_*` settings stay the same, and the on-disk layout under the base directory differs from localstack-persist's, so a data directory does not move between the two. |
+
+## S3 wire details
+
+What a raw HTTP client sees. SDK clients do not notice any of it.
+
+- Every response carries `Server: AmazonS3` and `x-amz-id-2`.
+- The ETag header is spelled `ETag`, and every `x-amz-*` response header is
+  lower case, as in the S3 model.
+- Response bodies use the root element names, the namespace and the member order
+  of LocalStack's S3 serializer, and body timestamps end in `.000Z`.
+- A `PostObject` form's fields before the file are capped at 20 KiB (see the
+  `PostObject` row above).
 
 ## Limits of Go's HTTP server
 
