@@ -3,6 +3,7 @@
 package sqs
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -1489,24 +1490,19 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 	if !utf8.Valid(body) {
 		return nil, errBodyNotUTF8
 	}
+	// A handler that refuses a number echoes the text sent, which only the body holds.
+	rc.Request.Body = io.NopCloser(bytes.NewReader(body))
 	return body, nil
 }
 
-// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8. LocalStack's
-// parser raises, and its exception handler turns that into a 500 of this form.
-//
-// OPEN QUESTION: a lone surrogate escape and broken json answer 400
-// SerializationException (awsjson.Decode), so the three malformed-body cases do not
-// share a status. The botocore protocol fixtures have no malformed request body case
-// and the Smithy awsJson1_0 spec says nothing on it, so neither settles which one
-// AWS sends. No parity test pins any of them, so the LocalStack answer stays here.
+// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8: the same as
+// broken json and a lone surrogate escape (awsjson.Decode). LocalStack answers 500
+// here, which is a crash in its parser and not an answer to copy.
 var errBodyNotUTF8 = &awserr.Error{
-	Code: "CommonServiceException",
-	Message: "exception while calling sqs with unknown operation: " +
-		"HTTP body could not be parsed as JSON.",
-	StatusCode: 500,
+	Code:       "SerializationException",
+	Message:    "Start of structure or map found where not expected.",
+	StatusCode: 400,
 	Fault:      awserr.FaultSender,
-	QueryCode:  "InternalError",
 }
 
 // readForm gives the parameters of a query call as LocalStack reads them: the URL's

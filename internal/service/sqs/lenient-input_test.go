@@ -106,26 +106,34 @@ func Test_numbers_are_read_the_way_LocalStack_reads_them(t *testing.T) {
 
 // Test_numbers_past_int32_reach_the_range_check: LocalStack takes any size of
 // integer and its handler refuses it with the range message, echoing the number
-// it was sent. gostack reads an int32, so the number it echoes is the nearest
-// bound; the code, the status and the reason are LocalStack's.
+// it was sent. gostack reads an int32, and still echoes the number sent.
 func Test_numbers_past_int32_reach_the_range_check(t *testing.T) {
 	t.Parallel()
 
 	for _, protocol := range protocols {
-		for _, raw := range []string{"3000000000", "99999999999999999999"} {
-			t.Run(protocol+" "+raw, func(t *testing.T) {
-				t.Parallel()
+		for raw, sent := range map[string]string{
+			"3000000000":           "3000000000",
+			"-3000000000":          "-3000000000",
+			"99999999999999999999": "99999999999999999999",
+		} {
+			for param, reason := range map[string]string{
+				paramMaxMessages: "Must be between 1 and 10, if provided.",
+				paramWaitTime:    "Must be >= 0 and <= 20, if provided.",
+			} {
+				t.Run(protocol+" "+param+" "+raw, func(t *testing.T) {
+					t.Parallel()
 
-				c := newStack(t).as(protocol)
-				queueURL := c.createQueue("q", nil)
+					c := newStack(t).as(protocol)
+					queueURL := c.createQueue("q", nil)
 
-				res := c.rawCall(opReceiveMessage, queueURL, paramMaxMessages, raw)
+					res := c.rawCall(opReceiveMessage, queueURL, param, raw)
 
-				assert.Equal(t, 400, res.status)
-				assert.Contains(t, res.errorCode(), "InvalidParameterValue")
-				assert.Equal(t, "Value 2147483647 for parameter MaxNumberOfMessages is invalid. "+
-					"Reason: Must be between 1 and 10, if provided.", res.errorMessage())
-			})
+					assert.Equal(t, 400, res.status)
+					assert.Contains(t, res.errorCode(), "InvalidParameterValue")
+					assert.Equal(t, "Value "+sent+" for parameter "+param+" is invalid. Reason: "+reason,
+						res.errorMessage())
+				})
+			}
 		}
 	}
 }

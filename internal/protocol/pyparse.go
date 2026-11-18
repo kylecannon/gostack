@@ -97,6 +97,32 @@ func pyTrim(s string) string {
 	return strings.Trim(s, " \t\n\v\f\r")
 }
 
+// PyIntDecimal returns the number Python's int(s) reads from s, printed the way
+// Python prints it: no sign but a minus, no underscores, no leading zeros. It is
+// exact for any size, which ParsePyInt is not. ok is false for what int()
+// refuses.
+func PyIntDecimal(s string) (text string, ok bool) {
+	if _, ok = ParsePyInt(s); !ok {
+		return "", false
+	}
+
+	s, _ = pyNormalize(s)
+	s = pyTrim(s)
+
+	neg := strings.HasPrefix(s, "-")
+	s = strings.TrimLeft(s, "+-")
+	s = strings.TrimLeft(strings.ReplaceAll(s, "_", ""), "0")
+
+	switch {
+	case s == "":
+		return "0", true
+	case neg:
+		return "-" + s, true
+	default:
+		return s, true
+	}
+}
+
 // ParsePyInt reads s the way Python's int(s) does: surrounding white space, a
 // sign, Unicode digits, and single underscores between digits. A value past the
 // int64 range saturates, so callers see a very large number as very large and
