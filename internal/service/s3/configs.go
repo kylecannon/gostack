@@ -334,8 +334,9 @@ func (p *Provider) DeleteBucketAnalyticsConfiguration(
 	return &s3api.DeleteBucketAnalyticsConfigurationOutput{}, nil
 }
 
-// PutBucketMetricsConfiguration stores a metrics configuration whose id is the
-// request's. A bucket holds at most 1000.
+// PutBucketMetricsConfiguration stores a metrics configuration under the id of
+// the request, whatever Id the body carries, as LocalStack does. A bucket holds
+// at most 1000.
 func (p *Provider) PutBucketMetricsConfiguration(
 	ctx context.Context, in *s3api.PutBucketMetricsConfigurationInput,
 ) (*s3api.PutBucketMetricsConfigurationOutput, error) {
@@ -345,7 +346,7 @@ func (p *Provider) PutBucketMetricsConfiguration(
 	}
 
 	id := deref(in.Id)
-	if in.MetricsConfiguration == nil || !idsMatch(id, in.MetricsConfiguration.Id) {
+	if in.MetricsConfiguration == nil {
 		return nil, malformedXMLError()
 	}
 

@@ -32,6 +32,44 @@ func copyTo(s *server, source string, header map[string]string) reply {
 	return s.do(call{method: http.MethodPut, target: destPath, region: regionUSEast1, header: h})
 }
 
+// TestCopySourceIsReadAsUrlparseReadsIt: each row is a request SQ-143 sent to
+// LocalStack 8b9a79f (s3/utils.py:162-174).
+func TestCopySourceIsReadAsUrlparseReadsIt(t *testing.T) {
+	s := newServer(t)
+	seed(t, s, nil)
+
+	for _, row := range []struct {
+		source string
+		status int
+		code   string
+	}{
+		{"//host/bucket/key", http.StatusOK, ""},
+		{"https:///bucket/key", http.StatusOK, ""},
+		{"s3:bucket/key", http.StatusOK, ""},
+		{"bucket/key#frag", http.StatusOK, ""},
+		{"bucket/key#", http.StatusOK, ""},
+		{"/bucket/key#frag?versionId=nope", http.StatusOK, ""},
+		{"/bucket/key?versionId=null#x", http.StatusOK, ""},
+		{"bucket/key?x=y", http.StatusOK, ""},
+		{"bucket/key?versionId=", http.StatusOK, ""},
+		{"bucket/key;p", http.StatusOK, ""},
+		{"http://host/bucket/key;p", http.StatusOK, ""},
+		{"foo://host/bucket/key;p", http.StatusNotFound, codeNoSuchKey},
+		{"bucket/key%23frag", http.StatusNotFound, codeNoSuchKey},
+		{"nosl", http.StatusBadRequest, cfgInvalidArgument},
+		{"//bucket/key", http.StatusBadRequest, cfgInvalidArgument},
+		{bucketPath, http.StatusBadRequest, cfgInvalidArgument},
+		{"//host/", http.StatusBadRequest, cfgInvalidArgument},
+	} {
+		got := copyTo(s, row.source, nil)
+		require.Equal(t, row.status, got.status, row.source+": "+string(got.body))
+
+		if row.code != "" {
+			assert.Equal(t, row.code, got.err(t).Code, row.source)
+		}
+	}
+}
+
 func TestCopyObject(t *testing.T) {
 	source := map[string]string{
 		headerContentType: contentTypePlain, "Content-Language": "de", "Cache-Control": "max-age=60",

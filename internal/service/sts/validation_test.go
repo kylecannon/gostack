@@ -210,7 +210,7 @@ func Test_validation_beforeOtherChecks(t *testing.T) {
 	server := newServer(t, false)
 
 	got := call(t, server, defaultKey, url.Values{
-		paramAction: {opAssumeRole}, paramRoleArn: {"not-an-arn"}, paramSession: {"a"},
+		paramAction: {opAssumeRole}, paramRoleArn: {"not-an-arn-but-long-enough"}, paramSession: {"a"},
 	}, "")
 
 	assertOutcome(t, got.status, got.body, one(violation("a", "roleSessionName", lengthAtLeast)))

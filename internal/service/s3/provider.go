@@ -70,6 +70,10 @@ type Provider struct {
 	// client delivers notifications, and checks their targets, through the
 	// gateway. Bind gives it the handler.
 	client *inproc.Client
+
+	// taken counts the responses written through a hijacked connection, which
+	// http.Server.Shutdown does not wait for (rawheader.go). Close does.
+	taken inflight
 }
 
 var _ s3api.Handler = (*Provider)(nil)
@@ -122,9 +126,13 @@ func (p *Provider) Reset(account, region string) {
 	})
 }
 
-// Close drops the notifications not yet delivered and lets go of the bodies the
-// store holds, when it is one that can be closed.
+// Close waits for the responses still being written on a hijacked connection,
+// which the gateway's drain cannot see, then drops the notifications not yet
+// delivered and lets go of the bodies the store holds, when it is one that can
+// be closed. The wait ends at the services' Close budget, because a Close that
+// overruns it is abandoned, or at drainLimit.
 func (p *Provider) Close() {
+	p.taken.drain(drainLimit)
 	p.client.Close()
 
 	if closer, ok := p.blobs.(interface{ Close() }); ok {
@@ -166,7 +174,17 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		p.serveAPI(&responseWriter{ResponseWriter: w, method: r.Method}, rc)
+		rw := &responseWriter{
+			ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1, http11: r.ProtoAtLeast(1, 1), inflight: &p.taken,
+		}
+		rw.trackBody(r)
+
+		// abort does nothing once finish has run; it ends a taken response whose
+		// handler panicked.
+		defer rw.abort()
+
+		p.serveAPI(rw, rc)
+		rw.finish()
 	}
 }
 
@@ -223,14 +241,32 @@ func (p *Provider) bucket(account, name string) (*Bucket, error) {
 // responseWriter gives an S3 response the Content-Type LocalStack's does:
 // application/xml unless the handler set one, except on a 204 and on a
 // successful PUT, which carry no body (s3_response_handler).
+//
+// A response over HTTP/1.x that has a header value starting or ending in a space
+// or tab takes the connection and writes itself (rawheader.go), because net/http
+// would trim the value.
 type responseWriter struct {
 	http.ResponseWriter
 
 	method string
+	http1  bool
+	http11 bool // HTTP/1.1 or later: the client reads a chunked body.
 	wrote  bool
+
+	// raw is set once takeConn has the connection.
+	raw *takenConn
+
+	// inflight counts the taken responses, and body notes whether the request
+	// body was read to its end (see trackBody). Both belong to this response.
+	inflight *inflight
+	body     trackedBody
 }
 
 func (w *responseWriter) WriteHeader(code int) {
+	if w.raw != nil {
+		return
+	}
+
 	if !w.wrote && code >= http.StatusOK {
 		w.wrote = true
 
@@ -251,7 +287,11 @@ func (w *responseWriter) WriteHeader(code int) {
 			header.Del("Content-Length")
 		}
 
-		spellHeaders(header)
+		trims := spellHeaders(header)
+
+		if trims && w.http1 && w.takeConn(code) {
+			return
+		}
 	}
 
 	w.ResponseWriter.WriteHeader(code)
@@ -260,8 +300,12 @@ func (w *responseWriter) WriteHeader(code int) {
 // spellHeaders spells the header names Header.Set canonicalized as the S3
 // model and LocalStack's serializer do: Etag as ETag, and X-Amz-* in lower
 // case, the case of every x-amz- header in the model. Clients that compare
-// header names exactly, as the CORS snapshots do, see the difference.
-func spellHeaders(header http.Header) {
+// header names exactly, as the CORS snapshots do, see the difference. It
+// reports whether a header value starts or ends with a space or tab, which
+// net/http would trim.
+func spellHeaders(header http.Header) bool {
+	trims := false
+
 	if etag, ok := header["Etag"]; ok {
 		delete(header, "Etag")
 		header["ETag"] = etag
@@ -272,12 +316,22 @@ func spellHeaders(header http.Header) {
 			delete(header, name)
 			header[strings.ToLower(name)] = values
 		}
+
+		for _, value := range values {
+			trims = trims || edgeSpace(value)
+		}
 	}
+
+	return trims
 }
 
 func (w *responseWriter) Write(p []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
+	}
+
+	if w.raw != nil {
+		return w.raw.write(p)
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.

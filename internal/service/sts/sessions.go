@@ -17,7 +17,18 @@ type session struct {
 	userID  string
 	account string
 	arn     string
+	// tags are the session tags the credentials carry: the ones the call that
+	// issued them passed and the transitive ones it inherited.
+	tags    []sessionTag
 	expires time.Time
+}
+
+// sessionTag is one session tag. A transitive tag passes to the sessions a
+// role chain issues from this one.
+type sessionTag struct {
+	key        string
+	value      string
+	transitive bool
 }
 
 // sessions holds the sessions of one account by access key ID.

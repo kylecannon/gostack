@@ -96,6 +96,11 @@ type Settings struct {
 	// presigned URL whose signature does not match, has expired, or leaves
 	// headers unsigned. It is true unless the variable is a false value.
 	S3SkipSignatureValidation bool
+	// MaxRequestBody is GOSTACK_MAX_REQUEST_BODY: the most bytes of a request
+	// body that is not streamed gostack reads, 16 MiB by default. Zero means no
+	// limit. It is read at start-up, and a value that cannot be parsed is the
+	// default. A runtime update does not change it.
+	MaxRequestBody int64
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -157,6 +162,7 @@ func (s *Settings) values() map[string]any {
 		varDisableCustomCORSS3:             s.DisableCustomCORSS3,
 		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
 		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
+		varMaxRequestBody:                  s.MaxRequestBody,
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -213,6 +219,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisableCustomCORSS3:               isTrue(get(varDisableCustomCORSS3)),
 		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
 		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
+		MaxRequestBody:                    base.maxRequestBody,
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

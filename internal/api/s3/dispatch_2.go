@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/rest"
 	"github.com/kylecannon/gostack/internal/protocol/restxml"
 	"github.com/kylecannon/gostack/internal/request"
@@ -37,7 +38,7 @@ func readGetBucketReplication(rc *request.Context) (*GetBucketReplicationInput, 
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -86,7 +87,7 @@ func readGetBucketRequestPayment(rc *request.Context) (*GetBucketRequestPaymentI
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -131,7 +132,7 @@ func readGetBucketTagging(rc *request.Context) (*GetBucketTaggingInput, *awserr.
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -176,7 +177,7 @@ func readGetBucketVersioning(rc *request.Context) (*GetBucketVersioningInput, *a
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -221,7 +222,7 @@ func readGetBucketWebsite(rc *request.Context) (*GetBucketWebsiteInput, *awserr.
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -266,7 +267,7 @@ func readGetObject(rc *request.Context) (*GetObjectInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -312,7 +313,7 @@ func readGetObjectAcl(rc *request.Context) (*GetObjectAclInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -358,7 +359,7 @@ func readGetObjectAttributes(rc *request.Context) (*GetObjectAttributesInput, *a
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -404,7 +405,7 @@ func readGetObjectLegalHold(rc *request.Context) (*GetObjectLegalHoldInput, *aws
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -453,7 +454,7 @@ func readGetObjectLockConfiguration(rc *request.Context) (*GetObjectLockConfigur
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -502,7 +503,7 @@ func readGetObjectRetention(rc *request.Context) (*GetObjectRetentionInput, *aws
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -551,7 +552,7 @@ func readGetObjectTagging(rc *request.Context) (*GetObjectTaggingInput, *awserr.
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -597,7 +598,7 @@ func readGetObjectTorrent(rc *request.Context) (*GetObjectTorrentInput, *awserr.
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -643,7 +644,7 @@ func readGetPublicAccessBlock(rc *request.Context) (*GetPublicAccessBlockInput, 
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -692,7 +693,7 @@ func readHeadBucket(rc *request.Context) (*HeadBucketInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -733,7 +734,7 @@ func readHeadObject(rc *request.Context) (*HeadObjectInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -774,7 +775,7 @@ func readListBucketAnalyticsConfigurations(rc *request.Context) (*ListBucketAnal
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -819,7 +820,7 @@ func readListBucketIntelligentTieringConfigurations(rc *request.Context) (*ListB
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -864,7 +865,7 @@ func readListBucketInventoryConfigurations(rc *request.Context) (*ListBucketInve
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -909,7 +910,7 @@ func readListBucketMetricsConfigurations(rc *request.Context) (*ListBucketMetric
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -954,7 +955,7 @@ func readListBuckets(rc *request.Context) (*ListBucketsInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	d := rest.NewDecoder(rc.Request, nil)
 	in.decodeBindings(d)
@@ -998,7 +999,7 @@ func readListDirectoryBuckets(rc *request.Context) (*ListDirectoryBucketsInput, 
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	d := rest.NewDecoder(rc.Request, nil)
 	in.decodeBindings(d)
@@ -1042,7 +1043,7 @@ func readListMultipartUploads(rc *request.Context) (*ListMultipartUploadsInput, 
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1088,7 +1089,7 @@ func readListObjectVersions(rc *request.Context) (*ListObjectVersionsInput, *aws
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1134,7 +1135,7 @@ func readListObjects(rc *request.Context) (*ListObjectsInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1180,7 +1181,7 @@ func readListObjectsV2(rc *request.Context) (*ListObjectsV2Input, *awserr.Error)
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1226,7 +1227,7 @@ func readListParts(rc *request.Context) (*ListPartsInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1313,7 +1314,7 @@ func readPutBucketAbac(rc *request.Context) (*PutBucketAbacInput, *awserr.Error)
 		in.AbacStatus.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1354,7 +1355,7 @@ func readPutBucketAccelerateConfiguration(rc *request.Context) (*PutBucketAccele
 		in.AccelerateConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1395,7 +1396,7 @@ func readPutBucketAcl(rc *request.Context) (*PutBucketAclInput, *awserr.Error) {
 		in.AccessControlPolicy.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1436,7 +1437,7 @@ func readPutBucketAnalyticsConfiguration(rc *request.Context) (*PutBucketAnalyti
 		in.AnalyticsConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1477,7 +1478,7 @@ func readPutBucketCors(rc *request.Context) (*PutBucketCorsInput, *awserr.Error)
 		in.CORSConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1518,7 +1519,7 @@ func readPutBucketEncryption(rc *request.Context) (*PutBucketEncryptionInput, *a
 		in.ServerSideEncryptionConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1559,7 +1560,7 @@ func readPutBucketIntelligentTieringConfiguration(rc *request.Context) (*PutBuck
 		in.IntelligentTieringConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1600,7 +1601,7 @@ func readPutBucketInventoryConfiguration(rc *request.Context) (*PutBucketInvento
 		in.InventoryConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1641,7 +1642,7 @@ func readPutBucketLifecycle(rc *request.Context) (*PutBucketLifecycleInput, *aws
 		in.LifecycleConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1682,7 +1683,7 @@ func readPutBucketLifecycleConfiguration(rc *request.Context) (*PutBucketLifecyc
 		in.LifecycleConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1724,7 +1725,7 @@ func readPutBucketLogging(rc *request.Context) (*PutBucketLoggingInput, *awserr.
 		in.BucketLoggingStatus.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1765,7 +1766,7 @@ func readPutBucketMetricsConfiguration(rc *request.Context) (*PutBucketMetricsCo
 		in.MetricsConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1806,7 +1807,7 @@ func readPutBucketNotification(rc *request.Context) (*PutBucketNotificationInput
 		in.NotificationConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1847,7 +1848,7 @@ func readPutBucketNotificationConfiguration(rc *request.Context) (*PutBucketNoti
 		in.NotificationConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1888,7 +1889,7 @@ func readPutBucketOwnershipControls(rc *request.Context) (*PutBucketOwnershipCon
 		in.OwnershipControls.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -1969,7 +1970,7 @@ func readPutBucketReplication(rc *request.Context) (*PutBucketReplicationInput, 
 		in.ReplicationConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2010,7 +2011,7 @@ func readPutBucketRequestPayment(rc *request.Context) (*PutBucketRequestPaymentI
 		in.RequestPaymentConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2051,7 +2052,7 @@ func readPutBucketTagging(rc *request.Context) (*PutBucketTaggingInput, *awserr.
 		in.Tagging.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2092,7 +2093,7 @@ func readPutBucketVersioning(rc *request.Context) (*PutBucketVersioningInput, *a
 		in.VersioningConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2133,7 +2134,7 @@ func readPutBucketWebsite(rc *request.Context) (*PutBucketWebsiteInput, *awserr.
 		in.WebsiteConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2209,7 +2210,7 @@ func readPutObjectAcl(rc *request.Context) (*PutObjectAclInput, *awserr.Error) {
 		in.AccessControlPolicy.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2251,7 +2252,7 @@ func readPutObjectLegalHold(rc *request.Context) (*PutObjectLegalHoldInput, *aws
 		in.LegalHold.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2293,7 +2294,7 @@ func readPutObjectLockConfiguration(rc *request.Context) (*PutObjectLockConfigur
 		in.ObjectLockConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2335,7 +2336,7 @@ func readPutObjectRetention(rc *request.Context) (*PutObjectRetentionInput, *aws
 		in.Retention.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2377,7 +2378,7 @@ func readPutObjectTagging(rc *request.Context) (*PutObjectTaggingInput, *awserr.
 		in.Tagging.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2419,7 +2420,7 @@ func readPutPublicAccessBlock(rc *request.Context) (*PutPublicAccessBlockInput, 
 		in.PublicAccessBlockConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2459,7 +2460,7 @@ func readRenameObject(rc *request.Context) (*RenameObjectInput, *awserr.Error) {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2500,7 +2501,7 @@ func readRestoreObject(rc *request.Context) (*RestoreObjectInput, *awserr.Error)
 		in.RestoreRequest.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2541,7 +2542,7 @@ func readSelectObjectContent(rc *request.Context) (*SelectObjectContentInput, *a
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2591,7 +2592,7 @@ func readUpdateBucketMetadataInventoryTableConfiguration(rc *request.Context) (*
 		in.InventoryTableConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2632,7 +2633,7 @@ func readUpdateBucketMetadataJournalTableConfiguration(rc *request.Context) (*Up
 		in.JournalTableConfiguration.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path2.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2673,7 +2674,7 @@ func readUpdateObjectEncryption(rc *request.Context) (*UpdateObjectEncryptionInp
 		in.ObjectEncryption.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2749,7 +2750,7 @@ func readUploadPartCopy(rc *request.Context) (*UploadPartCopyInput, *awserr.Erro
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	labels, _ := path1.Match(rc.Request.URL.EscapedPath())
 	d := rest.NewDecoder(rc.Request, labels)
@@ -2853,10 +2854,32 @@ func errMalformedBody() *awserr.Error {
 	}
 }
 
-// readBody reads a request body that is not streamed, up to rest.MaxBody bytes.
+// errBodyTooLarge is the error for a request body over protocol.MaxBody.
+func errBodyTooLarge() *awserr.Error {
+	return &awserr.Error{
+		Code:       "MaxMessageLengthExceeded",
+		Message:    "Your request was too big.",
+		StatusCode: 400,
+		Fault:      awserr.FaultSender,
+	}
+}
+
+// errXMLBody is the error for an xml request body that failed to decode: too
+// large when the read hit protocol.MaxBody, malformed otherwise.
+func errXMLBody(err error) *awserr.Error {
+	if errors.Is(err, rest.ErrBodyTooLarge) {
+		return errBodyTooLarge()
+	}
+	return errMalformedBody()
+}
+
+// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(io.LimitReader(rc.Request.Body, rest.MaxBody+1))
-	if err != nil || len(body) > rest.MaxBody {
+	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	if protocol.OverBody(len(body)) {
+		return nil, errBodyTooLarge()
+	}
+	if err != nil {
 		return nil, errMalformedBody()
 	}
 	return body, nil

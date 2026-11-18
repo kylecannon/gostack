@@ -240,7 +240,7 @@ func (g *generator) headerCall(prefix string, r ref, name, value string) (string
 			return "", fmt.Errorf("a header list of %s is not supported", elem.shape.Type)
 		}
 
-		return fmt.Sprintf("%s%s(%s%s)", prefix, suffix, args, timeArg(elem)), nil
+		return fmt.Sprintf("%s%s(%s%s)", prefix, suffix, args, g.headerTimeArg(prefix, elem)), nil
 	}
 
 	suffix, ok := scalarSuffixes[r.shape.Type]
@@ -252,7 +252,20 @@ func (g *generator) headerCall(prefix string, r ref, name, value string) (string
 		suffix = "String"
 	}
 
-	return fmt.Sprintf("%s%s(%s%s)", prefix, suffix, args, timeArg(r)), nil
+	return fmt.Sprintf("%s%s(%s%s)", prefix, suffix, args, g.headerTimeArg(prefix, r)), nil
+}
+
+// headerTimeArg is timeArg for a header. A header the service writes in the
+// explicit iso8601 form carries the service's BodyTime too, as S3's
+// x-amz-object-lock-retain-until-date does (serializer _timestamp_iso8601).
+// The default of a header, rfc822, stays, and so does reading.
+func (g *generator) headerTimeArg(prefix string, r ref) string {
+	if prefix == "rest.Set" && g.opts.BodyTime != "" && r.shape.Type == spec.TypeTimestamp &&
+		strings.EqualFold(r.tsfmt, rest.TimeISO8601) {
+		return fmt.Sprintf(", %q", g.opts.BodyTime)
+	}
+
+	return timeArg(r)
 }
 
 func (g *generator) checkStringMap(r ref) error {

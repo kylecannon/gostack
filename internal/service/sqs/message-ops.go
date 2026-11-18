@@ -357,7 +357,7 @@ func (q *Queue) receiveParams(
 		params.wait = time.Duration(q.intAttr(attrReceiveMessageWaitTimeSeconds)) * time.Second
 		q.mu.Unlock()
 	case *in.WaitTimeSeconds < 0 || *in.WaitTimeSeconds > maxWaitSeconds:
-		return params, invalidParameterValue("Value " + strconv.Itoa(int(*in.WaitTimeSeconds)) +
+		return params, invalidParameterValue("Value " + sentNumber(rc, "WaitTimeSeconds", int(*in.WaitTimeSeconds)) +
 			" for parameter WaitTimeSeconds is invalid. Reason: Must be >= 0 and <= 20, if provided.")
 	default:
 		params.wait = time.Duration(*in.WaitTimeSeconds) * time.Second
@@ -379,7 +379,7 @@ func (q *Queue) receiveParams(
 		count = q.contents.Counts().Visible
 		q.mu.Unlock()
 	case count < 1 || (count > maxReceiveCount && !noLimit):
-		return params, invalidParameterValue("Value " + strconv.Itoa(count) +
+		return params, invalidParameterValue("Value " + sentNumber(rc, "MaxNumberOfMessages", count) +
 			" for parameter MaxNumberOfMessages is invalid. Reason: Must be between 1 and 10, if provided.")
 	default:
 		// A count from 1 to 10 is as asked.

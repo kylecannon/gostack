@@ -411,7 +411,7 @@ func (c *devCall) queueURL() (string, *awserr.Error) {
 			return "", onlyReceiveMessage()
 		}
 
-		body, err := io.ReadAll(io.LimitReader(c.r.Body, query.MaxFormBody+1))
+		body, err := io.ReadAll(protocol.LimitBody(c.r.Body))
 		if err != nil {
 			return "", &awserr.Error{
 				Code: "SerializationException", Message: "The request body could not be read.",
@@ -419,7 +419,7 @@ func (c *devCall) queueURL() (string, *awserr.Error) {
 			}
 		}
 
-		if len(body) > query.MaxFormBody {
+		if protocol.OverBody(len(body)) {
 			return "", query.MalformedQueryString()
 		}
 

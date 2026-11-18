@@ -147,20 +147,6 @@ func TestPutBucketWebsiteValidates(t *testing.T) {
 			wantCode: codeInvalidRequest, wantMessage: badProtocol,
 		},
 		{
-			// net/http panics on WriteHeader(42), so a rule with it would take the
-			// request that matched it down with a 500.
-			name: "a redirect code that is not a status code",
-			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
-				`<HttpRedirectCode>42</HttpRedirectCode></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`,
-			wantCode: codeInvalidRequest, wantMessage: "The HTTP redirect code must be a 3xx status code.",
-		},
-		{
-			name: "a redirect code over 999",
-			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
-				`<HttpRedirectCode>1000</HttpRedirectCode></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`,
-			wantCode: codeInvalidRequest, wantMessage: "The HTTP redirect code must be a 3xx status code.",
-		},
-		{
 			name: "a prefix and a key to replace",
 			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
 				`<ReplaceKeyPrefixWith>prefix</ReplaceKeyPrefixWith><ReplaceKeyWith>key-name</ReplaceKeyWith>` +
@@ -477,6 +463,45 @@ func TestWebsiteRedirects(t *testing.T) {
 			require.Equal(t, tt.wantStatus, got.status, string(got.body))
 			assert.Equal(t, tt.wantLocation, got.header.Get("Location"))
 			assert.Equal(t, tt.wantBody, string(got.body))
+		})
+	}
+}
+
+// TestWebsiteRedirectCodeIsAnyValue: LocalStack 8b9a79f takes any
+// HttpRedirectCode (SQ-143 probe) and serves it as the status, 100 to 999. For
+// a value it cannot serve it answers garbage or a 500, which net/http cannot
+// send either, so gostack serves 301 for those.
+func TestWebsiteRedirectCodeIsAnyValue(t *testing.T) {
+	const location = "http://example.com/docs/page"
+
+	for _, tt := range []struct {
+		code       string
+		wantStatus int
+	}{
+		{"302", http.StatusFound},
+		{"304", http.StatusNotModified},
+		{"200", http.StatusOK},
+		{"404", http.StatusNotFound},
+		{"999", 999},
+		{"100", http.StatusMovedPermanently},
+		{"42", http.StatusMovedPermanently},
+		{"1000", http.StatusMovedPermanently},
+		{"0", http.StatusMovedPermanently},
+		{"-302", http.StatusMovedPermanently},
+		{"abc", http.StatusMovedPermanently},
+		{"", http.StatusMovedPermanently},
+	} {
+		t.Run("code "+tt.code, func(t *testing.T) {
+			s := newServer(t)
+			createBucket(t, s)
+			putWebsite(t, s, `<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument>`+
+				`<RoutingRules><RoutingRule><Condition><KeyPrefixEquals>docs/</KeyPrefixEquals></Condition>`+
+				`<Redirect><HostName>example.com</HostName><HttpRedirectCode>`+tt.code+`</HttpRedirectCode></Redirect>`+
+				`</RoutingRule></RoutingRules></WebsiteConfiguration>`)
+
+			got := site(s, http.MethodGet, "/docs/page", nil)
+			require.Equal(t, tt.wantStatus, got.status, string(got.body))
+			assert.Equal(t, location, got.header.Get("Location"))
 		})
 	}
 }

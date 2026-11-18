@@ -59,11 +59,11 @@ func Test_Decoder_Errors(t *testing.T) {
 		giveRaw string
 		read    func(*query.Decoder)
 	}{
-		{name: "int32 out of range", giveRaw: "N=4294967296", read: func(d *query.Decoder) { d.Int32("N") }},
+		{name: "int32 not a number", giveRaw: "N=5.0", read: func(d *query.Decoder) { d.Int32("N") }},
 		{name: "int64 not a number", giveRaw: "N=ten", read: func(d *query.Decoder) { d.Int64("N") }},
 		{name: "float not a number", giveRaw: "N=x", read: func(d *query.Decoder) { d.Float64("N") }},
 		{name: "bool not true or false", giveRaw: "N=yes", read: func(d *query.Decoder) { d.Bool("N") }},
-		{name: "blob not base64", giveRaw: "N=%25", read: func(d *query.Decoder) { d.Blob("N") }},
+		{name: "blob with a dangling data character", giveRaw: "N=aGVsb", read: func(d *query.Decoder) { d.Blob("N") }},
 		{name: "timestamp not iso8601", giveRaw: "N=yesterday", read: func(d *query.Decoder) { d.Time("N", "") }},
 	}
 

@@ -167,6 +167,10 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	}
 
 	r.HandleFunc("/*", g.serveAWS)
+	// chi registers "/*" for the methods it knows. Any other method token
+	// reaches the services too, so that S3 answers a method no operation takes
+	// with its own 405 instead of chi's empty one.
+	r.MethodNotAllowed(g.serveAWS)
 
 	return r
 }

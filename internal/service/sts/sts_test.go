@@ -37,6 +37,10 @@ const (
 	// lsiaAccount is the key LKIARZPUZDIKAAAAAAAA of internal/account's tests with the other prefix.
 	lsiaAccount   = "LSIARZPUZDIKAAAAAAAA"
 	lsiaAccountID = "123456789012"
+	// asiaAccount is lsiaAccount with the prefix of a real AWS key.
+	asiaAccount = "ASIARZPUZDIKAAAAAAAA"
+	// firstTagKeyParam is the query parameter of the key of the first session tag.
+	firstTagKeyParam = "Tags.member.1.Key"
 )
 
 func TestMain(m *testing.M) {
@@ -169,8 +173,8 @@ func Test_GetCallerIdentity(t *testing.T) {
 		{name: "the default key", giveKey: defaultKey, wantAccount: "000000000000"},
 		{name: "a key that is an account", giveKey: "000000000002", wantAccount: "000000000002"},
 		{name: "an LSIA key", giveKey: lsiaAccount, wantAccount: lsiaAccountID},
-		{name: "an ASIA key without parity", giveKey: "ASIARZPUZDIKAAAAAAAA", wantAccount: "000000000000"},
-		{name: "an ASIA key with parity", giveKey: "ASIARZPUZDIKAAAAAAAA", giveParity: true, wantAccount: lsiaAccountID},
+		{name: "an ASIA key without parity", giveKey: asiaAccount, wantAccount: "000000000000"},
+		{name: "an ASIA key with parity", giveKey: asiaAccount, giveParity: true, wantAccount: lsiaAccountID},
 	}
 
 	for _, tt := range tests {
@@ -350,7 +354,7 @@ func Test_AssumeRole_tags(t *testing.T) {
 		{
 			name: "duplicate keys differing in case",
 			give: url.Values{
-				"Tags.member.1.Key": {"Team"}, "Tags.member.1.Value": {"a"},
+				firstTagKeyParam: {"Team"}, "Tags.member.1.Value": {"a"},
 				"Tags.member.2.Key": {"team"}, "Tags.member.2.Value": {"b"},
 			},
 			wantMessage: "Duplicate tag keys found. Please note that Tag keys are case insensitive.",
@@ -358,8 +362,8 @@ func Test_AssumeRole_tags(t *testing.T) {
 		{
 			name: "transitive key that is not a tag",
 			give: url.Values{
-				"Tags.member.1.Key": {"Team"}, "Tags.member.1.Value": {"a"},
-				"TransitiveTagKeys.member.1": {"Other"},
+				firstTagKeyParam: {"Team"}, "Tags.member.1.Value": {"a"},
+				"TransitiveTagKeys.member.1": {otherTag},
 			},
 			wantMessage: "The specified transitive tag key must be included in the requested tags.",
 		},
@@ -472,7 +476,7 @@ func Test_GetSessionToken(t *testing.T) {
 		Credentials credentials `xml:"GetSessionTokenResult>Credentials"`
 	}
 
-	got := decode[result](t, call(t, server, "000000000002", url.Values{paramAction: {"GetSessionToken"}}, ""))
+	got := decode[result](t, call(t, server, "000000000002", url.Values{paramAction: {opSession}}, ""))
 
 	assert.Equal(t, "000000000002", account.FromAccessKey(got.Credentials.AccessKeyID, false))
 
@@ -504,7 +508,7 @@ type jsonSessionTokenResult struct {
 func Test_GetSessionToken_acceptJSON(t *testing.T) {
 	server := newServer(t, false)
 
-	got := call(t, server, defaultKey, url.Values{paramAction: {"GetSessionToken"}}, "application/json")
+	got := call(t, server, defaultKey, url.Values{paramAction: {opSession}}, "application/json")
 
 	require.Equal(t, http.StatusOK, got.status, got.body)
 	assert.Equal(t, "application/json", got.header.Get("Content-Type"))

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -40,7 +41,24 @@ func TestMetricsConfigurationPaging(t *testing.T) {
 
 	cfgExpect(t, cfgGet(s, bucketAPath+"?metrics&id=none"), http.StatusNotFound, cfgNoSuchConfig)
 	cfgExpect(t, cfgDelete(s, bucketAPath+"?metrics&id=none"), http.StatusNotFound, cfgNoSuchConfig)
-	cfgExpect(t, cfgPut(s, bucketAPath+"?metrics&id=a", metric("b"), nil), http.StatusBadRequest, cfgMalformedXML)
+
+	// LocalStack stores a metrics configuration under the id in the query and
+	// keeps the body as it came, whatever its own Id says (SQ-143 probe on
+	// 8b9a79f). Analytics, inventory and intelligent tiering refuse a
+	// mismatch there, as they do here.
+	for name, body := range map[string]string{
+		"a body with another id": metric("b"),
+		"a body with no id":      cfgDoc("MetricsConfiguration", ""),
+	} {
+		cfgExpect(t, cfgPut(s, bucketAPath+"?metrics&id=a", body, nil), http.StatusOK, "")
+
+		got := cfgGet(s, bucketAPath+"?metrics&id=a")
+		cfgExpect(t, got, http.StatusOK, "")
+		assert.Equal(t, strings.Contains(body, "<Id>b</Id>"), strings.Contains(string(got.body), "<Id>b</Id>"), name)
+		cfgExpect(t, cfgGet(s, bucketAPath+"?metrics&id=b"), http.StatusNotFound, cfgNoSuchConfig)
+	}
+
+	cfgExpect(t, cfgDelete(s, bucketAPath+"?metrics&id=a"), http.StatusNoContent, "")
 
 	for i := range 102 {
 		id := fmt.Sprintf("m%03d", i)

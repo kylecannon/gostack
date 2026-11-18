@@ -362,6 +362,17 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// NoteStatus records the status of a response the service writes through a
+// connection it took with Hijack, which never reaches WriteHeader. Without it a
+// 4xx on such a response reads as 0, counts as a success and marks state dirty,
+// and a panic after the response began would write a 500 into the closed
+// connection. A service finds it through Unwrap, by this method alone.
+func (w *statusWriter) NoteStatus(code int) {
+	if w.status == 0 && code >= http.StatusOK {
+		w.status = code
+	}
+}
+
 func (w *statusWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK

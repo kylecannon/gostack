@@ -199,6 +199,19 @@ func Test_Gateway_markDirty(t *testing.T) {
 	failing := func(w http.ResponseWriter, _ *request.Context) { w.WriteHeader(http.StatusBadRequest) }
 	panicking := func(http.ResponseWriter, *request.Context) { panic("boom") }
 	custom := func(operation string) bool { return operation == "Purge" }
+	// A service that takes the connection answers without calling WriteHeader,
+	// and tells the gateway the status it sent instead.
+	taken := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			if noter, ok := w.(interface{ NoteStatus(code int) }); ok {
+				noter.NoteStatus(code)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+		}
+	}
 
 	operation := func(op string) func(*testing.T) *http.Request {
 		return func(t *testing.T) *http.Request {
@@ -228,6 +241,14 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "receive", giveServe: okServe, giveRequest: operation("ReceiveMessage")},
 		{name: "an error response", giveServe: failing, giveRequest: operation("SendMessage")},
 		{name: "a panic", giveServe: panicking, giveRequest: operation("SendMessage")},
+		{
+			name: "an error on a taken connection", giveServe: taken(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"),
+		},
+		{
+			name: "a success on a taken connection", giveServe: taken(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
 		{name: "no operation", giveServe: okServe, giveRequest: operation("")},
 		{
 			name: "own rule marks", giveServe: okServe, giveMutating: custom,

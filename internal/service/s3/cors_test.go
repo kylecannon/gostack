@@ -24,6 +24,7 @@ const (
 	reqMethod           = "Access-Control-Request-Method"
 	reqHeaders          = "Access-Control-Request-Headers"
 	resourceBucket      = "BUCKET"
+	resourceObject      = "OBJECT"
 	localOrigin         = "https://localhost:4200"
 
 	corsAllowAll = `<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin>` +
@@ -352,7 +353,7 @@ func TestCORSWildcardOriginSendsNoCredentials(t *testing.T) {
 	})
 	require.Equal(t, http.StatusForbidden, got.status)
 	assert.Equal(t, corsError{
-		Code: codeAccessForbidden, HostID: got.corsErr(t).HostID, Method: http.MethodGet, ResourceType: "OBJECT",
+		Code: codeAccessForbidden, HostID: got.corsErr(t).HostID, Method: http.MethodGet, ResourceType: resourceObject,
 		Message: "CORSResponse: This CORS request is not allowed. This is usually because the evalution of Origin, " +
 			"request method / Access-Control-Request-Method or Access-Control-Request-Headers are not whitelisted " +
 			"by the resource's CORS spec.",

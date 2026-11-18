@@ -71,7 +71,12 @@ func (p *provider) AssumeRole(ctx context.Context, in *api.AssumeRoleInput) (*ap
 		return nil, invalid
 	}
 
-	creds, user := p.assume(rc, *in.RoleArn, *in.RoleSessionName, in.DurationSeconds)
+	tags, conflict := p.sessionTags(rc, in)
+	if conflict != nil {
+		return nil, conflict
+	}
+
+	creds, user := p.assume(rc, *in.RoleArn, *in.RoleSessionName, in.DurationSeconds, tags)
 
 	return &api.AssumeRoleOutput{Credentials: creds, AssumedRoleUser: user, SourceIdentity: in.SourceIdentity}, nil
 }
@@ -96,6 +101,7 @@ func (p *provider) AssumeRoleWithWebIdentity(
 
 	var limits violations
 
+	limits.roleARN(in.RoleArn)
 	limits.name("roleSessionName", in.RoleSessionName, maxSessionNameLength)
 	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
 
@@ -104,7 +110,7 @@ func (p *provider) AssumeRoleWithWebIdentity(
 		return nil, invalid
 	}
 
-	creds, user := p.assume(rc, *in.RoleArn, *in.RoleSessionName, in.DurationSeconds)
+	creds, user := p.assume(rc, *in.RoleArn, *in.RoleSessionName, in.DurationSeconds, nil)
 
 	return &api.AssumeRoleWithWebIdentityOutput{
 		Credentials:     creds,
@@ -133,6 +139,7 @@ func (p *provider) AssumeRoleWithSAML(
 
 	var limits violations
 
+	limits.roleARN(in.RoleArn)
 	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
 
 	invalid := limits.err()
@@ -145,7 +152,7 @@ func (p *provider) AssumeRoleWithSAML(
 		return nil, rejected
 	}
 
-	creds, user := p.assume(rc, *in.RoleArn, parsed.sessionName, in.DurationSeconds)
+	creds, user := p.assume(rc, *in.RoleArn, parsed.sessionName, in.DurationSeconds, nil)
 
 	return &api.AssumeRoleWithSAMLOutput{
 		Credentials:     creds,
@@ -155,6 +162,29 @@ func (p *provider) AssumeRoleWithSAML(
 		Issuer:          new(parsed.issuer),
 		Audience:        new(parsed.audience),
 	}, nil
+}
+
+// GetAccessKeyInfo returns the account an access key ID belongs to, whichever
+// account the caller is. The ID is decoded the way every call's account is, so a
+// key that carries no account answers the default one. LocalStack answers the
+// caller's account.
+func (p *provider) GetAccessKeyInfo(
+	_ context.Context, in *api.GetAccessKeyInfoInput,
+) (*api.GetAccessKeyInfoOutput, error) {
+	if in.AccessKeyId == nil {
+		return nil, nullMember("accessKeyId")
+	}
+
+	var limits violations
+
+	limits.accessKeyID(in.AccessKeyId)
+
+	invalid := limits.err()
+	if invalid != nil {
+		return nil, invalid
+	}
+
+	return &api.GetAccessKeyInfoOutput{Account: new(account.FromAccessKey(*in.AccessKeyId, p.parity()))}, nil
 }
 
 // GetFederationToken issues credentials for a federated user of the caller's
@@ -218,9 +248,10 @@ func (p *provider) GetSessionToken(
 }
 
 // assume issues credentials for roleArn in the account the ARN names, or the
-// caller's when it names none, and remembers who they stand for.
+// caller's when it names none, and remembers who they stand for and the session
+// tags they carry.
 func (p *provider) assume(
-	rc *request.Context, roleArn, sessionName string, duration *int32,
+	rc *request.Context, roleArn, sessionName string, duration *int32, tags []sessionTag,
 ) (*api.Credentials, *api.AssumedRoleUser) {
 	arnPartition, roleAccount, roleName := splitRoleARN(roleArn)
 	if !accountPattern.MatchString(roleAccount) {
@@ -234,7 +265,9 @@ func (p *provider) assume(
 			roleName + "/" + sessionName),
 	}
 
-	p.remember(roleAccount, creds, session{userID: *user.AssumedRoleId, account: roleAccount, arn: *user.Arn})
+	p.remember(roleAccount, creds, session{
+		userID: *user.AssumedRoleId, account: roleAccount, arn: *user.Arn, tags: tags,
+	})
 
 	return creds, user
 }
@@ -274,8 +307,11 @@ func validateAssumeRole(in *api.AssumeRoleInput) *awserr.Error {
 
 	var limits violations
 
+	limits.roleARN(in.RoleArn)
 	limits.name("roleSessionName", in.RoleSessionName, maxSessionNameLength)
 	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
+	limits.tags(in.Tags)
+	limits.transitiveKeys(in.TransitiveTagKeys)
 
 	invalid := limits.err()
 	if invalid != nil {
