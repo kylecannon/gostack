@@ -286,7 +286,7 @@ follows add, migrate, delete.
 | `GET /_gostack/init` | hook status per stage | `/_localstack/init[/<stage>]` |
 | `GET/PATCH /_gostack/config` | runtime config updates; only when `GOSTACK_ENABLE_CONFIG_UPDATES` (or `ENABLE_CONFIG_UPDATES`) is set | `/_localstack/config` (GET/POST) |
 | `GET /_gostack/services` | Capabilities per service: the operations implemented and the total, so coverage is stated honestly | none |
-| `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate | none |
+| `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate. `region=` matches the region a state is stored under, so a global service such as STS, stored under `global`, is cleared only by a reset with no `region` or with `region=global` | none |
 | `POST /_gostack/state/save`, `/_gostack/state/load` | Manual persistence triggers | none |
 | `/_gostack/services/<svc>/...` | Developer endpoints, listed below | `/_aws/<svc>/...` |
 | `/_gostack/debug/pprof/*` | Profiling; only when `DEBUG=1` | none |
