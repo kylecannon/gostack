@@ -101,9 +101,9 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 // loadState hands eng the persisted services and loads their state. A service
 // whose state file is unsafe to touch has been logged and runs without saving;
 // the state routes and the health endpoint say so. It does not stop the others
-// from starting.
+// from starting. S3 takes its assets only once the load has accepted it.
 func loadState(ctx context.Context, services *providers, eng *persist.Engine) error {
-	err := services.persist(eng)
+	assets, err := services.persist(eng)
 	if err != nil {
 		return err
 	}
@@ -112,6 +112,8 @@ func loadState(ctx context.Context, services *providers, eng *persist.Engine) er
 	if err != nil && !errors.Is(err, persist.ErrUnsafe) {
 		return fmt.Errorf("load persisted state: %w", err)
 	}
+
+	services.useAssets(eng, assets)
 
 	return nil
 }

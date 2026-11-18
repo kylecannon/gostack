@@ -73,7 +73,12 @@ type Provider struct {
 	// buckets as a whole: Snapshot, Restore and Reset. CreateBucket and
 	// DeleteBucket hold it for reading from the name claim to the State change,
 	// so neither falls between a restore's swap of the buckets and of the names.
-	// It is taken before State.mu and Bucket.mu, and never held over a body.
+	// Every call that drops a version or a part holds it for reading from before
+	// the drop to after it removes the body: a Restore between the
+	// two could bring back a state that names the body, and the late Remove
+	// would then queue a body the restored state needs. It is taken before
+	// State.mu and Bucket.mu, never twice by one call, and never held over a
+	// body's transfer.
 	transfer sync.RWMutex
 	// restored holds the blob ids the snapshot the last Restore read names,
 	// until Restored hands them to the engine. transfer guards it.
@@ -104,7 +109,8 @@ func New(settings func() Settings, blobs blob.Store) *Provider {
 
 // UseBlobs makes blobs the store S3 keeps its bodies in, in place of the one New
 // was given: a persisted S3 keeps them as assets of the persistence engine. It
-// is called once, before S3 serves or its state loads.
+// is called once, before S3 serves, and after its state loads, since a load
+// can refuse the state file.
 func (p *Provider) UseBlobs(blobs blob.Store) {
 	p.blobs = blobs
 }
@@ -228,7 +234,8 @@ func isControlCall(r *http.Request) bool {
 }
 
 // retire marks a bucket that left its State as gone, so a call that found it
-// before cannot write to it, and removes its bodies.
+// before cannot write to it, and removes its bodies. The caller holds the
+// transfer lock, for reading or writing.
 func (p *Provider) retire(b *Bucket) {
 	for _, id := range b.drop() {
 		_ = p.blobs.Remove(id)

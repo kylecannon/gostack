@@ -32,9 +32,9 @@ const (
 )
 
 // persisted is a gateway serving an S3 persisted under dir, as gostack wires
-// it: the assets open after Register and before Load. The engine never flushes
-// by itself, so a test saves with Flush, and a crash is a second persisted on
-// the same dir with the first never closed.
+// it: the assets open after Register and before Load, and S3 takes them after
+// Load. The engine never flushes by itself, so a test saves with Flush, and a
+// crash is a second persisted on the same dir with the first never closed.
 type persisted struct {
 	*server
 
@@ -74,9 +74,8 @@ func startPersistedAs(t *testing.T, dir string, as func(*s3.Provider) persist.Sn
 	assets, err := eng.Assets(s3Name)
 	require.NoError(t, err)
 	require.NotNil(t, assets)
-	provider.UseBlobs(persist.NewBlobStore(assets))
-
 	require.NoError(t, eng.Load(t.Context()))
+	provider.UseBlobs(persist.NewBlobStore(assets))
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },

@@ -261,6 +261,9 @@ type deletion struct {
 // stays, unless bypass lifts a GOVERNANCE hold. It answers errNoSuchVersion for
 // a version the key does not have and errObjectLocked for one that is held.
 func (p *Provider) deleteFrom(b *Bucket, key, versionID string, bypass bool) (deletion, error) {
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	b.mu.Lock()
 
 	if b.gone {

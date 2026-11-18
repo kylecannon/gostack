@@ -795,11 +795,14 @@ is untouched.
 its state at `<base>/s3/store.json` and its object and part bodies as assets.
 
 - gostack opens S3's assets after the engine registers S3 and before the state
-  loads, and S3 writes every body through `persist.NewBlobStore`, the
-  `blob.Store` over them. An assets directory that is unsafe or cannot be
-  opened, such as on a read-only base directory, leaves S3 off for saving and
-  loading, with its bodies in memory as without persistence. gostack still
-  starts, and the state file already on disk is left as it is.
+  loads, so the load can sweep them. Once the load accepts S3, S3 writes every
+  body through `persist.NewBlobStore`, the `blob.Store` over them. An assets
+  directory that is unsafe or cannot be opened, such as on a read-only base
+  directory, or a state file the load refuses, such as a link that leaves the
+  base directory, leaves S3 off for saving and loading, with its bodies in
+  memory as without persistence: nothing would save or sweep a body written to
+  disk. gostack still starts, and the state file already on disk is left as it
+  is.
 - The snapshot holds every bucket of every account with all of its
   subresources, each key's version chain, and each upload in progress with its
   parts. Bodies are named by blob id. A string that is not valid UTF-8, such as
@@ -819,6 +822,12 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
   removed. A file that does not load leaves S3 empty and removes nothing, since
   the engine sets the file aside and it may name them. The version id sequence
   moves past the newest restored id.
+- A request that drops a version or a part (a delete, an overwrite, an abort,
+  a part uploaded again, a completion, the delete of a bucket) holds the
+  transfer lock for reading from before the drop to after its `Remove`. A
+  restore between the two would bring back a state that names the body, and
+  the late `Remove` would queue it for the next save to delete; held this way,
+  the restore waits, and its load takes the queued removal back.
 - A body missing from disk makes only the version that names it answer 500
   `InternalError` when read, and is logged once per id.
 - A reset scoped to an account or a region removes the bodies of the buckets it

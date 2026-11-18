@@ -182,8 +182,6 @@ func (p *Provider) DeleteBucket(ctx context.Context, in *s3api.DeleteBucketInput
 		return nil, err
 	}
 
-	p.retire(b)
-
 	return &s3api.DeleteBucketOutput{}, nil
 }
 
@@ -206,8 +204,9 @@ func (p *Provider) addBucket(b *Bucket) (string, bool) {
 	return holder, true
 }
 
-// removeBucket takes an empty bucket out of its State, marks it gone and frees
-// its name. The bucket's bodies are the caller's to remove.
+// removeBucket takes an empty bucket out of its State, marks it gone, frees its
+// name and removes the bodies of its uploads, all under one hold of the
+// transfer lock.
 func (p *Provider) removeBucket(b *Bucket) error {
 	p.transfer.RLock()
 	defer p.transfer.RUnlock()
@@ -235,6 +234,7 @@ func (p *Provider) removeBucket(b *Bucket) error {
 	s.mu.Unlock()
 
 	p.names.release(b.Name, b.Account)
+	p.retire(b)
 
 	return nil
 }

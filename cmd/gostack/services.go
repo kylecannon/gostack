@@ -101,15 +101,13 @@ func (p *providers) close() {
 }
 
 // persist hands eng the services whose state is saved. The engine leaves out
-// the ones PERSIST_* does not enable. A persisted S3 then keeps its bodies as
-// the engine's assets, opened here: after S3 is registered, and before its
-// state loads or is first saved, so no body is written anywhere else. With S3
-// not persisted, or its assets directory unsafe or impossible to make, such as
-// on a read-only base dir, the bodies stay in the ephemeral store: the engine
-// has logged it, neither loads nor saves S3, and health reports S3 as not
-// persisted. Only an S3 the engine cannot give assets to at all, a wiring
-// error, stops the start.
-func (p *providers) persist(eng *persist.Engine) error {
+// the ones PERSIST_* does not enable. A persisted S3's assets are opened here:
+// after S3 is registered and before its state loads, so the load can sweep
+// them. It returns them, nil when S3 is not persisted or its assets directory
+// is unsafe or impossible to make, such as on a read-only base dir: the engine
+// has logged it and neither loads nor saves S3. Only an S3 the engine cannot
+// give assets to at all, a wiring error, stops the start.
+func (p *providers) persist(eng *persist.Engine) (*persist.Assets, error) {
 	for i := range p.regs {
 		if snapshotter := p.regs[i].Persist; snapshotter != nil {
 			eng.Register(p.regs[i].Metadata.Name, snapshotter)
@@ -122,13 +120,30 @@ func (p *providers) persist(eng *persist.Engine) error {
 	case errors.Is(err, persist.ErrUnsafe):
 		slog.Error("s3 bodies are not persisted", "error", err)
 	case err != nil:
-		return fmt.Errorf("persist s3: %w", err)
-	case assets != nil:
-		p.s3.UseBlobs(persist.NewBlobStore(assets))
+		return nil, fmt.Errorf("persist s3: %w", err)
 	default:
 	}
 
-	return nil
+	return assets, nil
+}
+
+// useAssets makes S3 keep its bodies as assets once the load has run, and
+// only when the engine still persists S3: one whose assets could not be opened,
+// or whose state file the load refused, keeps its bodies in the ephemeral
+// store, since nothing would save or sweep them, and health reports S3 as not
+// persisted. It runs before S3 serves.
+func (p *providers) useAssets(eng *persist.Engine, assets *persist.Assets) {
+	if assets == nil {
+		return
+	}
+
+	if !eng.Enabled(s3Service) {
+		slog.Error("s3 bodies are not persisted: its state file was refused")
+
+		return
+	}
+
+	p.s3.UseBlobs(persist.NewBlobStore(assets))
 }
 
 // sqsSettings maps the live configuration onto the settings of the SQS
