@@ -56,6 +56,7 @@ type gostack struct {
 	cmd    *exec.Cmd
 	base   string
 	stdout *syncBuffer
+	stderr *syncBuffer
 	exited chan error
 }
 
@@ -101,8 +102,8 @@ func startGostack(t *testing.T, env ...string) *gostack {
 	}, env...)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGKILL) }
 
-	g := &gostack{cmd: cmd, stdout: &syncBuffer{}, exited: make(chan error, 1)}
-	stderr := &syncBuffer{}
+	g := &gostack{cmd: cmd, stdout: &syncBuffer{}, stderr: &syncBuffer{}, exited: make(chan error, 1)}
+	stderr := g.stderr
 	cmd.Stdout = g.stdout
 	cmd.Stderr = stderr
 

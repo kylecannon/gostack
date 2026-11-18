@@ -440,22 +440,28 @@ cites the lines.
   tries them.
 - `PERSIST_FREQUENCY`: decimal seconds, defaults to 10. Zero or a negative number
   saves as soon as a service changes, with a timer armed at zero and never a
-  polling loop. A value Python's `float()` rejects is ignored with a warning, and
-  so are `nan` and `inf`.
+  polling loop. A value Python's `float()` rejects is ignored with a warning,
+  Go's hexadecimal floats (`0x1p4`) included, and so are `nan` and `inf`.
 - `PERSIST_BASE_DIR`: defaults to `/persisted-data`.
 
 **Behavior:**
 
 - After any successful request whose operation does not start with Get, Head,
   Query, List or Describe, the service is marked dirty.
-- A flush timer is armed only when a service is dirty.
+- A flush timer is armed only when a service is dirty. At most one flush runs
+  or waits at a time: a change made during a flush is saved by the flush that
+  one schedules when it ends.
 - State is also saved on shutdown.
-- Writes are atomic: temp file, fsync, rename. This fixes localstack-persist's
-  non-atomic writes and rustack's save-only-on-shutdown.
+- Writes are atomic. The snapshot streams through a buffer into a temp file
+  next to each state file, then the temp file is fsynced and renamed over it.
+  The state is never held in memory a second time. A failed snapshot removes the
+  temp files and leaves the state files as they were. This fixes
+  localstack-persist's non-atomic writes and rustack's save-only-on-shutdown.
 - A load never overlaps a save, so a state file on disk is always a whole old or
-  a whole new state.
-- If `PERSIST_FREQUENCY` is zero, a failed save is retried after one second, not
-  at once.
+  a whole new state. A save, load or shutdown that waits for the other stops
+  waiting when its deadline passes.
+- A failed save is retried no sooner than one second after it failed, even when
+  `PERSIST_FREQUENCY` is zero, and until it succeeds.
 
 **Loading and unloadable files:**
 
@@ -463,16 +469,37 @@ cites the lines.
   any known format that is not configured. The first file that restores wins. A
   missing file is skipped.
 - A file that exists but fails to load (an unknown envelope version, a truncated
-  or garbled file, one that cannot be read) is never overwritten. The engine
-  renames it to `<name>.unloadable-<UTC timestamp>` in the same directory, logs an
-  error naming both paths, and tries the next format. A service with no good file
-  starts empty.
-- If the rename fails (a read-only directory, `EACCES`), saving is off for that
-  service until the process restarts: the engine logs an error, never writes the
-  file, and `/_gostack/health` reports `persisted: false` for the service.
-- A `store.*` path that is a symlink is read through the link. A save writes the
-  temp file, fsyncs and renames in the target's directory, so the link stays. A
-  link whose target fails to load is the one moved aside; its target is untouched.
+  or garbled file, one that cannot be read, one whose restore panics) is never
+  overwritten. The engine renames it to `<name>.unloadable-<UTC timestamp>` in
+  the same directory, logs an error naming both paths, with the stack for a
+  panic, and tries the next format. A service with no good file starts empty.
+- If the rename fails (a read-only directory, `EACCES`), saving and loading are
+  off for that service until the process restarts: the engine logs an error and
+  never writes the file, and `/_gostack/health` reports `persisted: false` for
+  the service. Every later save or load says so: `POST /_gostack/state/save` and
+  `/_gostack/state/load` answer 500 with an error naming the service. The other
+  services keep saving, and gostack still starts.
+
+**Confinement.** Every state file operation goes through an `os.Root` opened on
+the base directory: reads, temp files, fsync, renames, moving a file aside and
+creating directories. A link in the volume cannot send a read or a write
+outside the base directory.
+
+- A relative symbolic link that stays inside the base directory works as the
+  kernel resolves it, a `..` after a directory link included. A save writes the
+  temp file in the target's directory and renames it there, so the link stays.
+- A link that leaves the base directory is refused, and so is every absolute
+  link, even one that points inside it: `os.Root` does not follow absolute
+  links, and the host path and the container path of a mount usually differ
+  anyway. Use a relative link. Load checks the path of every format before it
+  reads any, logs an error naming the link, and the service is neither loaded
+  nor saved, as above. The link and whatever it points at are left alone.
+- A temp file is created with `O_EXCL` under a random name, so a file or link
+  planted under a temp name is never opened. Leftover temp files, from a crash
+  or planted, are deleted after the next save; a link among them is removed as a
+  link.
+- A link whose target fails to load is the one moved aside; its target is
+  untouched.
 
 **Format:**
 

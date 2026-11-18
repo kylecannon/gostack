@@ -493,6 +493,8 @@ func Test_Engine_Flush_AttemptsEveryDirtyService(t *testing.T) {
 	e.Register(sts, good)
 	e.MarkDirty(sqs)
 	e.MarkDirty(sts)
+	// The failed flush re-arms the timer; Close stops it.
+	t.Cleanup(func() { _ = e.Close(t.Context()) })
 
 	require.ErrorIs(t, e.Flush(t.Context()), errSnapshot)
 	assert.Equal(t, "state:g", readFile(t, filepath.Join(base, sts, jsonFile)))
@@ -524,6 +526,8 @@ func Test_Engine_Flush_BaseDirIsAFile(t *testing.T) {
 	s := &fake{state: stateX}
 	e.Register(sqs, s)
 	e.MarkDirty(sqs)
+	// The failed flush re-arms the timer; Close stops it.
+	t.Cleanup(func() { _ = e.Close(t.Context()) })
 
 	require.Error(t, e.Flush(t.Context()))
 	assert.Zero(t, s.count())

@@ -292,9 +292,16 @@ func parsePersistBool(value string) (enabled, ok bool) {
 // so those mean "write when something changed". Python also parses "nan" and
 // "inf": nan waits no time, and inf makes the wait raise OverflowError, which
 // ends the saving thread. Neither is a useful setting, so both are not valid
-// here.
+// here. ParseFloat also reads Go's hexadecimal floats ("0x1p4"), which float()
+// rejects, so those are not valid either; every other text float() rejects,
+// ParseFloat rejects too.
 func parsePersistFrequency(value string) (time.Duration, bool) {
-	seconds, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	value = strings.TrimSpace(value)
+	unsigned := strings.TrimLeft(value, "+-")
+	if strings.HasPrefix(unsigned, "0x") || strings.HasPrefix(unsigned, "0X") {
+		return 0, false
+	}
+	seconds, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		return 0, false
 	}

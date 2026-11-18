@@ -1,12 +1,16 @@
 package persist
 
 import (
+	"bufio"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -14,6 +18,9 @@ const (
 	dirMode  fs.FileMode = 0o750
 	fileMode fs.FileMode = 0o600
 
+	// tempSuffix starts the name of a temp file after the name of the file it
+	// replaces. A temp file is <name>.tmp-<random>; builds before SQ-52 used
+	// <name>.tmp. Both are swept after a save.
 	tempSuffix = ".tmp"
 
 	// unloadableInfix joins a state file's name and the time it was moved aside.
@@ -22,101 +29,154 @@ const (
 	// characters that file systems reject.
 	unloadableTime = "20060102T150405Z"
 
-	// maxLinkHops bounds how many symbolic links locate follows, as the kernel does.
+	// maxLinkHops bounds how many symbolic links a save follows to the file it
+	// replaces, as the kernel bounds a path lookup.
 	maxLinkHops = 40
+
+	// writeBuffer is the buffer between a Snapshot and its temp files.
+	writeBuffer = 64 << 10
 )
 
-// stateFile is where a state file really lives: name inside the directory root.
-type stateFile struct {
-	root *os.Root
-	name string
-	// owned is true when root was opened for this file and must be closed.
-	owned bool
+// errLinkLeaves is the reason a state file is refused when it is, or is reached
+// through, a symbolic link that leaves the base dir. os.Root refuses every
+// absolute link as well, even one that points inside the base dir.
+var errLinkLeaves = errors.New(
+	"a link on the way to the state file leaves the base dir or is absolute; use a relative link inside the base dir")
+
+// leaves reports whether err is a path refused for leaving root: errLinkLeaves,
+// or os.Root's own refusal. The os package does not export that error, so it is
+// compared with the one root returns for "..", which always leaves the root.
+func leaves(root *os.Root, err error) bool {
+	if errors.Is(err, errLinkLeaves) {
+		return true
+	}
+
+	var escape *fs.PathError
+
+	_, probe := root.Lstat("..")
+
+	return errors.As(probe, &escape) && errors.Is(err, escape.Err)
 }
 
-func (s stateFile) close() {
-	if s.owned {
-		_ = s.root.Close()
+// dirOf returns file up to its last slash, without cleaning it, so that a ".."
+// after a symbolic link is left for os.Root to resolve as the kernel does.
+func dirOf(file string) string {
+	dir, _, found := strings.CutLast(file, "/")
+	if !found {
+		return "."
 	}
+
+	return dir
 }
 
-// locate finds where the state file at file, relative to root, lives. A regular
-// file or a missing one lives in root. A symbolic link lives at its target, which
-// may be anywhere the operator pointed it, so the result is the target's own
-// directory: reads follow the link, and a write replaces the target with a temp
-// file and a rename in that directory, which leaves the link in place.
-// base is the path root was opened at, which a relative link target is read
-// against.
-func locate(root *os.Root, base, file string) (stateFile, error) {
-	here := stateFile{root: root, name: file}
-
-	info, err := root.Lstat(file)
-	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
-		// Missing, unreadable or regular: the caller's own open says which.
-		return here, nil //nolint:nilerr // an Lstat error resurfaces when the caller opens the file
+// baseOf returns file after its last slash.
+func baseOf(file string) string {
+	_, base, found := strings.CutLast(file, "/")
+	if !found {
+		return file
 	}
 
-	link, err := root.Readlink(file)
-	if err != nil {
-		return here, fmt.Errorf("read link %s: %w", file, err)
-	}
+	return base
+}
 
-	path := resolveLink(filepath.Join(base, filepath.Dir(file)), link)
-
+// target returns the path, relative to root, of the file that a save of file
+// replaces: file itself, or the file its symbolic links lead to, so that the
+// links stay. Each link's text is joined to the link's directory without
+// cleaning, and root resolves the result, so a ".." after a directory link goes
+// where the kernel would take it, and a path that leaves root is refused. A
+// missing file is its own target.
+func target(root *os.Root, file string) (string, error) {
 	for range maxLinkHops {
-		info, err = os.Lstat(path)
-		if err != nil || info.Mode()&fs.ModeSymlink == 0 {
-			dir, openErr := os.OpenRoot(filepath.Dir(path))
-			if openErr != nil {
-				return here, fmt.Errorf("open directory of link target: %w", openErr)
-			}
+		info, err := root.Lstat(file)
 
-			return stateFile{root: dir, name: filepath.Base(path), owned: true}, nil
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return file, nil
+		case err != nil:
+			return "", fmt.Errorf("look up %s: %w", file, err)
+		case info.Mode()&fs.ModeSymlink == 0:
+			return file, nil
 		}
 
-		link, err = os.Readlink(path)
+		link, err := root.Readlink(file)
 		if err != nil {
-			return here, fmt.Errorf("read link %s: %w", path, err)
+			return "", fmt.Errorf("read link %s: %w", file, err)
 		}
 
-		path = resolveLink(filepath.Dir(path), link)
+		if filepath.IsAbs(link) {
+			return "", fmt.Errorf("%s -> %s: %w", file, link, errLinkLeaves)
+		}
+
+		file = dirOf(file) + "/" + link
 	}
 
-	return here, fmt.Errorf("follow link %s: too many levels of symbolic links", file)
+	return "", fmt.Errorf("follow %s: %w", file, syscall.ELOOP)
 }
 
-// resolveLink returns the path a link with the text target points at, when the
-// link sits in the directory dir.
-func resolveLink(dir, target string) string {
-	if filepath.IsAbs(target) {
-		return target
-	}
-
-	return filepath.Join(dir, target)
+// stateWriter writes one state file: a temp file next to the file it replaces,
+// created with O_EXCL under a name nobody can guess, so a file or link planted
+// under a temp name is never opened. It is renamed over the target once it is
+// complete and synced.
+type stateWriter struct {
+	root   *os.Root
+	target string
+	tmp    string
+	f      *os.File
+	buf    *bufio.Writer
 }
 
-// writeState replaces the state file at file, relative to root, with data. A
-// symbolic link keeps pointing at the file that now holds the new state.
-// base is the path root was opened at.
-func writeState(root *os.Root, base, file string, data []byte) error {
-	loc, err := locate(root, base, file)
+// createState opens the temp file for a save of file.
+func createState(root *os.Root, file string) (*stateWriter, error) {
+	path, err := target(root, file)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	defer loc.close()
+	tmp := dirOf(path) + "/" + baseOf(path) + tempSuffix + "-" + rand.Text()
 
-	err = writeAtomic(loc.root, loc.name, data)
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("create %s: %w", tmp, err)
 	}
 
-	if loc.owned {
-		// The rename happened in the target's directory, not the service's.
-		return syncDir(loc.root, ".")
+	return &stateWriter{root: root, target: path, tmp: tmp, f: f, buf: bufio.NewWriterSize(f, writeBuffer)}, nil
+}
+
+// finish writes out the buffer, then fsyncs and closes the temp file.
+func (w *stateWriter) finish() error {
+	err := w.buf.Flush()
+	if err != nil {
+		return fmt.Errorf("write %s: %w", w.tmp, err)
+	}
+
+	err = w.f.Sync()
+	if err != nil {
+		return fmt.Errorf("sync %s: %w", w.tmp, err)
+	}
+
+	err = w.f.Close()
+	if err != nil {
+		return fmt.Errorf("close %s: %w", w.tmp, err)
 	}
 
 	return nil
+}
+
+// commit renames the temp file over the target.
+func (w *stateWriter) commit() error {
+	err := w.root.Rename(w.tmp, w.target)
+	if err != nil {
+		return fmt.Errorf("rename %s: %w", w.tmp, err)
+	}
+
+	return nil
+}
+
+// discard closes and removes a temp file that will not be committed. The file
+// it was to replace is untouched.
+func (w *stateWriter) discard() {
+	_ = w.f.Close()
+	_ = w.root.Remove(w.tmp)
 }
 
 // moveAside renames file to file + ".unloadable-" + the UTC time in the same
@@ -150,58 +210,52 @@ func moveAside(root *os.Root, file string, at time.Time) (string, error) {
 	}
 }
 
-// writeAtomic replaces name with data: it writes name+".tmp" in the same
-// directory, fsyncs it, then renames it over name. A crash before the rename
-// leaves name as it was and a temp file that the next write replaces.
-func writeAtomic(root *os.Root, name string, data []byte) (err error) {
-	tmp := name + tempSuffix
-
-	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+// removeTemps deletes the temp files of the file named name in dir, which a
+// crash between creating and renaming one leaves behind. A temp name that is a
+// link is removed as a link; its target is untouched.
+func removeTemps(root *os.Root, dir, name string) error {
+	d, err := root.Open(dir)
 	if err != nil {
-		return fmt.Errorf("create %s: %w", tmp, err)
+		return fmt.Errorf("open %s: %w", dir, err)
 	}
 
-	defer func() {
-		if err != nil {
-			_ = root.Remove(tmp)
+	entries, err := d.ReadDir(-1)
+	_ = d.Close()
+
+	if err != nil {
+		return fmt.Errorf("read %s: %w", dir, err)
+	}
+
+	for _, entry := range entries {
+		temp := name + tempSuffix
+		if entry.Name() != temp && !strings.HasPrefix(entry.Name(), temp+"-") {
+			continue
 		}
-	}()
 
-	_, err = f.Write(data)
-	if err != nil {
-		_ = f.Close()
-
-		return fmt.Errorf("write %s: %w", tmp, err)
-	}
-
-	err = f.Sync()
-	if err != nil {
-		_ = f.Close()
-
-		return fmt.Errorf("sync %s: %w", tmp, err)
-	}
-
-	err = f.Close()
-	if err != nil {
-		return fmt.Errorf("close %s: %w", tmp, err)
-	}
-
-	err = root.Rename(tmp, name)
-	if err != nil {
-		return fmt.Errorf("rename %s: %w", tmp, err)
+		err = removeIfPresent(root, dir+"/"+entry.Name())
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// removeFile deletes name and its temp file. A file that is already gone is not
+// removeFile deletes file and its temp files. A file that is already gone is not
 // an error.
-func removeFile(root *os.Root, name string) error {
-	for _, n := range []string{name, name + tempSuffix} {
-		err := root.Remove(n)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove %s: %w", n, err)
-		}
+func removeFile(root *os.Root, file string) error {
+	err := removeIfPresent(root, file)
+	if err != nil {
+		return err
+	}
+
+	return removeTemps(root, dirOf(file), baseOf(file))
+}
+
+func removeIfPresent(root *os.Root, file string) error {
+	err := root.Remove(file)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", file, err)
 	}
 
 	return nil

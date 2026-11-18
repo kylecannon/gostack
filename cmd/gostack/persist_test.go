@@ -383,3 +383,58 @@ func Test_gostack_compat_paths_can_be_turned_off(t *testing.T) {
 		})
 	}
 }
+
+// Test_gostack_refuses_a_state_link_out_of_the_base_dir is the ld.so.preload
+// case with a sentinel in place of /etc/ld.so.preload: sqs/store.json is a
+// link to a file outside the base dir that does not exist yet. gostack starts
+// anyway, never creates the file, and the state routes and the health endpoint
+// say that SQS state is not saved.
+func Test_gostack_refuses_a_state_link_out_of_the_base_dir(t *testing.T) {
+	dir, outside := t.TempDir(), t.TempDir()
+	sentinel := filepath.Join(outside, "ld.so.preload")
+	link := filepath.Join(dir, "sqs", "store.json")
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o750))
+	require.NoError(t, os.Symlink(sentinel, link))
+
+	g := startGostack(t, "PERSIST_BASE_DIR="+dir, "PERSIST_FREQUENCY=0")
+
+	queue := g.sqs(t, opCreateQueue, map[string]any{fieldQueueName: queueStandard}).QueueURL
+	g.sqs(t, "SendMessage", map[string]any{fieldQueueURL: queue, fieldBody: "hi " + dir + "/evil.so there"})
+
+	for _, path := range []string{"/_gostack/state/save", "/_gostack/state/load"} {
+		status, body := g.do(t, http.MethodPost, path, "")
+		assert.Equal(t, http.StatusInternalServerError, status, "%s answers %s", path, body)
+		assert.Contains(t, body, "sqs", path)
+	}
+
+	status, body := g.do(t, http.MethodGet, "/_gostack/health", "")
+	require.Equal(t, http.StatusOK, status, body)
+
+	var health struct {
+		Services map[string]struct {
+			Persisted bool `json:"persisted"`
+		} `json:"services"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(body), &health))
+	assert.False(t, health.Services["sqs"].Persisted, body)
+	assert.True(t, health.Services["sts"].Persisted, body)
+
+	assert.Contains(t, g.stderr.String(), link, "the log names the refused link")
+	assert.NoFileExists(t, sentinel)
+	assert.Empty(t, mustReadDir(t, outside), "nothing is written outside the base dir")
+
+	target, err := os.Readlink(link)
+	require.NoError(t, err)
+	assert.Equal(t, sentinel, target, "the link is left as it was")
+}
+
+func mustReadDir(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	return entries
+}

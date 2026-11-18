@@ -146,6 +146,48 @@ func Test_Engine_Load_QuarantinesNeverReplaceEarlierOnes(t *testing.T) {
 	assert.ElementsMatch(t, []string{"first", "second", "third"}, kept)
 }
 
+// panicking is a Snapshotter whose Restore panics, as SQS's did on a null entry
+// in its state file.
+type panicking struct {
+	fake
+}
+
+func (*panicking) Restore(io.Reader) error {
+	panic("restore blew up on a null entry")
+}
+
+func Test_Engine_Load_RestorePanicIsAnUnloadableFile(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, sqs)
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+
+	bad := `{"queues":[null]}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, jsonFile), []byte(bad), 0o600))
+
+	var logs syncBuffer
+
+	e := persist.New(loggedCfg(base, &logs))
+	s := &panicking{}
+	e.Register(sqs, s)
+	t.Cleanup(func() { _ = e.Close(t.Context()) })
+
+	require.NoError(t, e.Load(t.Context()), "the panic is an unloadable file, not a crash")
+
+	moved := quarantined(t, dir, jsonFile)
+	require.Len(t, moved, 1, "the file is moved aside")
+	assert.Equal(t, bad, readFile(t, moved[0]))
+	assert.Empty(t, s.get(), "the service starts empty")
+	assert.Contains(t, logs.String(), "restore blew up on a null entry")
+	assert.Contains(t, logs.String(), "restoreFile", "the log carries the stack")
+	assert.True(t, e.Enabled(sqs), "saving stays on")
+
+	s.set(stateB)
+	e.MarkDirty(sqs)
+	require.NoError(t, e.Flush(t.Context()))
+	assert.Equal(t, stateB, readFile(t, filepath.Join(dir, jsonFile)), "later saves work")
+	assert.Equal(t, bad, readFile(t, moved[0]), "and leave the moved file alone")
+}
+
 func Test_Engine_Load_RenameFailureTurnsSavingOff(t *testing.T) {
 	skipIfRoot(t)
 
@@ -169,14 +211,20 @@ func Test_Engine_Load_RenameFailureTurnsSavingOff(t *testing.T) {
 	e.Register(sqs, s)
 	e.Register(sts, other)
 
-	require.NoError(t, e.Load(t.Context()))
+	err := e.Load(t.Context())
+	require.Error(t, err, "Load does not report success for a service it could not load")
+	assert.Contains(t, err.Error(), sqs)
+	assert.NotContains(t, err.Error(), sts)
 	assert.Contains(t, logs.String(), "level=ERROR")
 	assert.False(t, e.Enabled(sqs), "the health endpoint reports persisted: false")
 	assert.True(t, e.Enabled(sts))
 
 	e.MarkDirty(sqs)
 	e.MarkDirty(sts)
-	require.NoError(t, e.Flush(t.Context()))
+
+	err = e.Flush(t.Context())
+	require.Error(t, err, "nor does Flush, for a service it does not save")
+	assert.Contains(t, err.Error(), sqs)
 
 	assert.Equal(t, original, []byte(readFile(t, filepath.Join(broken, jsonFile))), "the file is never written")
 	assert.Equal(t, []string{jsonFile}, names(t, broken))
@@ -184,7 +232,8 @@ func Test_Engine_Load_RenameFailureTurnsSavingOff(t *testing.T) {
 	assert.Equal(t, 1, other.count())
 	assert.Zero(t, s.count(), "a service whose saving is off is not even snapshotted")
 
-	require.NoError(t, e.Close(t.Context()))
+	require.Error(t, e.Load(t.Context()), "a later load still says so")
+	require.Error(t, e.Close(t.Context()))
 	assert.Equal(t, original, []byte(readFile(t, filepath.Join(broken, jsonFile))), "nor at shutdown")
 }
 
@@ -289,35 +338,9 @@ func Test_Engine_Load_FallsBackAcrossFormats(t *testing.T) {
 	}
 }
 
+// Test_Engine_Symlinks covers links that stay inside the base dir; the ones
+// that leave it are in confine_test.go.
 func Test_Engine_Symlinks(t *testing.T) {
-	t.Run("a link is loaded through and written through", func(t *testing.T) {
-		base, elsewhere := t.TempDir(), t.TempDir()
-		dir := filepath.Join(base, sqs)
-		require.NoError(t, os.MkdirAll(dir, 0o750))
-
-		target := filepath.Join(elsewhere, "real.json")
-		require.NoError(t, os.WriteFile(target, []byte(stateA), 0o600))
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, jsonFile)))
-
-		e := persist.New(baseCfg(base))
-		s := &fake{}
-		e.Register(sqs, s)
-
-		require.NoError(t, e.Load(t.Context()))
-		assert.Equal(t, stateA, s.get(), "loaded through the link")
-
-		s.set(stateB)
-		e.MarkDirty(sqs)
-		require.NoError(t, e.Flush(t.Context()))
-
-		info, err := os.Lstat(filepath.Join(dir, jsonFile))
-		require.NoError(t, err)
-		assert.NotZero(t, info.Mode()&os.ModeSymlink, "the link is kept")
-		assert.Equal(t, stateB, readFile(t, target), "the target holds the new state")
-		assert.Equal(t, []string{"real.json"}, names(t, elsewhere), "the temp file is gone")
-		assert.Equal(t, []string{jsonFile}, names(t, dir))
-	})
-
 	t.Run("a relative link inside the base dir", func(t *testing.T) {
 		base := t.TempDir()
 		dir := filepath.Join(base, sqs)
@@ -341,15 +364,51 @@ func Test_Engine_Symlinks(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join("..", "shared", "real.json"), target)
 		assert.Equal(t, stateB, readFile(t, filepath.Join(base, "shared", "real.json")))
+		assert.Equal(t, []string{"real.json"}, names(t, filepath.Join(base, "shared")), "the temp file is gone")
+		assert.Equal(t, []string{jsonFile}, names(t, dir))
+	})
+
+	t.Run("dot-dot after a directory link resolves as the kernel does", func(t *testing.T) {
+		base := t.TempDir()
+		dir := filepath.Join(base, sqs)
+		shared := filepath.Join(base, "shared")
+		require.NoError(t, os.MkdirAll(filepath.Join(shared, "dir"), 0o750))
+		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(shared, "real.json"), []byte(stateA), 0o600))
+
+		// The kernel follows insub to shared/dir, and .. from there is shared, so
+		// the link reads shared/real.json. Read as text it would be sqs/real.json.
+		require.NoError(t, os.Symlink(filepath.Join("..", "shared", "dir"), filepath.Join(dir, "insub")))
+		require.NoError(t, os.Symlink("insub/../real.json", filepath.Join(dir, jsonFile)))
+
+		e := persist.New(baseCfg(base))
+		s := &fake{}
+		e.Register(sqs, s)
+
+		require.NoError(t, e.Load(t.Context()))
+		assert.Equal(t, stateA, s.get(), "loaded from the file the kernel resolves to")
+
+		s.set(stateB)
+		e.MarkDirty(sqs)
+		require.NoError(t, e.Flush(t.Context()))
+
+		assert.Equal(t, stateB, readFile(t, filepath.Join(shared, "real.json")), "saved to the same file")
+		assert.Equal(t, []string{"dir", "real.json"}, names(t, shared))
+		assert.Equal(t, []string{"insub", jsonFile}, names(t, dir), "no sqs/real.json appears")
+
+		target, err := os.Readlink(filepath.Join(dir, jsonFile))
+		require.NoError(t, err)
+		assert.Equal(t, "insub/../real.json", target, "the link is kept")
 	})
 
 	t.Run("a link to a missing target is created on the first save", func(t *testing.T) {
-		base, elsewhere := t.TempDir(), t.TempDir()
+		base := t.TempDir()
 		dir := filepath.Join(base, sqs)
 		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, os.MkdirAll(filepath.Join(base, "shared"), 0o750))
 
-		target := filepath.Join(elsewhere, "new.json")
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, jsonFile)))
+		target := filepath.Join(base, "shared", "new.json")
+		require.NoError(t, os.Symlink(filepath.Join("..", "shared", "new.json"), filepath.Join(dir, jsonFile)))
 
 		e := persist.New(baseCfg(base))
 		s := &fake{state: stateA}
@@ -365,13 +424,15 @@ func Test_Engine_Symlinks(t *testing.T) {
 	})
 
 	t.Run("an unloadable target moves the link, not the target", func(t *testing.T) {
-		base, elsewhere := t.TempDir(), t.TempDir()
+		base := t.TempDir()
 		dir := filepath.Join(base, sqs)
 		require.NoError(t, os.MkdirAll(dir, 0o750))
+		require.NoError(t, os.MkdirAll(filepath.Join(base, "shared"), 0o750))
 
-		target := filepath.Join(elsewhere, "real.json")
+		target := filepath.Join(base, "shared", "real.json")
+		text := filepath.Join("..", "shared", "real.json")
 		require.NoError(t, os.WriteFile(target, []byte("garbage"), 0o600))
-		require.NoError(t, os.Symlink(target, filepath.Join(dir, jsonFile)))
+		require.NoError(t, os.Symlink(text, filepath.Join(dir, jsonFile)))
 
 		e := persist.New(baseCfg(base))
 		s := &fake{}
@@ -385,7 +446,7 @@ func Test_Engine_Symlinks(t *testing.T) {
 
 		dest, err := os.Readlink(moved[0])
 		require.NoError(t, err)
-		assert.Equal(t, target, dest, "the moved link still points at the original bytes")
+		assert.Equal(t, text, dest, "the moved link still points at the original bytes")
 
 		s.set(stateB)
 		e.MarkDirty(sqs)

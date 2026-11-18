@@ -256,3 +256,80 @@ func Test_Config_PersistConfig(t *testing.T) {
 		require.Equal(t, persist.StateDir, persist.New(cfg.PersistConfig()).BaseDir())
 	})
 }
+
+// Test_parsePersistFrequency_PythonFloat checks PERSIST_FREQUENCY against what
+// Python 3.14's float(value.strip()) does with the same text. Every value
+// float() rejects is rejected here too, so the default stays. Go's ParseFloat
+// also reads hexadecimal floats, which float() does not. nan, inf and 1e400
+// parse in Python and are refused here on purpose (persist-parity_internal_test.go).
+func Test_parsePersistFrequency_PythonFloat(t *testing.T) {
+	tests := []struct {
+		give    string
+		wantOK  bool
+		wantDur time.Duration
+	}{
+		// float() rejects these.
+		{give: "0x1p4"},
+		{give: "0X1P4"},
+		{give: "-0x1p4"},
+		{give: "+0x1p4"},
+		{give: " 0x1p4 "},
+		{give: "0x.8p1"},
+		{give: "0x1.8p1"},
+		{give: "0x_1p4"},
+		{give: "0x1p+4"},
+		{give: "0x10"},
+		{give: "0b1"},
+		{give: "0o7"},
+		{give: "1__0"},
+		{give: "_1"},
+		{give: "1_"},
+		{give: "1_.5"},
+		{give: "1._5"},
+		{give: "1_e5"},
+		{give: "1e_5"},
+		{give: "1e"},
+		{give: "e5"},
+		{give: "."},
+		{give: ".e5"},
+		{give: "1.5e"},
+		{give: "++1"},
+		{give: "+-1"},
+		{give: "1 2"},
+		{give: "1,5"},
+		{give: "10s"},
+		{give: "infinityy"},
+		{give: "nanq"},
+		// float() reads these, and so does gostack.
+		{give: "16", wantOK: true, wantDur: 16 * time.Second},
+		{give: "1_0", wantOK: true, wantDur: 10 * time.Second},
+		{give: "1_000.5", wantOK: true, wantDur: 1000500 * time.Millisecond},
+		{give: "1e0_1", wantOK: true, wantDur: 10 * time.Second},
+		{give: "0_1", wantOK: true, wantDur: time.Second},
+		{give: "007", wantOK: true, wantDur: 7 * time.Second},
+		{give: ".5", wantOK: true, wantDur: 500 * time.Millisecond},
+		{give: "5.", wantOK: true, wantDur: 5 * time.Second},
+		{give: "+.5", wantOK: true, wantDur: 500 * time.Millisecond},
+		{give: "1.e1", wantOK: true, wantDur: 10 * time.Second},
+		{give: "1E1", wantOK: true, wantDur: 10 * time.Second},
+		{give: "1e-400", wantOK: true},
+		{give: "-.5", wantOK: true},
+		{give: "-0", wantOK: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.give, func(t *testing.T) {
+			got, ok := parsePersistFrequency(tt.give)
+
+			require.Equal(t, tt.wantOK, ok)
+			require.Equal(t, tt.wantDur, got)
+
+			parsed, warnings := parsePersist([]string{"PERSIST_FREQUENCY=" + tt.give})
+			if tt.wantOK {
+				require.Empty(t, warnings)
+			} else {
+				require.Len(t, warnings, 1, "a rejected value is ignored with a warning")
+				require.Equal(t, DefaultPersistFrequency, parsed.Frequency, "and the default stays")
+			}
+		})
+	}
+}

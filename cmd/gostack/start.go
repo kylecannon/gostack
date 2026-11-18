@@ -45,8 +45,11 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	// shutdown and a move task's final state are saved.
 	defer closeEngine(ctx, eng, services)
 
+	// A service whose state file is unsafe to touch has been logged and runs
+	// without saving; the state routes and the health endpoint say so. It does not
+	// stop the others from starting.
 	err := eng.Load(ctx)
-	if err != nil {
+	if err != nil && !errors.Is(err, persist.ErrUnsafe) {
 		return fmt.Errorf("load persisted state: %w", err)
 	}
 

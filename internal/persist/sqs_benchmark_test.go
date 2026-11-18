@@ -6,11 +6,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	sqsservice "github.com/kylecannon/gostack/internal/service/sqs"
@@ -112,6 +116,46 @@ func BenchmarkSQSSnapshot(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkSQSFlush saves the whole SQS store through the engine, as a flush
+// does. Set beside BenchmarkSQSSnapshot, its B/op shows what the engine holds on
+// top of the snapshot itself.
+func BenchmarkSQSFlush(b *testing.B) {
+	for _, c := range snapshotCells {
+		b.Run(snapshotName(c.queues, c.messages), func(b *testing.B) {
+			p := filledProvider(b, c.queues, c.messages)
+			base := b.TempDir()
+
+			e := persist.New(persist.Config{
+				PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: discard(),
+			})
+			e.Register(sqs, p)
+
+			flush := func() {
+				e.MarkDirty(sqs)
+
+				err := e.Flush(b.Context())
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			flush()
+
+			info, err := os.Stat(filepath.Join(base, sqs, jsonFile))
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			b.SetBytes(info.Size())
+
+			for b.Loop() {
+				flush()
 			}
 		})
 	}
