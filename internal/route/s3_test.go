@@ -127,6 +127,17 @@ func Test_Table_Detect_s3(t *testing.T) {
 			wantService: nameS3,
 		},
 		{
+			name: "a presigned virtual-host GET of key v20180820/x is s3's", giveMethod: http.MethodGet,
+			giveHost: "mybucket.s3.localhost.localstack.cloud:4566", giveTarget: "/v20180820/x" + presignedV4,
+			wantService: nameS3,
+		},
+		{
+			name: "a Bearer header keeps an sts scope in the query out", giveMethod: http.MethodGet,
+			giveHost: localHost, giveAuth: "Bearer x",
+			giveTarget:  pathObject + "?X-Amz-Credential=test%2F20130524%2Fus-east-1%2Fsts%2Faws4_request",
+			wantService: nameS3,
+		},
+		{
 			name: "a SigV2 header keeps an sqs scope in the query out", giveMethod: http.MethodGet,
 			giveHost: localHost, giveAuth: "AWS test:sig",
 			giveTarget:  pathObject + "?X-Amz-Credential=test%2F20130524%2Fus-east-1%2Fsqs%2Faws4_request",
