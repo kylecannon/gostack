@@ -65,13 +65,13 @@ func Test_Serve_AssumeRole(t *testing.T) {
 
 		return &sts.AssumeRoleOutput{
 			Credentials: &sts.Credentials{
-				AccessKeyId:     ptr("ASIAEXAMPLE"),
-				SecretAccessKey: ptr(`s"3cr3t`),
-				SessionToken:    ptr("token"),
+				AccessKeyId:     new("ASIAEXAMPLE"),
+				SecretAccessKey: new(`s"3cr3t`),
+				SessionToken:    new("token"),
 				Expiration:      expires,
 			},
-			AssumedRoleUser:  &sts.AssumedRoleUser{Arn: ptr("arn:aws:sts::1:assumed-role/r/s"), AssumedRoleId: ptr("ID:s")},
-			PackedPolicySize: ptr(int32(7)),
+			AssumedRoleUser:  &sts.AssumedRoleUser{Arn: new("arn:aws:sts::1:assumed-role/r/s"), AssumedRoleId: new("ID:s")},
+			PackedPolicySize: new(int32(7)),
 		}, nil
 	}}
 
@@ -150,5 +150,3 @@ func Test_ServeValidated(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "<Code>ValidationError</Code>")
 	assert.Contains(t, rec.Body.String(), "The request must contain the parameter RoleSessionName.")
 }
-
-func ptr[T any](v T) *T { return &v }

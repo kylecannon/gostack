@@ -14,7 +14,7 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
-// interp walks a fixture's shape model the way the generated types and sonic
+// interp walks a fixture's shape model the way the generated types and encoding/json/v2
 // do: a member is under its locationName or its name, a timestamp is epoch
 // seconds unless the shape says otherwise, and a blob is base64. It converts
 // between what is on the wire and plain values (maps, slices, strings,
@@ -171,11 +171,11 @@ func timeFromWire(format string, v any) (any, error) {
 
 	switch strings.ToLower(format) {
 	case "iso8601":
-		err = (*awsjson.ISO8601)(&t).UnmarshalJSON(raw)
+		err = awsjson.Unmarshal(raw, (*awsjson.ISO8601)(&t))
 	case "rfc822":
-		err = (*awsjson.RFC822)(&t).UnmarshalJSON(raw)
+		err = awsjson.Unmarshal(raw, (*awsjson.RFC822)(&t))
 	default:
-		err = t.UnmarshalJSON(raw)
+		err = awsjson.Unmarshal(raw, &t)
 	}
 
 	if err != nil {
@@ -294,11 +294,11 @@ func timeToWire(format string, v any) (any, error) {
 
 	switch strings.ToLower(format) {
 	case "iso8601":
-		raw, err = (*awsjson.ISO8601)(&t).MarshalJSON()
+		raw, err = awsjson.Marshal((*awsjson.ISO8601)(&t))
 	case "rfc822":
-		raw, err = (*awsjson.RFC822)(&t).MarshalJSON()
+		raw, err = awsjson.Marshal((*awsjson.RFC822)(&t))
 	default:
-		raw, err = t.MarshalJSON()
+		raw, err = awsjson.Marshal(&t)
 	}
 
 	if err != nil {

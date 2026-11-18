@@ -2,16 +2,25 @@ package awsjson
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 
-	"github.com/bytedance/sonic"
 	"github.com/kylecannon/gostack/internal/awserr"
 )
 
-// api is sonic with case-sensitive member names: AWS json members are exact,
-// where encoding/json would match them in any case.
-var api = sonic.Config{CaseSensitive: true}.Froze()
+// options are the encoding/json/v2 settings of every encode and decode here.
+// Member names are case-sensitive and members a type does not have are ignored,
+// which is v2's default and what AWS json needs. The rest:
+//   - a nil slice or map inside a value is null, not [] or {};
+//   - a repeated member keeps its last value;
+//   - invalid UTF-8 is an error, on decode and on encode.
+var options = json.JoinOptions(
+	json.FormatNilSliceAsNull(true),
+	json.FormatNilMapAsNull(true),
+	jsontext.AllowDuplicateNames(true),
+)
 
 // Decode reads a json request body into a T. An empty body decodes to the
 // zero T, and members the type does not have are ignored. A body that is not
@@ -22,7 +31,7 @@ func Decode[T any](body []byte) (*T, *awserr.Error) {
 		return v, nil
 	}
 
-	err := api.Unmarshal(body, v)
+	err := json.Unmarshal(body, v, options)
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",
@@ -35,10 +44,9 @@ func Decode[T any](body []byte) (*T, *awserr.Error) {
 	return v, nil
 }
 
-// Marshal returns v as json with the same settings Encode uses. Generated
-// marshalers call it, and those return a plain error.
+// Marshal returns v as json with the same settings Encode uses.
 func Marshal(v any) ([]byte, error) {
-	b, err := api.Marshal(v)
+	b, err := json.Marshal(v, options)
 	if err != nil {
 		return nil, fmt.Errorf("marshal json: %w", err)
 	}
@@ -46,10 +54,32 @@ func Marshal(v any) ([]byte, error) {
 	return b, nil
 }
 
-// Unmarshal reads json into v with the same settings Decode uses. Generated
-// marshalers call it, and those return a plain error.
+// Unmarshal reads json into v with the same settings Decode uses.
 func Unmarshal(data []byte, v any) error {
-	err := api.Unmarshal(data, v)
+	err := json.Unmarshal(data, v, options)
+	if err != nil {
+		return fmt.Errorf("unmarshal json: %w", err)
+	}
+
+	return nil
+}
+
+// MarshalTo writes v to enc with the same settings Encode uses. Generated
+// MarshalJSONTo methods call it, and those return a plain error.
+func MarshalTo(enc *jsontext.Encoder, v any) error {
+	err := json.MarshalEncode(enc, v, options)
+	if err != nil {
+		return fmt.Errorf("marshal json: %w", err)
+	}
+
+	return nil
+}
+
+// UnmarshalFrom reads the next json value from dec into v with the same
+// settings Decode uses. Generated UnmarshalJSONFrom methods call it, and those
+// return a plain error.
+func UnmarshalFrom(dec *jsontext.Decoder, v any) error {
+	err := json.UnmarshalDecode(dec, v, options)
 	if err != nil {
 		return fmt.Errorf("unmarshal json: %w", err)
 	}
@@ -59,7 +89,7 @@ func Unmarshal(data []byte, v any) error {
 
 // Encode returns v as json.
 func Encode(v any) ([]byte, *awserr.Error) {
-	b, err := api.Marshal(v)
+	b, err := json.Marshal(v, options)
 	if err != nil {
 		return nil, awserr.Internal("response could not be encoded: " + err.Error())
 	}

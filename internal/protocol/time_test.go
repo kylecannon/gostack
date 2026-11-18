@@ -1,11 +1,10 @@
 package protocol_test
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"testing"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +20,7 @@ func at(sec, nsec int64) *protocol.Time {
 	return &protocol.Time{Time: time.Unix(sec, nsec)}
 }
 
-func Test_Time_MarshalJSON(t *testing.T) {
+func Test_Time_MarshalJSONTo(t *testing.T) {
 	tests := []struct {
 		name    string
 		giveSec int64
@@ -40,14 +39,14 @@ func Test_Time_MarshalJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := at(tt.giveSec, tt.giveNs).MarshalJSON()
+			got, err := json.Marshal(at(tt.giveSec, tt.giveNs))
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, string(got))
 		})
 	}
 }
 
-func Test_Time_UnmarshalJSON(t *testing.T) {
+func Test_Time_UnmarshalJSONFrom(t *testing.T) {
 	tests := []struct {
 		name    string
 		give    string
@@ -70,13 +69,13 @@ func Test_Time_UnmarshalJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got protocol.Time
 
-			require.NoError(t, got.UnmarshalJSON([]byte(tt.give)))
+			require.NoError(t, json.Unmarshal([]byte(tt.give), &got))
 			assert.True(t, got.Equal(time.Unix(tt.wantSec, tt.wantNs)), "got %v", got.Time)
 		})
 	}
 }
 
-func Test_Time_UnmarshalJSON_invalid(t *testing.T) {
+func Test_Time_UnmarshalJSONFrom_invalid(t *testing.T) {
 	tests := []struct {
 		name string
 		give string
@@ -93,26 +92,26 @@ func Test_Time_UnmarshalJSON_invalid(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got protocol.Time
 
-			require.Error(t, got.UnmarshalJSON([]byte(tt.give)))
+			require.Error(t, json.Unmarshal([]byte(tt.give), &got))
 		})
 	}
 }
 
-func Test_Time_UnmarshalJSON_null(t *testing.T) {
+func Test_Time_UnmarshalJSONFrom_null(t *testing.T) {
 	got := *at(7, 0)
 
-	require.NoError(t, got.UnmarshalJSON([]byte("null")))
+	require.NoError(t, json.Unmarshal([]byte("null"), &got))
 	assert.True(t, got.Equal(time.Unix(7, 0)), "null leaves the time unchanged")
 }
 
 func Test_Time_JSON_roundTrip(t *testing.T) {
 	for _, give := range []*protocol.Time{at(1700000000, 0), at(1700000000, 123456000), at(-1, 250000000), at(0, 1)} {
-		data, err := give.MarshalJSON()
+		data, err := json.Marshal(give)
 		require.NoError(t, err)
 
 		var got protocol.Time
 
-		require.NoError(t, got.UnmarshalJSON(data))
+		require.NoError(t, json.Unmarshal(data, &got))
 		assert.True(t, got.Equal(give.Time), "%s round-trips", data)
 	}
 }
@@ -189,36 +188,22 @@ type timestamps struct {
 	Whole   *protocol.Time `json:"whole"`
 }
 
-// Test_Time_sonic checks that the sonic codec the json protocol uses writes and
-// reads protocol.Time exactly as encoding/json does.
-func Test_Time_sonic(t *testing.T) {
+// Test_Time_inStruct checks that a *protocol.Time member is epoch seconds
+// through encoding/json/v2, that a nil member stays nil, and that the value
+// reads back.
+func Test_Time_inStruct(t *testing.T) {
 	give := timestamps{Created: at(1700000000, 123456000), Expires: nil, Whole: at(1700000000, 0)}
 
-	want, err := json.Marshal(give)
+	got, err := json.Marshal(give)
 	require.NoError(t, err)
-
-	got, err := sonic.Marshal(give)
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(got))
 	assert.JSONEq(t, `{"created":1700000000.123456,"whole":1700000000}`, string(got))
 
-	var viaStd, viaSonic timestamps
+	var decoded timestamps
 
-	require.NoError(t, json.Unmarshal(got, &viaStd))
-	require.NoError(t, sonic.Unmarshal(want, &viaSonic))
-
-	for _, decoded := range []timestamps{viaStd, viaSonic} {
-		require.NotNil(t, decoded.Created)
-		require.NotNil(t, decoded.Whole)
-		assert.Nil(t, decoded.Expires)
-		assert.True(t, decoded.Created.Equal(give.Created.Time))
-		assert.True(t, decoded.Whole.Equal(give.Whole.Time))
-	}
-}
-
-// Test_sonic_native fails when sonic has fallen back to encoding/json. sonic
-// does that without a warning on a Go release it does not support, and it keeps
-// working, only slower.
-func Test_sonic_native(t *testing.T) {
-	assert.Equal(t, sonic.UseSonicJSON, sonic.APIKind, "sonic native path is inactive on this toolchain; see go.mod")
+	require.NoError(t, json.Unmarshal(got, &decoded))
+	require.NotNil(t, decoded.Created)
+	require.NotNil(t, decoded.Whole)
+	assert.Nil(t, decoded.Expires)
+	assert.True(t, decoded.Created.Equal(give.Created.Time))
+	assert.True(t, decoded.Whole.Equal(give.Whole.Time))
 }

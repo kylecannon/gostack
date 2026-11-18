@@ -223,9 +223,11 @@ encode functions, REST route tables, and error mapping. This avoids rustack's
 mistake, where only types were generated and roughly 4.4k lines of S3 XML were
 written by hand.
 
-- **JSON:** `bytedance/sonic` encodes and decodes the generated types. AWS JSON
-  quirks are custom marshalers on generated types, and sonic honors them:
-  epoch-second timestamps, base64 blobs, and `__type` error codes.
+- **JSON:** `encoding/json/v2` encodes and decodes the generated types. AWS JSON
+  quirks are custom marshalers on generated types, on the streaming v2
+  interfaces (`MarshalJSONTo`, `UnmarshalJSONFrom`): epoch-second timestamps,
+  base64 blobs, and `__type` error codes. One option set in
+  `internal/protocol/awsjson` serves every encode and decode.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output.
 
@@ -453,7 +455,7 @@ in the product `go.mod`.
 |---|---|---|
 | go-chi/chi/v5 | the gateway | Routing and middleware composition. |
 | go-chi/cors | the gateway | CORS. LocalStack's rules go through `AllowOriginFunc`: the allowed-origin list from `aws/handlers/cors.py`, `EXTRA_CORS_*`, and `DISABLE_CORS_CHECKS`/`DISABLE_CORS_HEADERS`. It runs at root middleware step 5. S3 and API Gateway requests, marked earlier in the chain, skip it for their own CORS handling, as LocalStack does. |
-| bytedance/sonic | codegen | JSON codec. The Go version limit is in the Makefile and the native-path test is in `standards.md`. Kept over `encoding/json/v2` by measurement: `BenchmarkCodec*` in `internal/protocol/awsjson` (4 decode and 3 encode payloads on the generated SQS and STS types, 10 interleaved single-CPU runs per toolchain, Apple M1 Max) put v2 on Go 1.27.4 at +27% geomean ns/op against sonic on Go 1.26.11 (2.37µs to 3.02µs) and +26% against sonic on the same 1.27.4; switching needed v2 within 20%. v2 decodes 1.35x to 1.92x slower on every payload and encodes ReceiveMessage output 6% to 21% faster. encoding/json v1 is +92% on Go 1.26.11. |
+| encoding/json/v2 (stdlib) | codegen | JSON codec, in place of `bytedance/sonic`. The user chose it despite a measured cost: `BenchmarkCodec*` in `internal/protocol/awsjson` (SQ-36: 4 decode and 3 encode payloads on the generated SQS and STS types, 10 interleaved single-CPU runs per toolchain, Apple M1 Max) put v2 on Go 1.27.4 at +27% geomean ns/op against sonic on Go 1.26.11, with decode 1.35x to 1.92x slower on every payload and ReceiveMessage encode 6% to 21% faster. The reasons: it is the standard library, it has no Go-version cap (sonic's native path stops at Go 1.27), and its streaming marshalers write into the caller's encoder without an intermediate `[]byte`. |
 | spf13/viper | config | Every LocalStack variable is registered with `BindEnv` and given its LocalStack default. `/_localstack/config` POST applies updates with `viper.Set`. `PERSIST_*` values go through an extra validator on top of viper, which reproduces localstack-persist's exact rules (only 1/0/true/false, a warning for anything else, dependency expansion). |
 | moby client (`github.com/moby/moby/client`) | Lambda | Lambda containers through the Docker socket. |
 | testify | the first test | Test assertions; required by conventions-go.md. |

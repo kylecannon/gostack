@@ -36,6 +36,7 @@ var importPaths = map[string]string{
 	"errors":   "errors",
 	"http":     "net/http",
 	"io":       "io",
+	"jsontext": "encoding/json/jsontext",
 	"maps":     "maps",
 	"protocol": "github.com/kylecannon/gostack/internal/protocol",
 	"query":    "github.com/kylecannon/gostack/internal/protocol/query",

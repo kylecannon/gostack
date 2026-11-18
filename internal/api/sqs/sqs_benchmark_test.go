@@ -16,8 +16,6 @@ func (d *discard) Header() http.Header         { return d.header }
 func (d *discard) Write(p []byte) (int, error) { return len(p), nil }
 func (d *discard) WriteHeader(int)             {}
 
-func ptr[T any](v T) *T { return &v }
-
 func BenchmarkSQSSendMessageQueryDecode(b *testing.B) {
 	vals := url.Values{
 		"Action":      {"SendMessage"},
@@ -65,15 +63,15 @@ func BenchmarkSQSReceiveMessageQueryEncode(b *testing.B) {
 
 	for range 10 {
 		out.Messages = append(out.Messages, Message{
-			MessageId:     ptr("5fea7756-0ea4-451a-a703-a558b933e274"),
-			ReceiptHandle: ptr("MbZj6wDWli+JvwwJaBV+3dcjk2YW2vA3+STFFljTM8tJJg6HRG6PYSasuWXPJB+Cw"),
-			MD5OfBody:     ptr("fafb00f5732ab283681e124bf8747ed1"),
-			Body:          ptr("a message body of a typical, unremarkable length for a test queue"),
+			MessageId:     new("5fea7756-0ea4-451a-a703-a558b933e274"),
+			ReceiptHandle: new("MbZj6wDWli+JvwwJaBV+3dcjk2YW2vA3+STFFljTM8tJJg6HRG6PYSasuWXPJB+Cw"),
+			MD5OfBody:     new("fafb00f5732ab283681e124bf8747ed1"),
+			Body:          new("a message body of a typical, unremarkable length for a test queue"),
 			Attributes: map[string]string{
 				"SenderId": "000000000000", "SentTimestamp": "1700000000000", "ApproximateReceiveCount": "1",
 			},
 			MessageAttributes: map[string]MessageAttributeValue{
-				"trace": {DataType: ptr("String"), StringValue: ptr("0123456789abcdef")},
+				"trace": {DataType: new("String"), StringValue: new("0123456789abcdef")},
 			},
 		})
 	}

@@ -38,8 +38,7 @@ func statusBinary(t *testing.T, path, listen string, args ...string) (string, st
 
 	err := cmd.Run()
 
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return stdout.String(), stderr.String(), exitErr.ExitCode()
 	}
 

@@ -1,7 +1,6 @@
 package awsjson_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,18 +9,15 @@ import (
 	"github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/api/sts"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// These benchmarks compare JSON codecs on the generated SQS and STS types, so
-// a codec change is decided by measurement. Run them with
+// These benchmarks measure the awsjson codec on the generated SQS and STS
+// types, so a codec change is decided by measurement. Run them with
 //
 //	go test -run '^$' -bench 'Codec' -count 10 ./internal/protocol/awsjson
 //
-// and compare codecs with `benchstat -col /codec`. Under Go 1.27 or later
-// codec_v2_bench_test.go adds encoding/json/v2 to the set. The values are
-// shaped after LocalStack's tests/aws/services/{sqs,sts} snapshots.
+// and compare runs with `benchstat`. The values are shaped after LocalStack's
+// tests/aws/services/{sqs,sts} snapshots.
 
 type benchCodec struct {
 	name      string
@@ -29,10 +25,9 @@ type benchCodec struct {
 	unmarshal func(data []byte, v any) error
 }
 
-// benchCodecs holds sonic, the codec awsjson uses, and encoding/json v1.
+// benchCodecs holds the codec awsjson uses.
 var benchCodecs = []benchCodec{
-	{name: "sonic", marshal: awsjson.Marshal, unmarshal: awsjson.Unmarshal},
-	{name: "v1", marshal: json.Marshal, unmarshal: json.Unmarshal},
+	{name: "awsjson", marshal: awsjson.Marshal, unmarshal: awsjson.Unmarshal},
 }
 
 const (
@@ -138,34 +133,6 @@ func benchEncodeFixtures() []encodeFixture {
 			Type:    "InvalidParameterValue",
 			Message: "Value 11 for parameter MaxNumberOfMessages is invalid. Reason: Must be between 1 and 10, if provided.",
 		}},
-	}
-}
-
-// Test_benchCodecs_agree checks that every benchmarked codec reads and writes
-// the fixtures the same way as awsjson, so the benchmarks compare like with like.
-func Test_benchCodecs_agree(t *testing.T) {
-	t.Parallel()
-
-	for _, f := range benchDecodeFixtures() {
-		want := f.newV()
-		require.NoError(t, awsjson.Unmarshal(f.body, want), f.name)
-
-		for _, c := range benchCodecs {
-			got := f.newV()
-			require.NoError(t, c.unmarshal(f.body, got), "%s/%s", f.name, c.name)
-			assert.Equal(t, want, got, "%s/%s", f.name, c.name)
-		}
-	}
-
-	for _, f := range benchEncodeFixtures() {
-		want, err := awsjson.Marshal(f.v)
-		require.NoError(t, err, f.name)
-
-		for _, c := range benchCodecs {
-			got, err := c.marshal(f.v)
-			require.NoError(t, err, "%s/%s", f.name, c.name)
-			assert.JSONEq(t, string(want), string(got), "%s/%s", f.name, c.name)
-		}
 	}
 }
 

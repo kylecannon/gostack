@@ -6,8 +6,8 @@ import (
 
 // jsonFile writes the json codec: the protocol constants, one decode function
 // for each operation, and the marshalers of the structs that hold a timestamp
-// in a form other than epoch seconds. The types carry json tags, so sonic does
-// the rest.
+// in a form other than epoch seconds. The types carry json tags, so
+// encoding/json/v2 does the rest.
 func (g *generator) jsonFile() (string, error) {
 	if !g.hasProtocol(protoJSON) {
 		return "", nil
@@ -67,10 +67,12 @@ func timeFields(st *structType) []timeField {
 	return out
 }
 
-// emitTimeMarshalers writes MarshalJSON and UnmarshalJSON for a struct with
-// timestamp members in another format. Each swaps those members for the awsjson
-// type of the format through an embedded alias of the struct, which has no
-// methods of its own, and a shadowing field of the same json name.
+// emitTimeMarshalers writes MarshalJSONTo and UnmarshalJSONFrom, the
+// encoding/json/v2 interfaces that stream into the caller's encoder and decoder,
+// for a struct with timestamp members in another format. Each swaps those
+// members for the awsjson type of the format through an embedded alias of the
+// struct, which has no methods of its own, and a shadowing field of the same
+// json name.
 func emitTimeMarshalers(p *printer, st *structType) {
 	tf := timeFields(st)
 	if len(tf) == 0 {
@@ -85,10 +87,10 @@ func emitTimeMarshalers(p *printer, st *structType) {
 		}
 	}
 
-	p.f("// MarshalJSON writes the timestamps of %s in the format of their shapes.", st.goName)
-	p.f("func (s %s) MarshalJSON() ([]byte, error) {", st.goName)
+	p.f("// MarshalJSONTo writes the timestamps of %s in the format of their shapes.", st.goName)
+	p.f("func (s %s) MarshalJSONTo(enc *jsontext.Encoder) error {", st.goName)
 	p.f("\ttype plain %s", st.goName)
-	p.f("\treturn awsjson.Marshal(struct {")
+	p.f("\treturn awsjson.MarshalTo(enc, struct {")
 	shadow()
 	p.f("\t}{")
 	p.f("\t\tplain: (*plain)(&s),")
@@ -100,13 +102,13 @@ func emitTimeMarshalers(p *printer, st *structType) {
 	p.f("\t})")
 	p.f("}")
 	p.blank()
-	p.f("// UnmarshalJSON reads the timestamps of %s in the format of their shapes.", st.goName)
-	p.f("func (s *%s) UnmarshalJSON(data []byte) error {", st.goName)
+	p.f("// UnmarshalJSONFrom reads the timestamps of %s in the format of their shapes.", st.goName)
+	p.f("func (s *%s) UnmarshalJSONFrom(dec *jsontext.Decoder) error {", st.goName)
 	p.f("\ttype plain %s", st.goName)
 	p.f("\taux := struct {")
 	shadow()
 	p.f("\t}{plain: (*plain)(s)}")
-	p.f("\tif err := awsjson.Unmarshal(data, &aux); err != nil {")
+	p.f("\tif err := awsjson.UnmarshalFrom(dec, &aux); err != nil {")
 	p.f("\t\treturn err")
 	p.f("\t}")
 

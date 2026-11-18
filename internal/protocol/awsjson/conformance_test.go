@@ -114,7 +114,7 @@ func Test_Conformance_Output(t *testing.T) {
 	}
 }
 
-// decodeBody reads a json body with sonic and turns it into plain values
+// decodeBody reads a json body with the awsjson codec and turns it into plain values
 // through the shape. An empty body is an empty structure.
 func decodeBody(t *testing.T, in *interp, r resolved, body []byte) map[string]any {
 	t.Helper()

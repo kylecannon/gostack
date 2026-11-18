@@ -73,10 +73,15 @@ specific to gostack.
 ### In force today
 
 - **Pre-commit** runs `.agentic-quality`, the manifest the harness hook reads:
-  `make fmt` on staged `*.go` files, then `make lint` and `make test`
-  (`go test -race`) on the packages those files belong to. `make -s packages`
+  `make fmt` on staged `*.go` files, then `make lint`, `make fix-check` and
+  `make test` (`go test -race`) on the packages those files belong to. `make -s packages`
   finds those packages, and a failing `go list` fails the rule.
-- **CI** (`ci.yml`) runs `make lint`, `make test` and `make build`.
+- **`make fix-check`** runs `go fix -diff` and fails on any diff; `make fix`
+  applies it. Code uses the newest idiom the pinned toolchain offers, and
+  `make fix-check` plus the `modernize` analyzers in golangci-lint enforce it:
+  `go fix` follows the toolchain, `modernize` follows the linter's release.
+- **CI** (`ci.yml`) runs `make fix-check`, `make lint`, `make test` and
+  `make build`.
 - **Linters and formatters** are configured in `.golangci.yml` (v2 format).
   Linting runs in strict mode (`default: all`), and each disabled linter is
   documented there. `govet` runs with every analyzer enabled except
@@ -111,11 +116,6 @@ are missing, and holds the reason for the layout below.
   the editor. Plain `go` commands outside `make` need it too.
 - **Each module** has its own `go mod tidy`. Both `go mod tidy -diff` (root) and
   `go -C tools mod tidy -diff` must exit 0.
-
-On a Go version sonic does not support, sonic falls back to `encoding/json`
-without warning. A test asserts its native path is active, so an unsupported
-Go bump fails CI instead of losing speed silently. The test arrives with sonic
-in Phase 1.
 
 ## Benchmarks
 

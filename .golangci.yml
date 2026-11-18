@@ -9,7 +9,8 @@ linters:
     - cyclop # duplicates gocognit and gocyclo (gocyclo stays at its default of 30); a flat switch over a spec's type codes trips it with no nesting to simplify. Not a conventions rule
     - depguard # conventions, opening list: "Standard library first. A dependency earns its place by doing what the standard library does not." Dependency control is go.mod review and the architecture.md dependency table
     - err113 # conventions, Errors: "`%v` over `%w` when the wrapped error is an implementation detail." err113 wants a wrapped sentinel for every dynamic error
-    - exhaustruct # conventions, Types and zero values: "Design the zero value to be useful; add a constructor only where a non-zero default is required." Omitted fields are intended
+    - exhaustruct # deprecated since v2.13.0; exhaustruct_v5 replaces it
+    - exhaustruct_v5 # conventions, Types and zero values: "Design the zero value to be useful; add a constructor only where a non-zero default is required." Omitted fields are intended
     - gochecknoglobals # conventions, Global state: "Global state only where logically constant, stateless, or free of external side effects." gochecknoglobals forbids all of it
     - gomodguard # deprecated since v2.12.0; gomodguard_v2 replaces it and stays on
     - nlreturn # conventions, Toolchain: "`golangci-lint fmt` formats". Blank-line layout is the formatter's job

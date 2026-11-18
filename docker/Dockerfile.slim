@@ -10,9 +10,9 @@
 # process reaper and supervisor (docs/architecture.md, Container), which needs
 # the privileges LocalStack's own image runs with.
 
-FROM --platform=$BUILDPLATFORM golang:1.26.11 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build
 
-ARG GOTOOLCHAIN=go1.26.11
+ARG GOTOOLCHAIN=go1.27.4
 ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH

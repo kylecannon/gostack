@@ -175,7 +175,8 @@ func Test_gostack_sqs_survives_a_kill(t *testing.T) {
 	require.NoError(t, first.cmd.Process.Signal(syscall.SIGKILL))
 
 	select {
-	case <-first.exited:
+	case err := <-first.exited:
+		require.Error(t, err, "SIGKILL ends the process with an error")
 	case <-time.After(killDeadline):
 		t.Fatal("gostack survived SIGKILL")
 	}
@@ -206,7 +207,7 @@ func Test_gostack_sqs_state_is_off_without_persistence(t *testing.T) {
 	first.sqs(t, opCreateQueue, map[string]any{fieldQueueName: "gone"})
 
 	require.NoError(t, first.cmd.Process.Signal(syscall.SIGKILL))
-	<-first.exited
+	require.Error(t, <-first.exited, "SIGKILL ends the process with an error")
 
 	second := startGostack(t)
 	assert.Empty(t, second.sqs(t, "ListQueues", map[string]any{}).QueueURLs)
@@ -247,7 +248,8 @@ func Test_gostack_sqs_fifo_survives_a_kill(t *testing.T) {
 	require.NoError(t, first.cmd.Process.Signal(syscall.SIGKILL))
 
 	select {
-	case <-first.exited:
+	case err := <-first.exited:
+		require.Error(t, err, "SIGKILL ends the process with an error")
 	case <-time.After(killDeadline):
 		t.Fatal("gostack survived SIGKILL")
 	}
@@ -336,7 +338,8 @@ func Test_gostack_sqs_move_task_is_saved_at_shutdown(t *testing.T) {
 			require.NoError(t, first.cmd.Process.Signal(tc.stop))
 
 			select {
-			case <-first.exited:
+			case err := <-first.exited:
+				require.Equal(t, tc.stop == syscall.SIGKILL, err != nil, "only SIGKILL ends the process with an error: %v", err)
 			case <-time.After(killDeadline):
 				t.Fatalf("gostack did not exit after %s", tc.stop)
 			}

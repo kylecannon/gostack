@@ -14,10 +14,9 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # golangci-lint lives in its own module, tools/go.mod. It requires the previous
 # Go release, so the two modules carry separate `go` lines and the product
-# go.mod holds none of the linter's dependencies. sonic v1.15.5 caps the
-# product at Go 1.27: its native build tag is !go1.28, and on Go 1.28 it falls
-# back to encoding/json, which Test_sonic_native in internal/protocol catches.
-# Raise the product pin past 1.27 only with a sonic release that supports it.
+# go.mod holds none of the linter's dependencies. The linter is built with the
+# product's pinned toolchain, so a toolchain bump needs a golangci-lint release
+# that supports that Go version.
 LINT := go tool -modfile=tools/go.mod golangci-lint
 
 # The pre-commit gate narrows these to the staged files:
@@ -72,13 +71,23 @@ BENCH_SYSTEM_ARGS ?=
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
 
 lint:
 	$(LINT) run $(PKGS)
+
+# go fix applies the analyzers that ship with the pinned toolchain, so the code
+# follows the Go release and not the linter's release cycle. It skips generated
+# files; codegen emits modern code instead. -diff prints what fix would change
+# and exits 1 when there is something, which fails fix-check.
+fix:
+	go fix $(PKGS)
+
+fix-check:
+	go fix -diff $(PKGS)
 
 test:
 	go test -race $(PKGS)

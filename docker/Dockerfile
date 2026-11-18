@@ -11,9 +11,9 @@
 
 # The build stage always runs on the builder's own architecture and
 # cross-compiles, so a multi-arch build never emulates the Go compiler.
-FROM --platform=$BUILDPLATFORM golang:1.26.11 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build
 
-ARG GOTOOLCHAIN=go1.26.11
+ARG GOTOOLCHAIN=go1.27.4
 ARG VERSION=dev
 ARG TARGETOS
 ARG TARGETARCH

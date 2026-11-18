@@ -50,7 +50,7 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 // and X-Amzn-Errortype repeats the code. When err has a QueryCode the response
 // also carries "x-amzn-query-error: <QueryCode>;Sender". r may be nil.
 func WriteError(w http.ResponseWriter, r *http.Request, requestID string, err *awserr.Error, opts ErrorOptions) {
-	body, encErr := api.Marshal(errorBody{Type: err.Code, Message: err.Message})
+	body, encErr := Marshal(errorBody{Type: err.Code, Message: err.Message})
 	if encErr != nil {
 		body = []byte(`{"__type":"InternalError"}`)
 	}
@@ -60,7 +60,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, requestID string, err *a
 		status = http.StatusInternalServerError
 	}
 
-	queryMode := r != nil && r.Header.Get("x-amzn-query-mode") == "true"
+	queryMode := r != nil && r.Header.Get("X-Amzn-Query-Mode") == "true"
 	if opts.QueryCompatible && !queryMode && status > http.StatusBadRequest && status < http.StatusInternalServerError {
 		status = http.StatusBadRequest
 	}

@@ -106,7 +106,7 @@ func Test_Serve_QueryDecode(t *testing.T) {
 	h := &provider{sendMessage: func(_ context.Context, in *sqs.SendMessageInput) (*sqs.SendMessageOutput, error) {
 		got = in
 
-		return &sqs.SendMessageOutput{MessageId: ptr("m-1"), MD5OfMessageBody: ptr(`md5 "q"`)}, nil
+		return &sqs.SendMessageOutput{MessageId: new("m-1"), MD5OfMessageBody: new(`md5 "q"`)}, nil
 	}}
 
 	body := form(
@@ -189,7 +189,7 @@ func Test_Serve_QueryAliases(t *testing.T) {
 			h := &provider{createQueue: func(_ context.Context, in *sqs.CreateQueueInput) (*sqs.CreateQueueOutput, error) {
 				got = in
 
-				return &sqs.CreateQueueOutput{QueueUrl: ptr("http://localhost:4566/000000000000/q")}, nil
+				return &sqs.CreateQueueOutput{QueueUrl: new("http://localhost:4566/000000000000/q")}, nil
 			}}
 
 			body := form(append([]string{"Action", "CreateQueue", "QueueName", "q"}, tt.giveForm...)...)
@@ -245,11 +245,11 @@ func Test_Serve_QueryFlattenedLists(t *testing.T) {
 
 		return &sqs.ReceiveMessageOutput{Messages: []sqs.Message{
 			{
-				MessageId: ptr("m-1"), Body: ptr("a<b"),
+				MessageId: new("m-1"), Body: new("a<b"),
 				Attributes:        map[string]string{"SentTimestamp": "1", "ApproximateReceiveCount": "2"},
-				MessageAttributes: map[string]sqs.MessageAttributeValue{"k": {DataType: ptr("String"), StringValue: ptr("v")}},
+				MessageAttributes: map[string]sqs.MessageAttributeValue{"k": {DataType: new("String"), StringValue: new("v")}},
 			},
-			{MessageId: ptr("m-2"), Body: ptr("b")},
+			{MessageId: new("m-2"), Body: new("b")},
 		}}, nil
 	}}
 
@@ -296,7 +296,7 @@ func Test_Serve_JSON(t *testing.T) {
 	h := &provider{sendMessage: func(_ context.Context, in *sqs.SendMessageInput) (*sqs.SendMessageOutput, error) {
 		got = in
 
-		return &sqs.SendMessageOutput{MessageId: ptr("m-1")}, nil
+		return &sqs.SendMessageOutput{MessageId: new("m-1")}, nil
 	}}
 
 	body := `{"QueueUrl":"q","MessageBody":"hi","DelaySeconds":0,
@@ -498,5 +498,3 @@ func Test_Exceptions(t *testing.T) {
 		})
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

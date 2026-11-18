@@ -5,4 +5,5 @@
 # skips lint and test.
 fmt [*.go]: make fmt FMT_ARGS="--diff {staged}"
 lint [*.go]: p=$(make -s packages FILES="{staged}") || exit 1; test -z "$p" || make lint PKGS="$p"
+fix-check [*.go]: p=$(make -s packages FILES="{staged}") || exit 1; test -z "$p" || make fix-check PKGS="$p"
 test [*.go]: p=$(make -s packages FILES="{staged}") || exit 1; test -z "$p" || make test PKGS="$p"

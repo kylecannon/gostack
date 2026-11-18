@@ -22,6 +22,7 @@ jobs:
             tools/go.sum
       - run: make tidy-check
       - run: make gen-check
+      - run: make fix-check
       - run: make lint
 
   test:

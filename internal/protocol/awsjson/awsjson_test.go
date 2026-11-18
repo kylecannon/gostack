@@ -1,13 +1,13 @@
 package awsjson_test
 
 import (
+	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/bytedance/sonic"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
@@ -65,6 +65,28 @@ func Test_Decode(t *testing.T) {
 		assert.Equal(t, "SerializationException", err.Code)
 		assert.Equal(t, http.StatusBadRequest, err.StatusCode)
 	})
+
+	t.Run("rejects invalid UTF-8 with a 400", func(t *testing.T) {
+		t.Parallel()
+
+		// A raw 0xFF byte inside a string, and a lone surrogate escape.
+		for _, body := range []string{"{\"Name\":\"a\xffb\"}", `{"Name":"\ud800"}`} {
+			got, err := awsjson.Decode[sample]([]byte(body))
+			require.NotNil(t, err, body)
+			assert.Nil(t, got, body)
+			assert.Equal(t, "SerializationException", err.Code, body)
+			assert.Equal(t, http.StatusBadRequest, err.StatusCode, body)
+		}
+	})
+
+	t.Run("a repeated member keeps the last value and unknown members are ignored", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := awsjson.Decode[sample]([]byte(`{"Name":"a","Other":{"x":[1]},"Name":"b"}`))
+		require.Nil(t, err)
+		require.NotNil(t, got.Name)
+		assert.Equal(t, "b", *got.Name)
+	})
 }
 
 func Test_Encode(t *testing.T) {
@@ -80,6 +102,19 @@ func Test_Encode(t *testing.T) {
 		got, err := awsjson.Encode(&sample{Tags: []string{}, Attrs: map[string]string{}, Payload: []byte{}})
 		require.Nil(t, err)
 		assert.JSONEq(t, `{"Tags":[],"Attrs":{},"Payload":""}`, string(got))
+	})
+
+	t.Run("writes a nil slice or map inside a value as null", func(t *testing.T) {
+		t.Parallel()
+
+		type wrapper struct {
+			Lists [][]string          `json:"Lists"`
+			Maps  []map[string]string `json:"Maps"`
+		}
+
+		got, err := awsjson.Encode(&wrapper{Lists: [][]string{nil}, Maps: []map[string]string{nil}})
+		require.Nil(t, err)
+		assert.JSONEq(t, `{"Lists":[null],"Maps":[null]}`, string(got))
 	})
 
 	t.Run("writes zero values that are set", func(t *testing.T) {
@@ -197,30 +232,35 @@ func Test_WriteError(t *testing.T) {
 }
 
 // stamped is the shape the generator writes for a struct with a timestamp that
-// is not in epoch seconds: it swaps the field for a format type while sonic
-// encodes or decodes the struct, using an embedded alias and a field that
-// shadows the embedded one.
+// is not in epoch seconds: it swaps the field for a format type while
+// encoding/json/v2 encodes or decodes the struct, using an embedded alias and a
+// field that shadows the embedded one.
+//
+//nolint:recvcheck // the generator writes a value receiver for the marshaler, as it must for a value in a map
 type stamped struct {
 	Created *protocol.Time `json:"Created,omitzero"`
 	Name    *string        `json:"Name,omitzero"`
 }
 
-func (s *stamped) MarshalJSON() ([]byte, error) {
+func (s stamped) MarshalJSONTo(enc *jsontext.Encoder) error {
 	type plain stamped
 
-	b, err := sonic.Marshal(struct {
+	err := awsjson.MarshalTo(enc, struct {
 		*plain
 
 		Created *awsjson.ISO8601 `json:"Created,omitzero"`
-	}{(*plain)(s), (*awsjson.ISO8601)(s.Created)})
+	}{
+		plain:   (*plain)(&s),
+		Created: (*awsjson.ISO8601)(s.Created),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("marshal stamped: %w", err)
+		return fmt.Errorf("marshal stamped: %w", err)
 	}
 
-	return b, nil
+	return nil
 }
 
-func (s *stamped) UnmarshalJSON(data []byte) error {
+func (s *stamped) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type plain stamped
 
 	aux := struct {
@@ -229,12 +269,14 @@ func (s *stamped) UnmarshalJSON(data []byte) error {
 		Created *awsjson.ISO8601 `json:"Created,omitzero"`
 	}{plain: (*plain)(s)}
 
-	err := sonic.Unmarshal(data, &aux)
+	err := awsjson.UnmarshalFrom(dec, &aux)
 	if err != nil {
 		return fmt.Errorf("unmarshal stamped: %w", err)
 	}
 
-	s.Created = (*protocol.Time)(aux.Created)
+	if aux.Created != nil {
+		s.Created = (*protocol.Time)(aux.Created)
+	}
 
 	return nil
 }

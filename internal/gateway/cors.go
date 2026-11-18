@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -125,12 +126,12 @@ func newCORSRules(s Settings) *corsRules {
 
 	allowHeaders := corsAllowedHeaders
 	if extra := strings.TrimSpace(s.ExtraCORSAllowedHeaders); extra != "" {
-		allowHeaders = append(allowHeaders[:len(allowHeaders):len(allowHeaders)], strings.Split(extra, ",")...)
+		allowHeaders = append(slices.Clip(allowHeaders), strings.Split(extra, ",")...)
 	}
 
 	expose := corsExposeHeaders
 	if extra := strings.TrimSpace(s.ExtraCORSExposeHeaders); extra != "" {
-		expose = append(expose[:len(expose):len(expose)], strings.Split(extra, ",")...)
+		expose = append(slices.Clip(expose), strings.Split(extra, ",")...)
 	}
 
 	rules.allowHeaders = strings.Join(allowHeaders, ",")
