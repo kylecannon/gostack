@@ -87,6 +87,18 @@ func Test_gate_regressions(t *testing.T) {
 	}
 }
 
+func Test_gate_refuses_empty_input(t *testing.T) {
+	for name, give := range map[string]string{"empty": "", "blank": " \n\t\n"} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+
+			err := gateMain(strings.NewReader(give), &out)
+			require.ErrorIs(t, err, errEmptyInput)
+			assert.Empty(t, out.String())
+		})
+	}
+}
+
 func Test_percentile(t *testing.T) {
 	sorted := make([]time.Duration, 0, 100)
 	for i := 1; i <= 100; i++ {

@@ -35,6 +35,10 @@ FILES ?=
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
 PARITY_BASE ?= HEAD
+# CI passes an empty value when the event has no base (a manual run).
+ifeq ($(strip $(PARITY_BASE)),)
+PARITY_BASE := HEAD
+endif
 export SERVICES GOSTACK_IMAGE
 
 

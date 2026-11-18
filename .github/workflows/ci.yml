@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# GitHub runs a bare bash step with -e only. Naming the shell adds -o pipefail,
+# so a failing command on the left of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -46,7 +52,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: make parity-check
+        with:
+          # The base commit holds the ledger the change is compared with.
+          fetch-depth: 0
+      - name: Compare the ledger with the base
+        env:
+          PARITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: make parity-check
 
   build:
     runs-on: ubuntu-latest

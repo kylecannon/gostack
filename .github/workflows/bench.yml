@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# GitHub runs a bare bash step with -e only. Naming the shell adds -o pipefail,
+# so a failing command on the left of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   benchstat:
     runs-on: ubuntu-latest
@@ -41,12 +47,13 @@ jobs:
         working-directory: head
         run: make bench BENCH_OUT="$GITHUB_WORKSPACE/head.txt"
       - name: Compare
+        id: compare
         run: |
           if ! grep -q '^Benchmark' base.txt; then
             echo "The base has no benchmarks, so there is nothing to compare against." | tee -a "$GITHUB_STEP_SUMMARY"
-            : > benchstat.txt
             exit 0
           fi
+          echo "compared=true" >> "$GITHUB_OUTPUT"
           benchstat base.txt head.txt | tee benchstat.txt
           {
             echo '```'
@@ -54,5 +61,6 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Fail on a regression over 10% at p<0.05
+        if: steps.compare.outputs.compared == 'true'
         working-directory: head
         run: go run ./bench gate < "$GITHUB_WORKSPACE/benchstat.txt"

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -23,15 +24,29 @@ const (
 // gate allows.
 var errRegression = errors.New("benchmark regression")
 
+// errEmptyInput is returned for an empty or missing benchstat file. Nothing was
+// compared, so the gate cannot say nothing regressed.
+var errEmptyInput = errors.New("gate: benchstat output is empty, so nothing was compared")
+
 // comparisonRow matches a benchstat row that carries a delta: name, the two
 // columns, the delta and its p-value. A row without a significant change prints
 // "~" and does not match.
 var comparisonRow = regexp.MustCompile(`^(\S+)\s.*?([+-]\d+(?:\.\d+)?)%\s+\(p=(\d+(?:\.\d+)?)\s+n=`)
 
 // gateMain is `bench gate`: it reads benchstat's text output and fails on a
-// regression over maxRegressionPercent at p < significance.
+// regression over maxRegressionPercent at p < significance. Empty input is an
+// error: a gate that read nothing has not checked anything.
 func gateMain(in io.Reader, out io.Writer) error {
-	regressions, err := findRegressions(in)
+	text, err := io.ReadAll(in)
+	if err != nil {
+		return fmt.Errorf("read benchstat output: %w", err)
+	}
+
+	if len(bytes.TrimSpace(text)) == 0 {
+		return errEmptyInput
+	}
+
+	regressions, err := findRegressions(bytes.NewReader(text))
 	if err != nil {
 		return err
 	}

@@ -9,9 +9,11 @@ import argparse
 import contextlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import ledger
 
@@ -167,6 +169,51 @@ class PruneTest(unittest.TestCase):
         self.assertEqual(ledger.stale_rows(self.before, cache), [])  # no cache, no warning
         cache.write_text(json.dumps({"services": ["sts"], "nodeids": [f"{STS}::kept"]}), encoding="utf-8")
         self.assertEqual(ledger.stale_rows(self.before, cache), [f"{STS}::gone"])
+
+
+class CheckAgainstBaseTest(unittest.TestCase):
+    """`check --base` compares with the ledger committed at that revision, so CI
+    can pass the pull request's base instead of HEAD."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name).resolve()
+        self.path = self.repo / "parity" / "ledger.json"
+        self.path.parent.mkdir()
+
+    def git(self, *argv: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def check(self, base: str) -> int:
+        args = argparse.Namespace(ledger=self.path, base=base, collected=self.repo / "none.json")
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            try:
+                ledger.check(args)
+            except SystemExit as exit_:
+                return int(exit_.code or 0)
+        return 0
+
+    def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
+        self.git("init", "-q")
+        self.path.write_text(json.dumps({f"{STS}::a": row("pass", "pass")}), encoding="utf-8")  # ledger A
+        self.git("add", ".")
+        self.git("commit", "-qm", "A")
+        base = self.git("rev-parse", "HEAD")
+        self.path.write_text(json.dumps({f"{STS}::a": row("pass", "fail")}), encoding="utf-8")  # ledger B
+        self.git("commit", "-qam", "B")
+
+        self.assertNotEqual(self.check(base), 0)
+        # Against HEAD, which already holds B, the same ledger is not a regression:
+        # the comparison base is what makes the difference.
+        self.assertEqual(self.check("HEAD"), 0)
 
 
 if __name__ == "__main__":
