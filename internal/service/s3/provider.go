@@ -173,7 +173,9 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		rw := &responseWriter{ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1, inflight: &p.taken}
+		rw := &responseWriter{
+			ResponseWriter: w, method: r.Method, http1: r.ProtoMajor == 1, http11: r.ProtoAtLeast(1, 1), inflight: &p.taken,
+		}
 		rw.trackBody(r)
 
 		// abort does nothing once finish has run; it ends a taken response whose
@@ -247,6 +249,7 @@ type responseWriter struct {
 
 	method string
 	http1  bool
+	http11 bool // HTTP/1.1 or later: the client reads a chunked body.
 	wrote  bool
 
 	// raw is set once takeConn has the connection.

@@ -51,36 +51,44 @@ func TestTakenConnFraming(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
+	// An HTTP/1.0 client cannot read chunks: what would be chunked for HTTP/1.1
+	// ends at the close for it, as net/http answers it.
+	for _, http11 := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(tt.name+map[bool]string{true: "", false: ", HTTP/1.0"}[http11], func(t *testing.T) {
+				var out bytes.Buffer
 
-			tc := &takenConn{
-				out: bufio.NewWriter(&out), length: -1, code: http.StatusOK,
-				header: http.Header{headerContentType: {contentTypeXML}},
-			}
+				tc := &takenConn{
+					out: bufio.NewWriter(&out), length: -1, code: http.StatusOK, http11: http11,
+					header: http.Header{headerContentType: {contentTypeXML}},
+				}
 
-			tt.give(t, tc)
-			tc.finish()
-			require.NoError(t, tc.err)
+				tt.give(t, tc)
+				tc.finish()
+				require.NoError(t, tc.err)
 
-			resp, err := http.ReadResponse(bufio.NewReader(&out), nil)
-			require.NoError(t, err)
+				resp, err := http.ReadResponse(bufio.NewReader(&out), nil)
+				require.NoError(t, err)
 
-			got, err := io.ReadAll(resp.Body)
-			require.NoError(t, err)
-			require.NoError(t, resp.Body.Close())
+				got, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
 
-			assert.Equal(t, tt.wantBody, string(got))
+				assert.Equal(t, tt.wantBody, string(got))
 
-			if tt.wantChunked {
-				assert.Equal(t, []string{"chunked"}, resp.TransferEncoding)
-				assert.Equal(t, int64(-1), resp.ContentLength)
-			} else {
-				assert.Empty(t, resp.TransferEncoding)
-				assert.Equal(t, int64(len(tt.wantBody)), resp.ContentLength, "the length of a body that ends in time")
-			}
-		})
+				switch {
+				case tt.wantChunked && http11:
+					assert.Equal(t, []string{"chunked"}, resp.TransferEncoding)
+					assert.Equal(t, int64(-1), resp.ContentLength)
+				case tt.wantChunked:
+					assert.Empty(t, resp.TransferEncoding, "no chunking for an HTTP/1.0 client")
+					assert.Equal(t, int64(-1), resp.ContentLength, "the body ends at the close")
+				default:
+					assert.Empty(t, resp.TransferEncoding)
+					assert.Equal(t, int64(len(tt.wantBody)), resp.ContentLength, "the length of a body that ends in time")
+				}
+			})
+		}
 	}
 }
 

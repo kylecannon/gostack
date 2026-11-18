@@ -209,7 +209,7 @@ func (w *responseWriter) takeConn(code int) bool {
 	header := w.Header()
 	t := &takenConn{
 		conn: conn, out: rw.Writer, length: -1, code: code,
-		noBody: bodiless(code), discard: w.method == http.MethodHead,
+		noBody: bodiless(code), discard: w.method == http.MethodHead, http11: w.http11,
 	}
 
 	n, parseErr := strconv.ParseInt(header.Get(headerContentLength), 10, 64)
@@ -314,6 +314,7 @@ type takenConn struct {
 	length  int64 // bytes still owed to a declared Content-Length, or -1.
 	noBody  bool  // a 204 or 304: no body, no Content-Length.
 	discard bool  // a HEAD response: Content-Length, no body.
+	http11  bool  // the client reads chunked bodies; an HTTP/1.0 client does not.
 
 	// sent is set once the head is written. Until then header holds the head of
 	// a response of unknown length, and buf the body held back for its length.
@@ -342,7 +343,7 @@ func (t *takenConn) write(p []byte) (int, error) {
 			return len(p), nil
 		}
 
-		t.commitChunked()
+		t.commitStreaming()
 
 		if t.err != nil {
 			return 0, t.err
@@ -388,14 +389,26 @@ func (t *takenConn) commitLength() {
 	t.header, t.buf = nil, nil
 }
 
-// commitChunked writes the head of a response of unknown length that must send
-// before its end, chunked, and then what was held back as the first chunk.
-func (t *takenConn) commitChunked() {
+// commitStreaming writes the head of a response of unknown length that must send
+// before its end, and then what was held back. An HTTP/1.1 client gets it
+// chunked. An HTTP/1.0 client cannot read chunks, so its body ends when the
+// connection closes, as net/http answers it.
+func (t *takenConn) commitStreaming() {
 	t.sent = true
-	t.chunked = true
-	t.err = writeRawHead(t.out, t.code, t.header, "Transfer-Encoding: chunked\r\n")
+	t.chunked = t.http11
 
-	t.writeChunk(t.buf)
+	framing := ""
+	if t.chunked {
+		framing = "Transfer-Encoding: chunked\r\n"
+	}
+
+	t.err = writeRawHead(t.out, t.code, t.header, framing)
+
+	if t.chunked {
+		t.writeChunk(t.buf)
+	} else if t.err == nil {
+		_, t.err = t.out.Write(t.buf)
+	}
 
 	t.header, t.buf = nil, nil
 }
@@ -420,7 +433,7 @@ func (t *takenConn) writeChunk(p []byte) {
 // something before its end can only be chunked.
 func (t *takenConn) flush() error {
 	if !t.sent {
-		t.commitChunked()
+		t.commitStreaming()
 	}
 
 	if t.err != nil {

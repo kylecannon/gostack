@@ -47,7 +47,7 @@ func putExposeEdgeCORS(t *testing.T, srv *httptest.Server) {
 	req.Header.Set("Authorization", rawAuthorization)
 	req.Header.Set("Content-MD5", base64.StdEncoding.EncodeToString(sum[:]))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -63,7 +63,7 @@ func putPlainObject(t *testing.T, srv *httptest.Server, body []byte) {
 
 	req.Header.Set("Authorization", rawAuthorization)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -112,7 +112,18 @@ func headerLine(head, name string) (string, bool) {
 // before the response does: the PUT below was lost 3 times in 20 without the
 // linger.
 func TestAnEarlyErrorReachesAClientThatIsStillSending(t *testing.T) {
-	srv := startEdgeServer(t, nil)
+	earlyErrors(t, startEdgeServer(t, nil))
+}
+
+// TestAnEarlyErrorReachesAClientOverTLS is the same over TLS, where the
+// half-close is tls.Conn.CloseWrite.
+func TestAnEarlyErrorReachesAClientOverTLS(t *testing.T) {
+	earlyErrors(t, startEdgeTLS(t))
+}
+
+func earlyErrors(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+
 	putEdgeObject(t, srv, []byte("hello"))
 	putExposeEdgeCORS(t, srv)
 
@@ -126,7 +137,7 @@ func TestAnEarlyErrorReachesAClientThatIsStillSending(t *testing.T) {
 		req.Header.Set("Origin", crossOrigin)
 		req.Header.Set("X-Amz-Storage-Class", "BOGUS")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := srv.Client().Do(req)
 		require.NoError(t, err, "try %d: the response is lost", try)
 
 		_, err = io.Copy(io.Discard, resp.Body)

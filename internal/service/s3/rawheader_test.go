@@ -53,6 +53,31 @@ func startEdgeProvider(
 ) (*httptest.Server, *s3.Provider) {
 	t.Helper()
 
+	srv, provider := newEdgeServer(t, protocols, dirty)
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	return srv, provider
+}
+
+// startEdgeTLS is startEdgeServer over TLS with HTTP/1.1. Its clients are
+// srv.Client().
+func startEdgeTLS(t *testing.T) *httptest.Server {
+	t.Helper()
+
+	srv, _ := newEdgeServer(t, nil, nil)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// newEdgeServer builds the server of startEdgeServer without starting it.
+func newEdgeServer(
+	t *testing.T, protocols *http.Protocols, dirty gateway.Dirtier,
+) (*httptest.Server, *s3.Provider) {
+	t.Helper()
+
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		s3.NewEphemeral(t.TempDir()))
 	t.Cleanup(provider.Close)
@@ -71,9 +96,6 @@ func startEdgeProvider(
 	if protocols != nil {
 		srv.Config.Protocols = protocols
 	}
-
-	srv.Start()
-	t.Cleanup(srv.Close)
 
 	return srv, provider
 }
@@ -99,7 +121,7 @@ func putEdgeObject(t *testing.T, srv *httptest.Server, body []byte) {
 			req.Header.Set(name, value)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := srv.Client().Do(req)
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
 		require.Equal(t, http.StatusOK, resp.StatusCode)
