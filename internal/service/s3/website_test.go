@@ -147,6 +147,20 @@ func TestPutBucketWebsiteValidates(t *testing.T) {
 			wantCode: codeInvalidRequest, wantMessage: badProtocol,
 		},
 		{
+			// net/http panics on WriteHeader(42), so a rule with it would take the
+			// request that matched it down with a 500.
+			name: "a redirect code that is not a status code",
+			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
+				`<HttpRedirectCode>42</HttpRedirectCode></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`,
+			wantCode: codeInvalidRequest, wantMessage: "The HTTP redirect code must be a 3xx status code.",
+		},
+		{
+			name: "a redirect code over 999",
+			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
+				`<HttpRedirectCode>1000</HttpRedirectCode></Redirect></RoutingRule></RoutingRules></WebsiteConfiguration>`,
+			wantCode: codeInvalidRequest, wantMessage: "The HTTP redirect code must be a 3xx status code.",
+		},
+		{
 			name: "a prefix and a key to replace",
 			giveBody: `<WebsiteConfiguration>` + index + `<RoutingRules><RoutingRule><Redirect>` +
 				`<ReplaceKeyPrefixWith>prefix</ReplaceKeyPrefixWith><ReplaceKeyWith>key-name</ReplaceKeyWith>` +

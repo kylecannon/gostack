@@ -213,10 +213,26 @@ func validateRoutingRules(rules []s3api.RoutingRule) error {
 		if protocol := deref(redirect.Protocol); protocol != "" && !slices.Contains(websiteProtocols, protocol) {
 			return invalidConfigRequest(messageBadProtocol)
 		}
+
+		// net/http panics on a status code outside 100 to 999, which the rule would
+		// otherwise reach at the first request it matches. A redirect is a 3xx;
+		// AWS documents no range, so this is the narrowest one that keeps a rule
+		// from being unserveable. A value that is not a number is served as 301.
+		code, err := strconv.Atoi(deref(redirect.HttpRedirectCode))
+		if err == nil && (code < minRedirectCode || code > maxRedirectCode) {
+			return invalidConfigRequest("The HTTP redirect code must be a 3xx status code.")
+		}
 	}
 
 	return nil
 }
+
+// minRedirectCode and maxRedirectCode bound the HttpRedirectCode of a routing
+// rule.
+const (
+	minRedirectCode = 300
+	maxRedirectCode = 399
+)
 
 // websiteBucket returns the bucket a website host names, whichever account owns
 // it, and its website configuration. A website request is not signed.
