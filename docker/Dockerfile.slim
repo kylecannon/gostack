@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1
+#
+# The slim image: the static gostack binary on distroless/static. There is no
+# shell, so .sh and .py boot.d/ready.d hooks fail; only executable hooks work.
+# Use docker/Dockerfile when hooks need bash, python or awslocal.
+#
+#   make image-slim   builds this file as gostack:dev-slim
+#
+# Runs as root, not the :nonroot variant: gostack is PID 1 and acts as the
+# process reaper and supervisor (docs/architecture.md, Container), which needs
+# the privileges LocalStack's own image runs with.
+
+FROM --platform=$BUILDPLATFORM golang:1.27.4 AS build
+
+ARG GOTOOLCHAIN=go1.27.4
+ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+
+ENV GOTOOLCHAIN=${GOTOOLCHAIN} \
+    CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH}
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+      -o /out/gostack ./cmd/gostack
+
+# distroless has no shell to create files, so the marker files, the state
+# directory and the localstack symlink are laid out here and copied over.
+RUN mkdir -p /rootfs/usr/local/bin /rootfs/var/lib/localstack /rootfs/usr/lib/localstack /rootfs/tmp/localstack && \
+    cp /out/gostack /rootfs/usr/local/bin/gostack && \
+    ln -s gostack /rootfs/usr/local/bin/localstack && \
+    touch /rootfs/tmp/localstack/.marker /rootfs/usr/lib/localstack/.community-version && \
+    chmod 777 /rootfs/var/lib/localstack /rootfs/tmp/localstack
+
+# The default tag of this image is the root variant.
+FROM gcr.io/distroless/static-debian12
+
+COPY --from=build /rootfs/ /
+
+EXPOSE 4566 4510-4559
+
+HEALTHCHECK --interval=10s --start-period=15s --retries=5 --timeout=10s \
+    CMD ["localstack", "status", "services", "--format=json"]
+
+VOLUME /var/lib/localstack
+
+LABEL org.opencontainers.image.source="https://github.com/kylecannon/gostack" \
+      org.opencontainers.image.description="gostack (slim), a LocalStack-compatible AWS emulator"
+
+ENTRYPOINT ["gostack"]

@@ -1,0 +1,11 @@
+.git
+.github
+.claude
+.agentic-quality
+bin
+tools
+parity
+docs
+*.test
+*.out
+.DS_Store

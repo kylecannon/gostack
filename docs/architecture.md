@@ -30,6 +30,16 @@ About 85 to 90% of tests are pure boto3 or HTTP. Snapshot comparison
 (`localstack-snapshot`) sees only parsed responses, so it works against any
 implementation.
 
+### Behavior the suite does not pin
+
+When gostack passes every test but behaves differently from LocalStack, the AWS
+specification decides: the vendored botocore model in `specs/`, then the AWS
+API reference for the operation. gostack follows AWS, and `docs/compat.md`
+lists the divergence from LocalStack. When neither settles it, the case is
+filed on the board for triage and the current behavior stays. A case on a core
+path (request routing, a protocol codec, persistence, or a service's main
+operations) is decided before the phase ships.
+
 ### Baseline
 
 Build the LocalStack image from `../localstack@8b9a79f`, then run the same
@@ -66,7 +76,7 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   deferral.
 - `docs/parity.md` is generated from the ledger and shows percentages per
   service.
-- Shard with `pytest-split` using LocalStack's `.test_durations`.
+- CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
 
 ### Spec sources (vendored into `specs/`, with a `specs/SOURCES.lock`)
 
@@ -115,7 +125,7 @@ parity/                      runner Dockerfile, pytest_gostack.py, exclusions.ya
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
 docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)
-.github/workflows/           ci.yml, parity.yml, bench.yml, release.yml
+.github/workflows/           ci.yml, parity.yml, fuzz.yml, bench.yml, bench-system.yml, release.yml
 AGENTS.md, CLAUDE.md, Makefile, .golangci.yml, .agentic-quality
 ```
 
@@ -126,7 +136,9 @@ names follow conventions-go.md: no `util`, no `types`, kebab-case file names.
 
 The server is `net/http` with `github.com/go-chi/chi/v5` for routing and
 middleware composition. fasthttp stays out: it has no HTTP/2, and its request
-type breaks streaming S3 bodies and SDK event streams.
+type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
+request bodies (form and json) are capped at 16 MiB, counted after gzip
+decoding, and an oversized one answers `MalformedQueryString` (400).
 
 ### How chi is used
 
@@ -138,10 +150,12 @@ type breaks streaming S3 bodies and SDK event streams.
   path, internal or AWS, in this order:
   1. Internal-request marking.
   2. The shutdown guard.
-  3. Data-plane service detection by `Host`: `<bucket>.s3.*`,
-     `*.s3-website.*`, `<id>.execute-api.*` and `*.lambda-url.*`
-     (`middleware.RouteHeaders`). This mirrors `ServiceLoaderForDataPlane`, and
-     a service set here is not detected again later.
+  3. Data-plane service detection by `Host`, through each registration's
+     `ClaimHost`, for hosts such as `*.lambda-url.*` and `*.s3-website.*`. This
+     mirrors `ServiceLoaderForDataPlane`. A service claimed here is not
+     detected again later, and its request is served before the routes other
+     services mount. The `/_localstack`, `/_gostack` and `/_aws` routes keep
+     their own.
   4. Preprocess hooks. S3 marks a request as S3 when it is host-style, or
      path-style to an existing bucket (`services/s3/cors.py`).
   5. CORS, skipped for requests marked S3 or API Gateway.
@@ -223,11 +237,33 @@ encode functions, REST route tables, and error mapping. This avoids rustack's
 mistake, where only types were generated and roughly 4.4k lines of S3 XML were
 written by hand.
 
-- **JSON:** `bytedance/sonic` encodes and decodes the generated types. AWS JSON
-  quirks are custom marshalers on generated types, and sonic honors them:
-  epoch-second timestamps, base64 blobs, and `__type` error codes.
+- **JSON:** `encoding/json/v2` encodes and decodes the generated types. AWS JSON
+  quirks are custom marshalers on generated types, on the streaming v2
+  interfaces (`MarshalJSONTo`, `UnmarshalJSONFrom`): epoch-second timestamps,
+  base64 blobs, and `__type` error codes. One option set in
+  `internal/protocol/awsjson` serves every encode and decode.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output.
+
+### Service registration (`internal/service`)
+
+A service is one `service.Registration`, listed once in `registrations()` in
+`cmd/gostack/services.go`; nothing else in `cmd/gostack` names it. Besides
+`Metadata`, `Serve`, `Mount`, `Mutating` and `Shutdown`, a registration carries
+its routing claims and its state lifecycle, each optional. `ClaimHost` takes a
+request by its host at root step 3. `Claim` picks the service among those that
+share a signing name, by the rules of `custom_signing_name_rules` in LocalStack's
+`aws/protocol/service_router.py`, such as s3control's `/v20180820` under the
+`s3` signing name. An unclaimed tie stays a 400 "ambiguous request". `Persist`
+is the Snapshot/Restore pair, which persistence registers only when `PERSIST_*`
+enables the service. `Reset(account, region)` empties the state in place, so a
+call already holding it never writes into state the reset dropped; every
+service that has one joins `/_gostack/state/reset`, persisted or not. `Close`
+stops the service's own goroutines after the gateway drains and before the last
+save. A service that reports changes the gateway cannot see, such as SQS calls
+to a queue URL, takes a `changed(service)` callback in its constructor.
+`store.Bundle` keeps each account-region state for good and resets it through
+the emptier its owner gives `NewBundle`.
 
 ## Internal API
 
@@ -250,7 +286,7 @@ follows add, migrate, delete.
 | `GET /_gostack/init` | hook status per stage | `/_localstack/init[/<stage>]` |
 | `GET/PATCH /_gostack/config` | runtime config updates; only when `GOSTACK_ENABLE_CONFIG_UPDATES` (or `ENABLE_CONFIG_UPDATES`) is set | `/_localstack/config` (GET/POST) |
 | `GET /_gostack/services` | Capabilities per service: the operations implemented and the total, so coverage is stated honestly | none |
-| `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate | none |
+| `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate. `region=` matches the region a state is stored under, so a global service such as STS, stored under `global`, is cleared only by a reset with no `region` or with `region=global` | none |
 | `POST /_gostack/state/save`, `/_gostack/state/load` | Manual persistence triggers | none |
 | `/_gostack/services/<svc>/...` | Developer endpoints, listed below | `/_aws/<svc>/...` |
 | `/_gostack/debug/pprof/*` | Profiling; only when `DEBUG=1` | none |
@@ -352,7 +388,10 @@ Tests split along the same line:
 - **Entrypoint.** The image runs the gostack binary directly. There is no
   shell entrypoint. Startup is in `internal/config` and `internal/lifecycle`:
   - `internal/config` resolves env vars (see Other compatibility aliases).
-  - `internal/lifecycle` runs the `boot.d` hooks, then starts the gateway.
+  - `internal/lifecycle` runs the `boot.d` hooks, then starts the gateway. The
+    gateway loads its TLS certificate and binds its ports before the `start.d`
+    and `ready.d` hooks run, so a `CUSTOM_SSL_CERT_PATH` that cannot be used
+    exits non-zero without `Ready.`.
   - `internal/lifecycle` also supervises. When gostack runs as PID 1, it starts
     itself as a child process and acts as LocalStack's
     `bin/localstack-supervisor`:
@@ -369,6 +408,47 @@ Tests split along the same line:
     community-image notice when `LOCALSTACK_AUTH_TOKEN` is unset, and the
     wrong-image notice when `LOCALSTACK_API_KEY` or `LOCALSTACK_AUTH_TOKEN` is
     set.
+- **Shutdown.** SIGTERM, SIGINT, a `restart` and a `kill` action all take one
+  path, and it ends before the supervisor's SIGKILL. LocalStack runs one
+  `on_infra_shutdown` hook list (`runtime/runtime.py`, `runtime/shutdown.py`):
+  the init `shutdown.d` scripts at default priority, then the services' stop at
+  priority -10 (SQS wakes its long polls there, and persistence saves), and
+  only then `runtime_server.shutdown()`. gostack keeps the hooks-before-save
+  order and differs in two places. The services are told to let go first, with
+  the 503 guard, because the gateway owns that call (SQ-44). And the gateway
+  drains before the save, so a request still in flight is in the saved state
+  where it can finish in time. The save is reserved ahead of everything that can
+  overrun. `T` is `SHUTDOWN_TIMEOUT`, which the supervisor counts from the
+  SIGTERM it sends. The child counts from the moment it sees the signal, which
+  is microseconds later, and reads `T` once at start, so an update through
+  `/_localstack/config` does not move the deadline. `Save` is the end of the
+  save, not of the process: the exit follows it by the time to close the
+  engine.
+  1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
+     developer paths stay up), and each service's `Shutdown` function runs. SQS
+     wakes its long polls there.
+  2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
+  3. The gateway drains the requests in flight. At `Work` it closes the
+     connections that are left.
+  4. The persisted state is saved, with a deadline of `Save`. Then the services
+     stop their own goroutines (SQS's move tasks), and a second save writes
+     whatever that or a request cut at `Work` changed.
+
+  | Point | Time after the signal, with `T` = 5 s | Rule |
+  | --- | --- | --- |
+  | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
+  | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | SIGKILL | 5 s | the supervisor, unchanged |
+
+  The hooks, the drain and the service `Shutdown` functions share the time up
+  to `Work`, and a slow one cannot take the save's reserve: a service function
+  that never returns is left behind at `Work`, the hooks that follow it are
+  skipped, and the drain and the save go on without it. A request still running
+  when the save starts can have its effect saved or not, and the file is whole
+  either way, since the snapshot takes the service locks. `SHUTDOWN_TIMEOUT=0` has no `Work` and no `Save`: hooks and the save
+  take what they need, and the drain keeps its 5-second cap. With the
+  supervisor's timer off nothing kills the child, so a stuck hook is the
+  user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at
   `/_gostack/init`. The process prints `Ready.` on stdout, which testcontainers
@@ -388,8 +468,11 @@ Tests split along the same line:
     A hook that imports `localstack.*` does not work under gostack, because
     there is no such package.
 - **Healthcheck:** the HEALTHCHECK runs `localstack status services
-  --format=json`, and `localstack` is a symlink to gostack. `curl` is present in
-  the full image for compose healthchecks that use it.
+  --format=json`, and `localstack` is a symlink to gostack. The command asks
+  `GET /_gostack/health`, which is mounted whatever `GOSTACK_COMPAT_PATHS` says,
+  and prints each service's `state` as LocalStack's CLI does, so the output is
+  the same with the compat paths on or off. `curl` is present in the full image
+  for compose healthchecks that use it.
 - **Lambda:**
   - Runs `public.ecr.aws/lambda/<runtime>` containers through the Docker
     socket.
@@ -415,25 +498,95 @@ Tests split along the same line:
   Kinesis, CloudWatch and SES assets).
 - Otherwise nothing persists and state is in-memory only.
 
-**Configuration** is copied exactly:
+**Configuration** is copied exactly from localstack-persist
+(`src/localstack_persist/config.py`, `state.py`); `internal/config/persist.go`
+cites the lines.
 
-- `PERSIST_DEFAULT`.
-- `PERSIST_<SERVICE>`: matched case-insensitively, `_` and `-` stripped,
-  `elasticsearch` maps to `es`. Accepted values are exactly `1`, `0`, `true` or
-  `false`; anything else logs a warning and is ignored. Enabling a service also
-  enables the services it depends on.
-- `PERSIST_FORMAT`: `json` and/or `binary`.
-- `PERSIST_FREQUENCY`: defaults to 10 seconds.
+- `PERSIST_DEFAULT`: a service name like the others, so it is matched the same
+  way.
+- `PERSIST_<SERVICE>`: the `PERSIST_` prefix and the `FORMAT`, `FREQUENCY` and
+  `BASE_DIR` names are matched case-insensitively (`persist_sqs` works). The
+  service name has `_` and `-` stripped, and `elasticsearch` maps to `es`.
+  Accepted values are exactly `1`, `0`, `true` or `false` (any case, no
+  surrounding spaces); anything else logs a warning and is ignored.
+- Enabling a service also enables every service LocalStack's `resolve_apis`
+  returns for it, unless that service has a value of its own: `API_DEPENDENCIES`
+  followed transitively, and group names (`PERSIST_SERVERLESS`, `PERSIST_COGNITO`,
+  `PERSIST_TIMESTREAM`) replaced by their members. An explicit `0` keeps that
+  service off but does not stop the expansion behind it: `PERSIST_DEFAULT=0
+  PERSIST_SSM=1 PERSIST_SECRETSMANAGER=0` persists `ssm`, `kms`, `lambda`, `s3`
+  and `sts`. Members of a group keep LocalStack's hyphens (`cognito-idp`), which
+  localstack-persist never looks up, so neither does gostack.
+- `PERSIST_FORMAT`: `json` and/or `binary`, comma separated, in the order Load
+  tries them.
+- `PERSIST_FREQUENCY`: decimal seconds, defaults to 10. Zero or a negative number
+  saves as soon as a service changes, with a timer armed at zero and never a
+  polling loop. A value Python's `float()` rejects is ignored with a warning,
+  Go's hexadecimal floats (`0x1p4`) included, and so are `nan` and `inf`.
 - `PERSIST_BASE_DIR`: defaults to `/persisted-data`.
 
 **Behavior:**
 
 - After any successful request whose operation does not start with Get, Head,
   Query, List or Describe, the service is marked dirty.
-- A flush timer is armed only when a service is dirty.
+- A flush timer is armed only when a service is dirty. At most one flush runs
+  or waits at a time: a change made during a flush is saved by the flush that
+  one schedules when it ends.
 - State is also saved on shutdown.
-- Writes are atomic: temp file, fsync, rename. This fixes localstack-persist's
-  non-atomic writes and rustack's save-only-on-shutdown.
+- Writes are atomic. The snapshot streams through a buffer into a temp file
+  next to each state file, then the temp file is fsynced and renamed over it.
+  The state is never held in memory a second time. A failed snapshot removes the
+  temp files and leaves the state files as they were. This fixes
+  localstack-persist's non-atomic writes and rustack's save-only-on-shutdown.
+- A load never overlaps a save, so a state file on disk is always a whole old or
+  a whole new state. A save, load or shutdown that waits for the other stops
+  waiting when its deadline passes.
+- A failed save is retried until it succeeds. The first retry waits
+  max(1 s, `PERSIST_FREQUENCY`) after the failure, and each failure in a row
+  doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
+  bring a pending retry forward. A successful save resets the wait, so with
+  `PERSIST_FREQUENCY` zero a change is saved at once again.
+- Of a run of failed saves the log shows the first in full, each one whose error
+  differs from the one before, every tenth with the count, and
+  `save recovered after N failures` when a save succeeds.
+
+**Loading and unloadable files:**
+
+- Load tries each format's file in the configured `PERSIST_FORMAT` order, then
+  any known format that is not configured. The first file that restores wins. A
+  missing file is skipped.
+- A file that exists but fails to load (an unknown envelope version, a truncated
+  or garbled file, one that cannot be read, one whose restore panics) is never
+  overwritten. The engine renames it to `<name>.unloadable-<UTC timestamp>` in
+  the same directory, logs an error naming both paths, with the stack for a
+  panic, and tries the next format. A service with no good file starts empty.
+- If the rename fails (a read-only directory, `EACCES`), saving and loading are
+  off for that service until the process restarts: the engine logs an error and
+  never writes the file, and `/_gostack/health` reports `persisted: false` for
+  the service. Every later save or load says so: `POST /_gostack/state/save` and
+  `/_gostack/state/load` answer 500 with an error naming the service. The other
+  services keep saving, and gostack still starts.
+
+**Confinement.** Every state file operation goes through an `os.Root` opened on
+the base directory: reads, temp files, fsync, renames, moving a file aside and
+creating directories. A link in the volume cannot send a read or a write
+outside the base directory.
+
+- A relative symbolic link that stays inside the base directory works as the
+  kernel resolves it, a `..` after a directory link included. A save writes the
+  temp file in the target's directory and renames it there, so the link stays.
+- A link that leaves the base directory is refused, and so is every absolute
+  link, even one that points inside it: `os.Root` does not follow absolute
+  links, and the host path and the container path of a mount usually differ
+  anyway. Use a relative link. Load checks the path of every format before it
+  reads any, logs an error naming the link, and the service is neither loaded
+  nor saved, as above. The link and whatever it points at are left alone.
+- A temp file is created with `O_EXCL` under a random name, so a file or link
+  planted under a temp name is never opened. Leftover temp files, from a crash
+  or planted, are deleted after the next save; a link among them is removed as a
+  link.
+- A link whose target fails to load is the one moved aside; its target is
+  untouched.
 
 **Format:**
 
@@ -453,11 +606,13 @@ in the product `go.mod`.
 |---|---|---|
 | go-chi/chi/v5 | the gateway | Routing and middleware composition. |
 | go-chi/cors | the gateway | CORS. LocalStack's rules go through `AllowOriginFunc`: the allowed-origin list from `aws/handlers/cors.py`, `EXTRA_CORS_*`, and `DISABLE_CORS_CHECKS`/`DISABLE_CORS_HEADERS`. It runs at root middleware step 5. S3 and API Gateway requests, marked earlier in the chain, skip it for their own CORS handling, as LocalStack does. |
-| bytedance/sonic | codegen | JSON codec. The Go version limit is in the Makefile and the native-path test is in `standards.md`. |
+| encoding/json/v2 (stdlib) | codegen | JSON codec, in place of `bytedance/sonic`. The user chose it despite a measured cost: `BenchmarkCodec*` in `internal/protocol/awsjson` (SQ-36: 4 decode and 3 encode payloads on the generated SQS and STS types, 10 interleaved single-CPU runs per toolchain, Apple M1 Max) put v2 on Go 1.27.4 at +27% geomean ns/op against sonic on Go 1.26.11, with decode 1.35x to 1.92x slower on every payload and ReceiveMessage encode 6% to 21% faster. The reasons: it is the standard library, it has no Go-version cap (sonic's native path stops at Go 1.27), and its streaming marshalers write into the caller's encoder without an intermediate `[]byte`. |
 | spf13/viper | config | Every LocalStack variable is registered with `BindEnv` and given its LocalStack default. `/_localstack/config` POST applies updates with `viper.Set`. `PERSIST_*` values go through an extra validator on top of viper, which reproduces localstack-persist's exact rules (only 1/0/true/false, a warning for anything else, dependency expansion). |
 | moby client (`github.com/moby/moby/client`) | Lambda | Lambda containers through the Docker socket. |
-| testify | the first test | Test assertions; required by conventions-go.md. |
+| stretchr/testify | the first test | Test assertions (`require`, `assert`) in every package's tests; required by conventions-go.md. |
+| santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
+| go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
-| aws-sdk-go-v2 | in-process tests | Tests and bench only. |
+| aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |

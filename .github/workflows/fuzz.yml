@@ -1,0 +1,57 @@
+name: fuzz
+
+# Every Fuzz* function in the repo, run by `make fuzz` for 60 seconds each
+# (docs/standards.md, "Gates"). A manual run can pick another FUZZTIME. When a
+# target crashes, go test writes the failing input to testdata/fuzz/<Target>/
+# beside the package, and the job uploads every such new file with the log.
+# Commit the file next to the fix: it replays as a seed from then on.
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "How long each target runs, as go test -fuzztime takes it."
+        type: string
+        default: 60s
+
+permissions:
+  contents: read
+
+# GitHub runs a bare bash step with -e only. Naming the shell adds -o pipefail,
+# so a failing command on the left of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FUZZTIME: ${{ inputs.fuzztime || '60s' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz every target
+        shell: bash
+        run: make fuzz FUZZTIME="$FUZZTIME" 2>&1 | tee "$RUNNER_TEMP/fuzz.log"
+      - name: Collect the failing inputs
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/fuzz-crashes"
+          git ls-files --others --exclude-standard -- '*/testdata/fuzz/*' |
+            xargs -r -I{} cp --parents {} "$RUNNER_TEMP/fuzz-crashes"
+          find "$RUNNER_TEMP/fuzz-crashes" -type f
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crashes
+          path: |
+            ${{ runner.temp }}/fuzz-crashes
+            ${{ runner.temp }}/fuzz.log
+          if-no-files-found: warn

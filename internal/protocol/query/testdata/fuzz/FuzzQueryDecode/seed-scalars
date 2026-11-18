@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Str=a&Int=1&Long=-9&Dbl=1.5&Flag=true&Data=aGk%3D&When=2000-01-02T20%3A34%3A56Z&Epoch=946845296")

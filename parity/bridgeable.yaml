@@ -1,0 +1,25 @@
+# Tests that carry LocalStack's `requires_in_process` marker and still run,
+# because everything they patch is `localstack.config`, which the config bridge
+# (parity/pytest_gostack.py) forwards to the target through /_localstack/config.
+#
+# Format: "nodeid pattern": the config variables the test patches
+#
+# Patterns match like parity/exclusions.yaml. The list applies only when the
+# bridge is on (GOSTACK_PARITY_BRIDGE=1). A test that is also in exclusions.yaml
+# stays excluded.
+#
+# A `requires_in_process` test that patches anything else (a module constant,
+# an object inside the server) belongs in exclusions.yaml, not here.
+
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_with_inflight": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_successive_purge_calls_fail": SQS_DELAY_PURGE_RETRY
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted": SQS_DELAY_RECENTLY_DELETED
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_endpoint": SQS_ENDPOINT_STRATEGY, LOCALSTACK_HOST
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_external_hostname_via_host_header": SQS_ENDPOINT_STRATEGY
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_get_queue_url_contains_localstack_host": SQS_ENDPOINT_STRATEGY
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_without_endpoint_strategy": SQS_ENDPOINT_STRATEGY
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_list_queues_multi_region_with_endpoint_strategy_domain": SQS_ENDPOINT_STRATEGY
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_endpoint_strategy_with_multi_region[off]": SQS_ENDPOINT_STRATEGY
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_queue_url_format_path_strategy": SQS_ENDPOINT_STRATEGY

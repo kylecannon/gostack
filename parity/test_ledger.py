@@ -1,0 +1,220 @@
+"""Tests for parity/ledger.py merge. Standard library only:
+
+    python3 -m unittest discover -s parity -p 'test_*.py'
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import ledger
+
+STS = "tests/aws/services/sts/test_sts.py::TestSts"
+SQS = "tests/aws/services/sqs/test_sqs.py::TestSqs"
+
+
+def row(localstack: str | None, gostack: str | None, reason: str = "") -> dict:
+    return {"localstack": localstack, "gostack": gostack, "reason": reason}
+
+
+def junit_for(results: dict[str, str]) -> str:
+    cases = []
+    for nodeid, status in results.items():
+        path, cls, name = nodeid.split("::")
+        classname = path[: -len(".py")].replace("/", ".") + "." + cls
+        body = {"pass": "", "fail": '<failure message="boom"/>', "skip": '<skipped message="why"/>'}[status]
+        cases.append(f'<testcase classname="{classname}" name="{name}" file="{path}">{body}</testcase>')
+    return f"<testsuites><testsuite>{''.join(cases)}</testsuite></testsuites>"
+
+
+class MergeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def merge(self, before: dict, column: str, results: dict[str, str], excluded: dict[str, str] | None = None) -> dict:
+        (self.dir / "ledger.json").write_text(json.dumps(before), encoding="utf-8")
+        (self.dir / "junit.xml").write_text(junit_for(results), encoding="utf-8")
+        (self.dir / "excluded.json").write_text(json.dumps({"excluded": excluded or {}}), encoding="utf-8")
+        args = argparse.Namespace(
+            column=column,
+            junit=self.dir / "junit.xml",
+            excluded=self.dir / "excluded.json",
+            ledger=self.dir / "ledger.json",
+            docs=self.dir / "parity.md",
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            ledger.merge(args)
+        return json.loads((self.dir / "ledger.json").read_text(encoding="utf-8"))
+
+    def test_full_run_replaces_every_row(self) -> None:
+        before = {
+            f"{STS}::a": row("pass", "pass"),
+            f"{STS}::b": row("pass", "pass"),
+            f"{SQS}::c": row("pass", "fail"),
+        }
+        after = self.merge(before, "gostack", {f"{STS}::a": "fail", f"{STS}::b": "skip", f"{SQS}::c": "pass"})
+        self.assertEqual(after[f"{STS}::a"]["gostack"], "fail")
+        self.assertEqual(after[f"{STS}::b"]["gostack"], "skip")
+        self.assertEqual(after[f"{SQS}::c"]["gostack"], "pass")
+        self.assertEqual({n: after[n]["localstack"] for n in after}, {n: before[n]["localstack"] for n in before})
+
+    def test_k_subset_updates_only_the_rows_it_matched(self) -> None:
+        before = {
+            f"{SQS}::purge_a": row("pass", "pass"),
+            f"{SQS}::purge_b": row("pass", "fail"),
+            f"{SQS}::other": row("pass", "pass"),
+            f"{SQS}::skipped": row("skip", None, "why"),
+        }
+        after = self.merge(before, "gostack", {f"{SQS}::purge_a": "fail"})
+        self.assertEqual(after[f"{SQS}::purge_a"]["gostack"], "fail")
+        for nodeid in (f"{SQS}::purge_b", f"{SQS}::other", f"{SQS}::skipped"):
+            self.assertEqual(after[nodeid], before[nodeid], nodeid)
+
+    def test_single_service_run_leaves_other_services_untouched(self) -> None:
+        before = {
+            f"{STS}::a": row("pass", "pass"),
+            f"{SQS}::c": row("pass", "fail", "kept"),
+            f"{SQS}::d": row("fail", None, "kept"),
+        }
+        after = self.merge(before, "localstack", {f"{STS}::a": "pass"})
+        self.assertEqual(after[f"{SQS}::c"], before[f"{SQS}::c"])
+        self.assertEqual(after[f"{SQS}::d"], before[f"{SQS}::d"])
+
+    def test_row_missing_from_a_run_of_its_own_service_keeps_both_columns(self) -> None:
+        before = {f"{STS}::a": row("pass", "pass"), f"{STS}::b": row("pass", "pass")}
+        after = self.merge(before, "gostack", {f"{STS}::a": "pass"})
+        self.assertEqual(after[f"{STS}::b"], before[f"{STS}::b"])
+
+    def test_excluded_nodeid_of_the_run_is_written_excluded(self) -> None:
+        before = {f"{STS}::a": row("pass", "pass"), f"{STS}::iam": row("pass", "pass")}
+        after = self.merge(before, "gostack", {f"{STS}::a": "pass"}, {f"{STS}::iam": "depends-on:iam"})
+        self.assertEqual(after[f"{STS}::iam"], row("excluded", "excluded", "depends-on:iam"))
+
+
+class PruneTest(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.ledger_path = self.dir / "ledger.json"
+        self.before = {
+            f"{STS}::kept": row("pass", "pass"),
+            f"{STS}::gone": row("pass", "pass"),
+            f"{SQS}::kept": row("pass", "fail"),
+            f"{SQS}::gone[a-b]": row("skip", None, "why"),
+            "tests/other/test_x.py::t": row("pass", None),
+        }
+        self.ledger_path.write_text(json.dumps(self.before), encoding="utf-8")
+        # What `pytest --collect-only -q` prints: nodeids, a blank line, a summary.
+        self.listing = self.dir / "collected.txt"
+        self.listing.write_text(f"{STS}::kept\n{SQS}::kept\n\n2 tests collected in 0.10s\n", encoding="utf-8")
+
+    def prune(self, dry_run: bool, collected: Path | None = None) -> tuple[str, dict]:
+        args = argparse.Namespace(
+            ledger=self.ledger_path,
+            docs=self.dir / "parity.md",
+            collected=collected or self.listing,
+            dry_run=dry_run,
+            localstack=None,
+            cache=self.dir / "cache.json",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ledger.prune(args)
+        return out.getvalue(), json.loads(self.ledger_path.read_text(encoding="utf-8"))
+
+    def test_removes_rows_the_collection_lacks_and_prints_them(self) -> None:
+        out, after = self.prune(dry_run=False)
+        self.assertIn(f"removed {STS}::gone", out)
+        self.assertIn(f"removed {SQS}::gone[a-b]", out)
+        self.assertEqual(set(after), {f"{STS}::kept", f"{SQS}::kept", "tests/other/test_x.py::t"})
+        self.assertTrue((self.dir / "parity.md").exists())
+
+    def test_dry_run_prints_the_same_list_and_changes_nothing(self) -> None:
+        dry_out, after = self.prune(dry_run=True)
+        self.assertEqual(after, self.before)
+        self.assertFalse((self.dir / "parity.md").exists())
+        real_out, _ = self.prune(dry_run=False)
+        self.assertEqual(dry_out.replace("would remove", "removed"), real_out)
+
+    def test_nothing_stale_prints_an_empty_list(self) -> None:
+        self.ledger_path.write_text(json.dumps({k: v for k, v in self.before.items() if "gone" not in k}), encoding="utf-8")
+        out, _ = self.prune(dry_run=True)
+        self.assertEqual(out.splitlines(), ["prune: would remove 0 of 3 ledger row(s); 2 nodeids collected"])
+
+    def test_empty_collection_refuses_to_remove_every_row(self) -> None:
+        self.listing.write_text("no tests ran\n", encoding="utf-8")
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+            self.prune(dry_run=False)
+        self.assertEqual(json.loads(self.ledger_path.read_text(encoding="utf-8")), self.before)
+
+    def test_service_with_no_collected_nodeid_refuses_to_prune(self) -> None:
+        self.listing.write_text(f"{STS}::kept\n", encoding="utf-8")
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+            self.prune(dry_run=False)
+        self.assertEqual(json.loads(self.ledger_path.read_text(encoding="utf-8")), self.before)
+
+    def test_stale_rows_reads_the_cached_collection(self) -> None:
+        cache = self.dir / "cache.json"
+        self.assertEqual(ledger.stale_rows(self.before, cache), [])  # no cache, no warning
+        cache.write_text(json.dumps({"services": ["sts"], "nodeids": [f"{STS}::kept"]}), encoding="utf-8")
+        self.assertEqual(ledger.stale_rows(self.before, cache), [f"{STS}::gone"])
+
+
+class CheckAgainstBaseTest(unittest.TestCase):
+    """`check --base` compares with the ledger committed at that revision, so CI
+    can pass the pull request's base instead of HEAD."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name).resolve()
+        self.path = self.repo / "parity" / "ledger.json"
+        self.path.parent.mkdir()
+
+    def git(self, *argv: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *argv],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def check(self, base: str) -> int:
+        args = argparse.Namespace(ledger=self.path, base=base, collected=self.repo / "none.json")
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+            io.StringIO()
+        ):
+            try:
+                ledger.check(args)
+            except SystemExit as exit_:
+                return int(exit_.code or 0)
+        return 0
+
+    def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
+        self.git("init", "-q")
+        self.path.write_text(json.dumps({f"{STS}::a": row("pass", "pass")}), encoding="utf-8")  # ledger A
+        self.git("add", ".")
+        self.git("commit", "-qm", "A")
+        base = self.git("rev-parse", "HEAD")
+        self.path.write_text(json.dumps({f"{STS}::a": row("pass", "fail")}), encoding="utf-8")  # ledger B
+        self.git("commit", "-qam", "B")
+
+        self.assertNotEqual(self.check(base), 0)
+        # Against HEAD, which already holds B, the same ledger is not a regression:
+        # the comparison base is what makes the difference.
+        self.assertEqual(self.check("HEAD"), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

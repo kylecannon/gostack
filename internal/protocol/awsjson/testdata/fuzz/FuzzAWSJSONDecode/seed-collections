@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"Names\":[\"a\",\"b\"],\"Leaves\":[{\"Name\":\"x\",\"Tags\":{\"k\":\"v\"}}],\"ByName\":{\"n\":{\"Name\":\"y\"}},\"Matrix\":[[\"a\"],[]]}")

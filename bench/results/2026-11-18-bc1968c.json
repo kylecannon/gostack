@@ -1,0 +1,448 @@
+{
+  "date": "2026-11-18",
+  "commit": "bc1968c",
+  "dirty": false,
+  "host": {
+    "docker": "29.8.2",
+    "os": "OrbStack",
+    "kernel": "7.2.12-orbstack-00394-gbecdd6130068",
+    "arch": "aarch64",
+    "cpus": 10,
+    "memory_bytes": 26287591424
+  },
+  "settings": {
+    "startup_runs": 5,
+    "settle_seconds": 10,
+    "idle_seconds": 60,
+    "load_seconds": 30,
+    "concurrencies": [
+      1,
+      16,
+      64
+    ],
+    "cycles": 200,
+    "cycle_concurrency": 16
+  },
+  "targets": [
+    {
+      "name": "gostack",
+      "image": "gostack:sq30",
+      "image_bytes": 489407835,
+      "startup": {
+        "samples_ms": [
+          330.215,
+          188.805,
+          219.557,
+          276.555,
+          197.629
+        ],
+        "median_ms": 219.557
+      },
+      "idle": {
+        "settle_seconds": 10,
+        "seconds": 60,
+        "usage": {
+          "baseline_rss_bytes": 5070848,
+          "end_rss_bytes": 5279744,
+          "peak_rss_bytes": 8179712,
+          "cpu_percent": 0.20092323963813463
+        }
+      },
+      "latency": [
+        {
+          "concurrency": 1,
+          "seconds": 30.000062418,
+          "cycles_per_sec": 2078.0956763141357,
+          "empty_receives": 0,
+          "send": {
+            "count": 62343,
+            "errors": 0,
+            "p50_us": 83,
+            "p99_us": 2158,
+            "mean_us": 161
+          },
+          "receive": {
+            "count": 62343,
+            "errors": 0,
+            "p50_us": 84,
+            "p99_us": 2163,
+            "mean_us": 164
+          },
+          "delete": {
+            "count": 62343,
+            "errors": 0,
+            "p50_us": 78,
+            "p99_us": 2025,
+            "mean_us": 153
+          },
+          "usage": {
+            "baseline_rss_bytes": 5279744,
+            "end_rss_bytes": 26189824,
+            "peak_rss_bytes": 33861632,
+            "cpu_percent": 32.88203681143924
+          }
+        },
+        {
+          "concurrency": 16,
+          "seconds": 30.002355209,
+          "cycles_per_sec": 2729.8523542388875,
+          "empty_receives": 0,
+          "send": {
+            "count": 81902,
+            "errors": 0,
+            "p50_us": 788,
+            "p99_us": 13461,
+            "mean_us": 1976
+          },
+          "receive": {
+            "count": 81902,
+            "errors": 0,
+            "p50_us": 789,
+            "p99_us": 13250,
+            "mean_us": 1973
+          },
+          "delete": {
+            "count": 81902,
+            "errors": 0,
+            "p50_us": 741,
+            "p99_us": 13194,
+            "mean_us": 1908
+          },
+          "usage": {
+            "baseline_rss_bytes": 26189824,
+            "end_rss_bytes": 43315200,
+            "peak_rss_bytes": 56397824,
+            "cpu_percent": 50.85255876730138
+          }
+        },
+        {
+          "concurrency": 64,
+          "seconds": 30.010993083,
+          "cycles_per_sec": 4187.232313587881,
+          "empty_receives": 0,
+          "send": {
+            "count": 125663,
+            "errors": 0,
+            "p50_us": 2909,
+            "p99_us": 26769,
+            "mean_us": 5120
+          },
+          "receive": {
+            "count": 125663,
+            "errors": 0,
+            "p50_us": 2856,
+            "p99_us": 26946,
+            "mean_us": 5090
+          },
+          "delete": {
+            "count": 125663,
+            "errors": 0,
+            "p50_us": 2856,
+            "p99_us": 26607,
+            "mean_us": 5066
+          },
+          "usage": {
+            "baseline_rss_bytes": 43315200,
+            "end_rss_bytes": 35504128,
+            "peak_rss_bytes": 61714432,
+            "cpu_percent": 75.87109853188173
+          }
+        }
+      ],
+      "agentic": {
+        "cycles": 200,
+        "concurrency": 16,
+        "seconds": 0.39456608,
+        "errors": 0,
+        "cycle_p50_ms": 28.881,
+        "cycle_p99_ms": 58.603,
+        "usage": {
+          "baseline_rss_bytes": 5079040,
+          "end_rss_bytes": 37322752,
+          "peak_rss_bytes": 37322752,
+          "cpu_percent": 14.156223404482146
+        }
+      }
+    },
+    {
+      "name": "gostack-slim",
+      "image": "gostack:sq30-slim",
+      "image_bytes": 20088975,
+      "startup": {
+        "samples_ms": [
+          987.521,
+          417.226,
+          403.849,
+          630.841,
+          574.523
+        ],
+        "median_ms": 574.523
+      },
+      "idle": {
+        "settle_seconds": 10,
+        "seconds": 60,
+        "usage": {
+          "baseline_rss_bytes": 5156864,
+          "end_rss_bytes": 5271552,
+          "peak_rss_bytes": 5271552,
+          "cpu_percent": 0.19461566922488668
+        }
+      },
+      "latency": [
+        {
+          "concurrency": 1,
+          "seconds": 30.002142047,
+          "cycles_per_sec": 1019.1605636724023,
+          "empty_receives": 0,
+          "send": {
+            "count": 30577,
+            "errors": 0,
+            "p50_us": 115,
+            "p99_us": 3620,
+            "mean_us": 331
+          },
+          "receive": {
+            "count": 30577,
+            "errors": 0,
+            "p50_us": 117,
+            "p99_us": 3554,
+            "mean_us": 328
+          },
+          "delete": {
+            "count": 30577,
+            "errors": 0,
+            "p50_us": 108,
+            "p99_us": 3701,
+            "mean_us": 319
+          },
+          "usage": {
+            "baseline_rss_bytes": 5271552,
+            "end_rss_bytes": 28016640,
+            "peak_rss_bytes": 36659200,
+            "cpu_percent": 35.3165617264059
+          }
+        },
+        {
+          "concurrency": 16,
+          "seconds": 30.002997671,
+          "cycles_per_sec": 2178.74896091412,
+          "empty_receives": 0,
+          "send": {
+            "count": 65369,
+            "errors": 0,
+            "p50_us": 1102,
+            "p99_us": 15121,
+            "mean_us": 2461
+          },
+          "receive": {
+            "count": 65369,
+            "errors": 0,
+            "p50_us": 1122,
+            "p99_us": 15528,
+            "mean_us": 2473
+          },
+          "delete": {
+            "count": 65369,
+            "errors": 0,
+            "p50_us": 1079,
+            "p99_us": 14897,
+            "mean_us": 2404
+          },
+          "usage": {
+            "baseline_rss_bytes": 28016640,
+            "end_rss_bytes": 45703168,
+            "peak_rss_bytes": 48971776,
+            "cpu_percent": 49.025518409094786
+          }
+        },
+        {
+          "concurrency": 64,
+          "seconds": 30.0095631,
+          "cycles_per_sec": 4117.454145808607,
+          "empty_receives": 0,
+          "send": {
+            "count": 123563,
+            "errors": 0,
+            "p50_us": 2709,
+            "p99_us": 25914,
+            "mean_us": 5215
+          },
+          "receive": {
+            "count": 123563,
+            "errors": 0,
+            "p50_us": 2717,
+            "p99_us": 26095,
+            "mean_us": 5206
+          },
+          "delete": {
+            "count": 123563,
+            "errors": 0,
+            "p50_us": 2649,
+            "p99_us": 26000,
+            "mean_us": 5115
+          },
+          "usage": {
+            "baseline_rss_bytes": 45703168,
+            "end_rss_bytes": 47980544,
+            "peak_rss_bytes": 71270400,
+            "cpu_percent": 71.88892540278923
+          }
+        }
+      ],
+      "agentic": {
+        "cycles": 200,
+        "concurrency": 16,
+        "seconds": 0.465921238,
+        "errors": 0,
+        "cycle_p50_ms": 34.421,
+        "cycle_p99_ms": 73.635,
+        "usage": {
+          "baseline_rss_bytes": 4771840,
+          "end_rss_bytes": 28639232,
+          "peak_rss_bytes": 28639232,
+          "cpu_percent": 18.87009103235862
+        }
+      }
+    },
+    {
+      "name": "localstack",
+      "image": "gostack-parity-localstack:8b9a79f",
+      "image_bytes": 1926689385,
+      "startup": {
+        "samples_ms": [
+          1532.037,
+          1607.69,
+          1425.609,
+          2753.828,
+          1827.617
+        ],
+        "median_ms": 1607.69
+      },
+      "idle": {
+        "settle_seconds": 10,
+        "seconds": 60,
+        "usage": {
+          "baseline_rss_bytes": 94683136,
+          "end_rss_bytes": 94777344,
+          "peak_rss_bytes": 132063232,
+          "cpu_percent": 2.6033841517547813
+        }
+      },
+      "latency": [
+        {
+          "concurrency": 1,
+          "seconds": 30.003886971,
+          "cycles_per_sec": 202.6070824048766,
+          "empty_receives": 0,
+          "send": {
+            "count": 6079,
+            "errors": 0,
+            "p50_us": 1250,
+            "p99_us": 5914,
+            "mean_us": 1667
+          },
+          "receive": {
+            "count": 6079,
+            "errors": 0,
+            "p50_us": 1253,
+            "p99_us": 5362,
+            "mean_us": 1661
+          },
+          "delete": {
+            "count": 6079,
+            "errors": 0,
+            "p50_us": 1210,
+            "p99_us": 5455,
+            "mean_us": 1605
+          },
+          "usage": {
+            "baseline_rss_bytes": 94777344,
+            "end_rss_bytes": 179163136,
+            "peak_rss_bytes": 209027072,
+            "cpu_percent": 100.19360056069293
+          }
+        },
+        {
+          "concurrency": 16,
+          "seconds": 30.02789505,
+          "cycles_per_sec": 270.7482488020751,
+          "empty_receives": 0,
+          "send": {
+            "count": 8130,
+            "errors": 0,
+            "p50_us": 18810,
+            "p99_us": 45005,
+            "mean_us": 19814
+          },
+          "receive": {
+            "count": 8130,
+            "errors": 0,
+            "p50_us": 18791,
+            "p99_us": 46869,
+            "mean_us": 19641
+          },
+          "delete": {
+            "count": 8130,
+            "errors": 0,
+            "p50_us": 18610,
+            "p99_us": 44424,
+            "mean_us": 19623
+          },
+          "usage": {
+            "baseline_rss_bytes": 179163136,
+            "end_rss_bytes": 255225856,
+            "peak_rss_bytes": 276160512,
+            "cpu_percent": 109.74001647761551
+          }
+        },
+        {
+          "concurrency": 64,
+          "seconds": 30.125264622,
+          "cycles_per_sec": 255.83177763596146,
+          "empty_receives": 0,
+          "send": {
+            "count": 7707,
+            "errors": 0,
+            "p50_us": 77993,
+            "p99_us": 204483,
+            "mean_us": 83303
+          },
+          "receive": {
+            "count": 7707,
+            "errors": 0,
+            "p50_us": 77856,
+            "p99_us": 308318,
+            "mean_us": 83722
+          },
+          "delete": {
+            "count": 7707,
+            "errors": 0,
+            "p50_us": 77663,
+            "p99_us": 279628,
+            "mean_us": 82774
+          },
+          "usage": {
+            "baseline_rss_bytes": 255225856,
+            "end_rss_bytes": 343269376,
+            "peak_rss_bytes": 364584960,
+            "cpu_percent": 107.44570202488623
+          }
+        }
+      ],
+      "agentic": {
+        "cycles": 200,
+        "concurrency": 16,
+        "seconds": 5.04947367,
+        "errors": 0,
+        "cycle_p50_ms": 243.998,
+        "cycle_p99_ms": 1688.725,
+        "usage": {
+          "baseline_rss_bytes": 98656256,
+          "end_rss_bytes": 312078336,
+          "peak_rss_bytes": 383926272,
+          "cpu_percent": 119.38521914305807
+        }
+      }
+    }
+  ]
+}

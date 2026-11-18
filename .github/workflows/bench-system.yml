@@ -1,0 +1,170 @@
+name: bench-system
+
+# The system bench (docs/standards.md, "Benchmarks"; bench/doc.go).
+#
+# A pull request builds the base and the head image on the same runner, runs the
+# quick profile for gostack alone against each, and compares the two with
+# `bench compare`, which fails the job when a gostack cell regressed with
+# non-overlapping runs. Both result files are uploaded and the comparison goes
+# to the step summary.
+#
+# The weekly schedule, and a manual run with the full profile, run the whole
+# matrix for gostack, gostack-slim and LocalStack (reference only, never gating)
+# and compare the result with the newest committed one of the same host.
+
+on:
+  pull_request:
+    paths:
+      - "internal/**"
+      - "cmd/**"
+      - "docker/**"
+      - "bench/**"
+      - "go.mod"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "quick: each axis once, gostack only. full: the whole matrix, with LocalStack as reference."
+        type: choice
+        options:
+          - quick
+          - full
+        default: quick
+      localstack_image:
+        description: "The LocalStack image the full profile measures as reference."
+        type: string
+        default: localstack/localstack:latest
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+# GitHub runs a bare bash step with -e only. Naming the shell adds -o pipefail,
+# so a failing command on the left of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pull-request:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: head/go.mod
+          cache: true
+          cache-dependency-path: |
+            head/go.sum
+            base/go.sum
+      # Main has no image until the pull request that adds docker/Dockerfile
+      # merges. A base without one leaves nothing to measure, so the job says so
+      # in the summary and skips the steps below, which keeps it green.
+      - name: Check that the base has an image
+        id: base
+        run: |
+          if [ -f base/docker/Dockerfile ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=false" >> "$GITHUB_OUTPUT"
+            echo "base has no image to measure; nothing to compare" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The head's Makefile and Dockerfile logic builds both trees, so a base
+      # that predates a Make target is still measured.
+      - name: Build the base image
+        if: steps.base.outputs.image == 'true'
+        working-directory: base
+        run: make -f ../head/Makefile image IMAGE=gostack:base
+      - name: Build the head image
+        if: steps.base.outputs.image == 'true'
+        working-directory: head
+        run: make image IMAGE=gostack:head
+      # The head's load generator drives both images, so the two runs differ only
+      # in the image.
+      - name: Measure the base
+        if: steps.base.outputs.image == 'true'
+        working-directory: head
+        run: |
+          go run ./bench run -profile quick -targets gostack -gostack-image gostack:base \
+            -commit "$BASE_SHA" -out "$RUNNER_TEMP/base" -loadgen-image gostack-bench-loadgen:base -name-suffix -base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      - name: Measure the head
+        if: steps.base.outputs.image == 'true'
+        working-directory: head
+        run: |
+          go run ./bench run -profile quick -targets gostack -gostack-image gostack:head \
+            -commit "$HEAD_SHA" -out "$RUNNER_TEMP/head" -loadgen-image gostack-bench-loadgen:head -name-suffix -head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      - name: Compare
+        if: steps.base.outputs.image == 'true'
+        working-directory: head
+        run: |
+          base=$(ls "$RUNNER_TEMP"/base/*.json)
+          head=$(ls "$RUNNER_TEMP"/head/*.json)
+          status=0
+          go run ./bench compare -base "$base" -head "$head" | tee "$RUNNER_TEMP/compare.md" || status=$?
+          cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.base.outputs.image == 'true'
+        with:
+          name: bench-system-pull-request
+          path: |
+            ${{ runner.temp }}/base/*.json
+            ${{ runner.temp }}/head/*.json
+            ${{ runner.temp }}/compare.md
+
+  scheduled:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      PROFILE: ${{ github.event_name == 'schedule' && 'full' || inputs.profile }}
+      LOCALSTACK_IMAGE: ${{ inputs.localstack_image || 'localstack/localstack:latest' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the images
+        run: |
+          make image IMAGE=gostack:ci
+          if [ "$PROFILE" = full ]; then
+            make image-slim IMAGE=gostack:ci
+            docker pull "$LOCALSTACK_IMAGE"
+          fi
+      # The full profile measures all three images; the quick one gostack alone.
+      # LocalStack is reference only. Either profile is compared with the newest
+      # committed result of the same host, which exits 0 with a note when no
+      # committed result was taken on a runner like this one.
+      - name: Measure and compare
+        run: |
+          targets=gostack
+          if [ "$PROFILE" = full ]; then targets=gostack,gostack-slim,localstack; fi
+          status=0
+          go run ./bench run -profile "$PROFILE" -targets "$targets" \
+            -gostack-image gostack:ci -slim-image gostack:ci-slim -localstack-image "$LOCALSTACK_IMAGE" \
+            -out "$RUNNER_TEMP/bench" -compare-dir bench/results \
+            | tee "$RUNNER_TEMP/compare.md" || status=$?
+          cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-system-${{ env.PROFILE }}
+          path: |
+            ${{ runner.temp }}/bench/*.json
+            ${{ runner.temp }}/bench/*.md
+            ${{ runner.temp }}/compare.md
