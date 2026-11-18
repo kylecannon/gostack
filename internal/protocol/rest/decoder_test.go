@@ -79,6 +79,53 @@ func Test_Decoder(t *testing.T) {
 	})
 }
 
+func Test_Decoder_QueryInt32Empty(t *testing.T) {
+	t.Parallel()
+
+	decode := func(query string) *rest.Decoder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/?"+query, nil)
+
+		return rest.NewDecoder(req, nil)
+	}
+
+	t.Run("empty value is absent", func(t *testing.T) {
+		t.Parallel()
+
+		d := decode("part-number-marker=")
+		assert.Nil(t, d.QueryInt32("part-number-marker"))
+		require.Nil(t, d.Err())
+	})
+
+	t.Run("malformed value is still an error", func(t *testing.T) {
+		t.Parallel()
+
+		d := decode("part-number-marker=abc")
+		assert.Nil(t, d.QueryInt32("part-number-marker"))
+		require.NotNil(t, d.Err())
+	})
+
+	t.Run("long and boolean stay strict", func(t *testing.T) {
+		t.Parallel()
+
+		d := decode("a=")
+		assert.Nil(t, d.QueryInt64("a"))
+		require.NotNil(t, d.Err())
+
+		d = decode("b=")
+		assert.Nil(t, d.QueryBool("b"))
+		require.NotNil(t, d.Err())
+	})
+
+	t.Run("number is read", func(t *testing.T) {
+		t.Parallel()
+
+		d := decode("part-number-marker=7")
+		got := d.QueryInt32("part-number-marker")
+		require.NotNil(t, got)
+		assert.Equal(t, int32(7), *got)
+	})
+}
+
 func Test_SetMap(t *testing.T) {
 	t.Parallel()
 

@@ -535,7 +535,7 @@
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListObjectsV2::test_list_ops_encoding_type_validation[list_object_versions]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListObjectsV2::test_list_ops_encoding_type_validation[list_objects]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListObjectsV2::test_list_ops_encoding_type_validation[list_objects_v2]": {"gostack": "pass", "localstack": "pass", "reason": ""},
-"tests/aws/services/s3/test_s3_list_operations.py::TestS3ListParts::test_list_parts_empty_part_number_marker": {"gostack": "fail", "localstack": "pass", "reason": ""},
+"tests/aws/services/s3/test_s3_list_operations.py::TestS3ListParts::test_list_parts_empty_part_number_marker": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListParts::test_list_parts_pagination": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListParts::test_list_parts_via_object_attrs_pagination": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/s3/test_s3_list_operations.py::TestS3ListParts::test_s3_list_parts_timestamp_precision": {"gostack": "pass", "localstack": "pass", "reason": ""},

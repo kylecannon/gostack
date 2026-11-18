@@ -208,8 +208,17 @@ func (d *Decoder) Query(name string) *string {
 	return &v[0]
 }
 
-// QueryInt32 returns the querystring parameter called name as an int32.
-func (d *Decoder) QueryInt32(name string) *int32 { return parseOne(d, name, d.Query(name), parseInt32) }
+// QueryInt32 returns the querystring parameter called name as an int32. An
+// empty value reads as absent, as LocalStack's S3 request parser does for an
+// integer member (S3RequestParser._parse_integer); long, boolean and timestamp
+// members stay strict there, so they stay strict here.
+func (d *Decoder) QueryInt32(name string) *int32 {
+	if v := d.Query(name); v != nil && *v == "" {
+		return nil
+	}
+
+	return parseOne(d, name, d.Query(name), parseInt32)
+}
 
 // QueryInt64 returns the querystring parameter called name as an int64.
 func (d *Decoder) QueryInt64(name string) *int64 { return parseOne(d, name, d.Query(name), parseInt64) }
