@@ -29,8 +29,10 @@ func writeAWSError(w http.ResponseWriter, rc *request.Context, e *awserr.Error) 
 	switch rc.Protocol {
 	case protocol.KindQuery, protocol.KindEC2, protocol.KindRestXML:
 		query.WriteError(w, &query.Envelope{RequestID: rc.RequestID}, e)
-	default:
+	case protocol.KindJSON:
 		awsjson.WriteError(w, rc.Request, rc.RequestID, e, awsjson.ErrorOptions{})
+	default:
+		awsjson.WriteError(w, rc.Request, rc.RequestID, e, awsjson.ErrorOptions{ContentType: contentTypeJSON})
 	}
 }
 

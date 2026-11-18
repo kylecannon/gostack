@@ -77,6 +77,22 @@ func (g *generator) emitServe(p *printer) {
 	p.f("}")
 	p.blank()
 	p.f("func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {")
+
+	if g.hasProtocol(protoQuery) {
+		// AWS Common Errors: "MissingAction ... HTTP Status Code: 400". LocalStack
+		// answers 500 for a query call with no Action, so this one differs from it.
+		p.f("\tif rc.Operation == \"\" && rc.Protocol == protocol.KindQuery {")
+		p.f("\t\twriteError(w, rc, &awserr.Error{")
+		p.f("\t\t\tCode: \"MissingAction\",")
+		p.f("\t\t\tMessage: \"The request is missing an action or a required parameter.\",")
+		p.f("\t\t\tStatusCode: 400,")
+		p.f("\t\t\tFault: awserr.FaultSender,")
+		p.f("\t\t})")
+		p.f("\t\treturn")
+		p.f("\t}")
+		p.blank()
+	}
+
 	p.f("\tswitch rc.Operation {")
 
 	for _, name := range g.opNames {
@@ -242,6 +258,12 @@ func (g *generator) emitReaders(p *printer) {
 		p.blank()
 		p.f("// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8. LocalStack's")
 		p.f("// parser raises, and its exception handler turns that into a 500 of this form.")
+		p.f("//")
+		p.f("// OPEN QUESTION: a lone surrogate escape and broken json answer 400")
+		p.f("// SerializationException (awsjson.Decode), so the three malformed-body cases do not")
+		p.f("// share a status. The botocore protocol fixtures have no malformed request body case")
+		p.f("// and the Smithy awsJson1_0 spec says nothing on it, so neither settles which one")
+		p.f("// AWS sends. No parity test pins any of them, so the LocalStack answer stays here.")
 		p.f("var errBodyNotUTF8 = &awserr.Error{")
 		p.f("\tCode: \"CommonServiceException\",")
 		p.f("\tMessage: \"exception while calling %s with unknown operation: \"+", g.name)
@@ -253,6 +275,11 @@ func (g *generator) emitReaders(p *printer) {
 		p.blank()
 	}
 
+	g.emitFormReader(p)
+}
+
+// emitFormReader writes the function that reads the parameters of a query call.
+func (g *generator) emitFormReader(p *printer) {
 	if g.hasProtocol(protoQuery) {
 		p.f("// readForm gives the parameters of a query call as LocalStack reads them: the URL's")
 		p.f("// before the body's, with no \";\" separator and a malformed escape kept as typed.")
@@ -274,7 +301,10 @@ func (g *generator) emitWriteError(p *printer) {
 
 	if g.hasProtocol(protoJSON) {
 		p.f("\tcase protocol.KindJSON:")
-		p.f("\t\topts := awsjson.ErrorOptions{QueryCompatible: awsQueryCompatible}")
+		p.f("\t\topts := awsjson.ErrorOptions{")
+		p.f("\t\t\tQueryCompatible: awsQueryCompatible,")
+		p.f("\t\t\tContentType: \"application/x-amz-json-\" + jsonVersion,")
+		p.f("\t\t}")
 		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
 	}
 

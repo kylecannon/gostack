@@ -68,3 +68,8 @@ change applies from the next one.
 |---|---|
 | `LOCALSTACK_AUTH_TOKEN`, `LOCALSTACK_API_KEY` | Never used for anything but the startup notice: the community-image notice when the token is unset, the wrong-image notice when either is set. |
 | `SUPERVISOR_PID` | Set by the supervisor, so a restart request reaches it. Not a setting. |
+
+# Differences from LocalStack
+
+- A query call with no `Action`, or an empty one, answers 400 `MissingAction`, the AWS Common Errors entry. LocalStack answers 500. An unknown `Action` still answers `InvalidAction`. A call to a queue URL with no `Action` still answers LocalStack's 404 `UnknownOperationException`.
+- A json error response has `Content-Type: application/x-amz-json-1.0`, the Smithy awsJson1_0 value, as success responses do. LocalStack sends `application/json` on errors. No parity test pins either.

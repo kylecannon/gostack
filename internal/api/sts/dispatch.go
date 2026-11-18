@@ -38,6 +38,16 @@ func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 }
 
 func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
+	if rc.Operation == "" && rc.Protocol == protocol.KindQuery {
+		writeError(w, rc, &awserr.Error{
+			Code:       "MissingAction",
+			Message:    "The request is missing an action or a required parameter.",
+			StatusCode: 400,
+			Fault:      awserr.FaultSender,
+		})
+		return
+	}
+
 	switch rc.Operation {
 	case "AssumeRole":
 		serveAssumeRole(h, w, rc, validate)

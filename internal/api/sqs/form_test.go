@@ -114,5 +114,5 @@ func Test_Serve_JSONBodyThatIsNotUTF8(t *testing.T) {
 		`"exception while calling sqs with unknown operation: HTTP body could not be parsed as JSON."}`,
 		rec.Body.String())
 	assert.Equal(t, []string{"InternalError;Sender"}, header(rec, "x-amzn-query-error"))
-	assert.Equal(t, []string{"application/json"}, header(rec, "Content-Type"))
+	assert.Equal(t, []string{"application/x-amz-json-1.0"}, header(rec, "Content-Type"))
 }

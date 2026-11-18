@@ -339,7 +339,7 @@ func Test_Serve_Errors(t *testing.T) {
 		rec := call(t, sqs.Serve, &provider{getQueueURL: gone}, "GetQueueUrl", protocol.KindJSON, `{"QueueName":"q"}`)
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Equal(t, []string{"application/json"}, header(rec, "Content-Type"))
+		assert.Equal(t, []string{"application/x-amz-json-1.0"}, header(rec, "Content-Type"))
 		assert.Equal(t, []string{"QueueDoesNotExist"}, header(rec, "X-Amzn-Errortype"))
 		assert.Equal(t, []string{"AWS.SimpleQueueService.NonExistentQueue;Sender"}, header(rec, "x-amzn-query-error"))
 		assert.JSONEq(t, `{"__type":"QueueDoesNotExist","message":"The specified queue does not exist."}`, rec.Body.String())
@@ -392,6 +392,25 @@ func Test_Serve_Errors(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.Contains(t, rec.Body.String(), "<Code>InvalidAction</Code>")
+	})
+
+	t.Run("a query call with no Action is a 400 MissingAction", func(t *testing.T) {
+		t.Parallel()
+
+		rec := call(t, sqs.Serve, &provider{}, "", protocol.KindQuery, form("Version", "2012-11-05"))
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "<Code>MissingAction</Code>")
+		assert.Contains(t, rec.Body.String(), "<Type>Sender</Type>")
+	})
+
+	t.Run("a json call with no operation stays InvalidAction", func(t *testing.T) {
+		t.Parallel()
+
+		rec := call(t, sqs.Serve, &provider{}, "", protocol.KindJSON, `{}`)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.JSONEq(t, `{"__type":"InvalidAction","message":"Could not find operation  for service sqs."}`, rec.Body.String())
 	})
 
 	t.Run("unimplemented operations answer 501", func(t *testing.T) {

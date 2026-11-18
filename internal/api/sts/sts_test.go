@@ -132,6 +132,25 @@ func Test_Serve_Errors(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
+	t.Run("a call with no Action is a 400 MissingAction", func(t *testing.T) {
+		t.Parallel()
+
+		rec := call(t, sts.Serve, &provider{}, "", protocol.KindQuery, "Version=2011-06-15")
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "<Code>MissingAction</Code>")
+		assert.Contains(t, rec.Body.String(), "<Type>Sender</Type>")
+	})
+
+	t.Run("an unknown Action stays InvalidAction", func(t *testing.T) {
+		t.Parallel()
+
+		rec := call(t, sts.Serve, &provider{}, "FooBar", protocol.KindQuery, "Action=FooBar")
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "<Code>InvalidAction</Code>")
+	})
+
 	t.Run("unimplemented operations answer 501", func(t *testing.T) {
 		t.Parallel()
 

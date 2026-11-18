@@ -12,7 +12,15 @@ type ErrorOptions struct {
 	// 4xx statuses are written as 400 unless the request sent
 	// "x-amzn-query-mode: true".
 	QueryCompatible bool
+
+	// ContentType is the Content-Type of the response. The zero value is
+	// application/x-amz-json-1.0, which is what SQS speaks; a service on 1.1 and a
+	// rest-json caller of the gateway's error path set their own.
+	ContentType string
 }
+
+// defaultContentType is the Smithy awsJson1_0 value.
+const defaultContentType = "application/x-amz-json-1.0"
 
 type errorBody struct {
 	Type    string `json:"__type"`
@@ -45,10 +53,12 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 	_, _ = w.Write(body)
 }
 
-// WriteError writes err as a json error, the way LocalStack does: the body is
-// {"__type": Code, "message": Message}, the Content-Type is application/json
-// and X-Amzn-Errortype repeats the code. When err has a QueryCode the response
-// also carries "x-amzn-query-error: <QueryCode>;Sender". r may be nil.
+// WriteError writes err as a json error: the body is {"__type": Code,
+// "message": Message}, the Content-Type is opts.ContentType (by default the
+// Smithy awsJson1_0 value application/x-amz-json-1.0) and X-Amzn-Errortype
+// repeats the code. LocalStack sends application/json here; no parity test pins
+// that, so gostack follows the AWS protocol. When err has a QueryCode the
+// response also carries "x-amzn-query-error: <QueryCode>;Sender". r may be nil.
 func WriteError(w http.ResponseWriter, r *http.Request, requestID string, err *awserr.Error, opts ErrorOptions) {
 	body, encErr := Marshal(errorBody{Type: err.Code, Message: err.Message})
 	if encErr != nil {
@@ -65,8 +75,13 @@ func WriteError(w http.ResponseWriter, r *http.Request, requestID string, err *a
 		status = http.StatusBadRequest
 	}
 
+	contentType := opts.ContentType
+	if contentType == "" {
+		contentType = defaultContentType
+	}
+
 	h := w.Header()
-	h["Content-Type"] = []string{"application/json"}
+	h["Content-Type"] = []string{contentType}
 	h["X-Amzn-Errortype"] = []string{err.Code}
 	h["x-amzn-RequestId"] = []string{requestID}
 

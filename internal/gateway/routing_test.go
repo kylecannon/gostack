@@ -95,7 +95,7 @@ func Test_Gateway_serviceNotEnabled(t *testing.T) {
 				headerTarget: "DynamoDB_20120810.ListTables",
 				headerType:   jsonType,
 			}),
-			wantType: contentJSON,
+			wantType: contentAmzJSON,
 			wantBody: `{"__type":"InternalFailure","message":"` + notEnabled("dynamodb") + `"}`,
 		},
 		{
@@ -105,7 +105,7 @@ func Test_Gateway_serviceNotEnabled(t *testing.T) {
 				headerTarget: "DynamoDBStreams_20120810.ListStreams",
 				headerType:   jsonType,
 			}),
-			wantType: contentJSON,
+			wantType: contentAmzJSON,
 			wantBody: `{"__type":"InternalFailure","message":"` + notEnabled("dynamodbstreams") + `"}`,
 		},
 		{

@@ -41,6 +41,16 @@ func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 }
 
 func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
+	if rc.Operation == "" && rc.Protocol == protocol.KindQuery {
+		writeError(w, rc, &awserr.Error{
+			Code:       "MissingAction",
+			Message:    "The request is missing an action or a required parameter.",
+			StatusCode: 400,
+			Fault:      awserr.FaultSender,
+		})
+		return
+	}
+
 	switch rc.Operation {
 	case "AddPermission":
 		serveAddPermission(h, w, rc, validate)
@@ -1450,7 +1460,10 @@ func asError(err error) *awserr.Error {
 func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	switch rc.Protocol {
 	case protocol.KindJSON:
-		opts := awsjson.ErrorOptions{QueryCompatible: awsQueryCompatible}
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	case protocol.KindQuery:
 		env := &query.Envelope{Namespace: queryNamespace, RequestID: rc.RequestID, EscapeQuotes: queryEscapeQuotes}
@@ -1478,6 +1491,12 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 
 // errBodyNotUTF8 is the answer to a json body that is not valid UTF-8. LocalStack's
 // parser raises, and its exception handler turns that into a 500 of this form.
+//
+// OPEN QUESTION: a lone surrogate escape and broken json answer 400
+// SerializationException (awsjson.Decode), so the three malformed-body cases do not
+// share a status. The botocore protocol fixtures have no malformed request body case
+// and the Smithy awsJson1_0 spec says nothing on it, so neither settles which one
+// AWS sends. No parity test pins any of them, so the LocalStack answer stays here.
 var errBodyNotUTF8 = &awserr.Error{
 	Code: "CommonServiceException",
 	Message: "exception while calling sqs with unknown operation: " +

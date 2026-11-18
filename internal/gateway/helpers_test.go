@@ -35,6 +35,7 @@ const (
 	opSendMessage     = "SendMessage"
 
 	contentJSON         = "application/json"
+	contentAmzJSON      = "application/x-amz-json-1.0"
 	contentXML          = "text/xml"
 	opGetCallerIdentity = "GetCallerIdentity"
 	valueTrue           = "true"

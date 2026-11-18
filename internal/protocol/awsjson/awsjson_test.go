@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const typeJSON11 = "application/x-amz-json-1.1"
+
 type sample struct {
 	Name    *string           `json:"Name,omitzero"`
 	Count   *int32            `json:"count,omitzero"`
@@ -151,7 +153,7 @@ func Test_WriteResponse(t *testing.T) {
 		rec := httptest.NewRecorder()
 		awsjson.WriteResponse(rec, "req-1", "1.1", nil)
 
-		assert.Equal(t, []string{"application/x-amz-json-1.1"}, map[string][]string(rec.Header())["Content-Type"])
+		assert.Equal(t, []string{typeJSON11}, map[string][]string(rec.Header())["Content-Type"])
 		assert.JSONEq(t, `{}`, rec.Body.String())
 	})
 }
@@ -222,13 +224,24 @@ func Test_WriteError(t *testing.T) {
 			hdr := map[string][]string(rec.Header())
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Equal(t, []string{"application/json"}, hdr["Content-Type"])
+			assert.Equal(t, []string{"application/x-amz-json-1.0"}, hdr["Content-Type"])
 			assert.Equal(t, []string{"req-2"}, hdr["x-amzn-RequestId"])
 			assert.Equal(t, []string{tt.giveErr.Code}, hdr["X-Amzn-Errortype"])
 			assert.Equal(t, tt.wantQuery, hdr["x-amzn-query-error"])
 			assert.JSONEq(t, tt.wantBody, rec.Body.String())
 		})
 	}
+
+	t.Run("the content type is the one in the options", func(t *testing.T) {
+		t.Parallel()
+
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
+		rec := httptest.NewRecorder()
+		opts := awsjson.ErrorOptions{ContentType: typeJSON11}
+		awsjson.WriteError(rec, req, "req-3", queueGone, opts)
+
+		assert.Equal(t, []string{typeJSON11}, map[string][]string(rec.Header())["Content-Type"])
+	})
 }
 
 // stamped is the shape the generator writes for a struct with a timestamp that
