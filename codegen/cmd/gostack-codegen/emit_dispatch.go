@@ -58,6 +58,7 @@ func (g *generator) emitMetadata(p *printer) {
 	p.f("\tEndpointPrefix: %q,", md.EndpointPrefix)
 	p.f("\tAPIVersion: %q,", md.APIVersion)
 	p.f("\tProtocols: []protocol.Kind{%s},", strings.Join(kinds, ", "))
+	p.f("\tOperations: Operations,")
 	p.f("}")
 	p.blank()
 }

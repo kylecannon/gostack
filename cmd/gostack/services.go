@@ -3,8 +3,6 @@ package main
 import (
 	"sync/atomic"
 
-	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
-	stsapi "github.com/kylecannon/gostack/internal/api/sts"
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
@@ -31,18 +29,9 @@ func newProviders(cfg *config.Config) *providers {
 // so an update through /_localstack/config reaches it.
 func registrations(cfg *config.Config, p *providers) []service.Registration {
 	return []service.Registration{
-		withOperations(p.sqs.Registration(), sqsapi.Operations),
-		withOperations(sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }), stsapi.Operations),
+		p.sqs.Registration(),
+		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
 	}
-}
-
-// withOperations gives a registration the operation list of its generated API.
-// The router needs it to find the service of an unsigned query request that has
-// an Action and no Version. The generated Metadata does not carry the list yet.
-func withOperations(reg service.Registration, operations []string) service.Registration {
-	reg.Metadata.Operations = operations
-
-	return reg
 }
 
 // close stops what the services run on their own: SQS's message move tasks.

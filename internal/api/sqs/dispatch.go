@@ -24,6 +24,7 @@ var Metadata = service.Metadata{
 	EndpointPrefix: "sqs",
 	APIVersion:     "2012-11-05",
 	Protocols:      []protocol.Kind{protocol.KindJSON, protocol.KindQuery},
+	Operations:     Operations,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the
