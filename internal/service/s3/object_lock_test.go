@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -290,6 +291,89 @@ func TestClearingARetention(t *testing.T) {
 	assert.Equal(t, "NoSuchObjectLockConfiguration", read.err(t).Code)
 
 	assert.Equal(t, http.StatusNoContent, deleteVersion(s, version, nil).status)
+}
+
+// TestRetentionChangeAfterTheDateHasPassed: each row is a request SQ-143 sent to
+// LocalStack 8b9a79f against an object whose retain-until date had passed. It
+// never looks at the clock, so a weaker retention is refused as before.
+func TestRetentionChangeAfterTheDateHasPassed(t *testing.T) {
+	const passed = "2020-01-01T00:00:00Z"
+
+	deny, allow := http.StatusForbidden, http.StatusOK
+
+	s := newServer(t)
+	createLockedBucket(t, s)
+
+	for _, row := range []struct {
+		name   string
+		mode   string
+		body   []byte
+		bypass bool
+		status int
+	}{
+		{"COMPLIANCE replaced by GOVERNANCE", modeCompliance, retentionBody(modeGovernance, farFuture), false, deny},
+		{"COMPLIANCE cleared", modeCompliance, retentionBody("", ""), false, deny},
+		{"COMPLIANCE cleared with a bypass", modeCompliance, retentionBody("", ""), true, deny},
+		{"COMPLIANCE extended", modeCompliance, retentionBody(modeCompliance, farFuture), false, allow},
+		{"GOVERNANCE cleared", modeGovernance, retentionBody("", ""), false, deny},
+		{"GOVERNANCE cleared with a bypass", modeGovernance, retentionBody("", ""), true, allow},
+		{"GOVERNANCE extended", modeGovernance, retentionBody(modeGovernance, farFuture), false, allow},
+		{"GOVERNANCE replaced by COMPLIANCE", modeGovernance, retentionBody(modeCompliance, farFuture), false, allow},
+	} {
+		key := "/bucket/" + strings.ReplaceAll(row.name, " ", "-")
+
+		held := s.do(call{
+			method: http.MethodPut, target: key, region: regionUSEast1,
+			header: map[string]string{headerLockMode: row.mode, headerLockUntil: passed},
+		})
+		require.Equal(t, http.StatusOK, held.status, row.name+": "+string(held.body))
+
+		header := map[string]string{}
+		if row.bypass {
+			header[headerBypass] = valueTrue
+		}
+
+		got := s.do(call{
+			method: http.MethodPut, target: key + retentionQuery, region: regionUSEast1, body: row.body, header: header,
+		})
+		require.Equal(t, row.status, got.status, row.name+": "+string(got.body))
+	}
+}
+
+// TestDefaultRetentionOfZeroOrLess: LocalStack takes a default retention of any
+// number of days or years. A negative one puts the date of a new object in the
+// past. A zero one fails the PutObject with a 500 there, where gostack ends the
+// retention at once.
+func TestDefaultRetentionOfZeroOrLess(t *testing.T) {
+	s := newServer(t)
+	createLockedBucket(t, s)
+
+	for _, row := range []struct{ name, mode, period string }{
+		{"days -1", modeGovernance, "<Days>-1</Days>"},
+		{"days 0", modeGovernance, "<Days>0</Days>"},
+		{"years -1", modeCompliance, "<Years>-1</Years>"},
+		{"years 0", modeCompliance, "<Years>0</Years>"},
+	} {
+		config := s.do(call{
+			method: http.MethodPut, target: lockPath, region: regionUSEast1,
+			body: lockConfigBody(`<ObjectLockEnabled>Enabled</ObjectLockEnabled><Rule><DefaultRetention>` +
+				`<Mode>` + row.mode + `</Mode>` + row.period + `</DefaultRetention></Rule>`),
+		})
+		require.Equal(t, http.StatusOK, config.status, row.name+": "+string(config.body))
+
+		read := s.do(call{method: http.MethodGet, target: lockPath, region: regionUSEast1})
+		assert.Contains(t, string(read.body), row.period, row.name)
+
+		key := "/bucket/" + strings.ReplaceAll(row.name, " ", "-")
+		put(t, s, key, "body", nil)
+
+		head := get(s, http.MethodHead, key, nil)
+		assert.Equal(t, row.mode, head.header.Get(headerLockMode), row.name)
+
+		until, err := time.Parse(time.RFC3339, head.header.Get(headerLockUntil))
+		require.NoError(t, err, row.name)
+		assert.False(t, until.After(time.Now()), row.name+": the retention has ended")
+	}
 }
 
 func TestObjectLockOperationsNeedAnObjectLockBucket(t *testing.T) {

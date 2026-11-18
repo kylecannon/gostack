@@ -147,7 +147,10 @@ func (b *Bucket) lockAt(mode *string, until *protocol.Time, legalHold *string, n
 	return lock, nil
 }
 
-// retainedUntil is the end of a default retention period that starts at now.
+// retainedUntil is the end of a default retention period that starts at now. A
+// period below 0 ends in the past, as it does in LocalStack. A period of 0
+// ends at now: LocalStack fails the PutObject with a 500 there
+// (get_retention_from_now), which gostack does not copy.
 func retainedUntil(now time.Time, retention *s3api.DefaultRetention) time.Time {
 	if retention.Days != nil && *retention.Days != 0 {
 		return now.AddDate(0, 0, int(*retention.Days)).UTC()
@@ -241,7 +244,8 @@ func (p *Provider) PutObjectLockConfiguration(
 
 // validLockConfiguration checks an Object Lock configuration the way
 // put_object_lock_configuration does and returns a copy to keep. A default
-// retention takes a mode and either Days or Years, which must be positive.
+// retention takes a mode and either Days or Years. LocalStack takes any
+// number, 0 and below included, so gostack does (SQ-143 probe).
 func validLockConfiguration(config *s3api.ObjectLockConfiguration) (*s3api.ObjectLockConfiguration, error) {
 	if config == nil || deref(config.ObjectLockEnabled) != objectLockEnabled {
 		return nil, malformedXMLError()
@@ -254,8 +258,7 @@ func validLockConfiguration(config *s3api.ObjectLockConfiguration) (*s3api.Objec
 
 	retention := config.Rule.DefaultRetention
 	if retention == nil || retention.Mode == nil || !slices.Contains(lockModes, *retention.Mode) ||
-		(retention.Days == nil) == (retention.Years == nil) ||
-		(retention.Days != nil && *retention.Days <= 0) || (retention.Years != nil && *retention.Years <= 0) {
+		(retention.Days == nil) == (retention.Years == nil) {
 		return nil, malformedXMLError()
 	}
 
@@ -317,9 +320,9 @@ func (b *Bucket) lockTargetIn(key, versionID, method string) (*Object, int, erro
 }
 
 // PutObjectRetention sets, extends or clears the retention of an object
-// version. Shortening it, or replacing COMPLIANCE with GOVERNANCE, is refused
-// while the retention lasts, unless it is GOVERNANCE and the request bypasses
-// it.
+// version. Shortening it, or replacing COMPLIANCE with GOVERNANCE, is refused,
+// whether or not its date has passed, unless it is GOVERNANCE and the request
+// bypasses it.
 func (p *Provider) PutObjectRetention(
 	ctx context.Context, in *s3api.PutObjectRetentionInput,
 ) (*s3api.PutObjectRetentionOutput, error) {
@@ -343,7 +346,7 @@ func (p *Provider) PutObjectRetention(
 			return retentionErr
 		}
 
-		retentionErr = checkRetentionChange(object.Versions[index].Lock, mode, until, now, bypass)
+		retentionErr = checkRetentionChange(object.Versions[index].Lock, mode, until, bypass)
 		if retentionErr != nil {
 			return retentionErr
 		}
@@ -390,12 +393,13 @@ func pastDate(date time.Time) string {
 	return date.In(zone).Format(pastDateLayout)
 }
 
-// checkRetentionChange refuses a change that makes a retention in force weaker
-// (a shorter date, no retention, or GOVERNANCE in place of COMPLIANCE) unless
-// the retention is GOVERNANCE and bypass lifts it. A retention that has ended
-// can change freely.
-func checkRetentionChange(current Lock, mode string, until, now time.Time, bypass bool) error {
-	if current.Mode == "" || !now.Before(current.Until) {
+// checkRetentionChange refuses a change that makes a retention weaker (a
+// shorter date, no retention, or GOVERNANCE in place of COMPLIANCE) unless the
+// retention is GOVERNANCE and bypass lifts it. A retention whose date has
+// passed still counts: LocalStack never looks at the clock here
+// (put_object_retention), and AWS's answer is only inferred.
+func checkRetentionChange(current Lock, mode string, until time.Time, bypass bool) error {
+	if current.Mode == "" {
 		return nil
 	}
 
