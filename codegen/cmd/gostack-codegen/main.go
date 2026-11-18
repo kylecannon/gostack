@@ -28,14 +28,20 @@ func run(args []string, stdout io.Writer) error {
 	specs := fs.String("specs", "specs", "directory the service models are read from")
 	out := fs.String("out", "internal/api", "directory the service packages are written to")
 	services := fs.String("services", "", "comma-separated botocore service names to generate")
+	fixtures := fs.String("fixtures", "",
+		"botocore protocol fixture directory; generates a service for each rest fixture group under -out instead")
 
 	err := fs.Parse(args)
 	if err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if *fixtures != "" {
+		return runFixtures(*fixtures, *out, stdout)
+	}
+
 	if *services == "" {
-		return errors.New("-services is required")
+		return errors.New("-services or -fixtures is required")
 	}
 
 	loader, err := spec.NewLoader(*specs)
@@ -67,6 +73,19 @@ func run(args []string, stdout io.Writer) error {
 	}
 
 	return nil
+}
+
+// runFixtures generates the fixture services of the fixtures directory into
+// out, a directory relative to the module root.
+func runFixtures(fixtures, out string, stdout io.Writer) error {
+	outRoot, err := os.OpenRoot(out)
+	if err != nil {
+		return fmt.Errorf("open output directory: %w", err)
+	}
+
+	defer func() { _ = outRoot.Close() }()
+
+	return generateFixtures(fixtures, out, outRoot, stdout)
 }
 
 const (

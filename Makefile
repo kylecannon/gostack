@@ -116,15 +116,21 @@ tidy-check:
 	go mod tidy -diff
 	go -C tools mod tidy -diff
 
-# Regenerates internal/api/<service> from the vendored specs.
+# The generated code gen-check holds to the generator: the services, and the
+# test-only services of the rest protocol fixtures.
+GEN_DIRS := internal/api internal/protocol/restxml/fixturegen_test internal/protocol/restjson/fixturegen_test
+
+# Regenerates internal/api/<service> from the vendored specs, and a service for
+# each rest protocol fixture group under internal/protocol/<protocol>/fixturegen_test.
 gen:
 	go run ./codegen/cmd/gostack-codegen -services $(subst $(space),$(comma),$(strip $(GEN_SERVICES)))
+	go run ./codegen/cmd/gostack-codegen -fixtures internal/protocol/testdata/botocore -out internal/protocol
 
-# Fails when regenerating changes internal/api: a modified file, or a generated
-# file that is not tracked yet, which git diff alone would not show.
+# Fails when regenerating changes generated code: a modified file, or a
+# generated file that is not tracked yet, which git diff alone would not show.
 gen-check: gen
-	git diff --exit-code -- internal/api
-	@untracked=$$(git ls-files --others --exclude-standard -- internal/api); \
+	git diff --exit-code -- $(GEN_DIRS)
+	@untracked=$(git ls-files --others --exclude-standard -- $(GEN_DIRS)); \
 	if [ -n "$$untracked" ]; then echo "untracked generated files:" >&2; echo "$$untracked" >&2; exit 1; fi
 
 # Runs every Fuzz* function in a *_test.go file for FUZZTIME each, e.g.

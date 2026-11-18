@@ -1,6 +1,8 @@
 package restxml
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -124,21 +126,59 @@ func errorStatus(err *awserr.Error) int {
 // send writes the request id by assigning the header map directly, so it keeps
 // the lower-case name LocalStack sends.
 func send(w http.ResponseWriter, env *Envelope, status int, body []byte) {
-	h := w.Header()
-	h["x-amz-request-id"] = []string{env.RequestID}
+	setRequestID(w, env)
 
-	if body != nil && h.Get("Content-Type") == "" {
-		contentType := env.ContentType
-		if contentType == "" {
-			contentType = defaultContentType
-		}
-
-		h.Set("Content-Type", contentType)
+	if body != nil {
+		setContentType(w, env)
 	}
 
 	w.WriteHeader(status)
 
 	if body != nil {
 		_, _ = w.Write(body)
+	}
+}
+
+// WriteStream writes a response whose body is a blob or string payload, copied
+// from body as it is and never buffered whole. Members that live in headers
+// are set on w before the call; a Content-Type they do not set is env's. A nil
+// body sends none. The error is the copy's: the status has gone out by then.
+func WriteStream(w http.ResponseWriter, env *Envelope, status int, body io.Reader) error {
+	setRequestID(w, env)
+
+	if body == nil {
+		w.WriteHeader(status)
+
+		return nil
+	}
+
+	setContentType(w, env)
+	w.WriteHeader(status)
+
+	_, err := io.Copy(w, body)
+	if err != nil {
+		return fmt.Errorf("write payload: %w", err)
+	}
+
+	return nil
+}
+
+// setRequestID sets the request id under the lower-case name LocalStack
+// sends, by assigning the header map directly.
+func setRequestID(w http.ResponseWriter, env *Envelope) {
+	w.Header()["x-amz-request-id"] = []string{env.RequestID}
+}
+
+// setContentType sets, for a response with a body, the Content-Type the
+// members did not set.
+func setContentType(w http.ResponseWriter, env *Envelope) {
+	h := w.Header()
+	if h.Get("Content-Type") == "" {
+		contentType := env.ContentType
+		if contentType == "" {
+			contentType = defaultContentType
+		}
+
+		h.Set("Content-Type", contentType)
 	}
 }

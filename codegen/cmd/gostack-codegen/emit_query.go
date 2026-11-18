@@ -65,11 +65,11 @@ func (e *queryEmitter) emitOperationDecode(op *operation) {
 }
 
 func (e *queryEmitter) emitStruct(st *structType) error {
-	if (st.decodeQ || st.encodeQ) && st.queryShape == nil && len(st.fields) > 0 {
+	if (st.decodes || st.encodes) && st.queryShape == nil && len(st.fields) > 0 {
 		return errors.New("no query shape for a structure the query codec needs")
 	}
 
-	if st.decodeQ {
+	if st.decodes {
 		e.p.f("func (v *%s) decodeQuery(d *query.Decoder, p string) {", st.goName)
 
 		for _, f := range st.queryOrder {
@@ -83,7 +83,7 @@ func (e *queryEmitter) emitStruct(st *structType) error {
 		e.p.blank()
 	}
 
-	if st.encodeQ {
+	if st.encodes {
 		e.p.f("func (v *%s) encodeQuery(w *query.Writer) {", st.goName)
 
 		for _, f := range st.queryOrder {

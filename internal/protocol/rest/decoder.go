@@ -19,6 +19,11 @@ const (
 	decimalBase = 10
 )
 
+// MaxBody is how many bytes of a request body that is not streamed a rest
+// service reads: a json body or a blob or string payload. A streamed payload
+// has no limit, and an xml body is read element by element.
+const MaxBody = 16 << 20
+
 // Decoder reads the members a request carries outside its body: headers, the
 // querystring and URI labels. A malformed value does not stop decoding: the
 // first one is kept and reported by Err, so generated code checks once, at the

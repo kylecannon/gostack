@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -15,12 +17,53 @@ import (
 // which is v2's default and what AWS json needs. The rest:
 //   - a nil slice or map inside a value is null, not [] or {};
 //   - a repeated member keeps its last value;
-//   - invalid UTF-8 is an error, on decode and on encode.
+//   - invalid UTF-8 is an error, on decode and on encode;
+//   - NaN and the infinities are the strings "NaN", "Infinity" and
+//     "-Infinity", as AWS json writes them.
 var options = json.JoinOptions(
+	json.WithMarshalers(json.MarshalToFunc(marshalNonFinite)),
+	json.WithUnmarshalers(json.UnmarshalFromFunc(unmarshalNonFinite)),
 	json.FormatNilSliceAsNull(true),
 	json.FormatNilMapAsNull(true),
 	jsontext.AllowDuplicateNames(true),
 )
+
+// nonFinite names the float values json has no number for.
+var nonFinite = map[string]float64{"NaN": math.NaN(), "Infinity": math.Inf(1), "-Infinity": math.Inf(-1)}
+
+// marshalNonFinite writes NaN and the infinities as their names, and leaves
+// every other float to the default encoding.
+func marshalNonFinite(enc *jsontext.Encoder, f float64) error {
+	for name, v := range nonFinite {
+		if math.IsNaN(f) && math.IsNaN(v) || f == v {
+			return enc.WriteToken(jsontext.String(name)) //nolint:wrapcheck // a marshaler returns the encoder's error as is
+		}
+	}
+
+	return errors.ErrUnsupported
+}
+
+// unmarshalNonFinite reads a float written as a name, and leaves a number to
+// the default decoding.
+func unmarshalNonFinite(dec *jsontext.Decoder, f *float64) error {
+	if dec.PeekKind() != '"' {
+		return errors.ErrUnsupported
+	}
+
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return err //nolint:wrapcheck // an unmarshaler returns the decoder's error as is
+	}
+
+	v, ok := nonFinite[tok.String()]
+	if !ok {
+		return fmt.Errorf("float written as %q", tok.String())
+	}
+
+	*f = v
+
+	return nil
+}
 
 // Decode reads a json request body into a T. An empty body decodes to the
 // zero T, and members the type does not have are ignored. A body that is not

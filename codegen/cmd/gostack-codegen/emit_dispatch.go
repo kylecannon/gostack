@@ -9,13 +9,19 @@ import (
 
 // protocolKinds maps a spec protocol name to the protocol.Kind constant.
 var protocolKinds = map[string]string{
-	protoJSON:  "protocol.KindJSON",
-	protoQuery: "protocol.KindQuery",
+	protoJSON:     "protocol.KindJSON",
+	protoQuery:    "protocol.KindQuery",
+	protoRestJSON: "protocol.KindRestJSON",
+	protoRestXML:  "protocol.KindRestXML",
 }
 
 // dispatchFile writes Metadata, Serve and ServeValidated, the per-operation
 // functions behind them, and the checks for required members.
 func (g *generator) dispatchFile() (string, error) {
+	if g.isRest() {
+		return g.restDispatchFile()
+	}
+
 	p := &printer{}
 
 	g.emitMetadata(p)
@@ -360,6 +366,10 @@ func (g *generator) emitMissingRequired(p *printer, st *structType) error {
 // structure with a missing member. at says whether x is a struct member, which
 // may be nil, or a list element or map value.
 func (g *generator) checkNested(p *printer, r ref, x string, at site, depth int) error {
+	if r.shape.Document {
+		return nil
+	}
+
 	switch r.shape.Type {
 	case spec.TypeStructure:
 		if !g.structs[g.goTypeName(r.name)].needsCheck {

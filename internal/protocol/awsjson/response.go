@@ -1,6 +1,8 @@
 package awsjson
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -22,6 +24,11 @@ type ErrorOptions struct {
 	// carry them in the body: a value that marshals to a json object, whose
 	// members are written after __type and message. Nil writes none.
 	Members any
+
+	// MessageName is the json name the message goes under: the name of the
+	// error shape's own message member, such as "Message", for rest-json,
+	// whose clients read that member from the body. Empty means "message".
+	MessageName string
 }
 
 // defaultContentType is the Smithy awsJson1_0 value.
@@ -58,6 +65,33 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 	_, _ = w.Write(body)
 }
 
+// WriteRestResponse writes a rest-json response with the given status. Members
+// that live in headers are set on w before the call. body, when not nil, is
+// copied as it is and never buffered whole: the json object of the output's
+// body members, or its payload. A Content-Type the members do not set is
+// contentType. The error is the copy's: the status has gone out by then.
+func WriteRestResponse(w http.ResponseWriter, requestID string, status int, contentType string, body io.Reader) error {
+	h := w.Header()
+	h["x-amzn-RequestId"] = []string{requestID}
+
+	if body != nil && h.Get("Content-Type") == "" {
+		h["Content-Type"] = []string{contentType}
+	}
+
+	w.WriteHeader(status)
+
+	if body == nil {
+		return nil
+	}
+
+	_, err := io.Copy(w, body)
+	if err != nil {
+		return fmt.Errorf("write body: %w", err)
+	}
+
+	return nil
+}
+
 // WriteError writes err as a json error: the body is {"__type": Code,
 // "message": Message}, the Content-Type is opts.ContentType (by default the
 // Smithy awsJson1_0 value application/x-amz-json-1.0) and X-Amzn-Errortype
@@ -65,9 +99,18 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 // that, so gostack follows the AWS protocol. When err has a QueryCode the
 // response also carries "x-amzn-query-error: <QueryCode>;Sender". r may be nil.
 func WriteError(w http.ResponseWriter, r *http.Request, requestID string, err *awserr.Error, opts ErrorOptions) {
-	body, encErr := Marshal(errorBody{Type: err.Code, Message: err.Message})
+	eb := errorBody{Type: err.Code, Message: err.Message}
+	if opts.MessageName != "" {
+		eb.Message = ""
+	}
+
+	body, encErr := Marshal(eb)
 	if encErr != nil {
 		body = []byte(`{"__type":"InternalError"}`)
+	}
+
+	if opts.MessageName != "" && err.Message != "" {
+		body = appendMembers(body, map[string]string{opts.MessageName: err.Message})
 	}
 
 	body = appendMembers(body, opts.Members)

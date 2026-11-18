@@ -52,7 +52,7 @@ func timeFields(st *structType) []timeField {
 	var out []timeField
 
 	for _, f := range st.fields {
-		if f.pair.p.shape.Type != spec.TypeTimestamp {
+		if f.pair.p.shape.Type != spec.TypeTimestamp || !inJSONBody(st, f) {
 			continue
 		}
 

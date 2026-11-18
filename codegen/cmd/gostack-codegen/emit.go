@@ -32,6 +32,7 @@ func (p *printer) blank() {
 var importPaths = map[string]string{
 	"awsjson":  "github.com/kylecannon/gostack/internal/protocol/awsjson",
 	"awserr":   "github.com/kylecannon/gostack/internal/awserr",
+	"bytes":    "bytes",
 	"context":  "context",
 	"errors":   "errors",
 	"http":     "net/http",
@@ -41,8 +42,11 @@ var importPaths = map[string]string{
 	"protocol": "github.com/kylecannon/gostack/internal/protocol",
 	"query":    "github.com/kylecannon/gostack/internal/protocol/query",
 	"request":  "github.com/kylecannon/gostack/internal/request",
+	"rest":     "github.com/kylecannon/gostack/internal/protocol/rest",
+	"restxml":  "github.com/kylecannon/gostack/internal/protocol/restxml",
 	"service":  "github.com/kylecannon/gostack/internal/service",
 	"slices":   "slices",
+	"strings":  "strings",
 	"url":      "net/url",
 	"utf8":     "unicode/utf8",
 }
@@ -110,15 +114,26 @@ func numbered(src string) string {
 	return strings.Join(lines, "\n")
 }
 
-// files returns the six generated files of the service by name.
+// maxShardLines is about how many lines of declarations one generated file
+// holds before the rest go to the next one.
+const maxShardLines = 3000
+
+// files returns the generated files of the service by name. A file whose
+// declarations run past maxShardLines is split into <base>_1.go, <base>_2.go
+// and so on, at declaration boundaries.
 func (g *generator) files() (map[string][]byte, error) {
 	bodies := map[string]func() (string, error){
-		"types.go":       g.typesFile,
-		"operations.go":  g.operationsFile,
-		"errors.go":      g.errorsFile,
-		"codec_json.go":  g.jsonFile,
-		"codec_query.go": g.queryFile,
-		"dispatch.go":    g.dispatchFile,
+		"types.go":      g.typesFile,
+		"operations.go": g.operationsFile,
+		"errors.go":     g.errorsFile,
+		"dispatch.go":   g.dispatchFile,
+	}
+
+	if g.isRest() {
+		bodies["codec_"+strings.ReplaceAll(g.restProtocol(), "-", "")+".go"] = g.restCodecFile
+	} else {
+		bodies["codec_json.go"] = g.jsonFile
+		bodies["codec_query.go"] = g.queryFile
 	}
 
 	out := make(map[string][]byte, len(bodies))
@@ -129,13 +144,47 @@ func (g *generator) files() (map[string][]byte, error) {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 
-		src, err := g.render(body)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
+		shards := splitDecls(body, maxShardLines)
+		for i, shard := range shards {
+			file := name
+			if len(shards) > 1 {
+				file = fmt.Sprintf("%s_%d.go", strings.TrimSuffix(name, ".go"), i+1)
+			}
 
-		out[name] = src
+			src, err := g.render(shard)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", file, err)
+			}
+
+			out[file] = src
+		}
 	}
 
 	return out, nil
+}
+
+// splitDecls cuts the body of a file into pieces of about maxLines lines. A
+// piece ends where a top-level declaration, or its doc comment, starts: a line
+// at column zero after a blank line. The generator never writes a multi-line
+// raw string, so such a line is never inside one.
+func splitDecls(body string, maxLines int) []string {
+	lines := strings.SplitAfter(body, "\n")
+	if len(lines) <= maxLines {
+		return []string{body}
+	}
+
+	var (
+		shards []string
+		start  int
+	)
+
+	for i := 1; i < len(lines); i++ {
+		boundary := lines[i-1] == "\n" && lines[i] != "" && !strings.ContainsAny(lines[i][:1], " \t\n})")
+		if boundary && i-start >= maxLines {
+			shards = append(shards, strings.Join(lines[start:i], ""))
+			start = i
+		}
+	}
+
+	return append(shards, strings.Join(lines[start:], ""))
 }

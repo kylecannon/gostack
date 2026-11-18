@@ -65,6 +65,9 @@ type Operation struct {
 	Input    *Ref   `json:"input"`
 	Output   *Ref   `json:"output"`
 	Errors   []Ref  `json:"errors"`
+	// Deprecated marks an operation a newer one replaces. When both bind the
+	// same request, the rest router sends it to the newer one.
+	Deprecated bool `json:"deprecated"`
 
 	// The traits below are read so the rest protocols can reach them. Nothing
 	// interprets them yet.

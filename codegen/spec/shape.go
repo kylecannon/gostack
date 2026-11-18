@@ -105,7 +105,10 @@ type Shape struct {
 	// EventStream marks a structure whose members are the events of an event
 	// stream, and Event each event's structure.
 	EventStream bool `json:"eventstream"`
-	Event       bool `json:"event"`
+	// Document marks a structure that holds any json value, with no members of
+	// its own.
+	Document bool `json:"document"`
+	Event    bool `json:"event"`
 }
 
 // IsRequired reports whether the structure lists name as required.

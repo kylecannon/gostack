@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -29,7 +30,18 @@ type ref struct {
 	hostLabel    bool
 	eventPayload bool
 	eventHeader  bool
+	// jsonvalue marks a string header that carries json text in base64.
+	jsonvalue bool
 }
+
+// The Go types of the values the rest emitters treat apart.
+const (
+	typeBytes      = "[]byte"
+	typeStringPtr  = "*string"
+	typeDocument   = "jsontext.Value"
+	typeReader     = "io.Reader"
+	typeReadCloser = "io.ReadCloser"
+)
 
 // site says where a value sits. A struct member holds a scalar by pointer, so
 // absence shows as nil. A list element or map value holds it by value.
@@ -40,7 +52,7 @@ const (
 	siteElement
 )
 
-// direction says whether the query codec decodes a struct or encodes it.
+// direction says whether a codec decodes a struct or encodes it.
 type direction int
 
 const (
@@ -74,8 +86,10 @@ type structType struct {
 	queryShape *spec.Shape
 	fields     []*field
 	queryOrder []*field
-	decodeQ    bool
-	encodeQ    bool
+	// decodes and encodes mark a struct below an operation input, which a
+	// codec decodes, and one below an output or an error, which it encodes.
+	decodes    bool
+	encodes    bool
 	needsCheck bool
 	// payload is the field the shape's payload trait names, sent as the whole
 	// body by a rest protocol, or nil.
@@ -90,6 +104,14 @@ type operation struct {
 	queryResult string
 	queryOutput bool
 	http        httpBinding
+	deprecated  bool
+	// outRoot is the root element of a rest-xml response body that has no
+	// payload member: the locationName of the operation's output reference, or
+	// of its shape, or else the shape's name. outNS is the namespace that root
+	// declares. A request body's root is read under any name, so the input
+	// reference's traits are not kept.
+	outRoot string
+	outNS   *spec.XMLNamespace
 }
 
 // httpBinding is where a rest protocol puts an operation: its method, request
@@ -118,6 +140,9 @@ type exception struct {
 	status    int
 	sender    bool
 	queryCode string
+	// members are the members a rest error carries besides its message, nil
+	// when it has none.
+	members *structType
 }
 
 // generator holds one service's models and what is derived from them.
@@ -143,6 +168,11 @@ const (
 
 func (g *generator) hasProtocol(name string) bool {
 	return slices.Contains(g.protocols, name)
+}
+
+// isRest reports whether the service speaks rest-xml or rest-json.
+func (g *generator) isRest() bool {
+	return g.hasProtocol(protoRestXML) || g.hasProtocol(protoRestJSON)
 }
 
 // newGenerator reads the models of one service and works out its structs,
@@ -202,6 +232,12 @@ func newModel(name string, opts serviceOptions, p, q *spec.Service) (*generator,
 		}
 	}
 
+	// A rest service routes, reads and writes errors its own way, so it
+	// speaks no other protocol beside its one rest protocol.
+	if g.isRest() && len(g.protocols) > 1 {
+		return nil, fmt.Errorf("%s: a rest protocol with another one, %v, is not supported", name, g.protocols)
+	}
+
 	err := g.build()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -230,10 +266,41 @@ func (g *generator) build() error {
 		}
 	}
 
+	g.streamPayloads()
+
+	err := g.buildExceptions()
+	if err != nil {
+		return err
+	}
+
 	g.markReachable()
 	g.markChecks()
 
-	return g.buildExceptions()
+	return nil
+}
+
+// streamPayloads types a streaming blob or string payload as a stream, so a
+// body is never buffered: an io.Reader in a request, an io.ReadCloser in a
+// response, which Serve closes once written. A struct that is the root of both
+// takes the io.ReadCloser, which is an io.Reader too.
+func (g *generator) streamPayloads() {
+	for _, name := range g.opNames {
+		op := g.ops[name]
+
+		for _, root := range []struct {
+			st  *structType
+			typ string
+		}{{op.input, typeReader}, {op.output, typeReadCloser}} {
+			f := root.st.payload
+			if f == nil || !f.pair.p.streaming || f.typ == typeReadCloser {
+				continue
+			}
+
+			if t := f.pair.p.shape.Type; t == spec.TypeBlob || t == spec.TypeString {
+				f.typ = root.typ
+			}
+		}
+	}
 }
 
 // nameRoots names the Go type of each operation's input and output shape. The
@@ -275,8 +342,17 @@ func (g *generator) nameRoots() {
 
 func (g *generator) buildOperation(name string) error {
 	op := g.p.Operations[name]
-	out := &operation{name: name}
+	out := &operation{name: name, deprecated: op.Deprecated}
 	g.ops[name] = out
+
+	if op.Output != nil {
+		out.outRoot, out.outNS = op.Output.LocationName, op.Output.XMLNamespace
+
+		if shape := g.p.Shapes[op.Output.Shape]; shape != nil {
+			out.outRoot = cmp.Or(out.outRoot, shape.LocationName, op.Output.Shape)
+			out.outNS = cmp.Or(out.outNS, shape.XMLNamespace)
+		}
+	}
 
 	var err error
 
@@ -461,6 +537,10 @@ func (g *generator) structFor(shapeName string) (*structType, error) {
 
 // buildNested builds the structs a member's type refers to.
 func (g *generator) buildNested(r ref) error {
+	if r.shape.Document {
+		return nil
+	}
+
 	switch r.shape.Type {
 	case spec.TypeStructure:
 		_, err := g.structFor(r.name)
@@ -496,9 +576,13 @@ func (g *generator) newField(shape *spec.Shape, m spec.Member) (*field, error) {
 		return nil, err
 	}
 
-	err = g.checkJSONTimestamp(r)
-	if err != nil {
-		return nil, err
+	// A member bound outside the body holds its timestamps in the formats of
+	// its location, which package rest reads and writes.
+	if r.binding == "" {
+		err = g.checkJSONTimestamp(r)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	jsonName := m.Name
@@ -572,9 +656,14 @@ func (g *generator) goTypeName(shape string) string {
 
 // goType is the Go type of a shape reference at the given site.
 func (g *generator) goType(r ref, at site) (string, error) {
+	// A document is any json value, kept as its text. nil is absent.
+	if r.shape.Document {
+		return typeDocument, nil
+	}
+
 	scalar, ok := scalarTypes[r.shape.Type]
 	if ok {
-		if at == siteMember && scalar != "[]byte" && scalar != "*protocol.Time" {
+		if at == siteMember && scalar != typeBytes && scalar != "*protocol.Time" {
 			return "*" + scalar, nil
 		}
 
@@ -655,6 +744,7 @@ func resolve(svc *spec.Service, r *spec.Ref) (ref, error) {
 		hostLabel:    r.HostLabel,
 		eventPayload: r.EventPayload,
 		eventHeader:  r.EventHeader,
+		jsonvalue:    shape.JSONValue || r.JSONValue,
 	}
 
 	if r.LocationName != "" {
@@ -672,10 +762,11 @@ func resolve(svc *spec.Service, r *spec.Ref) (ref, error) {
 	return out, nil
 }
 
-// markReachable flags the structs the query codec has to decode, those below an
-// operation input, and to encode, those below an output.
+// markReachable flags the structs the query or rest codec has to decode, those
+// below an operation input, and to encode, those below an output or the
+// members of a rest error.
 func (g *generator) markReachable() {
-	if g.q == nil {
+	if g.q == nil && !g.isRest() {
 		return
 	}
 
@@ -683,12 +774,18 @@ func (g *generator) markReachable() {
 		g.markStruct(g.ops[name].input, decoding)
 		g.markStruct(g.ops[name].output, encoding)
 	}
+
+	for _, ex := range g.exceptions {
+		if ex.members != nil {
+			g.markStruct(ex.members, encoding)
+		}
+	}
 }
 
 func (g *generator) markStruct(st *structType, dir direction) {
-	flag := &st.encodeQ
+	flag := &st.encodes
 	if dir == decoding {
-		flag = &st.decodeQ
+		flag = &st.decodes
 	}
 
 	if *flag {
@@ -707,6 +804,10 @@ func (g *generator) markStruct(st *structType, dir direction) {
 // nestedStructs lists the structure shapes directly below a type: the type
 // itself, or the element of a list or map.
 func (g *generator) nestedStructs(r ref) []string {
+	if r.shape.Document {
+		return nil
+	}
+
 	switch r.shape.Type {
 	case spec.TypeStructure:
 		return []string{r.name}

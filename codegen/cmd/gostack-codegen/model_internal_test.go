@@ -119,7 +119,7 @@ func Test_newModel_Rest(t *testing.T) {
 		giveService      string
 		giveLoad         func() (*spec.Service, error)
 		wantOps          int
-		wantStructs      int
+		wantStructs      int // with the member structs of errors that carry more than a message
 		wantLocated      map[string]int
 		wantPayloads     int
 		wantFlattened    int
@@ -134,7 +134,7 @@ func Test_newModel_Rest(t *testing.T) {
 			giveService: "s3",
 			giveLoad:    func() (*spec.Service, error) { return loader.File(rawS3) },
 			wantOps:     111,
-			wantStructs: 343,
+			wantStructs: 344,
 			wantLocated: map[string]int{
 				spec.LocationHeader: 623, spec.LocationQuery: 84, spec.LocationURI: 133, spec.LocationHeaders: 6,
 			},
@@ -153,9 +153,9 @@ func Test_newModel_Rest(t *testing.T) {
 			giveService: "s3",
 			giveLoad:    func() (*spec.Service, error) { return loader.Botocore("s3") },
 			wantOps:     112,
-			wantStructs: 345,
+			wantStructs: 389,
 			wantLocated: map[string]int{
-				spec.LocationHeader: 642, spec.LocationQuery: 84, spec.LocationURI: 134, spec.LocationHeaders: 6,
+				spec.LocationHeader: 647, spec.LocationQuery: 84, spec.LocationURI: 134, spec.LocationHeaders: 6,
 				spec.LocationStatusCode: 4,
 			},
 			wantPayloads:     62,
@@ -171,9 +171,9 @@ func Test_newModel_Rest(t *testing.T) {
 			giveService: "lambda",
 			giveLoad:    func() (*spec.Service, error) { return loader.Botocore("lambda") },
 			wantOps:     85,
-			wantStructs: 261,
+			wantStructs: 305,
 			wantLocated: map[string]int{
-				spec.LocationHeader: 15, spec.LocationQuery: 79, spec.LocationURI: 84, spec.LocationStatusCode: 4,
+				spec.LocationHeader: 16, spec.LocationQuery: 79, spec.LocationURI: 84, spec.LocationStatusCode: 4,
 			},
 			wantPayloads:     8,
 			wantFlattened:    0,

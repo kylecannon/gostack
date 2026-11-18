@@ -17,6 +17,13 @@ type serviceOptions struct {
 	// MissingParam is the error a missing required member gives. A nil value
 	// means the generic ValidationError.
 	MissingParam *missingParam
+	// S3Errors writes rest-xml errors in S3's envelope, <Error> with no
+	// <ErrorResponse> around it, instead of the generic one.
+	S3Errors bool
+	// HostRoutes names, by operation, the host prefix that tells a rest
+	// operation apart from another one bound to the same request: S3's
+	// ListDirectoryBuckets and ListBuckets are both GET /.
+	HostRoutes map[string]string
 }
 
 // missingParam names the error for a missing required member.
@@ -37,4 +44,13 @@ var serviceTable = map[string]serviceOptions{
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},
 	},
 	"sts": {},
+	"s3": {
+		// LocalStack's S3 serializer writes <Error><Code/><Message/><RequestId/>
+		// with the error's own members after them, as AWS does.
+		S3Errors: true,
+		// botocore sends ListDirectoryBuckets to the s3express-control endpoint
+		// (staticContextParams UseS3ExpressControlEndpoint), and nothing else in
+		// the request differs from ListBuckets.
+		HostRoutes: map[string]string{"ListDirectoryBuckets": "s3express-control."},
+	},
 }

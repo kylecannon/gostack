@@ -17,6 +17,7 @@ import (
 
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/rest"
+	xmlgen "github.com/kylecannon/gostack/internal/protocol/restxml/fixturegen_test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -274,7 +275,7 @@ func readFixture(t *testing.T, name string, v any) {
 }
 
 // fixtureFunc runs one case of a group.
-type fixtureFunc func(t *testing.T, m model, c *fixtureCase)
+type fixtureFunc func(t *testing.T, m model, c *fixtureCase, gen xmlgen.Group)
 
 // runCases runs every case of <kind>/<proto>.json that botocore's ignore list
 // keeps, each as a parallel subtest named after the case id.
@@ -289,7 +290,7 @@ func runCases(t *testing.T, proto, kind string, run fixtureFunc) {
 	readFixture(t, kind+"/"+proto+".json", &groups)
 	readFixture(t, "protocol-tests-ignore-list.json", &ignore)
 
-	for _, g := range groups {
+	for gi, g := range groups {
 		for i := range g.Cases {
 			c := &g.Cases[i]
 
@@ -300,7 +301,7 @@ func runCases(t *testing.T, proto, kind string, run fixtureFunc) {
 					t.Skip("botocore's ignore list skips this case")
 				}
 
-				run(t, model(g.Shapes), c)
+				run(t, model(g.Shapes), c, generatedGroup(t, proto, kind, gi))
 			})
 		}
 	}
@@ -386,150 +387,6 @@ func buildRequest(t *testing.T, c *fixtureCase) *http.Request {
 	return req
 }
 
-// decodeBindings reads every input member bound outside the body.
-func decodeBindings(t *testing.T, m model, in member, d *rest.Decoder) map[string]any {
-	t.Helper()
-
-	out := map[string]any{}
-
-	for _, mm := range m.members(in.shape) {
-		var v any
-
-		switch mm.location {
-		case locHeader:
-			v = headerValue(t, m, mm, d)
-		case locHeaders:
-			v = plain(d.HeaderMap(mm.loc))
-		case locQuery:
-			v = queryValue(m, mm, d)
-		case locURI:
-			v = labelValue(mm, d)
-		default:
-			continue
-		}
-
-		if v != nil {
-			out[mm.name] = v
-		}
-	}
-
-	return out
-}
-
-func headerValue(t *testing.T, m model, mm member, d *rest.Decoder) any {
-	t.Helper()
-
-	name := mm.loc
-
-	switch mm.shape.Type {
-	case typeString:
-		if !mm.jsonvalue {
-			return plain(d.Header(name))
-		}
-
-		text := d.HeaderJSONValue(name)
-		if text == nil {
-			return nil
-		}
-
-		return jsonDynamic(t, []byte(*text))
-	case typeInteger:
-		return plain(d.HeaderInt32(name))
-	case typeLong:
-		return plain(d.HeaderInt64(name))
-	case typeFloat, typeDouble:
-		return plain(d.HeaderFloat64(name))
-	case typeBoolean:
-		return plain(d.HeaderBool(name))
-	case typeTimestamp:
-		return plain(d.HeaderTime(name, mm.tsfmt))
-	case typeBlob:
-		return plain(d.HeaderBlob(name))
-	case typeList:
-		el := m.resolve("", mm.shape.Member)
-
-		switch el.shape.Type {
-		case typeInteger:
-			return plain(d.HeaderInt32s(name))
-		case typeLong:
-			return plain(d.HeaderInt64s(name))
-		case typeFloat, typeDouble:
-			return plain(d.HeaderFloat64s(name))
-		case typeBoolean:
-			return plain(d.HeaderBools(name))
-		case typeTimestamp:
-			return plain(d.HeaderTimes(name, el.tsfmt))
-		default:
-			return plain(d.HeaderStrings(name))
-		}
-	default:
-		panic("header of type " + mm.shape.Type)
-	}
-}
-
-func queryValue(m model, mm member, d *rest.Decoder) any {
-	name := mm.loc
-
-	switch mm.shape.Type {
-	case typeString:
-		return plain(d.Query(name))
-	case typeInteger:
-		return plain(d.QueryInt32(name))
-	case typeLong:
-		return plain(d.QueryInt64(name))
-	case typeFloat, typeDouble:
-		return plain(d.QueryFloat64(name))
-	case typeBoolean:
-		return plain(d.QueryBool(name))
-	case typeTimestamp:
-		return plain(d.QueryTime(name, mm.tsfmt))
-	case typeList:
-		el := m.resolve("", mm.shape.Member)
-
-		switch el.shape.Type {
-		case typeInteger:
-			return plain(d.QueryInt32s(name))
-		case typeLong:
-			return plain(d.QueryInt64s(name))
-		case typeFloat, typeDouble:
-			return plain(d.QueryFloat64s(name))
-		case typeBoolean:
-			return plain(d.QueryBools(name))
-		case typeTimestamp:
-			return plain(d.QueryTimes(name, el.tsfmt))
-		default:
-			return plain(d.QueryStrings(name))
-		}
-	case typeMap:
-		if m.resolve("", mm.shape.Value).shape.Type == typeList {
-			return plain(d.QueryMapStrings())
-		}
-
-		return plain(d.QueryMap())
-	default:
-		panic("querystring member of type " + mm.shape.Type)
-	}
-}
-
-func labelValue(mm member, d *rest.Decoder) any {
-	name := mm.loc
-
-	switch mm.shape.Type {
-	case typeInteger:
-		return plain(d.LabelInt32(name))
-	case typeLong:
-		return plain(d.LabelInt64(name))
-	case typeFloat, typeDouble:
-		return plain(d.LabelFloat64(name))
-	case typeBoolean:
-		return plain(d.LabelBool(name))
-	case typeTimestamp:
-		return plain(d.LabelTime(name, mm.tsfmt))
-	default:
-		return plain(d.Label(name))
-	}
-}
-
 // queryMapsMatch relaxes the comparison of querystring maps: the server's map
 // holds every parameter, those bound to named members too, while a client's
 // params hold only what it put in the map. Every entry the client set must be
@@ -572,108 +429,13 @@ func queryMapsMatch(t *testing.T, m model, in member, want, got map[string]any) 
 	}
 }
 
-// encodeBindings writes every output member bound to a header and returns
-// the status a statusCode member asks for, or def.
-func encodeBindings(t *testing.T, m model, out member, h http.Header, v map[string]any, def int) int {
-	t.Helper()
-
-	status := def
-
-	for _, mm := range m.members(out.shape) {
-		val, ok := v[mm.name]
-		if !ok || val == nil {
-			continue
-		}
-
-		switch mm.location {
-		case locHeader:
-			setHeader(t, m, mm, h, val)
-		case locHeaders:
-			entries := map[string]string{}
-			for k, e := range must[map[string]any](t, val) {
-				entries[k] = must[string](t, e)
-			}
-
-			rest.SetMap(h, mm.loc, entries)
-		case locStatus:
-			status = rest.Status(new(int32(number(t, val))), def)
-		default:
-			// Body members, and querystring and uri members, which a response
-			// does not carry.
-		}
-	}
-
-	return status
-}
-
-func setHeader(t *testing.T, m model, mm member, h http.Header, val any) {
-	t.Helper()
-
-	name := mm.loc
-
-	switch mm.shape.Type {
-	case typeString:
-		if mm.jsonvalue {
-			text, err := json.Marshal(val)
-			require.NoError(t, err)
-			rest.SetJSONValue(h, name, new(string(text)))
-
-			return
-		}
-
-		rest.SetString(h, name, new(must[string](t, val)))
-	case typeInteger:
-		rest.SetInt32(h, name, new(int32(number(t, val))))
-	case typeLong:
-		rest.SetInt64(h, name, new(int64(number(t, val))))
-	case typeFloat, typeDouble:
-		rest.SetFloat64(h, name, new(number(t, val)))
-	case typeBoolean:
-		rest.SetBool(h, name, new(must[bool](t, val)))
-	case typeTimestamp:
-		rest.SetTime(h, name, timeOf(t, val), mm.tsfmt)
-	case typeBlob:
-		rest.SetBlob(h, name, []byte(must[string](t, val)))
-	case typeList:
-		setHeaderList(t, m, mm, h, must[[]any](t, val))
-	default:
-		panic("header of type " + mm.shape.Type)
-	}
-}
-
-func setHeaderList(t *testing.T, m model, mm member, h http.Header, items []any) {
-	t.Helper()
-
-	el := m.resolve("", mm.shape.Member)
-
-	switch el.shape.Type {
-	case typeInteger:
-		rest.SetInt32s(h, mm.loc, mapItems(items, func(v any) int32 { return int32(number(t, v)) }))
-	case typeLong:
-		rest.SetInt64s(h, mm.loc, mapItems(items, func(v any) int64 { return int64(number(t, v)) }))
-	case typeFloat, typeDouble:
-		rest.SetFloat64s(h, mm.loc, mapItems(items, func(v any) float64 { return number(t, v) }))
-	case typeBoolean:
-		rest.SetBools(h, mm.loc, mapItems(items, func(v any) bool { return must[bool](t, v) }))
-	case typeTimestamp:
-		rest.SetTimes(h, mm.loc, mapItems(items, func(v any) *protocol.Time { return timeOf(t, v) }), el.tsfmt)
-	default:
-		rest.SetStrings(h, mm.loc, mapItems(items, func(v any) string { return must[string](t, v) }))
-	}
-}
-
-func mapItems[T any](items []any, f func(any) T) []T {
-	out := make([]T, 0, len(items))
-	for _, v := range items {
-		out = append(out, f(v))
-	}
-
-	return out
-}
-
 // parseHeaders reads the members bound to headers and the status line out of a
 // response the way botocore's parser does: header lists split on commas, and
 // a prefix map keyed by the rest of each header name as it came.
+// protocolHeaders are the headers a rest response carries for the protocol,
+// not for a member.
+var protocolHeaders = []string{"Content-Type", "x-amzn-RequestId", "x-amz-request-id"}
+
 func parseHeaders(t *testing.T, m model, out member, h http.Header, status int) map[string]any {
 	t.Helper()
 
@@ -692,6 +454,13 @@ func parseHeaders(t *testing.T, m model, out member, h http.Header, status int) 
 			entries := map[string]any{}
 
 			for k, v := range h {
+				// A member with no prefix takes every header, which in a
+				// server's response includes the ones the protocol itself
+				// sends; the fixture's response has none of them.
+				if mm.loc == "" && slices.Contains(protocolHeaders, k) {
+					continue
+				}
+
 				if len(k) >= len(mm.loc) && strings.EqualFold(k[:len(mm.loc)], mm.loc) {
 					entries[k[len(mm.loc):]] = v[0]
 				}
