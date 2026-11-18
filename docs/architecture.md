@@ -737,8 +737,9 @@ and is untouched.
   orphan older than the loaded state file goes: a newer one may be on its way
   into the state. The load also drops queued removals of ids the restored state
   names again.
-- Nothing is deleted while a state file of the service sits moved aside
-  (`.unloadable-`), because that file may name the assets.
+- The load sweep deletes nothing while a state file of the service sits moved
+  aside (`.unloadable-`), because that file may name the assets. Queued
+  removals and a reset still apply.
 - `POST /_gostack/state/reset` of a whole service lists its assets, wipes the
   state, and deletes every listed asset after the next save. A reset scoped to
   an account or a region leaves removals to the service. A reset holds the
