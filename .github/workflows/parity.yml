@@ -1,0 +1,150 @@
+name: parity
+
+# LocalStack's own pytest suite, run unchanged against a gostack image built
+# from the pull request head (docs/architecture.md, "Parity oracle").
+#
+# The services come from the changed paths: internal/service/<svc>/ selects that
+# service, and a shared path (parity/ledger.py, SHARED_PATHS) selects every
+# service in the ledger. A change to neither runs nothing. A manual run takes a
+# services input instead.
+#
+# CI never runs the LocalStack baseline. The localstack column of the committed
+# parity/ledger.json is the baseline, and `make parity-check` fails when a test
+# that passed there now fails. The suite comes from localstack/localstack at the
+# commit pinned in specs/SOURCES.lock. When GitHub cannot serve that commit the
+# job stops, and nothing is vendored in its place.
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Services to run, comma separated, as the ledger names them (sqs,sts). Empty runs every service in the ledger."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parity-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # The tag of the runner image inside this job. The cache key carries the
+  # LocalStack sha, so the tag does not have to.
+  PARITY_RUNNER_IMAGE: gostack-parity-runner:ci
+  GOSTACK_IMAGE: gostack:parity
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      # LocalStack sits beside the gostack checkout, where parity/run.sh looks
+      # for it (../localstack).
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          path: gostack
+
+      - name: Select the services
+        id: select
+        working-directory: gostack
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REQUESTED: ${{ inputs.services }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            services=${REQUESTED:-$(python3 parity/ledger.py services)}
+          else
+            services=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | python3 parity/ledger.py services --changed)
+          fi
+          case "$services" in
+          *[!a-z0-9_,]*) echo "services '$services' is not a comma separated list of service names" >&2; exit 1 ;;
+          esac
+          sha=$(awk '$1 == "localstack_sha" { print $2 }' specs/SOURCES.lock)
+          case "$sha" in
+          *[!0-9a-f]* | '') echo "specs/SOURCES.lock has no localstack_sha" >&2; exit 1 ;;
+          esac
+          [ "${#sha}" = 40 ] || { echo "localstack_sha '$sha' is not a full commit sha" >&2; exit 1; }
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "localstack_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Services: ${services:-none, no changed path affects a service}. LocalStack: $sha" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Fetch LocalStack at the pinned commit
+        if: steps.select.outputs.services != ''
+        uses: actions/checkout@v7
+        with:
+          repository: localstack/localstack
+          ref: ${{ steps.select.outputs.localstack_sha }}
+          path: localstack
+
+      - name: Check the LocalStack commit
+        if: steps.select.outputs.services != ''
+        env:
+          WANT: ${{ steps.select.outputs.localstack_sha }}
+        run: |
+          got=$(git -C localstack rev-parse HEAD)
+          [ "$got" = "$WANT" ] || { echo "LocalStack is at $got, want $WANT" >&2; exit 1; }
+
+      - name: Restore the runner image
+        id: runner-cache
+        if: steps.select.outputs.services != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/parity-runner.tar
+          key: parity-runner-${{ steps.select.outputs.localstack_sha }}-${{ hashFiles('gostack/parity/runner/**') }}
+
+      - name: Load the cached runner image
+        if: steps.select.outputs.services != '' && steps.runner-cache.outputs.cache-hit == 'true'
+        run: docker load --input "$RUNNER_TEMP/parity-runner.tar"
+
+      - name: Build the runner image
+        if: steps.select.outputs.services != '' && steps.runner-cache.outputs.cache-hit != 'true'
+        working-directory: gostack
+        run: |
+          parity/run.sh runner
+          docker save --output "$RUNNER_TEMP/parity-runner.tar" "$PARITY_RUNNER_IMAGE"
+
+      - name: Save the runner image
+        if: steps.select.outputs.services != '' && steps.runner-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/parity-runner.tar
+          key: ${{ steps.runner-cache.outputs.cache-primary-key }}
+
+      - name: Build the gostack image from the pull request head
+        if: steps.select.outputs.services != ''
+        working-directory: gostack
+        run: make image IMAGE="$GOSTACK_IMAGE"
+
+      - name: Run LocalStack's tests against gostack
+        if: steps.select.outputs.services != ''
+        working-directory: gostack
+        env:
+          SERVICES: ${{ steps.select.outputs.services }}
+          PARITY_RUNNER_PREBUILT: "1"
+        run: make parity
+
+      - name: Fail on a regression
+        if: steps.select.outputs.services != ''
+        working-directory: gostack
+        run: make parity-check
+
+      - name: Report
+        if: always() && steps.select.outputs.services != ''
+        working-directory: gostack
+        run: cat docs/parity.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.select.outputs.services != ''
+        with:
+          name: parity
+          path: |
+            gostack/parity/out/gostack
+            gostack/parity/ledger.json
+            gostack/docs/parity.md

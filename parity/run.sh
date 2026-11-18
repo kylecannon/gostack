@@ -5,6 +5,8 @@
 #   parity/run.sh gostack     the gostack image         (make parity)
 #   parity/run.sh localstack  LocalStack built from the pinned checkout
 #                             (make parity-baseline)
+#   parity/run.sh runner      only build the runner image, then stop. CI uses it
+#                             to fill its cache (.github/workflows/parity.yml).
 #
 # Environment:
 #   SERVICES              comma separated tests/aws/services/<name> dirs (default sqs,sts)
@@ -14,6 +16,11 @@
 #                         when run from a linked worktree)
 #   PARITY_NAME_SUFFIX    appended to container names, to keep parallel runs apart
 #   PARITY_REBUILD=1      rebuild the LocalStack baseline image even when it exists
+#   PARITY_RUNNER_PREBUILT=1
+#                         use the runner image as it is when it exists, without
+#                         `docker build`. CI sets it after restoring the image
+#                         from its cache, keyed on the LocalStack sha and
+#                         parity/runner/
 #   PARITY_TIMEOUT        seconds before the pytest run is killed (default 5400)
 #   PARITY_PYTEST_ARGS    extra pytest arguments, for a narrowed run
 #                         (`-k test_purge_queue`); never snapshot or duration flags
@@ -26,7 +33,8 @@ set -euo pipefail
 MODE=${1:-}
 case "$MODE" in
 gostack | localstack) COLUMN=$MODE ;;
-*) echo "usage: $0 gostack|localstack" >&2; exit 2 ;;
+runner) COLUMN=gostack ;;
+*) echo "usage: $0 gostack|localstack|runner" >&2; exit 2 ;;
 esac
 
 SERVICES=${SERVICES:-sqs,sts}
@@ -59,6 +67,23 @@ if ! git -C "$LOCALSTACK_DIR" diff-index --quiet HEAD --; then
 	exit 1
 fi
 
+# Runner image: cached after the first build.
+build_runner() {
+	if [ "${PARITY_RUNNER_PREBUILT:-}" = 1 ] && docker image inspect "$RUNNER_IMAGE" >/dev/null 2>&1; then
+		return
+	fi
+	docker build -q -t "$RUNNER_IMAGE" \
+		--build-context "localstack=$LOCALSTACK_DIR" \
+		--build-arg "LOCALSTACK_SHA=$LS_SHA" \
+		-f "$ROOT/parity/runner/Dockerfile" "$ROOT/parity/runner" >/dev/null
+}
+
+if [ "$MODE" = runner ]; then
+	build_runner
+	echo "parity: runner image $RUNNER_IMAGE built from LocalStack $LS_SHA"
+	exit 0
+fi
+
 test_paths=()
 IFS=, read -ra service_list <<<"$SERVICES"
 for service in "${service_list[@]}"; do
@@ -85,11 +110,7 @@ trap 'exit 130' INT TERM
 
 start=$(date +%s)
 
-# Runner image: cached after the first build.
-docker build -q -t "$RUNNER_IMAGE" \
-	--build-context "localstack=$LOCALSTACK_DIR" \
-	--build-arg "LOCALSTACK_SHA=$LS_SHA" \
-	-f "$ROOT/parity/runner/Dockerfile" "$ROOT/parity/runner" >/dev/null
+build_runner
 
 # Target image.
 if [ "$COLUMN" = gostack ]; then

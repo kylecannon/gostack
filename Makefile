@@ -122,11 +122,19 @@ gen-check: gen
 	@untracked=$$(git ls-files --others --exclude-standard -- internal/api); \
 	if [ -n "$$untracked" ]; then echo "untracked generated files:" >&2; echo "$$untracked" >&2; exit 1; fi
 
-# Runs each fuzz target for FUZZTIME. go test accepts one -fuzz target and one
-# package at a time, so each target has its own invocation.
+# Runs every Fuzz* function in a *_test.go file for FUZZTIME each, e.g.
+# `make fuzz FUZZTIME=5s`. go test accepts one -fuzz target and one package at a
+# time, so each target has its own invocation. A crash does not stop the loop:
+# the remaining targets still run and the target fails at the end.
 fuzz:
-	go test -run '^$$' -fuzz '^FuzzQueryDecode$$' -fuzztime $(FUZZTIME) ./internal/protocol/query
-	go test -run '^$$' -fuzz '^FuzzAWSJSONDecode$$' -fuzztime $(FUZZTIME) ./internal/protocol/awsjson
+	@status=0; \
+	for file in $$(grep -rl --include='*_test.go' '^func Fuzz' . | sort); do \
+		for target in $$(sed -n 's/^func \(Fuzz[A-Za-z0-9_]*\)(.*/\1/p' "$$file"); do \
+			echo "fuzz $$target in $$(dirname "$$file") for $(FUZZTIME)"; \
+			go test -run '^$$' -fuzz "^$$target\$$" -fuzztime $(FUZZTIME) "$$(dirname "$$file")" || status=1; \
+		done; \
+	done; \
+	exit $$status
 
 # Prints the pinned toolchain, for `export GOTOOLCHAIN=$(make -s toolchain)`.
 toolchain:

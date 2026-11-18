@@ -14,6 +14,11 @@ Commands (standard library only):
            HEAD:parity/ledger.json) fails in the working-tree ledger, in either
            column. A regression is never a deferral.
     docs   Rewrite docs/parity.md from the ledger.
+    services [--changed]
+           Print the services the ledger covers, comma separated. With --changed,
+           read changed file paths from stdin and print only the services that
+           code change can affect (empty when none): internal/service/<svc>/
+           selects <svc>, and a shared path selects every service.
 """
 
 from __future__ import annotations
@@ -33,6 +38,22 @@ COLUMNS = ("localstack", "gostack")
 STATUSES = ("pass", "fail", "skip", "xfail", "excluded")
 SERVICE_PREFIX = "tests/aws/services/"
 REASON_LIMIT = 200
+
+# A change under internal/service/<svc>/ affects that service alone. A change
+# under SHARED_PATHS affects every service. Anything else (docs/, bench/, tools/,
+# the other workflows) cannot change what the image does.
+SERVICE_DIR = "internal/service/"
+SHARED_PATHS = (
+    "internal/",  # gateway, protocol, route, persist, config, api and the rest
+    "cmd/",
+    "codegen/",
+    "specs/",
+    "docker/",
+    "parity/",
+    "go.mod",
+    "go.sum",
+    ".github/workflows/parity.yml",
+)
 
 # When one nodeid has several junit testcases (call plus a teardown error), the
 # worst one wins.
@@ -230,6 +251,29 @@ def check(args: argparse.Namespace) -> None:
     print(f"parity-check: ok against {args.base} ({len(current)} entries, {passing} column passes)")
 
 
+# --- services --------------------------------------------------------------
+
+
+def affected_services(paths: list[str], known: set[str]) -> set[str]:
+    """The known services that a change to paths can affect."""
+    affected: set[str] = set()
+    for raw in paths:
+        path = raw.strip()
+        service, _, rest = path.removeprefix(SERVICE_DIR).partition("/")
+        if path.startswith(SERVICE_DIR) and rest:
+            if service in known:
+                affected.add(service)
+        elif path.startswith(SHARED_PATHS):
+            return set(known)
+    return affected
+
+
+def services(args: argparse.Namespace) -> None:
+    known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)} - {"other"}
+    chosen = affected_services(sys.stdin.read().splitlines(), known) if args.changed else known
+    print(",".join(sorted(chosen)))
+
+
 # --- docs ------------------------------------------------------------------
 
 
@@ -301,6 +345,10 @@ def main() -> None:
     check_parser = sub.add_parser("check", help="fail on pass -> fail against the committed ledger")
     check_parser.add_argument("--base", default="HEAD", help="git revision holding the committed ledger")
     check_parser.set_defaults(func=check)
+
+    services_parser = sub.add_parser("services", help="print the ledger's services, or those a change affects")
+    services_parser.add_argument("--changed", action="store_true", help="read changed paths from stdin")
+    services_parser.set_defaults(func=services)
 
     docs_parser = sub.add_parser("docs", help="rewrite docs/parity.md")
     docs_parser.set_defaults(func=docs)

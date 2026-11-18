@@ -20,6 +20,8 @@ jobs:
           cache-dependency-path: |
             go.sum
             tools/go.sum
+      # --diff prints what the formatters would change and fails on any.
+      - run: make fmt FMT_ARGS=--diff
       - run: make tidy-check
       - run: make gen-check
       - run: make fix-check
