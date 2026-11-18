@@ -10,7 +10,8 @@ import (
 )
 
 // DefaultShutdownTimeout is how long the supervisor waits for the child process
-// to stop before it kills it, when SHUTDOWN_TIMEOUT is not set.
+// to stop before it kills it, when SHUTDOWN_TIMEOUT is not set. The child's own
+// shutdown, the state save included, ends 500 ms before that.
 const DefaultShutdownTimeout = 5 * time.Second
 
 var (
@@ -74,7 +75,9 @@ type Settings struct {
 	ResponseHeaderEnabled bool
 	// CustomSSLCertPath is CUSTOM_SSL_CERT_PATH.
 	CustomSSLCertPath string
-	// ShutdownTimeout is SHUTDOWN_TIMEOUT. Zero means wait without a limit.
+	// ShutdownTimeout is SHUTDOWN_TIMEOUT: the time from the supervisor's SIGTERM
+	// to its SIGKILL, which the child splits between the shutdown hooks, the drain
+	// and the save (lifecycle.PlanShutdown). Zero means no limit.
 	ShutdownTimeout time.Duration
 	// DisableCORSChecks is DISABLE_CORS_CHECKS.
 	DisableCORSChecks bool
