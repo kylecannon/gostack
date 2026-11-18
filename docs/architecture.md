@@ -793,7 +793,9 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 - Snapshot copies under S3's transfer lock and each bucket's lock in turn, and
   encodes once they are released. Restore checks the whole file first, then,
   under the transfer lock, puts each account's restored buckets in place in one
-  step and rebuilds the name index. Each bucket it replaces is marked gone, so a
+  step and rebuilds the name index. It builds each bucket's sorted key and
+  upload indexes before the bucket is visible, since every listing walks them.
+  Each bucket it replaces is marked gone, so a
   write that found it fails with `NoSuchBucket` and removes its own body, and
   the bodies the replaced buckets named that the restored state does not are
   removed. A file that does not load leaves S3 empty and removes nothing, since
