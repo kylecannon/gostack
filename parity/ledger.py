@@ -28,7 +28,12 @@ Commands (standard library only):
            Print the services the ledger covers, comma separated. With --changed,
            read changed file paths from stdin and print only the services that
            code change can affect (empty when none): internal/service/<svc>/
-           selects <svc>, and a shared path selects every service.
+           selects <svc>, and a shared path selects every service. --range
+           A...B lets a change to the registration list that only adds lines
+           naming a changed service count as that service's alone.
+    test-dirs SERVICES
+           Print the LocalStack test path (tests/aws/services/<dir>) of each
+           comma separated service, one per line. parity/run.sh runs these.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -51,6 +57,55 @@ COLUMNS = ("localstack", "gostack")
 STATUSES = ("pass", "fail", "skip", "xfail", "excluded")
 SERVICE_PREFIX = "tests/aws/services/"
 REASON_LIMIT = 200
+
+# The services under tests/aws/services/ at the pinned LocalStack checkout
+# (8b9a79f), keyed by the name of the service's directory under internal/service/
+# and valued by its test directory. Only lambda differs: `lambda` is a Python
+# keyword, so LocalStack's tests live in lambda_. A new LocalStack pin that adds
+# or renames a directory changes this map (`ls tests/aws/services` there).
+TEST_DIRS = {
+    "acm": "acm",
+    "apigateway": "apigateway",
+    "cloudcontrol": "cloudcontrol",
+    "cloudformation": "cloudformation",
+    "cloudwatch": "cloudwatch",
+    "config": "config",
+    "dynamodb": "dynamodb",
+    "dynamodbstreams": "dynamodbstreams",
+    "ec2": "ec2",
+    "es": "es",
+    "events": "events",
+    "firehose": "firehose",
+    "iam": "iam",
+    "kinesis": "kinesis",
+    "kms": "kms",
+    "lambda": "lambda_",
+    "logs": "logs",
+    "opensearch": "opensearch",
+    "redshift": "redshift",
+    "resource_groups": "resource_groups",
+    "resourcegroupstaggingapi": "resourcegroupstaggingapi",
+    "route53": "route53",
+    "route53resolver": "route53resolver",
+    "s3": "s3",
+    "s3control": "s3control",
+    "scheduler": "scheduler",
+    "secretsmanager": "secretsmanager",
+    "ses": "ses",
+    "sns": "sns",
+    "sqs": "sqs",
+    "ssm": "ssm",
+    "stepfunctions": "stepfunctions",
+    "sts": "sts",
+    "support": "support",
+    "swf": "swf",
+    "transcribe": "transcribe",
+}
+SERVICE_OF_DIR = {directory: name for name, directory in TEST_DIRS.items()}
+
+# The file that lists the registered services. Adding a service touches it, so
+# it is shared unless the change only adds lines naming the services it adds.
+REGISTRATION_FILE = "cmd/gostack/services.go"
 
 # A change under internal/service/<svc>/ affects that service alone. A change
 # under SHARED_PATHS affects every service. Anything else (docs/, bench/, tools/,
@@ -75,8 +130,16 @@ RANK = {"pass": 0, "skip": 1, "xfail": 2, "fail": 3}
 
 def service_of(nodeid: str) -> str:
     if nodeid.startswith(SERVICE_PREFIX):
-        return nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0]
+        directory = nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0]
+        return SERVICE_OF_DIR.get(directory, directory)
     return "other"
+
+
+def test_dir(service: str) -> str:
+    """The LocalStack test path of a service name."""
+    if service not in TEST_DIRS:
+        raise SystemExit(f"no LocalStack test directory known for service '{service}' (TEST_DIRS in parity/ledger.py)")
+    return SERVICE_PREFIX + TEST_DIRS[service]
 
 
 def file_of(nodeid: str) -> str:
@@ -337,24 +400,75 @@ def prune(args: argparse.Namespace) -> None:
 # --- services --------------------------------------------------------------
 
 
-def affected_services(paths: list[str], known: set[str]) -> set[str]:
-    """The known services that a change to paths can affect."""
+def only_adds_service_lines(diff: str, changed: set[str]) -> bool:
+    """True when a `git diff -U0` removes nothing and every added line names one
+    of the changed services as a word (an import, a struct field, a registration
+    line). Anything else, including a line edited in place or a bare `}`, is not
+    provably the registration of a service."""
+    if not changed:
+        return False
+    names = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(changed)) + r")\b")
+    added = 0
+    for line in diff.splitlines():
+        if line.startswith(("+++", "---")) or not line.startswith(("+", "-")):
+            continue
+        if line.startswith("-") or not names.search(line):
+            return False
+        added += 1
+    return added > 0
+
+
+def registration_diff(revisions: str) -> str | None:
+    shown = subprocess.run(
+        ["git", "-C", str(ROOT), "diff", "-U0", revisions, "--", REGISTRATION_FILE],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def affected_services(paths: list[str], known: set[str], registration_adds: bool = False) -> set[str]:
+    """The services that a change to paths can affect. A service directory
+    selects its service when the service has a LocalStack test directory; a shared
+    path selects every known service. registration_adds says the change to
+    REGISTRATION_FILE only adds lines naming the services of the changed
+    directories, so the file is not shared for it."""
     affected: set[str] = set()
+    shared = False
+    registration_changed = False
     for raw in paths:
         path = raw.strip()
         service, _, rest = path.removeprefix(SERVICE_DIR).partition("/")
         if path.startswith(SERVICE_DIR) and rest:
-            if service in known:
+            if service in TEST_DIRS:
                 affected.add(service)
+        elif path == REGISTRATION_FILE:
+            registration_changed = True
         elif path.startswith(SHARED_PATHS):
-            return set(known)
+            shared = True
+    if shared or (registration_changed and not registration_adds):
+        return set(known) | affected
     return affected
 
 
 def services(args: argparse.Namespace) -> None:
     known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)} - {"other"}
-    chosen = affected_services(sys.stdin.read().splitlines(), known) if args.changed else known
-    print(",".join(sorted(chosen)))
+    if not args.changed:
+        print(",".join(sorted(known)))
+        return
+    paths = sys.stdin.read().splitlines()
+    adds = False
+    if args.range and any(p.strip() == REGISTRATION_FILE for p in paths):
+        diff = registration_diff(args.range)
+        # Git failing to produce the diff keeps every service selected.
+        adds = diff is not None and only_adds_service_lines(diff, affected_services(paths, set()))
+    print(",".join(sorted(affected_services(paths, known, adds))))
+
+
+def test_dirs(args: argparse.Namespace) -> None:
+    for name in args.services.split(","):
+        print(test_dir(name))
 
 
 # --- docs ------------------------------------------------------------------
@@ -439,7 +553,12 @@ def main() -> None:
 
     services_parser = sub.add_parser("services", help="print the ledger's services, or those a change affects")
     services_parser.add_argument("--changed", action="store_true", help="read changed paths from stdin")
+    services_parser.add_argument("--range", help="git revisions A...B of the change; lets a registration-only edit of cmd/gostack/services.go not count as shared")
     services_parser.set_defaults(func=services)
+
+    dirs_parser = sub.add_parser("test-dirs", help="print the LocalStack test path of each service")
+    dirs_parser.add_argument("services", help="comma separated service names")
+    dirs_parser.set_defaults(func=test_dirs)
 
     docs_parser = sub.add_parser("docs", help="rewrite docs/parity.md")
     docs_parser.set_defaults(func=docs)

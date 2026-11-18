@@ -5,8 +5,9 @@ name: parity
 #
 # The services come from the changed paths: internal/service/<svc>/ selects that
 # service, and a shared path (parity/ledger.py, SHARED_PATHS) selects every
-# service in the ledger. A change to neither runs nothing. A manual run takes a
-# services input instead.
+# service in the ledger. cmd/gostack/services.go is shared unless the change to
+# it only adds lines naming the changed services. A change to neither runs
+# nothing. A manual run takes a services input instead.
 #
 # CI never runs the LocalStack baseline. The localstack column of the committed
 # parity/ledger.json is the baseline, and `make parity-check` fails when a test
@@ -61,7 +62,7 @@ jobs:
           if [ "$EVENT" = workflow_dispatch ]; then
             services=${REQUESTED:-$(python3 parity/ledger.py services)}
           else
-            services=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | python3 parity/ledger.py services --changed)
+            services=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | python3 parity/ledger.py services --changed --range "$BASE_SHA...$HEAD_SHA")
           fi
           case "$services" in
           *[!a-z0-9_,]*) echo "services '$services' is not a comma separated list of service names" >&2; exit 1 ;;

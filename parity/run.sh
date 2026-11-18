@@ -11,7 +11,8 @@
 #                             to fill its cache (.github/workflows/parity.yml).
 #
 # Environment:
-#   SERVICES              comma separated tests/aws/services/<name> dirs (default sqs,sts)
+#   SERVICES              comma separated service names (default sqs,sts); each runs
+#                         its tests/aws/services/<dir> from TEST_DIRS in ledger.py
 #   GOSTACK_IMAGE         image for `gostack` mode (default ghcr.io/kylecannon/gostack:latest)
 #   LOCALSTACK_DIR        LocalStack checkout; must be clean and at 8b9a79f05*
 #                         (default ../localstack, or beside the main checkout
@@ -95,9 +96,12 @@ for service in "${service_list[@]}"; do
 	case "$service" in
 	'' | *[!a-z0-9_]*) echo "bad service name '$service' in SERVICES=$SERVICES" >&2; exit 2 ;;
 	esac
-	[ -d "$LOCALSTACK_DIR/tests/aws/services/$service" ] ||
-		{ echo "no tests/aws/services/$service in $LOCALSTACK_DIR" >&2; exit 2; }
-	test_paths+=("tests/aws/services/$service")
+	# The service's test directory comes from the map in parity/ledger.py
+	# (lambda runs tests/aws/services/lambda_).
+	test_path=$(python3 "$ROOT/parity/ledger.py" test-dirs "$service") || exit 2
+	[ -d "$LOCALSTACK_DIR/$test_path" ] ||
+		{ echo "no $test_path in $LOCALSTACK_DIR" >&2; exit 2; }
+	test_paths+=("$test_path")
 done
 
 if [ "$MODE" = collect ]; then

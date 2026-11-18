@@ -76,7 +76,7 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   deferral.
 - `docs/parity.md` is generated from the ledger and shows percentages per
   service.
-- Shard with `pytest-split` using LocalStack's `.test_durations`.
+- CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
 
 ### Spec sources (vendored into `specs/`, with a `specs/SOURCES.lock`)
 
