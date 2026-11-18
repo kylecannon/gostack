@@ -530,6 +530,17 @@ func TestReadPreconditions(t *testing.T) {
 			412, headerIfUnmodifiedSince,
 		},
 		{
+			// AWS's GetObject and HeadObject documentation; LocalStack answers 412.
+			"a matching If-Match overrides a failed If-Unmodified-Since",
+			map[string]string{headerIfMatch: etag, headerIfUnmodifiedSince: earlier},
+			http.StatusOK, "",
+		},
+		{
+			"a failing If-Match is not overridden by If-Unmodified-Since",
+			map[string]string{headerIfMatch: etagOther, headerIfUnmodifiedSince: now},
+			412, headerIfMatch,
+		},
+		{
 			"every condition holds",
 			map[string]string{
 				headerIfMatch: etag, headerIfUnmodifiedSince: now, headerIfNoneMatch: etagOther, headerIfModifiedSince: earlier,

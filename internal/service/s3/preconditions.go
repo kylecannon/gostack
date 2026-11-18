@@ -34,11 +34,15 @@ type readConditions struct {
 // ignored, as S3 does.
 func (c readConditions) check(v *Version) error {
 	modified := v.LastModified.Truncate(time.Second)
+	hasIfMatch := deref(c.ifMatch) != ""
 
+	// An If-Match that holds overrides a failed If-Unmodified-Since, as the
+	// GetObject and HeadObject documentation says: the answer is 200. LocalStack
+	// answers 412 (utils.py:1017-1023); this follows AWS.
 	switch {
-	case deref(c.ifMatch) != "" && !etagMatches(*c.ifMatch, v.ETag):
+	case hasIfMatch && !etagMatches(*c.ifMatch, v.ETag):
 		return preconditionFailed(conditionIfMatch)
-	case c.ifUnmodifiedSince != nil && modified.After(c.ifUnmodifiedSince.Truncate(time.Second)):
+	case !hasIfMatch && c.ifUnmodifiedSince != nil && modified.After(c.ifUnmodifiedSince.Truncate(time.Second)):
 		return preconditionFailed(conditionIfUnmodifiedSince)
 	}
 
@@ -69,11 +73,14 @@ func modifiedSinceHolds(since *protocol.Time, modified time.Time) bool {
 // version fails, or "" when it passes (get_failed_precondition_copy_source).
 func copySourceCondition(in *s3api.CopyObjectInput, v *Version) string {
 	modified := v.LastModified.Truncate(time.Second)
+	hasIfMatch := deref(in.CopySourceIfMatch) != ""
 
+	// As for a read, a copy-source If-Match that holds overrides a failed
+	// copy-source If-Unmodified-Since, per the CopyObject documentation.
 	switch {
-	case deref(in.CopySourceIfMatch) != "" && strings.Trim(*in.CopySourceIfMatch, `"`) != v.ETag:
+	case hasIfMatch && strings.Trim(*in.CopySourceIfMatch, `"`) != v.ETag:
 		return copySourcePrefix + conditionIfMatch
-	case in.CopySourceIfUnmodifiedSince != nil &&
+	case !hasIfMatch && in.CopySourceIfUnmodifiedSince != nil &&
 		modified.After(in.CopySourceIfUnmodifiedSince.Truncate(time.Second)):
 		return copySourcePrefix + conditionIfUnmodifiedSince
 	case deref(in.CopySourceIfNoneMatch) != "" && strings.Trim(*in.CopySourceIfNoneMatch, `"`) == v.ETag:

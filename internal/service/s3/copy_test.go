@@ -19,6 +19,9 @@ import (
 const (
 	destPath  = "/bucket/copy"
 	sourceRef = "bucket/key"
+
+	headerCopyIfMatch      = "X-Amz-Copy-Source-If-Match"
+	headerCopyIfUnmodified = "X-Amz-Copy-Source-If-Unmodified-Since"
 )
 
 // copyTo copies the object at source to destPath, with extra headers.
@@ -272,19 +275,34 @@ func TestCopyObjectSourcePreconditions(t *testing.T) {
 		giveHeader    map[string]string
 		wantCondition string
 	}{
-		{"If-Match with the ETag", map[string]string{"X-Amz-Copy-Source-If-Match": etag}, ""},
-		{"If-Match with another", map[string]string{"X-Amz-Copy-Source-If-Match": etagOther}, "x-amz-copy-source-If-Match"},
+		{"If-Match with the ETag", map[string]string{headerCopyIfMatch: etag}, ""},
+		{"If-Match with another", map[string]string{headerCopyIfMatch: etagOther}, "x-amz-copy-source-If-Match"},
 		{"If-None-Match with another", map[string]string{"X-Amz-Copy-Source-If-None-Match": etagOther}, ""},
 		{
 			"If-None-Match with the ETag",
 			map[string]string{"X-Amz-Copy-Source-If-None-Match": etag},
 			"x-amz-copy-source-If-None-Match",
 		},
-		{"If-Unmodified-Since after the change", map[string]string{"X-Amz-Copy-Source-If-Unmodified-Since": now}, ""},
+		{"If-Unmodified-Since after the change", map[string]string{headerCopyIfUnmodified: now}, ""},
 		{
 			"If-Unmodified-Since before the change",
-			map[string]string{"X-Amz-Copy-Source-If-Unmodified-Since": earlier},
+			map[string]string{headerCopyIfUnmodified: earlier},
 			"x-amz-copy-source-If-Unmodified-Since",
+		},
+		{
+			// AWS's CopyObject documentation; LocalStack answers 412.
+			"a matching If-Match overrides a failed If-Unmodified-Since",
+			map[string]string{
+				headerCopyIfMatch: etag, headerCopyIfUnmodified: earlier,
+			},
+			"",
+		},
+		{
+			"a failing If-Match is not overridden by If-Unmodified-Since",
+			map[string]string{
+				headerCopyIfMatch: etagOther, headerCopyIfUnmodified: now,
+			},
+			"x-amz-copy-source-If-Match",
 		},
 		{"If-Modified-Since before the change", map[string]string{"X-Amz-Copy-Source-If-Modified-Since": earlier}, ""},
 		{
