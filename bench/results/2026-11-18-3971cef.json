@@ -1,0 +1,5265 @@
+{
+  "schema": 3,
+  "date": "2026-11-18",
+  "time": "2026-11-18T16:33:45Z",
+  "commit": "3971cef",
+  "dirty": false,
+  "profile": "full",
+  "host": {
+    "docker": "29.8.2",
+    "os": "OrbStack",
+    "kernel": "7.2.12-orbstack-00394-gbecdd6130068",
+    "arch": "aarch64",
+    "cpus": 10,
+    "memory_bytes": 26287591424,
+    "fingerprint": {
+      "os": "linux",
+      "arch": "aarch64",
+      "cpus": 10,
+      "docker": "29.8.2",
+      "orbstack": true
+    }
+  },
+  "settings": {
+    "profile": "full",
+    "services": [
+      "s3"
+    ],
+    "notes": [
+      "Host load before the run: load averages (1, 5, 15 min) 14.39 10.92 9.81 on 10 CPUs, from macOS daemons, not a quiet host. Both targets ran under the same load.",
+      "Host load after the run (9:04): load averages (1, 5, 15 min) 18.29 15.11 14.11 on 10 CPUs.",
+      "gostack S3 persistence is not wired (SQ-114), so there are no persist-on cells. LocalStack Community does not restore S3 under PERSISTENCE=1.",
+      "listing cells: RSS and CPU include the seeding of 1k or 10k keys."
+    ],
+    "startup_runs": 5,
+    "idle_runs": 3,
+    "settle_seconds": 5,
+    "idle_seconds": 30,
+    "cell_seconds": 2,
+    "reps": 3,
+    "cycles": 200,
+    "cycle_concurrency": 16
+  },
+  "targets": [
+    {
+      "name": "gostack",
+      "image": "gostack:sq115",
+      "image_bytes": 492761308,
+      "startup": {
+        "samples_ms": [
+          354.303,
+          232.122,
+          229.328,
+          237.213,
+          230.82
+        ],
+        "ms": {
+          "min": 229.328,
+          "median": 232.122,
+          "max": 354.303
+        }
+      },
+      "idle": {
+        "healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 5271552,
+            "median": 5931008,
+            "max": 5963776
+          },
+          "cpu_percent": {
+            "min": 0.13102850589635456,
+            "median": 0.13980294113429478,
+            "max": 0.19808861669452135
+          }
+        },
+        "no_healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 5083136,
+            "median": 5865472,
+            "max": 5984256
+          },
+          "cpu_percent": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          }
+        }
+      },
+      "cells": [
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 24638,
+              "errors": 0,
+              "p50_us": {
+                "min": 48,
+                "median": 48,
+                "max": 48
+              },
+              "p99_us": {
+                "min": 2179,
+                "median": 2388,
+                "max": 2624
+              }
+            },
+            "put": {
+              "count": 24638,
+              "errors": 0,
+              "p50_us": {
+                "min": 57,
+                "median": 57,
+                "max": 57
+              },
+              "p99_us": {
+                "min": 2373,
+                "median": 2565,
+                "max": 2567
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 4025.3181421643144,
+            "median": 4101.440479895756,
+            "max": 4191.874369525146
+          },
+          "ops_per_sec": {
+            "min": 8050.636284328629,
+            "median": 8202.880959791511,
+            "max": 8383.748739050292
+          },
+          "baseline_rss_bytes": {
+            "min": 5193728,
+            "median": 5443584,
+            "max": 12967936
+          },
+          "peak_rss_bytes": {
+            "min": 11411456,
+            "median": 11567104,
+            "max": 20549632
+          },
+          "cpu_percent": {
+            "min": 44.854910579524606,
+            "median": 45.91797779563369,
+            "max": 48.745583740094276
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 18546,
+              "errors": 0,
+              "p50_us": {
+                "min": 1739,
+                "median": 1794,
+                "max": 1824
+              },
+              "p99_us": {
+                "min": 11357,
+                "median": 11469,
+                "max": 11858
+              }
+            },
+            "put": {
+              "count": 18546,
+              "errors": 0,
+              "p50_us": {
+                "min": 1959,
+                "median": 1975,
+                "max": 2084
+              },
+              "p99_us": {
+                "min": 11633,
+                "median": 11808,
+                "max": 11924
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3046.1103450616306,
+            "median": 3087.245618088747,
+            "max": 3120.994935326096
+          },
+          "ops_per_sec": {
+            "min": 6092.220690123261,
+            "median": 6174.491236177494,
+            "max": 6241.989870652192
+          },
+          "baseline_rss_bytes": {
+            "min": 5095424,
+            "median": 5226496,
+            "max": 5267456
+          },
+          "peak_rss_bytes": {
+            "min": 13262848,
+            "median": 13402112,
+            "max": 13578240
+          },
+          "cpu_percent": {
+            "min": 74.68843452408566,
+            "median": 76.0976104458692,
+            "max": 77.4450777717592
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 34963,
+              "errors": 0,
+              "p50_us": {
+                "min": 2481,
+                "median": 2815,
+                "max": 2953
+              },
+              "p99_us": {
+                "min": 19831,
+                "median": 20195,
+                "max": 20606
+              }
+            },
+            "put": {
+              "count": 34963,
+              "errors": 0,
+              "p50_us": {
+                "min": 5106,
+                "median": 5627,
+                "max": 5928
+              },
+              "p99_us": {
+                "min": 24655,
+                "median": 25309,
+                "max": 27878
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5599.750087965314,
+            "median": 5611.660033464997,
+            "max": 6176.2876390447145
+          },
+          "ops_per_sec": {
+            "min": 11199.500175930629,
+            "median": 11223.320066929993,
+            "max": 12352.575278089429
+          },
+          "baseline_rss_bytes": {
+            "min": 5185536,
+            "median": 5345280,
+            "max": 5693440
+          },
+          "peak_rss_bytes": {
+            "min": 18554880,
+            "median": 18939904,
+            "max": 18972672
+          },
+          "cpu_percent": {
+            "min": 95.78817676998004,
+            "median": 96.07065340967158,
+            "max": 99.72944277396239
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 9804,
+              "errors": 0,
+              "p50_us": {
+                "min": 74,
+                "median": 75,
+                "max": 75
+              },
+              "p99_us": {
+                "min": 2575,
+                "median": 2592,
+                "max": 2885
+              }
+            },
+            "put": {
+              "count": 9804,
+              "errors": 0,
+              "p50_us": {
+                "min": 242,
+                "median": 243,
+                "max": 243
+              },
+              "p99_us": {
+                "min": 3780,
+                "median": 4032,
+                "max": 4055
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1598.3184993683283,
+            "median": 1648.7986907482525,
+            "max": 1653.512780884523
+          },
+          "ops_per_sec": {
+            "min": 3196.6369987366566,
+            "median": 3297.597381496505,
+            "max": 3307.025561769046
+          },
+          "baseline_rss_bytes": {
+            "min": 5033984,
+            "median": 5234688,
+            "max": 5500928
+          },
+          "peak_rss_bytes": {
+            "min": 11513856,
+            "median": 11522048,
+            "max": 11616256
+          },
+          "cpu_percent": {
+            "min": 52.906576940864255,
+            "median": 53.999797242394045,
+            "max": 54.26894039520249
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 17407,
+              "errors": 0,
+              "p50_us": {
+                "min": 814,
+                "median": 967,
+                "max": 977
+              },
+              "p99_us": {
+                "min": 9164,
+                "median": 9570,
+                "max": 10333
+              }
+            },
+            "put": {
+              "count": 17407,
+              "errors": 0,
+              "p50_us": {
+                "min": 2912,
+                "median": 3033,
+                "max": 3075
+              },
+              "p99_us": {
+                "min": 12673,
+                "median": 12781,
+                "max": 13111
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 2831.957078503401,
+            "median": 2883.352090416585,
+            "max": 2973.512906404671
+          },
+          "ops_per_sec": {
+            "min": 5663.914157006802,
+            "median": 5766.70418083317,
+            "max": 5947.025812809342
+          },
+          "baseline_rss_bytes": {
+            "min": 5259264,
+            "median": 5345280,
+            "max": 5451776
+          },
+          "peak_rss_bytes": {
+            "min": 19615744,
+            "median": 19623936,
+            "max": 21561344
+          },
+          "cpu_percent": {
+            "min": 98.87407736266329,
+            "median": 104.68374829625063,
+            "max": 109.37298100225992
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 32204,
+              "errors": 0,
+              "p50_us": {
+                "min": 2431,
+                "median": 2638,
+                "max": 2826
+              },
+              "p99_us": {
+                "min": 23950,
+                "median": 24607,
+                "max": 24856
+              }
+            },
+            "put": {
+              "count": 32204,
+              "errors": 0,
+              "p50_us": {
+                "min": 4840,
+                "median": 4863,
+                "max": 4983
+              },
+              "p99_us": {
+                "min": 27994,
+                "median": 28893,
+                "max": 33786
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5276.6002254571795,
+            "median": 5282.922642503824,
+            "max": 5486.052146377988
+          },
+          "ops_per_sec": {
+            "min": 10553.200450914359,
+            "median": 10565.845285007648,
+            "max": 10972.104292755976
+          },
+          "baseline_rss_bytes": {
+            "min": 5111808,
+            "median": 5115904,
+            "max": 5607424
+          },
+          "peak_rss_bytes": {
+            "min": 38875136,
+            "median": 39596032,
+            "max": 39956480
+          },
+          "cpu_percent": {
+            "min": 155.83364776270952,
+            "median": 159.24940972885722,
+            "max": 161.8907277834946
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 1165,
+              "errors": 0,
+              "p50_us": {
+                "min": 405,
+                "median": 406,
+                "max": 413
+              },
+              "p99_us": {
+                "min": 2728,
+                "median": 3178,
+                "max": 3324
+              }
+            },
+            "put": {
+              "count": 1165,
+              "errors": 0,
+              "p50_us": {
+                "min": 4017,
+                "median": 4050,
+                "max": 4201
+              },
+              "p99_us": {
+                "min": 8768,
+                "median": 8993,
+                "max": 9632
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 190.08218993744907,
+            "median": 194.79292917510256,
+            "max": 196.91861304493202
+          },
+          "ops_per_sec": {
+            "min": 380.16437987489815,
+            "median": 389.5858583502051,
+            "max": 393.83722608986403
+          },
+          "baseline_rss_bytes": {
+            "min": 5054464,
+            "median": 5410816,
+            "max": 5480448
+          },
+          "peak_rss_bytes": {
+            "min": 12111872,
+            "median": 12115968,
+            "max": 13991936
+          },
+          "cpu_percent": {
+            "min": 71.06264072720812,
+            "median": 72.73151856499774,
+            "max": 74.18437968518066
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 2947,
+              "errors": 0,
+              "p50_us": {
+                "min": 1882,
+                "median": 2106,
+                "max": 2159
+              },
+              "p99_us": {
+                "min": 28847,
+                "median": 30533,
+                "max": 30741
+              }
+            },
+            "put": {
+              "count": 2947,
+              "errors": 0,
+              "p50_us": {
+                "min": 24877,
+                "median": 25099,
+                "max": 25137
+              },
+              "p99_us": {
+                "min": 67238,
+                "median": 73047,
+                "max": 74912
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 481.28020271677104,
+            "median": 483.49158105982633,
+            "max": 497.1691503963456
+          },
+          "ops_per_sec": {
+            "min": 962.5604054335421,
+            "median": 966.9831621196527,
+            "max": 994.3383007926911
+          },
+          "baseline_rss_bytes": {
+            "min": 5373952,
+            "median": 5435392,
+            "max": 5562368
+          },
+          "peak_rss_bytes": {
+            "min": 30257152,
+            "median": 38477824,
+            "max": 47730688
+          },
+          "cpu_percent": {
+            "min": 169.68726205981557,
+            "median": 175.2089146192607,
+            "max": 179.2756323567029
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3806,
+              "errors": 0,
+              "p50_us": {
+                "min": 5283,
+                "median": 7253,
+                "max": 8131
+              },
+              "p99_us": {
+                "min": 98903,
+                "median": 101399,
+                "max": 122626
+              }
+            },
+            "put": {
+              "count": 3806,
+              "errors": 0,
+              "p50_us": {
+                "min": 74996,
+                "median": 80959,
+                "max": 99491
+              },
+              "p99_us": {
+                "min": 182642,
+                "median": 209397,
+                "max": 217787
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 557.4500345527975,
+            "median": 624.5828794170745,
+            "max": 684.2381348453209
+          },
+          "ops_per_sec": {
+            "min": 1114.900069105595,
+            "median": 1249.165758834149,
+            "max": 1368.4762696906419
+          },
+          "baseline_rss_bytes": {
+            "min": 5246976,
+            "median": 5431296,
+            "max": 5488640
+          },
+          "peak_rss_bytes": {
+            "min": 54071296,
+            "median": 68050944,
+            "max": 82141184
+          },
+          "cpu_percent": {
+            "min": 202.67546365775542,
+            "median": 216.96457710719216,
+            "max": 226.65942171230742
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 121,
+              "errors": 0,
+              "p50_us": {
+                "min": 4592,
+                "median": 4763,
+                "max": 4826
+              },
+              "p99_us": {
+                "min": 5646,
+                "median": 5706,
+                "max": 5868
+              }
+            },
+            "put": {
+              "count": 121,
+              "errors": 0,
+              "p50_us": {
+                "min": 45094,
+                "median": 45685,
+                "max": 46006
+              },
+              "p99_us": {
+                "min": 48303,
+                "median": 51484,
+                "max": 52116
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 19.545229735111608,
+            "median": 19.645057839242043,
+            "max": 20.002821998127498
+          },
+          "ops_per_sec": {
+            "min": 39.090459470223216,
+            "median": 39.290115678484085,
+            "max": 40.005643996254996
+          },
+          "baseline_rss_bytes": {
+            "min": 5173248,
+            "median": 5468160,
+            "max": 5672960
+          },
+          "peak_rss_bytes": {
+            "min": 10715136,
+            "median": 10960896,
+            "max": 11026432
+          },
+          "cpu_percent": {
+            "min": 81.06951097849839,
+            "median": 81.12080259733567,
+            "max": 82.39899084443226
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 566,
+              "errors": 0,
+              "p50_us": {
+                "min": 17055,
+                "median": 17159,
+                "max": 17981
+              },
+              "p99_us": {
+                "min": 64920,
+                "median": 81333,
+                "max": 97741
+              }
+            },
+            "put": {
+              "count": 566,
+              "errors": 0,
+              "p50_us": {
+                "min": 142513,
+                "median": 142884,
+                "max": 154831
+              },
+              "p99_us": {
+                "min": 256265,
+                "median": 283587,
+                "max": 352546
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 81.99649514935125,
+            "median": 92.53053825687915,
+            "max": 93.47528729607012
+          },
+          "ops_per_sec": {
+            "min": 163.9929902987025,
+            "median": 185.0610765137583,
+            "max": 186.95057459214024
+          },
+          "baseline_rss_bytes": {
+            "min": 5271552,
+            "median": 5283840,
+            "max": 5337088
+          },
+          "peak_rss_bytes": {
+            "min": 20291584,
+            "median": 21966848,
+            "max": 25948160
+          },
+          "cpu_percent": {
+            "min": 461.6514582946773,
+            "median": 464.6458437130835,
+            "max": 473.58822212894853
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 700,
+              "errors": 0,
+              "p50_us": {
+                "min": 41614,
+                "median": 60337,
+                "max": 68504
+              },
+              "p99_us": {
+                "min": 359274,
+                "median": 371417,
+                "max": 811328
+              }
+            },
+            "put": {
+              "count": 700,
+              "errors": 0,
+              "p50_us": {
+                "min": 464126,
+                "median": 508424,
+                "max": 516179
+              },
+              "p99_us": {
+                "min": 1273556,
+                "median": 1284348,
+                "max": 1666614
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 94.92940738705786,
+            "median": 96.43225850665104,
+            "max": 102.21509903641183
+          },
+          "ops_per_sec": {
+            "min": 189.85881477411573,
+            "median": 192.86451701330208,
+            "max": 204.43019807282366
+          },
+          "baseline_rss_bytes": {
+            "min": 5107712,
+            "median": 5345280,
+            "max": 5623808
+          },
+          "peak_rss_bytes": {
+            "min": 43159552,
+            "median": 48869376,
+            "max": 59904000
+          },
+          "cpu_percent": {
+            "min": 253.31948128508927,
+            "median": 528.8634413460743,
+            "max": 531.3766328961934
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1696,
+              "errors": 0,
+              "p50_us": {
+                "min": 3060,
+                "median": 3125,
+                "max": 3282
+              },
+              "p99_us": {
+                "min": 8373,
+                "median": 8500,
+                "max": 8517
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 276.3587118200912,
+            "median": 283.59282168052346,
+            "max": 286.449345104012
+          },
+          "ops_per_sec": {
+            "min": 276.3587118200912,
+            "median": 283.59282168052346,
+            "max": 286.449345104012
+          },
+          "baseline_rss_bytes": {
+            "min": 5111808,
+            "median": 5120000,
+            "max": 5279744
+          },
+          "peak_rss_bytes": {
+            "min": 19079168,
+            "median": 20049920,
+            "max": 20750336
+          },
+          "cpu_percent": {
+            "min": 57.54388377736272,
+            "median": 57.72735201559019,
+            "max": 59.48110921874393
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 3708,
+              "errors": 0,
+              "p50_us": {
+                "min": 22964,
+                "median": 23814,
+                "max": 24374
+              },
+              "p99_us": {
+                "min": 63750,
+                "median": 64364,
+                "max": 65236
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 599.7831123103792,
+            "median": 603.7903896852791,
+            "max": 626.8179594464586
+          },
+          "ops_per_sec": {
+            "min": 599.7831123103792,
+            "median": 603.7903896852791,
+            "max": 626.8179594464586
+          },
+          "baseline_rss_bytes": {
+            "min": 5120000,
+            "median": 5353472,
+            "max": 5431296
+          },
+          "peak_rss_bytes": {
+            "min": 29835264,
+            "median": 34172928,
+            "max": 35655680
+          },
+          "cpu_percent": {
+            "min": 118.11602529963474,
+            "median": 118.5955952359671,
+            "max": 120.55273693520618
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 6503,
+              "errors": 0,
+              "p50_us": {
+                "min": 50656,
+                "median": 52424,
+                "max": 52956
+              },
+              "p99_us": {
+                "min": 191487,
+                "median": 193656,
+                "max": 197442
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1039.1690740075323,
+            "median": 1066.3011548606307,
+            "max": 1068.4086154738197
+          },
+          "ops_per_sec": {
+            "min": 1039.1690740075323,
+            "median": 1066.3011548606307,
+            "max": 1068.4086154738197
+          },
+          "baseline_rss_bytes": {
+            "min": 4923392,
+            "median": 5152768,
+            "max": 5181440
+          },
+          "peak_rss_bytes": {
+            "min": 59498496,
+            "median": 59883520,
+            "max": 60248064
+          },
+          "cpu_percent": {
+            "min": 175.36279750041103,
+            "median": 180.6148912689441,
+            "max": 184.48049971650335
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 16051,
+              "errors": 0,
+              "p50_us": {
+                "min": 225,
+                "median": 225,
+                "max": 226
+              },
+              "p99_us": {
+                "min": 3296,
+                "median": 3411,
+                "max": 3601
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 2632.9136746593485,
+            "median": 2682.41814198677,
+            "max": 2709.873833694051
+          },
+          "ops_per_sec": {
+            "min": 2632.9136746593485,
+            "median": 2682.41814198677,
+            "max": 2709.873833694051
+          },
+          "baseline_rss_bytes": {
+            "min": 5287936,
+            "median": 5312512,
+            "max": 5337088
+          },
+          "peak_rss_bytes": {
+            "min": 15384576,
+            "median": 15384576,
+            "max": 15720448
+          },
+          "cpu_percent": {
+            "min": 69.46864346923378,
+            "median": 69.76207343966469,
+            "max": 70.9535616496078
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 32359,
+              "errors": 0,
+              "p50_us": {
+                "min": 1951,
+                "median": 2078,
+                "max": 2082
+              },
+              "p99_us": {
+                "min": 11953,
+                "median": 12116,
+                "max": 12453
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5333.217791438893,
+            "median": 5345.694494716453,
+            "max": 5479.167565819783
+          },
+          "ops_per_sec": {
+            "min": 5333.217791438893,
+            "median": 5345.694494716453,
+            "max": 5479.167565819783
+          },
+          "baseline_rss_bytes": {
+            "min": 5271552,
+            "median": 5361664,
+            "max": 5402624
+          },
+          "peak_rss_bytes": {
+            "min": 19091456,
+            "median": 19169280,
+            "max": 20500480
+          },
+          "cpu_percent": {
+            "min": 174.47170277046226,
+            "median": 180.59666543954404,
+            "max": 182.22433691298096
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 41157,
+              "errors": 0,
+              "p50_us": {
+                "min": 5384,
+                "median": 5676,
+                "max": 5730
+              },
+              "p99_us": {
+                "min": 38509,
+                "median": 40386,
+                "max": 40667
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 6753.544408610943,
+            "median": 6812.65441601215,
+            "max": 6906.81690596243
+          },
+          "ops_per_sec": {
+            "min": 6753.544408610943,
+            "median": 6812.65441601215,
+            "max": 6906.81690596243
+          },
+          "baseline_rss_bytes": {
+            "min": 5148672,
+            "median": 5238784,
+            "max": 5472256
+          },
+          "peak_rss_bytes": {
+            "min": 23887872,
+            "median": 25042944,
+            "max": 25858048
+          },
+          "cpu_percent": {
+            "min": 207.35451725276454,
+            "median": 211.99126403290413,
+            "max": 217.45087229668604
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1570,
+              "errors": 0,
+              "p50_us": {
+                "min": 3363,
+                "median": 3375,
+                "max": 3393
+              },
+              "p99_us": {
+                "min": 8365,
+                "median": 9276,
+                "max": 9688
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 25.672429529059986,
+            "median": 25.887057756961546,
+            "max": 26.468014674730295
+          },
+          "ops_per_sec": {
+            "min": 256.72429529059985,
+            "median": 258.8705775696155,
+            "max": 264.68014674730296
+          },
+          "baseline_rss_bytes": {
+            "min": 5025792,
+            "median": 5156864,
+            "max": 5287936
+          },
+          "peak_rss_bytes": {
+            "min": 37785600,
+            "median": 40280064,
+            "max": 42393600
+          },
+          "cpu_percent": {
+            "min": 100.78741990201465,
+            "median": 106.9706197024455,
+            "max": 108.14827704995199
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 4370,
+              "errors": 0,
+              "p50_us": {
+                "min": 21274,
+                "median": 21511,
+                "max": 21590
+              },
+              "p99_us": {
+                "min": 54130,
+                "median": 55138,
+                "max": 55986
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 68.12185620797244,
+            "median": 68.45333876277276,
+            "max": 68.7128641619784
+          },
+          "ops_per_sec": {
+            "min": 681.2185620797245,
+            "median": 684.5333876277276,
+            "max": 687.128641619784
+          },
+          "baseline_rss_bytes": {
+            "min": 5042176,
+            "median": 5410816,
+            "max": 5468160
+          },
+          "peak_rss_bytes": {
+            "min": 64131072,
+            "median": 70176768,
+            "max": 71004160
+          },
+          "cpu_percent": {
+            "min": 257.55635549309704,
+            "median": 262.58880584719975,
+            "max": 269.7972490874219
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 6350,
+              "errors": 0,
+              "p50_us": {
+                "min": 53116,
+                "median": 54049,
+                "max": 55148
+              },
+              "p99_us": {
+                "min": 227592,
+                "median": 227637,
+                "max": 234750
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 88.91331706881022,
+            "median": 89.04530447895993,
+            "max": 90.99643479197391
+          },
+          "ops_per_sec": {
+            "min": 889.1331706881022,
+            "median": 890.4530447895994,
+            "max": 909.9643479197391
+          },
+          "baseline_rss_bytes": {
+            "min": 5402624,
+            "median": 5455872,
+            "max": 5545984
+          },
+          "peak_rss_bytes": {
+            "min": 100933632,
+            "median": 105558016,
+            "max": 105885696
+          },
+          "cpu_percent": {
+            "min": 324.82055987864953,
+            "median": 335.071274731905,
+            "max": 337.4448905540302
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 2297,
+              "errors": 0,
+              "p50_us": {
+                "min": 2272,
+                "median": 2274,
+                "max": 2282
+              },
+              "p99_us": {
+                "min": 8513,
+                "median": 8735,
+                "max": 9535
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 378.821843875044,
+            "median": 379.83652064053547,
+            "max": 389.3496711186069
+          },
+          "ops_per_sec": {
+            "min": 378.821843875044,
+            "median": 379.83652064053547,
+            "max": 389.3496711186069
+          },
+          "baseline_rss_bytes": {
+            "min": 5079040,
+            "median": 5283840,
+            "max": 5414912
+          },
+          "peak_rss_bytes": {
+            "min": 42098688,
+            "median": 42446848,
+            "max": 44728320
+          },
+          "cpu_percent": {
+            "min": 104.54485734346497,
+            "median": 104.88235394095793,
+            "max": 105.06647117421615
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 9267,
+              "errors": 0,
+              "p50_us": {
+                "min": 8461,
+                "median": 8536,
+                "max": 8598
+              },
+              "p99_us": {
+                "min": 33233,
+                "median": 34686,
+                "max": 39522
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1522.502009320904,
+            "median": 1531.4218947055174,
+            "max": 1569.617893522609
+          },
+          "ops_per_sec": {
+            "min": 1522.502009320904,
+            "median": 1531.4218947055174,
+            "max": 1569.617893522609
+          },
+          "baseline_rss_bytes": {
+            "min": 5120000,
+            "median": 5128192,
+            "max": 5206016
+          },
+          "peak_rss_bytes": {
+            "min": 68247552,
+            "median": 69292032,
+            "max": 69648384
+          },
+          "cpu_percent": {
+            "min": 504.0237963521049,
+            "median": 504.4791909392476,
+            "max": 506.0311418019947
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 10798,
+              "errors": 0,
+              "p50_us": {
+                "min": 13724,
+                "median": 14065,
+                "max": 15395
+              },
+              "p99_us": {
+                "min": 240569,
+                "median": 245577,
+                "max": 300810
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1749.0059916507498,
+            "median": 1777.3967724253002,
+            "max": 1800.1742337425171
+          },
+          "ops_per_sec": {
+            "min": 1749.0059916507498,
+            "median": 1777.3967724253002,
+            "max": 1800.1742337425171
+          },
+          "baseline_rss_bytes": {
+            "min": 5238784,
+            "median": 5378048,
+            "max": 5443584
+          },
+          "peak_rss_bytes": {
+            "min": 96145408,
+            "median": 100851712,
+            "max": 108355584
+          },
+          "cpu_percent": {
+            "min": 528.0479332860536,
+            "median": 541.412604046164,
+            "max": 551.745469352021
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 24,
+              "errors": 0,
+              "p50_us": {
+                "min": 63567,
+                "median": 64004,
+                "max": 65619
+              },
+              "p99_us": {
+                "min": 67526,
+                "median": 69898,
+                "max": 75019
+              }
+            },
+            "create": {
+              "count": 24,
+              "errors": 0,
+              "p50_us": {
+                "min": 192,
+                "median": 211,
+                "max": 214
+              },
+              "p99_us": {
+                "min": 343,
+                "median": 346,
+                "max": 384
+              }
+            },
+            "part": {
+              "count": 192,
+              "errors": 0,
+              "p50_us": {
+                "min": 23241,
+                "median": 23283,
+                "max": 23684
+              },
+              "p99_us": {
+                "min": 27301,
+                "median": 29615,
+                "max": 85107
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3.719276287691962,
+            "median": 3.923625364940442,
+            "max": 3.973957952136074
+          },
+          "ops_per_sec": {
+            "min": 37.19276287691962,
+            "median": 39.23625364940442,
+            "max": 39.73957952136074
+          },
+          "baseline_rss_bytes": {
+            "min": 5107712,
+            "median": 5156864,
+            "max": 5636096
+          },
+          "peak_rss_bytes": {
+            "min": 11091968,
+            "median": 11776000,
+            "max": 12447744
+          },
+          "cpu_percent": {
+            "min": 81.66262540290423,
+            "median": 81.91413001336826,
+            "max": 84.24503847081162
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=4",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 4
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 78,
+              "errors": 0,
+              "p50_us": {
+                "min": 76945,
+                "median": 79773,
+                "max": 82153
+              },
+              "p99_us": {
+                "min": 90563,
+                "median": 92813,
+                "max": 102396
+              }
+            },
+            "create": {
+              "count": 78,
+              "errors": 0,
+              "p50_us": {
+                "min": 179,
+                "median": 191,
+                "max": 197
+              },
+              "p99_us": {
+                "min": 2367,
+                "median": 3980,
+                "max": 4242
+              }
+            },
+            "part": {
+              "count": 624,
+              "errors": 0,
+              "p50_us": {
+                "min": 30492,
+                "median": 30895,
+                "max": 31516
+              },
+              "p99_us": {
+                "min": 40632,
+                "median": 41846,
+                "max": 49294
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 11.519641297226771,
+            "median": 11.600031314671202,
+            "max": 12.035464713021778
+          },
+          "ops_per_sec": {
+            "min": 115.19641297226771,
+            "median": 116.00031314671203,
+            "max": 120.35464713021777
+          },
+          "baseline_rss_bytes": {
+            "min": 5177344,
+            "median": 5283840,
+            "max": 5492736
+          },
+          "peak_rss_bytes": {
+            "min": 15085568,
+            "median": 18587648,
+            "max": 23048192
+          },
+          "cpu_percent": {
+            "min": 213.54514485309383,
+            "median": 248.15203050771512,
+            "max": 269.10291449839207
+          }
+        }
+      ],
+      "agentic": {
+        "s3": {
+          "cycles": 200,
+          "concurrency": 16,
+          "seconds": 0.464857648,
+          "errors": 0,
+          "cycle_p50_ms": 36.269,
+          "cycle_p99_ms": 56.015,
+          "usage": {
+            "baseline_rss_bytes": 5361664,
+            "end_rss_bytes": 13598720,
+            "peak_rss_bytes": 13598720,
+            "median_rss_bytes": 12746752,
+            "cpu_percent": 46.39724552578085
+          }
+        }
+      }
+    },
+    {
+      "name": "gostack-slim",
+      "image": "gostack:sq115-slim",
+      "image_bytes": 23442526,
+      "startup": {
+        "samples_ms": [
+          226.194,
+          281.063,
+          242.592,
+          237.449,
+          233.874
+        ],
+        "ms": {
+          "min": 226.194,
+          "median": 237.449,
+          "max": 281.063
+        }
+      },
+      "idle": {
+        "healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 5529600,
+            "median": 5758976,
+            "max": 6160384
+          },
+          "cpu_percent": {
+            "min": 0.1894922866984286,
+            "median": 0.20566046228255502,
+            "max": 0.20786726285533935
+          }
+        },
+        "no_healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 5132288,
+            "median": 5214208,
+            "max": 5214208
+          },
+          "cpu_percent": {
+            "min": 0,
+            "median": 0,
+            "max": 0
+          }
+        }
+      },
+      "cells": [
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 23654,
+              "errors": 0,
+              "p50_us": {
+                "min": 48,
+                "median": 49,
+                "max": 49
+              },
+              "p99_us": {
+                "min": 2492,
+                "median": 2641,
+                "max": 2767
+              }
+            },
+            "put": {
+              "count": 23654,
+              "errors": 0,
+              "p50_us": {
+                "min": 58,
+                "median": 59,
+                "max": 59
+              },
+              "p99_us": {
+                "min": 2561,
+                "median": 2604,
+                "max": 2782
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3835.3649010386466,
+            "median": 3964.714986551404,
+            "max": 4017.275292068031
+          },
+          "ops_per_sec": {
+            "min": 7670.729802077293,
+            "median": 7929.429973102808,
+            "max": 8034.550584136062
+          },
+          "baseline_rss_bytes": {
+            "min": 5242880,
+            "median": 5365760,
+            "max": 5664768
+          },
+          "peak_rss_bytes": {
+            "min": 11321344,
+            "median": 11599872,
+            "max": 13414400
+          },
+          "cpu_percent": {
+            "min": 43.87858188464489,
+            "median": 44.58744203265474,
+            "max": 44.61329075400787
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 17802,
+              "errors": 0,
+              "p50_us": {
+                "min": 1592,
+                "median": 1605,
+                "max": 1667
+              },
+              "p99_us": {
+                "min": 12065,
+                "median": 13282,
+                "max": 13434
+              }
+            },
+            "put": {
+              "count": 17802,
+              "errors": 0,
+              "p50_us": {
+                "min": 1709,
+                "median": 1771,
+                "max": 1844
+              },
+              "p99_us": {
+                "min": 12803,
+                "median": 13193,
+                "max": 13695
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 2939.5413382631427,
+            "median": 2945.173801386026,
+            "max": 2985.877377914216
+          },
+          "ops_per_sec": {
+            "min": 5879.0826765262855,
+            "median": 5890.347602772052,
+            "max": 5971.754755828432
+          },
+          "baseline_rss_bytes": {
+            "min": 5177344,
+            "median": 5357568,
+            "max": 5672960
+          },
+          "peak_rss_bytes": {
+            "min": 12914688,
+            "median": 13475840,
+            "max": 13516800
+          },
+          "cpu_percent": {
+            "min": 74.50491394920674,
+            "median": 78.71687790499307,
+            "max": 78.94039505780528
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 32835,
+              "errors": 0,
+              "p50_us": {
+                "min": 2351,
+                "median": 2709,
+                "max": 3001
+              },
+              "p99_us": {
+                "min": 21902,
+                "median": 22596,
+                "max": 28385
+              }
+            },
+            "put": {
+              "count": 32835,
+              "errors": 0,
+              "p50_us": {
+                "min": 5564,
+                "median": 5625,
+                "max": 5773
+              },
+              "p99_us": {
+                "min": 27517,
+                "median": 27668,
+                "max": 34905
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5103.216588947436,
+            "median": 5419.217070838483,
+            "max": 5825.741842683448
+          },
+          "ops_per_sec": {
+            "min": 10206.433177894873,
+            "median": 10838.434141676966,
+            "max": 11651.483685366897
+          },
+          "baseline_rss_bytes": {
+            "min": 5341184,
+            "median": 5521408,
+            "max": 5582848
+          },
+          "peak_rss_bytes": {
+            "min": 18673664,
+            "median": 18984960,
+            "max": 19812352
+          },
+          "cpu_percent": {
+            "min": 96.46754406705443,
+            "median": 97.94495535244259,
+            "max": 100.20920103030451
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 9281,
+              "errors": 0,
+              "p50_us": {
+                "min": 76,
+                "median": 77,
+                "max": 79
+              },
+              "p99_us": {
+                "min": 2731,
+                "median": 2780,
+                "max": 2883
+              }
+            },
+            "put": {
+              "count": 9281,
+              "errors": 0,
+              "p50_us": {
+                "min": 244,
+                "median": 248,
+                "max": 250
+              },
+              "p99_us": {
+                "min": 4180,
+                "median": 4206,
+                "max": 4295
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1516.2571412614911,
+            "median": 1550.347917845825,
+            "max": 1571.8046844063065
+          },
+          "ops_per_sec": {
+            "min": 3032.5142825229823,
+            "median": 3100.69583569165,
+            "max": 3143.609368812613
+          },
+          "baseline_rss_bytes": {
+            "min": 5029888,
+            "median": 5275648,
+            "max": 5603328
+          },
+          "peak_rss_bytes": {
+            "min": 11485184,
+            "median": 11849728,
+            "max": 11870208
+          },
+          "cpu_percent": {
+            "min": 50.916528464839196,
+            "median": 52.29876025920163,
+            "max": 53.3846850947638
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 16562,
+              "errors": 0,
+              "p50_us": {
+                "min": 841,
+                "median": 869,
+                "max": 899
+              },
+              "p99_us": {
+                "min": 9983,
+                "median": 10633,
+                "max": 11020
+              }
+            },
+            "put": {
+              "count": 16562,
+              "errors": 0,
+              "p50_us": {
+                "min": 2962,
+                "median": 2985,
+                "max": 3308
+              },
+              "p99_us": {
+                "min": 13740,
+                "median": 13888,
+                "max": 13984
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 2717.5648709326615,
+            "median": 2760.7694826289026,
+            "max": 2789.1419486854716
+          },
+          "ops_per_sec": {
+            "min": 5435.129741865323,
+            "median": 5521.538965257805,
+            "max": 5578.283897370943
+          },
+          "baseline_rss_bytes": {
+            "min": 5255168,
+            "median": 5279744,
+            "max": 5292032
+          },
+          "peak_rss_bytes": {
+            "min": 19603456,
+            "median": 20316160,
+            "max": 20832256
+          },
+          "cpu_percent": {
+            "min": 92.91053845422049,
+            "median": 101.74383264857238,
+            "max": 103.23576143110674
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 31265,
+              "errors": 0,
+              "p50_us": {
+                "min": 2421,
+                "median": 2630,
+                "max": 2893
+              },
+              "p99_us": {
+                "min": 24223,
+                "median": 24445,
+                "max": 24574
+              }
+            },
+            "put": {
+              "count": 31265,
+              "errors": 0,
+              "p50_us": {
+                "min": 4677,
+                "median": 5040,
+                "max": 5061
+              },
+              "p99_us": {
+                "min": 29133,
+                "median": 30056,
+                "max": 30301
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5121.2769816727105,
+            "median": 5153.43160144913,
+            "max": 5299.996707772011
+          },
+          "ops_per_sec": {
+            "min": 10242.553963345421,
+            "median": 10306.86320289826,
+            "max": 10599.993415544022
+          },
+          "baseline_rss_bytes": {
+            "min": 5079040,
+            "median": 5156864,
+            "max": 5382144
+          },
+          "peak_rss_bytes": {
+            "min": 38072320,
+            "median": 38817792,
+            "max": 39735296
+          },
+          "cpu_percent": {
+            "min": 148.42199138508028,
+            "median": 156.7807287370718,
+            "max": 159.12615152380855
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 1159,
+              "errors": 0,
+              "p50_us": {
+                "min": 398,
+                "median": 404,
+                "max": 411
+              },
+              "p99_us": {
+                "min": 2139,
+                "median": 3579,
+                "max": 3634
+              }
+            },
+            "put": {
+              "count": 1159,
+              "errors": 0,
+              "p50_us": {
+                "min": 4027,
+                "median": 4053,
+                "max": 4086
+              },
+              "p99_us": {
+                "min": 9033,
+                "median": 9110,
+                "max": 9867
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 190.48993574997954,
+            "median": 192.9356399080565,
+            "max": 195.32488733200913
+          },
+          "ops_per_sec": {
+            "min": 380.9798714999591,
+            "median": 385.871279816113,
+            "max": 390.64977466401825
+          },
+          "baseline_rss_bytes": {
+            "min": 5120000,
+            "median": 5140480,
+            "max": 5521408
+          },
+          "peak_rss_bytes": {
+            "min": 12873728,
+            "median": 13234176,
+            "max": 13643776
+          },
+          "cpu_percent": {
+            "min": 71.37703696225518,
+            "median": 71.8422351875483,
+            "max": 72.64685406645775
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 2938,
+              "errors": 0,
+              "p50_us": {
+                "min": 1857,
+                "median": 1928,
+                "max": 1968
+              },
+              "p99_us": {
+                "min": 27137,
+                "median": 29156,
+                "max": 32231
+              }
+            },
+            "put": {
+              "count": 2938,
+              "errors": 0,
+              "p50_us": {
+                "min": 25819,
+                "median": 25831,
+                "max": 26335
+              },
+              "p99_us": {
+                "min": 66359,
+                "median": 67850,
+                "max": 69413
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 479.9134813168214,
+            "median": 488.82238442685804,
+            "max": 489.63878392411647
+          },
+          "ops_per_sec": {
+            "min": 959.8269626336428,
+            "median": 977.6447688537161,
+            "max": 979.2775678482329
+          },
+          "baseline_rss_bytes": {
+            "min": 5120000,
+            "median": 5373952,
+            "max": 5545984
+          },
+          "peak_rss_bytes": {
+            "min": 31330304,
+            "median": 38023168,
+            "max": 39608320
+          },
+          "cpu_percent": {
+            "min": 171.33218435812972,
+            "median": 174.8528781939328,
+            "max": 175.0271847488059
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3785,
+              "errors": 0,
+              "p50_us": {
+                "min": 4748,
+                "median": 5966,
+                "max": 7225
+              },
+              "p99_us": {
+                "min": 97461,
+                "median": 103475,
+                "max": 109355
+              }
+            },
+            "put": {
+              "count": 3785,
+              "errors": 0,
+              "p50_us": {
+                "min": 79827,
+                "median": 94457,
+                "max": 101328
+              },
+              "p99_us": {
+                "min": 186405,
+                "median": 197886,
+                "max": 212434
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 572.6793399996773,
+            "median": 603.6170986758035,
+            "max": 685.360722709531
+          },
+          "ops_per_sec": {
+            "min": 1145.3586799993545,
+            "median": 1207.234197351607,
+            "max": 1370.721445419062
+          },
+          "baseline_rss_bytes": {
+            "min": 5140480,
+            "median": 5341184,
+            "max": 5378048
+          },
+          "peak_rss_bytes": {
+            "min": 68276224,
+            "median": 72814592,
+            "max": 79642624
+          },
+          "cpu_percent": {
+            "min": 206.5649424776372,
+            "median": 213.68762055531795,
+            "max": 243.4189806278141
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 118,
+              "errors": 0,
+              "p50_us": {
+                "min": 4769,
+                "median": 4801,
+                "max": 5064
+              },
+              "p99_us": {
+                "min": 5705,
+                "median": 5970,
+                "max": 7099
+              }
+            },
+            "put": {
+              "count": 118,
+              "errors": 0,
+              "p50_us": {
+                "min": 46213,
+                "median": 46375,
+                "max": 47011
+              },
+              "p99_us": {
+                "min": 49597,
+                "median": 50794,
+                "max": 56464
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 19.20169414479565,
+            "median": 19.343205024603638,
+            "max": 19.51065682562794
+          },
+          "ops_per_sec": {
+            "min": 38.4033882895913,
+            "median": 38.686410049207275,
+            "max": 39.02131365125588
+          },
+          "baseline_rss_bytes": {
+            "min": 5226496,
+            "median": 5398528,
+            "max": 5529600
+          },
+          "peak_rss_bytes": {
+            "min": 10805248,
+            "median": 10829824,
+            "max": 10924032
+          },
+          "cpu_percent": {
+            "min": 78.76722656415434,
+            "median": 79.59789920688691,
+            "max": 79.73474382604144
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 588,
+              "errors": 0,
+              "p50_us": {
+                "min": 18053,
+                "median": 18910,
+                "max": 18988
+              },
+              "p99_us": {
+                "min": 60591,
+                "median": 81857,
+                "max": 94864
+              }
+            },
+            "put": {
+              "count": 588,
+              "errors": 0,
+              "p50_us": {
+                "min": 140213,
+                "median": 143996,
+                "max": 147095
+              },
+              "p99_us": {
+                "min": 231271,
+                "median": 243422,
+                "max": 273543
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 90.2202834793859,
+            "median": 92.9400514424228,
+            "max": 93.99815664632915
+          },
+          "ops_per_sec": {
+            "min": 180.4405669587718,
+            "median": 185.8801028848456,
+            "max": 187.9963132926583
+          },
+          "baseline_rss_bytes": {
+            "min": 5148672,
+            "median": 5480448,
+            "max": 5529600
+          },
+          "peak_rss_bytes": {
+            "min": 26189824,
+            "median": 27181056,
+            "max": 28565504
+          },
+          "cpu_percent": {
+            "min": 459.21768747999215,
+            "median": 471.4440938451312,
+            "max": 484.2331531981259
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 681,
+              "errors": 0,
+              "p50_us": {
+                "min": 59722,
+                "median": 60755,
+                "max": 64141
+              },
+              "p99_us": {
+                "min": 377075,
+                "median": 403541,
+                "max": 442141
+              }
+            },
+            "put": {
+              "count": 681,
+              "errors": 0,
+              "p50_us": {
+                "min": 492011,
+                "median": 499763,
+                "max": 506511
+              },
+              "p99_us": {
+                "min": 1322501,
+                "median": 1323966,
+                "max": 1359814
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 92.10787910394016,
+            "median": 97.01835370648107,
+            "max": 97.21795829101829
+          },
+          "ops_per_sec": {
+            "min": 184.21575820788033,
+            "median": 194.03670741296213,
+            "max": 194.43591658203658
+          },
+          "baseline_rss_bytes": {
+            "min": 5324800,
+            "median": 5373952,
+            "max": 5509120
+          },
+          "peak_rss_bytes": {
+            "min": 43847680,
+            "median": 44589056,
+            "max": 46399488
+          },
+          "cpu_percent": {
+            "min": 527.138264833015,
+            "median": 538.827791912127,
+            "max": 551.0189773917242
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1621,
+              "errors": 0,
+              "p50_us": {
+                "min": 3228,
+                "median": 3256,
+                "max": 3371
+              },
+              "p99_us": {
+                "min": 8917,
+                "median": 9115,
+                "max": 9534
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 268.1639941893269,
+            "median": 269.29348004197647,
+            "max": 271.44862622130637
+          },
+          "ops_per_sec": {
+            "min": 268.1639941893269,
+            "median": 269.29348004197647,
+            "max": 271.44862622130637
+          },
+          "baseline_rss_bytes": {
+            "min": 5271552,
+            "median": 5414912,
+            "max": 5492736
+          },
+          "peak_rss_bytes": {
+            "min": 17301504,
+            "median": 18026496,
+            "max": 18653184
+          },
+          "cpu_percent": {
+            "min": 59.77649234820389,
+            "median": 60.42765997785431,
+            "max": 61.46953344321816
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 3675,
+              "errors": 0,
+              "p50_us": {
+                "min": 23069,
+                "median": 24940,
+                "max": 25286
+              },
+              "p99_us": {
+                "min": 63312,
+                "median": 67806,
+                "max": 69157
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 593.3187283565469,
+            "median": 594.2540177647182,
+            "max": 627.292520781001
+          },
+          "ops_per_sec": {
+            "min": 593.3187283565469,
+            "median": 594.2540177647182,
+            "max": 627.292520781001
+          },
+          "baseline_rss_bytes": {
+            "min": 5251072,
+            "median": 5300224,
+            "max": 5521408
+          },
+          "peak_rss_bytes": {
+            "min": 30367744,
+            "median": 31170560,
+            "max": 32935936
+          },
+          "cpu_percent": {
+            "min": 115.99779164150338,
+            "median": 119.01830829431772,
+            "max": 123.21735655321307
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 6571,
+              "errors": 0,
+              "p50_us": {
+                "min": 48512,
+                "median": 51065,
+                "max": 51105
+              },
+              "p99_us": {
+                "min": 180034,
+                "median": 185586,
+                "max": 187129
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1040.7549118812947,
+            "median": 1043.4136764805694,
+            "max": 1104.9471458727803
+          },
+          "ops_per_sec": {
+            "min": 1040.7549118812947,
+            "median": 1043.4136764805694,
+            "max": 1104.9471458727803
+          },
+          "baseline_rss_bytes": {
+            "min": 5378048,
+            "median": 5406720,
+            "max": 5533696
+          },
+          "peak_rss_bytes": {
+            "min": 61014016,
+            "median": 61317120,
+            "max": 62337024
+          },
+          "cpu_percent": {
+            "min": 181.11670377738355,
+            "median": 181.2821662330288,
+            "max": 186.87098008110868
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 15257,
+              "errors": 0,
+              "p50_us": {
+                "min": 229,
+                "median": 230,
+                "max": 232
+              },
+              "p99_us": {
+                "min": 3661,
+                "median": 3871,
+                "max": 3917
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 2529.672404893894,
+            "median": 2541.378118046837,
+            "max": 2556.8685859037246
+          },
+          "ops_per_sec": {
+            "min": 2529.672404893894,
+            "median": 2541.378118046837,
+            "max": 2556.8685859037246
+          },
+          "baseline_rss_bytes": {
+            "min": 5070848,
+            "median": 5488640,
+            "max": 5529600
+          },
+          "peak_rss_bytes": {
+            "min": 14598144,
+            "median": 14798848,
+            "max": 15532032
+          },
+          "cpu_percent": {
+            "min": 67.00894799748008,
+            "median": 67.716114019199,
+            "max": 67.9721350335165
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 30721,
+              "errors": 0,
+              "p50_us": {
+                "min": 1998,
+                "median": 2056,
+                "max": 2140
+              },
+              "p99_us": {
+                "min": 12352,
+                "median": 12668,
+                "max": 13285
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5043.320548407745,
+            "median": 5113.663575012333,
+            "max": 5179.737687329249
+          },
+          "ops_per_sec": {
+            "min": 5043.320548407745,
+            "median": 5113.663575012333,
+            "max": 5179.737687329249
+          },
+          "baseline_rss_bytes": {
+            "min": 5222400,
+            "median": 5402624,
+            "max": 5451776
+          },
+          "peak_rss_bytes": {
+            "min": 19443712,
+            "median": 19779584,
+            "max": 20025344
+          },
+          "cpu_percent": {
+            "min": 171.5827340285274,
+            "median": 174.75055431162835,
+            "max": 178.3680241511756
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 41439,
+              "errors": 0,
+              "p50_us": {
+                "min": 5453,
+                "median": 5507,
+                "max": 5702
+              },
+              "p99_us": {
+                "min": 38696,
+                "median": 38917,
+                "max": 39703
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 6717.02019066891,
+            "median": 6912.025527078931,
+            "max": 6979.49218350711
+          },
+          "ops_per_sec": {
+            "min": 6717.02019066891,
+            "median": 6912.025527078931,
+            "max": 6979.49218350711
+          },
+          "baseline_rss_bytes": {
+            "min": 5173248,
+            "median": 5304320,
+            "max": 5341184
+          },
+          "peak_rss_bytes": {
+            "min": 23441408,
+            "median": 23965696,
+            "max": 24195072
+          },
+          "cpu_percent": {
+            "min": 210.14591524985096,
+            "median": 216.67610666250005,
+            "max": 220.75055801801636
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1550,
+              "errors": 0,
+              "p50_us": {
+                "min": 3370,
+                "median": 3411,
+                "max": 3419
+              },
+              "p99_us": {
+                "min": 9318,
+                "median": 9585,
+                "max": 11672
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 25.39301618833312,
+            "median": 25.880945129014382,
+            "max": 25.975052066429907
+          },
+          "ops_per_sec": {
+            "min": 253.9301618833312,
+            "median": 258.80945129014384,
+            "max": 259.7505206642991
+          },
+          "baseline_rss_bytes": {
+            "min": 5263360,
+            "median": 5459968,
+            "max": 5537792
+          },
+          "peak_rss_bytes": {
+            "min": 37257216,
+            "median": 37748736,
+            "max": 38277120
+          },
+          "cpu_percent": {
+            "min": 98.72501189472985,
+            "median": 99.43104660813219,
+            "max": 99.73516387325384
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 4370,
+              "errors": 0,
+              "p50_us": {
+                "min": 20705,
+                "median": 21125,
+                "max": 21689
+              },
+              "p99_us": {
+                "min": 54149,
+                "median": 55239,
+                "max": 57791
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 66.14818822339134,
+            "median": 68.42717848716399,
+            "max": 69.37496300690678
+          },
+          "ops_per_sec": {
+            "min": 661.4818822339134,
+            "median": 684.2717848716397,
+            "max": 693.7496300690678
+          },
+          "baseline_rss_bytes": {
+            "min": 5111808,
+            "median": 5193728,
+            "max": 5509120
+          },
+          "peak_rss_bytes": {
+            "min": 66908160,
+            "median": 67596288,
+            "max": 69324800
+          },
+          "cpu_percent": {
+            "min": 260.7993799909933,
+            "median": 265.91532574666843,
+            "max": 277.41146860503204
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 6430,
+              "errors": 0,
+              "p50_us": {
+                "min": 53124,
+                "median": 54582,
+                "max": 54932
+              },
+              "p99_us": {
+                "min": 224486,
+                "median": 230274,
+                "max": 238012
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 89.0427659798202,
+            "median": 89.78093864134031,
+            "max": 90.93123744625126
+          },
+          "ops_per_sec": {
+            "min": 890.4276597982021,
+            "median": 897.8093864134031,
+            "max": 909.3123744625126
+          },
+          "baseline_rss_bytes": {
+            "min": 5255168,
+            "median": 5341184,
+            "max": 5361664
+          },
+          "peak_rss_bytes": {
+            "min": 97218560,
+            "median": 97992704,
+            "max": 108498944
+          },
+          "cpu_percent": {
+            "min": 330.7939962580011,
+            "median": 333.33745767548766,
+            "max": 338.0912559701864
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 2308,
+              "errors": 0,
+              "p50_us": {
+                "min": 2263,
+                "median": 2336,
+                "max": 2339
+              },
+              "p99_us": {
+                "min": 8184,
+                "median": 8502,
+                "max": 8733
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 379.92667693349205,
+            "median": 384.1607543606374,
+            "max": 388.1220097212815
+          },
+          "ops_per_sec": {
+            "min": 379.92667693349205,
+            "median": 384.1607543606374,
+            "max": 388.1220097212815
+          },
+          "baseline_rss_bytes": {
+            "min": 5206016,
+            "median": 5275648,
+            "max": 5545984
+          },
+          "peak_rss_bytes": {
+            "min": 38232064,
+            "median": 40943616,
+            "max": 41500672
+          },
+          "cpu_percent": {
+            "min": 100.19379835962584,
+            "median": 100.55496657176005,
+            "max": 102.09318940667225
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 9984,
+              "errors": 0,
+              "p50_us": {
+                "min": 7869,
+                "median": 8154,
+                "max": 8289
+              },
+              "p99_us": {
+                "min": 29674,
+                "median": 31644,
+                "max": 32289
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1627.5839848761173,
+            "median": 1645.0574553219935,
+            "max": 1694.9319464488294
+          },
+          "ops_per_sec": {
+            "min": 1627.5839848761173,
+            "median": 1645.0574553219935,
+            "max": 1694.9319464488294
+          },
+          "baseline_rss_bytes": {
+            "min": 5185536,
+            "median": 5304320,
+            "max": 5423104
+          },
+          "peak_rss_bytes": {
+            "min": 65097728,
+            "median": 65249280,
+            "max": 71213056
+          },
+          "cpu_percent": {
+            "min": 497.6530103011565,
+            "median": 500.49892131388793,
+            "max": 511.0036420458591
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 10377,
+              "errors": 0,
+              "p50_us": {
+                "min": 13071,
+                "median": 13414,
+                "max": 14183
+              },
+              "p99_us": {
+                "min": 251526,
+                "median": 274833,
+                "max": 289180
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 1608.9622727675642,
+            "median": 1725.8828000583892,
+            "max": 1747.5549615289756
+          },
+          "ops_per_sec": {
+            "min": 1608.9622727675642,
+            "median": 1725.8828000583892,
+            "max": 1747.5549615289756
+          },
+          "baseline_rss_bytes": {
+            "min": 5062656,
+            "median": 5271552,
+            "max": 5312512
+          },
+          "peak_rss_bytes": {
+            "min": 94281728,
+            "median": 101429248,
+            "max": 102207488
+          },
+          "cpu_percent": {
+            "min": 514.9808624158301,
+            "median": 524.394881903002,
+            "max": 536.5380242565491
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 24,
+              "errors": 0,
+              "p50_us": {
+                "min": 61899,
+                "median": 65558,
+                "max": 65615
+              },
+              "p99_us": {
+                "min": 66860,
+                "median": 68018,
+                "max": 72129
+              }
+            },
+            "create": {
+              "count": 24,
+              "errors": 0,
+              "p50_us": {
+                "min": 184,
+                "median": 214,
+                "max": 219
+              },
+              "p99_us": {
+                "min": 403,
+                "median": 428,
+                "max": 518
+              }
+            },
+            "part": {
+              "count": 192,
+              "errors": 0,
+              "p50_us": {
+                "min": 23462,
+                "median": 23492,
+                "max": 23537
+              },
+              "p99_us": {
+                "min": 29032,
+                "median": 29833,
+                "max": 33453
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3.8644347927523333,
+            "median": 3.8733815339739626,
+            "max": 3.915686268559496
+          },
+          "ops_per_sec": {
+            "min": 38.644347927523334,
+            "median": 38.73381533973962,
+            "max": 39.15686268559496
+          },
+          "baseline_rss_bytes": {
+            "min": 5165056,
+            "median": 5394432,
+            "max": 5406720
+          },
+          "peak_rss_bytes": {
+            "min": 11313152,
+            "median": 11513856,
+            "max": 11870208
+          },
+          "cpu_percent": {
+            "min": 79.13946314036595,
+            "median": 81.20522229322637,
+            "max": 82.20908501995982
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=4",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 4
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 73,
+              "errors": 0,
+              "p50_us": {
+                "min": 75740,
+                "median": 77636,
+                "max": 83860
+              },
+              "p99_us": {
+                "min": 90466,
+                "median": 94189,
+                "max": 104851
+              }
+            },
+            "create": {
+              "count": 73,
+              "errors": 0,
+              "p50_us": {
+                "min": 184,
+                "median": 214,
+                "max": 222
+              },
+              "p99_us": {
+                "min": 4524,
+                "median": 4982,
+                "max": 10848
+              }
+            },
+            "part": {
+              "count": 584,
+              "errors": 0,
+              "p50_us": {
+                "min": 31390,
+                "median": 31971,
+                "max": 32848
+              },
+              "p99_us": {
+                "min": 44679,
+                "median": 48984,
+                "max": 52636
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 11.10462550085661,
+            "median": 11.143960862901567,
+            "max": 11.579506787090764
+          },
+          "ops_per_sec": {
+            "min": 111.04625500856609,
+            "median": 111.43960862901568,
+            "max": 115.79506787090764
+          },
+          "baseline_rss_bytes": {
+            "min": 5050368,
+            "median": 5124096,
+            "max": 5279744
+          },
+          "peak_rss_bytes": {
+            "min": 14553088,
+            "median": 16101376,
+            "max": 16740352
+          },
+          "cpu_percent": {
+            "min": 237.10111316671458,
+            "median": 245.01853790520008,
+            "max": 247.13872162667684
+          }
+        }
+      ],
+      "agentic": {
+        "s3": {
+          "cycles": 200,
+          "concurrency": 16,
+          "seconds": 0.483048944,
+          "errors": 0,
+          "cycle_p50_ms": 37.076,
+          "cycle_p99_ms": 66.503,
+          "usage": {
+            "baseline_rss_bytes": 5132288,
+            "end_rss_bytes": 12263424,
+            "peak_rss_bytes": 13680640,
+            "median_rss_bytes": 12263424,
+            "cpu_percent": 44.17495458557843
+          }
+        }
+      }
+    },
+    {
+      "name": "localstack",
+      "image": "gostack-parity-localstack:8b9a79f",
+      "image_bytes": 1926689385,
+      "startup": {
+        "samples_ms": [
+          2460.811,
+          2228.069,
+          1189.459,
+          1127.922,
+          2138.114
+        ],
+        "ms": {
+          "min": 1127.922,
+          "median": 2138.114,
+          "max": 2460.811
+        }
+      },
+      "idle": {
+        "healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 94765056,
+            "median": 94785536,
+            "max": 94834688
+          },
+          "cpu_percent": {
+            "min": 1.7758903502850556,
+            "median": 1.9763839452323086,
+            "max": 2.7332863908552327
+          }
+        },
+        "no_healthcheck": {
+          "runs": 3,
+          "settle_seconds": 5,
+          "seconds": 30,
+          "rss_bytes": {
+            "min": 93630464,
+            "median": 93659136,
+            "max": 93691904
+          },
+          "cpu_percent": {
+            "min": 0.08650543837914766,
+            "median": 0.09582281520914013,
+            "max": 0.11861782747798308
+          }
+        }
+      },
+      "cells": [
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3160,
+              "errors": 0,
+              "p50_us": {
+                "min": 829,
+                "median": 877,
+                "max": 898
+              },
+              "p99_us": {
+                "min": 1450,
+                "median": 1691,
+                "max": 3018
+              }
+            },
+            "put": {
+              "count": 3160,
+              "errors": 0,
+              "p50_us": {
+                "min": 881,
+                "median": 926,
+                "max": 930
+              },
+              "p99_us": {
+                "min": 1431,
+                "median": 1543,
+                "max": 3393
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 489.397144870254,
+            "median": 533.3616702506929,
+            "max": 556.7088526825786
+          },
+          "ops_per_sec": {
+            "min": 978.794289740508,
+            "median": 1066.7233405013858,
+            "max": 1113.4177053651572
+          },
+          "baseline_rss_bytes": {
+            "min": 93659136,
+            "median": 93659136,
+            "max": 93667328
+          },
+          "peak_rss_bytes": {
+            "min": 137891840,
+            "median": 137895936,
+            "max": 138268672
+          },
+          "cpu_percent": {
+            "min": 72.18868458659882,
+            "median": 75.1183979140432,
+            "max": 75.88202322083313
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3410,
+              "errors": 0,
+              "p50_us": {
+                "min": 13744,
+                "median": 13771,
+                "max": 13958
+              },
+              "p99_us": {
+                "min": 23676,
+                "median": 24617,
+                "max": 25301
+              }
+            },
+            "put": {
+              "count": 3410,
+              "errors": 0,
+              "p50_us": {
+                "min": 13690,
+                "median": 14116,
+                "max": 14351
+              },
+              "p99_us": {
+                "min": 35028,
+                "median": 38427,
+                "max": 38674
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 556.7251078692516,
+            "median": 559.3574848741289,
+            "max": 576.0983079580486
+          },
+          "ops_per_sec": {
+            "min": 1113.4502157385032,
+            "median": 1118.7149697482578,
+            "max": 1152.1966159160972
+          },
+          "baseline_rss_bytes": {
+            "min": 93626368,
+            "median": 93630464,
+            "max": 93650944
+          },
+          "peak_rss_bytes": {
+            "min": 138092544,
+            "median": 138776576,
+            "max": 138784768
+          },
+          "cpu_percent": {
+            "min": 84.45870778277789,
+            "median": 85.01361185953218,
+            "max": 85.91559067572427
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1024,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3473,
+              "errors": 0,
+              "p50_us": {
+                "min": 55483,
+                "median": 55781,
+                "max": 56250
+              },
+              "p99_us": {
+                "min": 106507,
+                "median": 107705,
+                "max": 109947
+              }
+            },
+            "put": {
+              "count": 3473,
+              "errors": 0,
+              "p50_us": {
+                "min": 55812,
+                "median": 55959,
+                "max": 56923
+              },
+              "p99_us": {
+                "min": 109345,
+                "median": 111980,
+                "max": 115912
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 557.5709117540209,
+            "median": 567.4707614154534,
+            "max": 569.1350731143984
+          },
+          "ops_per_sec": {
+            "min": 1115.1418235080419,
+            "median": 1134.9415228309067,
+            "max": 1138.2701462287969
+          },
+          "baseline_rss_bytes": {
+            "min": 93642752,
+            "median": 93663232,
+            "max": 93671424
+          },
+          "peak_rss_bytes": {
+            "min": 142729216,
+            "median": 142888960,
+            "max": 143040512
+          },
+          "cpu_percent": {
+            "min": 84.19072371814738,
+            "median": 84.20254650616668,
+            "max": 85.2235110001007
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 2996,
+              "errors": 0,
+              "p50_us": {
+                "min": 843,
+                "median": 867,
+                "max": 894
+              },
+              "p99_us": {
+                "min": 1432,
+                "median": 1605,
+                "max": 1652
+              }
+            },
+            "put": {
+              "count": 2996,
+              "errors": 0,
+              "p50_us": {
+                "min": 1017,
+                "median": 1037,
+                "max": 1075
+              },
+              "p99_us": {
+                "min": 1793,
+                "median": 1800,
+                "max": 1820
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 483.23080033605646,
+            "median": 502.549726501149,
+            "max": 511.3317398993393
+          },
+          "ops_per_sec": {
+            "min": 966.4616006721129,
+            "median": 1005.099453002298,
+            "max": 1022.6634797986786
+          },
+          "baseline_rss_bytes": {
+            "min": 93634560,
+            "median": 93675520,
+            "max": 93687808
+          },
+          "peak_rss_bytes": {
+            "min": 137994240,
+            "median": 138285056,
+            "max": 138854400
+          },
+          "cpu_percent": {
+            "min": 73.83012009047027,
+            "median": 74.01907685262499,
+            "max": 74.59774545263429
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3134,
+              "errors": 0,
+              "p50_us": {
+                "min": 13179,
+                "median": 13194,
+                "max": 13792
+              },
+              "p99_us": {
+                "min": 22800,
+                "median": 22848,
+                "max": 23216
+              }
+            },
+            "put": {
+              "count": 3134,
+              "errors": 0,
+              "p50_us": {
+                "min": 16898,
+                "median": 16984,
+                "max": 17488
+              },
+              "p99_us": {
+                "min": 36719,
+                "median": 36830,
+                "max": 42192
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 513.2758154270414,
+            "median": 516.0492140049716,
+            "max": 523.2392103325865
+          },
+          "ops_per_sec": {
+            "min": 1026.5516308540828,
+            "median": 1032.0984280099433,
+            "max": 1046.478420665173
+          },
+          "baseline_rss_bytes": {
+            "min": 93663232,
+            "median": 93683712,
+            "max": 93700096
+          },
+          "peak_rss_bytes": {
+            "min": 143183872,
+            "median": 143314944,
+            "max": 143446016
+          },
+          "cpu_percent": {
+            "min": 87.7677676743091,
+            "median": 88.39703823724197,
+            "max": 88.52801026935515
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=64KiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 65536,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 3238,
+              "errors": 0,
+              "p50_us": {
+                "min": 56372,
+                "median": 57119,
+                "max": 57863
+              },
+              "p99_us": {
+                "min": 104626,
+                "median": 109410,
+                "max": 111047
+              }
+            },
+            "put": {
+              "count": 3238,
+              "errors": 0,
+              "p50_us": {
+                "min": 61711,
+                "median": 63243,
+                "max": 64223
+              },
+              "p99_us": {
+                "min": 122833,
+                "median": 124319,
+                "max": 125907
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 518.5773948926832,
+            "median": 529.2191018964834,
+            "max": 531.0514882152135
+          },
+          "ops_per_sec": {
+            "min": 1037.1547897853663,
+            "median": 1058.4382037929668,
+            "max": 1062.102976430427
+          },
+          "baseline_rss_bytes": {
+            "min": 93638656,
+            "median": 93675520,
+            "max": 93683712
+          },
+          "peak_rss_bytes": {
+            "min": 156479488,
+            "median": 157331456,
+            "max": 158433280
+          },
+          "cpu_percent": {
+            "min": 86.72026554182452,
+            "median": 87.80817951295204,
+            "max": 87.84091626841396
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 1157,
+              "errors": 0,
+              "p50_us": {
+                "min": 1564,
+                "median": 1690,
+                "max": 1708
+              },
+              "p99_us": {
+                "min": 2351,
+                "median": 2537,
+                "max": 2556
+              }
+            },
+            "put": {
+              "count": 1157,
+              "errors": 0,
+              "p50_us": {
+                "min": 3304,
+                "median": 3511,
+                "max": 3523
+              },
+              "p99_us": {
+                "min": 4424,
+                "median": 4784,
+                "max": 4816
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 188.7595638247667,
+            "median": 189.90208183400537,
+            "max": 199.1232799609432
+          },
+          "ops_per_sec": {
+            "min": 377.5191276495334,
+            "median": 379.80416366801074,
+            "max": 398.2465599218864
+          },
+          "baseline_rss_bytes": {
+            "min": 93659136,
+            "median": 93683712,
+            "max": 119582720
+          },
+          "peak_rss_bytes": {
+            "min": 138006528,
+            "median": 142032896,
+            "max": 164294656
+          },
+          "cpu_percent": {
+            "min": 75.00697873829313,
+            "median": 76.11996907913692,
+            "max": 77.0006069102743
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 1205,
+              "errors": 0,
+              "p50_us": {
+                "min": 35506,
+                "median": 35939,
+                "max": 35952
+              },
+              "p99_us": {
+                "min": 49842,
+                "median": 49903,
+                "max": 53535
+              }
+            },
+            "put": {
+              "count": 1205,
+              "errors": 0,
+              "p50_us": {
+                "min": 44967,
+                "median": 45632,
+                "max": 45656
+              },
+              "p99_us": {
+                "min": 75111,
+                "median": 88916,
+                "max": 89066
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 195.1776800009889,
+            "median": 196.57346688313447,
+            "max": 196.98806940227183
+          },
+          "ops_per_sec": {
+            "min": 390.3553600019778,
+            "median": 393.14693376626894,
+            "max": 393.97613880454367
+          },
+          "baseline_rss_bytes": {
+            "min": 93655040,
+            "median": 93679616,
+            "max": 93687808
+          },
+          "peak_rss_bytes": {
+            "min": 147288064,
+            "median": 147808256,
+            "max": 149344256
+          },
+          "cpu_percent": {
+            "min": 115.36127118800059,
+            "median": 118.06237424846626,
+            "max": 118.16117417402252
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=1MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 1048576,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 1337,
+              "errors": 0,
+              "p50_us": {
+                "min": 133483,
+                "median": 135279,
+                "max": 150880
+              },
+              "p99_us": {
+                "min": 227117,
+                "median": 230079,
+                "max": 238180
+              }
+            },
+            "put": {
+              "count": 1337,
+              "errors": 0,
+              "p50_us": {
+                "min": 164406,
+                "median": 164450,
+                "max": 172339
+              },
+              "p99_us": {
+                "min": 240416,
+                "median": 316086,
+                "max": 326913
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 201.2200788140152,
+            "median": 204.68985402768493,
+            "max": 205.1706207227072
+          },
+          "ops_per_sec": {
+            "min": 402.4401576280304,
+            "median": 409.37970805536986,
+            "max": 410.3412414454144
+          },
+          "baseline_rss_bytes": {
+            "min": 93646848,
+            "median": 93655040,
+            "max": 93696000
+          },
+          "peak_rss_bytes": {
+            "min": 163921920,
+            "median": 167800832,
+            "max": 171806720
+          },
+          "cpu_percent": {
+            "min": 118.8078899457461,
+            "median": 118.96346260874763,
+            "max": 120.24439605000087
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 113,
+              "errors": 0,
+              "p50_us": {
+                "min": 10937,
+                "median": 11500,
+                "max": 23080
+              },
+              "p99_us": {
+                "min": 26298,
+                "median": 26724,
+                "max": 31076
+              }
+            },
+            "put": {
+              "count": 113,
+              "errors": 0,
+              "p50_us": {
+                "min": 36512,
+                "median": 36827,
+                "max": 37089
+              },
+              "p99_us": {
+                "min": 59542,
+                "median": 59895,
+                "max": 61092
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 17.96717823572456,
+            "median": 18.547321324471536,
+            "max": 18.820452049933518
+          },
+          "ops_per_sec": {
+            "min": 35.93435647144912,
+            "median": 37.09464264894307,
+            "max": 37.640904099867036
+          },
+          "baseline_rss_bytes": {
+            "min": 93650944,
+            "median": 93655040,
+            "max": 93655040
+          },
+          "peak_rss_bytes": {
+            "min": 137854976,
+            "median": 137969664,
+            "max": 141598720
+          },
+          "cpu_percent": {
+            "min": 76.23469561972742,
+            "median": 78.13356448219174,
+            "max": 79.21276398444657
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 148,
+              "errors": 0,
+              "p50_us": {
+                "min": 339989,
+                "median": 346347,
+                "max": 351829
+              },
+              "p99_us": {
+                "min": 405336,
+                "median": 418421,
+                "max": 424227
+              }
+            },
+            "put": {
+              "count": 148,
+              "errors": 0,
+              "p50_us": {
+                "min": 331769,
+                "median": 341292,
+                "max": 350816
+              },
+              "p99_us": {
+                "min": 387179,
+                "median": 403100,
+                "max": 478913
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 22.547481898901086,
+            "median": 22.635894491852103,
+            "max": 23.656445571064157
+          },
+          "ops_per_sec": {
+            "min": 45.09496379780217,
+            "median": 45.271788983704205,
+            "max": 47.312891142128315
+          },
+          "baseline_rss_bytes": {
+            "min": 93626368,
+            "median": 93630464,
+            "max": 93646848
+          },
+          "peak_rss_bytes": {
+            "min": 151314432,
+            "median": 151347200,
+            "max": 151371776
+          },
+          "cpu_percent": {
+            "min": 142.1292463657644,
+            "median": 143.39592387491928,
+            "max": 143.97873349138231
+          }
+        },
+        {
+          "id": "s3/objects/persist=off/payload=16MiB/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "objects",
+            "payload_bytes": 16777216,
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "get": {
+              "count": 192,
+              "errors": 0,
+              "p50_us": {
+                "min": 1377030,
+                "median": 1384305,
+                "max": 1430661
+              },
+              "p99_us": {
+                "min": 1711526,
+                "median": 2068133,
+                "max": 2170431
+              }
+            },
+            "put": {
+              "count": 192,
+              "errors": 0,
+              "p50_us": {
+                "min": 1481916,
+                "median": 1536206,
+                "max": 1628212
+              },
+              "p99_us": {
+                "min": 1571283,
+                "median": 1592354,
+                "max": 1675069
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 20.863983475892,
+            "median": 21.67707832544841,
+            "max": 22.31419862164972
+          },
+          "ops_per_sec": {
+            "min": 41.727966951784,
+            "median": 43.35415665089682,
+            "max": 44.62839724329944
+          },
+          "baseline_rss_bytes": {
+            "min": 93663232,
+            "median": 93683712,
+            "max": 93696000
+          },
+          "peak_rss_bytes": {
+            "min": 191275008,
+            "median": 225050624,
+            "max": 230191104
+          },
+          "cpu_percent": {
+            "min": 152.49622565871027,
+            "median": 155.03266688087106,
+            "max": 161.56863896742993
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 277,
+              "errors": 0,
+              "p50_us": {
+                "min": 19485,
+                "median": 19506,
+                "max": 19641
+              },
+              "p99_us": {
+                "min": 83462,
+                "median": 83500,
+                "max": 83638
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 45.79362765115842,
+            "median": 45.96341523578941,
+            "max": 46.08147445496504
+          },
+          "ops_per_sec": {
+            "min": 45.79362765115842,
+            "median": 45.96341523578941,
+            "max": 46.08147445496504
+          },
+          "baseline_rss_bytes": {
+            "min": 93634560,
+            "median": 93671424,
+            "max": 93691904
+          },
+          "peak_rss_bytes": {
+            "min": 184954880,
+            "median": 187248640,
+            "max": 190476288
+          },
+          "cpu_percent": {
+            "min": 90.11391716251346,
+            "median": 90.70220803762118,
+            "max": 91.56076584736937
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 282,
+              "errors": 0,
+              "p50_us": {
+                "min": 368339,
+                "median": 370445,
+                "max": 372663
+              },
+              "p99_us": {
+                "min": 528592,
+                "median": 637085,
+                "max": 643226
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 42.79404293893881,
+            "median": 44.66143773307009,
+            "max": 45.64240523562462
+          },
+          "ops_per_sec": {
+            "min": 42.79404293893881,
+            "median": 44.66143773307009,
+            "max": 45.64240523562462
+          },
+          "baseline_rss_bytes": {
+            "min": 93659136,
+            "median": 93659136,
+            "max": 93663232
+          },
+          "peak_rss_bytes": {
+            "min": 167206912,
+            "median": 204820480,
+            "max": 205979648
+          },
+          "cpu_percent": {
+            "min": 87.7344405263046,
+            "median": 94.12350147449548,
+            "max": 95.66456928289294
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 337,
+              "errors": 0,
+              "p50_us": {
+                "min": 1251036,
+                "median": 1380839,
+                "max": 1429637
+              },
+              "p99_us": {
+                "min": 2403781,
+                "median": 2421327,
+                "max": 2494224
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 44.21717430547883,
+            "median": 44.71465988159131,
+            "max": 45.788725180844644
+          },
+          "ops_per_sec": {
+            "min": 44.21717430547883,
+            "median": 44.71465988159131,
+            "max": 45.788725180844644
+          },
+          "baseline_rss_bytes": {
+            "min": 93650944,
+            "median": 93655040,
+            "max": 93671424
+          },
+          "peak_rss_bytes": {
+            "min": 192708608,
+            "median": 226373632,
+            "max": 241786880
+          },
+          "cpu_percent": {
+            "min": 88.83961555729344,
+            "median": 93.86783747662535,
+            "max": 94.06189606102568
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 3598,
+              "errors": 0,
+              "p50_us": {
+                "min": 1644,
+                "median": 1645,
+                "max": 1659
+              },
+              "p99_us": {
+                "min": 2436,
+                "median": 2456,
+                "max": 2470
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 597.2991975665652,
+            "median": 599.4454375771036,
+            "max": 601.9414629985478
+          },
+          "ops_per_sec": {
+            "min": 597.2991975665652,
+            "median": 599.4454375771036,
+            "max": 601.9414629985478
+          },
+          "baseline_rss_bytes": {
+            "min": 93667328,
+            "median": 93691904,
+            "max": 93691904
+          },
+          "peak_rss_bytes": {
+            "min": 176197632,
+            "median": 177782784,
+            "max": 177942528
+          },
+          "cpu_percent": {
+            "min": 90.00606753364163,
+            "median": 90.88159827162367,
+            "max": 91.34571905484206
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 3831,
+              "errors": 0,
+              "p50_us": {
+                "min": 24927,
+                "median": 25101,
+                "max": 25146
+              },
+              "p99_us": {
+                "min": 40388,
+                "median": 41033,
+                "max": 44043
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 630.7673617401806,
+            "median": 635.9593196235683,
+            "max": 641.4104668436355
+          },
+          "ops_per_sec": {
+            "min": 630.7673617401806,
+            "median": 635.9593196235683,
+            "max": 641.4104668436355
+          },
+          "baseline_rss_bytes": {
+            "min": 93634560,
+            "median": 93650944,
+            "max": 93659136
+          },
+          "peak_rss_bytes": {
+            "min": 141500416,
+            "median": 142213120,
+            "max": 179441664
+          },
+          "cpu_percent": {
+            "min": 88.74742321114091,
+            "median": 88.97145247432945,
+            "max": 95.86989942012812
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=1000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "1000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 3664,
+              "errors": 0,
+              "p50_us": {
+                "min": 99791,
+                "median": 101598,
+                "max": 102882
+              },
+              "p99_us": {
+                "min": 186254,
+                "median": 191967,
+                "max": 202653
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 582.3571351452895,
+            "median": 613.7799252477082,
+            "max": 616.7871559716368
+          },
+          "ops_per_sec": {
+            "min": 582.3571351452895,
+            "median": 613.7799252477082,
+            "max": 616.7871559716368
+          },
+          "baseline_rss_bytes": {
+            "min": 93655040,
+            "median": 93659136,
+            "max": 93687808
+          },
+          "peak_rss_bytes": {
+            "min": 178196480,
+            "median": 182267904,
+            "max": 183676928
+          },
+          "cpu_percent": {
+            "min": 94.01354255925256,
+            "median": 94.58393127039592,
+            "max": 95.51322513057853
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 250,
+              "errors": 0,
+              "p50_us": {
+                "min": 21783,
+                "median": 22128,
+                "max": 22666
+              },
+              "p99_us": {
+                "min": 122179,
+                "median": 127473,
+                "max": 130105
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3.9450242000778353,
+            "median": 3.999478234068801,
+            "max": 4.101343153973388
+          },
+          "ops_per_sec": {
+            "min": 39.45024200077835,
+            "median": 39.99478234068801,
+            "max": 41.01343153973388
+          },
+          "baseline_rss_bytes": {
+            "min": 93642752,
+            "median": 93679616,
+            "max": 93683712
+          },
+          "peak_rss_bytes": {
+            "min": 181825536,
+            "median": 181895168,
+            "max": 186621952
+          },
+          "cpu_percent": {
+            "min": 99.34162230241095,
+            "median": 99.39576552904987,
+            "max": 99.59858755667338
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 480,
+              "errors": 0,
+              "p50_us": {
+                "min": 388185,
+                "median": 391502,
+                "max": 402824
+              },
+              "p99_us": {
+                "min": 584784,
+                "median": 690440,
+                "max": 702839
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3.903882258239624,
+            "median": 3.913316984238503,
+            "max": 3.9235791367169432
+          },
+          "ops_per_sec": {
+            "min": 39.03882258239624,
+            "median": 39.13316984238503,
+            "max": 39.23579136716943
+          },
+          "baseline_rss_bytes": {
+            "min": 93650944,
+            "median": 93659136,
+            "max": 93683712
+          },
+          "peak_rss_bytes": {
+            "min": 193814528,
+            "median": 215777280,
+            "max": 219709440
+          },
+          "cpu_percent": {
+            "min": 100.19079865684996,
+            "median": 101.1943480177438,
+            "max": 101.76183796242582
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=flat/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "flat"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1920,
+              "errors": 0,
+              "p50_us": {
+                "min": 1605126,
+                "median": 1640018,
+                "max": 1640398
+              },
+              "p99_us": {
+                "min": 2602557,
+                "median": 2616425,
+                "max": 3023855
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 3.817789843572764,
+            "median": 3.859764812464593,
+            "max": 3.8958037271145733
+          },
+          "ops_per_sec": {
+            "min": 38.177898435727634,
+            "median": 38.59764812464593,
+            "max": 38.958037271145734
+          },
+          "baseline_rss_bytes": {
+            "min": 93642752,
+            "median": 93659136,
+            "max": 93683712
+          },
+          "peak_rss_bytes": {
+            "min": 263655424,
+            "median": 271396864,
+            "max": 271687680
+          },
+          "cpu_percent": {
+            "min": 101.7722929173508,
+            "median": 102.52089797103775,
+            "max": 102.5896032827601
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1093,
+              "errors": 0,
+              "p50_us": {
+                "min": 5381,
+                "median": 5403,
+                "max": 5421
+              },
+              "p99_us": {
+                "min": 6917,
+                "median": 7055,
+                "max": 10742
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 177.85702900473495,
+            "median": 183.78545373162822,
+            "max": 184.31942474788673
+          },
+          "ops_per_sec": {
+            "min": 177.85702900473495,
+            "median": 183.78545373162822,
+            "max": 184.31942474788673
+          },
+          "baseline_rss_bytes": {
+            "min": 93663232,
+            "median": 93667328,
+            "max": 93679616
+          },
+          "peak_rss_bytes": {
+            "min": 179683328,
+            "median": 180801536,
+            "max": 181239808
+          },
+          "cpu_percent": {
+            "min": 99.68389920579406,
+            "median": 99.74293213229245,
+            "max": 100.53373605772518
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=16",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 16
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1160,
+              "errors": 0,
+              "p50_us": {
+                "min": 81555,
+                "median": 81895,
+                "max": 84680
+              },
+              "p99_us": {
+                "min": 139695,
+                "median": 146802,
+                "max": 152168
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 189.4059207533204,
+            "median": 190.11498854408282,
+            "max": 191.05228005522582
+          },
+          "ops_per_sec": {
+            "min": 189.4059207533204,
+            "median": 190.11498854408282,
+            "max": 191.05228005522582
+          },
+          "baseline_rss_bytes": {
+            "min": 93671424,
+            "median": 93679616,
+            "max": 93700096
+          },
+          "peak_rss_bytes": {
+            "min": 180510720,
+            "median": 183234560,
+            "max": 186281984
+          },
+          "cpu_percent": {
+            "min": 99.24047834245684,
+            "median": 100.12578596114862,
+            "max": 100.58182393127777
+          }
+        },
+        {
+          "id": "s3/listing/persist=off/keys=10000/mode=delimiter/c=64",
+          "spec": {
+            "service": "s3",
+            "workload": "listing",
+            "payload_bytes": 0,
+            "options": [
+              {
+                "key": "keys",
+                "value": "10000"
+              },
+              {
+                "key": "mode",
+                "value": "delimiter"
+              }
+            ],
+            "concurrency": 64
+          },
+          "runs": 3,
+          "ops": {
+            "list": {
+              "count": 1144,
+              "errors": 0,
+              "p50_us": {
+                "min": 333309,
+                "median": 333887,
+                "max": 346227
+              },
+              "p99_us": {
+                "min": 685933,
+                "median": 788728,
+                "max": 812667
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 182.65918369808648,
+            "median": 186.05255788962216,
+            "max": 192.5114633743017
+          },
+          "ops_per_sec": {
+            "min": 182.65918369808648,
+            "median": 186.05255788962216,
+            "max": 192.5114633743017
+          },
+          "baseline_rss_bytes": {
+            "min": 93634560,
+            "median": 93663232,
+            "max": 93675520
+          },
+          "peak_rss_bytes": {
+            "min": 195153920,
+            "median": 195252224,
+            "max": 195317760
+          },
+          "cpu_percent": {
+            "min": 100.16057895475048,
+            "median": 100.65600041326842,
+            "max": 100.75292428386204
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=1",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 1
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 35,
+              "errors": 0,
+              "p50_us": {
+                "min": 19584,
+                "median": 19839,
+                "max": 20031
+              },
+              "p99_us": {
+                "min": 20485,
+                "median": 20702,
+                "max": 28443
+              }
+            },
+            "create": {
+              "count": 35,
+              "errors": 0,
+              "p50_us": {
+                "min": 1246,
+                "median": 1286,
+                "max": 1297
+              },
+              "p99_us": {
+                "min": 23267,
+                "median": 23488,
+                "max": 24118
+              }
+            },
+            "part": {
+              "count": 280,
+              "errors": 0,
+              "p50_us": {
+                "min": 18995,
+                "median": 19145,
+                "max": 19289
+              },
+              "p99_us": {
+                "min": 22607,
+                "median": 27865,
+                "max": 31773
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 5.457599911743266,
+            "median": 5.634306881040531,
+            "max": 5.651819772883375
+          },
+          "ops_per_sec": {
+            "min": 54.57599911743266,
+            "median": 56.343068810405306,
+            "max": 56.51819772883375
+          },
+          "baseline_rss_bytes": {
+            "min": 93663232,
+            "median": 93667328,
+            "max": 105680896
+          },
+          "peak_rss_bytes": {
+            "min": 138633216,
+            "median": 138809344,
+            "max": 149966848
+          },
+          "cpu_percent": {
+            "min": 79.25604475644063,
+            "median": 79.64260925409133,
+            "max": 80.26411080129388
+          }
+        },
+        {
+          "id": "s3/multipart/persist=off/payload=64MiB/c=4",
+          "spec": {
+            "service": "s3",
+            "workload": "multipart",
+            "payload_bytes": 67108864,
+            "concurrency": 4
+          },
+          "runs": 3,
+          "ops": {
+            "complete": {
+              "count": 60,
+              "errors": 0,
+              "p50_us": {
+                "min": 100572,
+                "median": 118510,
+                "max": 127536
+              },
+              "p99_us": {
+                "min": 159999,
+                "median": 164104,
+                "max": 166278
+              }
+            },
+            "create": {
+              "count": 60,
+              "errors": 0,
+              "p50_us": {
+                "min": 1668,
+                "median": 1898,
+                "max": 1931
+              },
+              "p99_us": {
+                "min": 29003,
+                "median": 29026,
+                "max": 31775
+              }
+            },
+            "part": {
+              "count": 480,
+              "errors": 0,
+              "p50_us": {
+                "min": 36576,
+                "median": 37598,
+                "max": 39142
+              },
+              "p99_us": {
+                "min": 51567,
+                "median": 54595,
+                "max": 55240
+              }
+            }
+          },
+          "cycles_per_sec": {
+            "min": 9.085439594327125,
+            "median": 9.182788756884541,
+            "max": 9.304876502468877
+          },
+          "ops_per_sec": {
+            "min": 90.85439594327126,
+            "median": 91.82788756884541,
+            "max": 93.04876502468876
+          },
+          "baseline_rss_bytes": {
+            "min": 93659136,
+            "median": 93671424,
+            "max": 93704192
+          },
+          "peak_rss_bytes": {
+            "min": 140771328,
+            "median": 140779520,
+            "max": 142069760
+          },
+          "cpu_percent": {
+            "min": 157.49560605565267,
+            "median": 159.84552119825184,
+            "max": 159.9011794267794
+          }
+        }
+      ],
+      "agentic": {
+        "s3": {
+          "cycles": 200,
+          "concurrency": 16,
+          "seconds": 6.017226479,
+          "errors": 0,
+          "cycle_p50_ms": 310.598,
+          "cycle_p99_ms": 2029.881,
+          "usage": {
+            "baseline_rss_bytes": 93663232,
+            "end_rss_bytes": 312414208,
+            "peak_rss_bytes": 392986624,
+            "median_rss_bytes": 312414208,
+            "cpu_percent": 112.96248153724038
+          }
+        }
+      }
+    }
+  ]
+}
