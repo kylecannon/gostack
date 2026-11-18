@@ -4,9 +4,11 @@ import (
 	"crypto/sha1" //nolint:gosec // S3's SHA1 checksum is an integrity check the client picks, not a security use.
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"hash"
 	"hash/crc32"
 	"hash/crc64"
+	"strings"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 )
@@ -70,6 +72,24 @@ func encodeChecksum(h hash.Hash) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
+// knownAlgorithm reports whether algorithm is one S3 accepts
+// (CHECKSUM_ALGORITHMS).
+func knownAlgorithm(algorithm string) bool {
+	switch algorithm {
+	case algorithmCRC32, algorithmCRC32C, algorithmCRC64NVME, algorithmSHA1, algorithmSHA256:
+		return true
+	default:
+		return false
+	}
+}
+
+// invalidChecksumValue is the error for a checksum value that is not one of
+// algorithm's size.
+func invalidChecksumValue(algorithm string) error {
+	return s3api.NewInvalidRequest(fmt.Sprintf("Value for x-amz-checksum-%s header is invalid.",
+		strings.ToLower(algorithm)))
+}
+
 // validChecksum reports whether value decodes to a checksum of algorithm's size.
 func validChecksum(algorithm, value string) bool {
 	raw, err := base64.StdEncoding.DecodeString(value)
@@ -81,6 +101,12 @@ func validChecksum(algorithm, value string) bool {
 // and its algorithm, as get_s3_checksum_algorithm_from_request finds it. It is
 // empty when there is none.
 func requestChecksum(in *s3api.PutObjectInput) (string, string, error) {
+	return namedChecksum(in.ChecksumSHA1, in.ChecksumSHA256, in.ChecksumCRC32, in.ChecksumCRC32C, in.ChecksumCRC64NVME)
+}
+
+// namedChecksum returns the one checksum value of the x-amz-checksum-*
+// members of a write, and its algorithm; "" when none is set.
+func namedChecksum(sha1Value, sha256Value, crc32Value, crc32cValue, crc64nvmeValue *string) (string, string, error) {
 	var algorithm, value string
 
 	found := 0
@@ -89,11 +115,11 @@ func requestChecksum(in *s3api.PutObjectInput) (string, string, error) {
 		algorithm string
 		value     *string
 	}{
-		{algorithmSHA1, in.ChecksumSHA1},
-		{algorithmSHA256, in.ChecksumSHA256},
-		{algorithmCRC32, in.ChecksumCRC32},
-		{algorithmCRC32C, in.ChecksumCRC32C},
-		{algorithmCRC64NVME, in.ChecksumCRC64NVME},
+		{algorithmSHA1, sha1Value},
+		{algorithmSHA256, sha256Value},
+		{algorithmCRC32, crc32Value},
+		{algorithmCRC32C, crc32cValue},
+		{algorithmCRC64NVME, crc64nvmeValue},
 	} {
 		if candidate.value != nil && *candidate.value != "" {
 			algorithm, value = candidate.algorithm, *candidate.value

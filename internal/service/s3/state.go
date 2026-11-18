@@ -181,6 +181,10 @@ type Version struct {
 	ChecksumAlgorithm string
 	ChecksumValue     string
 	ChecksumType      string
+
+	// Parts is where each part of an object completed from a multipart upload
+	// lies in its body, in part order; nil for an object put whole.
+	Parts []ObjectPart
 }
 
 // blobIDs returns the id of every body the bucket holds: object versions and

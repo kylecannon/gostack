@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 	"time"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
@@ -56,9 +55,15 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 		return nil, err
 	}
 
+	body, algorithm, err := streamingBody(rc.Request.Header, in.Body, algorithm)
+	if err != nil {
+		return nil, err
+	}
+
+	in.ContentEncoding = withoutAWSChunked(in.ContentEncoding)
 	v := newVersion(in, b, algorithm)
 
-	err = p.writeBody(v, in.Body, wantChecksum, contentMD5)
+	err = p.writeBody(v, body, wantChecksum, contentMD5)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +201,7 @@ func (p *Provider) DeleteObject(ctx context.Context, in *s3api.DeleteObjectInput
 // blob is dropped.
 func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD5 string) error {
 	if wantChecksum != "" && !validChecksum(v.ChecksumAlgorithm, wantChecksum) {
-		return s3api.NewInvalidRequest(fmt.Sprintf("Value for x-amz-checksum-%s header is invalid.",
-			strings.ToLower(v.ChecksumAlgorithm)))
+		return invalidChecksumValue(v.ChecksumAlgorithm)
 	}
 
 	writer, err := p.blobs.Create()
@@ -214,6 +218,15 @@ func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD
 			writer.Abort()
 
 			return fmt.Errorf("read object body: %w", err)
+		}
+	}
+
+	if wantChecksum == "" {
+		wantChecksum, err = trailerChecksum(body, v.ChecksumAlgorithm)
+		if err != nil {
+			writer.Abort()
+
+			return err
 		}
 	}
 
