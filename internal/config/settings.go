@@ -86,6 +86,12 @@ type Settings struct {
 	DisableCORSHeaders bool
 	// DisablePreflightProcessing is DISABLE_PREFLIGHT_PROCESSING.
 	DisablePreflightProcessing bool
+	// DisableCustomCORSS3 is DISABLE_CUSTOM_CORS_S3: the gateway's CORS rules
+	// apply to S3 requests too.
+	DisableCustomCORSS3 bool
+	// DisableCustomCORSAPIGateway is DISABLE_CUSTOM_CORS_APIGATEWAY: the
+	// gateway's CORS rules apply to API Gateway requests too.
+	DisableCustomCORSAPIGateway bool
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -95,6 +101,22 @@ type Settings struct {
 	ExtraCORSExposeHeaders []string
 	// ExtraCORSAllowedOrigins is EXTRA_CORS_ALLOWED_ORIGINS, split on commas.
 	ExtraCORSAllowedOrigins []string
+}
+
+// CustomCORSDisabled names the services whose DISABLE_CUSTOM_CORS_<NAME> is
+// set, by service name, for gateway.Settings.DisableCustomCORS.
+func (s *Settings) CustomCORSDisabled() []string {
+	var services []string
+
+	if s.DisableCustomCORSS3 {
+		services = append(services, "s3")
+	}
+
+	if s.DisableCustomCORSAPIGateway {
+		services = append(services, "apigateway")
+	}
+
+	return services
 }
 
 // values returns the settings by their LocalStack names, as GET
@@ -128,6 +150,8 @@ func (s *Settings) values() map[string]any {
 		varDisableCORSChecks:               s.DisableCORSChecks,
 		varDisableCORSHeaders:              s.DisableCORSHeaders,
 		varDisablePreflightProcessing:      s.DisablePreflightProcessing,
+		varDisableCustomCORSS3:             s.DisableCustomCORSS3,
+		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -181,6 +205,8 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisableCORSChecks:                 isTrue(get(varDisableCORSChecks)),
 		DisableCORSHeaders:                isTrue(get(varDisableCORSHeaders)),
 		DisablePreflightProcessing:        isTrue(get(varDisablePreflightProcessing)),
+		DisableCustomCORSS3:               isTrue(get(varDisableCustomCORSS3)),
+		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

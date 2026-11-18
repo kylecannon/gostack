@@ -342,6 +342,26 @@ func Test_Table_Detect_unregisteredSigningName(t *testing.T) {
 	})
 }
 
+// Test_Table_Detect_owner covers aws/handlers/service.py:38: the service a
+// Preprocess marked with service.Own comes ahead of every other step.
+func Test_Table_Detect_owner(t *testing.T) {
+	table, err := route.NewTable([]service.Registration{{Metadata: sqs}, {Metadata: sts}, s3Registration()})
+	require.NoError(t, err)
+
+	signedSQS := s3Request(t, http.MethodPost, localHost, pathObject, scope(nameSQS))
+	signedSQS.Header.Set(headerTarget, targetSendMessage)
+
+	got, err := table.Detect(service.Own(signedSQS, nameS3), formOf(formGetCallerIdentity))
+	require.NoError(t, err)
+	assert.Equal(t, nameS3, got.Service, "the mark beats the signing name and the target")
+
+	got, err = table.Detect(service.Own(signedSQS, "no-such-service"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, nameSQS, got.Service, "a mark that names no registered service is ignored")
+
+	assert.Empty(t, service.OwnerOf(signedSQS), "Own leaves the request it was given unmarked")
+}
+
 func Test_Table_Detect_signingDefault(t *testing.T) {
 	asDefault := func(reg service.Registration) service.Registration {
 		reg.SigningDefault = true

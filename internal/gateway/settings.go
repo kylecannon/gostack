@@ -34,6 +34,10 @@ type Settings struct {
 	// DisablePreflightProcessing is DISABLE_PREFLIGHT_PROCESSING: an OPTIONS
 	// request is passed on instead of answered with 204.
 	DisablePreflightProcessing bool
+	// DisableCustomCORS names, by Metadata.Name, the services whose
+	// DISABLE_CUSTOM_CORS_<NAME> is set (s3, apigateway): their requests get
+	// the gateway's CORS even when their Registration sets OwnCORS.
+	DisableCustomCORS []string
 	// ExtraCORSAllowedOrigins is EXTRA_CORS_ALLOWED_ORIGINS, comma separated.
 	ExtraCORSAllowedOrigins string
 	// ExtraCORSAllowedHeaders is EXTRA_CORS_ALLOWED_HEADERS, comma separated.

@@ -89,11 +89,22 @@ type Registration struct {
 	Fallback func(r *http.Request) bool
 	// Preprocess sees every request at root step 4, after the host claims and
 	// before CORS and content decoding, as LocalStack's preprocess_request
-	// handlers do: S3 marks its own requests there. It returns the request to
-	// carry on with, usually r with a value added to its context, or nil to keep
-	// r. The Preprocess of each service runs in registration order, each given
-	// the request the one before returned.
+	// handlers do: S3 marks its own requests there with Own. It returns the
+	// request to carry on with, usually the one Own returns, or nil to keep r.
+	// The Preprocess of each service runs in registration order, each given the
+	// request the one before returned.
 	Preprocess func(r *http.Request) *http.Request
+	// RawBody makes root content decoding skip a request the service owns (Own),
+	// so Serve reads the body as sent, gzip included, with its Content-Encoding.
+	// LocalStack's ContentDecoder skips s3 this way.
+	RawBody bool
+	// OwnCORS makes root CORS skip a request the service owns (Own): no origin
+	// check, no preflight answer, no CORS response headers. The service handles
+	// CORS itself, as LocalStack's should_enforce_self_managed_service leaves s3
+	// and execute-api calls to their services (aws/handlers/cors.py:154-171).
+	// DISABLE_CUSTOM_CORS_<NAME>, NAME being Metadata.Name in upper case, turns
+	// the skip off.
+	OwnCORS bool
 
 	// Persist saves and restores the service's state. The persistence engine
 	// uses it only when PERSIST_* enables the service. It is nil for a service

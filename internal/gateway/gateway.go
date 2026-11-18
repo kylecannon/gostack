@@ -151,7 +151,7 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	r.Use(g.claimService)    // 3
 	r.Use(g.preprocess)      // 4
 	r.Use(g.corsMiddleware)  // 5
-	r.Use(decodeContent)     // 6
+	r.Use(g.decodeContent)   // 6
 	r.Use(g.responseHeaders) // 7
 	r.Use(g.recoverPanic)    // 8
 	r.Use(g.serveClaimed)    // 3, continued

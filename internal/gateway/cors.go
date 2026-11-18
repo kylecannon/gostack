@@ -239,6 +239,9 @@ func (c *corsRules) setHeaders(header http.Header, r *http.Request, fallbackOrig
 // AllowOriginFunc; under DISABLE_CORS_CHECKS every origin gets "*" and no
 // credentials. An OPTIONS request is answered with 204 unless
 // DISABLE_PREFLIGHT_PROCESSING is set.
+//
+// A request whose owner handles CORS itself passes through untouched (see
+// selfManagedCORS).
 func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := g.settings()
@@ -270,6 +273,12 @@ func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := g.settings()
 
+		if g.selfManagedCORS(r, s) {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
 		if !s.DisableCORSChecks && !g.cors.requestAllowed(r.Header) {
 			w.WriteHeader(http.StatusForbidden)
 
@@ -287,6 +296,16 @@ func (g *Gateway) corsMiddleware(next http.Handler) http.Handler {
 			enforced.ServeHTTP(w, r)
 		}
 	})
+}
+
+// selfManagedCORS is should_enforce_self_managed_service in LocalStack's
+// aws/handlers/cors.py, inverted: it reports whether r's owner (service.Own)
+// sets Registration.OwnCORS and DISABLE_CUSTOM_CORS_<NAME> is not set for it.
+// Such a request skips both the origin check and the response headers.
+func (g *Gateway) selfManagedCORS(r *http.Request, s Settings) bool {
+	owner := g.owner(r)
+
+	return owner != nil && owner.OwnCORS && !slices.Contains(s.DisableCustomCORS, owner.Metadata.Name)
 }
 
 // newCORSHandlers builds the two go-chi/cors handlers: one that allows the

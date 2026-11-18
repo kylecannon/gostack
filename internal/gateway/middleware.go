@@ -15,6 +15,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
+	"github.com/kylecannon/gostack/internal/service"
 )
 
 // internalRequestHeader carries the parameters of a call that one service makes
@@ -174,12 +175,30 @@ func (g *Gateway) preprocess(next http.Handler) http.Handler {
 	})
 }
 
+// owner returns the Registration of the service a Preprocess marked r for
+// (service.Own), or nil.
+func (g *Gateway) owner(r *http.Request) *service.Registration {
+	name := service.OwnerOf(r)
+	if name == "" {
+		return nil
+	}
+
+	for i := range g.regs {
+		if g.regs[i].Metadata.Name == name {
+			return &g.regs[i]
+		}
+	}
+
+	return nil
+}
+
 // decodeContent is root step 6: a gzip request body is decoded before anyone
-// reads it. LocalStack skips S3 here because S3 does its own decoding; that
-// skip arrives with S3.
-func decodeContent(next http.Handler) http.Handler {
+// reads it, unless the request's owner sets Registration.RawBody, as
+// LocalStack's ContentDecoder skips s3, which decodes its own.
+func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody {
+		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody &&
+			!g.rawBody(r) {
 			r.Body = &gzipBody{src: r.Body}
 			r.Header.Set("Content-Encoding", "identity")
 			r.Header.Del("Content-Length")
@@ -188,6 +207,13 @@ func decodeContent(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rawBody reports whether the owner of r reads its body as sent.
+func (g *Gateway) rawBody(r *http.Request) bool {
+	owner := g.owner(r)
+
+	return owner != nil && owner.RawBody
 }
 
 // gzipBody decodes gzip when it is first read, so a body that is not gzip fails

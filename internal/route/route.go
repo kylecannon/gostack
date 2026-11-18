@@ -210,10 +210,15 @@ func buildTable(services []service.Metadata) (*Table, error) {
 }
 
 // Detect finds the service and protocol that r is addressed to. It looks, in
-// this order, at the signing name of the Authorization header
-// (account.FromAuthorization), the X-Amz-Target prefix, the host, the form
-// Action with Version as the tie-break, and last each Registration.Fallback.
-// It returns at the first step that leaves a single service.
+// this order, at the service a Preprocess marked r for (service.Own), the
+// signing name of the Authorization header (account.FromAuthorization), the
+// X-Amz-Target prefix, the host, the form Action with Version as the
+// tie-break, and last each Registration.Fallback. It returns at the first step
+// that leaves a single service.
+//
+// The mark comes ahead of every other step, as LocalStack's ServiceNameParser
+// keeps the service an earlier handler set (aws/handlers/service.py:38). A mark
+// that names no service in the table is ignored.
 //
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.
@@ -247,6 +252,10 @@ func buildTable(services []service.Metadata) (*Table, error) {
 // in registration order to claim r wins. Detect reports AmbiguousError when no
 // Fallback claims r and more than one service is left.
 func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
+	if owner := t.index(service.OwnerOf(r)); owner >= 0 {
+		return t.match(owner, r)
+	}
+
 	signed, candidates, err := t.bySigningName(r)
 	if err != nil {
 		return Match{}, err

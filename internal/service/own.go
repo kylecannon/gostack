@@ -1,0 +1,25 @@
+package service
+
+import (
+	"context"
+	"net/http"
+)
+
+type ownerKey struct{}
+
+// Own marks r as belonging to the named service. A Preprocess calls it; the
+// gateway's later steps honor it. Route detection answers with the service
+// before any other step, as LocalStack's ServiceNameParser keeps a service an
+// earlier handler set (aws/handlers/service.py:38). Content decoding skips the
+// request when the service's Registration sets RawBody, and CORS skips it when
+// the Registration sets OwnCORS. A later Own replaces an earlier one.
+func Own(r *http.Request, service string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), ownerKey{}, service))
+}
+
+// OwnerOf returns the service a Preprocess marked r for, or "".
+func OwnerOf(r *http.Request) string {
+	owner, _ := r.Context().Value(ownerKey{}).(string)
+
+	return owner
+}

@@ -81,6 +81,23 @@ func Test_Load_gatewayFlags(t *testing.T) {
 	require.Equal(t, true, cfg.Values()[varParityAWSAccessKeyID])
 }
 
+func Test_Load_disableCustomCORS(t *testing.T) {
+	isolate(t)
+	require.Empty(t, mustLoad(t).Settings().CustomCORSDisabled())
+
+	t.Setenv("DISABLE_CUSTOM_CORS_S3", "1")
+	cfg := mustLoad(t)
+
+	require.True(t, cfg.Settings().DisableCustomCORSS3)
+	require.False(t, cfg.Settings().DisableCustomCORSAPIGateway)
+	require.Equal(t, []string{"s3"}, cfg.Settings().CustomCORSDisabled())
+	require.Equal(t, true, cfg.Values()[varDisableCustomCORSS3])
+	require.Equal(t, false, cfg.Values()[varDisableCustomCORSAPIGateway])
+
+	require.NoError(t, cfg.Set(varDisableCustomCORSAPIGateway, true))
+	require.Equal(t, []string{"s3", "apigateway"}, cfg.Settings().CustomCORSDisabled())
+}
+
 func Test_Load_listenDefaultFollowsInDocker(t *testing.T) {
 	tests := []struct {
 		name         string

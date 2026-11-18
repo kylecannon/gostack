@@ -70,6 +70,8 @@ var variables = []variable{
 	{name: varOverrideInDocker},
 	{name: varParityAWSAccessKeyID},
 	{name: varDisablePreflightProcessing},
+	{name: varDisableCustomCORSS3},
+	{name: varDisableCustomCORSAPIGateway},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup

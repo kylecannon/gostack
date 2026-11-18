@@ -37,6 +37,8 @@ change applies from the next one.
 | `DISABLE_CORS_CHECKS` | No origin is refused. |
 | `DISABLE_CORS_HEADERS` | No CORS header is sent. |
 | `DISABLE_PREFLIGHT_PROCESSING` | An `OPTIONS` request is passed on instead of answered with 204. |
+| `DISABLE_CUSTOM_CORS_S3` | S3 requests get the gateway's CORS checks and headers instead of S3's own. |
+| `DISABLE_CUSTOM_CORS_APIGATEWAY` | API Gateway requests get the gateway's CORS checks and headers instead of API Gateway's own. |
 | `EXTRA_CORS_ALLOWED_ORIGINS` | Comma separated origins added to the allowed list. |
 | `EXTRA_CORS_ALLOWED_HEADERS` | Comma separated headers added to the allowed list. |
 | `EXTRA_CORS_EXPOSE_HEADERS` | Comma separated headers added to the exposed list. |
