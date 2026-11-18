@@ -72,6 +72,7 @@ var variables = []variable{
 	{name: varDisablePreflightProcessing},
 	{name: varDisableCustomCORSS3},
 	{name: varDisableCustomCORSAPIGateway},
+	{name: varS3SkipSignatureValidation},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup

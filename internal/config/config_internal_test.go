@@ -59,6 +59,7 @@ func Test_Load_defaults(t *testing.T) {
 	require.Equal(t, 5*time.Second, got.ShutdownTimeout)
 	require.True(t, got.CompatPaths)
 	require.True(t, got.ResponseHeaderEnabled)
+	require.True(t, got.S3SkipSignatureValidation)
 	require.False(t, got.Debug)
 	require.False(t, got.FailFast)
 	require.False(t, got.EnableConfigUpdates)
@@ -242,6 +243,14 @@ func Test_Load_variableForms(t *testing.T) {
 			check: func(t *testing.T, got *Settings) {
 				t.Helper()
 				require.False(t, got.ResponseHeaderEnabled)
+			},
+		},
+		{
+			name: "S3 signature checks are skipped unless the value is false",
+			give: map[string]string{varS3SkipSignatureValidation: "0"},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.False(t, got.S3SkipSignatureValidation)
 			},
 		},
 		{

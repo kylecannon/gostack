@@ -92,6 +92,10 @@ type Settings struct {
 	// DisableCustomCORSAPIGateway is DISABLE_CUSTOM_CORS_APIGATEWAY: the
 	// gateway's CORS rules apply to API Gateway requests too.
 	DisableCustomCORSAPIGateway bool
+	// S3SkipSignatureValidation is S3_SKIP_SIGNATURE_VALIDATION: S3 accepts a
+	// presigned URL whose signature does not match, has expired, or leaves
+	// headers unsigned. It is true unless the variable is a false value.
+	S3SkipSignatureValidation bool
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -152,6 +156,7 @@ func (s *Settings) values() map[string]any {
 		varDisablePreflightProcessing:      s.DisablePreflightProcessing,
 		varDisableCustomCORSS3:             s.DisableCustomCORSS3,
 		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
+		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -207,6 +212,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisablePreflightProcessing:        isTrue(get(varDisablePreflightProcessing)),
 		DisableCustomCORSS3:               isTrue(get(varDisableCustomCORSS3)),
 		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
+		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

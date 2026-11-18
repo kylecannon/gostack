@@ -32,4 +32,5 @@ const (
 	varDisablePreflightProcessing      = "DISABLE_PREFLIGHT_PROCESSING"
 	varDisableCustomCORSS3             = "DISABLE_CUSTOM_CORS_S3"
 	varDisableCustomCORSAPIGateway     = "DISABLE_CUSTOM_CORS_APIGATEWAY"
+	varS3SkipSignatureValidation       = "S3_SKIP_SIGNATURE_VALIDATION"
 )
