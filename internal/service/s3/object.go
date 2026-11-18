@@ -276,6 +276,7 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 
 	out := getOutput(fieldsOf(v, rng, in.PartNumber, in.ChecksumMode), body, in)
 	out.Expiration = p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v)
+	out.Restore = nonEmpty(v.Restore)
 
 	return out, nil
 }
@@ -389,6 +390,7 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 		TagCount:                f.tagCount,
 		PartsCount:              f.partsCount,
 		Expiration:              p.expirationOf(ctx, in.Bucket, deref(in.Key), in.VersionId, v),
+		Restore:                 nonEmpty(v.Restore),
 	}
 
 	out.ChecksumCRC32, out.ChecksumCRC32C = f.checksum.crc32, f.checksum.crc32c
@@ -401,7 +403,7 @@ func (p *Provider) HeadObject(ctx context.Context, in *s3api.HeadObjectInput) (*
 // checkReadable refuses a GET of an object in an archive storage class, which
 // stays out of reach until it is restored.
 func checkReadable(v *Version) error {
-	if !isArchived(v.StorageClass) {
+	if !archived(v) {
 		return nil
 	}
 

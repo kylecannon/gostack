@@ -161,7 +161,7 @@ func checkSource(in *s3api.CopyObjectInput, source *Version) error {
 
 // checkReadableSource is checkReadable for the source of a copy.
 func checkReadableSource(source *Version) error {
-	if !isArchived(source.StorageClass) {
+	if !archived(source) {
 		return nil
 	}
 

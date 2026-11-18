@@ -177,7 +177,7 @@ func TestCopyObject(t *testing.T) {
 
 	t.Run("the storage class is the request's, not the source's", func(t *testing.T) {
 		s := newServer(t)
-		seed(t, s, map[string]string{headerStorageClass: "STANDARD_IA"})
+		seed(t, s, map[string]string{headerStorageClass: classStandardIA})
 
 		got := copyTo(s, sourceRef, nil)
 		require.Equal(t, http.StatusOK, got.status, string(got.body))
@@ -207,7 +207,7 @@ func TestCopyObjectInPlace(t *testing.T) {
 		{"nothing changes", nil, http.StatusBadRequest},
 		{"the directive COPY changes nothing", map[string]string{headerMetadataDirective: "COPY"}, http.StatusBadRequest},
 		{"new metadata", map[string]string{headerMetadataDirective: valueReplace, "X-Amz-Meta-New": "v"}, http.StatusOK},
-		{"a storage class", map[string]string{headerStorageClass: "STANDARD_IA"}, http.StatusOK},
+		{"a storage class", map[string]string{headerStorageClass: classStandardIA}, http.StatusOK},
 		{"a server-side encryption", map[string]string{"X-Amz-Server-Side-Encryption": "AES256"}, http.StatusOK},
 		{"a website redirect", map[string]string{headerWebsiteRedirect: "/x"}, http.StatusOK},
 	}

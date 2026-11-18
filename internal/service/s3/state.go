@@ -181,6 +181,9 @@ type Version struct {
 
 	StorageClass         string
 	ServerSideEncryption string
+	// Restore is the Restore header of an archived object that was restored,
+	// "" for one that was not.
+	Restore string
 
 	ChecksumAlgorithm string
 	ChecksumValue     string
