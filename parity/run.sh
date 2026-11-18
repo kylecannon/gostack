@@ -5,6 +5,8 @@
 #   parity/run.sh gostack     the gostack image         (make parity)
 #   parity/run.sh localstack  LocalStack built from the pinned checkout
 #                             (make parity-baseline)
+#   parity/run.sh collect     print the nodeids pytest collects for SERVICES, one
+#                             per line, from the runner image (ledger.py prune)
 #   parity/run.sh runner      only build the runner image, then stop. CI uses it
 #                             to fill its cache (.github/workflows/parity.yml).
 #
@@ -36,8 +38,8 @@ set -euo pipefail
 MODE=${1:-}
 case "$MODE" in
 gostack | localstack) COLUMN=$MODE ;;
-runner) COLUMN=gostack ;;
-*) echo "usage: $0 gostack|localstack|runner" >&2; exit 2 ;;
+runner | collect) COLUMN=gostack ;;
+*) echo "usage: $0 gostack|localstack|runner|collect" >&2; exit 2 ;;
 esac
 
 SERVICES=${SERVICES:-sqs,sts}
@@ -97,6 +99,13 @@ for service in "${service_list[@]}"; do
 		{ echo "no tests/aws/services/$service in $LOCALSTACK_DIR" >&2; exit 2; }
 	test_paths+=("tests/aws/services/$service")
 done
+
+if [ "$MODE" = collect ]; then
+	build_runner
+	# Collection only imports the test modules, so no target container is needed.
+	exec docker run --rm "$RUNNER_IMAGE" \
+		python -m pytest --collect-only -q -p no:cacheprovider "${test_paths[@]}"
+fi
 
 extra_args=()
 [ -z "${PARITY_PYTEST_ARGS:-}" ] || read -ra extra_args <<<"$PARITY_PYTEST_ARGS"

@@ -27,7 +27,8 @@ make gen-check           # gen, then fail on any change under internal/api
 make fuzz                # every Fuzz* function; FUZZTIME=5s sets the time each
 make parity              # LocalStack's tests against GOSTACK_IMAGE; SERVICES=sqs,sts
 make parity-baseline     # the same tests against LocalStack itself, from ../localstack
-make parity-check        # fail when a test that passed in the committed ledger now fails
+make parity-check        # ledger unit tests, then fail when a test that passed in the committed ledger now fails
+make parity-prune        # drop ledger rows whose test left the pinned LocalStack; DRY_RUN=1 lists them
 make image               # docker/Dockerfile as IMAGE (gostack:dev)
 make image-slim          # docker/Dockerfile.slim as IMAGE_SLIM
 make bench               # every Benchmark*, BENCH_COUNT runs into BENCH_OUT

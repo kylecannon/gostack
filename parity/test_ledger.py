@@ -1,6 +1,6 @@
 """Tests for parity/ledger.py merge. Standard library only:
 
-    python3 -m unittest discover -s parity -p 'test_ledger.py'
+    python3 -m unittest discover -s parity -p 'test_*.py'
 """
 
 from __future__ import annotations
@@ -97,6 +97,76 @@ class MergeTest(unittest.TestCase):
         before = {f"{STS}::a": row("pass", "pass"), f"{STS}::iam": row("pass", "pass")}
         after = self.merge(before, "gostack", {f"{STS}::a": "pass"}, {f"{STS}::iam": "depends-on:iam"})
         self.assertEqual(after[f"{STS}::iam"], row("excluded", "excluded", "depends-on:iam"))
+
+
+class PruneTest(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.ledger_path = self.dir / "ledger.json"
+        self.before = {
+            f"{STS}::kept": row("pass", "pass"),
+            f"{STS}::gone": row("pass", "pass"),
+            f"{SQS}::kept": row("pass", "fail"),
+            f"{SQS}::gone[a-b]": row("skip", None, "why"),
+            "tests/other/test_x.py::t": row("pass", None),
+        }
+        self.ledger_path.write_text(json.dumps(self.before), encoding="utf-8")
+        # What `pytest --collect-only -q` prints: nodeids, a blank line, a summary.
+        self.listing = self.dir / "collected.txt"
+        self.listing.write_text(f"{STS}::kept\n{SQS}::kept\n\n2 tests collected in 0.10s\n", encoding="utf-8")
+
+    def prune(self, dry_run: bool, collected: Path | None = None) -> tuple[str, dict]:
+        args = argparse.Namespace(
+            ledger=self.ledger_path,
+            docs=self.dir / "parity.md",
+            collected=collected or self.listing,
+            dry_run=dry_run,
+            localstack=None,
+            cache=self.dir / "cache.json",
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ledger.prune(args)
+        return out.getvalue(), json.loads(self.ledger_path.read_text(encoding="utf-8"))
+
+    def test_removes_rows_the_collection_lacks_and_prints_them(self) -> None:
+        out, after = self.prune(dry_run=False)
+        self.assertIn(f"removed {STS}::gone", out)
+        self.assertIn(f"removed {SQS}::gone[a-b]", out)
+        self.assertEqual(set(after), {f"{STS}::kept", f"{SQS}::kept", "tests/other/test_x.py::t"})
+        self.assertTrue((self.dir / "parity.md").exists())
+
+    def test_dry_run_prints_the_same_list_and_changes_nothing(self) -> None:
+        dry_out, after = self.prune(dry_run=True)
+        self.assertEqual(after, self.before)
+        self.assertFalse((self.dir / "parity.md").exists())
+        real_out, _ = self.prune(dry_run=False)
+        self.assertEqual(dry_out.replace("would remove", "removed"), real_out)
+
+    def test_nothing_stale_prints_an_empty_list(self) -> None:
+        self.ledger_path.write_text(json.dumps({k: v for k, v in self.before.items() if "gone" not in k}), encoding="utf-8")
+        out, _ = self.prune(dry_run=True)
+        self.assertEqual(out.splitlines(), ["prune: would remove 0 of 3 ledger row(s); 2 nodeids collected"])
+
+    def test_empty_collection_refuses_to_remove_every_row(self) -> None:
+        self.listing.write_text("no tests ran\n", encoding="utf-8")
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+            self.prune(dry_run=False)
+        self.assertEqual(json.loads(self.ledger_path.read_text(encoding="utf-8")), self.before)
+
+    def test_service_with_no_collected_nodeid_refuses_to_prune(self) -> None:
+        self.listing.write_text(f"{STS}::kept\n", encoding="utf-8")
+        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()):
+            self.prune(dry_run=False)
+        self.assertEqual(json.loads(self.ledger_path.read_text(encoding="utf-8")), self.before)
+
+    def test_stale_rows_reads_the_cached_collection(self) -> None:
+        cache = self.dir / "cache.json"
+        self.assertEqual(ledger.stale_rows(self.before, cache), [])  # no cache, no warning
+        cache.write_text(json.dumps({"services": ["sts"], "nodeids": [f"{STS}::kept"]}), encoding="utf-8")
+        self.assertEqual(ledger.stale_rows(self.before, cache), [f"{STS}::gone"])
 
 
 if __name__ == "__main__":

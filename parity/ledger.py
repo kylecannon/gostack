@@ -14,6 +14,15 @@ Commands (standard library only):
            Fail when a nodeid that passed in the committed ledger (default
            HEAD:parity/ledger.json) fails in the working-tree ledger, in either
            column. A regression is never a deferral.
+           When parity/out/collected.json exists (written by prune), also warns
+           about ledger rows that collection no longer found. Never a failure.
+    prune  [--localstack DIR] [--dry-run] [--collected FILE]
+           Collect the nodeids of the ledger's services with `pytest
+           --collect-only -q` in the runner image (parity/run.sh collect, against
+           the LocalStack checkout DIR) and remove every ledger row whose nodeid
+           is gone. Prints the removed rows; --dry-run prints them and changes
+           nothing. --collected FILE reads a saved `pytest --collect-only -q`
+           listing instead of running Docker.
     docs   Rewrite docs/parity.md from the ledger.
     services [--changed]
            Print the services the ledger covers, comma separated. With --changed,
@@ -26,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -35,6 +45,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "parity" / "ledger.json"
 DOCS = ROOT / "docs" / "parity.md"
+COLLECTED = ROOT / "parity" / "out" / "collected.json"
+RUN_SH = ROOT / "parity" / "run.sh"
 COLUMNS = ("localstack", "gostack")
 STATUSES = ("pass", "fail", "skip", "xfail", "excluded")
 SERVICE_PREFIX = "tests/aws/services/"
@@ -237,12 +249,89 @@ def check(args: argparse.Namespace) -> None:
                 warnings.append(f"  {column}: {nodeid}: pass -> missing")
     for line in warnings:
         print(f"parity-check warning (not a failure):\n{line}" if line is warnings[0] else line)
+    stale = stale_rows(current, args.collected)
+    if stale:
+        print(f"parity-check warning (not a failure): {len(stale)} ledger row(s) not in the last collection, run `make parity-prune`:")
+        print("\n".join(f"  {nodeid}" for nodeid in stale))
     if regressions:
         print(f"parity-check: {len(regressions)} regression(s) against {args.base}:", file=sys.stderr)
         print("\n".join(regressions), file=sys.stderr)
         raise SystemExit(1)
     passing = sum(1 for e in current.values() for c in COLUMNS if e[c] == "pass")
     print(f"parity-check: ok against {args.base} ({len(current)} entries, {passing} column passes)")
+
+
+# --- prune -----------------------------------------------------------------
+
+
+def parse_collection(text: str) -> set[str]:
+    """The nodeids in `pytest --collect-only -q` output. Other lines (the blank
+    line, the summary, warnings) hold no `::` after a path, so they are skipped."""
+    return {
+        line.strip()
+        for line in text.splitlines()
+        if line.startswith(SERVICE_PREFIX) and "::" in line
+    }
+
+
+def stale_rows(ledger: dict[str, dict], collected_path: Path) -> list[str]:
+    """Ledger nodeids of the collected services that the last collection lacks.
+    Empty when no collection is cached."""
+    if not collected_path.exists():
+        return []
+    saved = json.loads(collected_path.read_text(encoding="utf-8"))
+    return find_stale(ledger, set(saved["services"]), set(saved["nodeids"]))
+
+
+def find_stale(ledger: dict[str, dict], services: set[str], collected: set[str]) -> list[str]:
+    return sorted(n for n in ledger if service_of(n) in services and n not in collected)
+
+
+def collect(localstack: Path | None, services: list[str]) -> str:
+    """Run `parity/run.sh collect`, which checks the checkout is the pinned one.
+    Without a path run.sh looks for ../localstack, as it does for `make parity`."""
+    env = {**os.environ, "SERVICES": ",".join(services)}
+    if localstack:
+        env["LOCALSTACK_DIR"] = str(localstack)
+    run = subprocess.run([str(RUN_SH), "collect"], env=env, capture_output=True, text=True, check=False)
+    if run.returncode != 0:
+        sys.stderr.write(run.stderr)
+        raise SystemExit(f"prune: `parity/run.sh collect` exited {run.returncode}")
+    return run.stdout
+
+
+def prune(args: argparse.Namespace) -> None:
+    ledger = load_ledger(args.ledger)
+    services = sorted({service_of(n) for n in ledger} - {"other"})
+    if not services:
+        print("prune: the ledger covers no service")
+        return
+    output = args.collected.read_text(encoding="utf-8") if args.collected else collect(args.localstack, services)
+    collected = parse_collection(output)
+    if not collected:
+        raise SystemExit("prune: the collection holds no nodeids; refusing to remove every row")
+    # A service whose directory collected nothing is a collection problem, not a
+    # service whose tests all vanished.
+    collected_services = {service_of(n) for n in collected}
+    missing = [s for s in services if s not in collected_services]
+    if missing:
+        raise SystemExit(f"prune: nothing collected for {', '.join(missing)}; refusing to prune")
+    stale = find_stale(ledger, set(services), collected)
+    verb = "would remove" if args.dry_run else "removed"
+    for nodeid in stale:
+        print(f"{verb} {nodeid}")
+    print(f"prune: {verb} {len(stale)} of {len(ledger)} ledger row(s); {len(collected)} nodeids collected")
+    if not args.collected:
+        args.cache.parent.mkdir(parents=True, exist_ok=True)
+        args.cache.write_text(
+            json.dumps({"services": services, "nodeids": sorted(collected)}), encoding="utf-8"
+        )
+    if args.dry_run or not stale:
+        return
+    for nodeid in stale:
+        del ledger[nodeid]
+    write_ledger(args.ledger, ledger)
+    write_docs(ledger, args.docs)
 
 
 # --- services --------------------------------------------------------------
@@ -338,7 +427,15 @@ def main() -> None:
 
     check_parser = sub.add_parser("check", help="fail on pass -> fail against the committed ledger")
     check_parser.add_argument("--base", default="HEAD", help="git revision holding the committed ledger")
+    check_parser.add_argument("--collected", type=Path, default=COLLECTED, help="cached collection from prune")
     check_parser.set_defaults(func=check)
+
+    prune_parser = sub.add_parser("prune", help="remove ledger rows whose test no longer exists upstream")
+    prune_parser.add_argument("--localstack", type=Path, help="the pinned LocalStack checkout (default: where parity/run.sh looks)")
+    prune_parser.add_argument("--dry-run", action="store_true", help="print the rows, change nothing")
+    prune_parser.add_argument("--collected", type=Path, help="a saved `pytest --collect-only -q` listing, no Docker")
+    prune_parser.add_argument("--cache", type=Path, default=COLLECTED, help=argparse.SUPPRESS)
+    prune_parser.set_defaults(func=prune)
 
     services_parser = sub.add_parser("services", help="print the ledger's services, or those a change affects")
     services_parser.add_argument("--changed", action="store_true", help="read changed paths from stdin")

@@ -40,6 +40,14 @@ jobs:
             tools/go.sum
       - run: make test
 
+  # The ledger tools are Python on the runner's own python3, no Go and no Docker.
+  # Runs the parity/test_*.py unit tests, then compares the ledger with HEAD.
+  parity-ledger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make parity-check
+
   build:
     runs-on: ubuntu-latest
     steps:

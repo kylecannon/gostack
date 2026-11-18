@@ -29,7 +29,8 @@ FILES ?=
 # Parity oracle (docs/architecture.md, "Parity oracle"). Needs Docker.
 #   make parity-baseline SERVICES=sqs,sts   LocalStack's own result, built from the pinned checkout
 #   make parity SERVICES=sqs,sts            the same suite against GOSTACK_IMAGE
-#   make parity-check                       fail when a test that passed in the committed ledger now fails
+#   make parity-check                       ledger unit tests, then fail when a test that passed in the committed ledger now fails
+#   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout
 # Both runs merge into parity/ledger.json and rewrite docs/parity.md.
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
@@ -82,7 +83,7 @@ BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image 
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check image image-slim bench bench-system bench-system-quick
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-system bench-system-quick
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -151,9 +152,17 @@ parity:
 parity-baseline:
 	parity/run.sh localstack
 
-# Compares the working-tree ledger with the one at PARITY_BASE (default HEAD).
+# Runs the ledger's unit tests, then compares the working-tree ledger with the
+# one at PARITY_BASE (default HEAD).
 parity-check:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s parity -p 'test_*.py'
 	python3 parity/ledger.py check --base $(PARITY_BASE)
+
+# Collects the tests of the pinned LocalStack checkout in the runner image and
+# removes the ledger rows whose test is gone. DRY_RUN=1 lists them and changes
+# nothing (make takes a bare --dry-run for itself). LOCALSTACK_DIR picks the checkout.
+parity-prune:
+	python3 parity/ledger.py prune $(if $(LOCALSTACK_DIR),--localstack $(LOCALSTACK_DIR)) $(if $(DRY_RUN),--dry-run)
 
 image:
 	$(DOCKER) build -f docker/Dockerfile $(IMAGE_BUILD_ARGS) -t $(IMAGE) .
