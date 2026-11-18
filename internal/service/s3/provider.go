@@ -157,7 +157,7 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 			Fault:      awserr.FaultReceiver,
 		})
 	default:
-		p.serveAPI(&responseWriter{ResponseWriter: w, method: r.Method, rc: rc}, rc)
+		p.serveAPI(&responseWriter{ResponseWriter: w, method: r.Method}, rc)
 	}
 }
 
@@ -218,12 +218,7 @@ type responseWriter struct {
 	http.ResponseWriter
 
 	method string
-	// rc is the call, whose Operation the generated dispatcher sets once it has
-	// routed the request.
-	rc    *request.Context
-	wrote bool
-	// started is set by the first Write.
-	started bool
+	wrote  bool
 }
 
 func (w *responseWriter) WriteHeader(code int) {
@@ -254,28 +249,6 @@ func (w *responseWriter) WriteHeader(code int) {
 func (w *responseWriter) Write(p []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
-	}
-
-	if !w.started {
-		w.started = true
-
-		// An XML body is written whole by the encoder, so the first Write is the
-		// document: S3 names its root differently from the model. An object's
-		// own bytes are never touched, whatever its Content-Type.
-		if w.Header().Get("Content-Type") != contentTypeXML || w.rc.Operation == "GetObject" {
-			return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
-		}
-
-		if parts, ok := renamedRoot(p); ok {
-			for _, part := range parts {
-				_, err := w.ResponseWriter.Write(part)
-				if err != nil {
-					return 0, err //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
-				}
-			}
-
-			return len(p), nil
-		}
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.

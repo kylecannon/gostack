@@ -173,6 +173,31 @@ func TestS3ResponsesNameTheirServer(t *testing.T) {
 	assert.Equal(t, []string{"AmazonS3"}, got.header.Values("Server"))
 }
 
+// The generated encoder writes S3's own root names, its namespace, the members
+// in spec order and millisecond timestamps (SQ-127). This checks they reach the
+// client through the provider's response writer unchanged.
+func TestS3ResponseBodiesAreWrittenAsS3WritesThem(t *testing.T) {
+	s := newServer(t)
+	createBucket(t, s)
+	require.Equal(t, http.StatusOK, s.do(call{
+		method: http.MethodPut, target: bucketPath + "/k", region: regionUSEast1, body: []byte("x"),
+	}).status)
+
+	const (
+		decl = `<?xml version="1.0" encoding="UTF-8"?>` + "\n"
+		ns   = ` xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`
+	)
+
+	buckets := string(s.do(call{method: http.MethodGet, target: "/", region: regionUSEast1}).body)
+	assert.True(t, strings.HasPrefix(buckets, decl+"<ListAllMyBucketsResult"+ns), buckets)
+	assert.Less(t, strings.Index(buckets, "<Owner>"), strings.Index(buckets, "<Buckets>"), buckets)
+
+	listed := string(s.do(call{method: http.MethodGet, target: bucketPath + "?list-type=2", region: regionUSEast1}).body)
+	assert.True(t, strings.HasPrefix(listed, decl+"<ListBucketResult"+ns), listed)
+	assert.Less(t, strings.Index(listed, "<Name>"), strings.Index(listed, "<Contents>"), listed)
+	assert.Regexp(t, `<LastModified>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z</LastModified>`, listed)
+}
+
 func TestListObjectsV2Pages(t *testing.T) {
 	s := newServer(t)
 
