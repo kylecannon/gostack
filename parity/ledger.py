@@ -7,8 +7,9 @@ where status is one of pass, fail, skip, xfail, excluded, or null (not run).
 
 Commands (standard library only):
     merge  --column localstack|gostack --junit FILE --excluded FILE
-           Replace that column for every service the run covered, then rewrite
-           docs/parity.md. Prints per-file counts.
+           Write that column for the nodeids the run collected and leave every
+           other row untouched, then rewrite docs/parity.md. Prints per-file
+           counts.
     check  [--base REV]
            Fail when a nodeid that passed in the committed ledger (default
            HEAD:parity/ledger.json) fails in the working-tree ledger, in either
@@ -153,16 +154,9 @@ def merge(args: argparse.Namespace) -> None:
     for nodeid in excluded:
         results.pop(nodeid, None)
 
-    run_nodeids = set(results) | set(excluded)
-    services = {service_of(n) for n in run_nodeids}
-
-    # The run replaces this column for every service it covered.
-    for nodeid, entry in list(ledger.items()):
-        if service_of(nodeid) in services and nodeid not in run_nodeids:
-            entry[args.column] = None
-            if all(entry[c] is None for c in COLUMNS):
-                del ledger[nodeid]
-
+    # Only the nodeids this run collected are written. Every other row keeps both
+    # columns, however the run was narrowed (SERVICES, -k, a nodeid list). The
+    # plugin leaves a collected-but-deselected nodeid out of both inputs.
     for nodeid, (status, reason) in results.items():
         entry = ledger.setdefault(nodeid, {"localstack": None, "gostack": None, "reason": ""})
         entry[args.column] = status

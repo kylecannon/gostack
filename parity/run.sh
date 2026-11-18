@@ -25,6 +25,9 @@
 #   PARITY_PYTEST_ARGS    extra pytest arguments, for a narrowed run
 #                         (`-k test_purge_queue`); never snapshot or duration flags
 #
+# A run writes only the nodeids it ran (parity/ledger.py merge). SERVICES, -k and
+# explicit nodeids narrow it; every other ledger row keeps both columns.
+#
 # The target publishes no ports: the runner joins its network namespace
 # (`--network container:<target>`), so the suite's hard-wired localhost:4566
 # reaches the target. The LocalStack checkout is only read, as a build context.

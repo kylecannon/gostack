@@ -49,6 +49,9 @@ from _pytest.monkeypatch import MonkeyPatch, notset
 
 CONFIG_URL = os.environ.get("GOSTACK_PARITY_CONFIG_URL", "http://localhost:4566/_localstack/config")
 REQUIRES_IN_PROCESS = "requires_in_process"
+
+# Handed from the exclusion hook to the report hook that runs after deselection.
+_pending: dict[str, Any] = {}
 # Variables whose value LocalStack's config endpoint cannot hold as the object
 # the server reads (see the module docstring, item 3).
 NOT_POSTED_TO_LOCALSTACK = frozenset({"LOCALSTACK_HOST"})
@@ -219,17 +222,34 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             excluded[item.nodeid] = reason
             item.add_marker(pytest.mark.skip(reason=f"excluded: {reason}"))
 
+    _pending["excluded"] = excluded
+    _pending["unmatched"] = {
+        "patterns": [*patterns, *bridgeable],
+        "paths": {item.nodeid.split("::", 1)[0] for item in items},
+    }
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    """Record the excluded nodeids once -k and friends have deselected.
+
+    pytest's own deselection runs after the hook above. A nodeid that was
+    collected but deselected is not run, so it must not reach the ledger.
+    """
     out = os.environ.get("GOSTACK_EXCLUDED_OUT")
-    if out:
-        collected_paths = {item.nodeid.split("::", 1)[0] for item in items}
-        unmatched = [p.text for p in [*patterns, *bridgeable] if not p.matched and p.path in collected_paths]
-        Path(out).write_text(
-            json.dumps({"collected": len(items), "excluded": excluded, "unmatched": unmatched}, indent=1, sort_keys=True)
-            + "\n",
-            encoding="utf-8",
-        )
-        for text in unmatched:
-            print(f"pytest_gostack: exclusion matches nothing: {text}")
+    if not out or "excluded" not in _pending:
+        return
+    items = session.items
+    kept = {item.nodeid for item in items}
+    excluded = {nodeid: reason for nodeid, reason in _pending["excluded"].items() if nodeid in kept}
+    seen = _pending["unmatched"]
+    unmatched = [p.text for p in seen["patterns"] if not p.matched and p.path in seen["paths"]]
+    Path(out).write_text(
+        json.dumps({"collected": len(items), "excluded": excluded, "unmatched": unmatched}, indent=1, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+    for text in unmatched:
+        print(f"pytest_gostack: exclusion matches nothing: {text}")
 
 
 def pytest_configure(config: pytest.Config) -> None:
