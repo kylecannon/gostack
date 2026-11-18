@@ -19,12 +19,18 @@ const (
 type state struct {
 	account string
 	region  string
+	// emptied counts the calls of emptyState.
+	emptied int
 }
 
 type pair struct{ account, region string }
 
 func newState(account, region string) *state {
 	return &state{account: account, region: region}
+}
+
+func emptyState(s *state) {
+	s.emptied++
 }
 
 // seeded returns a Bundle that holds every pair, plus the count of newFn calls.
@@ -35,7 +41,7 @@ func seeded(pairs ...pair) (*store.Bundle[state], *atomic.Int64) {
 		calls.Add(1)
 
 		return newState(account, region)
-	})
+	}, emptyState)
 	for _, p := range pairs {
 		b.Get(p.account, p.region)
 	}
@@ -126,28 +132,28 @@ func Test_Bundle_Reset(t *testing.T) {
 		name        string
 		giveAccount string
 		giveRegion  string
-		wantGone    []pair
+		wantEmptied []pair
 	}{
-		{name: "everything", giveAccount: "", giveRegion: "", wantGone: all},
+		{name: "everything", giveAccount: "", giveRegion: "", wantEmptied: all},
 		{
 			name:        "one account, every region",
 			giveAccount: "111111111111",
 			giveRegion:  "",
-			wantGone:    []pair{all[0], all[1]},
+			wantEmptied: []pair{all[0], all[1]},
 		},
 		{
 			name:        "one account and region",
 			giveAccount: "222222222222",
 			giveRegion:  euWest1,
-			wantGone:    []pair{all[3]},
+			wantEmptied: []pair{all[3]},
 		},
 		{
 			name:        "one region, every account",
 			giveAccount: "",
 			giveRegion:  usEast1,
-			wantGone:    []pair{all[0], all[2]},
+			wantEmptied: []pair{all[0], all[2]},
 		},
-		{name: "no match", giveAccount: "333333333333", giveRegion: "", wantGone: nil},
+		{name: "no match", giveAccount: "333333333333", giveRegion: "", wantEmptied: nil},
 	}
 
 	for _, tt := range tests {
@@ -158,30 +164,90 @@ func Test_Bundle_Reset(t *testing.T) {
 
 			b.Reset(tt.giveAccount, tt.giveRegion)
 
-			after := collect(b)
-			assert.Len(t, after, len(all)-len(tt.wantGone))
-
 			for _, p := range all {
-				if slices.Contains(tt.wantGone, p) {
-					assert.NotContains(t, after, p)
+				// A call that got the state before the reset holds the one Get
+				// returns after it, so nothing it writes is lost.
+				assert.Same(t, before[p], b.Get(p.account, p.region), "the state stays in the bundle")
 
-					continue
+				want := 0
+				if slices.Contains(tt.wantEmptied, p) {
+					want = 1
 				}
 
-				assert.Same(t, before[p], after[p], "a state outside the reset survives")
+				assert.Equal(t, want, before[p].emptied, "%v is emptied once when it matches, and only then", p)
 			}
 
-			// A reset key is created again on the next Get.
-			initsBefore := calls.Load()
-
-			for _, p := range tt.wantGone {
-				fresh := b.Get(p.account, p.region)
-				assert.NotSame(t, before[p], fresh)
-			}
-
-			assert.Equal(t, initsBefore+int64(len(tt.wantGone)), calls.Load())
+			assert.Equal(t, int64(len(all)), calls.Load(), "a reset creates no state")
 		})
 	}
+}
+
+// counter is a state that a writer adds to under its lock. emptyCounter moves
+// what it holds to removed, so that held plus removed is every add that reached
+// it.
+type counter struct {
+	mu      sync.Mutex
+	held    int
+	removed int
+}
+
+func emptyCounter(c *counter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.removed += c.held
+	c.held = 0
+}
+
+func Test_Bundle_Reset_concurrent(t *testing.T) {
+	const (
+		writers = 8
+		adds    = 2000
+	)
+
+	b := store.NewBundle(func(string, string) *counter { return &counter{} }, emptyCounter)
+
+	stop := make(chan struct{})
+
+	var resetter sync.WaitGroup
+
+	resetter.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				b.Reset("", "")
+			}
+		}
+	})
+
+	var writing sync.WaitGroup
+
+	for range writers {
+		writing.Go(func() {
+			for range adds {
+				// The state is found first and written after, so a reset can
+				// fall between the two.
+				c := b.Get("000000000000", usEast1)
+
+				c.mu.Lock()
+				c.held++
+				c.mu.Unlock()
+			}
+		})
+	}
+
+	writing.Wait()
+	close(stop)
+	resetter.Wait()
+
+	c := b.Get("000000000000", usEast1)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	assert.Equal(t, writers*adds, c.held+c.removed, "every add reached the state a reset empties")
 }
 
 func Test_Bundle_Range(t *testing.T) {
@@ -226,7 +292,12 @@ func Test_Bundle_Range(t *testing.T) {
 			return true
 		})
 
-		assert.Empty(t, collect(b))
+		got := collect(b)
+		assert.Len(t, got, 2)
+
+		for p, s := range got {
+			assert.Equal(t, 1, s.emptied, "%v", p)
+		}
 	})
 }
 
@@ -247,7 +318,7 @@ func Test_Bundle_Get_concurrent(t *testing.T) {
 		initsMu.Unlock()
 
 		return newState(account, region)
-	})
+	}, emptyState)
 
 	names := make([]pair, keys)
 	for i := range names {

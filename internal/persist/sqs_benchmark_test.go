@@ -64,7 +64,7 @@ func directCall(ctx context.Context) context.Context {
 func filledProvider(b *testing.B, queues, messages int) *sqsservice.Provider {
 	b.Helper()
 
-	p := sqsservice.New(nil)
+	p := sqsservice.New(nil, nil)
 	ctx := directCall(b.Context())
 	body := strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", snapshotBodyBytes/36+1)[:snapshotBodyBytes]
 
@@ -171,7 +171,7 @@ func BenchmarkSQSRestore(b *testing.B) {
 				b.Fatal(err)
 			}
 
-			p := sqsservice.New(nil)
+			p := sqsservice.New(nil, nil)
 			b.Cleanup(p.Close)
 
 			b.ReportAllocs()

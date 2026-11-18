@@ -122,7 +122,7 @@ func BenchmarkRestore(b *testing.B) {
 			// shed it, so the benchmark holds one copy of the queue and not two.
 			source.provider.Reset("", "")
 
-			target := sqs.New(nil)
+			target := sqs.New(nil, nil)
 			// Reset stops the deadline timers of the in-flight messages, which
 			// would keep the restored queue in memory for 30 seconds.
 			b.Cleanup(func() {

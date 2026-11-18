@@ -136,8 +136,8 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 // changed state. It does not wait to learn whether the call succeeded: a failed
 // one costs a flush of a state that did not change, which is harmless.
 func (p *Provider) markChanged(operation string) {
-	if p.changed != nil && operation != "" && mutating(operation) {
-		p.changed()
+	if operation != "" && mutating(operation) {
+		p.notifyChanged()
 	}
 }
 

@@ -81,7 +81,7 @@ func Test_queue_URL_panic(t *testing.T) {
 	// panic comes from.
 	var armed atomic.Bool
 
-	s.provider.OnChange(func() {
+	s.changes.set(func() {
 		if armed.Load() {
 			panic(queueURLPanic)
 		}

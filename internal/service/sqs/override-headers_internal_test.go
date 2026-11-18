@@ -114,7 +114,7 @@ func Test_an_override_wait_poll_never_returns_a_message_twice(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				q := newFillQueue(t, New(nil), tt.kind)
+				q := newFillQueue(t, New(nil, nil), tt.kind)
 				send := callContext(t)
 
 				require.NoError(t, q.send(send, fillFirstBody))
@@ -157,7 +157,7 @@ func Test_an_override_wait_poll_never_returns_a_message_twice(t *testing.T) {
 // filling poll whose queue went away: it returns what it took, at once.
 func Test_an_override_wait_poll_ends_when_the_queue_is_deleted(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		q := newFillQueue(t, New(nil), kindStandard)
+		q := newFillQueue(t, New(nil, nil), kindStandard)
 		send := callContext(t)
 
 		require.NoError(t, q.send(send, fillFirstBody))
@@ -183,7 +183,7 @@ func Test_an_override_wait_poll_ends_when_the_queue_is_deleted(t *testing.T) {
 func Test_DeleteMessageBatch_takes_its_limit_from_the_override_count(t *testing.T) {
 	const entries = 11
 
-	q := newFillQueue(t, New(nil), kindStandard)
+	q := newFillQueue(t, New(nil, nil), kindStandard)
 	send := callContext(t)
 
 	for i := range entries {
@@ -228,7 +228,7 @@ func Test_a_long_poll_looks_again_when_its_wait_runs_out(t *testing.T) {
 
 	for range fillRuns {
 		synctest.Test(t, func(t *testing.T) {
-			q := newFillQueue(t, New(nil), kindStandard)
+			q := newFillQueue(t, New(nil, nil), kindStandard)
 
 			_, err := q.p.SendMessage(callContext(t), &sqsapi.SendMessageInput{
 				QueueUrl: &q.url, MessageBody: new(fillFirstBody), DelaySeconds: new(int32(wait)),
@@ -248,7 +248,7 @@ func Test_a_long_poll_looks_again_when_its_wait_runs_out(t *testing.T) {
 // wait that the client ended does not run on.
 func Test_a_cancelled_long_poll_returns_at_once(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		q := newFillQueue(t, New(nil), kindStandard)
+		q := newFillQueue(t, New(nil, nil), kindStandard)
 
 		ctx, cancel := context.WithCancel(callContext(t))
 		defer cancel()

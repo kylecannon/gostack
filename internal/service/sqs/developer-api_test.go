@@ -69,7 +69,7 @@ func newDevStack(t *testing.T, mutate func(*sqs.Settings)) *stack {
 		settings.update(mutate)
 	}
 
-	provider := sqs.New(settings.get)
+	provider := sqs.New(settings.get, nil)
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },

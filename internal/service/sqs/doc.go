@@ -106,14 +106,16 @@
 // on the skip list of Test_snapshot_data_covers_every_field_of_a_message with
 // the reason it is not saved.
 //
-// Provider.Reset(account, region) is the /_gostack/state/reset hook.
+// Provider.Reset(account, region) is the /_gostack/state/reset hook. It empties
+// each matching State in place, so a call that found the State before a reset
+// and writes after it writes to the live one.
 //
 // # Dirty marking
 //
 // The gateway marks SQS dirty after an operation that went through its own /*
 // route, using Registration.Mutating: every operation but Get*, List* and
 // ReceiveMessage. A call made to a queue URL goes through the routes of Mount,
-// so the Provider reports it itself through the function given to OnChange.
+// so the Provider reports it itself through the changed function given to New.
 //
 // ReceiveMessage reports through the same function from inside the operation,
 // and only when it changed state: it returned a message, moved one to a

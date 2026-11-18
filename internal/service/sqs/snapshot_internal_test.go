@@ -13,7 +13,7 @@ import (
 
 func Test_Restore_arms_the_timer_of_each_queue(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		source := New(nil)
+		source := New(nil, nil)
 		ctx := callContext(t)
 
 		created, err := source.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})
@@ -37,7 +37,7 @@ func Test_Restore_arms_the_timer_of_each_queue(t *testing.T) {
 
 		require.NoError(t, source.Snapshot(&snapshot))
 
-		restored := New(nil)
+		restored := New(nil, nil)
 		require.NoError(t, restored.Restore(&snapshot))
 
 		q, found := restored.states.Get("000000000000", "us-east-1").find("q")
@@ -65,7 +65,7 @@ func Test_Restore_arms_the_timer_of_each_queue(t *testing.T) {
 }
 
 func Test_every_kind_of_queue_can_be_saved(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	ctx := callContext(t)
 
 	for name, attrs := range map[string]map[string]string{
@@ -84,7 +84,7 @@ func Test_every_kind_of_queue_can_be_saved(t *testing.T) {
 }
 
 func Test_Snapshot_and_Restore_refuse_contents_they_cannot_save(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	p.contents = func(*Queue) Contents { return &fakeContents{} }
 
 	_, err := p.CreateQueue(callContext(t), &sqsapi.CreateQueueInput{QueueName: new("q")})
@@ -95,7 +95,7 @@ func Test_Snapshot_and_Restore_refuse_contents_they_cannot_save(t *testing.T) {
 	require.ErrorContains(t, p.Snapshot(&buf), "its contents cannot be saved")
 	assert.Zero(t, buf.Len(), "nothing is written for a snapshot that failed")
 
-	good := New(nil)
+	good := New(nil, nil)
 	_, err = good.CreateQueue(callContext(t), &sqsapi.CreateQueueInput{QueueName: new("q")})
 	require.NoError(t, err)
 	require.NoError(t, good.Snapshot(&buf))

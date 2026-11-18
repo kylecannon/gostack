@@ -50,6 +50,16 @@ var (
 	}
 )
 
+// registered wraps metadata in Registrations without claims.
+func registered(metas ...service.Metadata) []service.Registration {
+	regs := make([]service.Registration, len(metas))
+	for i, meta := range metas {
+		regs[i] = service.Registration{Metadata: meta}
+	}
+
+	return regs
+}
+
 func scope(signingName string) string {
 	return "AWS4-HMAC-SHA256 Credential=test/20130524/us-east-1/" + signingName +
 		"/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc"
@@ -217,7 +227,7 @@ func Test_Detect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			table, err := route.NewTable(tt.giveServices)
+			table, err := route.NewTable(registered(tt.giveServices...))
 			require.NoError(t, err)
 
 			got, err := table.Detect(newRequest(t, tt.giveHost, tt.giveHeaders), formOf(tt.giveForm))
@@ -321,7 +331,7 @@ func Test_Detect_errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			table, err := route.NewTable(tt.giveServices)
+			table, err := route.NewTable(registered(tt.giveServices...))
 			require.NoError(t, err)
 
 			_, err = table.Detect(newRequest(t, localHost, tt.giveHeaders), formOf(tt.giveForm))
@@ -342,7 +352,7 @@ func Test_Detect_errors(t *testing.T) {
 }
 
 func Test_Detect_formIsLazy(t *testing.T) {
-	table, err := route.NewTable([]service.Metadata{sqs, sts})
+	table, err := route.NewTable(registered(sqs, sts))
 	require.NoError(t, err)
 
 	calls := 0
@@ -386,7 +396,7 @@ func Test_NewTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := route.NewTable(tt.give)
+			_, err := route.NewTable(registered(tt.give...))
 			require.ErrorContains(t, err, tt.want)
 		})
 	}

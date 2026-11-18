@@ -71,13 +71,31 @@ type stack struct {
 	handler  http.Handler
 	settings *liveSettings
 	provider *sqs.Provider
+	// changes is what the provider's changed function calls. Only newStack
+	// sets it.
+	changes *changeHook
+}
+
+// changeHook stands in for persistence as the changed function of a provider:
+// it calls the function a test sets, if any.
+type changeHook struct {
+	fn atomic.Pointer[func()]
+}
+
+func (h *changeHook) set(fn func()) { h.fn.Store(&fn) }
+
+func (h *changeHook) changed(string) {
+	if fn := h.fn.Load(); fn != nil {
+		(*fn)()
+	}
 }
 
 func newStack(t *testing.T) *stack {
 	t.Helper()
 
 	settings := newSettings()
-	provider := sqs.New(settings.get)
+	changes := &changeHook{}
+	provider := sqs.New(settings.get, changes.changed)
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },
@@ -90,7 +108,7 @@ func newStack(t *testing.T) *stack {
 	// A message move task is a goroutine, and a test leaves none behind.
 	t.Cleanup(provider.Close)
 
-	return &stack{t: t, handler: gw.Handler(), settings: settings, provider: provider}
+	return &stack{t: t, handler: gw.Handler(), settings: settings, provider: provider, changes: changes}
 }
 
 // httpCall describes one request to the gateway.

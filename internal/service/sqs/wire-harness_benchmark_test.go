@@ -85,7 +85,7 @@ type benchEnv struct {
 func newBenchEnv(b *testing.B) *benchEnv {
 	b.Helper()
 
-	provider := sqs.New(nil)
+	provider := sqs.New(nil, nil)
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },

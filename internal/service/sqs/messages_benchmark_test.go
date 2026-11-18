@@ -524,7 +524,7 @@ func expectCount(b *testing.B, answer, member string, want int) {
 // SendMessage, one ReceiveMessage and one DeleteMessage on the provider, without
 // the gateway or a codec.
 func BenchmarkSendReceiveDelete(b *testing.B) {
-	p := sqs.New(nil)
+	p := sqs.New(nil, nil)
 	ctx := direct(b.Context())
 
 	created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("bench")})

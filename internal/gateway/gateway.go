@@ -44,7 +44,6 @@ type Gateway struct {
 	corsEnforced *cors.Cors
 	corsOpen     *cors.Cors
 
-	dataPlane  Hook
 	preprocess Hook
 
 	phase   atomic.Int32
@@ -63,12 +62,7 @@ func New(
 	internal func(chi.Router),
 	eng Dirtier,
 ) (*Gateway, error) {
-	metadata := make([]service.Metadata, len(regs))
-	for i := range regs {
-		metadata[i] = regs[i].Metadata
-	}
-
-	table, err := route.NewTable(metadata)
+	table, err := route.NewTable(regs)
 	if err != nil {
 		return nil, fmt.Errorf("build service table: %w", err)
 	}
@@ -84,13 +78,6 @@ func New(
 // Handler returns the root router.
 func (g *Gateway) Handler() http.Handler {
 	return g.handler
-}
-
-// SetDataPlaneHook sets the seam at root step 3, where a request for a service
-// addressed by its host (a bucket, a function URL, an API) is recognised. The
-// first such service arrives after Phase 1. Call it before Serve.
-func (g *Gateway) SetDataPlaneHook(h Hook) {
-	g.dataPlane = h
 }
 
 // SetPreprocessHook sets the seam at root step 4, where a service can mark a
@@ -123,17 +110,23 @@ func (g *Gateway) BeginShutdown() {
 // chain. CleanPath, StripSlashes, RedirectSlashes, Timeout and RequestID stay
 // out: the first three rewrite S3 keys, Timeout would cut SQS long polls, and
 // AWS request ids come from the protocol.
+//
+// Step 3 finds the service that claims a request by its host. Its request is
+// served by the last middleware, inside the panic recovery and before the
+// routes that services mount, so a claimed host wins over another service's
+// paths as it does in LocalStack.
 func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(markInternal)                                // 1
 	r.Use(g.shutdownGuard)                             // 2
-	r.Use(hooked(func() Hook { return g.dataPlane }))  // 3
+	r.Use(g.claimService)                              // 3
 	r.Use(hooked(func() Hook { return g.preprocess })) // 4
 	r.Use(g.corsMiddleware)                            // 5
 	r.Use(decodeContent)                               // 6
 	r.Use(g.responseHeaders)                           // 7
 	r.Use(g.recoverPanic)                              // 8
+	r.Use(g.serveClaimed)                              // 3, continued
 
 	if internal != nil {
 		internal(r)

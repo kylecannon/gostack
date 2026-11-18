@@ -24,7 +24,7 @@ const (
 func seedSnapshot(t testing.TB, kind queueKind) []byte {
 	t.Helper()
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(p.Close)
 
 	ctx := callContext(t)
@@ -78,7 +78,7 @@ func seedSnapshot(t testing.TB, kind queueKind) []byte {
 func restoreOf(t *testing.T, raw []byte) (panicked any, err error) {
 	t.Helper()
 
-	p := New(nil)
+	p := New(nil, nil)
 	defer p.Close()
 	defer p.Reset("", "")
 
@@ -106,7 +106,7 @@ func Test_Restore_refuses_a_null_entry_and_does_not_panic(t *testing.T) {
 // Test_Restore_leaves_SQS_empty_after_a_null_entry is the half of the contract
 // the persist engine relies on: a snapshot that is not valid leaves nothing.
 func Test_Restore_leaves_SQS_empty_after_a_null_entry(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(p.Close)
 
 	good := seedSnapshot(t, kindStandard)
@@ -188,7 +188,7 @@ func FuzzSQSRestore(f *testing.F) {
 	f.Add([]byte(`{"v":1,"data":{"states":[{"account":"1","region":"r","next":0,"queues":[null]}]}}`))
 
 	f.Fuzz(func(t *testing.T, raw []byte) {
-		p := New(nil)
+		p := New(nil, nil)
 		defer p.Close()
 		defer p.Reset("", "")
 
@@ -201,7 +201,7 @@ func FuzzSQSRestore(f *testing.F) {
 
 		require.NoError(t, p.Snapshot(&saved))
 
-		again := New(nil)
+		again := New(nil, nil)
 		defer again.Close()
 		defer again.Reset("", "")
 

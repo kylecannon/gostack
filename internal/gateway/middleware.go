@@ -14,6 +14,7 @@ import (
 
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
+	"github.com/kylecannon/gostack/internal/route"
 )
 
 // internalRequestHeader carries the parameters of a call that one service makes
@@ -26,7 +27,15 @@ const (
 type (
 	internalKey struct{}
 	callKey     struct{}
+	claimKey    struct{}
 )
+
+// claim is the service that root step 3 found for a request by its host, or
+// why that service cannot take it.
+type claim struct {
+	match route.Match
+	err   error
+}
 
 // call is what the recovery middleware, which sits outside service detection,
 // learns about the request being served. serveAWS fills it in.
@@ -102,6 +111,50 @@ func isDeveloperPath(path string) bool {
 func (g *Gateway) refuse(w http.ResponseWriter) {
 	g.identify(w.Header())
 	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
+// claimService is root step 3, LocalStack's ServiceLoaderForDataPlane: a
+// service that knows a request by its host alone, through
+// Registration.ClaimHost, takes it before any other detection. The claim rides
+// on the request until serveClaimed hands it to serveAWS.
+func (g *Gateway) claimService(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		match, err := g.table.Claim(r)
+		if !errors.Is(err, route.ErrNoService) {
+			r = r.WithContext(context.WithValue(r.Context(), claimKey{}, &claim{match: match, err: err}))
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// claimOf returns the claim root step 3 put on r.
+func claimOf(r *http.Request) (*claim, bool) {
+	c, ok := r.Context().Value(claimKey{}).(*claim)
+
+	return c, ok
+}
+
+// serveClaimed is the last middleware: it serves a claimed request as an AWS
+// call before the router can give it to a route another service mounts. The
+// internal paths keep their routes, which LocalStack also serves after its
+// data-plane step.
+func (g *Gateway) serveClaimed(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := claimOf(r); ok && !isInternalPath(r.URL.Path) {
+			g.serveAWS(w, r)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isInternalPath reports whether path is one of gostack's own, which no claim
+// takes.
+func isInternalPath(path string) bool {
+	return isDeveloperPath(path) || strings.HasPrefix(path, "/_aws")
 }
 
 // hooked wraps a seam in the middleware chain. The hook is read when a request

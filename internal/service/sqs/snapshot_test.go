@@ -66,7 +66,7 @@ func stackOn(t *testing.T, settings *liveSettings, provider *sqs.Provider) *stac
 func restoredStack(t *testing.T, settings *liveSettings, snapshot []byte) *stack {
 	t.Helper()
 
-	provider := sqs.New(settings.get)
+	provider := sqs.New(settings.get, nil)
 	require.NoError(t, provider.Restore(bytes.NewReader(snapshot)))
 
 	return stackOn(t, settings, provider)
@@ -276,11 +276,11 @@ func Test_Snapshot_keeps_the_names_of_deleted_queues(t *testing.T) {
 }
 
 func Test_Snapshot_of_an_empty_provider(t *testing.T) {
-	snapshot := snapshotOf(t, sqs.New(nil))
+	snapshot := snapshotOf(t, sqs.New(nil, nil))
 
 	assert.JSONEq(t, `{"v":1,"data":{"states":[]}}`, string(snapshot))
 
-	p := sqs.New(nil)
+	p := sqs.New(nil, nil)
 	require.NoError(t, p.Restore(bytes.NewReader(snapshot)))
 }
 
@@ -343,7 +343,7 @@ func Test_Restore_refuses_a_snapshot_that_is_not_valid(t *testing.T) {
 }
 
 func Test_Registration_counts_every_call_that_changes_state_as_mutating(t *testing.T) {
-	mutating := sqs.New(nil).Registration().Mutating
+	mutating := sqs.New(nil, nil).Registration().Mutating
 	require.NotNil(t, mutating)
 
 	for _, op := range []string{
@@ -368,7 +368,7 @@ func Test_A_call_to_a_queue_URL_reports_a_change(t *testing.T) {
 
 	var changes atomic.Int32
 
-	s.provider.OnChange(func() { changes.Add(1) })
+	s.changes.set(func() { changes.Add(1) })
 
 	c := s.as(protoJSON)
 	c.createQueue("q", nil)

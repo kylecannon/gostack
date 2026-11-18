@@ -1,6 +1,7 @@
 package service
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -30,7 +31,19 @@ type Metadata struct {
 	Operations []string
 }
 
-// Registration is what a service hands the gateway.
+// Snapshotter saves and restores the whole state of a service. It has the
+// method set of persist.Snapshotter, which states the contract.
+type Snapshotter interface {
+	Snapshot(w io.Writer) error
+	Restore(r io.Reader) error
+}
+
+// Registration is what a service hands the gateway, and everything the process
+// needs to know about it: a stateful service is added with one Registration and
+// no other wiring. A service that reports changes the gateway does not see
+// takes the function for them in its constructor.
+//
+// Every func field but Serve may be nil.
 type Registration struct {
 	// Metadata describes the service.
 	Metadata Metadata
@@ -49,4 +62,33 @@ type Registration struct {
 	// stop the service and does not drop its state. It is nil when there is
 	// nothing to do.
 	Shutdown func()
+
+	// ClaimHost reports whether a request to host is the service's, before any
+	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a
+	// Lambda function URL or an S3 website by its host alone. A claimed request
+	// skips the routes other services mount, but not the /_localstack, /_gostack
+	// and /_aws ones. A request that more than one service claims is detected as
+	// if none had.
+	ClaimHost func(host string) bool
+	// Claim picks the service among those that share the request's signing
+	// name, as LocalStack's custom_signing_name_rules picks s3control over s3 by
+	// path. It is asked only when the signing name is not the service's alone,
+	// and the request is the service's when it is the only one of them to
+	// claim it.
+	Claim func(r *http.Request) bool
+
+	// Persist saves and restores the service's state. The persistence engine
+	// uses it only when PERSIST_* enables the service. It is nil for a service
+	// whose state is not saved.
+	Persist Snapshotter
+	// Reset empties the service's state for an account and region, in place, so
+	// a call already running keeps a state that is reached afterwards. An empty
+	// account or region matches every one. /_gostack/state/reset calls it,
+	// whether the service is persisted or not. It is nil for a service that
+	// keeps no state.
+	Reset func(account, region string)
+	// Close stops the goroutines the service runs on its own. It is called
+	// once, after the gateway has drained and before persistence's last save, so
+	// the state they leave is saved.
+	Close func()
 }

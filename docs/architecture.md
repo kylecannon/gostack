@@ -150,10 +150,12 @@ decoding, and an oversized one answers `MalformedQueryString` (400).
   path, internal or AWS, in this order:
   1. Internal-request marking.
   2. The shutdown guard.
-  3. Data-plane service detection by `Host`: `<bucket>.s3.*`,
-     `*.s3-website.*`, `<id>.execute-api.*` and `*.lambda-url.*`
-     (`middleware.RouteHeaders`). This mirrors `ServiceLoaderForDataPlane`, and
-     a service set here is not detected again later.
+  3. Data-plane service detection by `Host`, through each registration's
+     `ClaimHost`, for hosts such as `*.lambda-url.*` and `*.s3-website.*`. This
+     mirrors `ServiceLoaderForDataPlane`. A service claimed here is not
+     detected again later, and its request is served before the routes other
+     services mount. The `/_localstack`, `/_gostack` and `/_aws` routes keep
+     their own.
   4. Preprocess hooks. S3 marks a request as S3 when it is host-style, or
      path-style to an existing bucket (`services/s3/cors.py`).
   5. CORS, skipped for requests marked S3 or API Gateway.
@@ -242,6 +244,26 @@ written by hand.
   `internal/protocol/awsjson` serves every encode and decode.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output.
+
+### Service registration (`internal/service`)
+
+A service is one `service.Registration`, listed once in `registrations()` in
+`cmd/gostack/services.go`; nothing else in `cmd/gostack` names it. Besides
+`Metadata`, `Serve`, `Mount`, `Mutating` and `Shutdown`, a registration carries
+its routing claims and its state lifecycle, each optional. `ClaimHost` takes a
+request by its host at root step 3. `Claim` picks the service among those that
+share a signing name, by the rules of `custom_signing_name_rules` in LocalStack's
+`aws/protocol/service_router.py`, such as s3control's `/v20180820` under the
+`s3` signing name. An unclaimed tie stays a 400 "ambiguous request". `Persist`
+is the Snapshot/Restore pair, which persistence registers only when `PERSIST_*`
+enables the service. `Reset(account, region)` empties the state in place, so a
+call already holding it never writes into state the reset dropped; every
+service that has one joins `/_gostack/state/reset`, persisted or not. `Close`
+stops the service's own goroutines after the gateway drains and before the last
+save. A service that reports changes the gateway cannot see, such as SQS calls
+to a queue URL, takes a `changed(service)` callback in its constructor.
+`store.Bundle` keeps each account-region state for good and resets it through
+the emptier its owner gives `NewBundle`.
 
 ## Internal API
 

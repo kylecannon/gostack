@@ -30,6 +30,11 @@ func Test_Gateway_middlewareOrder(t *testing.T) {
 
 		_, _ = io.WriteString(w, "ok")
 	})
+	reg.ClaimHost = func(string) bool {
+		events = append(events, eventDataPlane)
+
+		return false
+	}
 
 	g := newGateway(t, newSettings(), []service.Registration{reg}, func(r chi.Router) {
 		r.Get("/_localstack/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -37,11 +42,6 @@ func Test_Gateway_middlewareOrder(t *testing.T) {
 
 			_, _ = io.WriteString(w, "up")
 		})
-	})
-	g.SetDataPlaneHook(func(r *http.Request) *http.Request {
-		events = append(events, eventDataPlane)
-
-		return r
 	})
 	g.SetPreprocessHook(func(r *http.Request) *http.Request {
 		events = append(events, eventPreprocess)

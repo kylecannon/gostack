@@ -35,7 +35,7 @@ func (e *AmbiguousError) Error() string {
 
 // Match is the outcome of Detect.
 type Match struct {
-	// Index is the position of the service's Metadata in the slice given to
+	// Index is the position of the service's Registration in the slice given to
 	// NewTable.
 	Index int
 	// Service is the service's Metadata.Name.
@@ -44,7 +44,7 @@ type Match struct {
 	Protocol protocol.Kind
 }
 
-// Table detects services from the Metadata of the registered ones.
+// Table detects services from the Metadata and claims of the registered ones.
 type Table struct {
 	services  []service.Metadata
 	bySigning map[string][]int
@@ -52,6 +52,11 @@ type Table struct {
 	// endpoints are ordered longest prefix first, so that a prefix that
 	// contains dots wins over a shorter one it starts with.
 	endpoints []endpoint
+	// claims holds the Registration.Claim of each service, by index. It is nil
+	// in the known table, which has no claims.
+	claims []func(*http.Request) bool
+	// hostClaims are the services with a Registration.ClaimHost.
+	hostClaims []hostClaim
 	// known detects the services LocalStack has, registered or not. It is nil in
 	// that table itself.
 	known *Table
@@ -62,13 +67,34 @@ type endpoint struct {
 	services []int
 }
 
-// NewTable builds the detection table for services. It fails on a service
-// without a name or protocol, and on two services with the same name.
-func NewTable(services []service.Metadata) (*Table, error) {
-	t, err := buildTable(services)
+type hostClaim struct {
+	index int
+	claim func(host string) bool
+}
+
+// NewTable builds the detection table for the registered services. It fails on
+// a service without a name or protocol, and on two services with the same name.
+func NewTable(regs []service.Registration) (*Table, error) {
+	metadata := make([]service.Metadata, len(regs))
+	claims := make([]func(*http.Request) bool, len(regs))
+
+	var hostClaims []hostClaim
+
+	for i := range regs {
+		metadata[i] = regs[i].Metadata
+		claims[i] = regs[i].Claim
+
+		if regs[i].ClaimHost != nil {
+			hostClaims = append(hostClaims, hostClaim{index: i, claim: regs[i].ClaimHost})
+		}
+	}
+
+	t, err := buildTable(metadata)
 	if err != nil {
 		return nil, err
 	}
+
+	t.claims, t.hostClaims = claims, hostClaims
 
 	t.known, err = buildTable(knownServices)
 	if err != nil {
@@ -76,6 +102,32 @@ func NewTable(services []service.Metadata) (*Table, error) {
 	}
 
 	return t, nil
+}
+
+// Claim finds the service that claims r by its host, through
+// Registration.ClaimHost. It is LocalStack's ServiceLoaderForDataPlane, which
+// runs before any other detection. It returns ErrNoService when no service, or
+// more than one, claims r; detection then goes on as if none had.
+func (t *Table) Claim(r *http.Request) (Match, error) {
+	found := -1
+
+	for _, c := range t.hostClaims {
+		if !c.claim(r.Host) {
+			continue
+		}
+
+		if found >= 0 {
+			return Match{}, ErrNoService
+		}
+
+		found = c.index
+	}
+
+	if found < 0 {
+		return Match{}, ErrNoService
+	}
+
+	return t.match(found, r)
 }
 
 func buildTable(services []service.Metadata) (*Table, error) {
@@ -135,6 +187,13 @@ func buildTable(services []service.Metadata) (*Table, error) {
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.
 //
+// A signing name that several services share goes to the one of them whose
+// Registration.Claim alone claims r, as service_router.py's
+// custom_signing_name_rules does right after its signing-name step. Its
+// fallback, which sends a request no rule matches to the service named after
+// the signing name, is not here: the service that needs it says so with its
+// own Claim.
+//
 // The form step is LocalStack's service_router.py step 5: the query services
 // that have the Action are the candidates, and Version narrows them when more
 // than one is left. A service whose Metadata lists no Operations has any
@@ -146,6 +205,10 @@ func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
 		found := t.bySigning[signing]
 		if len(found) == 1 {
 			return t.match(found[0], r)
+		}
+
+		if i, ok := t.claimedAmong(found, r); ok {
+			return t.match(i, r)
 		}
 
 		candidates = union(candidates, found)
@@ -217,6 +280,31 @@ func Operation(r *http.Request, kind protocol.Kind, form func() url.Values) stri
 	default:
 		return ""
 	}
+}
+
+// claimedAmong returns the one service among found whose Claim claims r. It is
+// false when none or more than one does.
+func (t *Table) claimedAmong(found []int, r *http.Request) (int, bool) {
+	if t.claims == nil {
+		return 0, false
+	}
+
+	claimed := -1
+
+	for _, i := range found {
+		claim := t.claims[i]
+		if claim == nil || !claim(r) {
+			continue
+		}
+
+		if claimed >= 0 {
+			return 0, false
+		}
+
+		claimed = i
+	}
+
+	return claimed, claimed >= 0
 }
 
 // queryCandidates returns the services that can answer a form request with

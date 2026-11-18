@@ -26,7 +26,7 @@ func fifoTimerOf(t *testing.T, q *Queue) (armed bool, pending, remembered int) {
 
 func Test_a_FIFO_queue_holds_no_timer_after_its_deduplication_window(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := New(nil)
+		p := New(nil, nil)
 		ctx := callContext(t)
 
 		created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{

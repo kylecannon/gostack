@@ -43,7 +43,7 @@ type cutProvider struct {
 func newCutProvider(t *testing.T) *cutProvider {
 	t.Helper()
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(p.Close)
 
 	ctx := callContext(t)
@@ -433,7 +433,7 @@ func Test_a_snapshot_round_trips_through_the_streaming_encoder(t *testing.T) {
 
 	require.NoError(t, c.p.Snapshot(&first))
 
-	other := New(nil)
+	other := New(nil, nil)
 	t.Cleanup(other.Close)
 	require.NoError(t, other.Restore(bytes.NewReader(first.Bytes())))
 	require.NoError(t, other.Snapshot(&second))

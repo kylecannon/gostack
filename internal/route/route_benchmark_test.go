@@ -7,12 +7,11 @@ import (
 
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/route"
-	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkRouteDetect(b *testing.B) {
-	table, err := route.NewTable([]service.Metadata{sqs, sts, sns})
+	table, err := route.NewTable(registered(sqs, sts, sns))
 	require.NoError(b, err)
 
 	signed := httptest.NewRequestWithContext(b.Context(), http.MethodPost, "http://localhost:4566/", nil)

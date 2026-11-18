@@ -47,6 +47,29 @@ func (s *State) Range(fn func(*Queue) bool) {
 	}
 }
 
+// reset empties the State in place, as a fresh one: no queues, no deleted names,
+// no move tasks. It is the emptyFn of the Provider's Bundle. The section under
+// the lock is where the reset happens: a call that found this State before it
+// and adds a queue after it adds to the emptied State, so a queue whose
+// CreateQueue answered is either still there or was removed and closed by a
+// reset. The tasks and queues taken out are stopped after the lock is released,
+// so the State's lock is never held while a queue's is taken.
+func (s *State) reset() {
+	s.mu.Lock()
+	queues, tasks := s.queues, s.moveTasks
+	s.queues, s.deleted, s.moveTasks = make(map[string]*Queue), make(map[string]time.Time), make(map[string]*moveTask)
+	s.next, s.moveSeq = 0, 0
+	s.mu.Unlock()
+
+	for _, task := range tasks {
+		task.cancel()
+	}
+
+	for _, q := range queues {
+		q.close()
+	}
+}
+
 // find returns the queue with the given name.
 func (s *State) find(name string) (*Queue, bool) {
 	s.mu.RLock()

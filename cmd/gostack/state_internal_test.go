@@ -15,7 +15,7 @@ import (
 
 const testService = "widgets"
 
-// widgets is a Snapshotter with a Reset, like a service built on store.Bundle.
+// widgets is a service whose state persists and resets, like SQS.
 type widgets struct {
 	data   string
 	resets [][2]string
@@ -39,12 +39,25 @@ func (w *widgets) Reset(account, region string) {
 	w.data = ""
 }
 
-// plain is a Snapshotter that cannot reset itself.
-type plain struct{}
+func (w *widgets) registration() service.Registration {
+	reg := registration(testService)
+	reg.Persist = w
+	reg.Reset = w.Reset
 
-func (plain) Snapshot(io.Writer) error { return nil }
+	return reg
+}
 
-func (plain) Restore(io.Reader) error { return nil }
+// sessions is a service whose state resets and is not saved, like STS.
+type sessions struct {
+	resets int
+}
+
+func (s *sessions) registration() service.Registration {
+	reg := registration("sessions")
+	reg.Reset = func(string, string) { s.resets++ }
+
+	return reg
+}
 
 func registration(name string) service.Registration {
 	return service.Registration{Metadata: service.Metadata{Name: name}}
@@ -75,20 +88,24 @@ func Test_serviceTable(t *testing.T) {
 
 func Test_stateController_Reset(t *testing.T) {
 	w := &widgets{data: "x"}
+	s := &sessions{}
 	c := &stateController{
-		regs:      []service.Registration{registration(testService), registration("plain")},
-		snapshots: map[string]persist.Snapshotter{testService: w, "plain": plain{}},
-		eng:       persist.New(persist.Config{}),
+		regs: []service.Registration{w.registration(), s.registration(), registration("stateless")},
+		eng:  persist.New(persist.Config{}),
 	}
 
 	require.NoError(t, c.Reset(internalapi.StateScope{Service: testService, Account: "111111111111", Region: "eu-west-1"}))
 	assert.Equal(t, [][2]string{{"111111111111", "eu-west-1"}}, w.resets)
 
-	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "nope"}), internalapi.ErrUnknownService)
-	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "plain"}), internalapi.ErrNotSupported)
+	require.NoError(t, c.Reset(internalapi.StateScope{Service: "sessions"}), "a service that is not saved resets too")
+	assert.Equal(t, 1, s.resets)
 
-	require.NoError(t, c.Reset(internalapi.StateScope{}), "every service that can reset does")
+	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "nope"}), internalapi.ErrUnknownService)
+	require.ErrorIs(t, c.Reset(internalapi.StateScope{Service: "stateless"}), internalapi.ErrNotSupported)
+
+	require.NoError(t, c.Reset(internalapi.StateScope{}), "every service that keeps state resets, saved or not")
 	assert.Len(t, w.resets, 2)
+	assert.Equal(t, 2, s.resets)
 
 	empty := &stateController{eng: persist.New(persist.Config{})}
 	require.NoError(t, empty.Reset(internalapi.StateScope{}))
@@ -107,11 +124,7 @@ func Test_stateController_SaveLoad(t *testing.T) {
 		eng, dir := persistentEngine(t)
 		w := &widgets{data: `{"n":1}`}
 		eng.Register(testService, w)
-		c := &stateController{
-			regs:      []service.Registration{registration(testService)},
-			snapshots: map[string]persist.Snapshotter{testService: w},
-			eng:       eng,
-		}
+		c := &stateController{regs: []service.Registration{w.registration()}, eng: eng}
 
 		require.NoError(t, c.Save(t.Context()))
 
@@ -129,11 +142,7 @@ func Test_stateController_Reset_reaches_the_disk(t *testing.T) {
 	eng, dir := persistentEngine(t)
 	w := &widgets{data: `{"n":1}`}
 	eng.Register(testService, w)
-	c := &stateController{
-		regs:      []service.Registration{registration(testService)},
-		snapshots: map[string]persist.Snapshotter{testService: w},
-		eng:       eng,
-	}
+	c := &stateController{regs: []service.Registration{w.registration()}, eng: eng}
 
 	require.NoError(t, c.Save(t.Context()))
 	require.NoError(t, c.Reset(internalapi.StateScope{Service: testService}))

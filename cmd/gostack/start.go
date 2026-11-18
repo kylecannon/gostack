@@ -30,15 +30,17 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	services := newProviders(cfg)
-	regs := registrations(cfg, services)
-	eng := persist.New(cfg.PersistConfig(serviceNames(regs)...))
-	services.markDirty(eng) //nolint:contextcheck // MarkDirty arms a timer, whose callback has no caller context
+	// The services report changes to the engine, and the engine is configured
+	// from the services' names. Nothing reports a change before the engine is
+	// set: constructors do not, and the state loads further down.
+	var eng *persist.Engine
 
-	snapshots := snapshotters(services)
-	for name, snapshot := range snapshots {
-		eng.Register(name, snapshot)
-	}
+	services := newProviders(cfg, func(name string) { //nolint:contextcheck // the flush timer has no caller context
+		eng.MarkDirty(name)
+	})
+	regs := services.regs
+	eng = persist.New(cfg.PersistConfig(serviceNames(regs)...))
+	services.persist(eng)
 
 	// The engine is closed last, after the gateway has stopped and the services
 	// have stopped their own goroutines, so that a request still running at
@@ -71,7 +73,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		Services:      &serviceTable{regs: regs, eng: eng},
 		Init:          hooks,
 		Config:        cfg,
-		State:         &stateController{regs: regs, snapshots: snapshots, eng: eng},
+		State:         &stateController{regs: regs, eng: eng},
 		Restart:       restart,
 		Kill:          cancel,
 		ConfigUpdates: cfg.Settings().EnableConfigUpdates,

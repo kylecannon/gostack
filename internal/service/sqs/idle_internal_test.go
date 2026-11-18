@@ -26,7 +26,7 @@ func timerOf(t *testing.T, q *Queue) (armed bool, pending int) {
 
 func Test_a_queue_with_no_deadline_has_no_timer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := New(nil)
+		p := New(nil, nil)
 		ctx := callContext(t)
 
 		created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})
@@ -104,7 +104,7 @@ func Test_a_queue_with_no_deadline_has_no_timer(t *testing.T) {
 
 func Test_the_timer_follows_the_earliest_deadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := New(nil)
+		p := New(nil, nil)
 		ctx := callContext(t)
 
 		created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})

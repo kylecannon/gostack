@@ -10,43 +10,49 @@ import (
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
 
-// serviceSQS is the botocore name SQS registers and persists under.
-const serviceSQS = "sqs"
-
-// providers are the services that keep state. They are built once, because the
-// gateway serves them through registrations and persistence saves them through
-// snapshotters, and both have to reach the same instance.
+// providers are the registered services. They are built once, because the
+// gateway serves them, persistence saves them and the state routes reset them,
+// and all three have to reach the same instance.
 type providers struct {
-	sqs *sqs.Provider
+	regs []service.Registration
 }
 
-func newProviders(cfg *config.Config) *providers {
-	return &providers{sqs: sqs.New(sqsSettings(cfg))}
+// newProviders builds the services. changed is how a service reports a change
+// the gateway does not see, by its botocore name.
+func newProviders(cfg *config.Config, changed func(name string)) *providers {
+	return &providers{regs: registrations(cfg, changed)}
 }
 
-// registrations lists the services the gateway serves. Each service ticket
-// adds one line here. A service reads its settings through cfg on each call,
-// so an update through /_localstack/config reaches it.
-func registrations(cfg *config.Config, p *providers) []service.Registration {
+// registrations lists the services the gateway serves. Adding a service is one
+// line here; its Registration carries everything else. A service reads its
+// settings through cfg on each call, so an update through /_localstack/config
+// reaches it.
+func registrations(cfg *config.Config, changed func(name string)) []service.Registration {
 	return []service.Registration{
-		p.sqs.Registration(),
+		sqs.New(sqsSettings(cfg), changed).Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
 	}
 }
 
-// close stops what the services run on their own: SQS's message move tasks.
-// It is called after the gateway has drained and before the engine's last flush,
-// so that a task's final state is saved.
+// close stops what the services run on their own, such as SQS's message move
+// tasks. It is called after the gateway has drained and before the engine's
+// last flush, so that a task's final state is saved.
 func (p *providers) close() {
-	p.sqs.Close()
+	for i := range p.regs {
+		if closeFn := p.regs[i].Close; closeFn != nil {
+			closeFn()
+		}
+	}
 }
 
-// markDirty makes the calls that persistence cannot see tell eng that a service
-// changed. The gateway reports every call it serves itself, but a call made to
-// an SQS queue URL goes through the routes SQS mounts, so SQS reports those. SQS
-// also reports a ReceiveMessage that changed state and the work of a move task.
-func (p *providers) markDirty(eng *persist.Engine) {
-	p.sqs.OnChange(func() { eng.MarkDirty(serviceSQS) })
+// persist hands eng the services whose state is saved. The engine leaves out
+// the ones PERSIST_* does not enable.
+func (p *providers) persist(eng *persist.Engine) {
+	for i := range p.regs {
+		if snapshotter := p.regs[i].Persist; snapshotter != nil {
+			eng.Register(p.regs[i].Metadata.Name, snapshotter)
+		}
+	}
 }
 
 // sqsSettings maps the live configuration onto the settings of the SQS
@@ -81,15 +87,5 @@ func sqsSettings(cfg *config.Config) func() sqs.Settings {
 		last.Store(m)
 
 		return m.to
-	}
-}
-
-// snapshotters lists the persistence hook of each service that keeps state, by
-// botocore service name. A service ticket whose state persists adds one entry.
-// A Snapshotter that also has Reset(account, region string) takes part in
-// /_gostack/state/reset.
-func snapshotters(p *providers) map[string]persist.Snapshotter {
-	return map[string]persist.Snapshotter{
-		serviceSQS: p.sqs,
 	}
 }

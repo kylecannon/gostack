@@ -27,11 +27,22 @@ const (
 )
 
 // serveAWS is the /* route: it finds the service, builds the request context
-// and hands the call to the service's Registration.
+// and hands the call to the service's Registration. A service that claimed the
+// request by its host at root step 3 has been found already.
 func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	form := &formReader{r: r}
 
-	match, err := g.table.Detect(r, form.values)
+	var (
+		match route.Match
+		err   error
+	)
+
+	if c, claimed := claimOf(r); claimed {
+		match, err = c.match, c.err
+	} else {
+		match, err = g.table.Detect(r, form.values)
+	}
+
 	if err != nil {
 		g.refuseDetection(w, r, err)
 

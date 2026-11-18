@@ -90,7 +90,7 @@ func Test_a_Restore_that_fails_leaves_SQS_empty_and_usable(t *testing.T) {
 
 	for name, bad := range tests {
 		t.Run(name, func(t *testing.T) {
-			p := New(nil)
+			p := New(nil, nil)
 			t.Cleanup(p.Close)
 
 			// Something to lose.
@@ -106,7 +106,7 @@ func Test_a_Restore_that_fails_leaves_SQS_empty_and_usable(t *testing.T) {
 // Test_a_Restore_that_panics_closes_every_queue_it_built builds three queues and
 // makes the third panic while it restores its messages.
 func Test_a_Restore_that_panics_closes_every_queue_it_built(t *testing.T) {
-	source := New(nil)
+	source := New(nil, nil)
 	t.Cleanup(source.Close)
 
 	ctx := callContext(t)
@@ -125,7 +125,7 @@ func Test_a_Restore_that_panics_closes_every_queue_it_built(t *testing.T) {
 
 	require.NoError(t, source.Snapshot(&saved))
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(p.Close)
 
 	registry := &panicRegistry{closed: make(map[*panickyContents]bool)}

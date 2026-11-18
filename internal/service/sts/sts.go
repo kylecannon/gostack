@@ -44,7 +44,7 @@ func Registration(parity func() bool) service.Registration {
 	p := &provider{
 		parity:   parity,
 		now:      time.Now,
-		sessions: store.NewBundle(func(string, string) *sessions { return newSessions() }),
+		sessions: store.NewBundle(func(string, string) *sessions { return newSessions() }, (*sessions).clear),
 	}
 
 	return service.Registration{
@@ -52,6 +52,9 @@ func Registration(parity func() bool) service.Registration {
 		Serve:    p.serve,
 		// STS keeps no state that persistence saves.
 		Mutating: func(string) bool { return false },
+		// The sessions are kept in the region "global", so a reset of one region
+		// leaves them; a reset of every region, or of "global", empties them.
+		Reset: p.sessions.Reset,
 	}
 }
 

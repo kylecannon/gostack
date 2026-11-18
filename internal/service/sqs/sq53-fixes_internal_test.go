@@ -28,7 +28,7 @@ func Test_ChangeMessageVisibility_leaves_a_message_a_filling_poll_holds(t *testi
 	for _, kind := range []queueKind{kindStandard, kindFIFO} {
 		t.Run(strconv.Itoa(int(kind)), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				q := newFillQueue(t, New(nil), kind)
+				q := newFillQueue(t, New(nil, nil), kind)
 
 				require.NoError(t, q.send(callContext(t), fillFirstBody))
 
@@ -67,7 +67,7 @@ func Test_ChangeMessageVisibility_works_again_after_the_poll_ends(t *testing.T) 
 	for _, kind := range []queueKind{kindStandard, kindFIFO} {
 		t.Run(strconv.Itoa(int(kind)), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				q := newFillQueue(t, New(nil), kind)
+				q := newFillQueue(t, New(nil, nil), kind)
 
 				require.NoError(t, q.send(callContext(t), fillFirstBody))
 
@@ -94,7 +94,7 @@ func Test_a_negative_override_wait_is_the_error_LocalStack_raises(t *testing.T) 
 		for _, wait := range []string{"-1", "-60", "-120"} {
 			t.Run(strconv.Itoa(int(kind))+" "+wait, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
-					q := newFillQueue(t, New(nil), kind)
+					q := newFillQueue(t, New(nil, nil), kind)
 
 					require.NoError(t, q.send(callContext(t), fillFirstBody))
 
@@ -124,7 +124,7 @@ func Test_a_negative_override_wait_is_the_error_LocalStack_raises(t *testing.T) 
 // validates MaxNumberOfMessages before queue.receive, which is where the wait
 // fails.
 func Test_a_receive_checks_the_count_before_a_negative_override_wait(t *testing.T) {
-	q := newFillQueue(t, New(nil), kindStandard)
+	q := newFillQueue(t, New(nil, nil), kindStandard)
 
 	_, err := q.p.ReceiveMessage(withHeader(t, headerOverrideWait, "-60"), &sqsapi.ReceiveMessageInput{
 		QueueUrl: &q.url, MaxNumberOfMessages: new(int32(maxReceiveCount + 1)),
@@ -153,7 +153,7 @@ func Test_TagQueue_refuses_tags_that_are_not_UTF_8(t *testing.T) {
 
 	for name, tags := range tests {
 		t.Run(name, func(t *testing.T) {
-			p := New(nil)
+			p := New(nil, nil)
 			ctx := callContext(t)
 
 			created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})
@@ -175,7 +175,7 @@ func Test_TagQueue_refuses_tags_that_are_not_UTF_8(t *testing.T) {
 }
 
 func Test_CreateQueue_refuses_tags_that_are_not_UTF_8(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	ctx := callContext(t)
 
 	_, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q"), Tags: invalidUTF8Tags()})
@@ -191,7 +191,7 @@ func Test_CreateQueue_refuses_tags_that_are_not_UTF_8(t *testing.T) {
 }
 
 func Test_tags_in_UTF_8_are_taken(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	ctx := callContext(t)
 
 	created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{

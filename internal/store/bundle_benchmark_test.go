@@ -7,7 +7,7 @@ import (
 )
 
 func BenchmarkBundleGet(b *testing.B) {
-	bundle := store.NewBundle(newState)
+	bundle := store.NewBundle(newState, emptyState)
 	bundle.Get("000000000000", "us-east-1")
 
 	for b.Loop() {

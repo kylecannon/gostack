@@ -50,6 +50,16 @@ func (s *sessions) put(accessKeyID string, v session, now time.Time) {
 	s.byKey[accessKeyID] = v
 }
 
+// clear forgets every session. It is the emptyFn of the provider's Bundle, so
+// it empties the sessions in place.
+func (s *sessions) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.byKey = make(map[string]session)
+	s.sweepAt = minSweep
+}
+
 // get returns the live session of an access key ID.
 func (s *sessions) get(accessKeyID string, now time.Time) (session, bool) {
 	s.mu.Lock()

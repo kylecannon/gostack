@@ -153,7 +153,7 @@ func Test_Table_Unregistered(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			table, err := route.NewTable(tt.giveServices)
+			table, err := route.NewTable(registered(tt.giveServices...))
 			require.NoError(t, err)
 
 			got, found := table.Unregistered(newRequest(t, tt.giveHost, tt.giveHeaders))

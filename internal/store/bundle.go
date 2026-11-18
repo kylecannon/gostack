@@ -2,7 +2,6 @@ package store
 
 import (
 	"hash/maphash"
-	"maps"
 	"sync"
 )
 
@@ -29,17 +28,24 @@ type shard[S any] struct {
 // Bundle holds one state value S for each account and region, created on first
 // use. It is safe for concurrent use. Keys are spread over a fixed set of
 // shards, so calls for different keys rarely contend on one lock.
+//
+// A state, once created, stays in the Bundle for good: Reset empties it in
+// place. A call that got a state from Get and writes to it after a reset writes
+// to the live, emptied state, never to one the Bundle has let go of.
 type Bundle[S any] struct {
-	newFn  func(account, region string) *S
-	seed   maphash.Seed
-	shards [shardCount]shard[S]
+	newFn   func(account, region string) *S
+	emptyFn func(*S)
+	seed    maphash.Seed
+	shards  [shardCount]shard[S]
 }
 
 // NewBundle returns an empty Bundle that calls newFn to create the state for a
-// key the first time it is asked for. newFn runs under a shard lock, so it must
-// not call back into the Bundle.
-func NewBundle[S any](newFn func(account, region string) *S) *Bundle[S] {
-	b := &Bundle[S]{newFn: newFn, seed: maphash.MakeSeed()}
+// key the first time it is asked for, and emptyFn to empty a state in place on
+// Reset. newFn runs under a shard lock, so it must not call back into the
+// Bundle. emptyFn runs under no Bundle lock and takes the state's own lock: what
+// it takes out under that lock is gone, and anything added after it is kept.
+func NewBundle[S any](newFn func(account, region string) *S, emptyFn func(*S)) *Bundle[S] {
+	b := &Bundle[S]{newFn: newFn, emptyFn: emptyFn, seed: maphash.MakeSeed()}
 	for i := range b.shards {
 		b.shards[i].states = make(map[key]*S)
 	}
@@ -77,8 +83,7 @@ func (b *Bundle[S]) Get(account, region string) *S {
 
 // Range calls fn for every state created so far, in no particular order, and
 // stops when fn returns false. It works on a snapshot of each shard, so fn may
-// call the Bundle; a state created or reset during the walk may or may not be
-// seen.
+// call the Bundle; a state created during the walk may or may not be seen.
 func (b *Bundle[S]) Range(fn func(account, region string, s *S) bool) {
 	for i := range b.shards {
 		sh := &b.shards[i]
@@ -100,19 +105,18 @@ func (b *Bundle[S]) Range(fn func(account, region string, s *S) bool) {
 	}
 }
 
-// Reset discards the states that match account and region, so the next Get
-// creates them again. An empty argument matches every value: Reset("", "")
-// clears everything and Reset(account, "") clears every region of one account.
+// Reset empties the states that match account and region, with the Bundle's
+// emptyFn. An empty argument matches every value: Reset("", "") empties
+// everything and Reset(account, "") empties every region of one account. The
+// states stay in the Bundle, so Get returns the same ones afterwards.
 func (b *Bundle[S]) Reset(account, region string) {
-	for i := range b.shards {
-		sh := &b.shards[i]
+	b.Range(func(stateAccount, stateRegion string, s *S) bool {
+		if (account == "" || stateAccount == account) && (region == "" || stateRegion == region) {
+			b.emptyFn(s)
+		}
 
-		sh.mu.Lock()
-		maps.DeleteFunc(sh.states, func(k key, _ *S) bool {
-			return (account == "" || k.account == account) && (region == "" || k.region == region)
-		})
-		sh.mu.Unlock()
-	}
+		return true
+	})
 }
 
 func (b *Bundle[S]) shardFor(k key) *shard[S] {

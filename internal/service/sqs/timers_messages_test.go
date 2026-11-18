@@ -262,7 +262,7 @@ func direct(ctx context.Context) context.Context {
 
 func Test_long_poll_ends_when_the_request_is_cancelled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := sqs.New(nil)
+		p := sqs.New(nil, nil)
 		base := t.Context()
 
 		created, err := p.CreateQueue(direct(base), &sqsapi.CreateQueueInput{QueueName: new("q")})
@@ -299,7 +299,7 @@ func Test_long_poll_ends_when_the_request_is_cancelled(t *testing.T) {
 
 func Test_long_poll_ends_when_the_queue_is_deleted(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := sqs.New(nil)
+		p := sqs.New(nil, nil)
 		ctx := direct(t.Context())
 
 		created, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})

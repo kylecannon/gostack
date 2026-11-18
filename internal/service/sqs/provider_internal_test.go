@@ -2,7 +2,9 @@ package sqs
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
@@ -104,7 +106,7 @@ func (f *fakeContents) Close()         { f.closed++ }
 func Test_Contents_seam(t *testing.T) {
 	var made []*fakeContents
 
-	p := New(nil)
+	p := New(nil, nil)
 	p.contents = func(*Queue) Contents {
 		fake := &fakeContents{counts: Counts{Visible: 3, NotVisible: 2, Delayed: 1}}
 		made = append(made, fake)
@@ -152,7 +154,7 @@ func Test_Contents_seam(t *testing.T) {
 func Test_Reset(t *testing.T) {
 	var made []*fakeContents
 
-	p := New(nil)
+	p := New(nil, nil)
 	p.contents = func(*Queue) Contents {
 		fake := &fakeContents{}
 		made = append(made, fake)
@@ -192,6 +194,85 @@ func Test_Reset(t *testing.T) {
 
 	assert.Equal(t, 0, count("000000000002", "us-east-1"))
 	assert.Equal(t, []int{1, 1, 1}, []int{made[0].closed, made[1].closed, made[2].closed})
+}
+
+// Test_Reset_racing_CreateQueue races resets with calls that find their State
+// before a reset and add to it after. From outside, a reset that legitimately
+// removed a queue and a queue lost to a State the reset let go of look the same:
+// CreateQueue answered and the queue is gone. The Contents tell them apart. A
+// queue a reset removed was closed by it, and a lost one never was.
+func Test_Reset_racing_CreateQueue(t *testing.T) {
+	const (
+		creators   = 4
+		perCreator = 500
+	)
+
+	var (
+		mu   sync.Mutex
+		made = make(map[string]*fakeContents)
+	)
+
+	p := New(nil, nil)
+	p.contents = func(q *Queue) Contents {
+		fake := &fakeContents{}
+
+		mu.Lock()
+		made[q.name] = fake
+		mu.Unlock()
+
+		return fake
+	}
+
+	stop := make(chan struct{})
+
+	var resetter sync.WaitGroup
+
+	resetter.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				p.Reset("", "")
+			}
+		}
+	})
+
+	ctx := callContext(t)
+	created := make([][]string, creators)
+
+	var creating sync.WaitGroup
+
+	for c := range creators {
+		creating.Go(func() {
+			for i := range perCreator {
+				name := fmt.Sprintf("q-%d-%d", c, i)
+
+				_, err := p.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: &name})
+				if err == nil {
+					created[c] = append(created[c], name)
+				}
+			}
+		})
+	}
+
+	creating.Wait()
+	close(stop)
+	resetter.Wait()
+
+	state := p.states.Get("000000000000", "us-east-1")
+
+	var lost []string
+
+	for _, names := range created {
+		for _, name := range names {
+			if _, found := state.find(name); !found && made[name].closed != 1 {
+				lost = append(lost, fmt.Sprintf("%s (closed %d times)", name, made[name].closed))
+			}
+		}
+	}
+
+	assert.Empty(t, lost, "a created queue is still there, or a reset removed and closed it once")
 }
 
 func callContext(t testing.TB) context.Context {

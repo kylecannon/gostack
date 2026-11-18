@@ -40,10 +40,9 @@ func persistedProvider(t *testing.T) (*flushCounter, *persist.Engine, string) {
 	eng := persist.New(persist.Config{
 		PersistVarSet: true, BaseDir: dir, Frequency: flushFrequency, Logger: slog.New(slog.DiscardHandler),
 	})
-	provider := &flushCounter{Provider: New(nil)}
+	provider := &flushCounter{Provider: New(nil, eng.MarkDirty)}
 
 	eng.Register("sqs", provider)
-	provider.OnChange(func() { eng.MarkDirty("sqs") })
 
 	return provider, eng, filepath.Join(dir, "sqs", "store.json")
 }
@@ -95,16 +94,14 @@ func Test_polling_an_empty_queue_arms_no_flush_timer(t *testing.T) {
 
 func Test_a_receive_marks_the_state_only_when_it_changed_it(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		var changes atomic.Int32
+
 		provider := New(func() Settings {
 			settings := defaultSettings()
 			settings.EnableMessageRetentionPeriod = true
 
 			return settings
-		})
-
-		var changes atomic.Int32
-
-		provider.OnChange(func() { changes.Add(1) })
+		}, func(string) { changes.Add(1) })
 
 		ctx := callContext(t)
 		receive := func(url *string) []sqsapi.Message {
@@ -158,7 +155,7 @@ func Test_a_receive_marks_the_state_only_when_it_changed_it(t *testing.T) {
 }
 
 func Test_Snapshot_of_a_polled_empty_queue_is_unchanged(t *testing.T) {
-	provider := New(nil)
+	provider := New(nil, nil)
 	ctx := callContext(t)
 
 	created, err := provider.CreateQueue(ctx, &sqsapi.CreateQueueInput{QueueName: new("q")})
