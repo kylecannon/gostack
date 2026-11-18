@@ -28,6 +28,13 @@ type Provider struct {
 	// tasks holds the goroutines of the message move tasks, so that Close can
 	// wait for them.
 	tasks sync.WaitGroup
+	// transfer is held for reading by whatever carries a message from one queue
+	// to another, from the moment the message leaves the first to the moment it
+	// is on the second: a dead-letter move, and one message of a move task. A
+	// snapshot holds it for writing while it copies the queues, so it never sees
+	// a message that is in neither queue, or in both. It is taken before any
+	// queue's lock.
+	transfer sync.RWMutex
 	// stopping is closed by Shutdown, once.
 	stopping chan struct{}
 	stopOnce sync.Once

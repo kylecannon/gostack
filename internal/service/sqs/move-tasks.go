@@ -345,6 +345,11 @@ func (p *Provider) moveMessages(ctx context.Context, task *moveTask) *awserr.Err
 // message is deleted from the source only after the put, so a failed move loses
 // nothing. It reports whether there was a message.
 func (p *Provider) moveOne(source *Queue, task *moveTask) (bool, *awserr.Error) {
+	// A snapshot waits until the message is on its destination and gone from its
+	// source, or still only on its source.
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	visibility := moveVisibility
 	got, _ := source.receiveOnce(receiveParams{count: 1, visibility: &visibility}, 1)
 
@@ -454,6 +459,12 @@ func (s *State) cancelMoveTasks() {
 // provider serves no more calls that start one afterwards only if its caller
 // stops sending them first.
 func (p *Provider) Close() {
+	p.stopMoveTasks()
+}
+
+// stopMoveTasks cancels every message move task and waits until each of their
+// goroutines has ended, the message it was moving included.
+func (p *Provider) stopMoveTasks() {
 	p.states.Range(func(_, _ string, state *State) bool {
 		state.cancelMoveTasks()
 

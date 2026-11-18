@@ -2,9 +2,7 @@ package sqs
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -21,32 +19,18 @@ type dedupData struct {
 	Expires  time.Time `json:"expires"`
 }
 
-// fifoData is a fifoContents as a snapshot holds it.
-//
-// Entries lists the visible and delayed messages in sending order, then the
-// messages in flight, group by group in the order they were received: the
-// order of a group's in-flight messages decides which of them comes back
-// first, and restore rebuilds each group's list by reading them in that order.
-// Locked and Ready are the groups that a receive locked and the groups that
-// were ready, in the order they became ready, so the next receive takes from
-// the group it would have taken from.
-type fifoData struct {
-	Seq     uint64      `json:"seq"`
-	Scope   string      `json:"scope,omitempty"`
-	Entries []entryData `json:"entries"`
-	Dedup   []dedupData `json:"dedup,omitempty"`
-	Locked  []string    `json:"locked,omitempty"`
-	Ready   []string    `json:"ready,omitempty"`
-}
-
 var _ persistentContents = (*fifoContents)(nil)
 
-func (c *fifoContents) snapshot() (json.RawMessage, error) {
-	data := fifoData{Seq: c.seq, Scope: c.scope, Entries: make([]entryData, 0, c.visible+c.delayed+c.inflight)}
+func (c *fifoContents) snapshot() contentsData {
+	data := contentsData{
+		Seq: c.seq, Scope: c.scope, Entries: make([]*entryData, 0, c.visible+c.delayed+c.inflight),
+		Dedup: make([]dedupData, 0, len(c.dedup)),
+	}
+	store := newEntryStore(c.visible + c.delayed + c.inflight)
 
 	for _, g := range c.groups {
 		for _, e := range g.visible.items {
-			data.Entries = append(data.Entries, e.data(savedVisible))
+			data.Entries = append(data.Entries, store.add(e.data(savedVisible)))
 		}
 
 		if g.locked {
@@ -56,16 +40,15 @@ func (c *fifoContents) snapshot() (json.RawMessage, error) {
 
 	for _, e := range c.deadlines.items {
 		if e.state == stateDelayed {
-			data.Entries = append(data.Entries, e.data(savedDelayed))
+			data.Entries = append(data.Entries, store.add(e.data(savedDelayed)))
 		}
 	}
 
-	slices.SortFunc(data.Entries, func(a, b entryData) int { return cmp.Compare(a.Seq, b.Seq) })
-	slices.Sort(data.Locked)
+	data.bySeq = len(data.Entries)
 
-	for _, id := range slices.Sorted(maps.Keys(c.groups)) {
-		for e := c.groups[id].head; e != nil; e = e.fifo.next {
-			data.Entries = append(data.Entries, e.data(savedInflight))
+	for _, g := range c.groups {
+		for e := g.head; e != nil; e = e.fifo.next {
+			data.Entries = append(data.Entries, store.add(e.data(savedInflight)))
 		}
 	}
 
@@ -75,17 +58,12 @@ func (c *fifoContents) snapshot() (json.RawMessage, error) {
 		}
 	}
 
-	for _, key := range slices.Sorted(maps.Keys(c.dedup)) {
-		f := c.dedup[key].fifo
+	for key, record := range c.dedup {
+		f := record.fifo
 		data.Dedup = append(data.Dedup, dedupData{Key: key, Original: f.original, Sequence: f.sequence, Expires: f.expires})
 	}
 
-	raw, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("encode messages: %w", err)
-	}
-
-	return raw, nil
+	return data
 }
 
 // restore fills an empty fifoContents from a snapshot. It puts each message in
@@ -93,19 +71,12 @@ func (c *fifoContents) snapshot() (json.RawMessage, error) {
 // heap and its timer again: a delayed message whose delay has run out, an
 // in-flight one whose timeout has and a deduplication record whose window has
 // are settled by the time the queue is used.
-func (c *fifoContents) restore(raw json.RawMessage) error {
-	var data fifoData
-
-	err := json.Unmarshal(raw, &data)
-	if err != nil {
-		return fmt.Errorf("decode messages: %w", err)
-	}
-
+func (c *fifoContents) restore(data *contentsData) error {
 	c.seq = data.Seq
 	c.scope = data.Scope
 
 	for i := range data.Entries {
-		d := &data.Entries[i]
+		d := data.Entries[i]
 		e := &entry{
 			msg: d.Message.message(), seq: d.Seq, deadline: d.Deadline,
 			receiveCount: d.ReceiveCount, firstReceived: d.FirstReceived, handles: d.Handles,
@@ -113,7 +84,7 @@ func (c *fifoContents) restore(raw json.RawMessage) error {
 		}
 		e.fifo = &fifoState{group: c.group(e.msg.groupID)}
 
-		err = c.place(e, d.State)
+		err := c.place(e, d.State)
 		if err != nil {
 			return err
 		}
@@ -135,7 +106,7 @@ func (c *fifoContents) restore(raw json.RawMessage) error {
 		c.deadlines.push(c.dedup[d.Key])
 	}
 
-	c.restoreGroups(&data)
+	c.restoreGroups(data)
 
 	now := time.Now()
 	c.refresh(now)
@@ -179,7 +150,7 @@ func (c *fifoContents) place(e *entry, state string) error {
 // restoreGroups sets the lock of each group and rebuilds the ready list: first
 // the groups the snapshot had in it, in its order, then any other group that is
 // open and has messages, in the order of their first message.
-func (c *fifoContents) restoreGroups(data *fifoData) {
+func (c *fifoContents) restoreGroups(data *contentsData) {
 	for _, id := range data.Locked {
 		if g, ok := c.groups[id]; ok {
 			g.locked = true

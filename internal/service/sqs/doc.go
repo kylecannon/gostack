@@ -83,6 +83,16 @@
 // timer from them. Restore reads and checks the whole file before it replaces
 // anything, and leaves SQS empty when the file is not valid.
 //
+// A snapshot is one moment of the state. Whatever carries a message from one
+// queue to another, a dead-letter move or one message of a move task, holds
+// Provider.transfer for reading from the moment the message leaves its queue to
+// the moment it is on the other. Snapshot holds it for writing, only while it
+// copies the queues into memory, each under its own lock; it sorts and encodes
+// the copy with every lock released, streaming to the writer. Restore stops the
+// move tasks and waits for their goroutines before it replaces the state, so
+// that none of them puts a message on a restored queue. The lock order is
+// transfer, then State, then queue.
+//
 // Message move tasks are saved with the State. A task that was running comes
 // back FAILED (FailureReason "ServiceRestarted") and one that was being
 // cancelled comes back CANCELLED; no goroutine is started for either, as

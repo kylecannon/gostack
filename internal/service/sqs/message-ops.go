@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
@@ -310,7 +311,9 @@ func (p *Provider) ReceiveMessage(
 		defer release()
 	}
 
-	taken, changed, err := q.poll(ctx, params, func(dead []deadLetter) *awserr.Error { return p.deadLetter(rc, q, dead) })
+	taken, changed, err := q.poll(ctx, params, &p.transfer, func(dead []deadLetter) *awserr.Error {
+		return p.deadLetter(rc, q, dead)
+	})
 
 	// A receive that found nothing and dropped nothing leaves the state as it
 	// was, so a client that polls an empty queue does not make persistence save.
@@ -426,8 +429,14 @@ const holdSlack = time.Minute
 //
 // changed reports whether the receive changed state: it took a message, moved
 // one to a dead-letter queue or dropped one past retention.
+//
+// Each look at the queue is a transfer when it finds a message past the
+// redrive limit: the message leaves the queue here and is on the dead-letter
+// queue only once deadLetter has put it there. transfer is held for reading from
+// before the look until deadLetter is done, so a snapshot sees the message in
+// one queue of the two.
 func (q *Queue) poll(
-	ctx context.Context, params receiveParams, deadLetter func([]deadLetter) *awserr.Error,
+	ctx context.Context, params receiveParams, transfer *sync.RWMutex, deadLetter func([]deadLetter) *awserr.Error,
 ) (taken []delivery, changed bool, _ *awserr.Error) {
 	parent := ctx
 
@@ -447,7 +456,7 @@ func (q *Queue) poll(
 	last := false
 
 	for {
-		got, wake := q.receiveOnce(params, params.count-len(taken))
+		got, wake, err := q.lookAndMove(params, params.count-len(taken), transfer, deadLetter)
 		taken = append(taken, got.taken...)
 		changed = changed || len(got.taken) > 0 || len(got.dead) > 0 || got.expired
 
@@ -455,13 +464,8 @@ func (q *Queue) poll(
 			held = append(held, got.taken...)
 		}
 
-		// The lock of the queue is free again, so the dead letters can go to a
-		// queue that has a lock of its own.
-		if len(got.dead) > 0 {
-			err := deadLetter(got.dead)
-			if err != nil {
-				return nil, changed, err
-			}
+		if err != nil {
+			return nil, changed, err
 		}
 
 		done := len(taken) >= params.count || (len(taken) > 0 && !params.fill)
@@ -480,6 +484,23 @@ func (q *Queue) poll(
 			last = true
 		}
 	}
+}
+
+// lookAndMove is one look at the queue of a poll, and the dead-letter moves it
+// causes. The queue's lock is free by the time the dead letters go to a queue
+// that has a lock of its own.
+func (q *Queue) lookAndMove(
+	params receiveParams, want int, transfer *sync.RWMutex, deadLetter func([]deadLetter) *awserr.Error,
+) (receiveResult, <-chan struct{}, *awserr.Error) {
+	transfer.RLock()
+	defer transfer.RUnlock()
+
+	got, wake := q.receiveOnce(params, want)
+	if len(got.dead) == 0 {
+		return got, wake, nil
+	}
+
+	return got, wake, deadLetter(got.dead)
 }
 
 // release gives the messages of a poll that filled its response the visibility

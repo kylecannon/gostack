@@ -2,7 +2,8 @@ package sqs
 
 import (
 	"cmp"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,15 @@ import (
 // Restore refuses any other.
 const snapshotVersion = 1
 
+// snapshotOptions are the json settings of a snapshot, on both sides of it. A
+// map is written in key order, so the same state gives the same bytes. A string
+// that is not valid UTF-8, which a tag or an attribute could hold, goes through
+// as it is instead of failing the whole save.
+var snapshotOptions = json.JoinOptions(
+	json.Deterministic(true),
+	jsontext.AllowInvalidUTF8(true),
+)
+
 // persistentContents is a Contents that can be saved and restored. Every
 // Contents the Provider makes has to be one, because a queue whose messages
 // cannot be saved would come back empty: Snapshot fails for it instead.
@@ -23,12 +33,14 @@ const snapshotVersion = 1
 // The queue calls both methods with its own lock held.
 type persistentContents interface {
 	Contents
-	// snapshot returns the messages and everything that orders or times them as
-	// json, deadlines as absolute times.
-	snapshot() (json.RawMessage, error)
+	// snapshot copies the messages and everything that orders or times them,
+	// deadlines as absolute times. It only copies: the queue's lock is held, so
+	// it sorts and encodes nothing, and what it returns shares nothing the queue
+	// goes on to change.
+	snapshot() contentsData
 	// restore fills a Contents that was just made from what snapshot returned,
 	// and arms its timers.
-	restore(raw json.RawMessage) error
+	restore(data *contentsData) error
 }
 
 // snapshotFile is the envelope of a snapshot.
@@ -51,7 +63,7 @@ type stateData struct {
 	Deleted   map[string]time.Time `json:"deleted,omitempty"`
 	Queues    []queueData          `json:"queues"`
 	MoveTasks []moveTaskData       `json:"moveTasks,omitempty"`
-	MoveSeq   uint64               `json:"moveSeq,omitempty"`
+	MoveSeq   uint64               `json:"moveSeq,omitzero"`
 }
 
 // queueData is a Queue: what makes it up besides its name and place, and the
@@ -63,14 +75,44 @@ type queueData struct {
 	Attrs    map[string]string `json:"attributes"`
 	Tags     map[string]string `json:"tags,omitempty"`
 	PurgedAt time.Time         `json:"purgedAt,omitzero"`
-	Contents json.RawMessage   `json:"contents"`
+	Contents contentsData      `json:"contents"`
 }
 
 // Snapshot writes the state of every account and region to w as json. It
-// implements persist.Snapshotter. Each queue is read under its own lock, so a
-// call that runs meanwhile is in the snapshot or not, whole.
+// implements persist.Snapshotter.
+//
+// It reads in two steps. First it copies every queue into memory, holding the
+// provider's transfer lock for writing, so that no message is moving between
+// two queues, and each queue's lock only for its own copy. Then, with every lock
+// released, it sorts the copy and encodes it straight to w. The snapshot is one
+// moment of the state: a message that a dead-letter move or a move task is
+// carrying is in its source or in its destination, never in both or neither,
+// and a call that runs meanwhile is in the snapshot or not, whole.
 func (p *Provider) Snapshot(w io.Writer) error {
+	file, err := p.capture()
+	if err != nil {
+		return err
+	}
+
+	file.sort()
+
+	err = json.MarshalEncode(jsontext.NewEncoder(w, snapshotOptions), &file, snapshotOptions)
+	if err != nil {
+		return fmt.Errorf("write sqs snapshot: %w", err)
+	}
+
+	return nil
+}
+
+// capture copies the state of every account and region.
+//
+// The transfer lock covers every state, because a move can name a queue of
+// another account or region by ARN.
+func (p *Provider) capture() (snapshotFile, error) {
 	file := snapshotFile{Version: snapshotVersion, Data: snapshotData{States: []stateData{}}}
+
+	p.transfer.Lock()
+	defer p.transfer.Unlock()
 
 	var failure error
 
@@ -89,28 +131,24 @@ func (p *Provider) Snapshot(w io.Writer) error {
 		return true
 	})
 
-	if failure != nil {
-		return failure
-	}
+	return file, failure
+}
 
-	slices.SortFunc(file.Data.States, func(a, b stateData) int {
+// sort puts the copy in the order the file keeps it, which takes more time than
+// the queues' locks should be held for.
+func (f *snapshotFile) sort() {
+	slices.SortFunc(f.Data.States, func(a, b stateData) int {
 		return cmp.Or(strings.Compare(a.Account, b.Account), strings.Compare(a.Region, b.Region))
 	})
 
-	raw, err := json.Marshal(file)
-	if err != nil {
-		return fmt.Errorf("encode sqs snapshot: %w", err)
+	for i := range f.Data.States {
+		for j := range f.Data.States[i].Queues {
+			f.Data.States[i].Queues[j].Contents.sort()
+		}
 	}
-
-	_, err = w.Write(raw)
-	if err != nil {
-		return fmt.Errorf("write sqs snapshot: %w", err)
-	}
-
-	return nil
 }
 
-// save reads one State.
+// save copies one State.
 func (s *State) save(account, region string) (stateData, error) {
 	s.mu.RLock()
 	saved := stateData{
@@ -131,7 +169,7 @@ func (s *State) save(account, region string) (stateData, error) {
 	return saved, nil
 }
 
-// save reads one queue under its lock.
+// save copies one queue under its lock.
 func (q *Queue) save() (queueData, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -141,14 +179,9 @@ func (q *Queue) save() (queueData, error) {
 		return queueData{}, fmt.Errorf("queue %s (%s): its contents cannot be saved", q.name, q.arn)
 	}
 
-	raw, err := contents.snapshot()
-	if err != nil {
-		return queueData{}, fmt.Errorf("queue %s (%s): %w", q.name, q.arn, err)
-	}
-
 	return queueData{
 		Name: q.name, FIFO: q.kind == kindFIFO, Seq: q.seq,
-		Attrs: maps.Clone(q.attrs), Tags: maps.Clone(q.tags), PurgedAt: q.purgedAt, Contents: raw,
+		Attrs: maps.Clone(q.attrs), Tags: maps.Clone(q.tags), PurgedAt: q.purgedAt, Contents: contents.snapshot(),
 	}, nil
 }
 
@@ -156,9 +189,14 @@ func (q *Queue) save() (queueData, error) {
 // implements persist.Snapshotter. The snapshot is read and checked whole before
 // anything is replaced, and a snapshot that is not valid leaves SQS empty, as
 // the Snapshotter contract says.
+//
+// A message move task is a goroutine that puts messages on queues it looks up
+// by ARN. Restore stops every one and waits for it before it swaps the state,
+// so that none of them puts a message on a restored queue.
 func (p *Provider) Restore(r io.Reader) error {
 	built, err := p.build(r)
 
+	p.stopMoveTasks()
 	p.Reset("", "")
 
 	if err != nil {
@@ -198,16 +236,18 @@ type builtState struct {
 // that was built before an error is closed, so no timer outlives a failed
 // restore.
 func (p *Provider) build(r io.Reader) (built []builtState, err error) {
-	raw, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("read sqs snapshot: %w", err)
-	}
-
 	var file snapshotFile
 
-	err = json.Unmarshal(raw, &file)
+	dec := jsontext.NewDecoder(r, restoreOptions)
+
+	err = json.UnmarshalDecode(dec, &file, restoreOptions)
 	if err != nil {
 		return nil, fmt.Errorf("decode sqs snapshot: %w", err)
+	}
+
+	_, err = dec.ReadToken()
+	if !errors.Is(err, io.EOF) {
+		return nil, errors.New("decode sqs snapshot: data after the snapshot")
 	}
 
 	if file.Version != snapshotVersion {
@@ -320,7 +360,7 @@ func (p *Provider) buildQueue(saved *stateData, d *queueData) (*Queue, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	err := contents.restore(d.Contents)
+	err := contents.restore(&d.Contents)
 	if err != nil {
 		contents.Close()
 

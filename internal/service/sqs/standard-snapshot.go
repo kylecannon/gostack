@@ -2,9 +2,9 @@ package sqs
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
@@ -30,7 +30,7 @@ type messageData struct {
 	GroupID       string                                  `json:"groupID,omitempty"`
 	DedupID       string                                  `json:"dedupID,omitempty"`
 	Sequence      string                                  `json:"sequence,omitempty"`
-	ReceiveBase   int                                     `json:"receiveBase,omitempty"`
+	ReceiveBase   int                                     `json:"receiveBase,omitzero"`
 }
 
 func (m *message) data() messageData {
@@ -61,24 +61,74 @@ type entryData struct {
 	Seq           uint64      `json:"seq"`
 	State         string      `json:"state"`
 	Deadline      time.Time   `json:"deadline,omitzero"`
-	ReceiveCount  int         `json:"receiveCount,omitempty"`
+	ReceiveCount  int         `json:"receiveCount,omitzero"`
 	FirstReceived time.Time   `json:"firstReceived,omitzero"`
 	Handles       []string    `json:"handles,omitempty"`
 }
 
-// standardData is a standardContents as a snapshot holds it.
-type standardData struct {
-	Seq     uint64      `json:"seq"`
-	Entries []entryData `json:"entries"`
+// entryStore hands out the entryData of one copy from a single allocation, so a
+// copy of a hundred thousand messages is one allocation and not that many, and
+// the entries can be sorted by swapping pointers.
+type entryStore struct{ items []entryData }
+
+func newEntryStore(size int) *entryStore { return &entryStore{items: make([]entryData, 0, size)} }
+
+// add stores d and returns where. When the store was sized too small it moves
+// to a new array, and the pointers handed out before stay good.
+func (s *entryStore) add(d entryData) *entryData {
+	s.items = append(s.items, d)
+
+	return &s.items[len(s.items)-1]
+}
+
+// contentsData is a Contents as a snapshot holds it: the messages of a standard
+// queue with the creation counter, and for a FIFO queue the rest of what orders
+// its groups. A standard queue leaves the FIFO members out.
+//
+// Entries lists the messages as the Contents restores them. For a standard
+// queue that is every message in sending order. For a FIFO queue it is the
+// visible and delayed messages in sending order, then the messages in flight,
+// group by group in the order they were received: the order of a group's
+// in-flight messages decides which of them comes back first, and restore
+// rebuilds each group's list by reading them in that order. Locked and Ready are
+// the groups that a receive locked and the groups that were ready, in the order
+// they became ready, so the next receive takes from the group it would have
+// taken from.
+//
+// snapshot fills it in no particular order, because it runs under the queue's
+// lock, and sort puts it in the order above.
+type contentsData struct {
+	Seq     uint64       `json:"seq"`
+	Scope   string       `json:"scope,omitempty"`
+	Entries []*entryData `json:"entries"`
+	Dedup   []dedupData  `json:"dedup,omitempty"`
+	Locked  []string     `json:"locked,omitempty"`
+	Ready   []string     `json:"ready,omitempty"`
+
+	// bySeq is how many entries, from the first, sort by sequence number. The
+	// ones after them are in-flight messages: sort groups them by their group id
+	// and keeps the order snapshot gave them within a group.
+	bySeq int
+}
+
+// sort puts the copy snapshot made in the order the file keeps it.
+func (d *contentsData) sort() {
+	slices.SortFunc(d.Entries[:d.bySeq], func(a, b *entryData) int { return cmp.Compare(a.Seq, b.Seq) })
+	slices.SortStableFunc(d.Entries[d.bySeq:], func(a, b *entryData) int {
+		return strings.Compare(a.Message.GroupID, b.Message.GroupID)
+	})
+	slices.Sort(d.Locked)
+	slices.SortFunc(d.Dedup, func(a, b dedupData) int { return strings.Compare(a.Key, b.Key) })
 }
 
 var _ persistentContents = (*standardContents)(nil)
 
-func (c *standardContents) snapshot() (json.RawMessage, error) {
-	data := standardData{Seq: c.seq, Entries: make([]entryData, 0, c.visible.len()+c.deadlines.len())}
+func (c *standardContents) snapshot() contentsData {
+	data := contentsData{Seq: c.seq, Entries: make([]*entryData, 0, c.visible.len()+c.deadlines.len())}
+	store := newEntryStore(c.visible.len() + c.deadlines.len())
 
 	for _, e := range c.visible.items {
-		data.Entries = append(data.Entries, e.data(savedVisible))
+		data.Entries = append(data.Entries, store.add(e.data(savedVisible)))
 	}
 
 	for _, e := range c.deadlines.items {
@@ -87,17 +137,12 @@ func (c *standardContents) snapshot() (json.RawMessage, error) {
 			name = savedDelayed
 		}
 
-		data.Entries = append(data.Entries, e.data(name))
+		data.Entries = append(data.Entries, store.add(e.data(name)))
 	}
 
-	slices.SortFunc(data.Entries, func(a, b entryData) int { return cmp.Compare(a.Seq, b.Seq) })
+	data.bySeq = len(data.Entries)
 
-	raw, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("encode messages: %w", err)
-	}
-
-	return raw, nil
+	return data
 }
 
 func (e *entry) data(state string) entryData {
@@ -111,25 +156,18 @@ func (e *entry) data(state string) entryData {
 // again and arms the timer for the earliest deadline, so a delayed message
 // whose delay has run out, or an in-flight one whose timeout has, is visible by
 // the time the queue is used.
-func (c *standardContents) restore(raw json.RawMessage) error {
-	var data standardData
-
-	err := json.Unmarshal(raw, &data)
-	if err != nil {
-		return fmt.Errorf("decode messages: %w", err)
-	}
-
+func (c *standardContents) restore(data *contentsData) error {
 	c.seq = data.Seq
 
 	for i := range data.Entries {
-		d := &data.Entries[i]
+		d := data.Entries[i]
 		e := &entry{
 			msg: d.Message.message(), seq: d.Seq, deadline: d.Deadline,
 			receiveCount: d.ReceiveCount, firstReceived: d.FirstReceived, handles: d.Handles,
 			visibleAt: -1, deadlineAt: -1,
 		}
 
-		err = c.place(e, d.State)
+		err := c.place(e, d.State)
 		if err != nil {
 			return err
 		}
