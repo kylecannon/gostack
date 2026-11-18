@@ -391,16 +391,5 @@ func validBucketName(name string) bool {
 
 // bucketARN is the bucket's ARN in the partition of its region.
 func bucketARN(name, region string) string {
-	var partition string
-
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		partition = "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		partition = "aws-us-gov"
-	default:
-		partition = "aws"
-	}
-
-	return "arn:" + partition + ":s3:::" + name
+	return "arn:" + partitionOf(region) + ":s3:::" + name
 }
