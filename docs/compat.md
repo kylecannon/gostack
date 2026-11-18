@@ -174,12 +174,6 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 - A `PostObject` form's fields before the file are capped at 20 KiB (see the
   `PostObject` row above).
 
-## Limits of Go's HTTP server
-
-| Behavior | LocalStack and AWS | gostack |
-|---|---|---|
-| A header value that starts or ends with a space or a tab, such as `PostObject` metadata `x-amz-meta-k` = `a\t` | Sent as stored | Sent without the leading and trailing whitespace: `net/http` trims every header value it writes. `TestS3PresignedPost::test_post_object_with_unicode_metadata` fails on this alone. |
-
 ## Accepted LocalStack-only behavior
 
 gostack copies these although AWS does not have them. Each is a LocalStack switch
