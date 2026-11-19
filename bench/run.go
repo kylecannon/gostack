@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,11 +172,96 @@ func (o *options) checkBase() error {
 		return fmt.Errorf("-base-image measures one target against its base; -targets names %d", len(o.targets))
 	case o.baseCommit == "" || o.baseOut == "":
 		return errors.New("-base-image needs -base-commit and -base-out")
-	case filepath.Clean(o.baseOut) == filepath.Clean(o.outDir):
-		return fmt.Errorf("-base-out and -out are both %s: the two results would share a name", o.outDir)
+	}
+
+	// Absolute paths with the links resolved, so one directory spelled two ways
+	// (out and ./out, a relative and an absolute path, /tmp/x and /private/tmp/x)
+	// is still one directory. A run of a commit against itself would otherwise
+	// write both results to one file name.
+	baseOut, err := realPath(o.baseOut)
+	if err != nil {
+		return fmt.Errorf("-base-out %s: %w", o.baseOut, err)
+	}
+
+	out, err := realPath(o.outDir)
+	if err != nil {
+		return fmt.Errorf("-out %s: %w", o.outDir, err)
+	}
+
+	if baseOut == out {
+		return fmt.Errorf("-base-out and -out are both %s: the two results would share a name", out)
 	}
 
 	return nil
+}
+
+// realPath is the absolute path of p with every symbolic link in it resolved.
+// A directory that does not exist yet is resolved through its nearest parent
+// that does, as the run creates it there. A link to a directory that does not
+// exist yet is followed to where the run would create it.
+func realPath(p string) (string, error) {
+	return resolvePath(p, maxLinkDepth)
+}
+
+// maxLinkDepth is how many dangling links realPath follows before it gives up,
+// as the kernel does for a loop.
+const maxLinkDepth = 40
+
+func resolvePath(p string, depth int) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("absolute path: %w", err)
+	}
+
+	dir, rest := abs, ""
+
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+
+		parent := filepath.Dir(dir)
+		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
+			return "", fmt.Errorf("resolve links: %w", err)
+		}
+
+		// A link whose target is not there yet: the run creates the target.
+		if dest, ok := danglingLink(dir); ok {
+			if depth == 0 {
+				return "", fmt.Errorf("resolve links: too many links at %s", dir)
+			}
+
+			resolved, err := resolvePath(dest, depth-1)
+			if err != nil {
+				return "", err
+			}
+
+			return filepath.Join(resolved, rest), nil
+		}
+
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	}
+}
+
+// danglingLink returns where the symbolic link at path points, made absolute,
+// when path is a link.
+func danglingLink(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return "", false
+	}
+
+	dest, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(filepath.Dir(path), dest)
+	}
+
+	return dest, true
 }
 
 // sides lists the images the run measures as one target in alternation: the
@@ -550,9 +636,7 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 		}
 
 		for s, cell := range r.cell(ctx, sides, spec) {
-			if cell.Problem != "" {
-				res[s].Problems = append(res[s].Problems, "cell "+cell.ID+": "+cell.Problem)
-			}
+			res[s].noteCell(cell)
 
 			res[s].Cells = append(res[s].Cells, cell)
 		}
@@ -602,6 +686,7 @@ func (r *runner) agenticAll(ctx context.Context, sides []target, res []targetRes
 				}
 
 				res[s].Agentic[w.Service()] = run
+				res[s].noteAgentic(w.Service(), run)
 			}
 		}
 
@@ -722,7 +807,12 @@ func (r *runner) idleRun(ctx context.Context, t target, variant string, i int) (
 		return usage{}, err
 	}
 
-	return r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+	if err == nil {
+		err = inst.alive(ctx)
+	}
+
+	return used, err
 }
 
 // cell measures one cell on each side: reps runs a side, alternating the sides,
@@ -748,13 +838,7 @@ func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cell
 	for s, t := range sides {
 		r.logf("%s: %s: %d of %d runs", t.label(), spec.id(), len(runs[s]), r.opts.reps)
 
-		if len(runs[s]) == 0 {
-			res[s] = cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed[s], "; ")}
-
-			continue
-		}
-
-		res[s] = summarizeCell(spec, runs[s])
+		res[s] = settleCell(spec, runs[s], failed[s])
 	}
 
 	return res
@@ -796,6 +880,10 @@ func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResul
 	})
 	run.Usage = used
 
+	if err == nil {
+		err = inst.alive(ctx)
+	}
+
 	return run, err
 }
 
@@ -818,6 +906,10 @@ func (r *runner) agentic(ctx context.Context, t target, w agenticWorkload) (agen
 			"-cycles", strconv.Itoa(r.opts.cycles), "-concurrency", strconv.Itoa(r.opts.cycleConcurrency))
 	})
 	run.Usage = used
+
+	if err == nil {
+		err = inst.alive(ctx)
+	}
 
 	return run, err
 }

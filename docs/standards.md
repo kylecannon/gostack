@@ -322,6 +322,33 @@ passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
 
+A run is a measurement only while its target works. After every run the
+orchestrator checks that the target container is still running; a run whose
+container exited or was removed fails, and is recorded in the cell's
+`failed_runs` instead of being dropped, so a side never ends with fewer runs
+than the other unrecorded. An operation that reports errors is recorded with its
+count in the result file's `problems`. `bench compare` fails when the head has a
+problem the base does not: an operation with errors where the base has none, a
+cell with failed runs or no completed run where the base ran, a measurement the
+head could not take of a kind (the text before the first `:` of its line) that the
+base did not also fail to take, or any of these in a cell only the head has. It also fails when the
+head has more failed runs in a cell than the base, or operation errors in the
+same cell and operation that are at least 10 and more than 10 times the base's,
+and when the head lacks a gated target, or a cell the base completed, that it
+was asked to measure ("missing from the head"; a different profile, a service
+the head did not select, or a cell the head's matrix no longer has, listed as
+"removed from the matrix", is not asked). A cell with no completed run in a
+result that predates `failed_runs` counts as having failed every run its reps
+asked for. Each row prints the cell, the operation
+and both counts. Any other problem on both sides is listed and does not fail,
+and neither do cells with unequal run counts. Zero tolerance for an error only
+the head has is deliberate: the committed results hold 0 errors in over 900,000
+operations, a stray error costs one rerun, and a floor would let a rare race
+through. A regression computed from fewer runs than the run asked for says so in
+its row ("head 4 of 5 runs"). The accepted list does not cover any of this.
+Containers are removed with their volume (`docker rm -f -v`), and `-out` and
+`-base-out` are compared as absolute paths with their links resolved.
+
 A pull request measures its base and head images in one run,
 `bench run -base-image`, never one image after the other. Every repeated
 measurement (each startup and idle run, and each run of a cell) alternates the
