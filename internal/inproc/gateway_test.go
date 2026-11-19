@@ -15,6 +15,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/service"
@@ -41,7 +42,7 @@ func newStack(t testing.TB) *stack {
 	t.Helper()
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
-		s3.NewEphemeral(t.TempDir()))
+		blob.NewEphemeral(t.TempDir()))
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{Host: localstackHost} }, func(string) {})
 
 	t.Cleanup(provider.Close)
