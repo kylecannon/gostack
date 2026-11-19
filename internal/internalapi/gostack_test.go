@@ -215,9 +215,10 @@ func Test_Gostack_services(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, got.status)
 	spec.validateResponse(t, "/_gostack/services", "get", statusOK, got.body)
+	// sts's implemented operations are unknown: they are null, not a guess.
 	require.JSONEq(t, `{"services": {
-		"sqs": {"implemented": 2, "total": 23, "operations": ["CreateQueue", "SendMessage"]},
-		"sts": {"implemented": 0, "total": 11, "operations": []}
+		"sqs": {"state": "running", "implemented": 2, "total": 23, "operations": ["CreateQueue", "SendMessage"]},
+		"sts": {"state": "available", "implemented": null, "total": 11, "operations": null}
 	}}`, string(got.body))
 }
 

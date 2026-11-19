@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/persist"
@@ -20,6 +21,11 @@ const stateRunning = "running"
 type serviceTable struct {
 	regs []service.Registration
 	eng  *persist.Engine
+
+	// capabilities are worked out once, on the first request for them: they
+	// never change after startup, and the startup does not pay for them.
+	capabilities []internalapi.ServiceCapability
+	once         sync.Once
 }
 
 // States returns every registered service as running, and says whether its state
@@ -39,16 +45,26 @@ func (t *serviceTable) States() map[string]internalapi.ServiceState {
 // Check does nothing: the states never change after startup.
 func (*serviceTable) Check() {}
 
-// Capabilities lists the registered services. A registration carries no list of
-// the operations it implements yet, so only the names are reported.
+// Capabilities lists, for every registered service, the operations of its API
+// and the ones its Handler implements. A service without a Handler, or whose
+// Handler the check cannot read, reports them as unknown.
 func (t *serviceTable) Capabilities() []internalapi.ServiceCapability {
-	capabilities := make([]internalapi.ServiceCapability, 0, len(t.regs))
+	t.once.Do(func() {
+		t.capabilities = make([]internalapi.ServiceCapability, 0, len(t.regs))
 
-	for i := range t.regs {
-		capabilities = append(capabilities, internalapi.ServiceCapability{Name: t.regs[i].Metadata.Name})
-	}
+		for i := range t.regs {
+			metadata := &t.regs[i].Metadata
+			implemented, known := service.Implemented(t.regs[i].Handler, metadata.Operations)
+			t.capabilities = append(t.capabilities, internalapi.ServiceCapability{
+				Name:        metadata.Name,
+				Implemented: implemented,
+				Unknown:     !known,
+				Total:       len(metadata.Operations),
+			})
+		}
+	})
 
-	return capabilities
+	return t.capabilities
 }
 
 // stateController implements [internalapi.StateController]: reset goes to the

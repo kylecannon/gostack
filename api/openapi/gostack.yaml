@@ -561,16 +561,24 @@ components:
             type: object
             additionalProperties: false
             properties:
+              state:
+                type: string
+                description: The service's state, as /_gostack/health reports it.
               implemented:
-                type: integer
-                description: The number of operations implemented.
+                type: [integer, 'null']
+                description: >-
+                  The number of operations implemented. It is null when the
+                  service's implemented operations cannot be told, for a
+                  service whose registration does not name its handler.
               total:
                 type: integer
                 description: The number of operations in the service's API.
               operations:
-                type: array
-                description: The implemented operations, sorted.
+                type: [array, 'null']
+                description: >-
+                  The implemented operations, sorted. The ones the API has
+                  beyond these answer 501. It is null when implemented is.
                 items:
                   type: string
-            required: [implemented, total, operations]
+            required: [state, implemented, total, operations]
       required: [services]

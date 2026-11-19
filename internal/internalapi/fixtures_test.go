@@ -52,7 +52,7 @@ func (f *fakeServices) Check() {
 func (*fakeServices) Capabilities() []internalapi.ServiceCapability {
 	return []internalapi.ServiceCapability{
 		{Name: serviceSQS, Implemented: []string{"SendMessage", "CreateQueue"}, Total: 23},
-		{Name: serviceSTS, Total: 11},
+		{Name: serviceSTS, Total: 11, Unknown: true},
 	}
 }
 
