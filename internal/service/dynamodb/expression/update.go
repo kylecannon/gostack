@@ -310,7 +310,14 @@ func updateCheckOperand(op *updateOperand, values map[string]api.AttributeValue,
 			return value.Invalid(msgUpdateNoValue + op.tok.text)
 		}
 
-		op.val = v
+		// A validated copy with canonical numbers, as conditions take: ADD
+		// and DELETE match set members by their canonical text.
+		c, err := canonical(op.tok.text, &v)
+		if err != nil {
+			return err
+		}
+
+		op.val = *c
 
 		if used != nil {
 			used[op.tok.text] = struct{}{}

@@ -1,6 +1,7 @@
 package expression_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -26,6 +27,37 @@ func updateApply(t *testing.T, old value.Item, expr string, subs expression.Subs
 	require.Equal(t, before, updateJSON(t, old), "Apply changed the old item")
 
 	return u, updated, applyErr //nolint:wrapcheck // the test checks the error itself
+}
+
+// Test_UpdateExpr_Apply_CanonicalValues: a value placeholder is read in
+// canonical form, as the image reads it (SQ-268): ADD of "1.0" to [1, 2, 3.5]
+// adds nothing, and DELETE of "1.0" removes 1. The substitutions are decoded
+// without validation, as the request carries them.
+func Test_UpdateExpr_Apply_CanonicalValues(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		expr string
+		want []string
+	}{
+		{"ADD ns :x", []string{"1", "2", "3.5"}},
+		{"DELETE ns :x", []string{"2", "3.5"}},
+	} {
+		t.Run(tt.expr, func(t *testing.T) {
+			t.Parallel()
+
+			var values value.Item
+
+			require.NoError(t, json.Unmarshal([]byte(`{":x":{"NS":["1.0"]}}`), &values))
+
+			old := updateItem(t, `{"pk":{"S":"k"},"ns":{"NS":["1","2","3.5"]}}`)
+			_, updated, err := updateApply(t, old, tt.expr, expression.Substitutions{Values: values})
+			require.NoError(t, err)
+
+			ns := updated["ns"]
+			require.ElementsMatch(t, tt.want, ns.NS)
+		})
+	}
 }
 
 // Each row's new item and UPDATED_OLD and UPDATED_NEW Attributes are what

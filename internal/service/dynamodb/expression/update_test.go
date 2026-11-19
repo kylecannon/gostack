@@ -2,7 +2,10 @@ package expression_test
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
@@ -253,7 +256,7 @@ func Test_ParseUpdate_Accepted(t *testing.T) {
 	t.Parallel()
 
 	for _, expr := range []string{
-		"SET id = :n", "SET ID = :n", "SET contains = :n", "SET CONTAINS = :n",
+		"SET id = :n", "SET ID = :n", "SET contains = :n", "SET CONTAINS = :n", "REMOVE id", "REMOVE contains",
 		"SET c = (:n)", "SET c = (:n + :n)", "SET c = (:n - :n)", "SET c = (c) + :n",
 		"SET c = :n + (c)", "SET c = ((c) + :n)", "SET c = if_not_exists(c, (:n))",
 		"SET c = (if_not_exists(c, :n))",
@@ -265,6 +268,32 @@ func Test_ParseUpdate_Accepted(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// Test_ParseUpdate_SizeCap: 4,097 characters answer the image's size message
+// before parsing, and a REMOVE list as long as the cap allows parses in well
+// under a second; the pairwise overlap check was 344 ms at 64 KiB before the
+// cap (SQ-268).
+func Test_ParseUpdate_SizeCap(t *testing.T) {
+	t.Parallel()
+
+	over := "REMOVE a" + strings.Repeat("b", 4097-len("REMOVE a"))
+	_, err := expression.ParseUpdate(over, expression.Substitutions{}, nil)
+	requireUpdateError(t, err, "Invalid UpdateExpression: Expression size has exceeded the maximum allowed size;")
+
+	var b strings.Builder
+
+	b.WriteString("REMOVE a0")
+
+	for i := 1; b.Len() < 4096-len(",a9999"); i++ {
+		b.WriteString(",a" + strconv.Itoa(i))
+	}
+
+	start := time.Now()
+	u, err := expression.ParseUpdate(b.String(), expression.Substitutions{}, nil)
+	require.NoError(t, err)
+	require.Greater(t, len(u.Paths()), 700)
+	require.Less(t, time.Since(start), time.Second)
 }
 
 func Test_ParseUpdate_Used(t *testing.T) {

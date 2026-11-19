@@ -221,6 +221,10 @@ caller's account and region, as LocalStack does.
   the FNV hash of its partition key picks. Every item is in exactly one
   segment, as in LocalStack, but which segment holds a given item differs
   from DynamoDB Local's hash.
+- Arithmetic in an update expression stores its result in canonical form:
+  `1.5 + 1.5` is `3` and a result of zero is `0`, where DynamoDB Local in the
+  LocalStack image writes `3.0` and `0.0`. AWS trims trailing zeroes from
+  numbers (the data types page of the developer guide).
 - `ReturnItemCollectionMetrics` is accepted and never answered, as the
   LocalStack image does on every write.
 - A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
