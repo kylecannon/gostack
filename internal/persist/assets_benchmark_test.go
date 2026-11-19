@@ -77,7 +77,8 @@ func BenchmarkAssetsCommit(b *testing.B) {
 
 // BenchmarkSavePendingAssets measures one save of a service whose state names
 // that many 1 KiB assets committed since the last save, all of which the save
-// fsyncs, with their directories, before its snapshot is renamed into place.
+// makes durable before its snapshot is renamed into place: one syncfs on
+// Linux, an fsync of each asset and of each of their directories elsewhere.
 // The commits are not timed.
 func BenchmarkSavePendingAssets(b *testing.B) {
 	body := bytes.Repeat([]byte{'x'}, 1<<10)
