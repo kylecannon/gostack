@@ -109,6 +109,14 @@ func (t *Table) Get(key value.Item) value.Item {
 	return t.primary.get(hash, rng, "")
 }
 
+// GetHeld is Get for a caller that holds the table's lock through Lock or
+// ReadLock, as a transaction does.
+func (t *Table) GetHeld(key value.Item) value.Item {
+	hash, rng := t.primaryKey(key)
+
+	return t.primary.get(hash, rng, "")
+}
+
 // Write is the one write path. It calls decide with the item stored at key,
 // nil when there is none, and stores what decide returns: a new item, which
 // must have the same key, or nil to delete. An error from decide stores
@@ -160,9 +168,7 @@ func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Ite
 // function that releases them, which the caller defers so that a panic
 // between the two releases them too.
 func Lock(tables ...*Table) (unlock func()) {
-	ordered := slices.Clone(tables)
-	slices.SortFunc(ordered, func(a, b *Table) int { return compareIDs(a.id, b.id) })
-	ordered = slices.Compact(ordered)
+	ordered := lockOrder(tables)
 
 	for _, t := range ordered {
 		t.mu.Lock()
@@ -173,6 +179,32 @@ func Lock(tables ...*Table) (unlock func()) {
 			t.mu.Unlock()
 		}
 	}
+}
+
+// ReadLock is Lock with the read locks, for a read of several tables that must
+// see one state of all of them. It takes them in Lock's order, so it cannot
+// deadlock against Lock either.
+func ReadLock(tables ...*Table) (unlock func()) {
+	ordered := lockOrder(tables)
+
+	for _, t := range ordered {
+		t.mu.RLock()
+	}
+
+	return func() {
+		for _, t := range slices.Backward(ordered) {
+			t.mu.RUnlock()
+		}
+	}
+}
+
+// lockOrder is tables, each once, in the one global order every multi-table
+// lock follows: the order in which the tables were created.
+func lockOrder(tables []*Table) []*Table {
+	ordered := slices.Clone(tables)
+	slices.SortFunc(ordered, func(a, b *Table) int { return compareIDs(a.id, b.id) })
+
+	return slices.Compact(ordered)
 }
 
 func compareIDs(a, b uint64) int {

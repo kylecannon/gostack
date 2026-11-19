@@ -1,7 +1,10 @@
 package table
 
 import (
+	"errors"
+
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -25,6 +28,16 @@ const (
 	msgEmptyKeyPrefix = "One or more parameter values are not valid. "
 	msgEmptyIndexKey  = "A value specified for a secondary index key is not supported. "
 )
+
+// IsKeyTypeMismatch reports whether err is CheckKey's or CheckItem's refusal
+// of a key value whose type is not the key attribute's, which a transaction
+// reports as one action's cancellation reason rather than refusing the
+// request.
+func IsKeyTypeMismatch(err error) bool {
+	var e *awserr.Error
+
+	return errors.As(err, &e) && e.Message == msgKeyTypeMismatch
+}
 
 // CheckKey checks that key names exactly the table's key attributes, each with
 // a value of its type, as GetItem and DeleteItem take it. The values must have
