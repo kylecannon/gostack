@@ -1,0 +1,22 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kylecannon/gostack/internal/gateway
+                              │  base.txt  │              head.txt              │
+                              │ allocs/op  │ allocs/op   vs base                │
+GatewayServeNoop/handler-2      24.00 ± 0%   21.00 ± 0%  -12.50% (p=0.000 n=10)
+
+pkg: github.com/kylecannon/gostack/internal/persist
+                                                │   base.txt   │              head.txt               │
+                                                │    sec/op    │   sec/op     vs base                │
+MarkDirty-2                                       27.19n ±  1%   24.14n ± 2%  -11.24% (p=0.000 n=10)
+
+pkg: github.com/kylecannon/gostack/internal/route
+                                      │  base.txt   │              head.txt               │
+                                      │   sec/op    │   sec/op     vs base                │
+RouteDetect/host-2                      109.9n ± 6%   139.4n ± 1%  +26.83% (p=0.000 n=10)
+                                      │   base.txt   │                head.txt                 │
+                                      │     B/op     │    B/op     vs base                     │
+RouteDetect/signing_name_and_target-2   80.00 ± 0%      0.00 ± 0%  -100.00% (p=0.000 n=10)
+                                      │   base.txt   │                head.txt                 │
+                                      │  allocs/op   │ allocs/op   vs base                     │
+RouteDetect/signing_name_and_target-2   1.000 ± 0%     0.000 ± 0%  -100.00% (p=0.000 n=10)

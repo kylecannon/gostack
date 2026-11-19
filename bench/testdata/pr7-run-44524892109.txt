@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kylecannon/gostack/internal/service/sqs
+                                                                         │   base.txt   │               head.txt                │
+                                                                         │    sec/op    │    sec/op      vs base                │
+ReceiveMessage/proto=query/queue=standard/max=10/payload=1MiB-2            19.76m ± 12%    21.99m ± 15%  +11.28% (p=0.023 n=10)
+                                                                         │   base.txt    │               head.txt                │
+                                                                         │      B/s      │      B/s       vs base                │
+ReceiveMessage/proto=query/queue=standard/max=10/payload=1MiB-2            506.0Mi ± 14%   455.0Mi ± 17%  -10.09% (p=0.023 n=10)
