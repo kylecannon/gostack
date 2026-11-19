@@ -26,7 +26,7 @@ Every package has a `doc.go` that states its contract; read it first.
 | `internal/route` | service detection, host claims, signing-name tie-break by `Claim`, `AmbiguousError`, known-service table | route.go, known.go |
 | `internal/internalapi` | health, info, init, config, services, state save/load/reset, plugins | mount.go, state*.go, config.go |
 | `internal/blob` | `Store`, `Writer`, `ErrNotFound`, the ephemeral in-memory/spill store | ephemeral.go |
-| `internal/persist` | `Engine`, `Snapshotter`, flush timer, atomic files, `ErrUnsafe`, the assets seam (`Assets`, `ResetAssets`) and its blob store | engine.go, files.go, config.go, assets.go, blob-store.go, assets-sync_linux.go (one `syncfs` before a save), assets-sync_other.go (per-file fsync elsewhere) |
+| `internal/persist` | `Engine`, `Snapshotter`, flush timer, atomic files, `ErrUnsafe`, the assets seam (`Assets`, `ResetAssets`) and its blob store | engine.go, files.go, config.go, assets.go, blob-store.go, assets-sync_linux.go (one `syncfs` before a save), assets-sync_other.go (per-file fsync elsewhere); assets-writeback_linux_internal_test.go runs only under scripts/writeback-fault.sh |
 | `internal/tlscert` | self-signed or custom cert | tlscert.go |
 | `internal/service/sts` | STS provider (query; credentials, sessions, SAML; model-bound validation) | sts.go, operations.go, credentials.go, sessions.go, validate.go |
 | `internal/service/sqs` | SQS provider, see below | provider.go, queue.go |

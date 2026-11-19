@@ -32,7 +32,7 @@ bench/                  loadgen, cells, gate, compare, results/
 docker/                 Dockerfile, Dockerfile.slim
 api/openapi/            gostack.yaml, embedded by embed.go
 docs/                   architecture, standards, compat, parity (generated)
-scripts/                go-packages.sh, vendor-specs.sh
+scripts/                go-packages.sh, vendor-specs.sh, writeback-fault.sh (loop-device asset sync faults, privileged Docker)
 tools/                  separate go.mod for golangci-lint
 .github/workflows/      ci, parity, fuzz, bench, bench-system, release
 ```
