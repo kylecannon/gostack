@@ -140,9 +140,11 @@ SERVICE_DIR = "internal/service/"
 NO_IMAGE_EFFECT = (
     # Outside the Docker build context (.dockerignore), and not read by parity/.
     "docs/",
-    "bench/",
     "tools/",
     ".claude/",
+    # In the build context, but its own programs: nothing under cmd/ or
+    # internal/ imports it, so it is not in the binary.
+    "bench/",
     # Prose in the build context that nothing compiles, embeds or reads.
     "README.md",
     "AGENTS.md",

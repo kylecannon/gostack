@@ -531,6 +531,25 @@ class CheckAgainstBaseTest(unittest.TestCase):
         code, out = self.check(demoted)
         self.assertEqual(code, 0, out)
 
+    def test_a_prune_that_removes_a_passing_row_passes_with_the_entry_prune_writes(self) -> None:
+        base = self.split_base()
+        listing = self.repo / "collected.txt"
+        listing.write_text(f"{STS}::a\n{SQS}::c\n", encoding="utf-8")
+        args = argparse.Namespace(
+            ledger=self.dir, docs=self.repo / "parity.md", collected=listing, dry_run=False, localstack=None, cache=self.repo / "cache.json", demotions=self.demotions
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            ledger.prune(args)
+        self.assertNotIn(f"{SQS}::b", ledger.load_ledger(self.dir))
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"gostack: {SQS}::b: pass -> missing (gone upstream at ", out)
+        # Without the entry the same removal fails.
+        self.demotions.unlink()
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"gostack: {SQS}::b: pass -> missing", out)
+
     def test_an_entry_for_an_excluded_failing_or_absent_row_may_stay(self) -> None:
         base = self.split_base()
         self.demotions.write_text(f'"{SQS}::c": still failing\n"{SQS}::gone": pruned\n', encoding="utf-8")
