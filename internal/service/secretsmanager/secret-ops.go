@@ -64,7 +64,7 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 
 	name := deref(in.Name)
 
-	tags, err := checkCreate(name, in)
+	err = checkCreate(name, in)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 	// The secret goes to the caller's account and region whatever its name looks
 	// like: LocalStack hands CreateSecret to moto as it is, and only the other
 	// operations read a SecretId that is an ARN for the place it names.
-	secret, out, err := p.create(p.stateAt(rc.AccountID, rc.Region), name, in, tags)
+	secret, out, err := p.create(p.stateAt(rc.AccountID, rc.Region), name, in)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 // create is CreateSecret's checks of the name against state, then the new
 // secret, added to state.
 func (p *Provider) create(
-	state *State, name string, in *api.CreateSecretInput, tags []api.Tag,
+	state *State, name string, in *api.CreateSecretInput,
 ) (*Secret, *api.CreateSecretOutput, *awserr.Error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -109,7 +109,7 @@ func (p *Provider) create(
 		return nil, nil, err
 	}
 
-	secret := newSecret(state, name, in, tags, p.now())
+	secret := newSecret(state, name, in, p.now())
 	out := &api.CreateSecretOutput{ARN: new(secret.arn), Name: new(name)}
 
 	if deref(in.SecretString) != "" || len(in.SecretBinary) > 0 {
@@ -126,20 +126,19 @@ func (p *Provider) create(
 }
 
 // checkCreate is CreateSecret's checks before the lookup: the token's presence,
-// then the name, unless the BYPASS_SECRET_ID_VALIDATION tag skips it. It
-// returns the tags to store.
-func checkCreate(name string, in *api.CreateSecretInput) ([]api.Tag, *awserr.Error) {
+// then the name, unless the BYPASS_SECRET_ID_VALIDATION tag skips it. The tag
+// is stored with the others, as LocalStack's moto does.
+func checkCreate(name string, in *api.CreateSecretInput) *awserr.Error {
 	err := checkTokenPresent(in.ClientRequestToken)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	tags, bypass := withoutBypassTag(in.Tags)
-	if bypass {
-		return tags, nil
+	if slices.ContainsFunc(in.Tags, func(t api.Tag) bool { return deref(t.Key) == bypassTag }) {
+		return nil
 	}
 
-	return tags, checkSecretID(name)
+	return checkSecretID(name)
 }
 
 // existsError is the error for a CreateSecret whose name is taken.
@@ -157,7 +156,7 @@ func existsError(existing *Secret, name string) *awserr.Error {
 }
 
 // newSecret is a new secret without versions, created now.
-func newSecret(state *State, name string, in *api.CreateSecretInput, tags []api.Tag, now time.Time) *Secret {
+func newSecret(state *State, name string, in *api.CreateSecretInput, now time.Time) *Secret {
 	now = now.Truncate(time.Microsecond)
 	secret := &Secret{
 		account:     state.account,
@@ -170,23 +169,12 @@ func newSecret(state *State, name string, in *api.CreateSecretInput, tags []api.
 		lastChanged: now,
 	}
 
-	if len(tags) > 0 {
-		secret.tags = tagsFrom(tags)
+	if len(in.Tags) > 0 {
+		secret.tags = tagsFrom(in.Tags)
 		secret.tagged = true
 	}
 
 	return secret
-}
-
-// withoutBypassTag returns tags without the BYPASS_SECRET_ID_VALIDATION tag,
-// and whether it was there.
-func withoutBypassTag(tags []api.Tag) ([]api.Tag, bool) {
-	i := slices.IndexFunc(tags, func(t api.Tag) bool { return deref(t.Key) == bypassTag })
-	if i < 0 {
-		return tags, false
-	}
-
-	return slices.Delete(slices.Clone(tags), i, i+1), true
 }
 
 func tagsFrom(in []api.Tag) []tag {

@@ -181,7 +181,7 @@ func (p *Provider) PutSecretValue(ctx context.Context, in *api.PutSecretValueInp
 			return nil
 		}
 
-		stages := slices.Clone(in.VersionStages)
+		stages := stagesFrom(in.VersionStages)
 		if stages == nil {
 			stages = []string{stageCurrent}
 		}
@@ -204,6 +204,29 @@ func (p *Provider) PutSecretValue(ctx context.Context, in *api.PutSecretValueInp
 	}
 
 	return out, nil
+}
+
+// stagesFrom is the stages PutSecretValue was given, each once, in the order
+// given, and none empty: a null entry of the list reaches the handler as an
+// empty name, which LocalStack takes for no stage. nil stays nil, for the
+// default stage.
+//
+// moto keeps a stage listed twice, so a version can hold AWSCURRENT twice and
+// a later move leaves two versions holding it, a state AWS cannot reach.
+func stagesFrom(given []string) []string {
+	if given == nil {
+		return nil
+	}
+
+	stages := make([]string, 0, len(given))
+
+	for _, stage := range given {
+		if stage != "" && !slices.Contains(stages, stage) {
+			stages = append(stages, stage)
+		}
+	}
+
+	return stages
 }
 
 // repeated is moto's _check_with_existing_secrets_and_versions for an existing
@@ -413,6 +436,8 @@ func (b *batch) read(secret *Secret, id string, filters []api.Filter) *awserr.Er
 		return api.NewInvalidRequestException(msgBatchDeleted)
 	case secret.deleted():
 		b.errors = append(b.errors, batchError(id, api.NewInvalidRequestException(msgBatchDeleted)))
+	case secret.version(secret.current) == nil:
+		return errBatchNoValue()
 	default:
 		v, err := secret.value(nil, "")
 		if err != nil {

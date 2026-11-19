@@ -113,7 +113,7 @@ func Test_rotate_secret_with_a_function(t *testing.T) {
 
 	stages := asMap(t, described["VersionIdsToStages"])
 	assert.Equal(t, []any{awsCurrent}, stages[token1])
-	assert.Equal(t, []any{"AWSPENDING"}, stages[token2])
+	assert.Equal(t, []any{stagePending}, stages[token2])
 
 	// The pending version has no value until the function sets one.
 	requireError(t, h, "GetSecretValue", `{"SecretId":"r","VersionStage":"AWSPENDING"}`, "ResourceNotFoundException")

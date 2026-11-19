@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	api "github.com/kylecannon/gostack/internal/api/secretsmanager"
+	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 )
@@ -70,47 +71,24 @@ func (p *Provider) ListSecretVersionIds(
 // version it left and makes the target the current version, and every version
 // left without a stage is deleted. Both version ids are checked before
 // anything changes.
+//
+// Without a VersionStage nothing changes. moto looks for a stage named None in
+// the version to remove it from, which is never there, and adds one to the
+// version to move it to, which nothing shows; gostack keeps no such stage.
 func (p *Provider) UpdateSecretVersionStage(
 	ctx context.Context, in *api.UpdateSecretVersionStageInput,
 ) (*api.UpdateSecretVersionStageOutput, error) {
-	stage := deref(in.VersionStage)
-	removeFrom := deref(in.RemoveFromVersionId)
-	moveTo := deref(in.MoveToVersionId)
-
 	var out *api.UpdateSecretVersionStageOutput
 
 	err := p.withSecret(ctx, in.SecretId, func(_ *request.Context, secret *Secret) error {
-		var from, to *version
-
-		switch {
-		case removeFrom != "":
-			if from = secret.version(removeFrom); from == nil {
-				return api.NewInvalidParameterException("Not a valid version: " + removeFrom)
-			}
-
-			if !from.hasStage(stage) {
-				return api.NewInvalidParameterException("Version stage " + stage + " not found in version " + removeFrom)
-			}
-		case stage == stageCurrent:
-			current := ""
-			if v := secret.versionWithStage(stageCurrent); v != nil {
-				current = v.id
-			}
-
-			return api.NewInvalidParameterException("The parameter RemoveFromVersionId can't be empty. Staging label " +
-				"AWSCURRENT is currently attached to version " + current +
-				", so you must explicitly reference that version in RemoveFromVersionId.")
-		default:
-			// Nothing to take the stage from.
+		from, to, err := secret.stageEnds(in)
+		if err != nil {
+			return err
 		}
 
-		if moveTo != "" {
-			if to = secret.version(moveTo); to == nil {
-				return api.NewInvalidParameterException("Not a valid version: " + moveTo)
-			}
+		if in.VersionStage != nil {
+			secret.moveStage(*in.VersionStage, from, to)
 		}
-
-		secret.moveStage(stage, from, to)
 
 		out = &api.UpdateSecretVersionStageOutput{ARN: new(secret.arn), Name: new(secret.name)}
 
@@ -121,6 +99,58 @@ func (p *Provider) UpdateSecretVersionStage(
 	}
 
 	return out, nil
+}
+
+// stageEnds finds the version UpdateSecretVersionStage takes the stage from and
+// the one it puts it on, either of which may be nil, with moto's checks of the
+// versions and of the stage the first one holds. The caller holds the secret's
+// lock.
+func (s *Secret) stageEnds(in *api.UpdateSecretVersionStageInput) (from, to *version, err *awserr.Error) {
+	stage := deref(in.VersionStage)
+	removeFrom := deref(in.RemoveFromVersionId)
+
+	switch {
+	case removeFrom != "":
+		if from = s.version(removeFrom); from == nil {
+			return nil, nil, api.NewInvalidParameterException("Not a valid version: " + removeFrom)
+		}
+
+		if in.VersionStage == nil {
+			return nil, nil, api.NewInvalidParameterException("Version stage None not found in version " + removeFrom)
+		}
+
+		if !from.hasStage(stage) {
+			return nil, nil, api.NewInvalidParameterException("Version stage " + stage + " not found in version " + removeFrom)
+		}
+	case stage == stageCurrent:
+		return nil, nil, s.errCurrentUnnamed()
+	default:
+		// Nothing to take the stage from.
+	}
+
+	if moveTo := deref(in.MoveToVersionId); moveTo != "" {
+		if to = s.version(moveTo); to == nil {
+			return nil, nil, api.NewInvalidParameterException("Not a valid version: " + moveTo)
+		}
+	}
+
+	return from, to, nil
+}
+
+// errCurrentUnnamed is moto's refusal to move AWSCURRENT without saying which
+// version it leaves. Where no version holds AWSCURRENT, which a stage move can
+// leave a secret in, moto has no version to name and crashes (a 500); the
+// message says so instead of naming an empty id.
+func (s *Secret) errCurrentUnnamed() *awserr.Error {
+	const prefix = "The parameter RemoveFromVersionId can't be empty. Staging label AWSCURRENT is "
+
+	current := s.versionWithStage(stageCurrent)
+	if current == nil {
+		return api.NewInvalidParameterException(prefix + "not attached to any version of this secret.")
+	}
+
+	return api.NewInvalidParameterException(prefix + "currently attached to version " + current.id +
+		", so you must explicitly reference that version in RemoveFromVersionId.")
 }
 
 // moveStage takes stage off from and puts it on to, either of which may be

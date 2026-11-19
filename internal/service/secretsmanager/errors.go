@@ -9,7 +9,8 @@ import (
 )
 
 // Every error Secrets Manager answers is a 400, ResourceNotFoundException
-// included: LocalStack sets moto's 404 to 400.
+// included: LocalStack sets moto's 404 to 400. errBatchNoValue is the one
+// exception, which reaches the client as moto made it.
 const (
 	msgSecretNotFound = "Secrets Manager can't find the specified secret."
 	msgValueNotFound  = "Secrets Manager can't find the specified secret value for "
@@ -33,12 +34,25 @@ const (
 	msgNoValue = "You must provide either SecretString or SecretBinary."
 
 	// bypassTag is the tag key with which another LocalStack provider creates a
-	// secret whose name would fail the name check; it is never stored.
+	// secret whose name would fail the name check. The tag is stored like any
+	// other.
 	bypassTag = "BYPASS_SECRET_ID_VALIDATION"
 )
 
 func errSecretNotFound() *awserr.Error {
 	return api.NewResourceNotFoundException(msgSecretNotFound)
+}
+
+// errBatchNoValue is what BatchGetSecretValue answers for a secret with no
+// version to read: moto's own ResourceNotFoundException, which its batch call
+// does not catch as it does SecretNotFoundException, so it fails the whole call
+// with moto's 404, which LocalStack does not turn into a 400 here. moto asks
+// for the VersionId "AWSCURRENT" because it falls back to that name.
+func errBatchNoValue() *awserr.Error {
+	err := api.NewResourceNotFoundException(msgValueNotFound + "VersionId: " + stageCurrent)
+	err.StatusCode = http.StatusNotFound
+
+	return err
 }
 
 func errValidation(msg string) *awserr.Error {

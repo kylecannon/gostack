@@ -56,6 +56,8 @@ const (
 	keyReplicas = "AddReplicaRegions"
 	keyRegion   = "Region"
 	keyString   = "SecretString"
+	keyTagKey   = "Key"
+	keyTagValue = "Value"
 )
 
 var (
@@ -239,7 +241,7 @@ func regionsOf(regions ...string) []map[string]string {
 
 // tagList is a Tags list of one tag.
 func tagList(key, value string) []map[string]string {
-	return []map[string]string{{"Key": key, "Value": value}}
+	return []map[string]string{{keyTagKey: key, keyTagValue: value}}
 }
 
 // do makes a call and notes the ARNs and version ids it returns.
