@@ -36,7 +36,7 @@ func benchProviderOf(tb testing.TB, n int) *Provider {
 
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
 		blob.NewEphemeral(tb.TempDir()))
-	tb.Cleanup(p.Close)
+	tb.Cleanup(func() { p.Close(context.WithoutCancel(tb.Context())) })
 
 	b := newBucket(benchBucket, benchAccount, regionUSEast1, "", nil)
 	p.state(benchAccount).buckets[benchBucket] = b

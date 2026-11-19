@@ -83,7 +83,7 @@ func Test_status_againstGostack(t *testing.T) {
 					cmdStatus, cmdServices, jsonArg)
 
 				assert.Zero(t, code, stderr)
-				assert.JSONEq(t, `{"s3":"running","sqs":"running","sts":"running"}`, stdout)
+				assert.JSONEq(t, runningServices(t), stdout)
 			}
 		})
 	}

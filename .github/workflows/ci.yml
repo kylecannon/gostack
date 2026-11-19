@@ -47,7 +47,10 @@ jobs:
       - run: make test
 
   # The ledger tools are Python on the runner's own python3, no Go and no Docker.
-  # Runs the parity/test_*.py unit tests, then compares the ledger with HEAD.
+  # Runs the parity/test_*.py unit tests, then compares the ledger with the base.
+  # A pull request compares the merge ref with HEAD^1, the base GitHub merged
+  # into, exactly as parity.yml does; base.sha in the event can be older than
+  # that. A push to main compares with the commit main was at before it.
   parity-ledger:
     runs-on: ubuntu-latest
     steps:
@@ -57,8 +60,15 @@ jobs:
           fetch-depth: 0
       - name: Compare the ledger with the base
         env:
-          PARITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: make parity-check
+          EVENT: ${{ github.event_name }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base=$BEFORE
+          if [ "$EVENT" = pull_request ]; then
+            base=$(python3 parity/ledger.py merge-parent --head "$PR_HEAD")
+          fi
+          make parity-check PARITY_BASE="$base"
 
   build:
     runs-on: ubuntu-latest

@@ -4,7 +4,19 @@
 // handler, so detection, account resolution, logging and dirty marking all
 // apply. It never reaches into another service's state.
 //
-// Calls are made synchronously with Do, or queued with Enqueue. The queue is
-// bounded and has one worker, started when a call is queued and gone when the
-// queue is empty again, so nothing runs while the process is idle.
+// A Call names any method, path, query, content type and headers, so it speaks
+// every protocol: json with a Target, query with a form body, rest with a path.
+// The credential scope names the call's signing name, which is how the gateway
+// routes a query or rest call. The answer carries the status, the response
+// head and the body.
+//
+// Do makes a call synchronously and reads its answer whole. Stream makes one
+// with the request body read from an io.Reader and the answer's body handed
+// back as an io.ReadCloser, so neither is ever held whole. Enqueue queues a
+// call for workers that exist only while calls are waiting, so nothing runs
+// while the process is idle. Queued calls in one lane run in the order they
+// were queued, whichever account made them; calls in different lanes run at
+// once, up to MaxInFlight. A call's lane is the Lane its caller names, or else
+// its destination: a region, service, method, path and target. A handler that
+// panics fails its call with ErrAborted, whichever of the three made it.
 package inproc

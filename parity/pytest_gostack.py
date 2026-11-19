@@ -12,7 +12,8 @@ unchanged against a container:
    the previous value back when the monkeypatch is undone. A failed POST raises,
    so the test fails instead of silently running against the wrong config.
 
-2. Exclusions (``GOSTACK_EXCLUSIONS``, a YAML file of ``pattern: reason``).
+2. Exclusions (``GOSTACK_EXCLUSIONS``, a YAML file of ``pattern: reason`` or a
+   directory of them, ``parity/exclusions/<service>.yaml``).
    Matching tests are skipped with the reason ``excluded: <reason>``. Tests
    carrying the ``requires_in_process`` marker are excluded too, unless the
    bridge is on and ``GOSTACK_BRIDGEABLE`` (a YAML file of ``pattern: note``)
@@ -186,15 +187,23 @@ class _Pattern:
 
 
 def _load_patterns(path: str) -> list[_Pattern]:
-    with open(path, encoding="utf-8") as handle:
-        loaded = yaml.safe_load(handle) or {}
-    if not isinstance(loaded, dict):
-        raise pytest.UsageError(f"{path}: expected a mapping of nodeid pattern to reason")
-    patterns = []
-    for text, reason in loaded.items():
-        if not isinstance(text, str) or not isinstance(reason, str) or not reason.strip():
-            raise pytest.UsageError(f"{path}: {text!r} needs a non-empty string reason")
-        patterns.append(_Pattern(text, reason.strip()))
+    """The patterns of a YAML file, or of every ``*.yaml`` file in a directory
+    (``parity/exclusions/``, one file per service), in file name order."""
+    files = sorted(Path(path).glob("*.yaml")) if Path(path).is_dir() else [Path(path)]
+    patterns: list[_Pattern] = []
+    seen: dict[str, Path] = {}
+    for file in files:
+        with open(file, encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle) or {}
+        if not isinstance(loaded, dict):
+            raise pytest.UsageError(f"{file}: expected a mapping of nodeid pattern to reason")
+        for text, reason in loaded.items():
+            if not isinstance(text, str) or not isinstance(reason, str) or not reason.strip():
+                raise pytest.UsageError(f"{file}: {text!r} needs a non-empty string reason")
+            if text in seen:
+                raise pytest.UsageError(f"{file}: {text} is also in {seen[text]}")
+            seen[text] = file
+            patterns.append(_Pattern(text, reason.strip()))
     return patterns
 
 

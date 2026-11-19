@@ -2,3 +2,5 @@
 *.test
 *.out
 .DS_Store
+# Scratch packages the generator tests write inside the module; a killed run leaves them.
+/codegen/cmd/gostack-codegen/testdata/

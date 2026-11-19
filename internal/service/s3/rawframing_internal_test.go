@@ -191,7 +191,7 @@ func TestInflightRefusesNewResponsesOnceDraining(t *testing.T) {
 	released := make(chan struct{})
 
 	go func() {
-		f.drain(5 * time.Second)
+		f.drain(t.Context(), 5*time.Second)
 		close(released)
 	}()
 

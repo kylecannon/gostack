@@ -405,7 +405,7 @@ func TestCloseWaitsForARawResponseStillStreaming(t *testing.T) {
 	closed := make(chan struct{})
 
 	go func() {
-		provider.Close()
+		provider.Close(t.Context())
 		close(closed)
 	}()
 

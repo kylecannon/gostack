@@ -1,0 +1,6 @@
+# Reviewed demotions: gostack tests that passed and no longer do. `make
+# parity-check` fails when a row that is `pass` in the gostack column at the
+# base is anything else now, unless its nodeid is listed here with a one-line
+# reason. An entry whose test passes again is refused: remove it. `make
+# parity-prune` adds the passing rows it removes, as gone upstream. One exact
+# nodeid per line, sorted; same line grammar as parity/exclusions/.

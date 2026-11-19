@@ -105,20 +105,74 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
 - **`make gen-check`** (`ci.yml`) regenerates `internal/api` and fails on any
   modified file or untracked generated file.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
-  `services` input) builds an image from the pull request head and runs
-  LocalStack's own tests for the services the change touches against it, then
-  `make parity-check`. A change under `internal/service/<svc>/` selects that
-  service. A change to a shared path (`internal/` outside a service,
-  `cmd/`, `codegen/`, `specs/`, `docker/`, `parity/`, `go.mod`, `go.sum`)
-  selects every service in `parity/ledger.json`. The job fails when a row goes
-  from pass to fail. `make parity-check` first runs the ledger's unit tests
-  (`parity/test_*.py`), which `ci.yml` also runs on every pull request in its
-  `parity-ledger` job. `make parity-prune` removes ledger rows whose test is
-  gone from the pinned LocalStack; `make parity-check` warns about them when a
-  collection is cached. `parity/ledger.py services --changed` holds the path
-  rules. CI does not run the LocalStack baseline; the committed ledger is the
-  baseline. The LocalStack suite comes from the commit in `specs/SOURCES.lock`,
-  and the runner image is cached on that sha and `parity/runner/`.
+  `services` input) builds an image from GitHub's merge ref, the pull request
+  head merged into its base, and runs LocalStack's own tests for the services
+  the change touches against it, then `make parity-check`. It compares with
+  `HEAD^1`, the base the merge ref was made from, and fails when `HEAD` is not
+  a two-parent merge of the pull request head or GitHub reports the pull
+  request as not mergeable. A manual run builds the dispatched ref and
+  compares with the ledger committed there.
+  - Selection is fail-safe: a changed path selects every service in the ledger
+    unless it is one service's own path or cannot change the image.
+  - A service's own paths are `internal/service/<svc>/` and the generated
+    `internal/api/<svc>/` once `internal/service/<svc>/` exists (both also
+    select the services whose tests depend on `<svc>`),
+    `parity/ledger/<svc>.json` and `parity/exclusions/<svc>.yaml`.
+    Every service's tests depend on `sts`, so a change there selects every
+    service.
+  - A change under the directories of a service whose Registration sets
+    `Mount`, `ClaimHost`, `Claim`, `Fallback` or `Preprocess` selects every
+    service: those hooks see requests meant for any service. Today that is
+    `s3` and `sqs`.
+  - A change to `cmd/gostack/services.go` selects the services its changed
+    lines name when every changed line of code is a whole element of the list
+    `registrations()` returns or an import of a service's package. Any other
+    changed line of code, a `//go:` directive included, selects every
+    service. Blank and comment lines name nothing.
+  - A `*_test.go` file anywhere, and `LICENSE`, select nothing.
+  - `parity/ledger.py` lists the paths that cannot change the image
+    (`NO_IMAGE_EFFECT`), the dependencies between services' tests
+    (`DEPENDS_ON`) and the services with routing hooks (`ROUTING_REACH`).
+    `Test_parityTables` in `cmd/gostack` fails when `ROUTING_REACH` differs
+    from the hooks `registrations()` sets, when a package outside
+    `internal/service/<svc>/` imports `internal/api/<svc>/`, or when the
+    `DEPENDS_ON` keys are not the services whose package imports
+    `internal/inproc` or another service's package. Which service an
+    in-process call reaches, and the `sts` entry, are reviewed by hand.
+    `make test` runs it and needs `python3`.
+  - On a pull request, the gostack column the run observed for the selected
+    services must equal the ledger committed in the merge ref, in either
+    direction, or the job fails and names each nodeid. A change commits the
+    ledger its run produces, so a fix lands with its row at `pass`.
+  - A committed row of a selected service whose test the run did not collect
+    (its junit report and the plugin's excluded list) fails the same job and
+    is named, unless the row is `excluded` or `parity/demotions.yaml` lists
+    it.
+  - `docs/parity.md` must equal what `parity/ledger.py` renders from the
+    committed ledger; the ledger unit tests check it.
+  - A test whose result changes from run to run is excluded with a reason
+    and demoted in the same change, never left to flap.
+- **Parity ratchet** (`make parity-check`, in `parity.yml` and in `ci.yml`'s
+  `parity-ledger` job, which compare the same merge ref with the same
+  `HEAD^1`): a test that is `pass` in the gostack column of the
+  ledger at the base stays `pass`. Changing it to `fail`, `skip`, `xfail`,
+  `excluded` or null fails the check, and so do removing its row and emptying
+  its file. The check names every such nodeid.
+  - The one exit is an entry in `parity/demotions.yaml`: the nodeid and a
+    one-line reason, reviewed with the change.
+  - An entry whose test is `pass` again fails the check until it is removed.
+  - `make parity-prune` removes the rows whose test is gone from the pinned
+    LocalStack and writes each removed gostack pass there as gone upstream.
+    A gone upstream entry whose row is still in the ledger fails the check.
+  - A base that names no commit fails the check, and so does the all-zero sha
+    unless `HEAD` is the repository's first commit.
+  - The localstack column is not under the ratchet. Only its pass to fail
+    fails the check, and any other change there is a warning.
+  - `make parity-check` first runs the ledger's unit tests
+    (`parity/test_*.py`). CI does not run the LocalStack baseline; the
+    committed ledger is the baseline. The LocalStack suite comes from the
+    commit in `specs/SOURCES.lock`, and the runner image is cached on that sha
+    and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
   at p<0.001.

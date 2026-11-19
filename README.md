@@ -7,7 +7,7 @@ existing compose file works after one line changes.
 
 Status: pre-alpha. STS and SQS are implemented. Every test in
 `tests/aws/services/{sqs,sts}` that LocalStack passes also passes against
-gostack, except the exclusions in `parity/exclusions.yaml`;
+gostack, except the exclusions in `parity/exclusions/`;
 [docs/parity.md](docs/parity.md) has the numbers. No other service exists yet.
 
 ## Drop-in usage

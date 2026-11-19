@@ -81,7 +81,7 @@ func newEdgeServer(
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	gw, err := gateway.New(
 		func() gateway.Settings {

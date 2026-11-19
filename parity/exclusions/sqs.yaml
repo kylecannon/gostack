@@ -1,0 +1,29 @@
+# sqs tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- requires_in_process: sqs ---------------------------------------------
+# The other requires_in_process SQS tests run through the config bridge; see
+# parity/bridgeable.yaml. test_create_queue_recently_deleted_cache stays out: it
+# patches the Python module constant sqs.constants.RECENTLY_DELETED_TIMEOUT and
+# reads sqs_stores in the server's process, which no external target can reach.
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_recently_deleted_cache": requires_in_process
+
+# --- hard-skipped: sqs ----------------------------------------------------
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_with_default_arguments_works_with_modified_attributes": hard-skipped (localstack/localstack#5938)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_create_queue_after_modified_attributes": hard-skipped (localstack/localstack#5938)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_delete_message_batch_from_lambda": hard-skipped (needs AWS fixing, fails against LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_fifo_delete_message_with_expired_receipt_handle": hard-skipped (not implemented in LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_redrive_policy_attribute_validity": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_invalid_dead_letter_arn_rejected_before_lookup": hard-skipped (behavior not implemented yet)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_send_message_with_invalid_fifo_parameters": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_dead_letter_queue_chain": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_disallow_queue_name_with_slashes": hard-skipped (LocalStack allows slashes in queue names)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_dead_letter_queue_execution_lambda_mapping_preserves_id": hard-skipped (no reason given in source)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_deduplication_interval": hard-skipped (needs 5 minutes, manual only)
+"tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_sse_kms_and_sqs_are_mutually_exclusive": hard-skipped (validation not implemented in LocalStack)
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_get_list_queues_fails_json_format": hard-skipped (json serialization not supported yet)
+"tests/aws/services/sqs/test_sqs.py::TestSqsQueryApi::test_get_queue_attributes_json_format": hard-skipped (json serialization not supported yet)
+
+# --- depends-on:cloudformation: sqs ---------------------------------------
+# The resource-provider tests deploy CloudFormation templates. CloudFormation
+# is outside the SQS + STS scope.
+"tests/aws/services/sqs/resource_providers/*": depends-on:cloudformation

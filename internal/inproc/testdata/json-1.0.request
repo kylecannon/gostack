@@ -1,0 +1,10 @@
+POST / HTTP/1.1
+Host: localhost.localstack.cloud:4566
+Authorization: AWS4-HMAC-SHA256 Credential=123456789012/20000101/eu-west-1/sqs/aws4_request, SignedHeaders=host;x-amz-date, Signature=0000000000000000000000000000000000000000000000000000000000000000
+Content-Length: 22
+Content-Type: application/x-amz-json-1.0
+X-Amz-Date: 20000101T000000Z
+X-Amz-Target: AmazonSQS.CreateQueue
+X-Amzn-Trace-Id: Root=1-abc
+
+{"QueueName":"golden"}

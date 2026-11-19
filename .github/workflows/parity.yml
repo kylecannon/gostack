@@ -1,17 +1,39 @@
 name: parity
 
 # LocalStack's own pytest suite, run unchanged against a gostack image built
-# from the pull request head (docs/architecture.md, "Parity oracle").
+# from the merged result of the pull request (docs/architecture.md, "Parity
+# oracle").
 #
-# The services come from the changed paths: internal/service/<svc>/ selects that
-# service, and a shared path (parity/ledger.py, SHARED_PATHS) selects every
-# service in the ledger. cmd/gostack/services.go is shared unless the change to
-# it only adds lines naming the changed services. A change to neither runs
-# nothing. A manual run takes a services input instead.
+# A pull request run checks out GitHub's merge ref (github.sha, as ci.yml
+# does): the pull request head merged into its base. The image, the tests and
+# the ledger all come from that tree, and it is compared with HEAD^1, the base
+# commit GitHub merged into. `parity/ledger.py merge-parent` fails the job when
+# HEAD is not a two-parent merge whose second parent is the pull request head,
+# and the select step fails when GitHub reports the pull request as not
+# mergeable. Nothing falls back to the head alone.
+#
+# The services come from the paths changed between HEAD^1 and HEAD, read with
+# `git diff --name-only -z --no-renames` so a quoted name and both sides of a
+# rename are seen. `parity/ledger.py services --changed` holds the rules: a
+# path selects every service in the ledger unless it is one service's own
+# (internal/service/<svc>/, or internal/api/<svc>/ once internal/service/<svc>/
+# exists, which also select the services whose tests depend on <svc> in
+# DEPENDS_ON, and every service when <svc> is in ROUTING_REACH, or
+# parity/ledger/<svc>.json, parity/exclusions/<svc>.yaml), or cannot change
+# the image (NO_IMAGE_EFFECT, and every *_test.go). cmd/gostack/services.go
+# selects the services named by its changed lines when each is a whole
+# registrations() entry or a service import, and every service otherwise.
+#
+# A manual run takes a services input, builds the dispatched ref, and compares
+# with the ledger committed at that ref (HEAD).
 #
 # CI never runs the LocalStack baseline. The localstack column of the committed
-# parity/ledger.json is the baseline, and `make parity-check` fails when a test
-# that passed there now fails. The suite comes from localstack/localstack at the
+# parity/ledger/<service>.json is the baseline. `make parity-check` fails when
+# a test that passed in the gostack column at the base no longer passes and
+# parity/demotions.yaml does not list it. On a pull request the gostack column
+# this run observed for the selected services must also equal the one
+# committed in the merged tree: the ratchet protects what is committed, so it
+# has to be what CI saw. The suite comes from localstack/localstack at the
 # commit pinned in specs/SOURCES.lock. When GitHub cannot serve that commit the
 # job stops, and nothing is vendored in its place.
 
@@ -48,11 +70,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
-      # LocalStack sits beside the gostack checkout, where parity/run.sh looks
-      # for it (../localstack).
+      # The default ref: on a pull request, GitHub's merge ref. fetch-depth 0
+      # brings both of its parents. LocalStack sits beside the gostack
+      # checkout, where parity/run.sh looks for it (../localstack).
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           path: gostack
 
@@ -61,15 +83,18 @@ jobs:
         working-directory: gostack
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          MERGEABLE: ${{ github.event.pull_request.mergeable }}
           REQUESTED: ${{ inputs.services }}
         run: |
+          base=
           if [ "$EVENT" = workflow_dispatch ]; then
             services=${REQUESTED:-$(python3 parity/ledger.py services)}
           else
-            [ -n "$BASE_SHA" ] || { echo "no base commit to compare with" >&2; exit 1; }
-            services=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | python3 parity/ledger.py services --changed --range "$BASE_SHA...$HEAD_SHA")
+            # null (not computed yet) reads as empty; HEAD's shape is checked next.
+            [ "$MERGEABLE" != false ] || { echo "GitHub reports the pull request as not mergeable: there is no merged tree to test" >&2; exit 1; }
+            base=$(python3 parity/ledger.py merge-parent --head "$PR_HEAD")
+            services=$(git diff --name-only -z --no-renames "$base" HEAD | python3 parity/ledger.py services --changed --range "$base..HEAD")
           fi
           case "$services" in
           *[!a-z0-9_,]*) echo "services '$services' is not a comma separated list of service names" >&2; exit 1 ;;
@@ -79,6 +104,7 @@ jobs:
           *[!0-9a-f]* | '') echo "specs/SOURCES.lock has no localstack_sha" >&2; exit 1 ;;
           esac
           [ "${#sha}" = 40 ] || { echo "localstack_sha '$sha' is not a full commit sha" >&2; exit 1; }
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "services=$services" >> "$GITHUB_OUTPUT"
           echo "localstack_sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Services: ${services:-none, no changed path affects a service}. LocalStack: $sha" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -125,12 +151,13 @@ jobs:
           path: ${{ runner.temp }}/parity-runner.tar
           key: ${{ steps.runner-cache.outputs.cache-primary-key }}
 
-      - name: Build the gostack image from the pull request head
+      - name: Build the gostack image from the merged tree
         if: steps.select.outputs.services != ''
         working-directory: gostack
         run: make image IMAGE="$GOSTACK_IMAGE"
 
       - name: Run LocalStack's tests against gostack
+        id: run
         if: steps.select.outputs.services != ''
         working-directory: gostack
         env:
@@ -138,14 +165,37 @@ jobs:
           PARITY_RUNNER_PREBUILT: "1"
         run: make parity
 
-      # The ledger the change is compared with is the one at the base commit
-      # (the PR base, or the commit before a push), which fetch-depth 0 fetched.
+      # The ledger the change is compared with is the one at HEAD^1, the base
+      # GitHub merged the pull request into, as the select step printed it. A
+      # manual run has no base and compares with HEAD.
       - name: Fail on a regression
         if: steps.select.outputs.services != ''
         working-directory: gostack
         env:
-          PARITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: make parity-check
+          EVENT: ${{ github.event_name }}
+          PARITY_BASE: ${{ steps.select.outputs.base }}
+        run: |
+          if [ "$EVENT" != workflow_dispatch ] && [ -z "$PARITY_BASE" ]; then
+            echo "no base to compare the ledger with" >&2
+            exit 1
+          fi
+          make parity-check
+
+      # The ratchet protects the committed ledger, so on a pull request it has
+      # to be the one this run observed: a fix cannot merge without its row
+      # turning pass, and a committed row of a selected service whose test the
+      # run did not collect (its junit report and the plugin's excluded list)
+      # fails unless it is excluded or demoted. Only the selected services ran.
+      # It runs after a failed regression check too, so both reports show. A
+      # manual run is how a ledger to commit is made, and is not gated here.
+      # docs/parity.md is checked against the committed ledger by the ledger
+      # unit tests in make parity-check, here and in ci.yml.
+      - name: Fail on an uncommitted ledger
+        if: always() && github.event_name == 'pull_request' && steps.run.outcome == 'success'
+        working-directory: gostack
+        env:
+          SERVICES: ${{ steps.select.outputs.services }}
+        run: python3 parity/ledger.py uncommitted --services "$SERVICES" --rev HEAD --junit parity/out/gostack/junit.xml --excluded parity/out/gostack/excluded.json
 
       - name: Report
         if: always() && steps.select.outputs.services != ''
@@ -158,5 +208,5 @@ jobs:
           name: parity
           path: |
             gostack/parity/out/gostack
-            gostack/parity/ledger.json
+            gostack/parity/ledger/
             gostack/docs/parity.md

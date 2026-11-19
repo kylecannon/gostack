@@ -15,7 +15,7 @@ func Test_s3Settings(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
-	settings := s3Settings(cfg)
+	settings := liveSettings(cfg, s3Settings)
 	got := settings()
 
 	assert.False(t, got.ValidateSignatures)
@@ -26,6 +26,28 @@ func Test_s3Settings(t *testing.T) {
 
 		assert.True(t, settings().ValidateSignatures)
 	})
+}
+
+func Test_liveSettings_mapsEachSnapshotOnce(t *testing.T) {
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	var mapped int
+
+	settings := liveSettings(cfg, func(s *config.Settings) bool {
+		mapped++
+
+		return s.FailFast
+	})
+
+	assert.False(t, settings())
+	assert.False(t, settings())
+	assert.Equal(t, 1, mapped, "an unchanged snapshot is mapped once")
+
+	require.NoError(t, cfg.Set("FAIL_FAST", true))
+
+	assert.True(t, settings())
+	assert.Equal(t, 2, mapped, "an update is mapped again")
 }
 
 func Test_settingsFunc(t *testing.T) {

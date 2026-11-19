@@ -47,13 +47,11 @@ func (g *generator) buildExceptions() error {
 			}
 		}
 
-		if g.isRest() {
-			var err error
+		var err error
 
-			ex.members, err = g.exceptionMembers(name, shape)
-			if err != nil {
-				return fmt.Errorf("error %s: %w", name, err)
-			}
+		ex.members, err = g.exceptionMembers(name, shape)
+		if err != nil {
+			return fmt.Errorf("error %s: %w", name, err)
 		}
 
 		g.exceptions = append(g.exceptions, ex)
@@ -62,11 +60,12 @@ func (g *generator) buildExceptions() error {
 	return nil
 }
 
-// exceptionMembers builds the struct of the members a rest error carries in
-// its headers and body, all but its message, which travels as the error's
-// Message. It is nil for an error with no other member.
+// exceptionMembers builds the struct of the members an error carries beside
+// its message, which travels as the error's Message: in the headers and body
+// of a rest error, beside __type in a json one, and after RequestId in a query
+// ErrorResponse. It is nil for an error with no other member.
 func (g *generator) exceptionMembers(name string, shape *spec.Shape) (*structType, error) {
-	goName := exportName(name)
+	goName := shapeName(name)
 	if _, taken := g.structs[goName]; taken {
 		return nil, fmt.Errorf("the Go type %s of its members is another shape's as well", goName)
 	}
@@ -97,6 +96,13 @@ func (g *generator) exceptionMembers(name string, shape *spec.Shape) (*structTyp
 
 	g.structs[goName] = st
 
+	if g.hasProtocol(protoQuery) && g.q.Shapes[name] != nil {
+		err := g.attachQuery(st, name)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return st, nil
 }
 
@@ -110,8 +116,8 @@ func (g *generator) errorsFile() (string, error) {
 			fault = "awserr.FaultSender"
 		}
 
-		p.f("// New%s returns the %s error with the given message.", exportName(ex.shape), ex.shape)
-		p.f("func New%s(msg string) *awserr.Error {", exportName(ex.shape))
+		p.f("// %s returns the %s error with the given message.", constructorName(ex.shape), ex.shape)
+		p.f("func %s(msg string) *awserr.Error {", constructorName(ex.shape))
 		p.f("\treturn &awserr.Error{")
 		p.f("\t\tCode: %q,", ex.code)
 		p.f("\t\tMessage: msg,")
@@ -129,13 +135,17 @@ func (g *generator) errorsFile() (string, error) {
 		if ex.members != nil {
 			p.f("// Err returns the %s error with the given message, carrying the members in v.", ex.shape)
 			p.f("func (v *%s) Err(msg string) error {", ex.members.goName)
-			p.f("\treturn &modeledError{err: New%s(msg), members: v}", exportName(ex.shape))
+			p.f("\treturn &modeledError{err: %s(msg), members: v}", constructorName(ex.shape))
 			p.f("}")
 			p.blank()
 		}
 	}
 
-	g.missingRequiredFunc(p)
+	if g.opts.Validation != nil {
+		g.validationErrorFunc(p)
+	} else {
+		g.missingRequiredFunc(p)
+	}
 
 	return p.buf.String(), nil
 }

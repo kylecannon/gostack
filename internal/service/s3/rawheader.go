@@ -2,6 +2,7 @@ package s3
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -39,9 +40,9 @@ const (
 	lingerFor = 500 * time.Millisecond
 
 	// drainLimit is the longest Provider.Close waits for the taken responses
-	// still being written. The services' Close budget is what ends the wait in
-	// a running process, because an overrunning Close is abandoned; this only
-	// keeps a stuck client from holding Close for good.
+	// still being written. The services' Close budget, which ends Close's
+	// context, is what ends the wait in a running process; this only keeps a
+	// stuck client from holding a Close with no deadline for good.
 	drainLimit = 10 * time.Second
 )
 
@@ -92,9 +93,9 @@ func (f *inflight) leave() {
 	}
 }
 
-// drain refuses new responses and waits for the registered ones, for at most
-// limit.
-func (f *inflight) drain(limit time.Duration) {
+// drain refuses new responses and waits for the registered ones, until ctx
+// ends and for at most limit.
+func (f *inflight) drain(ctx context.Context, limit time.Duration) {
 	f.mu.Lock()
 	f.closed = true
 	f.mu.Unlock()
@@ -112,6 +113,7 @@ func (f *inflight) drain(limit time.Duration) {
 	select {
 	case <-done:
 	case <-timer.C:
+	case <-ctx.Done():
 	}
 }
 

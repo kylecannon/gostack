@@ -19,7 +19,7 @@ Every package has a `doc.go` that states its contract; read it first.
 | `internal/store` | `Bundle[S]` keyed by account+region; `NewBundle(newFn, emptyFn)`, `Reset` empties states in place | bundle.go |
 | `internal/account` | access key to account id; region rules; `FromRequest`, the one credential parser, with `ParseScope` and `QueryScope` for callers that need the whole scope | account.go, region.go, credential.go |
 | `internal/sigv4` | SigV4 canonical request, scope, signing key and signature helpers | sigv4.go |
-| `internal/inproc` | in-process client: calls a service through the gateway's handler; on-demand worker | client.go |
+| `internal/inproc` | in-process client: calls a service through the gateway's handler with any method, path, query and content type; `Stream` for unbuffered bodies; `Enqueue` runs calls in per-destination lanes, up to 16 at once | client.go, stream.go, queue.go |
 | `internal/config` | LocalStack env vars to atomic `Settings` (including `S3_SKIP_SIGNATURE_VALIDATION`, `DISABLE_CUSTOM_CORS_*`); `PersistConfig`; host/port parsing; `GOSTACK_MAX_REQUEST_BODY` (`Settings.MaxRequestBody`, read once at start) | config.go, settings.go, persist.go, variable-names.go, max-request-body.go |
 | `internal/lifecycle` | PID 1 supervisor, init hooks, stages, startup warnings, `PlanShutdown` (the `SHUTDOWN_TIMEOUT` budget split into `Deadlines{Work, Save, Close}`) | supervisor.go, hooks.go, process.go, stage.go, shutdown.go |
 | `internal/gateway` | listener (`Listen` loads the TLS cert first), router, middleware, dispatch, `DrainBy`, `Handler`; per-service CORS skip; `Dirtier` interface; a method chi does not know goes to the AWS mount (`MethodNotAllowed`); `statusWriter.NoteStatus` lets a service that takes the connection report its status | gateway.go, listener.go, dispatch.go, middleware.go, cors.go |
@@ -32,8 +32,10 @@ Every package has a `doc.go` that states its contract; read it first.
 | `internal/service/sqs` | SQS provider, see below | provider.go, queue.go |
 | `internal/service/s3` | S3 provider, see below | provider.go, routing.go, state.go |
 | `internal/api/{sqs,sts,s3}` | generated; `Handler`, `Unimplemented`, `Serve`, codecs, `Metadata`; s3 also `Route`, sharded into `*_N.go` | dispatch*.go, operations.go, types*.go |
+| `internal/api/{dynamodb,dynamodbstreams,sns,kms,secretsmanager,ssm}` | generated ahead of their services so no service branch edits the generator; registered nowhere and not linked into the binary | same layout |
+| `internal/protocol/constraint` | runtime for generated constraint checks: member paths, the `N validation errors detected` message, length in code points, lazily compiled patterns. A service that sets `Validation` in the generator's `serviceTable` (kms, dynamodb, sns) gets a `Validate()` on each operation input that checks only the listed members; the generated dispatch never calls it, the handler does, where LocalStack makes that check | constraint.go |
 | `codegen/spec` | spec loader, shape model, order-keeping patches, HTTP bindings, endpoints, protocol fixtures | load.go, patch.go, shape.go, http.go, endpoint.go, fixture.go |
-| `codegen/cmd/gostack-codegen` | emitters per output file; REST route rules; fixture packages; per-service config | emit*.go, route.go, fixtures.go, config.go |
+| `codegen/cmd/gostack-codegen` | emitters per output file; REST route rules; fixture packages; per-service config; `emittedNames`, the exported names the generator declares, with a `Shape` suffix for a model shape that collides | emit*.go, route.go, fixtures.go, config.go, names.go |
 | `api/openapi` | embedded `gostack.yaml` | embed.go |
 | `bench` | loadgen, cells, gate, compare (each base cell from the newest result holding it), report; SQS and S3 workloads; report flags | cells.go, loadgen.go, gate.go, s3.go, flags.go |
 

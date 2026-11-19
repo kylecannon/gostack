@@ -109,6 +109,18 @@ type Shape struct {
 	// its own.
 	Document bool `json:"document"`
 	Event    bool `json:"event"`
+	// Union marks a structure of which exactly one member is set.
+	Union bool `json:"union"`
+
+	// The constraint traits. Min and Max bound the length of a string, blob,
+	// list or map, or the value of a number; they keep the text of the model's
+	// number, as a long bound does not fit a float64. Pattern is a regular
+	// expression a string must match whole. Sensitive marks a value AWS leaves
+	// out of the messages that name it.
+	Min       json.Number `json:"min"`
+	Max       json.Number `json:"max"`
+	Pattern   string      `json:"pattern"`
+	Sensitive bool        `json:"sensitive"`
 }
 
 // IsRequired reports whether the structure lists name as required.
