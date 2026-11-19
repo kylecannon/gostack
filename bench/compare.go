@@ -201,6 +201,7 @@ type comparison struct {
 	noise        []metric
 	improvements []metric
 	missing      []string
+	problems     []problem
 }
 
 // settle moves each regression the accepted list holds for base..head out of
@@ -245,6 +246,8 @@ func compareTargets(base, head report) comparison {
 		}
 
 		all = append(all, startup, idle)
+
+		cmp.problems = append(cmp.problems, compareProblems(bt, *ht)...)
 
 		for _, bc := range bt.Cells {
 			hc, ok := ht.cell(bc.ID)
@@ -301,7 +304,7 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	cmp := compareTargets(base, head)
 	cmp.settle(ctx, accepted, base.Commit, head.Commit)
 
-	if cmp.metrics == 0 {
+	if cmp.metrics == 0 && len(cmp.problems) == 0 {
 		b.WriteString("Nothing to compare: the two results hold no gostack or gostack-slim cell in common.\n")
 
 		return write(out, b.String())
@@ -319,6 +322,7 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	acceptedTable(&b, cmp.accepted)
 	table(&b, "Changes past the limit with overlapping ranges (noise, not failing)", cmp.noise)
 	table(&b, "Improvements", cmp.improvements)
+	problemTable(&b, cmp.problems)
 
 	if len(cmp.missing) > 0 {
 		fmt.Fprintf(&b, "### Not compared\n\n%d cells of the base are not in the head, or did not run there:\n\n",
@@ -336,11 +340,24 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 		return err
 	}
 
-	if len(cmp.regressions) > 0 {
-		return fmt.Errorf("%w: %d of %d metrics", errRegression, len(cmp.regressions), cmp.metrics)
+	return cmp.verdict()
+}
+
+// verdict is the error of a comparison: a regression, a problem the head has
+// and the base does not, or both.
+func (cmp *comparison) verdict() error {
+	var verdict error
+
+	if n := failing(cmp.problems); n > 0 {
+		verdict = fmt.Errorf("%w: %d of %d problems fail, the head has what the base does not", errRunProblem, n,
+			len(cmp.problems))
 	}
 
-	return nil
+	if len(cmp.regressions) > 0 {
+		verdict = errors.Join(verdict, fmt.Errorf("%w: %d of %d metrics", errRegression, len(cmp.regressions), cmp.metrics))
+	}
+
+	return verdict
 }
 
 func write(out io.Writer, s string) error {

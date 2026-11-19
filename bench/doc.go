@@ -135,6 +135,37 @@
 // pull request workflow measures this way, so drift over the job lands on both
 // sides.
 //
+// # Errors and dead targets
+//
+// A run is not a measurement when its target was not working. The orchestrator
+// checks, after every run of a cell, idle run and agentic workload, that the
+// target container is still running (`docker inspect`), and fails the run when
+// it is not (errTargetDied). A cell run that fails is left out of the figures
+// and named in the cell's failed_runs, so Runs counts the completed ones and a
+// side never ends with fewer runs than the other without a record of it. A cell
+// that has no completed run has no figures and a problem; the report lists
+// every one under "Problems". An operation that reported errors, and the
+// cycles of an agentic workload that errored, are recorded the same way, with
+// their counts. Their runs stay in the figures.
+//
+// `bench compare` reads those records as a second rule beside the metric
+// limits (problems.go). A problem the head has and the base does not fails it:
+// an operation with errors in the head and none in the base, a head cell with
+// failed runs or no completed run that the base ran clean, a measurement the
+// head could not take (startup, idle, an agentic workload) that the base took.
+// The row names the cell, the operation and both counts. A problem on both
+// sides is listed and does not fail, whatever the two counts, because a count
+// of errors is not comparable across runs of different length; the same goes
+// for a base that has the problem alone. Cells with a different number of
+// runs are listed too. The committed results hold no operation error and no
+// problem, LocalStack's included, so any problem is new. The accepted list does
+// not apply to it: a run that errors is fixed, not accepted. LocalStack never
+// gates.
+//
+// Every container the run starts is removed with `docker rm -f -v`, so the
+// anonymous volume the image declares goes with it. `-out` and `-base-out` are
+// compared as absolute paths, so one directory spelled two ways is refused.
+//
 // `-accepted bench/accepted.yaml` on compare, run and gate holds the regressions
 // a reviewer accepted (accepted.go). An entry applies while the head's commit
 // holds its commit and the base's does not; compare reads both commits from the
@@ -145,5 +176,7 @@
 //
 // Schema 3. A cell holds its operations as a map from name to latency spread.
 // loadReport converts a schema 2 file, whose cells had send, receive and delete
-// fields and ids with no service, so the committed results still compare.
+// fields and ids with no service, so the committed results still compare. A
+// cell's failed_runs, the repetitions that did not complete, was added without
+// a version bump: no field changed its meaning, and a file without it has none.
 package main

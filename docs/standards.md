@@ -283,6 +283,21 @@ passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
 
+A run is a measurement only while its target works. After every run the
+orchestrator checks that the target container is still running; a run whose
+container exited or was removed fails, and is recorded in the cell's
+`failed_runs` instead of being dropped, so a side never ends with fewer runs
+than the other unrecorded. An operation that reports errors is recorded with its
+count in the result file's `problems`. `bench compare` fails when the head has a
+problem the base does not (an operation with errors where the base has none, a
+cell with failed runs or no completed run, a measurement the head could not
+take), printing the cell, the operation and both counts. A problem on both
+sides is listed and does not fail, whatever the counts. Cells with unequal run
+counts are listed. The accepted list does not cover it. The committed results
+hold no error or problem on any target, LocalStack included. Containers are
+removed with their volume (`docker rm -f -v`), and `-out` and `-base-out` are
+compared as absolute paths.
+
 A pull request measures its base and head images in one run,
 `bench run -base-image`, never one image after the other. Every repeated
 measurement (each startup and idle run, and each run of a cell) alternates the

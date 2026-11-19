@@ -171,8 +171,23 @@ func (o *options) checkBase() error {
 		return fmt.Errorf("-base-image measures one target against its base; -targets names %d", len(o.targets))
 	case o.baseCommit == "" || o.baseOut == "":
 		return errors.New("-base-image needs -base-commit and -base-out")
-	case filepath.Clean(o.baseOut) == filepath.Clean(o.outDir):
-		return fmt.Errorf("-base-out and -out are both %s: the two results would share a name", o.outDir)
+	}
+
+	// Absolute paths, so one directory spelled two ways (out and ./out, or a
+	// relative and an absolute path) is still one directory. A run of a commit
+	// against itself would otherwise write both results to one file name.
+	baseOut, err := filepath.Abs(o.baseOut)
+	if err != nil {
+		return fmt.Errorf("-base-out %s: %w", o.baseOut, err)
+	}
+
+	out, err := filepath.Abs(o.outDir)
+	if err != nil {
+		return fmt.Errorf("-out %s: %w", o.outDir, err)
+	}
+
+	if baseOut == out {
+		return fmt.Errorf("-base-out and -out are both %s: the two results would share a name", out)
 	}
 
 	return nil
@@ -550,9 +565,7 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 		}
 
 		for s, cell := range r.cell(ctx, sides, spec) {
-			if cell.Problem != "" {
-				res[s].Problems = append(res[s].Problems, "cell "+cell.ID+": "+cell.Problem)
-			}
+			res[s].noteCell(cell)
 
 			res[s].Cells = append(res[s].Cells, cell)
 		}
@@ -602,6 +615,7 @@ func (r *runner) agenticAll(ctx context.Context, sides []target, res []targetRes
 				}
 
 				res[s].Agentic[w.Service()] = run
+				res[s].noteAgentic(w.Service(), run)
 			}
 		}
 
@@ -722,7 +736,12 @@ func (r *runner) idleRun(ctx context.Context, t target, variant string, i int) (
 		return usage{}, err
 	}
 
-	return r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
+	if err == nil {
+		err = inst.alive(ctx)
+	}
+
+	return used, err
 }
 
 // cell measures one cell on each side: reps runs a side, alternating the sides,
@@ -748,13 +767,7 @@ func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cell
 	for s, t := range sides {
 		r.logf("%s: %s: %d of %d runs", t.label(), spec.id(), len(runs[s]), r.opts.reps)
 
-		if len(runs[s]) == 0 {
-			res[s] = cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed[s], "; ")}
-
-			continue
-		}
-
-		res[s] = summarizeCell(spec, runs[s])
+		res[s] = settleCell(spec, runs[s], failed[s])
 	}
 
 	return res
@@ -796,6 +809,10 @@ func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResul
 	})
 	run.Usage = used
 
+	if err == nil {
+		err = inst.alive(ctx)
+	}
+
 	return run, err
 }
 
@@ -818,6 +835,10 @@ func (r *runner) agentic(ctx context.Context, t target, w agenticWorkload) (agen
 			"-cycles", strconv.Itoa(r.opts.cycles), "-concurrency", strconv.Itoa(r.opts.cycleConcurrency))
 	})
 	run.Usage = used
+
+	if err == nil {
+		err = inst.alive(ctx)
+	}
 
 	return run, err
 }
