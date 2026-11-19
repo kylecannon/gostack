@@ -177,7 +177,7 @@ func Test_compare_an_improvement_passes(t *testing.T) {
 	assert.NotContains(t, out, "### Improvements (0)")
 }
 
-func Test_compare_a_missing_cell_is_listed_and_does_not_fail(t *testing.T) {
+func Test_compare_a_cell_missing_from_the_head_is_listed_and_fails(t *testing.T) {
 	other := "sqs/messaging/persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
 	base := testReport(hostA,
 		testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB), testCell(other, 5000, 9000, 100, 90*bytesPerMiB))
@@ -185,10 +185,10 @@ func Test_compare_a_missing_cell_is_listed_and_does_not_fail(t *testing.T) {
 
 	out, err := compared(t, base, head)
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errRunProblem)
 	assert.Contains(t, out, "Compared 1 cells")
 	assert.Contains(t, out, "### Not compared")
-	assert.Contains(t, out, other)
+	assert.Contains(t, out, "| gostack | `"+other+"` | missing from the head | 3 runs | absent | **fails** |")
 }
 
 func Test_compare_refuses_a_different_host(t *testing.T) {

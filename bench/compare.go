@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -77,6 +78,18 @@ type metric struct {
 	// note says why the entries that name a regression do not.
 	accepted *acceptedEntry
 	note     string
+	// runs says that a side ran fewer repetitions than the run asked for, such as
+	// "head 4 of 5 runs": the overlap rule was sized for the full count.
+	runs string
+}
+
+// label is the metric's name with the runs note, for a table.
+func (m metric) label() string {
+	if m.runs == "" {
+		return m.name
+	}
+
+	return m.name + " (" + m.runs + ")"
 }
 
 // matches reports whether a system entry of the accepted list names the metric.
@@ -225,63 +238,111 @@ func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, h
 	cmp.regressions = still
 }
 
+// runsNote says which side of a cell completed fewer runs than its result asked
+// for, or "" when both completed them all. A result asked for the larger of its
+// reps setting and the runs it has, completed or failed.
+func runsNote(base, head cellResult, baseReps, headReps int) string {
+	var sides []string
+
+	for _, s := range []struct {
+		name string
+		c    cellResult
+		reps int
+	}{{"base", base, baseReps}, {"head", head, headReps}} {
+		if asked := max(s.reps, s.c.Runs+len(s.c.FailedRuns)); s.c.Runs < asked {
+			sides = append(sides, fmt.Sprintf("%s %d of %d runs", s.name, s.c.Runs, asked))
+		}
+	}
+
+	return strings.Join(sides, ", ")
+}
+
+// compareTargets holds the gated targets of two results against each other. A
+// target only one side has is compared against an empty one, so that what the
+// head has alone, or lacks, is a problem and not a silence.
 func compareTargets(base, head report) comparison {
 	var cmp comparison
 
-	for _, bt := range base.Targets {
-		ht, ok := head.target(bt.Name)
-		if !ok || !gated[bt.Name] {
-			continue
-		}
+	want := expectationOf(base, head)
 
-		var all []metric
+	for _, name := range slices.Sorted(maps.Keys(gated)) {
+		bt, baseHas := base.target(name)
+		ht, headHas := head.target(name)
 
-		startup := metric{
-			target: bt.Name, cell: "startup", name: "startup", base: bt.Startup.MS, head: ht.Startup.MS,
-			lowerIsBetter: true, limit: limitStartup, scale: msPerSecond, unit: "s",
-		}
-		idle := metric{
-			target: bt.Name, cell: "idle", name: "idle RSS", base: bt.Idle.Healthcheck.RSSBytes,
-			head: ht.Idle.Healthcheck.RSSBytes, lowerIsBetter: true, limit: limitRSS, scale: bytesPerMiB, unit: "MiB",
-		}
+		switch {
+		case headHas && !baseHas:
+			bt = &targetResult{Name: name}
 
-		all = append(all, startup, idle)
-
-		cmp.problems = append(cmp.problems, compareProblems(bt, *ht)...)
-
-		for _, bc := range bt.Cells {
-			hc, ok := ht.cell(bc.ID)
-			if !ok || hc.Problem != "" || bc.Problem != "" {
-				cmp.missing = append(cmp.missing, bt.Name+" "+bc.ID)
-
-				continue
-			}
-
-			cmp.compared++
-
-			all = append(all, cellMetrics(bt.Name, bc, hc)...)
-		}
-
-		for _, m := range all {
-			if m.base.zero() || m.head.zero() {
-				continue
-			}
-
-			cmp.metrics++
-
-			switch m.judge() {
-			case worse:
-				cmp.regressions = append(cmp.regressions, m)
-			case noisy:
-				cmp.noise = append(cmp.noise, m)
-			case improved:
-				cmp.improvements = append(cmp.improvements, m)
-			default:
-			}
+			fallthrough
+		case headHas:
+			cmp.addTarget(base, head, *bt, *ht, want)
+		case baseHas && want.same:
+			cmp.problems = append(cmp.problems, problem{
+				target: name, cell: "(target)", what: "missing from the head", base: "measured", head: "absent", fails: true,
+			})
+		default:
 		}
 	}
 
 	return cmp
+}
+
+// addTarget holds one gated target of the head against the base's.
+func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want expectation) {
+	startup := metric{
+		target: bt.Name, cell: "startup", name: "startup", base: bt.Startup.MS, head: ht.Startup.MS,
+		lowerIsBetter: true, limit: limitStartup, scale: msPerSecond, unit: "s",
+	}
+	idle := metric{
+		target: bt.Name, cell: "idle", name: "idle RSS", base: bt.Idle.Healthcheck.RSSBytes,
+		head: ht.Idle.Healthcheck.RSSBytes, lowerIsBetter: true, limit: limitRSS, scale: bytesPerMiB, unit: "MiB",
+	}
+
+	all := []metric{startup, idle}
+
+	cmp.problems = append(cmp.problems, compareProblems(bt, ht, want)...)
+
+	for _, bc := range bt.Cells {
+		hc, ok := ht.cell(bc.ID)
+		if !ok || hc.Problem != "" || bc.Problem != "" {
+			cmp.missing = append(cmp.missing, bt.Name+" "+bc.ID)
+
+			continue
+		}
+
+		cmp.compared++
+
+		note := runsNote(bc, hc, base.Settings.Reps, head.Settings.Reps)
+
+		for _, m := range cellMetrics(bt.Name, bc, hc) {
+			m.runs = note
+			all = append(all, m)
+		}
+	}
+
+	for _, hc := range ht.Cells {
+		if _, ok := bt.cell(hc.ID); !ok {
+			cmp.missing = append(cmp.missing, bt.Name+" "+hc.ID+" (head only)")
+		}
+	}
+
+	for _, m := range all {
+		if m.base.zero() || m.head.zero() {
+			continue
+		}
+
+		cmp.metrics++
+
+		switch m.judge() {
+		case worse:
+			cmp.regressions = append(cmp.regressions, m)
+		case noisy:
+			cmp.noise = append(cmp.noise, m)
+		case improved:
+			cmp.improvements = append(cmp.improvements, m)
+		default:
+		}
+	}
 }
 
 // compareReports writes the comparison and returns errRegression when a gated
@@ -325,7 +386,7 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	problemTable(&b, cmp.problems)
 
 	if len(cmp.missing) > 0 {
-		fmt.Fprintf(&b, "### Not compared\n\n%d cells of the base are not in the head, or did not run there:\n\n",
+		fmt.Fprintf(&b, "### Not compared\n\n%d cells are in only one of the results, or did not run in one of them:\n\n",
 			len(cmp.missing))
 
 		for _, id := range cmp.missing[:min(len(cmp.missing), maxListed)] {
@@ -382,7 +443,7 @@ func table(b *strings.Builder, title string, metrics []metric) {
 	b.WriteString("|---|---|---|---:|---:|---:|\n")
 
 	for _, m := range metrics[:min(len(metrics), maxListed)] {
-		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s | %+.1f%% |\n", m.target, m.cell, m.name,
+		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s | %+.1f%% |\n", m.target, m.cell, m.label(),
 			m.render(m.base), m.render(m.head), m.change()*percentScale)
 	}
 
@@ -429,7 +490,7 @@ func acceptedTable(b *strings.Builder, metrics []metric) {
 	b.WriteString("|---|---|---|---:|---:|---:|---:|---|\n")
 
 	for _, m := range metrics {
-		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s | %+.1f%% | %s | %s |\n", m.target, m.cell, m.name,
+		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s | %+.1f%% | %s | %s |\n", m.target, m.cell, m.label(),
 			m.render(m.base), m.render(m.head), m.change()*percentScale, m.accepted.limit, m.accepted.label())
 	}
 

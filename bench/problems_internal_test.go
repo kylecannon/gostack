@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -260,6 +261,32 @@ func Test_checkBase_compares_absolute_paths(t *testing.T) {
 		o := opts(tt.out, tt.baseOut)
 		require.NoError(t, o.checkBase(), name)
 	}
+}
+
+// /tmp/x and /private/tmp/x are one directory on macOS, and any link to a
+// directory makes two spellings of it.
+func Test_checkBase_resolves_links(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	require.NoError(t, os.Mkdir("real", 0o750))
+	require.NoError(t, os.Symlink("real", "link"))
+
+	opts := func(out, baseOut string) options {
+		return options{baseImage: "b", baseCommit: "c", baseOut: baseOut, outDir: out, targets: []target{{}}}
+	}
+
+	for name, tt := range map[string]struct{ out, baseOut string }{
+		"a link and its target":                 {out: "link", baseOut: "real"},
+		"a directory not made yet, by the link": {out: "link/new", baseOut: "real/new"},
+		"a link, absolute and relative":         {out: filepath.Join(dir, "link", "new"), baseOut: "real/new/"},
+	} {
+		o := opts(tt.out, tt.baseOut)
+		require.Error(t, o.checkBase(), name)
+	}
+
+	o := opts("link/head", "real/base")
+	require.NoError(t, o.checkBase(), "two directories under one link")
 }
 
 func Test_removeArgs_removes_the_volume_with_the_container(t *testing.T) {

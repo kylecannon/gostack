@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -173,15 +174,16 @@ func (o *options) checkBase() error {
 		return errors.New("-base-image needs -base-commit and -base-out")
 	}
 
-	// Absolute paths, so one directory spelled two ways (out and ./out, or a
-	// relative and an absolute path) is still one directory. A run of a commit
-	// against itself would otherwise write both results to one file name.
-	baseOut, err := filepath.Abs(o.baseOut)
+	// Absolute paths with the links resolved, so one directory spelled two ways
+	// (out and ./out, a relative and an absolute path, /tmp/x and /private/tmp/x)
+	// is still one directory. A run of a commit against itself would otherwise
+	// write both results to one file name.
+	baseOut, err := realPath(o.baseOut)
 	if err != nil {
 		return fmt.Errorf("-base-out %s: %w", o.baseOut, err)
 	}
 
-	out, err := filepath.Abs(o.outDir)
+	out, err := realPath(o.outDir)
 	if err != nil {
 		return fmt.Errorf("-out %s: %w", o.outDir, err)
 	}
@@ -191,6 +193,32 @@ func (o *options) checkBase() error {
 	}
 
 	return nil
+}
+
+// realPath is the absolute path of p with every symbolic link in it resolved.
+// A directory that does not exist yet is resolved through its nearest parent
+// that does, as the run creates it there.
+func realPath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("absolute path: %w", err)
+	}
+
+	dir, rest := abs, ""
+
+	for {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(resolved, rest), nil
+		}
+
+		parent := filepath.Dir(dir)
+		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
+			return "", fmt.Errorf("resolve links: %w", err)
+		}
+
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	}
 }
 
 // sides lists the images the run measures as one target in alternation: the

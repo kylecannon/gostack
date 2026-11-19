@@ -289,14 +289,23 @@ container exited or was removed fails, and is recorded in the cell's
 `failed_runs` instead of being dropped, so a side never ends with fewer runs
 than the other unrecorded. An operation that reports errors is recorded with its
 count in the result file's `problems`. `bench compare` fails when the head has a
-problem the base does not (an operation with errors where the base has none, a
-cell with failed runs or no completed run, a measurement the head could not
-take), printing the cell, the operation and both counts. A problem on both
-sides is listed and does not fail, whatever the counts. Cells with unequal run
-counts are listed. The accepted list does not cover it. The committed results
-hold no error or problem on any target, LocalStack included. Containers are
-removed with their volume (`docker rm -f -v`), and `-out` and `-base-out` are
-compared as absolute paths.
+problem the base does not: an operation with errors where the base has none, a
+cell with failed runs or no completed run where the base ran, a measurement the
+head could not take of a kind (the text before the first `:` of its line) that the
+base did not also fail to take, or any of these in a cell only the head has. It also fails when the
+head has more failed runs in a cell than the base, or operation errors in the
+same cell and operation that are at least 10 and more than 10 times the base's,
+and when the head lacks a gated target, or a cell the base completed, that it
+was asked to measure ("missing from the head"; a different profile, or a service
+the head did not select, is not asked). Each row prints the cell, the operation
+and both counts. Any other problem on both sides is listed and does not fail,
+and neither do cells with unequal run counts. Zero tolerance for an error only
+the head has is deliberate: the committed results hold 0 errors in over 900,000
+operations, a stray error costs one rerun, and a floor would let a rare race
+through. A regression computed from fewer runs than the run asked for says so in
+its row ("head 4 of 5 runs"). The accepted list does not cover any of this.
+Containers are removed with their volume (`docker rm -f -v`), and `-out` and
+`-base-out` are compared as absolute paths with their links resolved.
 
 A pull request measures its base and head images in one run,
 `bench run -base-image`, never one image after the other. Every repeated

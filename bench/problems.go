@@ -23,14 +23,35 @@ import (
 //     workload whose cycles did (agenticRun.Errors);
 //   - a measurement of the target that could not be taken (the Problems lines
 //     that do not start with cellProblemPrefix): the image size, startup, idle
-//     memory, an agentic workload that did not run.
+//     memory, an agentic workload that did not run;
+//   - a gated target, or a cell with a completed run, that the base has and the
+//     head lacks.
 //
-// A problem the head has and the base does not fails the comparison. A problem
-// on both sides is listed and does not fail, whatever the two counts: the rule
-// is that the head did not get worse in kind, and a count of operations is not
-// comparable across runs of different length. The committed results hold no
-// operation error or problem on any target, LocalStack included, so a problem
-// today is a new one. LocalStack never gates, as for the metrics.
+// The head fails the comparison when it has:
+//
+//   - any problem the base does not have: an operation with errors where the
+//     base has none, a cell with failed runs where the base has none, a cell
+//     with no completed run where the base has runs, a kind of target problem
+//     (the text before the first ":" of its line) the base lacks, or a problem
+//     in a cell the base does not have at all;
+//   - more of a problem the base has too: failed runs in a cell above the base's,
+//     or operation errors in a cell and operation that are at least
+//     minWorseErrors and more than worseErrors times the base's;
+//   - a cell, or a gated target, that the base has and the head does not,
+//     when both are results of one profile and the head selected the service.
+//
+// Any other problem on both sides is listed and does not fail. Zero tolerance
+// for a head-only error is deliberate: the committed results hold none in over
+// 900,000 operations, a stray error costs one rerun, and a floor would let a
+// rare race through. LocalStack never gates, as for the metrics.
+
+const (
+	// worseErrors is how many times the base's operation errors the head's must
+	// exceed to fail when the base has errors too.
+	worseErrors = 10
+	// minWorseErrors is the fewest operation errors the head needs for that.
+	minWorseErrors = 10
+)
 
 // errRunProblem is the answer when the head has a problem the base does not.
 var errRunProblem = errors.New("benchmark run problem")
@@ -39,18 +60,61 @@ var errRunProblem = errors.New("benchmark run problem")
 type problem struct {
 	target, cell, what string
 	base, head         string
-	// fails is set when the head has the problem and the base does not.
+	// fails is set when the head has the problem and the base does not, or the
+	// head has far more of it.
 	fails bool
 }
 
+// expectation says which cells and targets of the base the head was asked to
+// measure, and so are missing from it when it has none.
+type expectation struct {
+	// same is true when both results are of one profile. A quick run against a
+	// full result was never asked for most of the base's cells.
+	same bool
+	// services are the services the head selected, or none for all of them.
+	services []string
+}
+
+func expectationOf(base, head report) expectation {
+	return expectation{same: base.Profile == head.Profile, services: head.Settings.Services}
+}
+
+// covers reports whether the head was asked to measure the base's cell.
+func (e expectation) covers(c cellResult) bool {
+	return e.same && (len(e.services) == 0 || slices.Contains(e.services, c.Spec.Service))
+}
+
+// errorsWorse reports whether the head's count of an operation's errors fails
+// against the base's: any at all where the base has none, otherwise far more.
+func errorsWorse(base, head int) bool {
+	if base == 0 {
+		return head > 0
+	}
+
+	return head >= minWorseErrors && head > worseErrors*base
+}
+
 // compareProblems lists the problems of one gated target in either side.
-func compareProblems(base, head targetResult) []problem {
+func compareProblems(base, head targetResult, want expectation) []problem {
 	var out []problem
 
 	for _, bc := range base.Cells {
 		hc, ok := head.cell(bc.ID)
-		if ok {
-			out = append(out, cellProblems(base.Name, bc, hc)...)
+
+		switch {
+		case ok:
+			out = append(out, cellProblems(base.Name, &bc, hc)...)
+		case bc.Problem == "" && want.covers(bc):
+			out = append(out, problem{
+				target: base.Name, cell: bc.ID, what: "missing from the head", base: runsText(bc), head: "absent", fails: true,
+			})
+		default:
+		}
+	}
+
+	for _, hc := range head.Cells {
+		if _, ok := base.cell(hc.ID); !ok {
+			out = append(out, cellProblems(base.Name, nil, hc)...)
 		}
 	}
 
@@ -68,26 +132,46 @@ func runsText(c cellResult) string {
 	return fmt.Sprintf("%d runs, %d failed", c.Runs, len(c.FailedRuns))
 }
 
-// cellProblems compares what the two sides of one cell reported.
-func cellProblems(target string, base, head cellResult) []problem {
-	if head.Problem != "" {
-		return []problem{{
-			target: target, cell: head.ID, what: "no completed run", base: runsText(base),
-			head: runsText(head) + ": " + head.Problem, fails: base.Problem == "",
-		}}
+// failedCount is how many runs of a cell failed. A cell with no completed run
+// has failed all of them, and an older result may not have named them.
+func failedCount(c cellResult) int {
+	if c.Problem != "" {
+		return max(len(c.FailedRuns), 1)
 	}
 
-	// A base with no run is listed under "Not compared" already.
-	if base.Problem != "" {
-		return nil
+	return len(c.FailedRuns)
+}
+
+// cellProblems compares what the two sides of one cell reported. A head cell
+// the base does not have is compared with none (base nil), so any problem in it
+// is the head's alone. A base cell with no completed run has no
+// figures, but what it reported still counts: the head's errors there fail
+// unless they are of a kind the base's problem already was.
+func cellProblems(target string, baseCell *cellResult, head cellResult) []problem {
+	var base cellResult
+
+	baseRuns := "not in the base"
+
+	if baseCell != nil {
+		base = *baseCell
+		baseRuns = runsText(base)
+	}
+
+	if head.Problem != "" {
+		return []problem{{
+			target: target, cell: head.ID, what: "no completed run", base: baseRuns,
+			head: runsText(head) + ": " + head.Problem, fails: baseCell == nil || base.Problem == "",
+		}}
 	}
 
 	var out []problem
 
-	if head.Runs != base.Runs || len(head.FailedRuns) > 0 || len(base.FailedRuns) > 0 {
+	failedBase, failedHead := failedCount(base), failedCount(head)
+	baseRan := baseCell != nil && base.Problem == ""
+
+	if failedHead > 0 || (baseRan && (failedBase > 0 || head.Runs != base.Runs)) {
 		out = append(out, problem{
-			target: target, cell: head.ID, what: "runs", base: runsText(base), head: runsText(head),
-			fails: len(head.FailedRuns) > 0 && len(base.FailedRuns) == 0,
+			target: target, cell: head.ID, what: "runs", base: baseRuns, head: runsText(head), fails: failedHead > failedBase,
 		})
 	}
 
@@ -106,7 +190,7 @@ func cellProblems(target string, base, head cellResult) []problem {
 		if b > 0 || h > 0 {
 			out = append(out, problem{
 				target: target, cell: head.ID, what: name + " errors", base: strconv.Itoa(b), head: strconv.Itoa(h),
-				fails: h > 0 && b == 0,
+				fails: errorsWorse(b, h),
 			})
 		}
 	}
@@ -133,7 +217,7 @@ func agenticProblems(base, head targetResult) []problem {
 		if b > 0 || h > 0 {
 			out = append(out, problem{
 				target: base.Name, cell: agenticCell(service), what: "cycle errors", base: strconv.Itoa(b),
-				head: strconv.Itoa(h), fails: h > 0 && b == 0,
+				head: strconv.Itoa(h), fails: errorsWorse(b, h),
 			})
 		}
 	}
@@ -149,15 +233,36 @@ func ownLines(t targetResult) []string {
 	})
 }
 
-// ownProblems compares the measurements of the target that could not be taken.
+// problemKind is the text of a Problems line before its first ":": the
+// measurement that could not be taken, whatever the error said.
+func problemKind(line string) string {
+	kind, _, _ := strings.Cut(line, ":")
+
+	return kind
+}
+
+// ownProblems compares the measurements of the target that could not be taken,
+// by kind: the head fails for a kind the base has no line of.
 func ownProblems(base, head targetResult) []problem {
-	baseLines, headLines := ownLines(base), ownLines(head)
+	baseLines := map[string]string{}
+
+	for _, line := range ownLines(base) {
+		if _, ok := baseLines[problemKind(line)]; !ok {
+			baseLines[problemKind(line)] = line
+		}
+	}
+
+	headLines := ownLines(head)
 	out := make([]problem, 0, len(headLines))
 
 	for _, line := range headLines {
+		baseLine, ok := baseLines[problemKind(line)]
+		if !ok {
+			baseLine = "none"
+		}
+
 		out = append(out, problem{
-			target: base.Name, cell: "(target)", what: "not measured", base: fmt.Sprintf("%d problems", len(baseLines)),
-			head: line, fails: len(baseLines) == 0,
+			target: base.Name, cell: "(target)", what: "not measured", base: baseLine, head: line, fails: !ok,
 		})
 	}
 
@@ -187,8 +292,9 @@ func problemTable(b *strings.Builder, problems []problem) {
 		return
 	}
 
-	b.WriteString("A problem the head has and the base does not fails the comparison. A problem on both sides is " +
-		"listed and does not.\n\n")
+	b.WriteString("A problem the head has and the base does not fails the comparison, and so does a head far worse " +
+		"than a base that has it too, or a cell or target the head lacks. Any other problem on both sides is listed " +
+		"and does not.\n\n")
 	b.WriteString("| Target | Cell | What | Base | Head | Result |\n|---|---|---|---:|---|---|\n")
 
 	// The failing rows first, so that the cap never hides one.
