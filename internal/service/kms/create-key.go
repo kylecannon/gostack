@@ -89,7 +89,11 @@ func createRequest(in *api.CreateKeyInput, tags []tag) (keyRequest, error) {
 				return req, validation("The value of the " + tagCustomMaterial + " tag is not base64: " + err.Error())
 			}
 
-			req.material = material
+			// An empty value is no material: LocalStack's "key_material or
+			// os.urandom" makes the key's own.
+			if len(material) > 0 {
+				req.material = material
+			}
 		case tagCustomID:
 			req.customID = deref(t.TagValue)
 		default:

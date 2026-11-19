@@ -116,7 +116,8 @@ func keyUsage(requested *string, spec string) (string, error) {
 		}
 	}
 
-	if requested == nil {
+	// An empty usage is the default too: LocalStack's "request_key_usage or ...".
+	if requested == nil || *requested == "" {
 		return usageEncrypt, nil
 	}
 
@@ -160,15 +161,20 @@ type material struct {
 	public    []byte
 }
 
-// newMaterial makes the crypto key of a spec checkSpec accepted, as
-// KmsCryptoKey does, from custom, the _custom_key_material_ bytes, when there
-// are any: the material itself for a symmetric or HMAC key, and a DER private
-// key for an RSA or ECC one.
+// newMaterial makes the crypto key of a spec, as KmsCryptoKey does, from
+// custom, the _custom_key_material_ bytes, when there are any (none, as in
+// LocalStack, when the tag's value is empty): the material itself for a
+// symmetric or HMAC key, and a DER private key for an RSA or ECC one. A spec it
+// cannot make is an error, never a panic: checkSpec accepts ECC_SECG_P256K1,
+// which has no standard-library curve, and callers that skip checkSpec may pass
+// any string.
 func newMaterial(spec string, custom []byte, random io.Reader) (material, error) {
 	var m material
 
 	if hmac, ok := hmacLens[spec]; ok {
-		if custom != nil {
+		// Any length: LocalStack's test_create_key_custom_key_material_hmac
+		// gives a HMAC_256 key 24 bytes, under the 32 it makes itself.
+		if len(custom) > 0 {
 			m.symmetric = custom
 
 			return m, nil
@@ -184,8 +190,33 @@ func newMaterial(spec string, custom []byte, random io.Reader) (material, error)
 		return m, err
 	}
 
+	// A spec that has no private key to make must be the symmetric one.
+	if spec != specSymmetric {
+		private, err := privateKey(spec, custom, random)
+		if err != nil {
+			return m, err
+		}
+
+		m.symmetric = custom
+
+		if len(custom) == 0 {
+			m.symmetric, err = randomBytes(random, symmetricLen)
+			if err != nil {
+				return m, err
+			}
+		}
+
+		return m, m.serialize(private)
+	}
+
+	// AES takes these three key sizes; any other would make every Encrypt fail.
+	if len(custom) > 0 && !slices.Contains(aesKeyLens, len(custom)) {
+		return m, validation(fmt.Sprintf(
+			"The custom key material of a %s key must be 16, 24 or 32 bytes, but it is %d", spec, len(custom)))
+	}
+
 	m.symmetric = custom
-	if custom == nil {
+	if len(custom) == 0 {
 		var err error
 
 		m.symmetric, err = randomBytes(random, symmetricLen)
@@ -194,30 +225,20 @@ func newMaterial(spec string, custom []byte, random io.Reader) (material, error)
 		}
 	}
 
-	if spec == specSymmetric {
-		return m, nil
-	}
-
-	private, err := privateKey(spec, custom, random)
-	if err != nil {
-		return m, err
-	}
-
-	return m, m.serialize(private)
+	return m, nil
 }
 
-// privateKey makes the private key of an RSA or ECC spec, or reads custom.
+// aesKeyLens are the key sizes of AES, in bytes.
+var aesKeyLens = []int{16, 24, 32}
+
+// privateKey makes the private key of an RSA or ECC spec, or reads custom, a
+// key that must be of the spec's size or curve. Any other spec is an error.
 func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
-	if custom != nil {
-		key, err := parsePrivateKey(custom)
-		if err != nil {
-			return nil, validation("The custom key material is not a DER private key: " + err.Error())
+	if bits, ok := rsaBits(spec); ok {
+		if len(custom) > 0 {
+			return customPrivateKey(spec, custom)
 		}
 
-		return key, nil
-	}
-
-	if bits, ok := rsaBits(spec); ok {
 		key, err := rsa.GenerateKey(random, bits)
 		if err != nil {
 			return nil, fmt.Errorf("generate %s: %w", spec, err)
@@ -226,9 +247,46 @@ func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
 		return key, nil
 	}
 
-	key, err := ecdsa.GenerateKey(eccCurves[spec], random)
+	curve, known := eccCurves[spec]
+
+	switch {
+	case !known:
+		return nil, api.NewUnsupportedOperationException("KeySpec " + spec + " is not supported")
+	case curve == nil:
+		return nil, awserr.NotImplemented("kms", "key material of KeySpec "+spec)
+	case len(custom) > 0:
+		return customPrivateKey(spec, custom)
+	}
+
+	key, err := ecdsa.GenerateKey(curve, random)
 	if err != nil {
 		return nil, fmt.Errorf("generate %s: %w", spec, err)
+	}
+
+	return key, nil
+}
+
+// customPrivateKey reads the DER private key a request supplied for an RSA or
+// ECC spec, and checks it is the size or curve the spec names.
+func customPrivateKey(spec string, der []byte) (any, error) {
+	key, err := parsePrivateKey(der)
+	if err != nil {
+		return nil, validation("The custom key material is not a DER private key: " + err.Error())
+	}
+
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		if bits, _ := rsaBits(spec); k.N.BitLen() != bits {
+			return nil, validation(fmt.Sprintf(
+				"The custom key material is a %d-bit RSA key, but the key spec is %s", k.N.BitLen(), spec))
+		}
+	case *ecdsa.PrivateKey:
+		if k.Curve != eccCurves[spec] {
+			return nil, validation(
+				"The custom key material is an EC key of the " + k.Curve.Params().Name + " curve, but the key spec is " + spec)
+		}
+	default:
+		// Any other type is refused by serialize.
 	}
 
 	return key, nil

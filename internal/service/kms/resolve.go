@@ -46,10 +46,10 @@ func keyPlace(rc *request.Context, id string) (parsedARN, error) {
 // dataKey is the first step of a data operation and of every call that may
 // reach another account's key: it finds the key any of id's forms names, in
 // the account and region keyPlace gives, and refuses a disabled key or one
-// pending deletion. The operation checks its own input next, then calls
-// Key.usable.
+// pending deletion. A key pending import passes: the operation checks its own
+// input next, then calls Key.usable, which refuses it, as LocalStack's order is.
 func (p *Provider) dataKey(rc *request.Context, id *string) (*Key, error) {
-	return p.placedKey(rc, id, allowEnabled)
+	return p.placedKey(rc, id, allowEnabled|allowPendingImport)
 }
 
 // placedKey is dataKey for a call that allows other states.
@@ -67,6 +67,13 @@ func (p *Provider) placedKey(rc *request.Context, id *string, allowed allow) (*K
 // account and region.
 func (p *Provider) localKey(rc *request.Context, id *string, allowed allow) (*Key, error) {
 	return p.lookup(rc.AccountID, rc.Region, deref(id), allowed)
+}
+
+// resolveLocal finds a key in the caller's own account and region by any of
+// id's forms, in any state. A call that changes the key checks its state when
+// it writes, in Key.update.
+func (p *Provider) resolveLocal(rc *request.Context, id *string) (*Key, error) {
+	return p.resolve(rc.AccountID, rc.Region, deref(id))
 }
 
 // lookup is _get_kms_key: the key some id names in an account and region, in
@@ -182,9 +189,17 @@ func (p *Provider) aliasTarget(st *State, name string) (string, error) {
 }
 
 // reservedTarget makes the key of a reserved alias and the alias, unless a
-// call that ran at the same time made them first.
+// call that ran at the same time made them first. The key is what CreateKey
+// makes of an empty request, as LocalStack's _create_kms_key does without one:
+// AWS_KMS origin, a material id, no description, and the CUSTOMER manager, since
+// only set_key_managed, which its callers in other services use, changes that.
 func (p *Provider) reservedTarget(st *State, name string) (string, error) {
-	k, err := p.newKey(st.account, st.region, keyRequest{spec: specSymmetric, usage: usageEncrypt})
+	req, err := createRequest(&api.CreateKeyInput{}, nil)
+	if err != nil {
+		return "", err
+	}
+
+	k, err := p.newKey(st.account, st.region, req)
 	if err != nil {
 		return "", err
 	}

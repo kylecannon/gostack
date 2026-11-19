@@ -55,12 +55,14 @@ func (p *Provider) ListKeys(ctx context.Context, in *api.ListKeysInput) (*api.Li
 	return out, nil
 }
 
-// EnableKey enables a key that is enabled or disabled.
+// EnableKey enables a key that is enabled or disabled. A key pending import
+// is refused, as AWS does.
 func (p *Provider) EnableKey(ctx context.Context, in *api.EnableKeyInput) (*api.EnableKeyOutput, error) {
 	return &api.EnableKeyOutput{}, p.setEnabledState(ctx, in.KeyId, stateEnabled)
 }
 
-// DisableKey disables a key that is enabled or disabled.
+// DisableKey disables a key that is enabled or disabled. A key pending import
+// is refused, as AWS does.
 func (p *Provider) DisableKey(ctx context.Context, in *api.DisableKeyInput) (*api.DisableKeyOutput, error) {
 	return &api.DisableKeyOutput{}, p.setEnabledState(ctx, in.KeyId, stateDisabled)
 }
@@ -73,21 +75,15 @@ func (p *Provider) setEnabledState(ctx context.Context, id *string, state string
 		return err
 	}
 
-	k, err := p.localKey(rc, id, allowEnabled|allowDisabled)
+	k, err := p.resolveLocal(rc, id)
 	if err != nil {
 		return err
 	}
 
-	k.mu.Lock()
-	defer k.mu.Unlock()
-
-	k.state = state
-	k.enabled = state == stateEnabled
-
-	return nil
+	return k.update(allowEnabled|allowDisabled, func() { k.setState(state, time.Time{}) })
 }
 
-// ScheduleKeyDeletion marks a key that is enabled or disabled for deletion. The
+// ScheduleKeyDeletion marks a key that is not pending deletion for deletion. The
 // window is checked before the key is looked up, as LocalStack does. Nothing
 // deletes the key when the window ends, in LocalStack either.
 func (p *Provider) ScheduleKeyDeletion(
@@ -107,18 +103,17 @@ func (p *Provider) ScheduleKeyDeletion(
 		return nil, validation(fmt.Sprintf("PendingWindowInDays should be between 7 and 30, but it is %d", window))
 	}
 
-	k, err := p.localKey(rc, in.KeyId, allowEnabled|allowDisabled)
+	k, err := p.resolveLocal(rc, in.KeyId)
 	if err != nil {
 		return nil, err
 	}
 
 	deletion := p.now().Add(time.Duration(window) * 24 * time.Hour)
 
-	k.mu.Lock()
-	k.enabled = false
-	k.state = statePendingDeletion
-	k.deletionDate = deletion
-	k.mu.Unlock()
+	err = k.update(allowManage, func() { k.setState(statePendingDeletion, deletion) })
+	if err != nil {
+		return nil, err
+	}
 
 	// The key id, not its ARN, as LocalStack answers.
 	return &api.ScheduleKeyDeletionOutput{
@@ -138,21 +133,21 @@ func (p *Provider) CancelKeyDeletion(
 		return nil, err
 	}
 
-	k, err := p.localKey(rc, in.KeyId, allowPendingDeletion)
+	k, err := p.resolveLocal(rc, in.KeyId)
 	if err != nil {
 		return nil, err
 	}
 
-	k.mu.Lock()
-	k.state = stateDisabled
-	k.deletionDate = time.Time{}
-	k.mu.Unlock()
+	err = k.update(allowPendingDeletion, func() { k.setState(stateDisabled, time.Time{}) })
+	if err != nil {
+		return nil, err
+	}
 
 	return &api.CancelKeyDeletionOutput{KeyId: new(k.ARN)}, nil
 }
 
-// UpdateKeyDescription sets the description of a key that is enabled or
-// disabled.
+// UpdateKeyDescription sets the description of a key that is not pending
+// deletion.
 func (p *Provider) UpdateKeyDescription(
 	ctx context.Context, in *api.UpdateKeyDescriptionInput,
 ) (*api.UpdateKeyDescriptionOutput, error) {
@@ -161,14 +156,15 @@ func (p *Provider) UpdateKeyDescription(
 		return nil, err
 	}
 
-	k, err := p.localKey(rc, in.KeyId, allowEnabled|allowDisabled)
+	k, err := p.resolveLocal(rc, in.KeyId)
 	if err != nil {
 		return nil, err
 	}
 
-	k.mu.Lock()
-	k.description = deref(in.Description)
-	k.mu.Unlock()
+	err = k.update(allowManage, func() { k.description = deref(in.Description) })
+	if err != nil {
+		return nil, err
+	}
 
 	return &api.UpdateKeyDescriptionOutput{}, nil
 }

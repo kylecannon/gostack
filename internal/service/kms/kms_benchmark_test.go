@@ -129,7 +129,7 @@ func (c *bench) loop(operation, body string) {
 func BenchmarkCreateKey(b *testing.B) {
 	for _, spec := range []struct{ spec, usage string }{
 		{symmetricDefault, usageEncryptDecrypt},
-		{hmac256, "GENERATE_VERIFY_MAC"},
+		{hmac256, usageGenerateMAC},
 		{"ECC_NIST_P256", usageSignVerify},
 		{rsa2048, usageEncryptDecrypt},
 	} {

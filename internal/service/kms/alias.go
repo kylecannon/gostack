@@ -15,7 +15,7 @@ const defaultAliasesLimit = 100
 var errAliasPrefix = validation(`Alias must start with the prefix "alias/". Please see ` +
 	"https://docs.aws.amazon.com/kms/latest/developerguide/kms-alias.html")
 
-// CreateAlias names a key that is enabled or disabled. The name is checked,
+// CreateAlias names a key that is not pending deletion. The name is checked,
 // then whether it is taken, then the key.
 func (p *Provider) CreateAlias(ctx context.Context, in *api.CreateAliasInput) (*api.CreateAliasOutput, error) {
 	rc, err := call(ctx)
@@ -33,7 +33,7 @@ func (p *Provider) CreateAlias(ctx context.Context, in *api.CreateAliasInput) (*
 		return nil, aliasExists(st, name)
 	}
 
-	k, err := p.localKey(rc, in.TargetKeyId, allowEnabled|allowDisabled)
+	k, err := p.localKey(rc, in.TargetKeyId, allowManage)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (p *Provider) CreateAlias(ctx context.Context, in *api.CreateAliasInput) (*
 	return &api.CreateAliasOutput{}, nil
 }
 
-// UpdateAlias points an alias at another key that is enabled or disabled. It
+// UpdateAlias points an alias at another key that is not pending deletion. It
 // keeps the key's id, where LocalStack keeps the id as sent, an ARN included,
 // which ListAliases filtered by that key then misses.
 func (p *Provider) UpdateAlias(ctx context.Context, in *api.UpdateAliasInput) (*api.UpdateAliasOutput, error) {
@@ -77,7 +77,7 @@ func (p *Provider) UpdateAlias(ctx context.Context, in *api.UpdateAliasInput) (*
 		return nil, api.NewNotFoundException("Alias " + aliasARN(rc.AccountID, rc.Region, name) + " is not found.")
 	}
 
-	k, err := p.localKey(rc, in.TargetKeyId, allowEnabled|allowDisabled)
+	k, err := p.localKey(rc, in.TargetKeyId, allowManage)
 	if err != nil {
 		return nil, err
 	}

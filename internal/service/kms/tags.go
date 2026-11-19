@@ -2,6 +2,7 @@ package kms
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
@@ -15,14 +16,14 @@ const (
 	defaultTagsLimit = 50
 )
 
-// TagResource sets tags on a key that is enabled or disabled.
+// TagResource sets tags on a key that is not pending deletion.
 func (p *Provider) TagResource(ctx context.Context, in *api.TagResourceInput) (*api.TagResourceOutput, error) {
 	rc, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	k, err := p.localKey(rc, in.KeyId, allowEnabled|allowDisabled)
+	k, err := p.localKey(rc, in.KeyId, allowManage)
 	if err != nil {
 		return nil, err
 	}
@@ -36,24 +37,32 @@ func (p *Provider) TagResource(ctx context.Context, in *api.TagResourceInput) (*
 		return nil, err
 	}
 
-	k.setTags(tags)
+	err = k.update(allowManage, func() { k.tags = mergeTags(k.tags, tags) })
+	if err != nil {
+		return nil, err
+	}
 
 	return &api.TagResourceOutput{}, nil
 }
 
-// UntagResource removes tags from a key that is enabled or disabled.
+// UntagResource removes tags from a key that is not pending deletion.
 func (p *Provider) UntagResource(ctx context.Context, in *api.UntagResourceInput) (*api.UntagResourceOutput, error) {
 	rc, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	k, err := p.localKey(rc, in.KeyId, allowEnabled|allowDisabled)
+	k, err := p.localKey(rc, in.KeyId, allowManage)
 	if err != nil {
 		return nil, err
 	}
 
-	k.removeTags(in.TagKeys)
+	err = k.update(allowManage, func() {
+		k.tags = slices.DeleteFunc(k.tags, func(t tag) bool { return slices.Contains(in.TagKeys, t.Key) })
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &api.UntagResourceOutput{}, nil
 }

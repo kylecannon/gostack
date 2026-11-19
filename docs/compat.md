@@ -155,6 +155,13 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 | A method no S3 operation takes, such as `PATCH /bucket` or `PATCH /bucket/key` | Crashes: `500 InternalError`, "Unable to find operation for request to service s3" | `405 MethodNotAllowed`, "The specified method is not allowed against this resource.", in S3's error XML with `Method` and `ResourceType` (`BUCKET` or `OBJECT`). A method token chi does not know reaches S3 too. | AWS's recorded 405s carry the same members (`test_s3.snapshot.json`, the website 405 pages). `TestMethodsNoOperationTakesAnswer405` |
 | `x-amz-object-lock-retain-until-date` in a response | Written with `.000Z` | Matches | LocalStack's serializer, `_timestamp_iso8601`. `TestRetainUntilHeaderCarriesMilliseconds` |
 
+### KMS
+
+| Behavior | LocalStack | gostack | AWS source |
+|---|---|---|---|
+| `EnableKey`, `DisableKey` and `CancelKeyDeletion` on a key made with `Origin=EXTERNAL`, which has no material until `ImportKeyMaterial` | Answer 200 and leave the key `Enabled` or `Disabled` with no material (`_get_kms_key` looks at Disabled, PendingDeletion and Enabled only). The parity suite pins no such call: its `EXTERNAL` keys are only imported, rotated, described and scheduled for deletion (SQ-267 read `tests/aws/services/kms/test_kms.py`, and `s3`, `secretsmanager` and `ssm` for an `EXTERNAL` key that is enabled or disabled; none). | `400 KMSInvalidStateException`, "`<key ARN>` is pending import." The key stays `PendingImport`. `ScheduleKeyDeletion`, `UpdateKeyDescription`, `TagResource`, `UntagResource`, `PutKeyPolicy`, `CreateAlias` and `UpdateAlias` still pass, as the table has them. A key that `ScheduleKeyDeletion` and then `CancelKeyDeletion` made `Disabled` can be enabled with no material: `CancelKeyDeletion` leaves a key `Disabled` whatever it was, and the import calls are the place to decide more. | "Key states of AWS KMS keys", Pending import column: `EnableKey`, `DisableKey` fail ([5]), `CancelKeyDeletion` fails ([4]); the rows above pass. `CancelKeyDeletion` API reference: "the key state of the KMS key is `Disabled`." |
+| `_custom_key_material_` with a length that no AES key has | Any length is kept for a `SYMMETRIC_DEFAULT` key, and `Encrypt` then fails inside the cipher | `400 ValidationException` at `CreateKey` unless the value is 16, 24 or 32 bytes. An HMAC key takes any length (a LocalStack test gives `HMAC_256` 24 bytes), and an RSA or ECC key must be a private key of its spec's size or curve. | AES key sizes; the LocalStack test `test_create_key_custom_key_material_hmac` |
+
 ## S3 limits
 
 What S3 does not do, or does in part, so a client's expectations can be set.

@@ -28,6 +28,9 @@ func Test_mutating(t *testing.T) {
 // sampleKeyID is a key id of the UUID form.
 const sampleKeyID = "134f2428-cec1-4b25-a1ae-9048164dba47"
 
+// testRegion is the region the internal tests call from.
+const testRegion = "us-east-1"
+
 // Test_dataKey holds the two steps every data operation takes to its key:
 // dataKey finds it and refuses a disabled key or one pending deletion, then
 // Key.usable refuses another usage before a key pending import.
@@ -35,7 +38,7 @@ func Test_dataKey(t *testing.T) {
 	const other = "111111111111"
 
 	p := New(func(string) {})
-	rc := &request.Context{AccountID: "000000000000", Region: "us-east-1"}
+	rc := &request.Context{AccountID: "000000000000", Region: testRegion}
 
 	add := func(account string, req keyRequest, state string) *Key {
 		t.Helper()
@@ -147,7 +150,7 @@ func Test_parseKeyARN(t *testing.T) {
 	}{
 		{
 			"a key ARN", "arn:aws:kms:us-east-1:111111111111:key/abc",
-			parsedARN{region: "us-east-1", account: "111111111111", keyID: "abc"},
+			parsedARN{region: testRegion, account: "111111111111", keyID: "abc"},
 			true,
 		},
 		{
@@ -198,6 +201,6 @@ func FuzzResolveID(f *testing.F) {
 			require.NotContains(t, parsed.keyID, ":")
 		}
 
-		_, _ = splitARN("us-east-1", id)
+		_, _ = splitARN(testRegion, id)
 	})
 }

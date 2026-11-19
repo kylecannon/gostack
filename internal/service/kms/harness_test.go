@@ -36,6 +36,13 @@ const (
 	fieldTagValue      = "TagValue"
 	fieldKeyUsage      = "KeyUsage"
 	fieldTargetKeyID   = "TargetKeyId"
+	fieldARN           = "Arn"
+	fieldOrigin        = "Origin"
+	fieldPolicy        = "Policy"
+
+	usageGenerateMAC = "GENERATE_VERIFY_MAC"
+	valueNew         = "new"
+	aliasS3          = "alias/aws/s3"
 
 	usageEncryptDecrypt = "ENCRYPT_DECRYPT"
 	usageSignVerify     = "SIGN_VERIFY"
@@ -175,7 +182,7 @@ func keyID(t *testing.T, meta map[string]any) string {
 func arn(t *testing.T, meta map[string]any) string {
 	t.Helper()
 
-	a, ok := meta["Arn"].(string)
+	a, ok := meta[fieldARN].(string)
 	require.True(t, ok)
 
 	return a

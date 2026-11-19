@@ -110,10 +110,10 @@ func Test_keyStates(t *testing.T) {
 	require.Equal(t, "Disabled", meta["KeyState"])
 	require.NotContains(t, meta, "DeletionDate")
 
-	s.ok("UpdateKeyDescription", map[string]any{fieldKeyID: id, fieldDescription: "new"})
+	s.ok("UpdateKeyDescription", map[string]any{fieldKeyID: id, fieldDescription: valueNew})
 	meta, ok = s.ok("DescribeKey", key)["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "new", meta[fieldDescription])
+	require.Equal(t, valueNew, meta[fieldDescription])
 }
 
 func Test_ListKeys(t *testing.T) {
@@ -238,11 +238,11 @@ func Test_aliases(t *testing.T) {
 func Test_reservedAlias(t *testing.T) {
 	s := newStack(t)
 
-	meta, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: "alias/aws/s3"})["KeyMetadata"].(map[string]any)
+	meta, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: aliasS3})["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, int32(1), s.changes.Load(), "a read that makes a reserved alias reports the change")
 
-	again, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: "alias/aws/s3"})["KeyMetadata"].(map[string]any)
+	again, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: aliasS3})["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, meta[fieldKeyID], again[fieldKeyID])
 	require.Equal(t, int32(1), s.changes.Load())
@@ -252,7 +252,8 @@ func Test_policies(t *testing.T) {
 	s := newStack(t)
 	id := keyID(t, s.createKey(nil))
 
-	policy, ok := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault})["Policy"].(string)
+	got := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault})
+	policy, ok := got[fieldPolicy].(string)
 	require.True(t, ok)
 	require.JSONEq(t, `{"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": "Enable IAM User `+
 		`Permissions", "Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::`+account+`:root"}, "Action": "kms:*", `+
@@ -260,9 +261,9 @@ func Test_policies(t *testing.T) {
 	// The text is json.dumps's, with a space after each separator.
 	require.Contains(t, policy, `{"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": `)
 
-	s.ok("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault, "Policy": `{"x": 1}`})
+	s.ok("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault, fieldPolicy: `{"x": 1}`})
 
-	stored, ok := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id})["Policy"].(string)
+	stored, ok := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id})[fieldPolicy].(string)
 	require.True(t, ok)
 	require.Contains(t, stored, `{"x": 1}`)
 	require.Len(t, stored, len(`{"x": 1}`), "the policy is kept as it was sent")
@@ -273,7 +274,7 @@ func Test_policies(t *testing.T) {
 
 	s.fails("GetKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: "other"},
 		"NotFoundException", "No such policy exists")
-	s.fails("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: "other", "Policy": "{}"},
+	s.fails("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: "other", fieldPolicy: "{}"},
 		"UnsupportedOperationException", "Only default policy is supported")
 }
 

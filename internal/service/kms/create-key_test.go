@@ -34,7 +34,7 @@ func Test_CreateKey(t *testing.T) {
 
 		require.Equal(t, map[string]any{
 			"AWSAccountId":          account,
-			"Arn":                   "arn:aws:kms:us-east-1:" + account + ":key/" + id,
+			fieldARN:                "arn:aws:kms:us-east-1:" + account + ":key/" + id,
 			"CustomerMasterKeySpec": symmetricDefault,
 			fieldDescription:        "test key 123",
 			"Enabled":               true,
@@ -44,7 +44,7 @@ func Test_CreateKey(t *testing.T) {
 			"KeyState":              "Enabled",
 			fieldKeyUsage:           usageEncryptDecrypt,
 			"MultiRegion":           false,
-			"Origin":                "AWS_KMS",
+			fieldOrigin:             "AWS_KMS",
 		}, meta)
 	})
 
@@ -56,7 +56,7 @@ func Test_CreateKey(t *testing.T) {
 		require.Regexp(t, `^mrk-[0-9a-f]{32}$`, id)
 		require.Equal(t, map[string]any{
 			"MultiRegionKeyType": "PRIMARY",
-			"PrimaryKey":         map[string]any{"Arn": arn(t, meta), "Region": usEast1},
+			"PrimaryKey":         map[string]any{fieldARN: arn(t, meta), "Region": usEast1},
 			"ReplicaKeys":        []any{},
 		}, meta["MultiRegionConfiguration"])
 	})
@@ -72,7 +72,7 @@ func Test_CreateKey(t *testing.T) {
 		}{
 			{
 				name:      hmac256,
-				giveInput: map[string]any{fieldKeySpec: hmac256, fieldKeyUsage: "GENERATE_VERIFY_MAC"},
+				giveInput: map[string]any{fieldKeySpec: hmac256, fieldKeyUsage: usageGenerateMAC},
 				wantKey:   "MacAlgorithms",
 				wantAlgs:  []any{"HMAC_SHA_256"},
 			},
@@ -102,7 +102,7 @@ func Test_CreateKey(t *testing.T) {
 	t.Run("an external key waits for its material", func(t *testing.T) {
 		s := newStack(t)
 
-		meta := s.createKey(map[string]any{"Origin": "EXTERNAL"})
+		meta := s.createKey(map[string]any{fieldOrigin: "EXTERNAL"})
 		require.Equal(t, "PendingImport", meta["KeyState"])
 		require.Equal(t, false, meta["Enabled"])
 		require.NotContains(t, meta, "CurrentKeyMaterialId")

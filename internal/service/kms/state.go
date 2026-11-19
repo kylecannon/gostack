@@ -59,7 +59,8 @@ func (s *State) key(id string) *Key {
 }
 
 // addKey stores k. A key made with the id of one that exists, through the
-// _custom_id_ tag, replaces it in place, as LocalStack's dict does.
+// _custom_id_ tag, replaces it in place, as LocalStack's dict does, and keeps
+// its tags.
 func (s *State) addKey(k *Key) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,8 +68,14 @@ func (s *State) addKey(k *Key) {
 	s.addKeyLocked(k)
 }
 
+// addKeyLocked is addKey with s.mu held. LocalStack keeps tags by key ARN, apart
+// from the key, so a key that replaces another has the old tags with the new
+// ones set over them. k is not shared yet, so it needs no lock of its own.
 func (s *State) addKeyLocked(k *Key) {
-	if _, ok := s.keys[k.ID]; !ok {
+	old, ok := s.keys[k.ID]
+	if ok {
+		k.tags = mergeTags(old.tagList(), k.tags)
+	} else {
 		s.keyOrder = append(s.keyOrder, k.ID)
 	}
 

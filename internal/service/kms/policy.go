@@ -26,6 +26,7 @@ func (p *Provider) PutKeyPolicy(ctx context.Context, in *api.PutKeyPolicyInput) 
 		return nil, api.NewUnsupportedOperationException("Only default policy is supported")
 	}
 
+	// Any state accepts a policy, so there is no check to hold with the write.
 	k.mu.Lock()
 	k.policy = deref(in.Policy)
 	k.mu.Unlock()
