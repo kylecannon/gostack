@@ -2,6 +2,7 @@ package kms_test
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,7 +25,9 @@ var dataPayloads = []struct {
 }{{size32B, 32}, {"1KiB", 1024}, {size4KiB, 4096}}
 
 // dataConcurrency is the number of calls each loop makes at once, all on one
-// key.
+// key. At concurrency N one iteration is N simultaneous calls, so ns/op, the
+// byte rate and the allocations are per batch of N calls, as the S3 object
+// benchmarks report them.
 var dataConcurrency = []int{1, 16, 64}
 
 // fanOut sends workers calls of operation with body at once and fails the
@@ -106,7 +109,7 @@ func BenchmarkDecrypt(b *testing.B) {
 				plaintext := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", payload.size)))
 
 				blob, ok := c.setup("Encrypt", map[string]any{
-					fieldKeyID: c.benchKey(), "Plaintext": plaintext,
+					fieldKeyID: c.benchKey(), fieldPlaintext: plaintext,
 				})["CiphertextBlob"].(string)
 				if !ok {
 					b.Fatal("Encrypt answered no CiphertextBlob")
@@ -125,6 +128,117 @@ func BenchmarkDecrypt(b *testing.B) {
 	}
 }
 
+// BenchmarkReEncrypt moves a blob of each payload size from one key to
+// another, with that many calls at once.
+func BenchmarkReEncrypt(b *testing.B) {
+	for _, payload := range dataPayloads {
+		for _, workers := range dataConcurrency {
+			b.Run(dataCell(payload.name, workers), func(b *testing.B) {
+				c := newBench(b)
+				plaintext := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", payload.size)))
+				source, destination := c.benchKey(), c.benchKey()
+
+				blob, ok := c.setup("Encrypt", map[string]any{
+					fieldKeyID: source, fieldPlaintext: plaintext,
+				})["CiphertextBlob"].(string)
+				if !ok {
+					b.Fatal("Encrypt answered no CiphertextBlob")
+				}
+
+				body := `{"CiphertextBlob":"` + blob + `","DestinationKeyId":"` + destination + `"}`
+
+				b.SetBytes(int64(payload.size * workers))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					c.fanOut(opReEncrypt, body, workers)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkGenerateDataKeyPair makes a key pair of an RSA and an ECC spec, with
+// and without the private key in the clear, with that many calls at once. The
+// pair is the work: an RSA key pair costs orders of magnitude more than an
+// elliptic one.
+func BenchmarkGenerateDataKeyPair(b *testing.B) {
+	for _, operation := range []string{opGenerateDataKeyPair, "GenerateDataKeyPairWithoutPlaintext"} {
+		for _, spec := range []string{"RSA_2048", eccP256} {
+			for _, workers := range dataConcurrency {
+				name := "proto=json/op=" + operation + "/keypairspec=" + spec + "/concurrency=" + strconv.Itoa(workers)
+
+				b.Run(name, func(b *testing.B) {
+					c := newBench(b)
+					body := `{"KeyId":"` + c.benchKey() + `","KeyPairSpec":"` + spec + `"}`
+
+					b.ReportAllocs()
+
+					for b.Loop() {
+						c.fanOut(operation, body, workers)
+					}
+				})
+			}
+		}
+	}
+}
+
+// BenchmarkEncryptionContext seals and opens 1 KiB under an encryption context
+// of one pair and of eight, with that many calls at once. The context is the
+// additional data of the seal, built from the sorted pairs on every call.
+func BenchmarkEncryptionContext(b *testing.B) {
+	const size = 1024
+
+	for _, pairs := range []int{1, 8} {
+		for _, operation := range []string{"Encrypt", opDecrypt} {
+			for _, workers := range dataConcurrency {
+				name := "proto=json/op=" + operation + "/pairs=" + strconv.Itoa(pairs) + "/concurrency=" +
+					strconv.Itoa(workers)
+
+				b.Run(name, func(b *testing.B) {
+					c := newBench(b)
+					plaintext := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", size)))
+					context := make(map[string]string, pairs)
+
+					for i := range pairs {
+						context["key"+strconv.Itoa(i)] = "value" + strconv.Itoa(i)
+					}
+
+					input := map[string]any{fieldKeyID: c.benchKey(), fieldPlaintext: plaintext, "EncryptionContext": context}
+					body := encodeBody(b, input)
+
+					if operation == opDecrypt {
+						blob, ok := c.setup("Encrypt", input)["CiphertextBlob"].(string)
+						if !ok {
+							b.Fatal("Encrypt answered no CiphertextBlob")
+						}
+
+						body = encodeBody(b, map[string]any{"CiphertextBlob": blob, "EncryptionContext": context})
+					}
+
+					b.SetBytes(int64(size * workers))
+					b.ReportAllocs()
+
+					for b.Loop() {
+						c.fanOut(operation, body, workers)
+					}
+				})
+			}
+		}
+	}
+}
+
+func encodeBody(b *testing.B, input map[string]any) string {
+	b.Helper()
+
+	body, err := json.Marshal(input)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	return string(body)
+}
+
 // BenchmarkGenerateDataKey makes a data key of each size option, with and
 // without its plaintext, with that many calls at once.
 func BenchmarkGenerateDataKey(b *testing.B) {
@@ -134,7 +248,7 @@ func BenchmarkGenerateDataKey(b *testing.B) {
 		{"bytes=1024", `"NumberOfBytes":1024`},
 	}
 
-	for _, operation := range []string{"GenerateDataKey", "GenerateDataKeyWithoutPlaintext"} {
+	for _, operation := range []string{opGenerateDataKey, "GenerateDataKeyWithoutPlaintext"} {
 		for _, option := range options {
 			for _, workers := range dataConcurrency {
 				name := "proto=json/op=" + operation + "/" + option.name + "/concurrency=" + strconv.Itoa(workers)

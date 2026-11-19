@@ -20,6 +20,18 @@ const (
 // dataKeySpecs are the sizes of the DataKeySpec values.
 var dataKeySpecs = map[string]int{"AES_128": aes128, "AES_256": aes256}
 
+// refuseRecipient answers 501 for a request that carries a Recipient, before
+// any key or random bytes are made. The CMS envelope that would hold the
+// plaintext for it is not written yet, and returning the plaintext instead is
+// wrong: AWS leaves it out when a recipient is given.
+func refuseRecipient(recipient *api.RecipientInfo, operation string) error {
+	if recipient == nil {
+		return nil
+	}
+
+	return awserr.NotImplemented("kms", operation+" with a Recipient")
+}
+
 // dataKey is what the GenerateDataKey family makes: the data key or private
 // key in the clear, an asymmetric pair's public key, and the blob that holds
 // the clear key under key.
@@ -31,9 +43,16 @@ type dataKey struct {
 }
 
 // GenerateDataKey answers a random data key and its blob under the key.
-// DryRun and Recipient are not read, in LocalStack either.
+// DryRun is not read, in LocalStack either. A Recipient is answered 501, as
+// Decrypt answers it: LocalStack ignores it and returns the plaintext, which
+// AWS leaves out when a recipient is given.
 func (p *Provider) GenerateDataKey(ctx context.Context, in *api.GenerateDataKeyInput,
 ) (*api.GenerateDataKeyOutput, error) {
+	err := refuseRecipient(in.Recipient, "GenerateDataKey")
+	if err != nil {
+		return nil, err
+	}
+
 	d, err := p.newDataKey(ctx, in.KeyId, in.KeySpec, in.NumberOfBytes, in.EncryptionContext, "GenerateDataKey")
 	if err != nil {
 		return nil, err
@@ -57,9 +76,15 @@ func (p *Provider) GenerateDataKeyWithoutPlaintext(ctx context.Context,
 
 // GenerateDataKeyPair answers a key pair of KeyPairSpec, its private key in
 // the clear and as a blob under the key, both PKCS #8 DER, and its public key
-// as a DER SubjectPublicKeyInfo. Recipient is not read, in LocalStack either.
+// as a DER SubjectPublicKeyInfo. A Recipient is answered 501, as
+// GenerateDataKey answers it.
 func (p *Provider) GenerateDataKeyPair(ctx context.Context, in *api.GenerateDataKeyPairInput,
 ) (*api.GenerateDataKeyPairOutput, error) {
+	err := refuseRecipient(in.Recipient, "GenerateDataKeyPair")
+	if err != nil {
+		return nil, err
+	}
+
 	d, err := p.newDataKeyPair(ctx, in.KeyId, in.KeyPairSpec, in.EncryptionContext, in.DryRun, "GenerateDataKeyPair")
 	if err != nil {
 		return nil, err

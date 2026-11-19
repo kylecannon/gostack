@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"strconv"
+	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -241,15 +242,21 @@ func (p *Provider) sourceKey(rc *request.Context, keyID *string, data []byte, op
 
 // blobKey finds the key a blob names. A blob that did not parse, or names a
 // key ARN of another region, is InvalidCiphertextException, since LocalStack
-// makes both checks inside one try.
+// makes both checks inside one try. A blob holds a key id, never an alias:
+// one that does names no key, and is not resolved, since resolving an AWS
+// managed alias makes it and its key.
 func (p *Provider) blobKey(rc *request.Context, blob *ciphertext.Blob, parseErr error) (*Key, error) {
 	if parseErr != nil {
 		return nil, api.NewInvalidCiphertextException(undeserializable)
 	}
 
-	_, err := keyPlace(rc, blob.KeyID)
+	place, err := keyPlace(rc, blob.KeyID)
 	if err != nil {
 		return nil, api.NewInvalidCiphertextException(undeserializable)
+	}
+
+	if strings.HasPrefix(place.keyID, aliasPrefix) {
+		return nil, api.NewNotFoundException("Unable to find KMS alias with name " + place.keyID)
 	}
 
 	return p.dataKey(rc, &blob.KeyID)

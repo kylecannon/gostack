@@ -7,13 +7,19 @@ import (
 )
 
 // GenerateRandom answers NumberOfBytes random bytes, 1 to 1024 of them.
-// CustomKeyStoreId and Recipient are not read, in LocalStack either.
+// CustomKeyStoreId is not read, in LocalStack either. A Recipient is answered
+// 501, as GenerateDataKey answers it.
 func (p *Provider) GenerateRandom(_ context.Context, in *api.GenerateRandomInput) (*api.GenerateRandomOutput, error) {
+	err := refuseRecipient(in.Recipient, "GenerateRandom")
+	if err != nil {
+		return nil, err
+	}
+
 	if in.NumberOfBytes == nil {
 		return nil, validation("NumberOfBytes is required.")
 	}
 
-	err := in.Validate()
+	err = in.Validate()
 	if err != nil {
 		return nil, err
 	}
