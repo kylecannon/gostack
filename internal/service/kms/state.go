@@ -19,6 +19,9 @@ type State struct {
 	keyOrder   []string
 	aliases    map[string]*Alias
 	aliasOrder []string
+
+	// grants has its own lock.
+	grants grantStore
 }
 
 // Alias names a key. Its fields change only under its State's mu.
@@ -48,6 +51,7 @@ func (s *State) reset() {
 	s.keyOrder = nil
 	s.aliases = map[string]*Alias{}
 	s.aliasOrder = nil
+	s.grants.reset()
 }
 
 // key returns the key with id, or nil.
