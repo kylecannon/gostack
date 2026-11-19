@@ -4,8 +4,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -19,10 +22,13 @@ const (
 	account = "123456789012"
 	region  = "eu-west-1"
 	target  = "AmazonSQS.SendMessage"
+
+	sqsService  = "sqs"
+	createQueue = "AmazonSQS.CreateQueue"
 )
 
 func sqsCall(body string) inproc.Call {
-	return inproc.Call{Account: account, Region: region, Service: "sqs", Target: target, Body: []byte(body)}
+	return inproc.Call{Account: account, Region: region, Service: sqsService, Target: target, Body: []byte(body)}
 }
 
 func Test_Do_BuildsASignedRequestForTheCallersAccountAndRegion(t *testing.T) {
@@ -246,4 +252,280 @@ func Test_Close_DropsQueuedCallsCancelsTheOneInFlightAndRefusesMore(t *testing.T
 	assert.False(t, dropped, "a queued call is dropped, not served")
 	assert.False(t, client.Enqueue(sqsCall("after close"), nil))
 	assert.True(t, client.Idle())
+}
+
+// laneCall is a call to destination lane, numbered n in its body.
+func laneCall(lane, n int) inproc.Call {
+	call := sqsCall(strconv.Itoa(n))
+	call.Path = "/" + strconv.Itoa(lane)
+
+	return call
+}
+
+func Test_Enqueue_RunsDestinationsAtOnceUpToTheBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			mu       sync.Mutex
+			inFlight int
+			most     int
+			served   int
+		)
+
+		release := make(chan struct{})
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			mu.Lock()
+			inFlight++
+			most = max(most, inFlight)
+			mu.Unlock()
+
+			<-release
+
+			mu.Lock()
+			inFlight--
+			served++
+			mu.Unlock()
+		}))
+
+		for lane := range 2 * inproc.MaxInFlight {
+			require.True(t, client.Enqueue(laneCall(lane, 0), nil))
+		}
+
+		synctest.Wait()
+
+		mu.Lock()
+		assert.Equal(t, inproc.MaxInFlight, inFlight, "every destination runs at once, up to the bound")
+		mu.Unlock()
+
+		close(release)
+		synctest.Wait()
+
+		mu.Lock()
+		assert.Equal(t, inproc.MaxInFlight, most)
+		assert.Equal(t, 2*inproc.MaxInFlight, served)
+		mu.Unlock()
+
+		assert.True(t, client.Idle(), "the workers exit once nothing waits")
+	})
+}
+
+// Test_Enqueue_KeepsEachDestinationsOrder runs many destinations at once and
+// checks each one's calls arrived one at a time, in the order they were queued.
+// Run it with -race -count=20.
+func Test_Enqueue_KeepsEachDestinationsOrder(t *testing.T) {
+	const (
+		lanes   = 3 * inproc.MaxInFlight
+		perLane = 40
+	)
+
+	var (
+		mu       sync.Mutex
+		got      = make(map[string][]string)
+		running  = make(map[string]bool)
+		inFlight int
+		most     int
+		overlap  bool
+		served   sync.WaitGroup
+	)
+
+	served.Add(lanes * perLane)
+
+	client := inproc.New()
+	t.Cleanup(client.Close)
+	client.Bind(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+
+		mu.Lock()
+		overlap = overlap || running[r.URL.Path]
+		running[r.URL.Path] = true
+		inFlight++
+		most = max(most, inFlight)
+		got[r.URL.Path] = append(got[r.URL.Path], string(body))
+		mu.Unlock()
+
+		runtime.Gosched()
+
+		mu.Lock()
+		running[r.URL.Path] = false
+		inFlight--
+		mu.Unlock()
+	}))
+
+	for n := range perLane {
+		for lane := range lanes {
+			require.True(t, client.Enqueue(laneCall(lane, n), func(inproc.Response, error) { served.Done() }))
+		}
+	}
+
+	served.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.False(t, overlap, "two calls to one destination never run at once")
+	assert.LessOrEqual(t, most, inproc.MaxInFlight)
+
+	want := make([]string, perLane)
+	for n := range perLane {
+		want[n] = strconv.Itoa(n)
+	}
+
+	for lane := range lanes {
+		assert.Equal(t, want, got["/"+strconv.Itoa(lane)], "destination %d", lane)
+	}
+}
+
+// Test_Stream_ReturnsAtTheHeadAndStreamsTheBody checks the head is the one the
+// handler sent with its status, and the body arrives as it is written.
+func Test_Stream_ReturnsAtTheHeadAndStreamsTheBody(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		next := make(chan struct{})
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+
+			w.Header()["x-amz-request-id"] = []string{"req"} // spelled as S3 spells it, to be canonicalized.
+			w.WriteHeader(http.StatusPartialContent)
+			w.Header().Set("X-Late", "never sent")
+
+			_, _ = w.Write(body)
+			<-next
+			_, _ = w.Write([]byte(" second"))
+		}))
+
+		resp, err := client.Stream(t.Context(), sqsCall(""), strings.NewReader("first"), -1)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusPartialContent, resp.Status)
+		assert.True(t, resp.OK())
+		assert.Equal(t, "req", resp.Header.Get("X-Amz-Request-Id"))
+		assert.Empty(t, resp.Header.Get("X-Late"), "a header set after the status is not part of the head")
+
+		buf := make([]byte, 64)
+		n, err := resp.Body.Read(buf)
+		require.NoError(t, err)
+		assert.Equal(t, "first", string(buf[:n]), "the first write arrives before the handler writes again")
+
+		close(next)
+
+		rest, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, " second", string(rest))
+		require.NoError(t, resp.Body.Close())
+	})
+}
+
+// endless is a handler that writes until a write fails, and reports that it
+// returned.
+func endless(returned *atomic.Bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		defer returned.Store(true)
+
+		chunk := make([]byte, 1024)
+
+		for {
+			_, err := w.Write(chunk)
+			if err != nil {
+				return
+			}
+		}
+	})
+}
+
+func Test_Stream_ClosingTheBodyEarlyEndsTheHandler(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var returned atomic.Bool
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(endless(&returned))
+
+		resp, err := client.Stream(t.Context(), sqsCall(""), nil, 0)
+		require.NoError(t, err)
+
+		_, err = io.ReadFull(resp.Body, make([]byte, 4096))
+		require.NoError(t, err)
+		assert.False(t, returned.Load())
+
+		require.NoError(t, resp.Body.Close())
+		assert.True(t, returned.Load(), "Close returns once the handler has")
+		require.NoError(t, resp.Body.Close(), "a second Close is harmless")
+	})
+}
+
+func Test_Stream_TheEndOfTheContextEndsTheHandler(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			returned atomic.Bool
+			sawDone  atomic.Bool
+		)
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			endless(&returned).ServeHTTP(w, r)
+			sawDone.Store(r.Context().Err() != nil)
+		}))
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		resp, err := client.Stream(ctx, sqsCall(""), nil, 0)
+		require.NoError(t, err)
+
+		// The caller stops reading and never closes the body: the handler is
+		// blocked in a write when the context ends.
+		cancel()
+		synctest.Wait()
+
+		assert.True(t, returned.Load(), "the handler returns without Close")
+		assert.True(t, sawDone.Load(), "the request's context ended with the caller's")
+
+		_, err = resp.Body.Read(make([]byte, 1))
+		require.ErrorIs(t, err, context.Canceled)
+		require.NoError(t, resp.Body.Close())
+	})
+}
+
+func Test_Stream_AHandlerPanicIsAnError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			panic(http.ErrAbortHandler)
+		}))
+
+		_, err := client.Stream(t.Context(), sqsCall(""), nil, 0)
+		require.ErrorIs(t, err, inproc.ErrAborted, "a panic before the head is the error of the call")
+
+		client.Bind(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("partial"))
+
+			panic(http.ErrAbortHandler)
+		}))
+
+		resp, err := client.Stream(t.Context(), sqsCall(""), nil, 0)
+		require.NoError(t, err)
+
+		got, err := io.ReadAll(resp.Body)
+		require.ErrorIs(t, err, inproc.ErrAborted, "a panic after the head ends the body")
+		assert.Equal(t, "partial", string(got))
+		require.NoError(t, resp.Body.Close())
+	})
+}
+
+func Test_Stream_WithoutAHandlerFails(t *testing.T) {
+	client := inproc.New()
+	t.Cleanup(client.Close)
+
+	_, err := client.Stream(t.Context(), sqsCall(""), nil, 0)
+	require.ErrorIs(t, err, inproc.ErrNotBound)
 }

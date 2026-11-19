@@ -358,12 +358,40 @@ account and region derivation call `FromRequest`.
 A service calls another one through `inproc.Client`, which builds an HTTP request
 with a credential scope for the caller's account and region and serves it
 through the gateway's own handler. Detection, account resolution, logging and
-dirty marking all apply, and a service never reaches into another's state. `Do`
-makes a call synchronously. `Enqueue` queues it behind one worker that starts
-with the first queued call and ends when the queue is empty, so nothing runs
-while idle; the queue holds `inproc.MaxQueued` (4,096) calls and refuses the
-next. A call made before `Bind` gives the client a handler returns
-`ErrNotBound`. S3 uses it to deliver event notifications to SQS.
+dirty marking all apply, and a service never reaches into another's state.
+
+An `inproc.Call` names the method, path, query, content type, headers and body,
+so it speaks every protocol. Its zero values are a json 1.0 call: `POST /`,
+`Content-Type: application/x-amz-json-1.0` and the `X-Amz-Target` of `Target`.
+A call without a `Target` sends no `X-Amz-Target` and no default content type,
+and the gateway routes it by the signing name in its credential scope: a query
+call is a form body to SQS, a rest call a path such as `GET /bucket?location`
+to S3. A query parameter with an empty value is sent as its bare name. The
+answer carries the status, the head as a client outside reads it (each name
+canonical, nothing set after the status) and the body.
+
+- `Do` makes a call on the caller's goroutine and reads the answer whole.
+- `Stream` takes the request body as an `io.Reader` and hands back the answer's
+  body as an `io.ReadCloser`, so neither is held whole: an 8 MiB S3 GET
+  allocates about 46 KB against 16 MB through `Do`. The handler runs on a
+  goroutine of its own. Closing the body, or the end of the caller's context,
+  cancels the request and fails the handler's next write, and `Close` returns
+  once the handler has.
+- `Enqueue` queues a call and returns. Calls to one destination (account,
+  region, signing name, method, path and target) run one at a time in the order
+  they were queued; different destinations run at once, up to
+  `inproc.MaxInFlight` (16), served in turn. A call is in-memory work on this
+  process's CPUs, so more at once gains nothing, and the bound keeps a burst,
+  such as the events of a bulk delete, from crowding out client requests.
+  Workers start with a waiting call and exit when none waits, so nothing runs
+  while idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and
+  refuses the next; each queued call has 30 seconds.
+
+A call made before `Bind` gives the client a handler returns `ErrNotBound`. S3
+uses the client to check a notification's queue and to deliver event
+notifications to SQS. Each event is a `SendMessage` as the bucket's owner to
+the queue's region, so the events one owner raises for one region arrive in
+the order they were raised.
 
 ### S3 body store (`internal/service/s3`)
 
