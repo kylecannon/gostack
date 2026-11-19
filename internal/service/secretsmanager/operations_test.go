@@ -149,7 +149,7 @@ func Test_stage_moves(t *testing.T) {
 
 	described := mustCall(t, h, describeSecret, `{"SecretId":"st"}`)
 	stages := asMap(t, described["VersionIdsToStages"])
-	require.ElementsMatch(t, []any{"custom", "AWSCURRENT", "extra"}, stages[token2])
+	require.ElementsMatch(t, []any{"custom", awsCurrent, "extra"}, stages[token2])
 	require.Equal(t, []any{"AWSPREVIOUS"}, stages[token1])
 
 	// AWSCURRENT taken off with no target: the secret is not stuck, the next

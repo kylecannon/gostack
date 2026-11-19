@@ -63,7 +63,7 @@ func Test_valueLifecycle(t *testing.T) {
 	status, put := call(t, h, "PutSecretValue",
 		`{"SecretId":"s1","SecretString":"two","ClientRequestToken":"22222222-2222-2222-2222-222222222222"}`)
 	require.Equal(t, http.StatusOK, status, put)
-	require.Equal(t, []any{"AWSCURRENT"}, put["VersionStages"])
+	require.Equal(t, []any{awsCurrent}, put["VersionStages"])
 
 	_, previous := call(t, h, "GetSecretValue", `{"SecretId":"s1","VersionStage":"AWSPREVIOUS"}`)
 	require.Equal(t, "one", previous["SecretString"])

@@ -177,8 +177,7 @@ type tag struct {
 	value string
 }
 
-// rotation is what RotateSecret stores. No operation of this package sets it
-// yet; it is kept so that DescribeSecret and persistence already carry it.
+// rotation is what RotateSecret stores and CancelRotateSecret turns off.
 type rotation struct {
 	requested    bool
 	enabled      bool

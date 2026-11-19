@@ -12,6 +12,7 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/secretsmanager"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/store"
@@ -23,6 +24,9 @@ type Provider struct {
 	api.Unimplemented
 
 	states *store.Bundle[State]
+	// client reaches Lambda, which RotateSecret asks whether the rotation
+	// function exists.
+	client *inproc.Client
 	// changed is told, with the service name, about a change that no mutating
 	// call reports: a read that stamped a new LastAccessedDate. It may be nil.
 	changed func(name string)
@@ -39,6 +43,7 @@ var _ api.Handler = (*Provider)(nil)
 func New(changed func(name string)) *Provider {
 	return &Provider{
 		states:  store.NewBundle(newState, (*State).reset),
+		client:  inproc.New(),
 		changed: changed,
 		now:     time.Now,
 	}
@@ -52,6 +57,7 @@ func (p *Provider) Registration() service.Registration {
 		Mutating: mutating,
 		Persist:  p,
 		Reset:    p.states.Reset,
+		Bind:     p.client.Bind,
 	}
 }
 
