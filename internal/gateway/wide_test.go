@@ -19,11 +19,89 @@ import (
 
 const (
 	// wideSlack is the constant in the memory rule: what one request may
-	// allocate beyond four times its body, for the request's own bookkeeping.
-	wideSlack = 8 << 20
+	// allocate beyond four times its body. The decode budget's own constant
+	// (protocol.DecodeSlack) is in it, and 8 MiB for the request's bookkeeping.
+	wideSlack = protocol.DecodeSlack + 8<<20
 
 	malformedQuery = "MalformedQueryString"
+	tooLarge       = "<Code>MaxMessageLengthExceeded</Code>"
 )
+
+// repeatTo is head, then unit repeated, then tail, at most the body cap long.
+func repeatTo(head, unit, tail string) string {
+	n := (int(protocol.DefaultMaxBody) - len(head) - len(tail)) / len(unit)
+
+	return head + strings.Repeat(unit, n) + tail
+}
+
+// tenLargeMessages is a json SendMessageBatch of ten entries of 256 KiB each,
+// the most SQS takes.
+func tenLargeMessages() string {
+	body := strings.Repeat("m", 256<<10)
+	entries := make([]string, 10)
+
+	for i := range entries {
+		entries[i] = `{"Id":"` + strconv.Itoa(i) + `","MessageBody":"` + body + `"}`
+	}
+
+	return `{"QueueUrl":"q","Entries":[` + strings.Join(entries, ",") + `]}`
+}
+
+// thousandRules is a lifecycle configuration of 1,000 rules, the most S3
+// takes, each with a filter of a prefix and two tags, an expiration and a
+// transition.
+func thousandRules() string {
+	var b strings.Builder
+
+	b.WriteString(`<LifecycleConfiguration>`)
+
+	for i := range 1000 {
+		n := strconv.Itoa(i)
+		b.WriteString(`<Rule><ID>rule-` + n + `</ID><Status>Enabled</Status><Filter><And><Prefix>logs/` + n +
+			`/</Prefix><Tag><Key>a</Key><Value>1</Value></Tag><Tag><Key>b</Key><Value>2</Value></Tag></And></Filter>` +
+			`<Expiration><Days>30</Days></Expiration><Transition><Days>7</Days><StorageClass>GLACIER</StorageClass>` +
+			`</Transition></Rule>`)
+	}
+
+	b.WriteString(`</LifecycleConfiguration>`)
+
+	return b.String()
+}
+
+// thousandKeys is a DeleteObjects of 1,000 keys, the most S3 takes.
+func thousandKeys() string {
+	var b strings.Builder
+
+	b.WriteString(`<Delete><Quiet>true</Quiet>`)
+
+	for i := range 1000 {
+		b.WriteString(`<Object><Key>key-` + strconv.Itoa(i) + `</Key><VersionId>v</VersionId></Object>`)
+	}
+
+	b.WriteString(`</Delete>`)
+
+	return b.String()
+}
+
+// tenThousandParts is a CompleteMultipartUpload of 10,000 parts, the most S3
+// takes, each with every checksum.
+func tenThousandParts() string {
+	var b strings.Builder
+
+	b.WriteString(`<CompleteMultipartUpload>`)
+
+	for i := 1; i <= 10000; i++ {
+		b.WriteString(`<Part><PartNumber>` + strconv.Itoa(i) + `</PartNumber>` +
+			`<ETag>"0123456789abcdef0123456789abcdef"</ETag>` +
+			`<ChecksumCRC32>AAAAAA==</ChecksumCRC32><ChecksumCRC32C>AAAAAA==</ChecksumCRC32C>` +
+			`<ChecksumCRC64NVME>AAAAAAAAAAA=</ChecksumCRC64NVME><ChecksumSHA1>AAAAAAAAAAAAAAAAAAAAAAAAAAA=</ChecksumSHA1>` +
+			`<ChecksumSHA256>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</ChecksumSHA256></Part>`)
+	}
+
+	b.WriteString(`</CompleteMultipartUpload>`)
+
+	return b.String()
+}
 
 // wideGateway serves the generated sqs, sts and s3 APIs with their
 // Unimplemented handlers: decoding happens before the handler, so a body that
@@ -120,12 +198,67 @@ func Test_Gateway_WideBodies(t *testing.T) {
 	largest, pairs := largestSendMessageBatch()
 	require.Equal(t, 4853, pairs, "the largest the specs allow")
 
+	sqsBatch := jsonCall(nameSQS, "AmazonSQS.SendMessageBatch", "1.0")
+	sqsBatchGzip := jsonCall(nameSQS, "AmazonSQS.SendMessageBatch", "1.0")
+	sqsBatchGzip[headerContentEncoding] = encodingGzip
+	s3Call := map[string]string{headerAuth: signed("test", usEast1, nameS3)}
+
+	emptyEntries := repeatTo(`{"QueueUrl":"q","Entries":[{}`, `,{}`, `]}`)
+	tenLarge := tenLargeMessages()
+
 	tests := []struct {
 		name, method, target, body string
 		headers                    map[string]string
 		wantStatus                 int
 		wantBody                   string
+		decoded                    int // the body's size once decoded, when it is sent compressed
 	}{
+		{
+			name: "json: SendMessageBatch of empty entries to the cap", method: http.MethodPost, target: localhost,
+			body: emptyEntries, headers: sqsBatch, wantStatus: http.StatusBadRequest, wantBody: malformedQuery,
+		},
+		{
+			name: "json: the same body gzipped", method: http.MethodPost, target: localhost,
+			body: string(gzipped(t, emptyEntries)), headers: sqsBatchGzip, decoded: len(emptyEntries),
+			wantStatus: http.StatusBadRequest, wantBody: malformedQuery,
+		},
+		{
+			name: "json: SendMessageBatch of ten 256 KiB messages decodes", method: http.MethodPost, target: localhost,
+			body: tenLarge, headers: sqsBatch, wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
+		{
+			name: "rest-xml: PutBucketLifecycleConfiguration of empty rules to the cap", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call,
+			body:       repeatTo(`<LifecycleConfiguration>`, `<Rule/>`, `</LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: tooLarge,
+		},
+		{
+			name: "rest-xml: a lifecycle configuration of 1,000 rules decodes", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call, body: thousandRules(),
+			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
+		{
+			name: "rest-xml: DeleteObjects of empty objects to the cap", method: http.MethodPost,
+			target: localhost + "b?delete", headers: s3Call,
+			body:       repeatTo(`<Delete>`, `<Object/>`, `</Delete>`),
+			wantStatus: http.StatusBadRequest, wantBody: tooLarge,
+		},
+		{
+			name: "rest-xml: DeleteObjects of 1,000 keys decodes", method: http.MethodPost,
+			target: localhost + "b?delete", headers: s3Call, body: thousandKeys(),
+			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
+		{
+			name: "rest-xml: CompleteMultipartUpload of empty parts to the cap", method: http.MethodPost,
+			target: localhost + "b/k?uploadId=u", headers: s3Call,
+			body:       repeatTo(`<CompleteMultipartUpload>`, `<Part/>`, `</CompleteMultipartUpload>`),
+			wantStatus: http.StatusBadRequest, wantBody: tooLarge,
+		},
+		{
+			name: "rest-xml: CompleteMultipartUpload of 10,000 parts with every checksum decodes", method: http.MethodPost,
+			target: localhost + "b/k?uploadId=u", headers: s3Call, body: tenThousandParts(),
+			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
 		{
 			name: "query: SendMessage and 16 MiB of distinct keys", method: http.MethodPost, target: localhost,
 			body:    "Action=SendMessage&QueueUrl=q&MessageBody=b&" + shortKeys(bodyCap-100),
@@ -156,7 +289,52 @@ func Test_Gateway_WideBodies(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, resp.StatusCode, body)
 			assert.Contains(t, body, tt.wantBody)
-			assert.LessOrEqual(t, total, uint64(4*len(tt.body)+wideSlack), "allocated %d MiB", total>>20)
+			size := max(tt.decoded, len(tt.body))
+			assert.LessOrEqual(t, total, uint64(4*size+wideSlack), "allocated %d MiB", total>>20)
+			t.Logf("%d MiB allocated for %d MiB", total>>20, size>>20)
+		})
+	}
+}
+
+// Test_Gateway_DenseBodiesNearTheBudget: a cap-sized body whose dense part is
+// sized to land on either side of the decode budget, after padding that the
+// decoder skips, allocates no more than four times its size plus wideSlack
+// whether it is refused or decoded. These are the bodies a budget lets through
+// with the most to decode.
+func Test_Gateway_DenseBodiesNearTheBudget(t *testing.T) {
+	handler := wideGateway(t)
+
+	const bodyCap = int(protocol.DefaultMaxBody)
+
+	sqsBatch := jsonCall(nameSQS, "AmazonSQS.SendMessageBatch", "1.0")
+	s3Call := map[string]string{headerAuth: signed("test", usEast1, nameS3)}
+
+	for _, entries := range []int{50_000, 100_000, 200_000, 400_000, 800_000} {
+		n := strconv.Itoa(entries)
+
+		t.Run("json: "+n+" empty entries after padding", func(t *testing.T) {
+			dense := strings.Repeat(`{},`, entries) + `{}`
+			pad := strings.Repeat("x", bodyCap-len(dense)-100)
+			body := `{"Pad":"` + pad + `","QueueUrl":"q","Entries":[` + dense + `]}`
+
+			total, resp, text := allocated(t, handler, newRequest(t, http.MethodPost, localhost, body, sqsBatch))
+
+			assert.Contains(t, []int{http.StatusBadRequest, http.StatusNotImplemented}, resp.StatusCode, text)
+			assert.LessOrEqual(t, total, uint64(4*len(body)+wideSlack), "allocated %d MiB", total>>20)
+			t.Logf("%d: %d MiB allocated, answered %d", entries, total>>20, resp.StatusCode)
+		})
+
+		t.Run("rest-xml: "+n+" empty rules after padding", func(t *testing.T) {
+			dense := strings.Repeat(`<Rule/>`, entries)
+			pad := strings.Repeat("x", bodyCap-len(dense)-100)
+			body := `<LifecycleConfiguration><Pad>` + pad + `</Pad>` + dense + `</LifecycleConfiguration>`
+
+			total, resp, text := allocated(t, handler,
+				newRequest(t, http.MethodPut, localhost+"b?lifecycle", body, s3Call))
+
+			assert.Contains(t, []int{http.StatusBadRequest, http.StatusNotImplemented}, resp.StatusCode, text)
+			assert.LessOrEqual(t, total, uint64(4*len(body)+wideSlack), "allocated %d MiB", total>>20)
+			t.Logf("%d: %d MiB allocated, answered %d", entries, total>>20, resp.StatusCode)
 		})
 	}
 }

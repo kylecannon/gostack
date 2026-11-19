@@ -142,7 +142,7 @@ func errMalformedBody() *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}

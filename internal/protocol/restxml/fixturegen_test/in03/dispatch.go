@@ -4,7 +4,6 @@ package in03
 
 import (
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -88,7 +87,7 @@ func serveConstantQueryString(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readConstantQueryString(rc *request.Context) (*ConstantQueryStringInput, *awserr.Error) {
 	in := &ConstantQueryStringInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -151,7 +150,7 @@ func errMalformedBody() *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}

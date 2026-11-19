@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"sync/atomic"
 )
@@ -51,19 +52,45 @@ func LimitBody(r io.Reader) io.Reader {
 // length, within MaxBody, is read into a buffer of that length and allocated
 // once; io.ReadAll would grow its buffer about 25% at a time and allocate
 // some five times the body on the way. A body of unknown length (-1, as a gzip
-// body has) or one longer than it stated grows as io.ReadAll's does. Check the
-// result with OverBody.
+// body has) or one longer than it stated doubles its buffer, never past one
+// byte more than MaxBody, so it allocates at most about three times what it
+// reads. Check the result with OverBody.
 func ReadBody(r io.Reader, length int64) ([]byte, error) {
+	const growth = 2
+
 	limit := MaxBody()
 	if length < 0 || (limit > 0 && length > limit) {
 		length = 0
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 0, length+bytes.MinRead))
+	buf := make([]byte, 0, length+bytes.MinRead)
+	r = LimitBody(r)
 
-	_, err := buf.ReadFrom(LimitBody(r))
+	for {
+		if len(buf) == cap(buf) {
+			if limit > 0 && int64(len(buf)) > limit {
+				return buf, nil
+			}
 
-	return buf.Bytes(), err
+			next := growth * cap(buf)
+			if limit > 0 {
+				next = int(min(int64(next), limit+1))
+			}
+
+			buf = append(make([]byte, 0, next), buf...)
+		}
+
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+
+		if errors.Is(err, io.EOF) {
+			return buf, nil
+		}
+
+		if err != nil {
+			return buf, err
+		}
+	}
 }
 
 // OverBody reports whether n bytes, read through LimitBody, are more than

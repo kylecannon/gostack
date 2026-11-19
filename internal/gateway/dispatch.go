@@ -64,6 +64,8 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 		AccountID: identity.AccountID,
 		Region:    identity.Region,
 		RequestID: newRequestID(),
+
+		DecodeFactor: reg.DecodeFactor,
 	}
 
 	if s := g.settings(); g.selfManagedCORS(r, s) {

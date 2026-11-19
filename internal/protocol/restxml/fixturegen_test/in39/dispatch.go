@@ -4,7 +4,6 @@ package in39
 
 import (
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -87,7 +86,7 @@ func serveXmlAttributesOnPayload(h Handler, w http.ResponseWriter, rc *request.C
 
 func readXmlAttributesOnPayload(rc *request.Context) (*XmlAttributesOnPayloadInput, *awserr.Error) {
 	in := &XmlAttributesOnPayloadInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
 	if _, ok := xd.Root(); ok {
 		in.Payload = &XmlAttributesPayloadRequest{}
 		in.Payload.decodeXML(xd)
@@ -145,7 +144,7 @@ func errMalformedBody() *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}

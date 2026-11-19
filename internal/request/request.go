@@ -28,6 +28,16 @@ type Context struct {
 	// not set for it). It is nil when the gateway's CORS has answered the
 	// request already.
 	CORS DefaultCORS
+	// DecodeFactor is the service's service.Registration.DecodeFactor: how many
+	// bytes of decoded values each byte of the body may cost. Zero is
+	// protocol.DecodeFactor.
+	DecodeFactor int
+}
+
+// DecodeBudget is the most bytes decoding a body of n bytes may hold for this
+// call's service: protocol.DecodeBudgetAt with DecodeFactor.
+func (rc *Context) DecodeBudget(n int) int64 {
+	return protocol.DecodeBudgetAt(n, rc.DecodeFactor)
 }
 
 // DefaultCORS is the gateway's CORS policy, which a service that handles CORS

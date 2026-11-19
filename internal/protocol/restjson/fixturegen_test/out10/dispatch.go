@@ -141,9 +141,19 @@ func errMalformedBody() *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}
 	return body, nil
+}
+
+// decodeJSONBody reads a json request body into a T, refusing one that would
+// decode into more than the call's budget as a body over protocol.MaxBody.
+func decodeJSONBody[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
+	in, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)))
+	if err == awsjson.ErrTooLarge {
+		return nil, errMalformedBody()
+	}
+	return in, err
 }

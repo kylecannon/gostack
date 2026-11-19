@@ -255,7 +255,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 		return nil
 	case strings.HasPrefix(f.typ, "*") && f.pair.p.shape.Type == spec.TypeStructure &&
 		g.hasProtocol(protoRestXML):
-		p.f("\txd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))")
+		p.f("\txd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.%s = &%s{}", f.goName, strings.TrimPrefix(f.typ, "*"))
 		p.f("\t\tin.%s.decodeXML(xd)", f.goName)
@@ -281,7 +281,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 	case f.typ == typeDocument:
 		p.f("\t\tin.%s = jsontext.Value(body)", f.goName)
 	case f.pair.p.shape.Type == spec.TypeStructure:
-		p.f("\t\tin.%s, err = awsjson.Decode[%s](body)", f.goName, strings.TrimPrefix(f.typ, "*"))
+		p.f("\t\tin.%s, err = decodeJSONBody[%s](rc, body)", f.goName, strings.TrimPrefix(f.typ, "*"))
 		p.f("\t\tif err != nil {")
 		p.f("\t\t\treturn nil, err")
 		p.f("\t\t}")
@@ -302,7 +302,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\tin := &%s{}", in.goName)
 	case g.hasProtocol(protoRestXML):
 		p.f("\tin := &%s{}", in.goName)
-		p.f("\txd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))")
+		p.f("\txd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.decodeXML(xd)")
 		p.f("\t}")
@@ -316,7 +316,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\t}")
 		p.f("\tin := &%s{}", in.goName)
 		p.f("\tif len(body) > 0 {")
-		p.f("\t\tin, err = awsjson.Decode[%s](body)", in.goName)
+		p.f("\t\tin, err = decodeJSONBody[%s](rc, body)", in.goName)
 		p.f("\t\tif err != nil {")
 		p.f("\t\t\treturn nil, err")
 		p.f("\t\t}")
@@ -593,7 +593,7 @@ func (g *generator) emitErrorHelpers(p *printer) {
 func (g *generator) emitReadBody(p *printer) {
 	p.f("// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.")
 	p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-	p.f("\tbody, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))")
+	p.f("\tbody, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)")
 
 	if g.opts.S3Errors {
 		p.f("\tif protocol.OverBody(len(body)) {")
@@ -609,6 +609,25 @@ func (g *generator) emitReadBody(p *printer) {
 	p.f("\treturn body, nil")
 	p.f("}")
 	p.blank()
+
+	if g.hasProtocol(protoRestJSON) {
+		p.f("// decodeJSONBody reads a json request body into a T, refusing one that would")
+		p.f("// decode into more than the call's budget as a body over protocol.MaxBody.")
+		p.f("func decodeJSONBody[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {")
+		p.f("\tin, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)))")
+		p.f("\tif err == awsjson.ErrTooLarge {")
+
+		if g.opts.S3Errors {
+			p.f("\t\treturn nil, errBodyTooLarge()")
+		} else {
+			p.f("\t\treturn nil, errMalformedBody()")
+		}
+
+		p.f("\t}")
+		p.f("\treturn in, err")
+		p.f("}")
+		p.blank()
+	}
 }
 
 // emitBodyTooLarge writes what an S3 request body over protocol.MaxBody is

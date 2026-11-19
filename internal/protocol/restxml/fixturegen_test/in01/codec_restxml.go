@@ -15,7 +15,7 @@ func (v *BodyWithXmlNameInput) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Hello":
-			v.Nested = &PayloadWithXmlName{}
+			v.Nested = restxml.New[PayloadWithXmlName](d)
 			v.Nested.decodeXML(d)
 		default:
 			d.Skip()

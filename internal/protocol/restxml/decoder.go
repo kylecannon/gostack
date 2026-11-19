@@ -44,15 +44,23 @@ var ErrMalformed = errors.New("malformed xml")
 // reports false. The first error stops decoding: from then on Root and Next
 // report false and the value methods nil, and Err returns it.
 type Decoder struct {
-	xd    *xml.Decoder
-	stack []xml.Name // the open elements, to check each end tag
-	attrs []xml.Attr // the attributes of the element entered last
-	err   error
+	xd     *xml.Decoder
+	stack  []xml.Name // the open elements, to check each end tag
+	attrs  []xml.Attr // the attributes of the element entered last
+	err    error
+	cost   int64 // what decoding has charged so far (Charge)
+	factor int   // the service's decode factor (protocol.DecodeBudgetAt)
 }
 
-// NewDecoder returns a Decoder that reads r.
+// NewDecoder returns a Decoder that reads r, at protocol.DecodeFactor.
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{xd: xml.NewDecoder(r)}
+	return NewDecoderAt(r, 0)
+}
+
+// NewDecoderAt returns a Decoder that reads r and holds what it decodes to
+// protocol.DecodeBudgetAt of the bytes read so far and factor (budget.go).
+func NewDecoderAt(r io.Reader, factor int) *Decoder {
+	return &Decoder{xd: xml.NewDecoder(r), factor: factor}
 }
 
 // Err returns the first error met so far, or nil.
@@ -76,6 +84,10 @@ func (d *Decoder) Root() (string, bool) {
 		if err != nil {
 			d.fail(err)
 
+			return "", false
+		}
+
+		if d.chargeToken(tok); d.err != nil {
 			return "", false
 		}
 
@@ -137,7 +149,7 @@ func (d *Decoder) Attr(name string) (string, bool) {
 
 // Skip consumes the element entered last, with everything inside it.
 func (d *Decoder) Skip() {
-	_, _ = d.text()
+	_ = d.read(nil)
 }
 
 // String returns the text of the element entered last and consumes it. An
@@ -234,38 +246,46 @@ func (d *Decoder) leave(end xml.EndElement) {
 // text reads the character data of the current element up to its end tag,
 // skipping any element inside it, and closes it.
 func (d *Decoder) text() (string, bool) {
-	if d.err != nil || len(d.stack) == 0 {
-		return "", false
-	}
-
 	var b strings.Builder
+
+	ok := d.read(&b)
+
+	return b.String(), ok
+}
+
+// read consumes the current element as text does, writing its character data
+// to b. A nil b keeps nothing, so Skip costs nothing for the text it skips.
+func (d *Decoder) read(b *strings.Builder) bool {
+	if d.err != nil || len(d.stack) == 0 {
+		return false
+	}
 
 	depth := len(d.stack)
 
 	for {
 		tok, ok := d.token()
 		if !ok {
-			return "", false
+			return false
 		}
 
 		switch t := tok.(type) {
 		case xml.CharData:
-			if len(d.stack) == depth {
+			if b != nil && len(d.stack) == depth {
 				b.Write(t)
 			}
 		case xml.StartElement:
 			if _, ok := d.enter(t); !ok {
-				return "", false
+				return false
 			}
 		case xml.EndElement:
 			d.leave(t)
 
 			if d.err != nil {
-				return "", false
+				return false
 			}
 
 			if len(d.stack) < depth {
-				return b.String(), true
+				return true
 			}
 		default:
 			// Comments and processing instructions carry no text.
@@ -284,6 +304,10 @@ func (d *Decoder) token() (xml.Token, bool) {
 
 		d.fail(err)
 
+		return nil, false
+	}
+
+	if d.chargeToken(tok); d.err != nil {
 		return nil, false
 	}
 

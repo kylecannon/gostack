@@ -1,11 +1,12 @@
 package protocol
 
 // DecodeSlack is the constant in the memory rule for a request body: what
-// decoding may hold beyond twice the body's bytes, whatever the body.
+// decoding may hold beyond DecodeFactor times the body's bytes, whatever the
+// body.
 //
 // The rule: decoding a body of n bytes holds at most DecodeBudget(n) bytes of
 // decoded values. With the body itself and the one copy a protocol keeps of it,
-// one request holds about four times its body plus DecodeSlack. A body that
+// one request holds about four times its body plus a constant. A body that
 // would decode into more is refused with the protocol's answer to a body over
 // MaxBody, before it is decoded where the protocol can tell in advance (json,
 // query) and as soon as it passes the budget where it decodes as it reads
@@ -17,8 +18,25 @@ package protocol
 // sent (TooManyEntriesInBatchRequest), as LocalStack and AWS do.
 const DecodeSlack = 16 << 20
 
-// DecodeBudget is the most bytes decoding a body of n bytes may hold: twice
-// the body, plus DecodeSlack.
+// DecodeFactor is how many bytes of decoded values each byte of a body may
+// cost, for a service that does not declare its own
+// (service.Registration.DecodeFactor). The legal requests of S3, SQS and STS
+// stay far below it; docs/architecture.md lists their worst ratios.
+const DecodeFactor = 2
+
+// DecodeBudget is the most bytes decoding a body of n bytes may hold, at
+// DecodeFactor: twice the body, plus DecodeSlack.
 func DecodeBudget(n int) int64 {
-	return 2*int64(n) + DecodeSlack
+	return DecodeBudgetAt(n, DecodeFactor)
+}
+
+// DecodeBudgetAt is DecodeBudget for a service that declares its own factor:
+// factor times the body, plus DecodeSlack. A factor of zero or less is
+// DecodeFactor.
+func DecodeBudgetAt(n, factor int) int64 {
+	if factor <= 0 {
+		factor = DecodeFactor
+	}
+
+	return int64(factor)*int64(n) + DecodeSlack
 }
