@@ -40,10 +40,22 @@ type muxListener struct {
 	pending map[net.Conn]struct{}
 	wg      sync.WaitGroup
 	once    sync.Once
+
+	// handedOff, when set, runs in a connection's goroutine right after Accept
+	// has taken the connection. Tests use it to hold that goroutine there.
+	handedOff func()
 }
 
 func newMuxListener(inner net.Listener, cfg *tls.Config) *muxListener {
-	l := &muxListener{
+	l := muxListenerFor(inner, cfg)
+	l.wg.Go(l.acceptLoop)
+
+	return l
+}
+
+// muxListenerFor builds a muxListener that does not accept yet.
+func muxListenerFor(inner net.Listener, cfg *tls.Config) *muxListener {
+	return &muxListener{
 		inner:   inner,
 		tls:     cfg,
 		conns:   make(chan net.Conn),
@@ -51,10 +63,6 @@ func newMuxListener(inner net.Listener, cfg *tls.Config) *muxListener {
 		done:    make(chan struct{}),
 		pending: make(map[net.Conn]struct{}),
 	}
-
-	l.wg.Go(l.acceptLoop)
-
-	return l
 }
 
 // Accept returns the next connection, already wrapped in tls.Server when the
@@ -84,12 +92,7 @@ func (l *muxListener) Close() error {
 			err = fmt.Errorf("close listener: %w", closeErr)
 		}
 
-		l.mu.Lock()
-		for conn := range l.pending {
-			_ = conn.Close()
-		}
-		l.mu.Unlock()
-
+		l.closePending()
 		l.wg.Wait()
 	})
 
@@ -99,6 +102,16 @@ func (l *muxListener) Close() error {
 // Addr returns the address of the underlying listener.
 func (l *muxListener) Addr() net.Addr {
 	return l.inner.Addr()
+}
+
+// closePending closes the connections still waiting for their first byte.
+func (l *muxListener) closePending() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	for conn := range l.pending {
+		_ = conn.Close()
+	}
 }
 
 func (l *muxListener) acceptLoop() {
@@ -128,13 +141,17 @@ func (l *muxListener) acceptLoop() {
 }
 
 func (l *muxListener) classify(conn net.Conn) {
-	defer l.remove(conn)
-
 	_ = conn.SetReadDeadline(time.Now().Add(firstByteTimeout))
 
 	reader := bufio.NewReader(conn)
 
 	first, err := reader.Peek(1)
+
+	// conn leaves pending before it can reach Accept. Once net/http serves it,
+	// a Close of this listener (net/http's own, when Accept fails) must not cut
+	// the request in flight; only the server's drain may.
+	l.remove(conn)
+
 	if err != nil {
 		_ = conn.Close()
 
@@ -150,6 +167,9 @@ func (l *muxListener) classify(conn net.Conn) {
 
 	select {
 	case l.conns <- out:
+		if l.handedOff != nil {
+			l.handedOff()
+		}
 	case <-l.done:
 		_ = out.Close()
 	}
