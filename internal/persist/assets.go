@@ -478,9 +478,12 @@ func (a *Assets) sync(ctx context.Context) error {
 	select {
 	case <-s.done:
 	case <-ctx.Done():
-		a.keepUnsynced(s.ids)
+		// A sync that returned as ctx ended counts: the save may rename.
+		if !resolved(s.done) {
+			a.keepUnsynced(s.ids)
 
-		return fmt.Errorf("sync assets: %w", ctx.Err())
+			return fmt.Errorf("sync assets: %w", ctx.Err())
+		}
 	}
 
 	err = cmp.Or(a.failure(), result)
@@ -504,16 +507,30 @@ type pendingSync struct {
 }
 
 // syncDue reports whether a save of the service has assets to sync, or an
-// earlier sync to wait for. It is nil-safe, for a service with no assets.
-func (a *Assets) syncDue() bool {
+// earlier sync to wait for. When it reports false, every asset a snapshot
+// taken before the call names was synced by a sync that returned clean, so the
+// snapshot may be renamed with no call to sync. It fails as sync does once a
+// sync has failed or Close has released the assets. It is nil-safe, for a
+// service with no assets.
+func (a *Assets) syncDue() (bool, error) {
 	if a == nil {
-		return false
+		return false, nil
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return len(a.unsynced) > 0 || !resolved(a.lastSync)
+	// A sync records its failure before its done is closed, so a resolved
+	// lastSync with no failure is a clean one.
+	if a.failed != nil {
+		return false, fmt.Errorf("sync assets: %w", a.failedErr())
+	}
+
+	if a.released {
+		return false, fmt.Errorf("sync assets: %w", errReleased)
+	}
+
+	return len(a.unsynced) > 0 || !resolved(a.lastSync), nil
 }
 
 // resolved reports whether done, the done of a sync, is nil or closed.
@@ -939,7 +956,17 @@ func (a *Assets) sweep(refs, loaded map[string]struct{}) (int, error) {
 
 	// Read after the listing: commit marks an id committed before it renames the
 	// file into blobs, so every listed asset this process committed is here.
+	// Once a sync has failed, committed no longer tracks them (see fail), so a
+	// sweep that finds the assets failed removes nothing; the sweep at restart
+	// does. The check shares the hold that copies committed: a sync that fails
+	// after it finds every committed id copied already.
 	a.mu.Lock()
+	if a.failed != nil {
+		a.mu.Unlock()
+
+		return 0, nil
+	}
+
 	maps.DeleteFunc(a.committed, func(id string, _ struct{}) bool {
 		_, named := refs[id]
 

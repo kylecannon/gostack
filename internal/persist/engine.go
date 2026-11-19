@@ -66,9 +66,9 @@ type Engine struct {
 	// running is true while the timer's callback runs. It is the one goroutine
 	// the engine starts, and no timer is armed while it runs.
 	running bool
-	// cancelTimed cancels the flush the timer's callback runs, or waits to run.
-	// It is nil while the callback does not run.
-	cancelTimed context.CancelFunc
+	// timed cancels the flush the timer's callback runs, or waits to run. It is
+	// nil while the callback does not run.
+	timed *timedFlush
 	// waiting counts the Flush, Load, Close and ResetAssets calls waiting for
 	// sem. A timer callback that starts while one waits does not flush; see
 	// acquire for what happens to a timed flush already running.
@@ -423,16 +423,61 @@ const (
 	lend
 )
 
+// errPreempted is the cause a Load or ResetAssets cancels a timed save with. It
+// wraps context.Canceled, so the services the save did not reach gave way.
+var errPreempted = fmt.Errorf("preempted by a load or reset: %w", context.Canceled)
+
+// timedFlush cancels the context of one flush by the timer. preempt cancels it
+// with errPreempted, and lend with the cause of the caller's ctx. They are two
+// contexts, the preemptable one the parent, because a cause is set once: a
+// preempt after a lent deadline ran out must still stop the rename.
+type timedFlush struct {
+	preempt context.CancelCauseFunc
+	lend    context.CancelCauseFunc
+}
+
+// preemptKey is the context key under which a timed flush's context holds the
+// cause of its preemptable parent, as a func() error.
+type preemptKey struct{}
+
+// newTimedFlush returns the context of a flush by the timer and what cancels it.
+func newTimedFlush() (context.Context, *timedFlush) {
+	parent, preemptFn := context.WithCancelCause(context.Background())
+	cause := func() error { return context.Cause(parent) }
+	ctx, lendFn := context.WithCancelCause(context.WithValue(parent, preemptKey{}, cause))
+
+	return ctx, &timedFlush{preempt: preemptFn, lend: lendFn}
+}
+
+// stop cancels the context, once the flush has ended, to release it.
+func (t *timedFlush) stop() {
+	t.lend(nil)
+	t.preempt(nil)
+}
+
+// preempted reports whether ctx is that of a flush by the timer that a Load or
+// ResetAssets cancelled. Such a save renames nothing: the Load would restore
+// what it wrote. Any other end of a save's context, its own deadline or a lent
+// one, a caller that went away, leaves a snapshot that is taken, and whose
+// syncs have returned clean, free to rename (US-2 log #49).
+func preempted(ctx context.Context) bool {
+	cause, _ := ctx.Value(preemptKey{}).(func() error)
+
+	return cause != nil && errors.Is(cause(), errPreempted)
+}
+
 // acquire waits for sem until ctx ends, and does what mode says to a flush by
-// the timer. A cancelled timed flush fails before it renames anything and
-// leaves its services dirty, with no backoff. A sync of assets it started still
-// runs, and the next save renames only once that sync has returned.
+// the timer. A preempted timed flush fails before it renames anything and
+// leaves its services dirty, with no backoff. A lent one that runs out of time
+// renames the service whose snapshot and syncs are done, and leaves the rest
+// dirty, as a save past its own deadline does. A sync of assets it started
+// still runs, and the next save renames only once that sync has returned.
 func (e *Engine) acquire(ctx context.Context, mode timedSave) error {
 	e.mu.Lock()
 	e.waiting++
 
-	if mode == preempt && e.cancelTimed != nil {
-		e.cancelTimed()
+	if mode == preempt && e.timed != nil {
+		e.timed.preempt(errPreempted)
 	}
 	e.mu.Unlock()
 
@@ -450,8 +495,8 @@ func (e *Engine) acquire(ctx context.Context, mode timedSave) error {
 		return nil
 	case <-ctx.Done():
 		e.mu.Lock()
-		if e.cancelTimed != nil {
-			e.cancelTimed()
+		if e.timed != nil {
+			e.timed.lend(context.Cause(ctx))
 		}
 		e.mu.Unlock()
 
@@ -498,8 +543,8 @@ func (e *Engine) disarmLocked() {
 // deadline (see acquire), and one already waiting when the callback starts
 // makes it skip the flush.
 func (e *Engine) flushOnTimer(gen uint64) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, timed := newTimedFlush()
+	defer timed.stop()
 
 	e.mu.Lock()
 	if gen != e.gen {
@@ -510,10 +555,10 @@ func (e *Engine) flushOnTimer(gen uint64) {
 
 	e.timer = nil
 	e.running = true
-	e.cancelTimed = cancel
+	e.timed = timed
 
 	if e.waiting > 0 {
-		cancel()
+		timed.lend(context.Canceled)
 	}
 	e.mu.Unlock()
 
@@ -534,7 +579,7 @@ func (e *Engine) flushOnTimer(gen uint64) {
 
 	e.mu.Lock()
 	e.running = false
-	e.cancelTimed = nil
+	e.timed = nil
 	e.scheduleLocked()
 	e.mu.Unlock()
 
@@ -712,13 +757,20 @@ func (e *Engine) backoffLocked() time.Duration {
 // A service whose file turns out to be a link that leaves the base dir is not
 // tried again: saving is turned off for it.
 //
-// Services are saved in two runs, each in name order: first those whose
-// assets have nothing to sync when the flush starts, services with no assets
-// among them, then those with assets to sync. A sync cannot be interrupted and
-// can take the whole of the deadline, so it never runs before a save that needs
-// none. One service's failure does not stop the services after it; only the
-// end of ctx does, since no save can then finish. All services share ctx: two
-// services with assets to sync would share its time in order.
+// It saves in two passes, each in name order. The first takes every service's
+// snapshot into temp files, and renames at once each one whose assets have
+// nothing to sync, and no earlier sync to wait for, when its Snapshot has
+// returned: services with no assets among them. It defers the others, with
+// their temp files, to the second pass, which syncs their assets and renames
+// them. A sync cannot be interrupted and can take the whole of the deadline,
+// so it never runs before a save that needs none, even when a request commits
+// an asset during the service's own Snapshot. A deferred snapshot is renamed
+// by the save that took it or not at all, so no older snapshot of a service
+// replaces a newer one. A change after its Snapshot returned is for the next
+// save; an asset committed between the Snapshot and the sync is synced with
+// the rest, though the snapshot does not name it. One service's failure does
+// not stop the services after it; only the end of ctx does, since no save can
+// then finish. All services share ctx.
 //
 // The assets a service removed before its snapshot is taken are deleted once
 // that snapshot is on disk, and kept for the next save when it is not.
@@ -735,140 +787,167 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 
 	defer func() { _ = root.Close() }()
 
-	var (
-		failed  []pendingService
-		errs    []error
-		gaveWay int
-	)
+	run := flushRun{e: e, root: root}
+	deferred := run.firstPass(ctx, pending)
+	run.secondPass(ctx, deferred)
 
-	pending = syncLast(pending)
+	return run.failed, run.gaveWay, errors.Join(run.errs...)
+}
+
+// flushRun is what the saves of one flush failed with.
+type flushRun struct {
+	e    *Engine
+	root *os.Root
+
+	failed  []pendingService
+	errs    []error
+	gaveWay int
+	// ended is true once the end of ctx is in errs.
+	ended bool
+}
+
+// staged is one service's save between its snapshot and its rename.
+type staged struct {
+	p pendingService
+	// removed is the batch of removals begin returned.
+	removed []string
+	// writers hold the snapshot in temp files that are not renamed yet.
+	writers []*stateWriter
+}
+
+// firstPass snapshots each service and renames the ones with nothing to sync.
+// It returns the services deferred to the second pass.
+func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*staged {
+	var deferred []*staged
 
 	for i, p := range pending {
-		err = ctx.Err()
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				gaveWay += len(pending) - i
+		if ctx.Err() != nil {
+			r.abandon(ctx, pending[i:])
+
+			break
+		}
+
+		s := &staged{p: p, removed: p.assets.begin()}
+
+		err := r.e.snapshot(r.root, s)
+		if err == nil {
+			var due bool
+
+			due, err = p.assets.syncDue()
+			if err == nil && due {
+				deferred = append(deferred, s)
+
+				continue
+			}
+		}
+
+		if err == nil {
+			err = r.e.rename(ctx, r.root, s)
+		}
+
+		r.end(s, err)
+	}
+
+	return deferred
+}
+
+// secondPass syncs the assets of each deferred service and renames its
+// snapshot. The ones ctx ends before are abandoned with their temp files.
+func (r *flushRun) secondPass(ctx context.Context, deferred []*staged) {
+	for i, s := range deferred {
+		if ctx.Err() != nil {
+			for _, rest := range deferred[i:] {
+				finishSave(rest, ctx.Err())
+				r.abandon(ctx, []pendingService{rest.p})
 			}
 
-			failed = append(failed, pending[i:]...)
-
-			return failed, gaveWay, errors.Join(append(errs, err)...)
+			return
 		}
 
-		err = e.saveAssets(ctx, root, p)
+		err := s.p.assets.sync(ctx)
 		if err == nil {
-			continue
+			err = r.e.rename(ctx, r.root, s)
 		}
 
-		errs = append(errs, fmt.Errorf("persist %s: %w", p.name, err))
+		r.end(s, err)
+	}
+}
 
-		if leaves(root, err) {
-			e.markUnsafe(p.name, err)
-			e.log.Error("persist: a state file is a link that leaves the base dir or is absolute, "+
-				"so the service is no longer saved; use a relative link inside the base dir",
-				"service", p.name, "error", err)
+// end ends one service's save with err and records what it failed with.
+func (r *flushRun) end(s *staged, err error) {
+	finishSave(s, err)
 
-			continue
-		}
-
-		// The store has turned the service off and logged why; it is not tried
-		// again.
-		if errors.Is(err, errSyncFailed) {
-			continue
-		}
-
-		failed = append(failed, p)
-
-		if errors.Is(err, context.Canceled) {
-			gaveWay++
-		}
+	if err == nil {
+		return
 	}
 
-	return failed, gaveWay, errors.Join(errs...)
-}
+	p := s.p
+	r.errs = append(r.errs, fmt.Errorf("persist %s: %w", p.name, err))
 
-// syncLast orders pending, which is in name order, for writeAll: the services
-// whose assets have nothing to sync first, then the others, each run in name
-// order.
-func syncLast(pending []pendingService) []pendingService {
-	ordered := make([]pendingService, 0, len(pending))
-	later := make([]pendingService, 0, len(pending))
+	if leaves(r.root, err) {
+		r.e.markUnsafe(p.name, err)
+		r.e.log.Error("persist: a state file is a link that leaves the base dir or is absolute, "+
+			"so the service is no longer saved; use a relative link inside the base dir",
+			"service", p.name, "error", err)
 
-	for _, p := range pending {
-		if p.assets.syncDue() {
-			later = append(later, p)
-		} else {
-			ordered = append(ordered, p)
-		}
+		return
 	}
 
-	return append(ordered, later...)
+	// The store has turned the service off and logged why; it is not tried
+	// again.
+	if errors.Is(err, errSyncFailed) {
+		return
+	}
+
+	r.failed = append(r.failed, p)
+
+	// A save that was cancelled, or that Close's release of the assets cut
+	// short at exit, gave way: it failed at nothing a retry would fail at again.
+	if errors.Is(err, context.Canceled) || errors.Is(err, errReleased) {
+		r.gaveWay++
+	}
 }
 
-// saveAssets saves one service between begin and finish of its assets: the
-// removals queued before the snapshot is taken go once it is on disk, and the
-// assets committed while it is written are not deleted at their Remove, because
-// the snapshot may name them.
-func (e *Engine) saveAssets(ctx context.Context, root *os.Root, p pendingService) error {
-	removed := p.assets.begin()
-	err := e.save(ctx, root, p)
+// abandon records the services the end of ctx stopped before they were saved.
+func (r *flushRun) abandon(ctx context.Context, ps []pendingService) {
+	if !r.ended {
+		r.ended = true
+		r.errs = append(r.errs, ctx.Err())
+	}
 
-	ref, _ := p.snap.(Referencer)
-	p.assets.finish(removed, err, ref)
+	if errors.Is(ctx.Err(), context.Canceled) {
+		r.gaveWay += len(ps)
+	}
 
-	return err
+	r.failed = append(r.failed, ps...)
 }
 
-// save writes the state files of one service, removes the ones of formats that
-// are no longer listed, and fsyncs the directories it changed.
-func (e *Engine) save(ctx context.Context, root *os.Root, p pendingService) error {
+// finishSave ends the save of s: a failed one removes its temp files, and the
+// assets delete the removals of the batch once the snapshot is on disk, or
+// queue them again when it is not.
+func finishSave(s *staged, err error) {
+	if err != nil {
+		for _, w := range s.writers {
+			w.discard()
+		}
+
+		s.writers = nil
+	}
+
+	ref, _ := s.p.snap.(Referencer)
+	s.p.assets.finish(s.removed, err, ref)
+}
+
+// snapshot snapshots one service straight into a temp file for each listed
+// format, written out and fsynced. A failed Snapshot or write leaves the state
+// files as they were.
+func (e *Engine) snapshot(root *os.Root, s *staged) error {
+	p := s.p
+
 	err := root.MkdirAll(p.name, dirMode)
 	if err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
-
-	dirs, err := e.writeFormats(ctx, root, p)
-	if err != nil {
-		return err
-	}
-
-	// Formats that are no longer listed go only after the listed ones are safe.
-	for _, f := range knownFormats {
-		if slices.Contains(e.formats, f) {
-			continue
-		}
-
-		err = removeFile(root, p.name+"/"+f.fileName())
-		if err != nil {
-			return err
-		}
-	}
-
-	for _, dir := range dirs {
-		err = syncDir(root, dir)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// writeFormats snapshots one service straight into a temp file for each listed
-// format, then renames them over the state files. It returns the directories it
-// renamed in, the service's own first. A failed Snapshot or write removes the
-// temp files and leaves the state files as they were, and so does a sync of
-// the assets that ctx cuts short.
-func (e *Engine) writeFormats(ctx context.Context, root *os.Root, p pendingService) (dirs []string, err error) {
-	writers := make([]*stateWriter, 0, len(e.formats))
-
-	defer func() {
-		if err != nil {
-			for _, w := range writers {
-				w.discard()
-			}
-		}
-	}()
 
 	outs := make([]io.Writer, 0, len(e.formats))
 
@@ -877,45 +956,52 @@ func (e *Engine) writeFormats(ctx context.Context, root *os.Root, p pendingServi
 
 		w, err = createState(root, p.name+"/"+f.fileName())
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		writers = append(writers, w)
+		s.writers = append(s.writers, w)
 		outs = append(outs, w.buf)
 	}
 
-	err = snapshot(ctx, p, io.MultiWriter(outs...))
+	err = p.snap.Snapshot(io.MultiWriter(outs...))
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("snapshot: %w", err)
 	}
 
-	for _, w := range writers {
+	for _, w := range s.writers {
 		err = w.finish()
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	// A save that was cancelled, by a Load or ResetAssets that preempted it or a
-	// caller that went away, renames nothing: a Load would restore what it wrote.
-	// One past its deadline still renames what it has finished (US-2 log #49).
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return nil, fmt.Errorf("save cancelled before its rename: %w", ctx.Err())
+	return nil
+}
+
+// rename renames a service's snapshot over its state files, removes the ones of
+// formats that are no longer listed, and fsyncs the directories it changed.
+// Every asset the snapshot names is synced by then. A save a Load or
+// ResetAssets preempted renames nothing: the Load would restore what it wrote.
+func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
+	if preempted(ctx) {
+		return fmt.Errorf("save cancelled before its rename: %w", errPreempted)
 	}
 
-	dirs = []string{p.name}
+	dirs := []string{s.p.name}
 
-	for i, w := range writers {
-		err = w.commit()
+	for i, w := range s.writers {
+		err := w.commit()
 		if err != nil {
-			writers = writers[i:] // the ones before are renamed, so not discarded
+			s.writers = s.writers[i:] // the ones before are renamed, so not discarded
 
-			return nil, err
+			return err
 		}
 
 		err = removeTemps(root, dirOf(w.target), baseOf(w.target))
 		if err != nil {
-			return nil, err
+			s.writers = s.writers[i+1:]
+
+			return err
 		}
 
 		if !slices.Contains(dirs, dirOf(w.target)) {
@@ -923,19 +1009,28 @@ func (e *Engine) writeFormats(ctx context.Context, root *os.Root, p pendingServi
 		}
 	}
 
-	return dirs, nil
-}
+	s.writers = nil
 
-// snapshot writes the snapshot of one service to w, then syncs the assets
-// committed since the last save, until ctx ends. Every asset the snapshot names
-// is committed by then, so it is on disk before the snapshot is.
-func snapshot(ctx context.Context, p pendingService, w io.Writer) error {
-	err := p.snap.Snapshot(w)
-	if err != nil {
-		return fmt.Errorf("snapshot: %w", err)
+	// Formats that are no longer listed go only after the listed ones are safe.
+	for _, f := range knownFormats {
+		if slices.Contains(e.formats, f) {
+			continue
+		}
+
+		err := removeFile(root, s.p.name+"/"+f.fileName())
+		if err != nil {
+			return err
+		}
 	}
 
-	return p.assets.sync(ctx)
+	for _, dir := range dirs {
+		err := syncDir(root, dir)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // loaded is what loading one service's state files did.

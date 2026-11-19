@@ -805,7 +805,9 @@ is untouched.
   a missing asset fails only that object, at its read.
 - After a failed sync the assets stop tracking: an asset committed then is
   never synced or swept, so it is recorded only as committed since the last
-  save, and its `Remove` deletes it at once. A removal of an asset committed
+  save, and its `Remove` deletes it at once. A load sweep that finds the
+  assets failed deletes nothing, because the ids it would keep are no longer
+  tracked; the sweep at restart removes the orphans. A removal of an asset committed
   before the failure stays queued, because the state file on disk, which a
   restart loads, may name it; that queue is bounded by the assets committed
   before the failure. While saves fail for another reason, such as a full
@@ -828,20 +830,32 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
-- Save order: a flush saves the services whose assets have nothing to sync
-  when it starts first, services with no assets among them, then the services
-  with assets to sync, each run in name order. So S3's sync, which cannot be
-  interrupted and can take a save's whole deadline, never runs before SQS or
-  STS is written. A service's failure does not stop the services after it; only
-  the end of the save's deadline does, since no save can finish after it. The
-  services share that one deadline, so two services with assets to sync would
-  share its time in order; S3 is the only one today.
+- Save order: a flush saves in two passes, each in name order. The first takes
+  every service's snapshot into temp files and renames at once each one whose
+  assets have nothing to sync, and no earlier sync to wait for, when its
+  `Snapshot` returns: services with no assets among them. It defers the
+  others, temp files kept. The second pass syncs each deferred service's
+  assets and renames its snapshot. So S3's sync, which cannot be interrupted
+  and can take a save's whole deadline, never runs before SQS or STS is
+  written, even when a PUT commits during S3's own `Snapshot`. A deferred
+  snapshot is renamed by the save that took it or discarded, so no older
+  snapshot of a service replaces a newer one. A write after its `Snapshot`
+  returned is for the next save, as it always was; an asset committed between
+  the `Snapshot` and the deferred sync is synced with the rest, though the
+  snapshot does not name it, so every asset the snapshot names is durable
+  before the rename. A service's failure does not stop the services after it;
+  only the end of the save's deadline does, since no save can finish after it.
+  The services share that one deadline, so two services with assets to sync
+  would share its time in order; S3 is the only one today.
 - A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
   timed save running lends it its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot
   already taken and make the shutdown take a second one. The timed save
   finishes, or is cancelled when the waiter's deadline passes; of several
-  waiters, the first deadline to pass cancels it. The waiter then saves only
+  waiters, the first deadline to pass cancels it. A lent deadline that passes
+  acts as the save's own deadline would: a service whose snapshot is taken and
+  whose syncs have returned clean is still renamed, and the rest stay dirty.
+  The waiter then saves only
   what is still dirty, with the time left. A timed save that has not started
   when a waiter arrives skips its flush, and the timer is not armed again
   while any `Flush`, `Load`, `Close` or reset waits: the last waiter arms it as
@@ -851,12 +865,19 @@ is untouched.
   cancels the timed save at once: it replaces or discards the state the timed
   save would write, and a load that waited would restore what the timed save
   wrote rather than the state saved before the load was asked for.
-- A cancelled timed save fails before it renames anything, its services stay
-  dirty for the next save, and it counts as no failure. Every save checks for
-  a cancellation after its snapshot and before its rename, so this holds for a
-  service with no asset to sync too; a save past its deadline, which is not a
-  cancellation, still renames what it finished. Its sync, if one started, goes
-  on as above, and the next save renames only after it returns. A flush is
+- The timed save's context is cancelled with a cause, and only a preempt by
+  `Load` or reset stops a rename. A preempted timed save fails before it
+  renames anything, its services stay dirty for the next save, and it counts
+  as no failure. Every save checks for a preempt after its snapshot and
+  before its rename, so this holds for a service with no asset to sync too. A
+  context's cause is set once, so the preempt cancels a parent of the context
+  a lent deadline cancels: a `Load` that comes after a lent deadline passed
+  still stops the rename. Any other end of a save's context, its own deadline,
+  a lent one or a caller that went away, renames what is finished. Its sync,
+  if one started, goes on as above, and the next save renames only after it
+  returns. A timed save still in its `Snapshot` when `Close` releases the
+  assets fails on the released assets, which counts as giving way and is not
+  logged as a failed flush. A flush is
   judged by what its services failed with, never by its context: one whose
   every unsaved service gave way to a cancellation counts as no failure; one
   with a real error, such as `ENOSPC`, counts with the backoff even when its
