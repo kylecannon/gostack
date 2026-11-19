@@ -44,7 +44,9 @@ jobs:
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
       # The head's Makefile measures both trees in alternating rounds, so drift
       # in the runner's speed over the job hits base and head alike, and a base
-      # that predates `make bench-ab` is still measured.
+      # that predates `make bench-ab` is still measured. Before each round it
+      # links both trees again with a new function layout, so where the linker
+      # happened to put a benchmark's code is not read as a regression.
       - name: Benchmark the base and the head, interleaved
         working-directory: head
         run: make bench-ab BASE=../base HEAD=. BENCH_BASE_OUT="$GITHUB_WORKSPACE/base.txt" BENCH_HEAD_OUT="$GITHUB_WORKSPACE/head.txt"

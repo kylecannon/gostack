@@ -183,10 +183,14 @@ not apply to a feature is left out, not filled with a placeholder.
   the PR. A regression over 10% with p<0.05 fails the build unless it is
   accepted (below).
 - The gate measures base and head interleaved, never one tree after the other:
-  `make bench-ab` builds both trees' benchmark binaries first, then runs ten
-  rounds of one run per tree, alternating which tree goes first (base head,
-  head base, ...). A runner that speeds up or slows down during the job then
-  moves both sides alike instead of reading as a regression.
+  `make bench-ab` runs ten rounds of one run per tree, alternating which tree
+  goes first (base head, head base, ...). A runner that speeds up or slows down
+  during the job then moves both sides alike instead of reading as a regression.
+- Before each round the gate links both trees' benchmark binaries again, each
+  with its own function layout (`-randlayout`, a different seed per tree and
+  round), because a change elsewhere in the binary can move where a benchmark's
+  functions land, and one fixed layout per tree would read that as a regression
+  in code that did not change.
 
 ### System bench (`bench/`)
 
