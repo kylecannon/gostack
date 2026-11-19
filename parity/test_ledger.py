@@ -626,15 +626,151 @@ class CheckAgainstBaseTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("matches sts tests, not sqs", out)
 
+    def test_a_base_that_names_no_commit_fails(self) -> None:
+        # SQ-181 N3: these printed "nothing to compare" and passed.
+        self.split_base()
+        self.set_gostack(f"{SQS}::b", "fail")
+        for base in ("deadbeef" * 5, "f" * 40, "no-such-branch", "-q"):
+            with self.subTest(base=base):
+                code, out = self.check(base)
+                self.assertEqual(code, 1, out)
+                self.assertIn("is not a commit", out)
+
+    def test_the_all_zero_base_fails_when_head_has_history(self) -> None:
+        self.split_base()
+        self.commit_change("second")
+        self.set_gostack(f"{SQS}::b", "fail")
+        code, out = self.check("0" * 40)
+        self.assertEqual(code, 1, out)
+        self.assertIn("all-zero sha", out)
+
+    def test_the_all_zero_base_of_the_first_commit_has_nothing_to_compare(self) -> None:
+        # The push that created the repository: HEAD is a root commit.
+        self.split_base()
+        code, out = self.check("0" * 40)
+        self.assertEqual(code, 0, out)
+        self.assertIn("no committed ledger before the first commit", out)
+
+    def commit_change(self, message: str) -> str:
+        (self.repo / "README").write_text(message, encoding="utf-8")
+        return self.commit(message)
+
+    def test_a_gone_upstream_entry_for_a_row_still_in_the_ledger_is_refused(self) -> None:
+        # SQ-181 N1: prune deletes every row it writes such an entry for.
+        base = self.split_base()
+        self.set_gostack(f"{SQS}::b", "fail")
+        self.demotions.write_text(f'"{SQS}::b": gone upstream at {"a" * 40}\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{SQS}::b: says gone upstream, but its row is still in the ledger", out)
+        self.demotions.write_text(f'"{SQS}::b": fails since the receipt handle change\n', encoding="utf-8")
+        self.assertEqual(self.check(base)[0], 0)
+
+
+class UncommittedTest(unittest.TestCase):
+    """`uncommitted` compares the gostack column a run wrote into the working
+    tree with the ledger committed at --rev, for the services the run selected."""
+
+    def setUp(self) -> None:
+        without_git_env(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name).resolve()
+        self.dir = self.repo / "parity" / "ledger"
+        self.git("init", "-q", "-b", "main")
+        ledger.write_ledger(self.dir, {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("pass", "fail", "x")})
+        self.git("add", "-A")
+        self.git("commit", "-qm", "ledger")
+
+    def git(self, *argv: str) -> str:
+        return git_in(self.repo, *argv)
+
+    def change(self, nodeid: str, column: str, status: str | None) -> None:
+        rows = ledger.load_ledger(self.dir)
+        if status == "missing":
+            del rows[nodeid]
+        else:
+            rows.setdefault(nodeid, row("pass", None))[column] = status
+        ledger.write_ledger(self.dir, rows)
+
+    def run_uncommitted(self, services: str) -> tuple[int, str]:
+        args = argparse.Namespace(ledger=self.dir, services=services, rev="HEAD")
+        out = io.StringIO()
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                ledger.uncommitted(args)
+            except SystemExit as exit_:
+                return (exit_.code if isinstance(exit_.code, int) else 1), out.getvalue() + str(exit_.code)
+        return 0, out.getvalue()
+
+    def test_an_unchanged_ledger_passes(self) -> None:
+        code, out = self.run_uncommitted("sqs,sts")
+        self.assertEqual(code, 0, out)
+
+    def test_every_difference_of_a_selected_service_fails_and_is_named(self) -> None:
+        cases = {
+            "a fix left uncommitted": (f"{SQS}::c", "pass", "committed fail, observed pass"),
+            "a regression left uncommitted": (f"{SQS}::b", "fail", "committed pass, observed fail"),
+            "a row the run removed": (f"{SQS}::b", "missing", "committed pass, observed missing"),
+            "a new row": (f"{SQS}::new", "pass", "committed missing, observed pass"),
+            "null": (f"{SQS}::b", None, "committed pass, observed null"),
+        }
+        for label, (nodeid, status, message) in cases.items():
+            with self.subTest(case=label):
+                self.change(nodeid, "gostack", status)
+                code, out = self.run_uncommitted("sqs")
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"  {nodeid}: {message}", out)
+                self.assertIn("Commit the ledger", out)
+                self.git("reset", "-q", "--hard")
+                self.git("clean", "-qfd")
+
+    def test_a_service_file_not_committed_at_all_fails(self) -> None:
+        self.change("tests/aws/services/sns/test_sns.py::T::t", "gostack", "pass")
+        code, out = self.run_uncommitted("sns")
+        self.assertEqual(code, 1, out)
+        self.assertIn("tests/aws/services/sns/test_sns.py::T::t: committed missing, observed pass", out)
+
+    def test_a_service_the_run_did_not_select_is_not_compared(self) -> None:
+        self.change(f"{STS}::a", "gostack", "fail")
+        self.assertEqual(self.run_uncommitted("sqs")[0], 0)
+        self.assertEqual(self.run_uncommitted("sqs,sts")[0], 1)
+
+    def test_the_localstack_column_is_not_compared(self) -> None:
+        self.change(f"{SQS}::b", "localstack", "fail")
+        self.assertEqual(self.run_uncommitted("sqs")[0], 0)
+
+    def test_a_service_name_with_no_test_directory_is_refused(self) -> None:
+        code, out = self.run_uncommitted("sqs,nope")
+        self.assertEqual(code, 1, out)
+        self.assertIn("no LocalStack test directory known for service 'nope'", out)
+
 
 WORKFLOW = ledger.ROOT / ".github" / "workflows" / "parity.yml"
+CI_WORKFLOW = ledger.ROOT / ".github" / "workflows" / "ci.yml"
+
+# Stands in for `make parity-check` in the workflow steps: the Makefile's
+# PARITY_BASE handling (an empty or unset base is HEAD) and its
+# `ledger.py check --base`, without the unit tests, which would run this file.
+MAKE_SHIM = """\
+#!/bin/sh
+[ "$1" = parity-check ] || { echo "make shim: unexpected target $1" >&2; exit 2; }
+shift
+for arg in "$@"; do
+\tcase "$arg" in PARITY_BASE=*) PARITY_BASE=${arg#PARITY_BASE=} ;; esac
+done
+printf '%s\\n' "${PARITY_BASE:-HEAD}" >"$MAKE_LOG"
+exec python3 parity/ledger.py check --base "${PARITY_BASE:-HEAD}"
+"""
 
 
 def step_script(workflow: Path, name: str) -> str:
     """The `run: |` block of the step called name, dedented."""
     lines = workflow.read_text(encoding="utf-8").splitlines()
     start = lines.index(f"      - name: {name}")
-    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    run = next(i for i in range(start, len(lines)) if lines[i].strip().startswith("run:"))
+    if lines[run].strip() != "run: |":
+        return lines[run].strip()[len("run:") :].strip() + "\n"
     indent = len(lines[run]) - len(lines[run].lstrip()) + 2
     body = []
     for line in lines[run + 1 :]:
@@ -644,11 +780,12 @@ def step_script(workflow: Path, name: str) -> str:
     return "\n".join(body) + "\n"
 
 
-class MergeBaseTest(unittest.TestCase):
-    """parity.yml compares a pull request with the merge base of its base and
-    head, and selects from the paths changed since then. These run the
-    workflow's own select step in a temporary repository: main moves on after
-    the branch forks."""
+class MergeRefTest(unittest.TestCase):
+    """parity.yml tests GitHub's merge ref of a pull request, the head merged
+    into its base, and compares it with HEAD^1. These run the workflow's own
+    steps under `bash -e -o pipefail` in a temporary repository: main moves on
+    after the branch forks, the merge commit is made the way GitHub makes it,
+    and the run's results are written into the working tree."""
 
     P = f"{SQS}::p"
     R = f"{SQS}::r"
@@ -657,7 +794,7 @@ class MergeBaseTest(unittest.TestCase):
         without_git_env(self)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.repo = Path(tmp.name).resolve()
+        self.repo = Path(tmp.name).resolve() / "repo"
         self.dir = self.repo / "parity" / "ledger"
         self.dir.mkdir(parents=True)
         (self.repo / "parity" / "ledger.py").write_bytes((ledger.ROOT / "parity" / "ledger.py").read_bytes())
@@ -665,6 +802,12 @@ class MergeBaseTest(unittest.TestCase):
         (self.repo / "specs" / "SOURCES.lock").write_text(f"localstack_sha {'a' * 40}\n", encoding="utf-8")
         (self.repo / "internal" / "service" / "sqs").mkdir(parents=True)
         (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n", encoding="utf-8")
+        bin_dir = Path(tmp.name).resolve() / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "make").write_text(MAKE_SHIM, encoding="utf-8")
+        (bin_dir / "make").chmod(0o755)
+        self.path = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        self.make_log = Path(tmp.name).resolve() / "make.log"
         # P passes at the fork. R fails at the fork; main makes it pass later.
         ledger.write_ledger(self.dir, {self.P: row("pass", "pass"), self.R: row("pass", "fail"), f"{STS}::a": row("pass", "pass")})
         self.git("init", "-q", "-b", "main")
@@ -672,6 +815,7 @@ class MergeBaseTest(unittest.TestCase):
         self.git("checkout", "-qb", "branch")
         (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n\n// changed\n", encoding="utf-8")
         self.head = self.commit("branch change")
+        self.tip = self.fork
 
     def git(self, *argv: str) -> str:
         return git_in(self.repo, *argv)
@@ -681,111 +825,205 @@ class MergeBaseTest(unittest.TestCase):
         self.git("commit", "-qm", message)
         return self.git("rev-parse", "HEAD")
 
-    def on_main(self, change) -> str:
+    def on_main(self, change) -> None:
         self.git("checkout", "-q", "main")
         change()
-        tip = self.commit("main moves on")
+        self.tip = self.commit("main moves on")
         self.git("checkout", "-q", "branch")
-        return tip
 
     def on_branch(self, change) -> None:
         change()
         self.head = self.commit("branch")
+
+    def merge_ref(self) -> str:
+        """Check out what GitHub's refs/pull/N/merge holds: a merge commit whose
+        first parent is the base tip and second the pull request head."""
+        self.git("checkout", "-q", "--detach", self.tip)
+        self.git("merge", "-q", "--no-ff", "-m", "Merge branch into main", self.head)
+        return self.git("rev-parse", "HEAD")
 
     def set_gostack(self, nodeid: str, status: str) -> None:
         rows = ledger.load_ledger(self.dir)
         rows[nodeid]["gostack"] = status
         ledger.write_ledger(self.dir, rows)
 
-    def select(self, base_sha: str) -> tuple[int, dict[str, str], str]:
-        """Run the workflow's select step as a pull_request event would."""
-        output, summary = self.repo / "gh-output", self.repo / "gh-summary"
-        env = {**os.environ, "EVENT": "pull_request", "BASE_SHA": base_sha, "HEAD_SHA": self.head, "REQUESTED": "", "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)}
+    def step(self, workflow: Path, name: str, **env: str) -> tuple[int, str]:
         run = subprocess.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step_script(WORKFLOW, "Select the services")],
+            ["bash", "-e", "-o", "pipefail", "-c", step_script(workflow, name)],
             cwd=self.repo,
-            env=env,
+            env={**os.environ, "PATH": self.path, "MAKE_LOG": str(self.make_log), **env},
             capture_output=True,
             text=True,
             check=False,
         )
-        outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()) if output.exists() else {}
-        return run.returncode, outputs, run.stderr
+        return run.returncode, run.stdout + run.stderr
 
-    def check(self, base: str) -> tuple[int, str]:
-        args = argparse.Namespace(
-            ledger=self.dir,
-            exclusions=self.repo / "parity" / "exclusions",
-            demotions=self.repo / "parity" / "demotions.yaml",
-            base=base,
-            collected=self.repo / "none.json",
+    def select(self, event: str = "pull_request", pr_head: str | None = None, mergeable: str = "", requested: str = "") -> tuple[int, dict[str, str], str]:
+        """Run the workflow's select step as the event would."""
+        output, summary = self.repo.parent / "gh-output", self.repo.parent / "gh-summary"
+        output.unlink(missing_ok=True)
+        code, text = self.step(
+            WORKFLOW,
+            "Select the services",
+            EVENT=event,
+            PR_HEAD=self.head if pr_head is None else pr_head,
+            MERGEABLE=mergeable,
+            REQUESTED=requested,
+            GITHUB_OUTPUT=str(output),
+            GITHUB_STEP_SUMMARY=str(summary),
         )
-        out = io.StringIO()
-        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            try:
-                ledger.check(args)
-            except SystemExit as exit_:
-                return (exit_.code if isinstance(exit_.code, int) else 1), out.getvalue() + str(exit_.code)
-        return 0, out.getvalue()
+        outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()) if output.exists() else {}
+        return code, outputs, text
 
-    def assert_selects_from_the_fork(self, tip: str) -> str:
-        code, outputs, stderr = self.select(tip)
-        self.assertEqual(code, 0, stderr)
-        self.assertEqual(outputs["base"], self.fork)
-        self.assertEqual(outputs["services"], "s3,sqs")  # sqs changed; s3 calls it
+    def regression(self, base: str, event: str = "pull_request") -> tuple[int, str]:
+        return self.step(WORKFLOW, "Fail on a regression", EVENT=event, PARITY_BASE=base)
+
+    def committed_check(self, services: str) -> tuple[int, str]:
+        return self.step(WORKFLOW, "Fail on an uncommitted ledger", SERVICES=services)
+
+    def assert_selects_from_the_base_tip(self) -> str:
+        code, outputs, text = self.select()
+        self.assertEqual(code, 0, text)
+        self.assertEqual(outputs["base"], self.tip)
+        self.assertEqual(self.git("rev-parse", "HEAD^1"), self.tip)
+        self.assertEqual(outputs["services"], "s3,sqs")  # sqs changed; s3 depends on it
         return outputs["base"]
 
-    def test_a_service_file_main_added_after_the_fork_does_not_fail_the_branch(self) -> None:
+    def test_a_service_file_main_added_after_the_fork_passes(self) -> None:
         def add_sns() -> None:
             ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", "pass")})
 
-        tip = self.on_main(add_sns)
-        base = self.assert_selects_from_the_fork(tip)
-        code, out = self.check(base)
+        self.on_main(add_sns)
+        self.merge_ref()
+        base = self.assert_selects_from_the_base_tip()
+        self.assertTrue((self.dir / "sns.json").exists())
+        code, out = self.regression(base)
         self.assertEqual(code, 0, out)
-        # Against main's tip the branch would be blamed for a file it never had.
-        code, out = self.check(tip)
-        self.assertEqual(code, 1, out)
-        self.assertIn("ledger/sns.json: deleted", out)
+        self.assertEqual(self.make_log.read_text(encoding="utf-8").strip(), self.tip)
+        code, out = self.committed_check("s3,sqs")
+        self.assertEqual(code, 0, out)
 
-    def test_a_row_main_fixed_after_the_fork_is_compared_with_the_fork(self) -> None:
-        # R: fail at the fork, pass on main, fail on the branch. The right result
-        # is a pass: this head was built without main's fix, so its `fail` is
-        # what the fork recorded. ci.yml checks the merge ref, which holds
-        # main's `pass` for R, against main's tip.
-        tip = self.on_main(lambda: self.set_gostack(self.R, "pass"))
-        base = self.assert_selects_from_the_fork(tip)
-        code, out = self.check(base)
-        self.assertEqual(code, 0, out)
-        code, out = self.check(tip)
+    def test_a_row_fixed_on_main_and_broken_by_the_branch_fails(self) -> None:
+        # SQ-181 S1, item3c: main fixes R after the fork; the branch, built
+        # alone, still fails it. The merged tree carries main's fix in its
+        # ledger and the branch's code, and its run sees R fail.
+        self.on_main(lambda: self.set_gostack(self.R, "pass"))
+        self.merge_ref()
+        base = self.assert_selects_from_the_base_tip()
+        self.set_gostack(self.R, "fail")  # what the run of the merged tree observed
+        code, out = self.regression(base)
         self.assertEqual(code, 1, out)
         self.assertIn(f"gostack: {self.R}: pass -> fail", out)
+        code, out = self.committed_check("s3,sqs")
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{self.R}: committed pass, observed fail", out)
 
-    def test_a_row_that_passed_at_the_fork_and_fails_on_the_branch_fails(self) -> None:
-        tip = self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
-        self.on_branch(lambda: self.set_gostack(self.P, "fail"))
-        base = self.assert_selects_from_the_fork(tip)
-        code, out = self.check(base)
+    def test_a_row_that_passes_at_the_base_and_fails_in_the_merged_tree_fails(self) -> None:
+        self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
+        self.on_branch(lambda: self.set_gostack(self.P, "fail"))  # committed honestly
+        self.merge_ref()
+        base = self.assert_selects_from_the_base_tip()
+        self.set_gostack(self.P, "fail")
+        code, out = self.regression(base)
         self.assertEqual(code, 1, out)
         self.assertIn(f"gostack: {self.P}: pass -> fail", out)
+        # The committed ledger is what the run saw; only the ratchet fails.
+        self.assertEqual(self.committed_check("s3,sqs")[0], 0)
 
-    def test_no_merge_base_fails_the_select_step(self) -> None:
-        self.git("checkout", "-q", "--orphan", "unrelated")
-        unrelated = self.commit("unrelated history")
-        self.git("checkout", "-q", "branch")
-        for base_sha in (unrelated, "f" * 40):
-            with self.subTest(base=base_sha):
-                code, outputs, stderr = self.select(base_sha)
-                self.assertNotEqual(code, 0)
-                self.assertIn("no merge base", stderr)
+    def test_a_fix_the_branch_did_not_commit_fails_until_it_does(self) -> None:
+        self.merge_ref()
+        self.assert_selects_from_the_base_tip()
+        self.set_gostack(self.R, "pass")
+        code, out = self.committed_check("s3,sqs")
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{self.R}: committed fail, observed pass", out)
+        self.assertIn("Commit the ledger", out)
+        # sts did not run, so its rows are not compared.
+        self.set_gostack(self.R, "fail")
+        self.set_gostack(f"{STS}::a", "fail")
+        self.assertEqual(self.committed_check("s3,sqs")[0], 0)
+
+    def test_a_head_that_is_not_githubs_merge_fails_the_select_step(self) -> None:
+        self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
+        merged = self.merge_ref()
+        cases = {
+            "the head itself": (self.head, self.head, "is the pull request head"),
+            "the base tip": (self.tip, self.head, "has 1 parent(s), not 2"),
+            "a merge of another head": (merged, self.fork, f"merges {self.head}, not the pull request head"),
+            "no head given": (merged, "", "is not a commit"),
+            "a head this checkout lacks": (merged, "f" * 40, "is not a commit"),
+        }
+        for label, (checked_out, pr_head, message) in cases.items():
+            with self.subTest(case=label):
+                self.git("checkout", "-q", "--detach", checked_out)
+                code, outputs, text = self.select(pr_head=pr_head)
+                self.assertNotEqual(code, 0, text)
+                self.assertIn(message, text)
                 self.assertNotIn("services", outputs)
 
-    def test_the_check_step_compares_with_the_selected_merge_base(self) -> None:
-        script = step_script(WORKFLOW, "Fail on a regression")
-        self.assertIn("make parity-check", script)
+    def test_a_head_that_is_itself_a_merge_is_not_taken_for_the_merge_ref(self) -> None:
+        # The branch merged main: its head has two parents too.
+        self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
+        self.git("merge", "-q", "--no-ff", "-m", "Merge main into branch", "main")
+        self.head = self.git("rev-parse", "HEAD")
+        code, _, text = self.select()
+        self.assertNotEqual(code, 0, text)
+        self.assertIn("is the pull request head", text)
+        self.merge_ref()
+        self.assertEqual(self.select()[0], 0)
+
+    def test_a_pull_request_github_reports_as_not_mergeable_fails(self) -> None:
+        self.merge_ref()
+        code, outputs, text = self.select(mergeable="false")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not mergeable", text)
+        self.assertNotIn("services", outputs)
+        for mergeable in ("", "true"):  # null reads as empty: not computed yet
+            with self.subTest(mergeable=mergeable):
+                self.assertEqual(self.select(mergeable=mergeable)[0], 0)
+
+    def test_a_manual_run_compares_with_the_dispatched_ref(self) -> None:
+        # HEAD is the branch tip, not a merge, and that is fine here.
+        code, outputs, text = self.select(event="workflow_dispatch", pr_head="", requested="sqs")
+        self.assertEqual(code, 0, text)
+        self.assertEqual(outputs["base"], "")
+        self.assertEqual(outputs["services"], "sqs")
+        self.set_gostack(self.P, "fail")
+        code, out = self.regression("", event="workflow_dispatch")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.make_log.read_text(encoding="utf-8").strip(), "HEAD")
+        self.assertIn(f"gostack: {self.P}: pass -> fail", out)
+
+    def test_a_pull_request_without_a_base_fails_the_regression_step(self) -> None:
+        code, out = self.regression("")
+        self.assertEqual(code, 1, out)
+        self.assertIn("no base to compare the ledger with", out)
+
+    def test_the_workflow_wires_the_base_and_the_committed_check(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("PARITY_BASE: ${{ steps.select.outputs.base }}", text)
-        self.assertNotIn("PARITY_BASE: ${{ github.event.pull_request.base.sha", text)
+        self.assertNotIn("pull_request.base.sha", text)
+        self.assertNotIn("ref: ${{ github.event.pull_request.head.sha", text)
+        self.assertIn("if: always() && github.event_name == 'pull_request' && steps.run.outcome == 'success'", text)
+        self.assertIn("SERVICES: ${{ steps.select.outputs.services }}", text)
+
+    def test_ci_compares_the_merge_ref_with_the_same_base(self) -> None:
+        # ci.yml's parity-ledger job and parity.yml read the same HEAD^1.
+        self.on_main(lambda: self.set_gostack(self.R, "pass"))
+        self.merge_ref()
+        base = self.assert_selects_from_the_base_tip()
+        code, out = self.step(CI_WORKFLOW, "Compare the ledger with the base", EVENT="pull_request", PR_HEAD=self.head, BEFORE="")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.make_log.read_text(encoding="utf-8").strip(), base)
+        self.git("checkout", "-q", "--detach", self.head)
+        code, out = self.step(CI_WORKFLOW, "Compare the ledger with the base", EVENT="pull_request", PR_HEAD=self.head, BEFORE="")
+        self.assertNotEqual(code, 0, out)
+        self.assertIn("is the pull request head", out)
+        # A push compares with the commit main was at before it.
+        self.git("checkout", "-q", "main")
+        code, out = self.step(CI_WORKFLOW, "Compare the ledger with the base", EVENT="push", PR_HEAD="", BEFORE=self.fork)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.make_log.read_text(encoding="utf-8").strip(), self.fork)
 
 
 if __name__ == "__main__":

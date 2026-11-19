@@ -17,20 +17,35 @@ Commands (standard library only):
            counts.
     check  [--base REV]
            Compare the working-tree ledger with the one committed at REV
-           (default HEAD; CI passes the merge base). It fails when:
+           (default HEAD; on a pull request CI passes HEAD^1 of GitHub's merge
+           ref, the base the merged tree was made from). It fails when:
            - a nodeid that was `pass` in the gostack column is anything else
              now (fail, skip, xfail, excluded, null, or a missing row) and
              parity/demotions.yaml does not list it. Each one is named;
            - parity/demotions.yaml lists a nodeid that is `pass` in the
-             gostack column now (the test passes again; remove the entry);
+             gostack column now (the test passes again; remove the entry), or
+             says gone upstream for a row that is still in the ledger;
            - a nodeid that was `pass` in the localstack column is `fail` now
              (any other change there only warns);
-           - a service file the base has is gone from the working tree.
+           - a service file the base has is gone from the working tree;
+           - REV is no commit, or is the all-zero sha while HEAD has a parent.
+             The all-zero sha with a root HEAD is the first commit, and a
+             commit with no ledger has nothing to compare; both pass.
            The base is read in either layout: parity/ledger/*.json, or the
            single parity/ledger.json that came before it. Also checks every
            exclusions file. When parity/out/collected.json exists (written by
            prune), also warns about ledger rows that collection no longer
            found. Never a failure.
+    uncommitted --services SERVICES [--rev REV]
+           Fail when the gostack column of a listed service in the working
+           tree differs from the file committed at REV (default HEAD), in
+           either direction, a row missing on one side included. parity.yml
+           runs it after `make parity`, so a pull request carries the ledger
+           its run observed. Other services are not compared.
+    merge-parent --head SHA
+           Print HEAD's first parent when HEAD is GitHub's merge of the pull
+           request head SHA into its base: two parents, the second SHA. Fail
+           otherwise.
     prune  [--localstack DIR] [--dry-run] [--collected FILE]
            Collect the nodeids of the ledger's services with `pytest
            --collect-only -q` in the runner image (parity/run.sh collect, against
@@ -41,7 +56,7 @@ Commands (standard library only):
            changes nothing. --collected FILE reads a saved `pytest
            --collect-only -q` listing instead of running Docker.
     docs   Rewrite docs/parity.md from the ledger.
-    services [--changed [--range A...B]]
+    services [--changed [--range A..B]]
            Print the services the ledger covers, comma separated. With
            --changed, read NUL-separated changed paths from stdin (`git diff
            --name-only -z --no-renames`) and print the services that change can
@@ -133,10 +148,14 @@ SERVICE_OF_DIR = {directory: name for name, directory in TEST_DIRS.items()}
 # services its changed lines name, or every service when a line names none.
 REGISTRATION_FILE = "cmd/gostack/services.go"
 
-# A change under internal/service/<svc>/, where <svc> is in TEST_DIRS, is that
-# service's own. Every other path selects every service, except these, which
-# cannot change what the image does or how the suite runs against it.
+# A change under internal/service/<svc>/ or internal/api/<svc>/ (generated from
+# that service's model, imported by internal/service/<svc>/ alone, and own only
+# once that directory exists), where <svc> is in TEST_DIRS, is that service's
+# own. Every other path selects every
+# service, except these, which cannot change what the image does or how the
+# suite runs against it.
 SERVICE_DIR = "internal/service/"
+OWN_DIRS = (SERVICE_DIR, "internal/api/")
 NO_IMAGE_EFFECT = (
     # Outside the Docker build context (.dockerignore), and not read by parity/.
     "docs/",
@@ -155,10 +174,17 @@ NO_IMAGE_EFFECT = (
 WORKFLOWS = ".github/workflows/"
 PARITY_WORKFLOW = ".github/workflows/parity.yml"
 
-# The services a service calls in this process, so a change to the callee can
-# break the caller's tests. s3 delivers event notifications to sqs.
-IN_PROCESS_CALLS = {
+# The services whose tests a change to another service can break: each key's
+# tests depend on the services it lists, so a change to one of those selects
+# the key too. EVERY_SERVICE as a key is every service the ledger covers.
+# - s3 delivers event notifications to sqs in this process.
+# - LocalStack's session fixtures account_id and secondary_account_id call
+#   sts.get_caller_identity in every service's test session, so a change to
+#   sts can break any service's tests.
+EVERY_SERVICE = "*"
+DEPENDS_ON = {
     "s3": ("sqs",),
+    EVERY_SERVICE: ("sts",),
 }
 
 # When one nodeid has several junit testcases (call plus a teardown error), the
@@ -385,6 +411,10 @@ DEMOTIONS_HEADER = """\
 """
 
 
+# The reason prune gives the passing rows it removes.
+GONE_UPSTREAM = "gone upstream"
+
+
 def load_demotions(path: Path) -> dict[str, str]:
     """nodeid -> reason. No file lists nothing."""
     if not path.exists():
@@ -487,12 +517,13 @@ def git_show(base: str, relative: str) -> str:
 def committed_ledger(base: str, directory: Path) -> tuple[dict[str, dict], set[str]] | None:
     """The ledger at base and the services it has rows or a file for, from the
     per-service files when base has them, else from the single ledger.json that
-    came before them. None only when base has neither (or is no commit)."""
+    came before them. None only when base has neither. base is a commit
+    (resolve_base)."""
     relative = directory.resolve().relative_to(ROOT).as_posix()
     legacy = f"{relative.rsplit('/', 1)[0]}/{LEGACY_LEDGER}" if "/" in relative else LEGACY_LEDGER
     listed = git("ls-tree", "--name-only", f"{base}^{{tree}}", "--", f"{relative}/", legacy)
     if listed.returncode != 0:
-        return None
+        raise SystemExit(f"parity-check: cannot list {base}: {listed.stderr.strip()}")
     names = listed.stdout.splitlines()
     files = [n for n in names if n.startswith(f"{relative}/") and n.endswith(".json")]
     if legacy in names and files:
@@ -514,14 +545,46 @@ def committed_ledger(base: str, directory: Path) -> tuple[dict[str, dict], set[s
     return None
 
 
+# An all-zero sha is how GitHub names "no commit": github.event.before of a push
+# that created the branch.
+NULL_SHA = re.compile(r"0{40}|0{64}")
+
+
+def resolve_base(base: str) -> str | None:
+    """The commit base names, or None when there is genuinely nothing before
+    this change: base is the all-zero sha and HEAD is a root commit, the first
+    commit of the repository. An all-zero base with history behind HEAD, or a
+    name that resolves to no commit, fails: comparing with nothing there
+    would pass any regression."""
+    if NULL_SHA.fullmatch(base):
+        if git("rev-parse", "--verify", "--quiet", "HEAD^{commit}").returncode != 0:
+            raise SystemExit("parity-check: the base is the all-zero sha and HEAD is no commit")
+        if git("rev-parse", "--verify", "--quiet", "HEAD^").returncode == 0:
+            raise SystemExit(
+                f"parity-check: the base is the all-zero sha {base}, which names no commit, and HEAD has a parent; "
+                "pass the commit to compare with"
+            )
+        return None
+    resolved = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+    if base.startswith("-") or resolved.returncode != 0:
+        raise SystemExit(f"parity-check: the base {base!r} is not a commit in this repository")
+    return resolved.stdout.strip()
+
+
 def stale_demotions(current: dict[str, dict], demotions: dict[str, str], where: str) -> list[str]:
     """An entry whose test passes in the working tree no longer excuses
-    anything. An excluded, failing or absent row keeps its entry."""
-    return [
-        f"  {where}: {nodeid}: passes in the gostack column again; remove the entry"
-        for nodeid in sorted(demotions)
-        if nodeid in current and current[nodeid]["gostack"] == "pass"
-    ]
+    anything. An excluded, failing or absent row keeps its entry, except that a
+    gone upstream entry needs its row gone: prune deletes the row it writes the
+    entry for, so a row that is still there was not pruned."""
+    stale = []
+    for nodeid in sorted(demotions):
+        if nodeid not in current:
+            continue
+        if current[nodeid]["gostack"] == "pass":
+            stale.append(f"  {where}: {nodeid}: passes in the gostack column again; remove the entry")
+        elif demotions[nodeid].startswith(GONE_UPSTREAM):
+            stale.append(f"  {where}: {nodeid}: says {GONE_UPSTREAM}, but its row is still in the ledger; give the real reason")
+    return stale
 
 
 def compare_rows(base: dict[str, dict], current: dict[str, dict], demotions: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
@@ -554,13 +617,15 @@ def check(args: argparse.Namespace) -> None:
     demotions = load_demotions(args.demotions)
     demotions_name = args.demotions.name
     stale_entries = stale_demotions(current, demotions, demotions_name)
-    committed = committed_ledger(args.base, args.ledger)
+    commit = resolve_base(args.base)
+    committed = committed_ledger(commit, args.ledger) if commit is not None else None
     if committed is None:
         if stale_entries:
             print("parity-check: stale demotion(s):\n" + "\n".join(stale_entries), file=sys.stderr)
             raise SystemExit(1)
+        where = f"at {args.base}" if commit is not None else f"before the first commit ({args.base})"
         print(
-            f"parity-check: no committed ledger at {args.base}; {len(current)} entries, "
+            f"parity-check: no committed ledger {where}; {len(current)} entries, "
             f"{len(exclusions)} exclusion patterns, nothing to compare"
         )
         return
@@ -588,6 +653,90 @@ def check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     passing = sum(1 for e in current.values() for c in COLUMNS if e[c] == "pass")
     print(f"parity-check: ok against {args.base} ({len(current)} entries, {passing} column passes)")
+
+
+# --- uncommitted -------------------------------------------------------------
+
+
+def committed_service(rev: str, directory: Path, service: str) -> dict[str, dict]:
+    """The rows of one service's file committed at rev; none when rev has no
+    such file."""
+    relative = f"{directory.resolve().relative_to(ROOT).as_posix()}/{service}.json"
+    listed = git("ls-tree", "--name-only", f"{rev}^{{tree}}", "--", relative)
+    if listed.returncode != 0:
+        raise SystemExit(f"uncommitted: cannot list {rev}: {listed.stderr.strip()}")
+    if not listed.stdout.strip():
+        return {}
+    return parse_service_ledger(service, git_show(rev, relative), f"{rev}:{relative}")
+
+
+def gostack_value(rows: dict[str, dict], nodeid: str) -> str:
+    if nodeid not in rows:
+        return "missing"
+    value = rows[nodeid]["gostack"]
+    return "null" if value is None else value
+
+
+def uncommitted(args: argparse.Namespace) -> None:
+    """Fail when the gostack column a run wrote into the working tree differs
+    from the ledger committed at --rev, for the services the run selected."""
+    selected = sorted({name for name in args.services.split(",") if name})
+    for service in selected:
+        test_dir(service)
+    refuse_legacy(args.ledger, LEGACY_LEDGER)
+    files = service_files(args.ledger, ".json")
+    differences = []
+    for service in selected:
+        committed = committed_service(args.rev, args.ledger, service)
+        path = files.get(service)
+        observed = parse_service_ledger(service, path.read_text(encoding="utf-8"), str(path)) if path else {}
+        for nodeid in sorted(committed.keys() | observed.keys()):
+            before, after = gostack_value(committed, nodeid), gostack_value(observed, nodeid)
+            if before != after:
+                differences.append(f"  {nodeid}: committed {before}, observed {after}")
+    if differences:
+        print(
+            f"parity: the gostack column this run observed differs from the ledger committed at {args.rev} "
+            f"in {len(differences)} row(s):",
+            file=sys.stderr,
+        )
+        print("\n".join(differences), file=sys.stderr)
+        print(
+            "Commit the ledger this run wrote (parity/ledger/ in the parity artifact, or `make parity` "
+            "locally): the committed ledger is what the ratchet protects. A test whose result changes "
+            "from run to run is excluded with a reason and demoted, not left to flap.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    print(f"parity: the gostack column of {', '.join(selected) or 'no service'} matches the ledger committed at {args.rev}")
+
+
+# --- merge-parent ------------------------------------------------------------
+
+
+def merge_parent(args: argparse.Namespace) -> None:
+    """Print HEAD's first parent when HEAD is the merge of the pull request
+    head into its base, as GitHub's merge ref (refs/pull/N/merge) is: exactly
+    two parents, the second being --head, and HEAD not --head itself. Anything
+    else fails, so a run never falls back to comparing the head alone."""
+    shown = git("rev-list", "--parents", "-n", "1", "HEAD")
+    if shown.returncode != 0:
+        raise SystemExit(f"merge-parent: cannot read HEAD: {shown.stderr.strip()}")
+    head, *parents = shown.stdout.split()
+    want = git("rev-parse", "--verify", "--quiet", f"{args.head}^{{commit}}") if args.head and not args.head.startswith("-") else None
+    if want is None or want.returncode != 0:
+        raise SystemExit(f"merge-parent: the pull request head {args.head!r} is not a commit in this checkout")
+    pr_head = want.stdout.strip()
+    if head == pr_head:
+        raise SystemExit(f"merge-parent: HEAD is the pull request head {pr_head}, not GitHub's merge of it into the base")
+    if len(parents) != 2:
+        raise SystemExit(
+            f"merge-parent: HEAD {head} has {len(parents)} parent(s), not 2: it is not GitHub's merge of the pull request "
+            "into its base. GitHub makes no merge ref for a pull request that cannot merge; resolve the conflict."
+        )
+    if parents[1] != pr_head:
+        raise SystemExit(f"merge-parent: HEAD {head} merges {parents[1]}, not the pull request head {pr_head}")
+    print(parents[0])
 
 
 # --- prune -----------------------------------------------------------------
@@ -662,7 +811,7 @@ def prune(args: argparse.Namespace) -> None:
     passing = [nodeid for nodeid in stale if ledger[nodeid]["gostack"] == "pass"]
     if passing:
         demotions = load_demotions(args.demotions)
-        reason = f"gone upstream at {pinned_localstack_sha()}"
+        reason = f"{GONE_UPSTREAM} at {pinned_localstack_sha()}"
         demotions.update(dict.fromkeys(passing, reason))
         write_demotions(args.demotions, demotions)
     for nodeid in stale:
@@ -674,15 +823,22 @@ def prune(args: argparse.Namespace) -> None:
 # --- services --------------------------------------------------------------
 
 
+# What a line of Go that only opens or closes a block, a call or a list is
+# made of: `}`, `)`, `},`, `})`, with the whitespace around them.
+BRACKETS = "{}()[],; \t"
+
+
 def registration_services(diff: str, names: set[str]) -> set[str] | None:
     """The services a `git diff -U0` of REGISTRATION_FILE changes: every service
     in names that an added or removed line names as a word, outside a `//`
     comment. None when a changed line of code names no service, so the change
-    cannot be attributed line by line. A change to comments or blank lines
-    alone names nothing and changes nothing."""
+    cannot be attributed line by line. Lines that are blank, comments or only
+    brackets name nothing and select nothing: a change to comments or blank
+    lines alone changes nothing. Brackets alone can move code between blocks,
+    so a diff whose only code is brackets cannot be attributed either."""
     pattern = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(names)) + r")\b") if names else None
     found: set[str] = set()
-    changed = False
+    changed = brackets = False
     for line in diff.splitlines():
         if line.startswith(("+++", "---")) or not line.startswith(("+", "-")):
             continue
@@ -692,13 +848,18 @@ def registration_services(diff: str, names: set[str]) -> set[str] | None:
         code = line[1:].split("//", 1)[0]
         if not code.strip():
             continue
+        if not code.strip(BRACKETS):
+            brackets = True
+            continue
         named = set(pattern.findall(code)) if pattern else set()
         if not named:
             return None
         found |= named
     # The path list says the file changed; a diff without a changed line
     # disagrees, so nothing is attributed.
-    return found if changed else None
+    if not changed or (brackets and not found):
+        return None
+    return found
 
 
 def registration_diff(revisions: str) -> str | None:
@@ -730,24 +891,34 @@ def parity_file_service(path: str) -> str | None:
 
 
 def own_service(path: str) -> str | None:
-    """The service a path under internal/service/<svc>/ belongs to, when <svc>
-    is in TEST_DIRS. A file directly under internal/service/, or a directory
-    there that names no service, is shared."""
-    if not path.startswith(SERVICE_DIR):
-        return None
-    service, slash, _ = path[len(SERVICE_DIR) :].partition("/")
-    return service if slash and service in TEST_DIRS else None
+    """The service a path under internal/service/<svc>/ or internal/api/<svc>/
+    belongs to, when <svc> is in TEST_DIRS. A file directly under either
+    directory, or a directory there that names no service, is shared. So is
+    internal/api/<svc>/ while internal/service/<svc>/ is not in the tree: a
+    generated package no service uses yet would otherwise select a service
+    the image does not serve."""
+    for directory in OWN_DIRS:
+        if path.startswith(directory):
+            service, slash, _ = path[len(directory) :].partition("/")
+            if not slash or service not in TEST_DIRS:
+                return None
+            return service if directory == SERVICE_DIR or service in service_dirs() else None
+    return None
 
 
-def with_callers(services: set[str]) -> set[str]:
-    """services and every service that calls one of them in this process,
-    following IN_PROCESS_CALLS to its end."""
+def with_dependents(services: set[str], known: set[str]) -> set[str]:
+    """services and every service whose tests depend on one of them, following
+    DEPENDS_ON to its end. A dependency of EVERY_SERVICE adds every known
+    service."""
     selected = set(services)
     while True:
-        callers = {caller for caller, callees in IN_PROCESS_CALLS.items() if selected.intersection(callees)}
-        if callers <= selected:
+        dependents: set[str] = set()
+        for service, dependencies in DEPENDS_ON.items():
+            if selected.intersection(dependencies):
+                dependents |= set(known) if service == EVERY_SERVICE else {service}
+        if dependents <= selected:
             return selected
-        selected |= callers
+        selected |= dependents
 
 
 def no_image_effect(path: str) -> bool:
@@ -759,12 +930,12 @@ def no_image_effect(path: str) -> bool:
 def affected_services(paths: list[str], known: set[str], registration: set[str] | None = None) -> set[str]:
     """The services that a change to paths can affect. Fail-safe: a path
     selects every known service unless it is
-    - under internal/service/<svc>/: <svc> and the services that call it in
-      process (IN_PROCESS_CALLS);
+    - under internal/service/<svc>/ or internal/api/<svc>/: <svc> and the
+      services whose tests depend on it (DEPENDS_ON);
     - parity/ledger/<svc>.json or parity/exclusions/<svc>.yaml: <svc>;
     - REGISTRATION_FILE, when registration holds the services its changed
-      lines name (registration_services): those and their callers. None means
-      the change could not be attributed;
+      lines name (registration_services): those and their dependents. None
+      means the change could not be attributed;
     - in NO_IMAGE_EFFECT or another workflow than parity.yml: nothing."""
     code: set[str] = set()
     files: set[str] = set()
@@ -780,7 +951,7 @@ def affected_services(paths: list[str], known: set[str], registration: set[str] 
             code |= registration
         elif not no_image_effect(path):
             shared = True
-    affected = with_callers(code) | files
+    affected = with_dependents(code, known) | files
     return set(known) | affected if shared else affected
 
 
@@ -873,7 +1044,7 @@ def main() -> None:
     parser.add_argument("--exclusions", type=Path, default=EXCLUSIONS, help="the per-service exclusions directory")
     parser.add_argument("--docs", type=Path, default=DOCS)
     parser.add_argument("--demotions", type=Path, default=DEMOTIONS, help="the reviewed demotions file")
-    sub =parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True)
 
     merge_parser = sub.add_parser("merge", help="merge a run into the ledger")
     merge_parser.add_argument("--column", choices=COLUMNS, required=True)
@@ -886,6 +1057,15 @@ def main() -> None:
     check_parser.add_argument("--collected", type=Path, default=COLLECTED, help="cached collection from prune")
     check_parser.set_defaults(func=check)
 
+    uncommitted_parser = sub.add_parser("uncommitted", help="fail when a run's gostack column differs from the committed ledger")
+    uncommitted_parser.add_argument("--services", required=True, help="comma separated services the run selected")
+    uncommitted_parser.add_argument("--rev", default="HEAD", help="git revision holding the committed ledger")
+    uncommitted_parser.set_defaults(func=uncommitted)
+
+    merge_parent_parser = sub.add_parser("merge-parent", help="print HEAD^1 when HEAD is GitHub's merge of --head into its base")
+    merge_parent_parser.add_argument("--head", required=True, help="the pull request head sha")
+    merge_parent_parser.set_defaults(func=merge_parent)
+
     prune_parser = sub.add_parser("prune", help="remove ledger rows whose test no longer exists upstream")
     prune_parser.add_argument("--localstack", type=Path, help="the pinned LocalStack checkout (default: where parity/run.sh looks)")
     prune_parser.add_argument("--dry-run", action="store_true", help="print the rows, change nothing")
@@ -895,7 +1075,7 @@ def main() -> None:
 
     services_parser = sub.add_parser("services", help="print the ledger's services, or those a change affects")
     services_parser.add_argument("--changed", action="store_true", help="read NUL-separated changed paths from stdin")
-    services_parser.add_argument("--range", help="git revisions A...B of the change; a change to cmd/gostack/services.go then selects the services its changed lines name")
+    services_parser.add_argument("--range", help="git revisions A..B of the change; a change to cmd/gostack/services.go then selects the services its changed lines name")
     services_parser.set_defaults(func=services)
 
     dirs_parser = sub.add_parser("test-dirs", help="print the LocalStack test path of each service")

@@ -94,8 +94,11 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   gostack pass it removes there as gone upstream at the pinned LocalStack sha.
 - The localstack column is not under this rule: only its pass to fail fails
   CI.
-- `parity.yml` compares a pull request with the merge base of its base and
-  head. `ci.yml` checks out the merge ref and compares it with the base tip.
+- `parity.yml` and `ci.yml` both check out GitHub's merge ref of a pull
+  request and compare it with `HEAD^1`, the base it was merged into
+  (`ledger.py merge-parent`). `parity.yml` builds and tests that merged tree,
+  and fails when the gostack column it observed for the selected services
+  differs from the ledger committed there (`ledger.py uncommitted`).
 - A nodeid's service comes from its test directory (`TEST_DIRS` in
   `parity/ledger.py`). A nodeid in no service's directory, or in another
   service's file, is an error. `ledger.py check` reads the base in either

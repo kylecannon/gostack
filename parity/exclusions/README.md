@@ -27,4 +27,11 @@ Reasons in use:
 | `runner-docker` | Needs Docker from inside the runner. |
 
 Adding an entry for a test that passes is a deferral, not a fix. parity-check
-warns when a passing test turns into an exclusion.
+fails when a test that passes in the gostack column turns into an exclusion,
+unless `parity/demotions.yaml` lists it.
+
+A test whose result changes from run to run is excluded here with a reason
+and demoted in `parity/demotions.yaml`, in the same change. Its row is never
+left to flap: `parity.yml` fails a pull request whose committed gostack column
+differs from what its run observed, so a flapping row fails unrelated pull
+requests.
