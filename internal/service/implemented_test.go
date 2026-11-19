@@ -173,6 +173,38 @@ type deepDeclared struct {
 	Unimplemented
 }
 
+// selfEmbedding embeds a pointer to its own type, which Go allows, and
+// overrides Alpha; selfEmbeddingPlain overrides nothing. A walk down the
+// embedded fields that did not note the types it has been through would never
+// end.
+type selfEmbedding struct {
+	*selfEmbedding //nolint:unused // nothing reads it, the cycle is only walked
+	Unimplemented
+}
+
+func (*selfEmbedding) Alpha(context.Context) error { return nil }
+
+type selfEmbeddingPlain struct {
+	*selfEmbeddingPlain //nolint:unused // see selfEmbedding
+	Unimplemented
+}
+
+// cycleA and cycleB embed each other, by pointer; cycleB embeds Unimplemented
+// and overrides Delta, so the walk from cycleA goes round the pair.
+type cycleA struct{ *cycleB }
+
+type cycleB struct {
+	*cycleA //nolint:unused // see selfEmbedding
+	Unimplemented
+}
+
+func (*cycleB) Delta(context.Context) error { return nil }
+
+// cycleDeep reaches the cycle of selfEmbedding two embedded fields down.
+type cycleWrap struct{ *selfEmbedding }
+
+type cycleDeep struct{ cycleWrap }
+
 func Test_Implemented(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -209,6 +241,10 @@ func Test_Implemented(t *testing.T) {
 		{name: "interface embedded, a method declared by value, by pointer", handler: &valueDecorator{}, known: false},
 		{name: "generic provider", handler: &genericProvider[int]{}, want: []string{alpha}, known: true},
 		{name: "not a handler", handler: struct{}{}, known: false},
+		{name: "a type that embeds itself", handler: &selfEmbedding{}, want: []string{alpha}, known: true},
+		{name: "a type that embeds itself, no override", handler: &selfEmbeddingPlain{}, want: []string{}, known: true},
+		{name: "a pair of types that embed each other", handler: &cycleA{}, want: []string{delta}, known: true},
+		{name: "a cycle two fields down", handler: &cycleDeep{}, want: []string{alpha}, known: true},
 	}
 
 	for _, tt := range tests {
@@ -219,6 +255,114 @@ func Test_Implemented(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// Test_Implemented_oracle checks the types that embed themselves, and a few
+// of the shapes above, against reflect: an instance with every embedded field
+// allocated, each operation called, and the operations that answer nil are the
+// implemented ones. Method resolution on the instance is Go's own, so it is
+// the authority.
+func Test_Implemented_oracle(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler any
+	}{
+		{name: "a type that embeds itself", handler: &selfEmbedding{}},
+		{name: "a type that embeds itself, no override", handler: &selfEmbeddingPlain{}},
+		{name: "a pair of types that embed each other", handler: &cycleA{}},
+		{name: "a cycle two fields down", handler: &cycleDeep{}},
+		{name: "pointer receivers", handler: &pointerProvider{}},
+		{name: "through a helper", handler: &nestedProvider{}},
+		{name: "two fields at different depths", handler: &ambiguousProvider{}},
+		{name: "two embeds, the shallower wins", handler: &depthProvider{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want, wantKnown := reflectOracle(tt.handler, fiveOperations)
+			require.True(t, wantKnown)
+
+			got, known := service.Implemented(tt.handler, fiveOperations, fiveMethods)
+			require.True(t, known)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+// allocate returns a value of type t whose embedded fields, to a depth of
+// six, point to values of their own: a type that embeds itself gets a chain of
+// instances that ends in a nil pointer.
+func allocate(t reflect.Type, depth int) reflect.Value {
+	v := reflect.New(t).Elem()
+	if depth > 6 || t.Kind() != reflect.Struct {
+		return v
+	}
+
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if !field.Anonymous {
+			continue
+		}
+
+		slot := reflect.NewAt(field.Type, v.Field(i).Addr().UnsafePointer()).Elem()
+
+		switch field.Type.Kind() {
+		case reflect.Pointer:
+			p := reflect.New(field.Type.Elem())
+			p.Elem().Set(allocate(field.Type.Elem(), depth+1))
+			slot.Set(p)
+		case reflect.Struct:
+			slot.Set(allocate(field.Type, depth+1))
+		default:
+		}
+	}
+
+	return v
+}
+
+// reflectOracle calls every operation of an allocated handler and reports the
+// ones that answer nil as the implemented ones. It reports not known when a
+// method is missing or panics.
+func reflectOracle(handler any, operations []string) (implemented []string, known bool) {
+	t := reflect.TypeOf(handler)
+
+	var v reflect.Value
+
+	if t.Kind() == reflect.Pointer {
+		p := reflect.New(t.Elem())
+		p.Elem().Set(allocate(t.Elem(), 0))
+		v = p
+	} else {
+		v = allocate(t, 0)
+	}
+
+	implemented = []string{}
+
+	for _, operation := range operations {
+		m := v.MethodByName(operation)
+		if !m.IsValid() {
+			return nil, false
+		}
+
+		var out []reflect.Value
+
+		panicked := func() (p bool) {
+			defer func() { p = recover() != nil }()
+
+			out = m.Call([]reflect.Value{reflect.ValueOf(context.Background())})
+
+			return false
+		}()
+		if panicked {
+			return nil, false
+		}
+
+		if out[0].IsNil() {
+			implemented = append(implemented, operation)
+		}
+	}
+
+	return implemented, true
 }
 
 // Test_Implemented_lookup checks that every method is found through the

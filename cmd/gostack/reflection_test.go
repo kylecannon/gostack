@@ -14,10 +14,19 @@ import (
 const mainSymbol = "main.main"
 
 // prunedMethods are exported methods of types that are in the binary, that no
-// code reached from main calls, and that no interface the binary uses names.
-// The linker drops such a method unless some reachable code looks a method up
-// by a name it cannot see at link time, which keeps every exported method of
-// every type that is converted to an interface.
+// code reached from main calls, and that no interface declares. The linker
+// drops such a method unless some reachable code looks a method up by a name
+// it cannot see at link time, which keeps every exported method of every type
+// that is converted to an interface.
+//
+// "No interface declares" is what makes a method a sentinel: a method that an
+// interface of the standard library names is kept as soon as a type is
+// converted to that interface and the interface's method is called, with no
+// reflection at all. bytes.(*Buffer).UnreadRune was one, through
+// io.RuneScanner, and a fmt.Sscanf anywhere in the binary kept it. Neither of
+// these is named by any interface declaration in the standard library
+// (go doc bytes.Buffer.Truncate, math/big.Int.ModSqrt; grep of GOROOT/src for
+// an interface method of either name finds none).
 //
 // They are rarely used methods, of two standard packages that are in the
 // binary through other dependencies: a dependency that starts calling one is
@@ -25,7 +34,7 @@ const mainSymbol = "main.main"
 // Two packages, so that one dependency changing does not blind the check: any
 // one of them present fails it.
 var prunedMethods = []string{
-	"bytes.(*Buffer).UnreadRune",
+	"bytes.(*Buffer).Truncate",
 	"math/big.(*Int).ModSqrt",
 }
 
