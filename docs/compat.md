@@ -64,7 +64,7 @@ change applies from the next one.
 
 | Variable | Effect |
 |---|---|
-| `DYNAMODB_ERROR_PROBABILITY` | A number from 0 to 1: the chance that an item read or write (`GetItem`, `Query`, `Scan`, `BatchGetItem`, `TransactGetItems`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `TransactWriteItems`) answers `400 ProvisionedThroughputExceededException`. One draw per request, as in LocalStack. |
+| `DYNAMODB_ERROR_PROBABILITY` | A number from 0 to 1: the chance that an item read or write (`GetItem`, `Query`, `Scan`, `BatchGetItem`, `TransactGetItems`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `TransactWriteItems`) answers `400 ProvisionedThroughputExceededException`. One draw per request, except `BatchWriteItem`, which draws once per write request and returns each throttled one in `UnprocessedItems`; LocalStack draws the same way. |
 | `DYNAMODB_READ_ERROR_PROBABILITY`, `DYNAMODB_WRITE_ERROR_PROBABILITY` | The same for the reads alone or the writes alone, tested before the general one. |
 | `DYNAMODB_SHARE_DB` | An integer; any but `0` puts every account's and region's tables in one namespace, as DynamoDB Local's shared database does. ARNs still carry the caller's account and region. |
 
@@ -230,6 +230,22 @@ caller's account and region, as LocalStack does.
 - A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
   is not `ALL`: LocalStack's message names the index `id-index` whatever it is
   called; gostack names the index of the request. No snapshot pins the text.
+
+## DynamoDB batches and transactions
+
+The LocalStack column is the LocalStack 8b9a79f image, probed in SQ-293 and
+SQ-302 (`verification/SQ-293`, `verification/SQ-302`).
+
+| Behavior | AWS | LocalStack | gostack |
+|---|---|---|---|
+| Consumed capacity of a transaction | The developer guide's rule for transactions: each action costs twice what it costs alone, two write units per 1 KB written and two read units per 4 KB checked | DynamoDB Local collapses equal per-action amounts, so several equal writes can report less than twice their units | Twice each action's own units, index units included, summed per table (`transactCapacity`) |
+| `BatchWriteItem` with no `RequestItems`, `TransactWriteItems` or `TransactGetItems` with no `TransactItems` | `400 ValidationException`: the member is required | `500 InternalError` from a Python `NoneType` error (`BatchGetItem` with no `RequestItems` answers 400) | `400 ValidationException`: `BatchWriteItem cannot have a null or no requests set`, or `Value null at 'transactItems' failed to satisfy constraint: Member must not be null` |
+| A `BatchWriteItem` request throttled by `DYNAMODB_*ERROR_PROBABILITY` | An item in `UnprocessedItems` was not written | Returned in `UnprocessedItems` and written anyway: the provider still forwards the whole batch | Returned in `UnprocessedItems` and not written |
+| `{"N": "1"}` and `{"N": "1.0"}` as keys of one table | One number: the data types page trims leading and trailing zeroes, so they name one item | `BatchWriteItem` and `TransactGetItems` call them duplicates; `TransactWriteItems` and `BatchGetItem` treat them as two items and answer 200 | One key everywhere: each operation reports its duplicate error |
+| A `ClientRequestToken` reused more than 10 minutes after its transaction | The `TransactWriteItems` reference: after 10 minutes the request runs as a new one | Answers 200 and writes nothing, for the same request or a different one | Runs as a new transaction and writes |
+| A transaction that repeats an item and also has a failing condition | No recorded answer | The duplicate error, unless one of the repeated actions has a failing condition: then `TransactionCanceledException` with reasons. A syntax error in any action comes before either. | The duplicate error whenever an item repeats; syntax errors still come first. Matching the image would need the duplicate check to wait for condition evaluation (SQ-302 ruling). |
+| A reused `ClientRequestToken` on a different request that also fails validation | No recorded answer | Checks the values and expression syntax of every action, then the token (`IdempotentParameterMismatchException`), then table names, lookup, keys and duplicates | Checks each action in order, names, lookup and keys included, before the token, so a missing table or a bad key answers its own error first. Matching needs the validation split in two passes (SQ-302 ruling). |
+| Order of `ConsumedCapacity` and of the first error across tables in a batch | No recorded answer | Java hash order of the table names; two names in one hash bucket keep the request's order | Java hash order; two names in one bucket go in sorted order, because `RequestItems` decodes into a Go map that keeps no request order |
 
 ## Accepted LocalStack-only behavior
 
