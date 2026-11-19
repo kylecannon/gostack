@@ -69,8 +69,8 @@ type lanes struct {
 	// idle, when not nil, is closed when queued reaches zero.
 	idle chan struct{}
 	// unbounded is set when the shutdown begins: no delivery waits any more.
-	// closing is set when Close begins, closed when it stops waiting.
-	unbounded, closing, closed bool
+	// closed is set when Close begins.
+	unbounded, closed bool
 
 	dropped atomic.Int64
 	log     dropLog
@@ -129,14 +129,12 @@ func mayWait(j *job) bool {
 }
 
 // add puts j at the tail of the lane of its destination. It is the one place a
-// delivery is refused: a publisher's once Close has begun, any once Close has
-// stopped waiting, and one that finds its lane full and may not wait. A
-// delivery refused at Close is dropped; one refused for room fails, to its
-// dead-letter queue when it has one. Each is counted and logged. add reports
-// whether j is
-// in the lane, admitted or waiting.
+// delivery is refused: any once Close has begun, and one that finds its lane
+// full and may not wait. A delivery refused at Close is dropped; one refused
+// for room fails, to its dead-letter queue when it has one. Each is counted
+// and logged. add reports whether j is in the lane, admitted or waiting.
 func (ls *lanes) add(j *job) bool {
-	if ls.closed || !j.dead && ls.closing {
+	if ls.closed {
 		ls.drop(j, reasonClosing)
 
 		return false
@@ -530,31 +528,14 @@ func (ls *lanes) awaitIdle(ctx context.Context) {
 	}
 }
 
-// Close stops delivery. Every delivery still in a lane is accounted for once:
-// one that cannot be made any more is counted in Dropped and logged.
-//
-// From the moment Close begins, a publish's deliveries are refused, and no
-// delivery waits for room. Close then waits, until ctx ends, for the
-// deliveries still in a lane, so a publish that was acknowledged reaches its
-// queue on a clean stop. It does not wait when the client was stopped
-// already, as a shutdown's drain of the in-process calls stops it at its
-// deadline: a head that was then queued in the client is never answered, and
-// is cut here instead. Last, Close stops the client and cuts what is left.
-func (p *Provider) Close(ctx context.Context) {
+// Close stops delivery at once, without waiting: the shutdown's drain of the
+// in-process calls has already made the deliveries it had time for, and
+// stopped or cut the client, so nothing sent now could reach a queue. From
+// here every delivery is refused. Each delivery still in a lane is accounted
+// for once, counted in Dropped and logged: a head the client dropped without
+// an answer, or never got, is cut here.
+func (p *Provider) Close(context.Context) {
 	ls := &p.lanes
-
-	ls.mu.Lock()
-	ls.closing = true
-	ls.unbound()
-	// A head with SNS while the client is idle is one the client dropped
-	// without answering: the client answers each head before its worker
-	// leaves, and SNS hands it heads under mu.
-	stopped := ls.inflight > 0 && p.client.Idle()
-	ls.mu.Unlock()
-
-	if !stopped {
-		ls.awaitIdle(ctx)
-	}
 
 	ls.mu.Lock()
 	ls.closed = true

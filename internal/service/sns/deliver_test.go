@@ -294,9 +294,11 @@ func Test_Provider_Publish_slowQueue(t *testing.T) {
 	assert.Equal(t, "m", slow.await(1)[0].Body)
 }
 
-// Test_Provider_Close_waits stops SNS with one delivery held and one queued
-// behind it: Close waits for both, and both messages reach their queue.
-func Test_Provider_Close_waits(t *testing.T) {
+// Test_Provider_Close_doesNotWait stops SNS with one delivery held and one
+// queued behind it and a context that never ends: Close does not wait, since
+// the shutdown's drain of the in-process calls ran before it, and both
+// deliveries are dropped and counted once.
+func Test_Provider_Close_doesNotWait(t *testing.T) {
 	g := newGate("/q")
 	s := newStack(t, g.wrap)
 	topic := s.createTopic(paramName, "t")
@@ -307,26 +309,12 @@ func Test_Provider_Close_waits(t *testing.T) {
 	s.publish(paramTopicArn, topic, paramMessage, "n")
 	g.awaitEntered(t)
 
-	closed := make(chan struct{})
+	s.sns.Close(context.WithoutCancel(t.Context()))
 
-	go func() {
-		s.sns.Close(context.WithoutCancel(t.Context()))
-		close(closed)
-	}()
-
-	select {
-	case <-closed:
-		t.Fatal("Close returned with a delivery pending")
-	case <-time.After(50 * time.Millisecond):
-	}
+	assert.Equal(t, int64(2), s.sns.Dropped())
 
 	close(g.open)
-	<-closed
-
-	msgs := q.await(2)
-	assert.Equal(t, "m", msgs[0].Body)
-	assert.Equal(t, "n", msgs[1].Body)
-	assert.Zero(t, s.sns.Dropped())
+	assert.Empty(t, q.receive(0))
 }
 
 // Test_Provider_Close_deadline stops SNS with one delivery held and one queued

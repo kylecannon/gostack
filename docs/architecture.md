@@ -531,19 +531,21 @@ time, in the order they entered its lane.
   lane. When the client's queue is full, the lane waits for the next answer.
 - **Shutdown.** The gateway's `Shutdown` call lifts the bound: every waiting
   delivery is admitted and none waits from then on, so the publishes still in
-  flight are answered and their deliveries are made in the drain. `Close`
-  refuses later publishes, each counted and logged as dropped, waits until
-  its deadline for the lanes to empty, then stops the client and counts what
-  is left. A call the client dropped without an answer, as a drain of the
-  in-process calls does at its deadline, is found at once (SNS holds a head
-  while the client is idle), so `Close` does not wait for it.
+  flight are answered and their deliveries are made in the drain. A lane
+  keeps a call in the client while it has work, and a dead-letter delivery
+  never fails over to another, so the chain of calls a lane queues from an
+  answer is finite and the drain of the in-process calls waits for it. Once
+  that drain cuts the client, a refused head parks or is cut and queues
+  nothing more. `Close` does not wait: it refuses every later delivery,
+  stops the client and counts each delivery still in a lane once, as
+  dropped, and logs the counts.
 - **Other transports.** A lane meets its transport in one function,
   `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
   destination's head would be sent on a goroutine that lives for that send,
   with its own timeout and retries, and answer the same way. The bound, the
   order and the deadline stay as they are. `inflight` must go on counting
-  only the in-process client's calls, since parking and `Close`'s test for a
-  stopped client read it, and `Close` waits for the HTTP sends itself.
+  only the in-process client's calls, since a refused head parks or is cut
+  by it.
 
 ### Body store (`internal/blob`)
 
