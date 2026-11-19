@@ -135,6 +135,60 @@
 // pull request workflow measures this way, so drift over the job lands on both
 // sides.
 //
+// # Errors and dead targets
+//
+// A run is not a measurement when its target was not working. The orchestrator
+// checks, after every run of a cell, idle run and agentic workload, that the
+// target container is still running (`docker inspect`), and fails the run when
+// it is not (errTargetDied). A cell run that fails is left out of the figures
+// and named in the cell's failed_runs, so Runs counts the completed ones and a
+// side never ends with fewer runs than the other without a record of it. A cell
+// that has no completed run has no figures and a problem; the report lists
+// every one under "Problems". An operation that reported errors, and the
+// cycles of an agentic workload that errored, are recorded the same way, with
+// their counts. Their runs stay in the figures.
+//
+// `bench compare` reads those records as a second rule beside the metric
+// limits (problems.go). It fails when the head has a problem the base does not:
+// an operation with errors in the head and none in the base, failed runs in a
+// cell the base ran clean, a cell with no completed run where the base has
+// runs, a measurement the head could not take (startup, idle, an agentic
+// workload) of a kind the base did not also fail to take (the kind is the text before the first ":" of its
+// line), and any of these in a cell only the head has. A head cell the base
+// does not have is checked: it fails when it has a failed run, no completed
+// run or operation errors, and stays under "Not compared" when clean. A base
+// cell with no completed run does not hide the head's errors there: they fail
+// unless the base's problem in that cell was of the same kind. A problem on
+// both sides is listed and does not fail, with two exceptions: the head has
+// more failed runs in a cell than the base, or its errors in a cell and
+// operation are at least 10 and more than 10 times the base's (the agentic
+// cycles follow the same rule). A head that errors where the base has none
+// fails at one error. That is deliberate: the committed results hold 0 errors
+// in over 900,000 operations, a stray error costs one rerun, and a floor would
+// let a rare race through. Every row names the cell, the operation and both
+// counts.
+//
+// A gated target, or a cell with a completed run, that the base has and the
+// head lacks fails as "missing from the head", naming it. A cell or target
+// missing on both sides, a target that is not gated, and a cell the head was
+// not asked to measure (a different profile, a service the head's settings
+// leave out, or a cell the head's own matrix no longer has, listed as "removed
+// from the matrix") do not. A cell with no completed run in a result that
+// predates failed_runs counts as having failed every run that result's reps
+// asked for. Cells with a different number of runs are listed. A row
+// of a regression or a change computed from fewer runs than the result asked
+// for says so, such as "head 4 of 5 runs", because the overlap rule was sized
+// for the full count. The committed results hold no operation error and no
+// problem, LocalStack's included, so any problem is new. The accepted list does
+// not apply to it: a run that errors is fixed, not accepted. LocalStack never
+// gates.
+//
+// Every container the run starts is removed with `docker rm -f -v`, so the
+// anonymous volume the image declares goes with it. `-out` and `-base-out` are
+// compared as absolute paths with their links resolved (`/tmp/x` and
+// `/private/tmp/x` are one directory), so one directory spelled two ways is
+// refused.
+//
 // `-accepted bench/accepted.yaml` on compare, run and gate holds the regressions
 // a reviewer accepted (accepted.go). An entry applies while the head's commit
 // holds its commit and the base's does not; compare reads both commits from the
@@ -145,5 +199,7 @@
 //
 // Schema 3. A cell holds its operations as a map from name to latency spread.
 // loadReport converts a schema 2 file, whose cells had send, receive and delete
-// fields and ids with no service, so the committed results still compare.
+// fields and ids with no service, so the committed results still compare. A
+// cell's failed_runs, the repetitions that did not complete, was added without
+// a version bump: no field changed its meaning, and a file without it has none.
 package main

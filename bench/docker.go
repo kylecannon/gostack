@@ -280,7 +280,7 @@ func (i *instance) stop(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
 	defer cancel()
 
-	_, _ = dockerOutput(ctx, "rm", "-f", i.name)
+	_, _ = dockerOutput(ctx, removeArgs(i.name)...)
 
 	select {
 	case <-i.exited:
@@ -299,5 +299,32 @@ func removeContainer(ctx context.Context, name string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
 	defer cancel()
 
-	_, _ = dockerOutput(ctx, "rm", "-f", name)
+	_, _ = dockerOutput(ctx, removeArgs(name)...)
+}
+
+// removeArgs is the `docker rm` that ends a container: forced, and with -v so the
+// anonymous volume the image declares goes with it. Without -v every target
+// container leaves one volume behind (230 in one quick run).
+func removeArgs(name string) []string {
+	return []string{"rm", "-f", "-v", name}
+}
+
+// errTargetDied reports a target container that was not running when a run of
+// a measurement ended: it exited, or was removed, during the run.
+var errTargetDied = errors.New("the target container died during the run")
+
+// alive returns errTargetDied unless the container is still running. A run
+// against a target that went away has numbers from before and errors from after
+// it went, so the run is not a measurement of the image.
+func (i *instance) alive(ctx context.Context) error {
+	out, err := dockerOutput(ctx, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", i.name)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", errTargetDied, i.name, err)
+	}
+
+	if state := strings.TrimSpace(string(out)); !strings.HasPrefix(state, "running ") {
+		return fmt.Errorf("%w: %s is %s (status, exit code)", errTargetDied, i.name, state)
+	}
+
+	return nil
 }
