@@ -1,12 +1,12 @@
 package persist
 
 import (
+	"context"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -177,41 +177,85 @@ func Test_Assets_FailedStateIsBounded(t *testing.T) {
 		"only removals of bodies a saved snapshot may name wait, for the restart")
 }
 
-// openFiles counts this process's open descriptors.
-func openFiles(t *testing.T) int {
+// handleErrs stats each descriptor a holds, the root on the assets directory
+// and, where syncfs is used, the directory kept open for it, and returns their
+// errors. It asks the handles rather than count the process's descriptors,
+// which the finalizers of other tests' handles change at any time.
+func handleErrs(a *Assets) []error {
+	_, err := a.root.Stat(".")
+	errs := []error{err}
+
+	if a.fsDir != nil {
+		_, err = a.fsDir.Stat()
+		errs = append(errs, err)
+	}
+
+	return errs
+}
+
+func requireOpen(t *testing.T, a *Assets) {
 	t.Helper()
 
-	entries, err := os.ReadDir("/dev/fd")
-	require.NoError(t, err)
+	require.NoError(t, errors.Join(handleErrs(a)...), "the assets' descriptors are open")
+}
 
-	return len(entries)
+func requireClosed(t *testing.T, a *Assets) {
+	t.Helper()
+
+	for _, err := range handleErrs(a) {
+		require.ErrorIs(t, err, os.ErrClosed, "the assets' descriptors are closed")
+	}
 }
 
 // Test_Engine_Close_ReleasesAssets checks that Close releases what the assets
-// hold open: the root on the assets directory and, where syncfs is used, the
-// directory kept open for it (SQ-190 item 9).
+// hold open, and Stop does not, since the last flush of a shutdown comes after
+// it (SQ-190 item 9). A sync the save stopped waiting for keeps them until it
+// returns, so it never finds them closed and takes that for a lost write.
 func Test_Engine_Close_ReleasesAssets(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no /dev/fd")
-	}
+	t.Run("after the last flush", func(t *testing.T) {
+		e := New(quietConfig(t.TempDir(), time.Hour))
+		n := &namer{}
+		e.Register(syncService, n)
 
-	before := openFiles(t)
+		a, err := e.Assets(syncService)
+		require.NoError(t, err)
 
-	e := New(quietConfig(t.TempDir(), time.Hour))
-	n := &namer{}
-	e.Register(syncService, n)
+		n.add(commitAsset(t, a, "body"))
+		e.MarkDirty(syncService)
+		require.NoError(t, e.Stop(t.Context()))
+		requireOpen(t, a)
 
-	a, err := e.Assets(syncService)
-	require.NoError(t, err)
+		n.add(commitAsset(t, a, "late"))
+		e.MarkDirty(syncService)
+		require.NoError(t, e.Close(t.Context()))
+		requireClosed(t, a)
+	})
 
-	n.add(commitAsset(t, a, "body"))
-	e.MarkDirty(syncService)
-	require.NoError(t, e.Stop(t.Context()))
-	assert.Greater(t, openFiles(t), before, "the assets stay open after Stop, for the last flush")
+	t.Run("once an abandoned sync returns", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			e := New(quietConfig(t.TempDir(), time.Hour))
+			n := &namer{}
+			e.Register(syncService, n)
 
-	n.add(commitAsset(t, a, "late"))
-	e.MarkDirty(syncService)
-	require.NoError(t, e.Close(t.Context()))
+			a, err := e.Assets(syncService)
+			require.NoError(t, err)
 
-	assert.Equal(t, before, openFiles(t), "Close leaves no descriptor open")
+			_, release := gateFirstSync(a, nil)
+			defer release()
+
+			n.add(commitAsset(t, a, "body"))
+			e.MarkDirty(syncService)
+
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+
+			require.ErrorIs(t, e.Close(ctx), context.DeadlineExceeded)
+			requireOpen(t, a)
+
+			release()
+			synctest.Wait()
+			requireClosed(t, a)
+			assert.True(t, e.Enabled(syncService), "the sync did not fail")
+		})
+	})
 }
