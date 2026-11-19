@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"iter"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -264,15 +265,27 @@ func Test_Engine_FlushIsClassifiedByItsError(t *testing.T) {
 		assert.True(t, e.services["svc"].dirty)
 	})
 
-	t.Run("a flush that saved everything ends the run of failures", func(t *testing.T) {
+	t.Run("a flush that saved everything as its context ended ends the run of failures", func(t *testing.T) {
 		e := New(quietConfig(t.TempDir(), time.Hour))
+		ctx, cancel := context.WithCancel(t.Context())
+		c := &cancelsOnReferences{cancel: cancel}
+		e.Register("svc", c)
+
+		a, err := e.Assets("svc")
+		require.NoError(t, err)
+
+		c.add(commitAsset(t, a, "body"))
 		e.failures, e.lastFailure, e.retryAt = 3, "disk full", time.Now().Add(time.Hour)
+		e.MarkDirty("svc")
 
-		result := e.conclude(nil, 0, nil)
+		require.NoError(t, e.Flush(ctx))
+		require.Error(t, ctx.Err(), "the context ended after the rename")
 
-		assert.Equal(t, 3, result.recovered)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
 		assert.Zero(t, e.failures)
-		assert.True(t, e.retryAt.IsZero())
+		assert.True(t, e.retryAt.IsZero(), "no stale backoff is left")
 	})
 
 	t.Run("a cancelled save does not log removals as stuck", func(t *testing.T) {
@@ -309,6 +322,20 @@ func Test_Engine_FlushIsClassifiedByItsError(t *testing.T) {
 
 		assert.Contains(t, a.removed, old, "the removal waits for the next save")
 	})
+}
+
+// cancelsOnReferences is a namer that cancels a context when the engine reads
+// its references, which a save does after its rename.
+type cancelsOnReferences struct {
+	namer
+
+	cancel context.CancelFunc
+}
+
+func (c *cancelsOnReferences) References() iter.Seq[string] {
+	c.cancel()
+
+	return c.namer.References()
 }
 
 // Test_Engine_ZeroTimedSaveIsNotPreempt checks that the zero value of timedSave
