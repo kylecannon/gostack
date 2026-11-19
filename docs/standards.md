@@ -157,7 +157,11 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     the tables are seeded before a service is built; an entry for a service
     with neither fails, as does a registered service, service package or API
     package with no `TEST_DIRS` entry. Which service an in-process call
-    reaches and the `sts` entry are reviewed by hand. `Test_settingsFiles`
+    reaches and the `sts` entry are reviewed by hand. A service calls
+    another service only through `internal/inproc`: the test finds callers by
+    that import, so a call made another way (the gateway handler taken through
+    `Bind`, an HTTP request to the service's own port) is a dependency it
+    cannot see. `Test_settingsFiles`
     holds each `cmd/gostack/settings-<svc>.go` to one declaration, the
     function `<svc>Settings`, used only on a line of `services.go` that names
     the `<svc>` package. `make test` runs both and needs `python3`.
