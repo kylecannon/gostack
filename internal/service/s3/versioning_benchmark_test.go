@@ -44,7 +44,13 @@ var versionedBenchCells = []struct {
 func versionedBenchServer(b *testing.B, status string) *objectBenchServer {
 	b.Helper()
 
-	s := newObjectBenchServer(b)
+	return enableVersioning(b, newObjectBenchServer(b), status)
+}
+
+// enableVersioning gives the bucket of s the versioning status.
+func enableVersioning(b *testing.B, s *objectBenchServer, status string) *objectBenchServer {
+	b.Helper()
+
 	body := []byte(`<VersioningConfiguration><Status>` + status + `</Status></VersioningConfiguration>`)
 
 	got, _, err := s.send(b.Context(), http.MethodPut, "/bucket?versioning", body, nil)
@@ -175,39 +181,49 @@ func BenchmarkGetObjectByVersion(b *testing.B) {
 // versioning: a delete marker, and the removal of one version, which is a PUT
 // and a DELETE of the version it made per iteration.
 func BenchmarkDeleteObjectVersioned(b *testing.B) {
-	for _, kind := range []string{"marker", "version"} {
-		for _, workers := range benchConcurrency {
-			b.Run(fmt.Sprintf("delete=%s/concurrency=%d", kind, workers), func(b *testing.B) {
-				s := versionedBenchServer(b, "Enabled")
-				body := bytes.Repeat([]byte("x"), 1<<10)
+	for _, persisted := range persistRows {
+		for _, kind := range []string{"marker", "version"} {
+			for _, workers := range benchConcurrency {
+				name := persistName(persisted, fmt.Sprintf("delete=%s/concurrency=%d", kind, workers))
 
-				b.ReportAllocs()
-
-				for b.Loop() {
-					err := fanOut(workers, func(worker int) error {
-						target := fmt.Sprintf("/bucket/key-%d", worker)
-
-						if kind == "marker" {
-							got, _, err := s.send(b.Context(), http.MethodDelete, target, nil, nil)
-
-							return expectStatus("DELETE", got, http.StatusNoContent, err)
-						}
-
-						got, id, err := s.send(b.Context(), http.MethodPut, target, body, nil)
-
-						err = expectStatus("PUT", got, http.StatusOK, err)
-						if err != nil {
-							return err
-						}
-
-						got, _, err = s.send(b.Context(), http.MethodDelete, target+"?versionId="+id, nil, nil)
-
-						return expectStatus("DELETE", got, http.StatusNoContent, err)
-					})
-					require.NoError(b, err)
-				}
-			})
+				b.Run(name, func(b *testing.B) {
+					benchDeleteVersioned(b, serverFor(b, persisted), kind, workers)
+				})
+			}
 		}
+	}
+}
+
+func benchDeleteVersioned(b *testing.B, server *objectBenchServer, kind string, workers int) {
+	b.Helper()
+
+	s := enableVersioning(b, server, "Enabled")
+	body := bytes.Repeat([]byte("x"), 1<<10)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		err := fanOut(workers, func(worker int) error {
+			target := fmt.Sprintf("/bucket/key-%d", worker)
+
+			if kind == "marker" {
+				got, _, err := s.send(b.Context(), http.MethodDelete, target, nil, nil)
+
+				return expectStatus("DELETE", got, http.StatusNoContent, err)
+			}
+
+			got, id, err := s.send(b.Context(), http.MethodPut, target, body, nil)
+
+			err = expectStatus("PUT", got, http.StatusOK, err)
+			if err != nil {
+				return err
+			}
+
+			got, _, err = s.send(b.Context(), http.MethodDelete, target+"?versionId="+id, nil, nil)
+
+			return expectStatus("DELETE", got, http.StatusNoContent, err)
+		})
+		require.NoError(b, err)
 	}
 }
 

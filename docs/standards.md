@@ -170,6 +170,12 @@ Name sub-benchmarks so benchstat lines them up across runs:
 `BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB`. An axis that does
 not apply to a feature is left out, not filled with a placeholder.
 
+A micro benchmark's persistence-on rows sit under the same function as its
+persistence-off rows, with a `persist=on` key first
+(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16`) and no key for
+off, so the base's rows keep their names. `benchstat -col /persist` sets the two
+side by side.
+
 ### Micro benchmarks
 
 - Live in `*_benchmark_test.go`, loop with `b.Loop()`, and report bytes with

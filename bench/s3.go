@@ -87,9 +87,7 @@ const (
 )
 
 // s3Persistence are the persistence settings of the S3 cells, "" being off.
-// gostack's S3 does not persist yet (SQ-114), so a PERSIST_S3=1 cell would run
-// the same code as the cell without it. SQ-114 adds persistEnvS3 here.
-var s3Persistence = []string{""}
+var s3Persistence = []string{"", persistEnvS3}
 
 var (
 	errS3      = errors.New("s3")
@@ -405,7 +403,7 @@ func objectsCell(payload int, persistEnv string, concurrency int) cellSpec {
 
 // Cells is every payload at every concurrency, persistence off and on. The quick
 // profile is the base cell, a size above and below it, and its two other
-// concurrencies.
+// concurrencies, and the base cell with persistence on.
 func (objectsWorkload) Cells(profile string) []cellSpec {
 	if profile == profileQuick {
 		return []cellSpec{
@@ -414,6 +412,7 @@ func (objectsWorkload) Cells(profile string) []cellSpec {
 			objectsCell(s3Payload64KiB, "", levelHigh),
 			objectsCell(s3Payload1KiB, "", levelMid),
 			objectsCell(s3Payload16MiB, "", levelMid),
+			objectsCell(s3Payload64KiB, persistEnvS3, levelMid),
 		}
 	}
 
@@ -654,12 +653,14 @@ func listingCell(keys int, mode, persistEnv string, concurrency int) cellSpec {
 }
 
 // Cells is 1000 and 10000 keys, flat and with a delimiter, at every concurrency,
-// persistence off and on. The quick profile is two of them at concurrency 16.
+// persistence off and on. The quick profile is two of them at concurrency 16,
+// and the first with persistence on.
 func (listingWorkload) Cells(profile string) []cellSpec {
 	if profile == profileQuick {
 		return []cellSpec{
 			listingCell(listSmall, modeFlat, "", levelMid),
 			listingCell(listLarge, modeDelimiter, "", levelMid),
+			listingCell(listSmall, modeFlat, persistEnvS3, levelMid),
 		}
 	}
 
@@ -772,10 +773,10 @@ func multipartCell(persistEnv string, concurrency int) cellSpec {
 }
 
 // Cells is one 64 MiB object at concurrency 1 and 4, persistence off and on. The
-// quick profile is the first.
+// quick profile is the first at each persistence setting.
 func (multipartWorkload) Cells(profile string) []cellSpec {
 	if profile == profileQuick {
-		return []cellSpec{multipartCell("", levelLow)}
+		return []cellSpec{multipartCell("", levelLow), multipartCell(persistEnvS3, levelLow)}
 	}
 
 	var cells []cellSpec
