@@ -229,6 +229,18 @@ passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
 
+A pull request measures its base and head images in one run,
+`bench run -base-image`, never one image after the other. Every repeated
+measurement (each startup and idle run, and each run of a cell) alternates the
+two images and flips which goes first each time: base head, head base, ....
+A runner that slows down during the job then moves both sides alike, as in the
+micro-benchmark gate.
+
+The pull-request comparison runs each cell five times a side (`-reps 5`), not
+the default three. A metric fails only when the two sides' ranges do not
+overlap, and pure noise puts them apart once in C(6,3) = 20 orderings at three
+runs a side, once in C(10,5) = 252 at five.
+
 ### Accepted regressions
 
 A regression accepted as the cost of a change is listed in

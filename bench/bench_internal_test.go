@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -270,6 +272,74 @@ func Test_parseOptions(t *testing.T) {
 
 	_, err = parseOptions([]string{"-reps", "0"})
 	require.Error(t, err)
+}
+
+func Test_parseOptions_base(t *testing.T) {
+	const (
+		baseImage  = "base-image"
+		baseCommit = "base-commit"
+		baseOut    = "base-out"
+	)
+
+	// args turns the settings of a two-sided quick run, changed by edit, into flags.
+	args := func(edit func(map[string]string)) []string {
+		set := map[string]string{
+			"profile": profileQuick, "gostack-image": "gostack:head", "out": "out/head",
+			baseImage: "gostack:base", baseCommit: "1234abc", baseOut: "out/base",
+		}
+		edit(set)
+
+		out := make([]string, 0, 2*len(set))
+		for _, name := range slices.Sorted(maps.Keys(set)) {
+			out = append(out, "-"+name, set[name])
+		}
+
+		return out
+	}
+
+	opts, err := parseOptions(args(func(map[string]string) {}))
+	require.NoError(t, err)
+
+	sides := opts.sides(opts.targets[0])
+	require.Len(t, sides, 2)
+	assert.Equal(t, target{name: targetGostack, image: "gostack:base", persistable: true, side: sideBase}, sides[0])
+	assert.Equal(t, target{name: targetGostack, image: "gostack:head", persistable: true, side: sideHead}, sides[1])
+	assert.Equal(t, "gostack-base", sides[0].label(), "the two sides' containers are told apart")
+
+	plain, err := parseOptions(args(func(set map[string]string) {
+		delete(set, baseImage)
+		delete(set, baseCommit)
+		delete(set, baseOut)
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, []target{plain.targets[0]}, plain.sides(plain.targets[0]), "a run without -base-image has one side")
+	assert.Equal(t, targetGostack, plain.targets[0].label())
+
+	for name, edit := range map[string]func(map[string]string){
+		"two targets":      func(set map[string]string) { set["targets"] = "gostack,gostack-slim" },
+		"no base commit":   func(set map[string]string) { delete(set, baseCommit) },
+		"no base out":      func(set map[string]string) { delete(set, baseOut) },
+		"same out":         func(set map[string]string) { set[baseOut] = "out/head/" },
+		"commit, no image": func(set map[string]string) { delete(set, baseImage); delete(set, baseOut) },
+		"out, no image":    func(set map[string]string) { delete(set, baseImage); delete(set, baseCommit) },
+	} {
+		_, err := parseOptions(args(edit))
+		assert.Error(t, err, name)
+	}
+}
+
+func Test_roundOrder(t *testing.T) {
+	var got [][]int
+
+	alternate(4, 2, func(round, side int) { got = append(got, []int{round, side}) })
+	assert.Equal(t, [][]int{{0, 0}, {0, 1}, {1, 1}, {1, 0}, {2, 0}, {2, 1}, {3, 1}, {3, 0}}, got,
+		"two sides go base head, head base, ...")
+
+	got = nil
+
+	alternate(3, 1, func(round, side int) { got = append(got, []int{round, side}) })
+	assert.Equal(t, [][]int{{0, 0}, {1, 0}, {2, 0}}, got, "one side runs as before")
+	assert.Equal(t, []int{2, 1, 0}, roundOrder(1, 3))
 }
 
 func Test_cells_profiles(t *testing.T) {
