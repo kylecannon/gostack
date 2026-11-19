@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -18,14 +19,30 @@ const tokenWindow = 10 * time.Minute
 
 // tokens records the ClientRequestTokens of one account and region's
 // successful transactions, for their idempotency window. Its zero value is
-// empty and ready. Expired tokens are dropped as new ones are recorded; no
-// timer runs.
+// empty and ready. A transaction drops the tokens that have expired before it
+// runs, oldest first; no timer runs.
 type tokens struct {
 	mu   sync.Mutex
 	byID map[string]*tokenEntry
-	// sweepAt is the number of tokens at which the next record sweeps the
-	// expired ones.
-	sweepAt int
+	// done lists the finished tokens from done[head] on, in the order they
+	// finished, which is the order they expire in.
+	done []doneToken
+	head int
+	// peak is the most tokens byID has held since it was last made, so a map
+	// that has emptied can be made again at its live size: Go keeps a map's
+	// buckets when its keys are deleted.
+	peak int
+	// oldest is when done[head] finished, in Unix nanoseconds, or 0 when
+	// done is empty, so a transaction with nothing to drop takes no lock.
+	oldest atomic.Int64
+}
+
+// doneToken is one finished token, as done lists it. A token begun again
+// after it expired has a new entry, and the old one is dropped from done
+// alone.
+type doneToken struct {
+	id    string
+	entry *tokenEntry
 }
 
 // tokenEntry is one recorded token: the request it was given with, when its
@@ -50,11 +67,11 @@ const (
 	tokenMismatch
 )
 
-// minSweep is the fewest tokens at which recording one sweeps expired ones,
-// and sweepGrowth how much the map must grow after a sweep before the next.
+// remakeRatio is how far below its peak the token map shrinks before it is
+// made again at its live size, and minRemake the smallest peak worth it.
 const (
-	minSweep    = 64
-	sweepGrowth = 2
+	remakeRatio = 4
+	minRemake   = 1024
 )
 
 // begin looks up token for a transaction with request fingerprint request at
@@ -65,6 +82,8 @@ const (
 func (t *tokens) begin(token string, request [sha256.Size]byte, now time.Time) (tokenState, tableConsumption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	t.expireHeld(now)
 
 	if e := t.byID[token]; e != nil && (!e.done || now.Sub(e.at) < tokenWindow) {
 		if e.request != request {
@@ -80,8 +99,8 @@ func (t *tokens) begin(token string, request [sha256.Size]byte, now time.Time) (
 		t.byID = map[string]*tokenEntry{}
 	}
 
-	t.sweep(now)
 	t.byID[token] = &tokenEntry{request: request}
+	t.peak = max(t.peak, len(t.byID))
 
 	return tokenNew, nil
 }
@@ -92,8 +111,73 @@ func (t *tokens) finish(token string, now time.Time, used tableConsumption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if e := t.byID[token]; e != nil {
-		e.done, e.at, e.used = true, now, used
+	e := t.byID[token]
+	if e == nil {
+		return
+	}
+
+	e.done, e.at, e.used = true, now, used
+
+	if t.head == len(t.done) {
+		t.oldest.Store(now.UnixNano())
+	}
+
+	t.done = append(t.done, doneToken{id: token, entry: e})
+}
+
+// expire drops the tokens that have expired by now. It takes the lock only
+// when the oldest token has expired, so a transaction without a token pays
+// one atomic load.
+func (t *tokens) expire(now time.Time) {
+	oldest := t.oldest.Load()
+	if oldest == 0 || now.Sub(time.Unix(0, oldest)) < tokenWindow {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.expireHeld(now)
+}
+
+// expireHeld drops the finished tokens from the oldest on while they have
+// expired, releasing the list's front, and makes the map again once it holds
+// a quarter of its peak. The caller holds the lock.
+func (t *tokens) expireHeld(now time.Time) {
+	for t.head < len(t.done) {
+		d := t.done[t.head]
+		if now.Sub(d.entry.at) < tokenWindow {
+			break
+		}
+
+		if t.byID[d.id] == d.entry {
+			delete(t.byID, d.id)
+		}
+
+		t.done[t.head] = doneToken{}
+		t.head++
+	}
+
+	switch {
+	case t.head == len(t.done):
+		t.done, t.head = nil, 0
+		t.oldest.Store(0)
+	case t.head > 0:
+		t.oldest.Store(t.done[t.head].entry.at.UnixNano())
+
+		// Copy the live tail once the dropped front is the larger part, so
+		// the list's memory follows the live tokens at a constant cost per
+		// token.
+		if t.head > len(t.done)-t.head {
+			t.done, t.head = slices.Clone(t.done[t.head:]), 0
+		}
+	default: // nothing had expired
+	}
+
+	if t.peak >= minRemake && len(t.byID)*remakeRatio <= t.peak {
+		live := make(map[string]*tokenEntry, len(t.byID))
+		maps.Copy(live, t.byID)
+		t.byID, t.peak = live, len(live)
 	}
 }
 
@@ -111,18 +195,8 @@ func (t *tokens) reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.byID, t.sweepAt = nil, 0
-}
-
-// sweep drops expired tokens once the map has doubled since the last sweep,
-// so recording costs constant time on average.
-func (t *tokens) sweep(now time.Time) {
-	if len(t.byID) < max(t.sweepAt, minSweep) {
-		return
-	}
-
-	maps.DeleteFunc(t.byID, func(_ string, e *tokenEntry) bool { return e.done && now.Sub(e.at) >= tokenWindow })
-	t.sweepAt = sweepGrowth * len(t.byID)
+	t.byID, t.done, t.head, t.peak = nil, nil, 0, 0
+	t.oldest.Store(0)
 }
 
 // transactFingerprint identifies a TransactWriteItems request for its

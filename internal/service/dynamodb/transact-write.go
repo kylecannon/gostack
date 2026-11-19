@@ -190,6 +190,12 @@ func (p *Provider) runTransaction(
 		engines[i] = a.entry.data
 	}
 
+	// A transaction without a token still drops the expired ones, so they
+	// go even when no token follows them. begin drops them for one with.
+	if token == nil {
+		c.state.tokens.expire(p.now())
+	}
+
 	// table.Lock takes the tables' locks in the one global order every
 	// multi-table lock follows, the order the tables were created in, so two
 	// transactions over the same tables in opposite orders cannot deadlock.
