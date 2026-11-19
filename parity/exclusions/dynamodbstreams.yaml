@@ -11,5 +11,5 @@
 "tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_stream_spec_and_region_replacement": depends-on:kinesis
 
 # --- hard-skipped: dynamodbstreams ----------------------------------------
-# Skipped unless run on AWS or on the V1 provider (Flaky, and not implemented yet on v2 implementation).
+# Skipped on every run that is not against AWS (upstream: flaky, and not implemented yet on the v2 implementation).
 "tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_enable_kinesis_streaming_destination": hard-skipped (Flaky and not implemented yet on the v2 implementation)
