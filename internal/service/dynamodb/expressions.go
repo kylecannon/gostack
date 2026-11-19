@@ -142,6 +142,19 @@ type consumption struct {
 	global map[string]float64
 }
 
+// scale multiplies every amount in c by f.
+func (c *consumption) scale(f float64) {
+	c.table *= f
+
+	for name := range c.local {
+		c.local[name] *= f
+	}
+
+	for name := range c.global {
+		c.global[name] *= f
+	}
+}
+
 // addIndex adds units on the index spec names.
 func (c *consumption) addIndex(spec *table.IndexSpec, units float64) {
 	m := &c.local
@@ -202,11 +215,16 @@ func capacities(m map[string]float64) map[string]api.Capacity {
 // keeps its index key, both when it moves, and the one there is when it
 // enters or leaves the index.
 func writeCapacity(e *tableEntry, old, updated value.Item) consumption {
+	return indexedWriteCapacity(e.data.Key(), e.indexSpecs(), old, updated)
+}
+
+// indexedWriteCapacity is writeCapacity on a table with key schema key and
+// the indexes specs, for a caller that holds the table's lock and so cannot
+// take the entry's.
+func indexedWriteCapacity(key table.KeySchema, specs []table.IndexSpec, old, updated value.Item) consumption {
 	c := consumption{table: writeUnits(old, updated)}
 
-	key := e.data.Key()
-
-	for _, spec := range e.indexSpecs() {
+	for _, spec := range specs {
 		oldIn, newIn := inIndex(&spec, old), inIndex(&spec, updated)
 
 		var oldP, newP value.Item

@@ -109,6 +109,17 @@ func (t *Table) Get(key value.Item) value.Item {
 	return t.primary.get(hash, rng, "")
 }
 
+// IndexesHeld returns the specs of the table's indexes, for a caller that
+// holds the table's lock through Lock or ReadLock.
+func (t *Table) IndexesHeld() []IndexSpec {
+	specs := make([]IndexSpec, len(t.indexes))
+	for i, idx := range t.indexes {
+		specs[i] = idx.spec
+	}
+
+	return specs
+}
+
 // GetHeld is Get for a caller that holds the table's lock through Lock or
 // ReadLock, as a transaction does.
 func (t *Table) GetHeld(key value.Item) value.Item {
@@ -142,7 +153,7 @@ func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Ite
 	}
 
 	if updated != nil {
-		err := t.CheckItem(updated)
+		err := t.CheckItemHeld(updated)
 		if err != nil {
 			return Change{Old: old}, err
 		}

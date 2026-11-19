@@ -32,7 +32,6 @@ const (
 	msgUpdateKeyAttr    = "One or more parameter values were invalid: Cannot update attribute %s. " +
 		"This attribute is part of the key"
 	msgConditionCheckFailed = msgConditionFailed + "."
-	msgKeyTypeMismatch      = "One or more parameter values were invalid: Type mismatch for key"
 )
 
 // transactUnits is how many times the units of a plain read or write a
@@ -316,7 +315,14 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 	}
 
 	if result.new != nil {
-		err := a.entry.data.CheckItem(result.new)
+		// An update that gives an index key attribute a value of another
+		// type cancels the transaction with this action's reason, as a put
+		// of one does; any other refusal of the new item refuses the request.
+		err := a.entry.data.CheckItemHeld(result.new)
+		if msg := table.KeyTypeMismatch(err); msg != "" {
+			return cancellation(reasonValidation, msg, nil), txResult{}, nil
+		}
+
 		if err != nil {
 			return api.CancellationReason{}, txResult{}, fmt.Errorf("transaction: %w", err)
 		}
@@ -368,27 +374,27 @@ func transactionCanceled(reasons []api.CancellationReason) error {
 // transactCapacity is what a transaction consumed on each table, as DynamoDB
 // Local counts each action: a transactional write twice the units of a plain
 // one, a delete of no item one unit, and a condition check twice the units of
-// a consistent read of its item. The units are summed per table, as AWS
-// documents transactional capacity; DynamoDB Local instead counts equal
-// per-action amounts once.
+// a consistent read of its item. A write's index units are counted as
+// writeCapacity counts them, twice over. The units are summed per table, as
+// AWS documents transactional capacity; DynamoDB Local instead counts equal
+// per-action amounts once. The caller holds the tables' locks, so the
+// indexes are read from the engine.
 func transactCapacity(actions []*txAction, results []txResult) tableConsumption {
 	used := tableConsumption{}
 
 	for i, a := range actions {
 		r := results[i]
 
-		var units float64
-
 		switch {
 		case a.op == opConditionCheck:
-			units = transactUnits * readUnits(value.ItemSize(r.old), new(true))
+			used.on(a.name).table += transactUnits * readUnits(value.ItemSize(r.old), new(true))
 		case a.op == opDelete && r.old == nil:
-			units = 1
+			used.on(a.name).table++
 		default:
-			units = transactUnits * writeUnits(r.old, r.new)
+			c := indexedWriteCapacity(a.entry.data.Key(), a.entry.data.IndexesHeld(), r.old, r.new)
+			c.scale(transactUnits)
+			used.on(a.name).add(c)
 		}
-
-		used.on(a.name).table += units
 	}
 
 	return used
@@ -543,8 +549,8 @@ func (a *txAction) checkKey() error {
 		err = a.entry.data.CheckKey(a.key)
 	}
 
-	if table.IsKeyTypeMismatch(err) {
-		a.keyMismatch = msgKeyTypeMismatch
+	if msg := table.KeyTypeMismatch(err); msg != "" {
+		a.keyMismatch = msg
 
 		return nil
 	}

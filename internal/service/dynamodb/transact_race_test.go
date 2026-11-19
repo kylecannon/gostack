@@ -3,6 +3,7 @@ package dynamodb_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"sync"
 	"testing"
@@ -191,4 +192,50 @@ func Test_transact_tokenWindow(t *testing.T) {
 		require.Equal(t, "2", stored(), "after the window the token is free")
 		require.True(t, mismatch(write(ctx, "1")))
 	})
+}
+
+// Test_write_indexChurn writes items carrying a GSI key while UpdateTable
+// creates and deletes that GSI: the check before each write reads the table's
+// index list under its lock, so -race finds nothing and no write answers 500.
+func Test_write_indexChurn(t *testing.T) {
+	const (
+		addIndex = `{"TableName":"churn","AttributeDefinitions":[{"AttributeName":"h","AttributeType":"S"}],` +
+			`"GlobalSecondaryIndexUpdates":[{"Create":{"IndexName":"hix","KeySchema":[{"AttributeName":"h",` +
+			`"KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"},` +
+			`"ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1}}}]}`
+		dropIndex = `{"TableName":"churn","GlobalSecondaryIndexUpdates":[{"Delete":{"IndexName":"hix"}}]}`
+		item      = `{"id":{"S":"x"},"h":{"S":"v"}}`
+	)
+
+	writes := map[string][2]string{
+		"PutItem":            {"PutItem", `{"TableName":"churn","Item":` + item + `}`},
+		"TransactWriteItems": {"TransactWriteItems", `{"TransactItems":[{"Put":{"TableName":"churn","Item":` + item + `}}]}`},
+		opBatchWrite:         {opBatchWrite, `{"RequestItems":{"churn":[{"PutRequest":{"Item":` + item + `}}]}}`},
+	}
+
+	for name, w := range writes {
+		t.Run(name, func(t *testing.T) {
+			s := newStack(t)
+			s.ok(t, "CreateTable", hashTable("churn"))
+
+			var wg sync.WaitGroup
+
+			wg.Go(func() {
+				for range 100 {
+					s.call(t, usEast1, "UpdateTable", addIndex)
+					s.call(t, usEast1, "UpdateTable", dropIndex)
+				}
+			})
+			wg.Go(func() {
+				for range 500 {
+					if got := s.call(t, usEast1, w[0], w[1]); got.status != http.StatusOK {
+						t.Errorf("%s: %d %s", w[0], got.status, got.body)
+
+						return
+					}
+				}
+			})
+			wg.Wait()
+		})
+	}
 }

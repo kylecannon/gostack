@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -16,8 +17,14 @@ import (
 const (
 	msgTransactGetMember = "Value null at 'transactItems.%d.member.get.tableName' failed to satisfy constraint: " +
 		"Member must not be null"
-	msgTransactGetNoKey = "Get Condition for key not in key list"
+	msgTransactGetNoKey    = "Get Condition for key not in key list"
+	msgTransactGetTooLarge = "Payload in response is too large."
 )
+
+// responseItemOverhead is what DynamoDB Local adds to each returned item's
+// size when it totals a TransactGetItems response, as probed on the LocalStack
+// image: 11 items of 4,194,260 bytes pass and of 4,194,261 do not.
+const responseItemOverhead = 4
 
 // txGet is one checked Get of a TransactGetItems.
 type txGet struct {
@@ -40,17 +47,29 @@ func (p *Provider) TransactGetItems(
 	stored := readTransaction(gets)
 	out := &api.TransactGetItemsOutput{Responses: make([]api.ItemResponse, len(gets))}
 	used := tableConsumption{}
+	size := 0
 
 	for i, g := range gets {
 		// A transactional read costs twice a consistent one, an item or not.
 		used.on(g.name).table += transactUnits * readUnits(value.ItemSize(stored[i]), new(true))
 
 		item := stored[i]
-		if g.projection != nil && item != nil {
+		if item == nil {
+			continue
+		}
+
+		if g.projection != nil {
 			item = g.projection.Apply(item)
 		}
 
+		size += value.ItemSize(item) + responseItemOverhead
 		out.Responses[i].Item = item
+	}
+
+	// AWS caps the items a transaction returns at 4 MB; DynamoDB Local
+	// counts them as returned, projected, and names the total.
+	if size > maxTransactBytes {
+		return nil, value.Invalid(msgTransactGetTooLarge + strconv.Itoa(size))
 	}
 
 	out.ConsumedCapacity = used.report(in.ReturnConsumedCapacity)
