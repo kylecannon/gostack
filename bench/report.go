@@ -125,7 +125,28 @@ type cellResult struct {
 	PeakRSSBytes     spread         `json:"peak_rss_bytes"`
 	CPUPercent       spread         `json:"cpu_percent"`
 	Counters         map[string]int `json:"counters,omitempty"`
-	Problem          string         `json:"problem,omitempty"`
+	// Problem is set when no run of the cell completed, so the cell has no figures.
+	Problem string `json:"problem,omitempty"`
+	// FailedRuns names each repetition that did not complete (the load generator
+	// failed, or the target container was gone when the run ended) and why. Such a
+	// run is left out of the figures, so Runs is the number that completed, and
+	// compare reads a side that has failed runs as having a problem. The field was
+	// added to schema 3 without a bump: a file without it has no failed runs, and
+	// no field changed its meaning.
+	FailedRuns []string `json:"failed_runs,omitempty"`
+}
+
+// settleCell is the result of a cell from the runs that completed and the
+// reasons the others did not. A failed run is never dropped without a trace.
+func settleCell(spec cellSpec, runs []runResult, failed []string) cellResult {
+	if len(runs) == 0 {
+		return cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed, "; "), FailedRuns: failed}
+	}
+
+	cell := summarizeCell(spec, runs)
+	cell.FailedRuns = failed
+
+	return cell
 }
 
 // summarizeCell folds the runs of one cell.
@@ -245,6 +266,42 @@ type idleResult struct {
 func (t *targetResult) problem(what string, err error) {
 	if err != nil {
 		t.Problems = append(t.Problems, what+": "+err.Error())
+	}
+}
+
+// cellProblemPrefix starts the Problems line of a cell or an agentic workload.
+// compare reads those from the cell's own fields, with both sides' figures, and
+// reads every other line as a problem of the target.
+const cellProblemPrefix = "cell "
+
+// noteCell records in Problems what went wrong in a cell: no completed run, runs
+// that failed, and every operation that reported errors.
+func (t *targetResult) noteCell(c cellResult) {
+	switch {
+	case c.Problem != "":
+		t.Problems = append(t.Problems, cellProblemPrefix+c.ID+": "+c.Problem)
+	case len(c.FailedRuns) > 0:
+		t.Problems = append(t.Problems, fmt.Sprintf("%s%s: %d of %d runs failed: %s",
+			cellProblemPrefix, c.ID, len(c.FailedRuns), len(c.FailedRuns)+c.Runs, strings.Join(c.FailedRuns, "; ")))
+	default:
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(c.Ops)) {
+		if op := c.Ops[name]; op.Errors > 0 {
+			t.Problems = append(t.Problems, fmt.Sprintf("%s%s: %s: %d errors in %d operations over %d runs",
+				cellProblemPrefix, c.ID, name, op.Errors, op.Count+op.Errors, c.Runs))
+		}
+	}
+}
+
+// agenticCell is the id compare and Problems give the agentic workload of a service.
+func agenticCell(service string) string { return "agentic/" + service }
+
+// noteAgentic records the cycles of an agentic run that errored.
+func (t *targetResult) noteAgentic(service string, run agenticRun) {
+	if run.Errors > 0 {
+		t.Problems = append(t.Problems, fmt.Sprintf("%s%s: %d errors in %d cycles",
+			cellProblemPrefix, agenticCell(service), run.Errors, run.Cycles))
 	}
 }
 
@@ -533,7 +590,8 @@ func (r report) problemList(b *strings.Builder) {
 	for _, t := range r.Targets {
 		for _, p := range t.Problems {
 			if !wrote {
-				b.WriteString("## Not measured\n\n")
+				b.WriteString("## Problems\n\n" +
+					"Measurements that could not be taken, runs that failed and operations that reported errors.\n\n")
 
 				wrote = true
 			}
