@@ -66,9 +66,14 @@ jobs:
         if: steps.compare.outputs.compared == 'true'
         working-directory: head
         run: |
+          # Without pipefail the pipe's status is tee's, and a failing gate
+          # passes. The step sets it itself rather than rely on the shell above.
+          set -o pipefail
           status=0
+          # 2>&1: a load error of the accepted list goes to stderr, and belongs
+          # in the summary beside a regression.
           go run ./bench gate -accepted bench/accepted.yaml -base "$BASE_SHA" -head "$HEAD_SHA" \
-            < "$GITHUB_WORKSPACE/benchstat.txt" | tee "$RUNNER_TEMP/gate.txt" || status=$?
+            < "$GITHUB_WORKSPACE/benchstat.txt" 2>&1 | tee "$RUNNER_TEMP/gate.txt" || status=$?
           {
             echo '```'
             cat "$RUNNER_TEMP/gate.txt"
