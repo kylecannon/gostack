@@ -200,7 +200,8 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 | `RotateSecret` with `RotateImmediately=false` | Crashes on an unbound variable: 500 | Stores the configuration and returns the current version id |
 | `RotateSecret` while a version holds `AWSPENDING` without `AWSCURRENT` | Stores the new configuration, then answers "Previous rotation request is still in progress." | Answers the same error and leaves the configuration as it was |
 | `PutResourcePolicy` without `ResourcePolicy` | Crashes on the missing key: 500 | `400 ValidationException`, AWS's missing-member text |
-| A replica secret | moto's `ReplicaSecret`: reads through to the primary, writes refused | The same. No test pins replication; gostack follows moto's models. |
+| A replica secret | moto's `ReplicaSecret`: reads through to the primary, writes refused | The same. No test pins replication (`grep -i -E 'replica\|Replicat'` over `tests/aws/services/secretsmanager` finds nothing); gostack follows moto's models. |
+| A replica whose primary a forced overwrite replaced, or a reset of the primary's region emptied | Stays in its region, reading the primary it no longer belongs to | Not found, and its name is free for a new secret |
 | `ReplicateSecretToRegions` with `ForceOverwriteReplicaSecret` where the region holds a replica of a secret of that name | Stores a second record under the replica's ARN, and a later `RemoveRegionsFromReplication` crashes (500) | Never overwrites a replica: the entry is `Failed`, as for any taken name. A primary secret of that name is replaced, as in moto. |
 | The `Failed` entry's `StatusMessage` | "Replication failed: Secret name simple already exists in region …", the literal word `simple` | Names the secret |
 | `CreateSecret` with the name of a replica in that region | Crashes reading the replica's deletion date: 500 | `400 ResourceExistsException`, as for any taken name |

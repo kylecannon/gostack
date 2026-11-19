@@ -172,6 +172,33 @@ func Test_replicas_survive_a_snapshot(t *testing.T) {
 	assert.Equal(t, "x", other["SecretString"])
 }
 
+// Test_a_left_replica_frees_its_name: a replica whose primary was replaced
+// by a forced overwrite, or emptied by a reset of its region, is not found,
+// and its name can be used again.
+func Test_a_left_replica_frees_its_name(t *testing.T) {
+	p := secretsmanager.New(nil)
+	h := handlerFor(t, p)
+
+	const third = "ap-south-1"
+
+	mustCallIn(t, h, replicaRegion, "CreateSecret", `{"Name":"r","SecretString":"v","ClientRequestToken":"`+token1+`",`+
+		`"AddReplicaRegions":[{"Region":"`+third+`"}]}`)
+	mustCall(t, h, "CreateSecret", `{"Name":"r","SecretString":"v","ClientRequestToken":"`+token1+`"}`)
+	mustCall(t, h, "ReplicateSecretToRegions", `{"SecretId":"r","ForceOverwriteReplicaSecret":true,`+
+		`"AddReplicaRegions":[{"Region":"`+replicaRegion+`"}]}`)
+
+	status, _ := callIn(t, h, third, describeSecret, `{"SecretId":"r"}`)
+	assert.Equal(t, http.StatusBadRequest, status)
+	mustCallIn(t, h, third, "CreateSecret", `{"Name":"r","SecretString":"v","ClientRequestToken":"`+token1+`"}`)
+
+	// A reset of the primary's region alone leaves the replica record behind.
+	p.Registration().Reset("", primaryRegion)
+
+	status, _ = callIn(t, h, replicaRegion, describeSecret, `{"SecretId":"r"}`)
+	assert.Equal(t, http.StatusBadRequest, status)
+	mustCallIn(t, h, replicaRegion, "CreateSecret", `{"Name":"r","SecretString":"v","ClientRequestToken":"`+token1+`"}`)
+}
+
 // Test_replication_runs_with_everything_else replicates one name both ways
 // between two regions while secrets are deleted, listed and reset. Run it
 // with -race: it fails on a deadlock or a data race, not on an answer.

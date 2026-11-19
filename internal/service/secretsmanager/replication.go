@@ -191,7 +191,7 @@ func (p *Provider) replicateTo(primary *Secret, region string, req replication) 
 
 	entry := replica{region: region, status: replicaInSync, message: replicaSucceeded}
 
-	existing := state.lookupLocked(primary.name)
+	existing := state.lookupLive(primary.name)
 	if existing != nil && req.overwrite && existing.primary == nil {
 		existing.mu.Lock()
 		state.remove(existing)
@@ -330,6 +330,31 @@ func checkDeletable(secret *Secret, id string) *awserr.Error {
 
 	return api.NewInvalidParameterException("You can't delete secret " + id +
 		" that still has replica regions [" + strings.Join(regions, ",") + "]")
+}
+
+// lookupLive is lookupLocked for a caller that holds mu for writing. A
+// replica record left behind by its primary, which a forced overwrite or a
+// reset of the primary's region took away, is dropped and not found, so its
+// name is free again. Reads never see such a record: readable refuses it.
+func (s *State) lookupLive(key string) *Secret {
+	found := s.lookupLocked(key)
+	if found == nil || found.primary == nil {
+		return found
+	}
+
+	primary := found.primary
+
+	primary.mu.Lock()
+	live := !primary.gone && primary.replicates(found)
+	primary.mu.Unlock()
+
+	if live {
+		return found
+	}
+
+	s.drop(found)
+
+	return nil
 }
 
 // primaryFor finds the secret secretID names for an operation only a primary

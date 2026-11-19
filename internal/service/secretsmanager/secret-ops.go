@@ -92,7 +92,7 @@ func (p *Provider) create(
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	if existing := state.lookupLocked(name); existing != nil {
+	if existing := state.lookupLive(name); existing != nil {
 		return nil, nil, existsError(existing, name)
 	}
 
@@ -328,7 +328,7 @@ func (p *Provider) DeleteSecret(ctx context.Context, in *api.DeleteSecretInput) 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	secret := state.lookupLocked(id)
+	secret := state.lookupLive(id)
 	if secret == nil {
 		if !force {
 			return nil, errSecretNotFound()
