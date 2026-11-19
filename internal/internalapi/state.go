@@ -40,7 +40,7 @@ func (a *api) stateReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	err := a.deps.State.Reset(StateScope{
+	err := a.deps.State.Reset(r.Context(), StateScope{
 		Service: query.Get("service"),
 		Account: query.Get("account"),
 		Region:  query.Get("region"),

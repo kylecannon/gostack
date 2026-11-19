@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +29,7 @@ const (
 func newTestProvider(t *testing.T) *Provider {
 	t.Helper()
 
-	blobs := NewEphemeral(t.TempDir())
+	blobs := blob.NewEphemeral(t.TempDir())
 	t.Cleanup(blobs.Close)
 
 	return New(func() Settings { return Settings{LocalstackHost: testHost} }, blobs)

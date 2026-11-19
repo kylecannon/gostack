@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -121,14 +124,86 @@ func parseAccepted(data []byte, name string) ([]acceptedEntry, error) {
 		return nil, fmt.Errorf("%w %s: %w", errAccepted, name, err)
 	}
 
+	// The list is one document. Entries after a second --- would be dropped
+	// unread, so the file would hold entries the gate never applies.
+	var extra yaml.Node
+
+	err = dec.Decode(&extra)
+	if err == nil {
+		return nil, fmt.Errorf("%w %s: a second YAML document follows the list; it is one document", errAccepted, name)
+	}
+
+	if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%w %s: %w", errAccepted, name, err)
+	}
+
+	seen := make(map[[4]string]int, len(entries))
+
 	for i := range entries {
 		err = entries[i].validate()
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %d: %w", name, i+1, err)
 		}
+
+		key := entries[i].key()
+		if first, dup := seen[key]; dup {
+			return nil, fmt.Errorf("%s entry %d: %w: it names the same metric as entry %d (%s); "+
+				"one entry holds a metric, whatever its bound or commit", name, i+1, errAccepted, first, entries[i].subject())
+		}
+
+		seen[key] = i + 1
 	}
 
 	return entries, nil
+}
+
+// key identifies the metric an entry names, so two entries for one metric are
+// found whichever way the package is spelled.
+func (e *acceptedEntry) key() [4]string {
+	if e.Gate == gateBenchstat {
+		return [4]string{e.Gate, e.fullPackage(), e.Benchmark, e.Unit}
+	}
+
+	return [4]string{e.Gate, e.Target, e.Cell, e.Metric}
+}
+
+// subject names the metric an entry holds, for an error.
+func (e *acceptedEntry) subject() string {
+	if e.Gate == gateBenchstat {
+		return fmt.Sprintf("benchstat %s %s %s", e.Package, e.Benchmark, e.Unit)
+	}
+
+	return fmt.Sprintf("system %s %s %s", e.Target, e.Cell, e.Metric)
+}
+
+// modulePath is the path of the module this tool is built in. An entry's package
+// is written relative to it.
+var modulePath = sync.OnceValue(func() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+
+	return info.Main.Path
+})
+
+// fullPackage is the entry's package as an import path. A package already
+// inside the module is its own full path.
+func (e *acceptedEntry) fullPackage() string {
+	module := modulePath()
+	if module == "" || strings.HasPrefix(e.Package, module+"/") {
+		return e.Package
+	}
+
+	return module + "/" + e.Package
+}
+
+// namesPackage reports whether the entry's package is pkg: either pkg's full
+// import path, or its path below the module. A trailing part of a path that
+// does not start at the module root, such as the internal/route of another
+// module nested in this one, names a different package.
+func (e *acceptedEntry) namesPackage(pkg string) bool {
+	return pkg == e.Package || pkg == e.fullPackage()
 }
 
 func (e *acceptedEntry) validate() error {
@@ -182,15 +257,20 @@ func (e *acceptedEntry) fields() (own, other map[string]string) {
 	}
 }
 
+// units a system metric is written in: the unit field of the metrics `bench
+// compare` builds.
+var knownUnits = map[string]bool{"MiB": true, "ms": true, "s": true, "cycles/s": true}
+
 // parseLimit reads "+50%" (the sign is the regression's direction and only the
 // size counts) or, for a system metric, "6 MiB": the worst head median accepted.
+// The number is finite and above zero, with at most one leading "+".
 func parseLimit(raw, gate string) (limit, error) {
 	text := strings.TrimSpace(raw)
 
 	if number, ok := strings.CutSuffix(text, "%"); ok {
-		pct, err := strconv.ParseFloat(strings.TrimLeft(number, "+-"), 64)
-		if err != nil || pct <= 0 {
-			return limit{}, fmt.Errorf("%w: max %q is not a positive percent", errAccepted, raw)
+		pct, ok := positiveNumber(number)
+		if !ok {
+			return limit{}, fmt.Errorf("%w: max %q is not a finite percent above zero such as +50%%", errAccepted, raw)
 		}
 
 		return limit{percent: pct}, nil
@@ -202,12 +282,33 @@ func parseLimit(raw, gate string) (limit, error) {
 			"and its unit such as 6 MiB", errAccepted, raw)
 	}
 
-	value, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil || value <= 0 {
-		return limit{}, fmt.Errorf("%w: max %q is not a positive value", errAccepted, raw)
+	value, ok := positiveNumber(fields[0])
+	if !ok {
+		return limit{}, fmt.Errorf("%w: max %q is not a finite value above zero", errAccepted, raw)
+	}
+
+	if !knownUnits[fields[1]] {
+		return limit{}, fmt.Errorf("%w: max %q names a unit that no system metric uses; they are MiB, ms, s and cycles/s",
+			errAccepted, raw)
 	}
 
 	return limit{absolute: value, unit: fields[1]}, nil
+}
+
+// positiveNumber reads a finite number above zero. One leading "+" is allowed;
+// a second sign, or a "-", is not.
+func positiveNumber(text string) (float64, bool) {
+	text = strings.TrimPrefix(text, "+")
+	if text == "" || text[0] == '+' || text[0] == '-' {
+		return 0, false
+	}
+
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return 0, false
+	}
+
+	return value, true
 }
 
 // label names the entry in the gates' output.

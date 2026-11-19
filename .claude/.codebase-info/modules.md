@@ -25,7 +25,8 @@ Every package has a `doc.go` that states its contract; read it first.
 | `internal/gateway` | listener (`Listen` loads the TLS cert first), router, middleware, dispatch, `DrainBy`, `Handler`; per-service CORS skip; `Dirtier` interface; a method chi does not know goes to the AWS mount (`MethodNotAllowed`); `statusWriter.NoteStatus` lets a service that takes the connection report its status | gateway.go, listener.go, dispatch.go, middleware.go, cors.go |
 | `internal/route` | service detection, host claims, signing-name tie-break by `Claim`, `AmbiguousError`, known-service table | route.go, known.go |
 | `internal/internalapi` | health, info, init, config, services, state save/load/reset, plugins | mount.go, state*.go, config.go |
-| `internal/persist` | `Engine`, `Snapshotter`, flush timer, atomic files, `ErrUnsafe` | engine.go, files.go, config.go |
+| `internal/blob` | `Store`, `Writer`, `ErrNotFound`, the ephemeral in-memory/spill store | ephemeral.go |
+| `internal/persist` | `Engine`, `Snapshotter`, flush timer, atomic files, `ErrUnsafe`, the assets seam (`Assets`, `ResetAssets`) and its blob store | engine.go, files.go, config.go, assets.go, blob-store.go, assets-sync_linux.go (one `syncfs` before a save), assets-sync_other.go (per-file fsync elsewhere); assets-writeback_linux_internal_test.go runs only under scripts/writeback-fault.sh |
 | `internal/tlscert` | self-signed or custom cert | tlscert.go |
 | `internal/service/sts` | STS provider (query; credentials, sessions, SAML; model-bound validation) | sts.go, operations.go, credentials.go, sessions.go, validate.go |
 | `internal/service/sqs` | SQS provider, see below | provider.go, queue.go |
@@ -49,7 +50,8 @@ Every package has a `doc.go` that states its contract; read it first.
 ## `internal/service/s3` by concern
 
 - Core and routing: provider.go, rawheader.go (HTTP/1.x responses with edge-whitespace header values written on the taken connection: linger on close, drained by `Close`), routing.go (host claim, legacy `Fallback`, virtual-host `Preprocess`), state.go, bucket.go, metadata.go, configs.go
-- Bodies: blobstore.go, chunked.go, checksum.go, range.go
+- Persistence: snapshot.go (state to store.json, bodies by id; Restore reindexes)
+- Bodies: chunked.go, checksum.go, range.go
 - Objects: object.go, copy.go, delete-objects.go, objectconfig.go, preconditions.go, object-attributes.go, tagging.go, acl.go, storage-class.go
 - Multipart: multipart.go, multipart-complete.go, multipart-copy.go, multipart-list.go
 - Listing: list-objects.go, keyindex.go (sorted key and upload indexes kept with the maps; a page binary-searches its start)

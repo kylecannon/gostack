@@ -8,16 +8,22 @@
 # An entry applies only to a comparison whose head holds its commit and whose
 # base does not. Name a commit that already carries the cost, on the branch the
 # pull request merges with a merge commit. Once main holds that commit, every
-# later base does too and the entry has expired; delete it then.
+# later base does too and the entry has expired; delete it then. A squash or
+# rebase merge leaves the commit out of main, so such an entry never expires:
+# delete the entries in the first change after the merge.
+#
+# One entry per metric, in one YAML document. Anything else fails the gate.
 #
 # Fields:
 #   gate:      benchstat, or system for `bench compare`.
-#   benchstat: package (its import path, or a trailing part of it), benchmark
-#              (without the -GOMAXPROCS suffix) and unit, as benchstat prints it.
+#   benchstat: package (its import path, or its path below the module, such as
+#              internal/route), benchmark (without the -GOMAXPROCS suffix) and
+#              unit, as benchstat prints it.
 #   system:    target, cell and metric, as `bench compare` prints them.
-#   max:       the largest accepted change: "+50%" (the size counts, the sign
-#              does not), or for a system metric the worst accepted head median
-#              in the metric's unit, such as "6 MiB".
+#   max:       the largest accepted change, a finite number above zero with at
+#              most one leading +: "+50%" (the size counts, the sign does not),
+#              or for a system metric the worst accepted head median in the
+#              metric's unit (MiB, ms, s or cycles/s), such as "6 MiB".
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.

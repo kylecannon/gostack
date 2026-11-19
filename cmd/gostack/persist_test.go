@@ -401,6 +401,7 @@ func Test_gostack_health_persisted_flag(t *testing.T) {
 
 	require.NoError(t, json.Unmarshal([]byte(body), &health))
 	assert.True(t, health.Services["sqs"].Persisted, body)
+	assert.True(t, health.Services["s3"].Persisted, body)
 	assert.False(t, health.Services["sts"].Persisted, body)
 
 	status, body = g.do(t, http.MethodGet, "/_localstack/health", "")

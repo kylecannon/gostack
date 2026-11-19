@@ -186,6 +186,12 @@ Name sub-benchmarks so benchstat lines them up across runs:
 `BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB`. An axis that does
 not apply to a feature is left out, not filled with a placeholder.
 
+A micro benchmark's persistence-on rows sit under the same function as its
+persistence-off rows, with a `persist=on` key first
+(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16`) and no key for
+off, so the base's rows keep their names. `benchstat -col /persist` sets the two
+side by side.
+
 ### Micro benchmarks
 
 - Live in `*_benchmark_test.go`, loop with `b.Loop()`, and report bytes with
@@ -230,9 +236,17 @@ A regression accepted as the cost of a change is listed in
 the largest change accepted, a one-line reason, the pull request and a commit
 that carries the cost. Both CI gates read the file and print what it holds
 under "Accepted". A listed metric past its bound, and every unlisted one, still
-fails. An entry applies only while the head holds its commit and the base does
-not, so it expires once main holds the commit; the pull request lands with a
-merge commit, never a squash, and an expired entry is deleted.
+fails. A bound is a finite number above zero with at most one leading `+`, as
+`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`);
+an infinite, negative, zero or repeated-sign bound is a load error, as is a
+second entry for one metric or a second YAML document. An entry's `package` is
+the full import path or the path below the module (`internal/route`).
+
+An entry applies only while the head holds its commit and the base does not, so
+it expires once main holds the commit. The pull request lands with a merge
+commit, never a squash: a squash or rebase merge leaves the commit out of main,
+so the entry never expires. Delete the entries in the first change after the
+merge.
 
 A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
 such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.

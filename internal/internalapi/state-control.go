@@ -14,8 +14,10 @@ type StateScope struct {
 
 // StateController resets, saves and loads service state.
 type StateController interface {
-	// Reset wipes in-memory state inside the scope.
-	Reset(scope StateScope) error
+	// Reset wipes in-memory state inside the scope. A reset of a whole service
+	// also removes the files it persisted beside its state, and may wait for a
+	// running save or load until ctx ends.
+	Reset(ctx context.Context, scope StateScope) error
 	// Save writes state to disk now.
 	Save(ctx context.Context) error
 	// Load reads state from disk now.

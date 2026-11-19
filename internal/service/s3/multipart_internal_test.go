@@ -41,9 +41,11 @@ func TestCommitVersionThenRunsAfterEveryCheck(t *testing.T) {
 
 			runs, current := 0, false
 
-			err = p.commitVersionThen(b, "k", &Version{BlobID: id, ETag: "e"}, func() {
+			err = p.commitVersionThen(b, "k", &Version{BlobID: id, ETag: "e"}, func() []string {
 				runs++
 				current = b.Objects["k"] != nil && b.Objects["k"].current() != nil
+
+				return nil
 			}, tt.giveCheck...)
 
 			require.ErrorIs(t, err, tt.wantErr)

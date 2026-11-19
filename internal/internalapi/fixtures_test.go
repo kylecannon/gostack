@@ -110,7 +110,7 @@ type fakeState struct {
 	err    error
 }
 
-func (f *fakeState) Reset(scope internalapi.StateScope) error {
+func (f *fakeState) Reset(_ context.Context, scope internalapi.StateScope) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scopes = append(f.scopes, scope)

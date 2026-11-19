@@ -169,7 +169,7 @@ type Version struct {
 	// ID is the version id, versionNull outside a versioned bucket.
 	ID           string
 	DeleteMarker bool
-	// BlobID names the body in the BlobStore. A delete marker has none.
+	// BlobID names the body in the blob.Store. A delete marker has none.
 	BlobID       string
 	Size         int64
 	ETag         string

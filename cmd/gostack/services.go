@@ -1,9 +1,13 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
@@ -11,6 +15,9 @@ import (
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
+
+// s3Service is S3's name in the catalog and in PERSIST_*.
+const s3Service = "s3"
 
 // providers are the registered services. They are built once, because the
 // gateway serves them, persistence saves them and the state routes reset them,
@@ -26,7 +33,7 @@ type providers struct {
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	p := &providers{s3: s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir))}
+	p := &providers{s3: s3.New(s3Settings(cfg), blob.NewEphemeral(blob.DefaultSpillDir))}
 	p.regs = registrations(cfg, changed, p.s3)
 
 	return p
@@ -94,13 +101,49 @@ func (p *providers) close() {
 }
 
 // persist hands eng the services whose state is saved. The engine leaves out
-// the ones PERSIST_* does not enable.
-func (p *providers) persist(eng *persist.Engine) {
+// the ones PERSIST_* does not enable. A persisted S3's assets are opened here:
+// after S3 is registered and before its state loads, so the load can sweep
+// them. It returns them, nil when S3 is not persisted or its assets directory
+// is unsafe or impossible to make, such as on a read-only base dir: the engine
+// has logged it and neither loads nor saves S3. Only an S3 the engine cannot
+// give assets to at all, a wiring error, stops the start.
+func (p *providers) persist(eng *persist.Engine) (*persist.Assets, error) {
 	for i := range p.regs {
 		if snapshotter := p.regs[i].Persist; snapshotter != nil {
 			eng.Register(p.regs[i].Metadata.Name, snapshotter)
 		}
 	}
+
+	assets, err := eng.Assets(s3Service)
+
+	switch {
+	case errors.Is(err, persist.ErrUnsafe):
+		slog.Error("s3 bodies are not persisted", "error", err)
+	case err != nil:
+		return nil, fmt.Errorf("persist s3: %w", err)
+	default:
+	}
+
+	return assets, nil
+}
+
+// useAssets makes S3 keep its bodies as assets once the load has run, and
+// only when the engine still persists S3: one whose assets could not be opened,
+// or whose state file the load refused, keeps its bodies in the ephemeral
+// store, since nothing would save or sweep them, and health reports S3 as not
+// persisted. It runs before S3 serves.
+func (p *providers) useAssets(eng *persist.Engine, assets *persist.Assets) {
+	if assets == nil {
+		return
+	}
+
+	if !eng.Enabled(s3Service) {
+		slog.Error("s3 bodies are not persisted: its state file was refused")
+
+		return
+	}
+
+	p.s3.UseBlobs(persist.NewBlobStore(assets))
 }
 
 // sqsSettings maps the live configuration onto the settings of the SQS

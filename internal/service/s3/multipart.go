@@ -376,6 +376,9 @@ func (p *Provider) AbortMultipartUpload(
 		return nil, err
 	}
 
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	b.mu.Lock()
 
 	upload := b.Uploads[deref(in.UploadId)]
@@ -437,6 +440,9 @@ func (p *Provider) uploadOf(account string, bucket, key, uploadID *string, partN
 // stored. The part it replaces loses its body. When the upload or its bucket
 // went meanwhile, the new body goes instead.
 func (p *Provider) installPart(b *Bucket, upload *MultipartUpload, part *Part) error {
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	b.mu.Lock()
 
 	switch {

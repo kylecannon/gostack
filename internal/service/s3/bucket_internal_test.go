@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,7 +50,7 @@ func TestGoneBucketIsMissingToHeadBucketAndGetBucketLocation(t *testing.T) {
 	t.Parallel()
 
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
-		NewEphemeral(t.TempDir()))
+		blob.NewEphemeral(t.TempDir()))
 	t.Cleanup(p.Close)
 
 	b := newBucket("gone-bucket", benchAccount, regionEUWest1, regionEUWest1, nil)
