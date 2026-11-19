@@ -21,7 +21,7 @@
 //	                127.0.0.1:4566 inside that namespace. Host port 4566 is never
 //	                bound and no port is published.
 //	bench gate      reads benchstat output on stdin and fails on a regression
-//	                over 10% with p<0.05 that the accepted list does not
+//	                over 10% with p<0.001 that the accepted list does not
 //	                hold. The bench workflow runs it.
 //
 // # Workloads and cells
