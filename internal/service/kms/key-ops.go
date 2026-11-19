@@ -57,15 +57,17 @@ func (p *Provider) ListKeys(ctx context.Context, in *api.ListKeysInput) (*api.Li
 
 // EnableKey enables a key that is enabled or disabled.
 func (p *Provider) EnableKey(ctx context.Context, in *api.EnableKeyInput) (*api.EnableKeyOutput, error) {
-	return &api.EnableKeyOutput{}, p.setEnabled(ctx, in.KeyId, true)
+	return &api.EnableKeyOutput{}, p.setEnabledState(ctx, in.KeyId, stateEnabled)
 }
 
 // DisableKey disables a key that is enabled or disabled.
 func (p *Provider) DisableKey(ctx context.Context, in *api.DisableKeyInput) (*api.DisableKeyOutput, error) {
-	return &api.DisableKeyOutput{}, p.setEnabled(ctx, in.KeyId, false)
+	return &api.DisableKeyOutput{}, p.setEnabledState(ctx, in.KeyId, stateDisabled)
 }
 
-func (p *Provider) setEnabled(ctx context.Context, id *string, enabled bool) error {
+// setEnabledState moves a key that is enabled or disabled to state, which is
+// stateEnabled or stateDisabled.
+func (p *Provider) setEnabledState(ctx context.Context, id *string, state string) error {
 	rc, err := call(ctx)
 	if err != nil {
 		return err
@@ -79,12 +81,8 @@ func (p *Provider) setEnabled(ctx context.Context, id *string, enabled bool) err
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	k.enabled = enabled
-	k.state = stateDisabled
-
-	if enabled {
-		k.state = stateEnabled
-	}
+	k.state = state
+	k.enabled = state == stateEnabled
 
 	return nil
 }

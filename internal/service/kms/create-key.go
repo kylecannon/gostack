@@ -3,6 +3,7 @@ package kms
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -91,6 +92,7 @@ func createRequest(in *api.CreateKeyInput, tags []tag) (keyRequest, error) {
 			req.material = material
 		case tagCustomID:
 			req.customID = deref(t.TagValue)
+		default:
 		}
 	}
 
@@ -103,6 +105,7 @@ func createRequest(in *api.CreateKeyInput, tags []tag) (keyRequest, error) {
 		req.spec = *in.KeySpec
 	case in.CustomerMasterKeySpec != nil && *in.CustomerMasterKeySpec != "":
 		req.spec = *in.CustomerMasterKeySpec
+	default:
 	}
 
 	usage, err := keyUsage(in.KeyUsage, req.spec)
@@ -112,12 +115,7 @@ func createRequest(in *api.CreateKeyInput, tags []tag) (keyRequest, error) {
 
 	req.usage = usage
 
-	err = checkSpec(req.spec)
-	if err != nil {
-		return req, err
-	}
-
-	return req, checkUsage(req.usage)
+	return req, checkSpec(req.spec)
 }
 
 // newKey makes a key from req in an account and region, as KmsKey does.
@@ -185,17 +183,16 @@ func (p *Provider) keyID(req keyRequest) (string, error) {
 	case req.customID != "":
 		return req.customID, nil
 	case req.multiRegion:
-		b, err := randomBytes(p.random, mrkHexLen/2)
+		var u [16]byte
+
+		_, err := io.ReadFull(p.random, u[:])
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("read multi-Region key id: %w", err)
 		}
 
-		var u [16]byte
-		copy(u[:], b)
-		u[6] = u[6]&0x0f | 0x40
-		u[8] = u[8]&0x3f | 0x80
+		setUUIDVersion(&u, uuidRandom)
 
-		return mrkPrefix + fmt.Sprintf("%x", u), nil
+		return mrkPrefix + hex.EncodeToString(u[:]), nil
 	default:
 		return newUUID(p.random)
 	}

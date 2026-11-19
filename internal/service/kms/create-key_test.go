@@ -14,9 +14,11 @@ func Test_CreateKey(t *testing.T) {
 	t.Run("a symmetric key shows what DescribeKey shows, on the 1.1 wire", func(t *testing.T) {
 		s := newStack(t)
 
-		r := s.call(usEast1, "CreateKey", map[string]any{"Description": "test key 123", "KeyUsage": "ENCRYPT_DECRYPT"})
+		r := s.call(usEast1, "CreateKey", map[string]any{
+			fieldDescription: "test key 123", fieldKeyUsage: usageEncryptDecrypt,
+		})
 		require.Equal(t, http.StatusOK, r.status)
-		require.Equal(t, jsonType, r.header.Get("Content-Type"))
+		require.Equal(t, []string{jsonType}, r.header.Values("Content-Type"))
 
 		meta, ok := r.body["KeyMetadata"].(map[string]any)
 		require.True(t, ok)
@@ -26,21 +28,21 @@ func Test_CreateKey(t *testing.T) {
 		require.Regexp(t, `^[0-9a-f]{64}$`, meta["CurrentKeyMaterialId"])
 		require.NotNil(t, meta["CreationDate"])
 
-		for _, k := range []string{"KeyId", "CurrentKeyMaterialId", "CreationDate"} {
+		for _, k := range []string{fieldKeyID, "CurrentKeyMaterialId", "CreationDate"} {
 			delete(meta, k)
 		}
 
 		require.Equal(t, map[string]any{
 			"AWSAccountId":          account,
 			"Arn":                   "arn:aws:kms:us-east-1:" + account + ":key/" + id,
-			"CustomerMasterKeySpec": "SYMMETRIC_DEFAULT",
-			"Description":           "test key 123",
+			"CustomerMasterKeySpec": symmetricDefault,
+			fieldDescription:        "test key 123",
 			"Enabled":               true,
-			"EncryptionAlgorithms":  []any{"SYMMETRIC_DEFAULT"},
+			"EncryptionAlgorithms":  []any{symmetricDefault},
 			"KeyManager":            "CUSTOMER",
-			"KeySpec":               "SYMMETRIC_DEFAULT",
+			fieldKeySpec:            symmetricDefault,
 			"KeyState":              "Enabled",
-			"KeyUsage":              "ENCRYPT_DECRYPT",
+			fieldKeyUsage:           usageEncryptDecrypt,
 			"MultiRegion":           false,
 			"Origin":                "AWS_KMS",
 		}, meta)
@@ -69,20 +71,20 @@ func Test_CreateKey(t *testing.T) {
 			wantAlgs  []any
 		}{
 			{
-				name:      "HMAC_256",
-				giveInput: map[string]any{"KeySpec": "HMAC_256", "KeyUsage": "GENERATE_VERIFY_MAC"},
+				name:      hmac256,
+				giveInput: map[string]any{fieldKeySpec: hmac256, fieldKeyUsage: "GENERATE_VERIFY_MAC"},
 				wantKey:   "MacAlgorithms",
 				wantAlgs:  []any{"HMAC_SHA_256"},
 			},
 			{
 				name:      "ECC_NIST_P256 through CustomerMasterKeySpec",
-				giveInput: map[string]any{"CustomerMasterKeySpec": "ECC_NIST_P256", "KeyUsage": "SIGN_VERIFY"},
+				giveInput: map[string]any{"CustomerMasterKeySpec": "ECC_NIST_P256", fieldKeyUsage: usageSignVerify},
 				wantKey:   "SigningAlgorithms",
 				wantAlgs:  []any{"ECDSA_SHA_256"},
 			},
 			{
 				name:      "RSA_2048 for encryption",
-				giveInput: map[string]any{"KeySpec": "RSA_2048"},
+				giveInput: map[string]any{fieldKeySpec: rsa2048},
 				wantKey:   "EncryptionAlgorithms",
 				wantAlgs:  []any{"RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256"},
 			},
@@ -112,15 +114,15 @@ func Test_CreateKey(t *testing.T) {
 		const custom = "5d6f1c0e-8a43-4b3e-9a0b-1f7f3b2e9c41"
 
 		material := base64.StdEncoding.EncodeToString(make([]byte, 32))
-		meta := s.createKey(map[string]any{"Tags": []map[string]string{
-			{"TagKey": "_custom_id_", "TagValue": custom},
-			{"TagKey": "_custom_key_material_", "TagValue": material},
+		meta := s.createKey(map[string]any{fieldTags: []map[string]string{
+			{fieldTagKey: "_custom_id_", fieldTagValue: custom},
+			{fieldTagKey: "_custom_key_material_", fieldTagValue: material},
 		}})
 		require.Equal(t, custom, keyID(t, meta))
 		require.Contains(t, meta, "CurrentKeyMaterialId")
 
-		tags := s.ok("ListResourceTags", map[string]any{"KeyId": custom})["Tags"]
-		require.Equal(t, []any{map[string]any{"TagKey": "_custom_id_", "TagValue": custom}}, tags)
+		tags := s.ok("ListResourceTags", map[string]any{fieldKeyID: custom})[fieldTags]
+		require.Equal(t, []any{map[string]any{fieldTagKey: "_custom_id_", fieldTagValue: custom}}, tags)
 	})
 }
 
@@ -129,7 +131,7 @@ func Test_CreateKey_errors(t *testing.T) {
 	fiftyOne := make([]map[string]string, 0, 51)
 
 	for i := range 51 {
-		fiftyOne = append(fiftyOne, map[string]string{"TagKey": "key" + strconv.Itoa(i), "TagValue": "v"})
+		fiftyOne = append(fiftyOne, map[string]string{fieldTagKey: "key" + strconv.Itoa(i), fieldTagValue: "v"})
 	}
 
 	tests := []struct {
@@ -140,71 +142,73 @@ func Test_CreateKey_errors(t *testing.T) {
 	}{
 		{
 			name:        "an HMAC key without a usage",
-			giveInput:   map[string]any{"KeySpec": "HMAC_256"},
-			wantCode:    "ValidationException",
+			giveInput:   map[string]any{fieldKeySpec: hmac256},
+			wantCode:    codeValidation,
 			wantMessage: "You must specify a KeyUsage value for all KMS keys except for symmetric encryption keys.",
 		},
 		{
 			name:      "an unknown HMAC spec",
-			giveInput: map[string]any{"KeySpec": "HMAC_random"},
-			wantCode:  "ValidationException",
+			giveInput: map[string]any{fieldKeySpec: "HMAC_random"},
+			wantCode:  codeValidation,
 			wantMessage: "1 validation error detected: Value 'HMAC_random' at 'keySpec' failed to satisfy constraint: " +
 				"Member must satisfy enum value set: [RSA_2048, ECC_NIST_P384, ECC_NIST_P256, ECC_NIST_P521, HMAC_384, " +
 				"RSA_3072, ECC_SECG_P256K1, RSA_4096, SYMMETRIC_DEFAULT, HMAC_256, HMAC_224, HMAC_512]",
 		},
 		{
 			name:      "an HMAC key with an unknown usage",
-			giveInput: map[string]any{"KeySpec": "HMAC_256", "KeyUsage": "RANDOM"},
-			wantCode:  "ValidationException",
+			giveInput: map[string]any{fieldKeySpec: hmac256, fieldKeyUsage: "RANDOM"},
+			wantCode:  codeValidation,
 			wantMessage: "1 validation error detected: Value 'RANDOM' at 'keyUsage' failed to satisfy constraint: " +
 				"Member must satisfy enum value set: [ENCRYPT_DECRYPT, SIGN_VERIFY, GENERATE_VERIFY_MAC]",
 		},
 		{
 			name:        "a spec of no known family",
-			giveInput:   map[string]any{"KeySpec": "ML_DSA_44"},
+			giveInput:   map[string]any{fieldKeySpec: "ML_DSA_44"},
 			wantCode:    "UnsupportedOperationException",
 			wantMessage: "KeySpec ML_DSA_44 is not supported",
 		},
 		{
 			name:        "key agreement with an RSA spec",
-			giveInput:   map[string]any{"KeySpec": "RSA_2048", "KeyUsage": "KEY_AGREEMENT"},
-			wantCode:    "ValidationException",
+			giveInput:   map[string]any{fieldKeySpec: rsa2048, fieldKeyUsage: "KEY_AGREEMENT"},
+			wantCode:    codeValidation,
 			wantMessage: "KeyUsage KEY_AGREEMENT is not compatible with KeySpec RSA_2048",
 		},
 		{
 			name: "duplicate tag keys before their lengths",
-			giveInput: map[string]any{"Tags": []map[string]string{
-				{"TagKey": long, "TagValue": "1"}, {"TagKey": long, "TagValue": "2"},
+			giveInput: map[string]any{fieldTags: []map[string]string{
+				{fieldTagKey: long, fieldTagValue: "1"}, {fieldTagKey: long, fieldTagValue: "2"},
 			}},
-			wantCode:    "TagException",
+			wantCode:    codeTag,
 			wantMessage: "Duplicate tag keys",
 		},
 		{
 			name:        "more than 50 tags",
-			giveInput:   map[string]any{"Tags": fiftyOne},
-			wantCode:    "TagException",
+			giveInput:   map[string]any{fieldTags: fiftyOne},
+			wantCode:    codeTag,
 			wantMessage: "Too many tags",
 		},
 		{
 			name: "a long tag key, at its place in the request, before a bad spec",
-			giveInput: map[string]any{"KeySpec": "HMAC_random", "Tags": []map[string]string{
-				{"TagKey": "fine", "TagValue": "1"}, {"TagKey": long, "TagValue": "2"},
+			giveInput: map[string]any{fieldKeySpec: "HMAC_random", fieldTags: []map[string]string{
+				{fieldTagKey: "fine", fieldTagValue: "1"}, {fieldTagKey: long, fieldTagValue: "2"},
 			}},
-			wantCode: "ValidationException",
+			wantCode: codeValidation,
 			wantMessage: "1 validation error detected: Value '" + long + "' at 'tags.2.member.tagKey' failed to " +
 				"satisfy constraint: Member must have length less than or equal to 128",
 		},
 		{
-			name:      "a long tag value",
-			giveInput: map[string]any{"Tags": []map[string]string{{"TagKey": "tag1", "TagValue": strings.Repeat("v", 257)}}},
-			wantCode:  "ValidationException",
+			name: "a long tag value",
+			giveInput: map[string]any{
+				fieldTags: []map[string]string{{fieldTagKey: tag1, fieldTagValue: strings.Repeat("v", 257)}},
+			},
+			wantCode: codeValidation,
 			wantMessage: "1 validation error detected: Value '" + strings.Repeat("v", 257) + "' at " +
 				"'tags.1.member.tagValue' failed to satisfy constraint: Member must have length less than or equal to 256",
 		},
 		{
 			name:        "an aws: tag key in any case",
-			giveInput:   map[string]any{"Tags": []map[string]string{{"TagKey": "AWS:key1", "TagValue": "value1"}}},
-			wantCode:    "TagException",
+			giveInput:   map[string]any{fieldTags: []map[string]string{{fieldTagKey: "AWS:key1", fieldTagValue: value1}}},
+			wantCode:    codeTag,
 			wantMessage: "Tags beginning with aws: are reserved",
 		},
 	}
@@ -212,13 +216,19 @@ func Test_CreateKey_errors(t *testing.T) {
 	s := newStack(t)
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			s.fails("CreateKey", tt.giveInput, tt.wantCode, tt.wantMessage)
 		})
 	}
 
+	t.Run("an unknown usage of a non-HMAC spec is kept, as LocalStack keeps it", func(t *testing.T) {
+		meta := newStack(t).createKey(map[string]any{fieldKeyUsage: "RANDOM"})
+		require.Equal(t, "RANDOM", meta[fieldKeyUsage])
+		require.NotContains(t, meta, "EncryptionAlgorithms")
+	})
+
 	t.Run("secp256k1 waits for its dependency", func(t *testing.T) {
-		r := s.call(usEast1, "CreateKey", map[string]any{"KeySpec": "ECC_SECG_P256K1", "KeyUsage": "SIGN_VERIFY"})
+		r := s.call(usEast1, "CreateKey", map[string]any{fieldKeySpec: "ECC_SECG_P256K1", fieldKeyUsage: usageSignVerify})
 		require.Equal(t, http.StatusNotImplemented, r.status)
 	})
 

@@ -145,7 +145,7 @@ func Open(material []byte, b *Blob, aad []byte) ([]byte, error) {
 
 	padded, err := aead.Open(nil, b.IV[:], sealed, aad)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	return unpad(padded)

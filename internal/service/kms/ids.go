@@ -10,8 +10,13 @@ import (
 )
 
 const (
-	uuidLen      = 36
-	mrkPrefix    = "mrk-"
+	// uuidShape is a UUID's text with x for each hex digit.
+	uuidShape = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+	mrkPrefix = "mrk-"
+	// arnFields is the number of colon-separated fields in an ARN, the last
+	// being the resource, and arnRegion the index of its region.
+	arnFields    = 6
+	arnRegion    = 3
 	mrkHexLen    = 32
 	aliasPrefix  = "alias/"
 	keyResource  = "key/"
@@ -79,16 +84,18 @@ type parsedARN struct {
 // region, a 12-digit account, then key/ and an id or alias/ and a name, with
 // no colon after the account.
 func parseKeyARN(s string) (parsedARN, bool) {
-	parts := strings.SplitN(s, ":", 6)
-	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "kms" || parts[3] == "" {
+	const partitionField, serviceField, accountField, resourceField = 1, 2, 4, 5
+
+	parts := strings.SplitN(s, ":", arnFields)
+	if len(parts) != arnFields || parts[0] != "arn" || parts[serviceField] != "kms" || parts[arnRegion] == "" {
 		return parsedARN{}, false
 	}
 
-	if !slices.Contains(partitions, parts[1]) || !isDigits(parts[4], accountIDLen) || strings.Contains(parts[5], ":") {
+	resource := parts[resourceField]
+	if !slices.Contains(partitions, parts[partitionField]) || !isDigits(parts[accountField], accountIDLen) ||
+		strings.Contains(resource, ":") {
 		return parsedARN{}, false
 	}
-
-	resource := parts[5]
 
 	switch {
 	case strings.HasPrefix(resource, keyResource) && len(resource) > len(keyResource):
@@ -98,7 +105,7 @@ func parseKeyARN(s string) (parsedARN, bool) {
 		return parsedARN{}, false
 	}
 
-	return parsedARN{region: parts[3], account: parts[4], keyID: resource}, true
+	return parsedARN{region: parts[arnRegion], account: parts[accountField], keyID: resource}, true
 }
 
 func isDigits(s string, n int) bool {
@@ -122,20 +129,17 @@ func isKeyID(id string) bool {
 		return len(rest) == mrkHexLen && isHex(rest)
 	}
 
-	if len(id) != uuidLen {
+	if len(id) != len(uuidShape) {
 		return false
 	}
 
 	for i := range len(id) {
-		switch i {
-		case 8, 13, 18, 23:
+		if uuidShape[i] == '-' {
 			if id[i] != '-' {
 				return false
 			}
-		default:
-			if !isHex(id[i : i+1]) {
-				return false
-			}
+		} else if !isHex(id[i : i+1]) {
+			return false
 		}
 	}
 
@@ -162,10 +166,23 @@ func newUUID(random io.Reader) (string, error) {
 		return "", fmt.Errorf("read uuid: %w", err)
 	}
 
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
+	setUUIDVersion(&b, uuidRandom)
 
 	return formatUUID(b), nil
+}
+
+// uuidRandom and uuidSHA1 are the version nibbles of UUID versions 4 and 5.
+const (
+	uuidRandom = 0x40
+	uuidSHA1   = 0x50
+)
+
+// setUUIDVersion writes a UUID's version nibble and the RFC 4122 variant bits.
+func setUUIDVersion(b *[16]byte, version byte) {
+	const versionByte, variantByte, versionMask, variantMask, variant = 6, 8, 0x0f, 0x3f, 0x80
+
+	b[versionByte] = b[versionByte]&versionMask | version
+	b[variantByte] = b[variantByte]&variantMask | variant
 }
 
 // uuid5 is Python's uuid.uuid5(namespace, name).
@@ -176,8 +193,7 @@ func uuid5(namespace [16]byte, name []byte) [16]byte {
 
 	var b [16]byte
 	copy(b[:], h.Sum(nil))
-	b[6] = b[6]&0x0f | 0x50
-	b[8] = b[8]&0x3f | 0x80
+	setUUIDVersion(&b, uuidSHA1)
 
 	return b
 }

@@ -30,17 +30,17 @@ var reservedAliases = []string{
 // keyPlace is LocalStack's _parse_key_id: a key ARN names the account and
 // region of its key, which must be the caller's region, and any other id is
 // looked up in the caller's account and region.
-func keyPlace(rc *request.Context, id string) (account, region, keyID string, err error) {
+func keyPlace(rc *request.Context, id string) (parsedARN, error) {
 	parsed, ok := parseKeyARN(id)
 	if !ok {
-		return rc.AccountID, rc.Region, id, nil
+		return parsedARN{region: rc.Region, account: rc.AccountID, keyID: id}, nil
 	}
 
 	if parsed.region != rc.Region {
-		return "", "", "", api.NewNotFoundException("Invalid arn " + parsed.region)
+		return parsedARN{}, api.NewNotFoundException("Invalid arn " + parsed.region)
 	}
 
-	return parsed.account, parsed.region, parsed.keyID, nil
+	return parsed, nil
 }
 
 // dataKey is the first step of a data operation and of every call that may
@@ -54,12 +54,12 @@ func (p *Provider) dataKey(rc *request.Context, id *string) (*Key, error) {
 
 // placedKey is dataKey for a call that allows other states.
 func (p *Provider) placedKey(rc *request.Context, id *string, allowed allow) (*Key, error) {
-	account, region, keyID, err := keyPlace(rc, deref(id))
+	place, err := keyPlace(rc, deref(id))
 	if err != nil {
 		return nil, err
 	}
 
-	return p.lookup(account, region, keyID, allowed)
+	return p.lookup(place.account, place.region, place.keyID, allowed)
 }
 
 // localKey finds a key in the caller's own account and region by any of id's
@@ -89,26 +89,27 @@ func (p *Provider) lookup(account, region, someID string, allowed allow) (*Key, 
 // alias ARN names in an account and region, with LocalStack's errors. The
 // account of a key ARN is not looked at here; keyPlace reads it.
 func (p *Provider) resolve(account, region, someID string) (*Key, error) {
-	var aliasName, keyID, arn string
+	var named arnTarget
 
 	switch {
 	case strings.HasPrefix(someID, arnPrefix):
 		var err error
 
-		aliasName, keyID, arn, err = splitARN(region, someID)
+		named, err = splitARN(region, someID)
 		if err != nil {
 			return nil, err
 		}
 	case strings.HasPrefix(someID, aliasPrefix):
-		aliasName = someID
+		named.aliasName = someID
 	default:
-		keyID = someID
+		named.keyID = someID
 	}
 
 	st := p.stateAt(account, region)
+	keyID, arn := named.keyID, named.arn
 
-	if aliasName != "" {
-		target, err := p.aliasTarget(st, aliasName)
+	if named.aliasName != "" {
+		target, err := p.aliasTarget(st, named.aliasName)
 		if err != nil {
 			return nil, err
 		}
@@ -135,27 +136,35 @@ func (p *Provider) resolve(account, region, someID string) (*Key, error) {
 // splitARN reads an ARN given as a key id: the alias name of an alias ARN, or
 // the key id of a key ARN, which must be in region. Another ARN is refused;
 // LocalStack raises a ValueError there, which it answers with a 500.
-func splitARN(region, arn string) (aliasName, keyID, keyARN string, err error) {
+func splitARN(region, arn string) (arnTarget, error) {
 	if _, name, ok := strings.Cut(arn, ":alias/"); ok {
-		return aliasPrefix + name, "", "", nil
+		return arnTarget{aliasName: aliasPrefix + name}, nil
 	}
 
 	_, id, ok := strings.Cut(arn, ":key/")
 	if !ok {
-		return "", "", "", api.NewNotFoundException("Invalid keyId '" + arn + "'")
+		return arnTarget{}, api.NewNotFoundException("Invalid keyId '" + arn + "'")
 	}
 
 	// parse_arn: arn:partition:service:region:account:resource.
-	if parts := strings.SplitN(arn, ":", 6); len(parts) < 6 || parts[3] != region {
+	if parts := strings.SplitN(arn, ":", arnFields); len(parts) < arnFields || parts[arnRegion] != region {
 		var got string
-		if len(parts) > 3 {
-			got = parts[3]
+		if len(parts) > arnRegion {
+			got = parts[arnRegion]
 		}
 
-		return "", "", "", api.NewNotFoundException("Invalid arn " + got)
+		return arnTarget{}, api.NewNotFoundException("Invalid arn " + got)
 	}
 
-	return "", id, arn, nil
+	return arnTarget{keyID: id, arn: arn}, nil
+}
+
+// arnTarget is what splitARN reads from an ARN: an alias name, or a key id and
+// the key ARN it came from.
+type arnTarget struct {
+	aliasName string
+	keyID     string
+	arn       string
 }
 
 // aliasTarget is the id of the key an alias names, making a reserved alias and

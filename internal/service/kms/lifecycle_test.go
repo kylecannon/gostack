@@ -23,7 +23,10 @@ func Test_DescribeKey_errors(t *testing.T) {
 		wantMessage string
 	}{
 		{"an id that is not a key id", usEast1, "fake-key-id", "Invalid keyId 'fake-key-id'"},
-		{"a UUID without dashes", usEast1, "134f2428cec14b25a1ae9048164dba47", "Invalid keyId '134f2428cec14b25a1ae9048164dba47'"},
+		{
+			"a UUID without dashes", usEast1, "134f2428cec14b25a1ae9048164dba47",
+			"Invalid keyId '134f2428cec14b25a1ae9048164dba47'",
+		},
 		{"an mrk- id that is not hex", usEast1, "mrk-fake-key-id", "Invalid keyId 'mrk-fake-key-id'"},
 		{
 			"a missing key", usEast1, missing,
@@ -46,7 +49,7 @@ func Test_DescribeKey_errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := s.call(tt.giveRegion, "DescribeKey", map[string]any{"KeyId": tt.giveKeyID})
+			r := s.call(tt.giveRegion, "DescribeKey", map[string]any{fieldKeyID: tt.giveKeyID})
 			require.Equal(t, http.StatusBadRequest, r.status)
 			require.Equal(t, "NotFoundException", r.errorCode())
 			require.Equal(t, tt.wantMessage, r.message())
@@ -57,7 +60,7 @@ func Test_DescribeKey_errors(t *testing.T) {
 func Test_keyStates(t *testing.T) {
 	s := newStack(t)
 	id := keyID(t, s.createKey(nil))
-	key := map[string]any{"KeyId": id}
+	key := map[string]any{fieldKeyID: id}
 
 	state := func() (string, any) {
 		meta, ok := s.ok("DescribeKey", key)["KeyMetadata"].(map[string]any)
@@ -80,11 +83,11 @@ func Test_keyStates(t *testing.T) {
 
 	s.fails("CancelKeyDeletion", key, "KMSInvalidStateException",
 		"arn:aws:kms:us-east-1:"+account+":key/"+id+" is enabled, but the operation doesn't support such a state")
-	s.fails("ScheduleKeyDeletion", map[string]any{"KeyId": id, "PendingWindowInDays": 6}, "ValidationException",
+	s.fails("ScheduleKeyDeletion", map[string]any{fieldKeyID: id, "PendingWindowInDays": 6}, codeValidation,
 		"PendingWindowInDays should be between 7 and 30, but it is 6")
 
 	scheduled := s.ok("ScheduleKeyDeletion", key)
-	require.Equal(t, id, scheduled["KeyId"])
+	require.Equal(t, id, scheduled[fieldKeyID])
 	require.Equal(t, "PendingDeletion", scheduled["KeyState"])
 	require.InDelta(t, 30, scheduled["PendingWindowInDays"], 0)
 	require.NotNil(t, scheduled["DeletionDate"])
@@ -100,24 +103,26 @@ func Test_keyStates(t *testing.T) {
 	require.Equal(t, false, enabled)
 
 	cancelled := s.ok("CancelKeyDeletion", key)
-	require.Equal(t, "arn:aws:kms:us-east-1:"+account+":key/"+id, cancelled["KeyId"])
+	require.Equal(t, "arn:aws:kms:us-east-1:"+account+":key/"+id, cancelled[fieldKeyID])
 
 	meta, ok := s.ok("DescribeKey", key)["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "Disabled", meta["KeyState"])
 	require.NotContains(t, meta, "DeletionDate")
 
-	s.ok("UpdateKeyDescription", map[string]any{"KeyId": id, "Description": "new"})
+	s.ok("UpdateKeyDescription", map[string]any{fieldKeyID: id, fieldDescription: "new"})
 	meta, ok = s.ok("DescribeKey", key)["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "new", meta["Description"])
+	require.Equal(t, "new", meta[fieldDescription])
 }
 
 func Test_ListKeys(t *testing.T) {
 	s := newStack(t)
 
-	var ids []any
-	for range 5 {
+	const keys = 5
+
+	ids := make([]any, 0, keys)
+	for range keys {
 		ids = append(ids, keyID(t, s.createKey(nil)))
 	}
 
@@ -141,7 +146,7 @@ func Test_ListKeys(t *testing.T) {
 		for _, e := range entries {
 			entry, ok := e.(map[string]any)
 			require.True(t, ok)
-			got = append(got, entry["KeyId"])
+			got = append(got, entry[fieldKeyID])
 		}
 	}
 
@@ -150,33 +155,35 @@ func Test_ListKeys(t *testing.T) {
 
 func Test_tags(t *testing.T) {
 	s := newStack(t)
-	id := keyID(t, s.createKey(map[string]any{"Tags": []map[string]string{
-		{"TagKey": "tag1", "TagValue": "value1"}, {"TagKey": "tag2", "TagValue": "value2"}, {"TagKey": "tag3", "TagValue": "value3"},
+	id := keyID(t, s.createKey(map[string]any{fieldTags: []map[string]string{
+		{fieldTagKey: tag1, fieldTagValue: value1},
+		{fieldTagKey: tag2, fieldTagValue: "value2"},
+		{fieldTagKey: tag3, fieldTagValue: "value3"},
 	}}))
-	key := map[string]any{"KeyId": id}
+	key := map[string]any{fieldKeyID: id}
 
-	s.ok("TagResource", map[string]any{"KeyId": id, "Tags": []map[string]string{
-		{"TagKey": "tag4", "TagValue": "value4"}, {"TagKey": "tag2", "TagValue": "updated"},
+	s.ok("TagResource", map[string]any{fieldKeyID: id, fieldTags: []map[string]string{
+		{fieldTagKey: tag4, fieldTagValue: "value4"}, {fieldTagKey: tag2, fieldTagValue: "updated"},
 	}})
 
 	listed := s.ok("ListResourceTags", key)
 	require.Equal(t, false, listed["Truncated"])
 	require.Equal(t, []any{
-		map[string]any{"TagKey": "tag1", "TagValue": "value1"},
-		map[string]any{"TagKey": "tag2", "TagValue": "updated"},
-		map[string]any{"TagKey": "tag3", "TagValue": "value3"},
-		map[string]any{"TagKey": "tag4", "TagValue": "value4"},
-	}, listed["Tags"])
+		map[string]any{fieldTagKey: tag1, fieldTagValue: value1},
+		map[string]any{fieldTagKey: tag2, fieldTagValue: "updated"},
+		map[string]any{fieldTagKey: tag3, fieldTagValue: "value3"},
+		map[string]any{fieldTagKey: tag4, fieldTagValue: "value4"},
+	}, listed[fieldTags])
 
-	s.ok("UntagResource", map[string]any{"KeyId": id, "TagKeys": []string{"tag1", "tag2", "tag3", "tag4"}})
-	require.Equal(t, []any{}, s.ok("ListResourceTags", key)["Tags"])
+	s.ok("UntagResource", map[string]any{fieldKeyID: id, "TagKeys": []string{tag1, tag2, tag3, tag4}})
+	require.Equal(t, []any{}, s.ok("ListResourceTags", key)[fieldTags])
 
-	s.fails("TagResource", map[string]any{"KeyId": id, "Tags": []map[string]string{
-		{"TagKey": "tag1", "TagValue": "value1"}, {"TagKey": "tag1", "TagValue": "another"},
-	}}, "TagException", "Duplicate tag keys")
-	s.fails("TagResource", map[string]any{"KeyId": id, "Tags": []map[string]string{
-		{"TagKey": "aws:key1", "TagValue": "value1"},
-	}}, "TagException", "Tags beginning with aws: are reserved")
+	s.fails("TagResource", map[string]any{fieldKeyID: id, fieldTags: []map[string]string{
+		{fieldTagKey: tag1, fieldTagValue: value1}, {fieldTagKey: tag1, fieldTagValue: "another"},
+	}}, codeTag, "Duplicate tag keys")
+	s.fails("TagResource", map[string]any{fieldKeyID: id, fieldTags: []map[string]string{
+		{fieldTagKey: "aws:key1", fieldTagValue: value1},
+	}}, codeTag, "Tags beginning with aws: are reserved")
 }
 
 func Test_aliases(t *testing.T) {
@@ -185,22 +192,23 @@ func Test_aliases(t *testing.T) {
 	first := keyID(t, meta)
 	second := keyID(t, s.createKey(nil))
 
-	s.fails("CreateAlias", map[string]any{"AliasName": "no-prefix", "TargetKeyId": first}, "ValidationException",
-		`Alias must start with the prefix "alias/". Please see https://docs.aws.amazon.com/kms/latest/developerguide/kms-alias.html`)
+	s.fails("CreateAlias", map[string]any{fieldAliasName: "no-prefix", fieldTargetKeyID: first}, codeValidation,
+		`Alias must start with the prefix "alias/". Please see `+
+			`https://docs.aws.amazon.com/kms/latest/developerguide/kms-alias.html`)
 
-	s.ok("CreateAlias", map[string]any{"AliasName": "alias/a", "TargetKeyId": first})
-	s.fails("CreateAlias", map[string]any{"AliasName": "alias/a", "TargetKeyId": second}, "AlreadyExistsException",
+	s.ok("CreateAlias", map[string]any{fieldAliasName: aliasA, fieldTargetKeyID: first})
+	s.fails("CreateAlias", map[string]any{fieldAliasName: aliasA, fieldTargetKeyID: second}, "AlreadyExistsException",
 		"An alias with the name arn:aws:kms:us-east-1:"+account+":alias/a already exists")
 
 	described, ok := s.ok("DescribeKey", map[string]any{
-		"KeyId": "arn:aws:kms:us-east-1:" + account + ":alias/a",
+		fieldKeyID: "arn:aws:kms:us-east-1:" + account + ":alias/a",
 	})["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, first, described["KeyId"])
+	require.Equal(t, first, described[fieldKeyID])
 
 	aliasesOf := func(id string) []any {
-		aliases, ok := s.ok("ListAliases", map[string]any{"KeyId": id})["Aliases"].([]any)
-		require.True(t, ok)
+		aliases, found := s.ok("ListAliases", map[string]any{fieldKeyID: id})["Aliases"].([]any)
+		require.True(t, found)
 
 		return aliases
 	}
@@ -208,21 +216,21 @@ func Test_aliases(t *testing.T) {
 	require.Len(t, aliasesOf(first), 1)
 	require.Empty(t, aliasesOf(second))
 
-	s.ok("UpdateAlias", map[string]any{"AliasName": "alias/a", "TargetKeyId": arn(t, meta)})
-	s.ok("UpdateAlias", map[string]any{"AliasName": "alias/a", "TargetKeyId": second})
+	s.ok("UpdateAlias", map[string]any{fieldAliasName: aliasA, fieldTargetKeyID: arn(t, meta)})
+	s.ok("UpdateAlias", map[string]any{fieldAliasName: aliasA, fieldTargetKeyID: second})
 	require.Empty(t, aliasesOf(first))
 
 	entry, ok := aliasesOf(second)[0].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "arn:aws:kms:us-east-1:"+account+":alias/a", entry["AliasArn"])
-	require.Equal(t, second, entry["TargetKeyId"])
+	require.Equal(t, second, entry[fieldTargetKeyID])
 	require.Contains(t, entry, "LastUpdatedDate")
 
-	s.fails("UpdateAlias", map[string]any{"AliasName": "alias/none", "TargetKeyId": second}, "NotFoundException",
+	s.fails("UpdateAlias", map[string]any{fieldAliasName: "alias/none", fieldTargetKeyID: second}, "NotFoundException",
 		"Alias arn:aws:kms:us-east-1:"+account+":alias/none is not found.")
 
-	s.ok("DeleteAlias", map[string]any{"AliasName": "alias/a"})
-	s.fails("DeleteAlias", map[string]any{"AliasName": "alias/a"}, "NotFoundException",
+	s.ok("DeleteAlias", map[string]any{fieldAliasName: aliasA})
+	s.fails("DeleteAlias", map[string]any{fieldAliasName: aliasA}, "NotFoundException",
 		"Alias arn:aws:kms:us-east-1:"+account+":alias/a is not found")
 	require.Equal(t, []any{}, s.ok("ListAliases", nil)["Aliases"])
 }
@@ -230,13 +238,13 @@ func Test_aliases(t *testing.T) {
 func Test_reservedAlias(t *testing.T) {
 	s := newStack(t)
 
-	meta, ok := s.ok("DescribeKey", map[string]any{"KeyId": "alias/aws/s3"})["KeyMetadata"].(map[string]any)
+	meta, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: "alias/aws/s3"})["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, int32(1), s.changes.Load(), "a read that makes a reserved alias reports the change")
 
-	again, ok := s.ok("DescribeKey", map[string]any{"KeyId": "alias/aws/s3"})["KeyMetadata"].(map[string]any)
+	again, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: "alias/aws/s3"})["KeyMetadata"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, meta["KeyId"], again["KeyId"])
+	require.Equal(t, meta[fieldKeyID], again[fieldKeyID])
 	require.Equal(t, int32(1), s.changes.Load())
 }
 
@@ -244,20 +252,28 @@ func Test_policies(t *testing.T) {
 	s := newStack(t)
 	id := keyID(t, s.createKey(nil))
 
-	policy := s.ok("GetKeyPolicy", map[string]any{"KeyId": id, "PolicyName": "default"})["Policy"]
-	require.Equal(t, `{"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": "Enable IAM User `+
+	policy, ok := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault})["Policy"].(string)
+	require.True(t, ok)
+	require.JSONEq(t, `{"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": "Enable IAM User `+
 		`Permissions", "Effect": "Allow", "Principal": {"AWS": "arn:aws:iam::`+account+`:root"}, "Action": "kms:*", `+
 		`"Resource": "*"}]}`, policy)
+	// The text is json.dumps's, with a space after each separator.
+	require.Contains(t, policy, `{"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": `)
 
-	s.ok("PutKeyPolicy", map[string]any{"KeyId": id, "PolicyName": "default", "Policy": `{"x": 1}`})
-	require.Equal(t, `{"x": 1}`, s.ok("GetKeyPolicy", map[string]any{"KeyId": id})["Policy"])
+	s.ok("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: policyDefault, "Policy": `{"x": 1}`})
 
-	listed := s.ok("ListKeyPolicies", map[string]any{"KeyId": id})
-	require.Equal(t, []any{"default"}, listed["PolicyNames"])
+	stored, ok := s.ok("GetKeyPolicy", map[string]any{fieldKeyID: id})["Policy"].(string)
+	require.True(t, ok)
+	require.Contains(t, stored, `{"x": 1}`)
+	require.Len(t, stored, len(`{"x": 1}`), "the policy is kept as it was sent")
+
+	listed := s.ok("ListKeyPolicies", map[string]any{fieldKeyID: id})
+	require.Equal(t, []any{policyDefault}, listed["PolicyNames"])
 	require.Equal(t, false, listed["Truncated"])
 
-	s.fails("GetKeyPolicy", map[string]any{"KeyId": id, "PolicyName": "other"}, "NotFoundException", "No such policy exists")
-	s.fails("PutKeyPolicy", map[string]any{"KeyId": id, "PolicyName": "other", "Policy": "{}"},
+	s.fails("GetKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: "other"},
+		"NotFoundException", "No such policy exists")
+	s.fails("PutKeyPolicy", map[string]any{fieldKeyID: id, fieldPolicyName: "other", "Policy": "{}"},
 		"UnsupportedOperationException", "Only default policy is supported")
 }
 
@@ -266,17 +282,17 @@ func Test_GenerateRandom(t *testing.T) {
 
 	for _, n := range []int{1, 12, 1024} {
 		t.Run(strconv.Itoa(n), func(t *testing.T) {
-			plaintext, ok := s.ok("GenerateRandom", map[string]any{"NumberOfBytes": n})["Plaintext"].(string)
+			plaintext, ok := s.ok("GenerateRandom", map[string]any{fieldNumberOfBytes: n})["Plaintext"].(string)
 			require.True(t, ok)
 			require.Len(t, plaintext, (n+2)/3*4)
 		})
 	}
 
-	s.fails("GenerateRandom", map[string]any{}, "ValidationException", "NumberOfBytes is required.")
-	s.fails("GenerateRandom", map[string]any{"NumberOfBytes": 0}, "ValidationException",
+	s.fails("GenerateRandom", map[string]any{}, codeValidation, "NumberOfBytes is required.")
+	s.fails("GenerateRandom", map[string]any{fieldNumberOfBytes: 0}, codeValidation,
 		"1 validation error detected: Value '0' at 'numberOfBytes' failed to satisfy constraint: "+
 			"Member must have value greater than or equal to 1")
-	s.fails("GenerateRandom", map[string]any{"NumberOfBytes": 1025}, "ValidationException",
+	s.fails("GenerateRandom", map[string]any{fieldNumberOfBytes: 1025}, codeValidation,
 		"1 validation error detected: Value '1025' at 'numberOfBytes' failed to satisfy constraint: "+
 			"Member must have value less than or equal to 1024")
 }
@@ -284,6 +300,6 @@ func Test_GenerateRandom(t *testing.T) {
 func Test_unimplemented(t *testing.T) {
 	s := newStack(t)
 
-	r := s.call(usEast1, "Encrypt", map[string]any{"KeyId": "alias/x", "Plaintext": "AA=="})
+	r := s.call(usEast1, "Encrypt", map[string]any{fieldKeyID: "alias/x", "Plaintext": "AA=="})
 	require.Equal(t, http.StatusNotImplemented, r.status)
 }

@@ -23,6 +23,38 @@ const (
 	jsonType   = "application/x-amz-json-1.1"
 )
 
+// Member names, values and error codes the tests repeat.
+const (
+	fieldKeyID         = "KeyId"
+	fieldDescription   = "Description"
+	fieldKeySpec       = "KeySpec"
+	fieldTags          = "Tags"
+	fieldTagKey        = "TagKey"
+	fieldAliasName     = "AliasName"
+	fieldPolicyName    = "PolicyName"
+	fieldNumberOfBytes = "NumberOfBytes"
+	fieldTagValue      = "TagValue"
+	fieldKeyUsage      = "KeyUsage"
+	fieldTargetKeyID   = "TargetKeyId"
+
+	usageEncryptDecrypt = "ENCRYPT_DECRYPT"
+	usageSignVerify     = "SIGN_VERIFY"
+	rsa2048             = "RSA_2048"
+	policyDefault       = "default"
+	tag2                = "tag2"
+	tag3                = "tag3"
+
+	symmetricDefault = "SYMMETRIC_DEFAULT"
+	hmac256          = "HMAC_256"
+	aliasA           = "alias/a"
+	tag1             = "tag1"
+	tag4             = "tag4"
+	value1           = "value1"
+
+	codeValidation = "ValidationException"
+	codeTag        = "TagException"
+)
+
 // stack is KMS behind the real gateway, called in process.
 type stack struct {
 	t       *testing.T
@@ -134,7 +166,7 @@ func (s *stack) createKey(input map[string]any) map[string]any {
 func keyID(t *testing.T, meta map[string]any) string {
 	t.Helper()
 
-	id, ok := meta["KeyId"].(string)
+	id, ok := meta[fieldKeyID].(string)
 	require.True(t, ok)
 
 	return id

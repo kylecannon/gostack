@@ -3,13 +3,16 @@ package kms
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
@@ -38,16 +41,34 @@ const (
 	keyUsageEnum = "Member must satisfy enum value set: [ENCRYPT_DECRYPT, SIGN_VERIFY, GENERATE_VERIFY_MAC]"
 )
 
-// rsaBits are the RSA specs (RSA_CRYPTO_KEY_LENGTHS).
-var rsaBits = map[string]int{"RSA_2048": 2048, "RSA_3072": 3072, "RSA_4096": 4096}
+const (
+	specP256 = "ECC_NIST_P256"
+	specP384 = "ECC_NIST_P384"
+	specP521 = "ECC_NIST_P521"
+)
+
+// rsaSpecs are the RSA specs (RSA_CRYPTO_KEY_LENGTHS); each names its size in
+// bits after the prefix.
+var rsaSpecs = []string{"RSA_2048", "RSA_3072", "RSA_4096"}
+
+// rsaBits is the key size of an RSA spec.
+func rsaBits(spec string) (int, bool) {
+	if !slices.Contains(rsaSpecs, spec) {
+		return 0, false
+	}
+
+	bits, err := strconv.Atoi(strings.TrimPrefix(spec, "RSA_"))
+
+	return bits, err == nil
+}
 
 // eccCurves are the elliptic-curve specs (ECC_CURVES). secp256k1 has no
 // standard-library curve; its spec is accepted and answered 501 by CreateKey.
 var eccCurves = map[string]elliptic.Curve{
-	"ECC_NIST_P256": elliptic.P256(),
-	"ECC_NIST_P384": elliptic.P384(),
-	"ECC_NIST_P521": elliptic.P521(),
-	specSECGK1:      nil,
+	specP256:   elliptic.P256(),
+	specP384:   elliptic.P384(),
+	specP521:   elliptic.P521(),
+	specSECGK1: nil,
 }
 
 // hmacLens are the HMAC specs with the shortest and longest material
@@ -60,17 +81,14 @@ var hmacLens = map[string][2]int{
 }
 
 // keyAgreementSpecs are the specs KEY_AGREEMENT is allowed with.
-var keyAgreementSpecs = []string{"ECC_NIST_P256", "ECC_NIST_P384", "ECC_NIST_P521", specSECGK1, "SM2"}
-
-// knownUsages are the KeyUsage values of the model.
-var knownUsages = []string{usageEncrypt, usageSign, usageMAC, usageKeyAgreement}
+var keyAgreementSpecs = []string{specP256, specP384, specP521, specSECGK1, "SM2"}
 
 // validation is a ValidationException with message.
 func validation(message string) *awserr.Error {
 	return &awserr.Error{
 		Code:       "ValidationException",
 		Message:    message,
-		StatusCode: 400,
+		StatusCode: http.StatusBadRequest,
 		Fault:      awserr.FaultSender,
 	}
 }
@@ -119,7 +137,7 @@ func checkSpec(spec string) error {
 	case spec == specSymmetric:
 		return nil
 	case strings.HasPrefix(spec, "RSA"):
-		_, known = rsaBits[spec]
+		known = slices.Contains(rsaSpecs, spec)
 	case strings.HasPrefix(spec, "ECC"):
 		_, known = eccCurves[spec]
 	case strings.HasPrefix(spec, "HMAC"):
@@ -133,16 +151,6 @@ func checkSpec(spec string) error {
 	}
 
 	return nil
-}
-
-// checkUsage refuses a KeyUsage the model does not have, which LocalStack
-// stores as it is and AWS refuses with this message. It runs after checkSpec.
-func checkUsage(usage string) error {
-	if slices.Contains(knownUsages, usage) {
-		return nil
-	}
-
-	return enumError("keyUsage", usage, keyUsageEnum)
 }
 
 // material is a key's crypto key.
@@ -209,7 +217,7 @@ func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
 		return key, nil
 	}
 
-	if bits, ok := rsaBits[spec]; ok {
+	if bits, ok := rsaBits(spec); ok {
 		key, err := rsa.GenerateKey(random, bits)
 		if err != nil {
 			return nil, fmt.Errorf("generate %s: %w", spec, err)
@@ -229,20 +237,22 @@ func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
 // parsePrivateKey reads a DER private key in any of the forms
 // load_der_private_key takes: PKCS #8, PKCS #1 and SEC 1.
 func parsePrivateKey(der []byte) (any, error) {
-	if key, err := x509.ParsePKCS8PrivateKey(der); err == nil {
-		return key, nil
+	pkcs8, err := x509.ParsePKCS8PrivateKey(der)
+	if err == nil {
+		return pkcs8, nil
 	}
 
-	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
-		return key, nil
+	pkcs1, err := x509.ParsePKCS1PrivateKey(der)
+	if err == nil {
+		return pkcs1, nil
 	}
 
-	key, err := x509.ParseECPrivateKey(der)
+	sec1, err := x509.ParseECPrivateKey(der)
 	if err != nil {
 		return nil, errors.New("not PKCS #8, PKCS #1 or SEC 1")
 	}
 
-	return key, nil
+	return sec1, nil
 }
 
 // serialize keeps private as PKCS #8 and its public key as a
@@ -291,11 +301,11 @@ func signingAlgorithms(usage, spec string) []string {
 	switch {
 	case usage != usageSign:
 		return nil
-	case spec == "ECC_NIST_P256" || spec == specSECGK1:
+	case spec == specP256 || spec == specSECGK1:
 		return []string{"ECDSA_SHA_256"}
-	case spec == "ECC_NIST_P384":
+	case spec == specP384:
 		return []string{"ECDSA_SHA_384"}
-	case spec == "ECC_NIST_P521":
+	case spec == specP521:
 		return []string{"ECDSA_SHA_512"}
 	default:
 		return []string{
@@ -326,14 +336,10 @@ func randomBytes(random io.Reader, n int) ([]byte, error) {
 
 // randomBetween is a number from lowest to highest, both included.
 func randomBetween(random io.Reader, lowest, highest int) (int, error) {
-	var b [8]byte
-
-	_, err := io.ReadFull(random, b[:])
+	n, err := rand.Int(random, big.NewInt(int64(highest-lowest+1)))
 	if err != nil {
 		return 0, fmt.Errorf("read random bytes: %w", err)
 	}
 
-	span := uint64(highest - lowest + 1)
-
-	return lowest + int(binary.BigEndian.Uint64(b[:])%span), nil //nolint:gosec // span is at most 81
+	return lowest + int(n.Int64()), nil
 }
