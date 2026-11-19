@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key\": [{\"suffix\": [\"test\", \"test2\"]}]}")
+bool(false)
+string("{}")

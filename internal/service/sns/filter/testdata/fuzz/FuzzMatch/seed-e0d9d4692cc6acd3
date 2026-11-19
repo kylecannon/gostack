@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key\": [{\"cidr\": \"2001:db8:1234:1a00::/64\"}]}")
+bool(false)
+string("{}")

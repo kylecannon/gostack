@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": {\"$or\": [{\"b\": [\"x\"]}, {\"c\": [\"y\"]}]}}")
+bool(false)
+string("{}")

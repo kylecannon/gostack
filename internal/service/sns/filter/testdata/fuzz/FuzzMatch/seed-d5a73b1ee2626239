@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"headers\": {\"route-to\": [\"queue1\"]}}")
+bool(true)
+string("{\"headers\": {\"route-to\": [\"queue1\"]}}")

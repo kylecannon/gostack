@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"k\": [\"a\", \"b\"], \"m\": [{\"exists\": true}]}")
+bool(false)
+string("{\"k\": {\"DataType\": \"String\", \"StringValue\": \"a\"}, \"m\": {\"DataType\": \"String\", \"StringValue\": \"b\"}}")

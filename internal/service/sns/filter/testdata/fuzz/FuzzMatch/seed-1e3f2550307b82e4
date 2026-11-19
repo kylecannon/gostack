@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"object\": {\"key\": [{\"prefix\": \"auto-\"}, \"hardcodedvalue\"], \"nested_key\": [{\"exists\": false}]}, \"test\": [{\"exists\": false}]}")
+bool(true)
+string("{\"object\": {\"key\": \"auto-test\"}}")

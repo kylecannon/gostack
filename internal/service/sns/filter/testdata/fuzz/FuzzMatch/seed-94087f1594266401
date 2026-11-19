@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key\": [{\"anything-but\": [[\"x\"]]}]}")
+bool(false)
+string("{}")

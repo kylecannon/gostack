@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": [{\"cidr\": \"0.0.0.0/24\"}]}")
+bool(true)
+string("{\"a\": 3}")
