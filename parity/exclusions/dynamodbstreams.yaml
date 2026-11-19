@@ -1,0 +1,15 @@
+# dynamodbstreams tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- depends-on:cloudformation: dynamodbstreams ---------------------------
+# Provisions the table with a CDK stack (infrastructure_setup), which deploys
+# through CloudFormation.
+"tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_table_v2_stream": depends-on:cloudformation
+
+# --- depends-on:kinesis: dynamodbstreams ----------------------------------
+# With DDB_STREAMS_PROVIDER_V2 false in the runner, it asserts the table's
+# Kinesis stream is listed by kinesis.list_streams.
+"tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_stream_spec_and_region_replacement": depends-on:kinesis
+
+# --- hard-skipped: dynamodbstreams ----------------------------------------
+# Skipped on every run that is not against AWS (upstream: flaky, and not implemented yet on the v2 implementation).
+"tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_enable_kinesis_streaming_destination": hard-skipped (Flaky and not implemented yet on the v2 implementation)
