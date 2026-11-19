@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/config"
+	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,9 +27,11 @@ const (
 // parityTables are the hand-kept tables parity/ledger.py selects the services
 // of a parity run with, as `ledger.py tables` prints them.
 type parityTables struct {
-	DependsOn    map[string][]string `json:"depends_on"`
-	EveryService string              `json:"every_service"`
-	RoutingReach []string            `json:"routing_reach"`
+	DeclaredAhead []string            `json:"declared_ahead"`
+	DependsOn     map[string][]string `json:"depends_on"`
+	EveryService  string              `json:"every_service"`
+	RoutingReach  []string            `json:"routing_reach"`
+	TestDirs      []string            `json:"test_dirs"`
 }
 
 // Test_parityTables holds the tables in parity/ledger.py to the code. Parity
@@ -40,6 +43,17 @@ type parityTables struct {
 // parity/test_*.py, has no Go; the test job running this has python3, which
 // make parity-check needs anyway. Imports are read with go/build for the
 // image's platform, linux without cgo, so no go command runs.
+//
+// A DEPENDS_ON entry may be seeded for a service built next: its key or a
+// dependency may name a service that has a generated internal/api/<svc> package
+// and no internal/service/<svc> yet. An entry for a service with neither fails,
+// and so does a registered service, or a service package or generated API
+// package, with no TEST_DIRS entry.
+//
+// Every service that calls or imports another must be a key: a caller without
+// one is a missed selection. A key that is not a caller only over-selects, so
+// it passes when it is on DECLARED_AHEAD in parity/ledger.py, whether or not
+// its service package exists yet, and fails otherwise.
 func Test_parityTables(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
@@ -47,6 +61,8 @@ func Test_parityTables(t *testing.T) {
 	tables := readParityTables(t, root)
 	graph := importGraph(t, root)
 	services := serviceDirs(t, root)
+	apis := packageDirs(t, root, "api", apiPrefix)
+	known := slices.Concat(services, apis)
 
 	t.Run("ROUTING_REACH lists every service with a hook on other services' requests", func(t *testing.T) {
 		require.ElementsMatch(t, routingReach(t), tables.RoutingReach, "ROUTING_REACH in parity/ledger.py")
@@ -58,16 +74,34 @@ func Test_parityTables(t *testing.T) {
 
 	t.Run("DEPENDS_ON keys are the services that call or import other services", func(t *testing.T) {
 		want := callers(graph, services)
-		got := maps.Clone(tables.DependsOn)
-		delete(got, tables.EveryService)
+		missing, extra := dependsOnKeyProblems(want, tables)
 
-		require.ElementsMatch(t, slices.Collect(maps.Keys(want)), slices.Collect(maps.Keys(got)),
-			"DEPENDS_ON keys in parity/ledger.py: the services whose package imports internal/inproc or another service's")
+		require.Empty(t, missing,
+			"DEPENDS_ON in parity/ledger.py: a key for each service whose package imports inproc or another service's")
+		require.Empty(t, extra,
+			"DEPENDS_ON in parity/ledger.py: a key that is not a caller is allowed only in DECLARED_AHEAD")
 
 		for svc, others := range want {
-			require.Subset(t, got[svc], others, "DEPENDS_ON[%q] in parity/ledger.py: the services %s imports", svc, svc)
+			require.Subset(t, tables.DependsOn[svc], others,
+				"DEPENDS_ON[%q] in parity/ledger.py: the services %s imports", svc, svc)
 		}
 	})
+
+	// A service's first commit imports its generated API package and calls no
+	// other service yet. Adding it must not need a table edit, so a branch that
+	// builds it edits only the lines the other branches edit.
+	for _, svc := range []string{"sns", "ssm", "kms", "dynamodb", "dynamodbstreams", "secretsmanager"} {
+		t.Run("the first commit of "+svc+" needs no table edit", func(t *testing.T) {
+			first := maps.Clone(graph)
+			first[svcPrefix+svc] = []string{apiPrefix + svc}
+			first[apiPrefix+svc] = nil
+
+			missing, extra := dependsOnKeyProblems(callers(first, slices.Concat(services, []string{svc})), tables)
+
+			require.Empty(t, missing)
+			require.Empty(t, extra)
+		})
+	}
 
 	// The EveryService entry is in no import: LocalStack's session fixtures
 	// account_id and secondary_account_id call sts.get_caller_identity in every
@@ -80,16 +114,163 @@ func Test_parityTables(t *testing.T) {
 			"DEPENDS_ON[EVERY_SERVICE] in parity/ledger.py: every service's tests call sts, in LocalStack's account_id fixtures")
 	})
 
-	t.Run("DEPENDS_ON names services that exist", func(t *testing.T) {
-		for svc, dependencies := range tables.DependsOn {
-			if svc != tables.EveryService {
-				require.Contains(t, services, svc, "a DEPENDS_ON key in parity/ledger.py")
-			}
-
-			require.NotEmpty(t, dependencies, "DEPENDS_ON[%q] in parity/ledger.py", svc)
-			require.Subset(t, services, dependencies, "DEPENDS_ON[%q] in parity/ledger.py", svc)
-		}
+	t.Run("DEPENDS_ON names services that exist or have a generated API package", func(t *testing.T) {
+		require.Empty(t, unknownEntries(tables, known),
+			"DEPENDS_ON in parity/ledger.py: entries for services with no internal/service/<svc> and no internal/api/<svc>")
 	})
+
+	t.Run("every registered service and service package has a TEST_DIRS entry", func(t *testing.T) {
+		require.Subset(t, tables.TestDirs, registeredNames(t), "TEST_DIRS in parity/ledger.py: a registered service")
+		require.Subset(t, tables.TestDirs, services, "TEST_DIRS in parity/ledger.py: a package under internal/service")
+		require.Subset(t, tables.TestDirs, apis, "TEST_DIRS in parity/ledger.py: a package under internal/api")
+	})
+}
+
+// dependsOnKeyProblems compares the DEPENDS_ON keys with callers, the services
+// that call or import another one: the callers with no key, and the keys that
+// are neither a caller nor in DECLARED_AHEAD. The EveryService key is not a
+// service.
+func dependsOnKeyProblems(callers map[string][]string, tables parityTables) ([]string, []string) {
+	var missing, extra []string
+
+	for _, svc := range slices.Sorted(maps.Keys(callers)) {
+		if _, key := tables.DependsOn[svc]; !key {
+			missing = append(missing, svc)
+		}
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(tables.DependsOn)) {
+		_, caller := callers[key]
+		if key != tables.EveryService && !caller && !slices.Contains(tables.DeclaredAhead, key) {
+			extra = append(extra, key)
+		}
+	}
+
+	return missing, extra
+}
+
+func Test_dependsOnKeyProblems(t *testing.T) {
+	const (
+		caller = "caller"
+		ahead  = "ahead"
+		stray  = "stray"
+	)
+
+	tables := parityTables{
+		DeclaredAhead: []string{ahead},
+		DependsOn:     map[string][]string{"*": {"sts"}, caller: {"x"}, ahead: {"x"}, stray: {"x"}},
+		EveryService:  "*",
+	}
+
+	t.Run("accepts every caller as a key, and a key not a caller only when declared ahead", func(t *testing.T) {
+		okTables := tables
+		okTables.DependsOn = map[string][]string{"*": {"sts"}, caller: {"x"}, ahead: {"x"}}
+
+		missing, extra := dependsOnKeyProblems(map[string][]string{caller: {"x"}}, okTables)
+
+		require.Empty(t, missing)
+		require.Empty(t, extra)
+	})
+
+	t.Run("a declared-ahead key that becomes a caller stays valid", func(t *testing.T) {
+		missing, extra := dependsOnKeyProblems(map[string][]string{caller: {"x"}, ahead: {"x"}, stray: nil}, tables)
+
+		require.Empty(t, missing)
+		require.Empty(t, extra)
+	})
+
+	t.Run("refuses a key that is neither a caller nor declared ahead", func(t *testing.T) {
+		missing, extra := dependsOnKeyProblems(map[string][]string{caller: {"x"}}, tables)
+
+		require.Empty(t, missing)
+		require.Equal(t, []string{stray}, extra)
+	})
+
+	t.Run("refuses a caller with no key, declared ahead or not", func(t *testing.T) {
+		missing, _ := dependsOnKeyProblems(map[string][]string{caller: {"x"}, "orphan": nil}, tables)
+
+		require.Equal(t, []string{"orphan"}, missing)
+	})
+}
+
+// unknownEntries lists what DEPENDS_ON names, as a key or a dependency, that is
+// not in known, and each key with no dependency.
+func unknownEntries(tables parityTables, known []string) []string {
+	var found []string
+
+	for _, svc := range slices.Sorted(maps.Keys(tables.DependsOn)) {
+		dependencies := tables.DependsOn[svc]
+
+		if svc != tables.EveryService && !slices.Contains(known, svc) {
+			found = append(found, "key "+svc)
+		}
+
+		if len(dependencies) == 0 {
+			found = append(found, "key "+svc+" has no dependency")
+		}
+
+		for _, dep := range dependencies {
+			if !slices.Contains(known, dep) {
+				found = append(found, svc+" depends on "+dep)
+			}
+		}
+	}
+
+	return found
+}
+
+func Test_unknownEntries(t *testing.T) {
+	const (
+		alpha = "alpha"
+		beta  = "beta"
+	)
+
+	known := []string{"gamma", alpha, beta}
+	tables := func(dependsOn map[string][]string) parityTables {
+		return parityTables{DependsOn: dependsOn, EveryService: "*"}
+	}
+
+	t.Run("accepts services that exist or are seeded, and the every-service key", func(t *testing.T) {
+		got := unknownEntries(tables(map[string][]string{beta: {alpha}, "*": {alpha}}), known)
+
+		require.Empty(t, got)
+	})
+
+	t.Run("refuses a key or a dependency with no service package and no API package", func(t *testing.T) {
+		got := unknownEntries(tables(map[string][]string{"ghost": {alpha}, beta: {"phantom"}}), known)
+
+		require.Equal(t, []string{"beta depends on phantom", "key ghost"}, got)
+	})
+
+	t.Run("refuses a key with no dependency", func(t *testing.T) {
+		got := unknownEntries(tables(map[string][]string{beta: {}}), known)
+
+		require.Equal(t, []string{"key beta has no dependency"}, got)
+	})
+}
+
+// registeredNames lists the names of the services registrations() lists.
+func registeredNames(t *testing.T) []string {
+	t.Helper()
+
+	regs := buildRegistrations(t)
+	names := make([]string, 0, len(regs))
+
+	for i := range regs {
+		names = append(names, regs[i].Metadata.Name)
+	}
+
+	return names
+}
+
+// buildRegistrations builds the registrations as the binary does.
+func buildRegistrations(t *testing.T) []service.Registration {
+	t.Helper()
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	return newProviders(cfg, func(string) {}).regs
 }
 
 // routingReach lists the services registrations() gives a hook that runs on
@@ -97,10 +278,7 @@ func Test_parityTables(t *testing.T) {
 func routingReach(t *testing.T) []string {
 	t.Helper()
 
-	cfg, err := config.Load()
-	require.NoError(t, err)
-
-	regs := newProviders(cfg, func(string) {}).regs
+	regs := buildRegistrations(t)
 
 	var reach []string
 
@@ -190,13 +368,21 @@ func readParityTables(t *testing.T, root string) parityTables {
 func serviceDirs(t *testing.T, root string) []string {
 	t.Helper()
 
-	entries, err := os.ReadDir(filepath.Join(root, "internal", "service"))
+	return packageDirs(t, root, "service", svcPrefix)
+}
+
+// packageDirs lists the directories under internal/<dir>/ that hold a package,
+// whose import path is prefix plus the name.
+func packageDirs(t *testing.T, root, dir, prefix string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Join(root, "internal", dir))
 	require.NoError(t, err)
 
 	var names []string
 
 	for _, entry := range entries {
-		if entry.IsDir() && importsOf(t, root, svcPrefix+entry.Name()) != nil {
+		if entry.IsDir() && importsOf(t, root, prefix+entry.Name()) != nil {
 			names = append(names, entry.Name())
 		}
 	}

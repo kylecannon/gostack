@@ -15,7 +15,8 @@ name: parity
 # The services come from the paths changed between HEAD^1 and HEAD, read with
 # `git diff --name-only -z --no-renames` so a quoted name and both sides of a
 # rename are seen. `parity/ledger.py services --changed` holds the rules: a
-# path selects every service in the ledger unless it is one service's own
+# path selects every service gostack serves (a ledger and a directory under
+# internal/service/) unless it is one service's own
 # (internal/service/<svc>/, or internal/api/<svc>/ once internal/service/<svc>/
 # exists, which also select the services whose tests depend on <svc> in
 # DEPENDS_ON, and every service when <svc> is in ROUTING_REACH, or
@@ -42,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       services:
-        description: "Services to run, comma separated, as the ledger names them (sqs,sts). Empty runs every service in the ledger."
+        description: "Services to run, comma separated, as the ledger names them (sqs,sts). Empty runs every service in the ledger that has a directory under internal/service/."
         type: string
         default: ""
 

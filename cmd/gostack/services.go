@@ -43,14 +43,18 @@ func newProviders(cfg *config.Config, changed func(name string)) *providers {
 }
 
 // registrations lists the services the gateway serves. Adding a service is one
-// line here; its Registration carries everything else. A service reads its
-// settings through cfg on each call, so an update through /_localstack/config
-// reaches it. Keep one service to a line: parity selection reads a changed
-// line of this file as a change to the services it names.
+// import and one line here; its Registration carries everything else. A service
+// reads its settings through cfg on each call, so an update through
+// /_localstack/config reaches it. Its settings mapping is a pure
+// func(*config.Settings) T in its own file, settings-<svc>.go, which liveSettings
+// wraps on its line here; this file holds no settings code, and parity selection
+// reads a change to settings-<svc>.go as a change to that service alone. Keep one
+// service to a line: parity selection reads a changed line of this file as a
+// change to the services it names.
 func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
 	return []service.Registration{
 		sqs.New(liveSettings(cfg, sqsSettings), changed).Registration(),
-		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
+		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
 	}
 }
@@ -147,34 +151,6 @@ func liveSettings[T any](cfg *config.Config, mapTo func(*config.Settings) T) fun
 		last.Store(m)
 
 		return m.to
-	}
-}
-
-// s3Settings maps the configuration onto the settings of the S3 provider.
-func s3Settings(current *config.Settings) s3.Settings {
-	settings := s3.Settings{
-		LocalstackHost:     current.LocalstackHost.String(),
-		ValidateSignatures: !current.S3SkipSignatureValidation,
-	}
-	if len(current.GatewayListen) > 0 {
-		settings.GatewayPort = current.GatewayListen[0].Port
-	}
-
-	return settings
-}
-
-// sqsSettings maps the configuration onto the settings of the SQS provider.
-func sqsSettings(current *config.Settings) sqs.Settings {
-	return sqs.Settings{
-		EndpointStrategy:     current.SQSEndpointStrategy,
-		DelayRecentlyDeleted: current.SQSDelayRecentlyDeleted,
-		DelayPurgeRetry:      current.SQSDelayPurgeRetry,
-		Host:                 current.LocalstackHost.String(),
-		ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
-		DisableCompatPaths:   !current.CompatPaths,
-
-		EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
-		DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,
 	}
 }
 

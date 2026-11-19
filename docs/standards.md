@@ -113,13 +113,22 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   request as not mergeable. A manual run builds the dispatched ref and
   compares with the ledger committed there.
   - Selection is fail-safe: a changed path selects every service in the ledger
-    unless it is one service's own path or cannot change the image.
+    that gostack serves, unless it is one service's own path or cannot change
+    the image. gostack serves a service when `internal/service/<svc>/` exists;
+    ledger rows do not count. A service with only a LocalStack baseline is never
+    selected, by its own files, as a dependent, by `sts` or by a shared path, and
+    the manual run's default (`ledger.py services`) leaves it out. A change that
+    selects nothing skips every later step of the workflow.
   - A service's own paths are `internal/service/<svc>/` and the generated
     `internal/api/<svc>/` once `internal/service/<svc>/` exists (both also
     select the services whose tests depend on `<svc>`),
-    `parity/ledger/<svc>.json` and `parity/exclusions/<svc>.yaml`.
-    Every service's tests depend on `sts`, so a change there selects every
-    service.
+    `parity/ledger/<svc>.json`, `parity/exclusions/<svc>.yaml` and
+    `cmd/gostack/settings-<svc>.go`, the service's settings mapping. The
+    settings file selects `<svc>` and its dependents even for a service whose
+    Registration sets a routing hook, since it sets none. A dependent selects
+    only once it is served. Every service's tests depend on `sts`, so a change
+    there selects every service. The first commit of a service branch that adds
+    `internal/service/<svc>/` makes `<svc>` selectable by every rule above.
   - A change under the directories of a service whose Registration sets
     `Mount`, `ClaimHost`, `Claim`, `Fallback` or `Preprocess` selects every
     service: those hooks see requests meant for any service. Today that is
@@ -137,9 +146,29 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     from the hooks `registrations()` sets, when a package outside
     `internal/service/<svc>/` imports `internal/api/<svc>/`, or when the
     `DEPENDS_ON` keys are not the services whose package imports
-    `internal/inproc` or another service's package. Which service an
-    in-process call reaches, and the `sts` entry, are reviewed by hand.
-    `make test` runs it and needs `python3`.
+    `internal/inproc` or another service's package. Every such service must
+    be a key (a caller with no key is a missed selection). A key that is not a
+    caller only over-selects, so it passes when it is on `DECLARED_AHEAD` in
+    `parity/ledger.py` (`dynamodb`, `dynamodbstreams`, `sns`, `ssm`), and fails
+    otherwise; the first commit of a service, its API package imported and no
+    in-process call yet, needs no table edit, and a key stays on the list once
+    its service calls another. An entry for a service that has a generated
+    `internal/api/<svc>` and no `internal/service/<svc>` yet is allowed, so
+    the tables are seeded before a service is built; an entry for a service
+    with neither fails, as does a registered service, service package or API
+    package with no `TEST_DIRS` entry. Which service an in-process call
+    reaches and the `sts` entry are reviewed by hand. A service calls
+    another service only through `internal/inproc`: the test finds callers by
+    that import, so a call made another way (the gateway handler taken through
+    `Bind`, an HTTP request to the service's own port) is a dependency it
+    cannot see. `Test_settingsFiles`
+    holds each `cmd/gostack/settings-<svc>.go` to one declaration, the
+    function `<svc>Settings`, used only on a line of `services.go` that names
+    the `<svc>` package. `make test` runs both and needs `python3`.
+  - `ledger.py check` fails when a ledger holds gostack results for a service
+    with no `internal/service/<svc>/` package, since selection no longer runs
+    its suite: remove the rows or bring the service back. A directory counts as
+    a package only when it holds a non-test `.go` file.
   - On a pull request, the gostack column the run observed for the selected
     services must equal the ledger committed in the merge ref, in either
     direction, or the job fails and names each nodeid. A change commits the

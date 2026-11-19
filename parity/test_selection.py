@@ -10,6 +10,7 @@ import argparse
 import contextlib
 import difflib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,8 +19,22 @@ from unittest import mock
 import ledger
 from test_ledger import git_in, without_git_env
 
-KNOWN = {"kms", "sqs", "sts"}
+KNOWN = {"ssm", "sqs", "sts"}
+# The services with a directory under internal/service/ in the tests that do
+# not build a tree: KNOWN, s3 (a dependent of sqs, with no ledger rows here) and
+# lambda (a service selected by its own path, with none either). Only a served
+# service is ever selected.
+SERVED = KNOWN | {"s3", "lambda"}
 REGISTRATION = ledger.REGISTRATION_FILE
+
+
+class ServedTestCase(unittest.TestCase):
+    """A test case in which SERVED are the services gostack serves."""
+
+    def setUp(self) -> None:
+        patched = mock.patch.object(ledger, "service_dirs", return_value=set(SERVED))
+        patched.start()
+        self.addCleanup(patched.stop)
 
 SERVICES_GO = """\
 package main
@@ -97,28 +112,73 @@ class TestDirTest(unittest.TestCase):
         self.assertEqual(len(set(ledger.TEST_DIRS.values())), len(ledger.TEST_DIRS))
 
 
-class AffectedServicesTest(unittest.TestCase):
+class AffectedServicesTest(ServedTestCase):
     def test_change_under_a_service_directory_selects_that_service(self) -> None:
         got = ledger.affected_services(["internal/service/lambda/function.go"], KNOWN)
         self.assertEqual(got, {"lambda"})
         self.assertEqual(ledger.test_dir("lambda"), "tests/aws/services/lambda_")
 
     def test_two_service_directories_select_both(self) -> None:
-        paths = ["internal/service/kms/keys.go", "internal/service/lambda/a.go"]
-        self.assertEqual(ledger.affected_services(paths, KNOWN), {"kms", "lambda"})
+        paths = ["internal/service/ssm/keys.go", "internal/service/lambda/a.go"]
+        self.assertEqual(ledger.affected_services(paths, KNOWN), {"ssm", "lambda"})
 
     def test_a_change_to_a_dependency_also_selects_the_services_that_depend_on_it(self) -> None:
         # s3 calls sqs in this process. Both reach other services' requests
         # too, so a fake table shows the dependents rule on its own.
-        self.assertEqual(ledger.DEPENDS_ON["s3"], ("sqs",))
-        with mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("kms",), "events": ("lambda",)}):
-            self.assertEqual(ledger.affected_services(["internal/service/kms/keys.go"], KNOWN), {"kms", "lambda", "events"})
+        self.assertEqual(ledger.DEPENDS_ON["s3"], ("kms", "sns", "sqs"))
+        with (
+            mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",), "events": ("lambda",)}),
+            mock.patch.object(ledger, "service_dirs", return_value={"ssm", "lambda", "events"}),
+        ):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm", "lambda", "events"})
             self.assertEqual(ledger.affected_services(["internal/service/lambda/a.go"], KNOWN), {"lambda", "events"})
 
+    def test_a_dependent_that_is_not_built_is_not_selected(self) -> None:
+        # A seeded DEPENDS_ON entry names a service nobody has built: the image
+        # does not serve it. Ledger rows do not make it built (SQ-213 commits
+        # LocalStack baselines for services gostack does not serve yet).
+        depends = mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",)})
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm"}):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm"})
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm", "lambda"}):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm", "lambda"})
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm"}):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN | {"lambda"}), {"ssm"})
+
+    def test_the_services_built_next_are_seeded_with_their_dependencies(self) -> None:
+        # The branch that builds one edits no table. Each service in the seeded
+        # entries is a test directory the ledger knows by name.
+        self.assertEqual(ledger.DEPENDS_ON["sns"], ("sqs",))
+        self.assertEqual(ledger.DEPENDS_ON["ssm"], ("secretsmanager",))
+        self.assertEqual(ledger.DEPENDS_ON["dynamodbstreams"], ("dynamodb",))
+        self.assertEqual(ledger.DEPENDS_ON["dynamodb"], ("dynamodbstreams",))
+        for service, dependencies in ledger.DEPENDS_ON.items():
+            for name in (service, *dependencies):
+                if name != ledger.EVERY_SERVICE:
+                    self.assertIn(name, ledger.TEST_DIRS)
+
+    def test_once_built_a_seeded_service_selects_what_the_code_will_have_it_select(self) -> None:
+        built = {"dynamodb", "dynamodbstreams", "kms", "s3", "secretsmanager", "sns", "sqs", "ssm", "sts"}
+        known = built
+        with mock.patch.object(ledger, "service_dirs", return_value=built):
+            cases = {
+                "internal/service/kms/keys.go": {"kms", "s3"},
+                "internal/service/sns/topics.go": {"sns", "s3"},
+                "internal/api/sns/types.go": {"sns", "s3"},
+                "internal/service/secretsmanager/secrets.go": {"secretsmanager", "ssm"},
+                "internal/service/ssm/parameters.go": {"ssm"},
+                "internal/service/dynamodb/tables.go": {"dynamodb", "dynamodbstreams"},
+                "internal/service/dynamodbstreams/streams.go": {"dynamodb", "dynamodbstreams"},
+                "internal/service/sqs/queue.go": known,
+            }
+            for path, want in cases.items():
+                with self.subTest(path=path):
+                    self.assertEqual(ledger.affected_services([path], known), want)
+
     def test_a_service_without_routing_hooks_selects_itself_and_its_dependents(self) -> None:
-        # kms sets none of Mount, ClaimHost, Claim, Fallback or Preprocess.
-        self.assertNotIn("kms", ledger.ROUTING_REACH)
-        self.assertEqual(ledger.affected_services(["internal/service/kms/keys.go"], KNOWN), {"kms"})
+        # ssm sets none of Mount, ClaimHost, Claim, Fallback or Preprocess.
+        self.assertNotIn("ssm", ledger.ROUTING_REACH)
+        self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm"})
 
     def test_a_change_to_a_service_with_routing_hooks_selects_every_service(self) -> None:
         # SQ-199 item2: s3's Fallback, Preprocess and ClaimHost and sqs's
@@ -146,14 +206,14 @@ class AffectedServicesTest(unittest.TestCase):
         self.assertEqual(ledger.affected_services(["parity/ledger/sts.json", "parity/exclusions/sts.yaml"], KNOWN), {"sts"})
 
     def test_a_services_generated_api_package_is_its_own_path(self) -> None:
-        with mock.patch.object(ledger, "service_dirs", return_value={"kms", "lambda", "sqs"}):
-            self.assertEqual(ledger.affected_services(["internal/api/kms/operations.go"], KNOWN), {"kms"})
+        with mock.patch.object(ledger, "service_dirs", return_value={"ssm", "lambda", "sqs"}):
+            self.assertEqual(ledger.affected_services(["internal/api/ssm/operations.go"], KNOWN), {"ssm"})
             self.assertEqual(ledger.affected_services(["internal/api/lambda/types.go"], KNOWN), {"lambda"})
 
     def test_a_generated_api_package_with_no_service_directory_is_shared(self) -> None:
         # SQ-182 generates packages for services not registered yet; the image
         # serves none of them, so they select what a shared path selects.
-        with mock.patch.object(ledger, "service_dirs", return_value={"sqs"}):
+        with mock.patch.object(ledger, "service_dirs", return_value=set(KNOWN)):
             self.assertEqual(ledger.affected_services(["internal/api/lambda/types.go"], KNOWN), KNOWN)
 
     def test_paths_no_service_owns_select_every_known_service(self) -> None:
@@ -212,7 +272,7 @@ class AffectedServicesTest(unittest.TestCase):
                 self.assertEqual(ledger.affected_services([path], KNOWN), set())
 
     def test_a_test_file_beside_code_selects_what_the_code_selects(self) -> None:
-        self.assertEqual(ledger.affected_services(["internal/service/kms/a_test.go", "internal/service/kms/a.go"], KNOWN), {"kms"})
+        self.assertEqual(ledger.affected_services(["internal/service/ssm/a_test.go", "internal/service/ssm/a.go"], KNOWN), {"ssm"})
         self.assertEqual(ledger.affected_services(["internal/gateway/a_test.go", "codegen/cmd/gostack-codegen/emit.go"], KNOWN), KNOWN)
 
     def test_the_no_effect_list_matches_whole_names_only(self) -> None:
@@ -227,7 +287,7 @@ class AffectedServicesTest(unittest.TestCase):
 
     def test_registration_lines_naming_another_service_select_it_too(self) -> None:
         paths = ["internal/service/lambda/lambda.go", REGISTRATION]
-        self.assertEqual(ledger.affected_services(paths, KNOWN, registration={"kms"}), {"lambda", "kms"})
+        self.assertEqual(ledger.affected_services(paths, KNOWN, registration={"ssm"}), {"lambda", "ssm"})
         # sts selects every known service, and sqs among them selects s3.
         self.assertEqual(ledger.affected_services(paths, KNOWN, registration={"sts"}), KNOWN | {"lambda", "s3"})
         # sqs's mount reaches every service's requests.
@@ -242,7 +302,7 @@ class RegistrationServicesTest(unittest.TestCase):
     """Only a whole element of the list registrations() returns, or an import
     of a service's package, is attributed to the services it names."""
 
-    NAMES = {"foo", "kms", "sqs", "sts", "s3"}
+    NAMES = {"foo", "ssm", "sqs", "sts", "s3"}
 
     def services(self, *replacements: tuple[str, str], names: set[str] | None = None) -> set[str] | None:
         return ledger.registration_services(whole_diff(SERVICES_GO, edited(*replacements)), self.NAMES if names is None else names)
@@ -259,7 +319,7 @@ class RegistrationServicesTest(unittest.TestCase):
         self.assertEqual(ledger.registration_services(whole_diff(edited(ELEMENT_FOO), SERVICES_GO), self.NAMES), {"foo"})
 
     def test_an_element_naming_two_services_selects_both(self) -> None:
-        self.assertEqual(self.services(("sqs.New()", "sqs.New(kms.Client())")), {"sqs", "kms"})
+        self.assertEqual(self.services(("sqs.New()", "sqs.New(ssm.Client())")), {"sqs", "ssm"})
 
     def test_a_call_of_registrations_is_not_an_element(self) -> None:
         # SQ-199 item4, the reviewer's case: `p.regs = registrations(cfg, nil,
@@ -360,7 +420,7 @@ class ServicesCommandTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.ledger = Path(tmp.name) / "ledger"
         entry = {"localstack": "pass", "gostack": "pass", "reason": ""}
-        ledger.write_ledger(self.ledger, {f"tests/aws/services/{d}/test_x.py::t": entry for d in ("kms", "sqs", "sts")})
+        ledger.write_ledger(self.ledger, {f"tests/aws/services/{d}/test_x.py::t": entry for d in ("ssm", "sqs", "sts")})
 
     def run_services(self, paths: list[str], diff: str | None, changed: bool = True, revisions: str | None = "a...b") -> str:
         args = argparse.Namespace(ledger=self.ledger, changed=changed, range=revisions)
@@ -369,13 +429,13 @@ class ServicesCommandTest(unittest.TestCase):
             contextlib.redirect_stdout(out),
             mock.patch("sys.stdin", io.StringIO("".join(p + "\0" for p in paths))),
             mock.patch.object(ledger, "registration_diff", return_value=diff),
-            mock.patch.object(ledger, "service_dirs", return_value={"foo", "kms", "sqs", "sts", "s3"}),
+            mock.patch.object(ledger, "service_dirs", return_value={"foo", "ssm", "sqs", "sts", "s3", "lambda"}),
         ):
             ledger.services(args)
         return out.getvalue().strip()
 
     def test_without_changed_every_ledger_service_is_printed(self) -> None:
-        self.assertEqual(self.run_services([], None, changed=False), "kms,sqs,sts")
+        self.assertEqual(self.run_services([], None, changed=False), "sqs,ssm,sts")
 
     def test_no_changed_path_selects_nothing(self) -> None:
         self.assertEqual(self.run_services([], None), "")
@@ -387,20 +447,20 @@ class ServicesCommandTest(unittest.TestCase):
 
     def test_registration_line_for_another_service_beside_one_services_change_selects_both(self) -> None:
         # S2: before, the lambda change excused any added line.
-        diff = whole_diff(SERVICES_GO, edited(("\t\tsts.Registration(),\n", "\t\tsts.Registration(),\n\t\tkms.New().Registration(),\n")))
-        self.assertEqual(self.run_services(["internal/service/lambda/a.go", REGISTRATION], diff), "kms,lambda")
+        diff = whole_diff(SERVICES_GO, edited(("\t\tsts.Registration(),\n", "\t\tsts.Registration(),\n\t\tssm.New().Registration(),\n")))
+        self.assertEqual(self.run_services(["internal/service/lambda/a.go", REGISTRATION], diff), "lambda,ssm")
 
     def test_registration_edit_naming_no_service_selects_everything(self) -> None:
         paths = ["internal/service/foo/foo.go", REGISTRATION]
         diff = whole_diff(SERVICES_GO, edited(IMPORT_FOO, ELEMENT_FOO, ("\tp := &providers{}\n", "\tp := &providers{old()}\n")))
         with mock.patch.dict(ledger.TEST_DIRS, {"foo": "foo"}):
-            self.assertEqual(self.run_services(paths, diff), "foo,kms,sqs,sts")
+            self.assertEqual(self.run_services(paths, diff), "foo,sqs,ssm,sts")
 
     def test_registration_edit_without_a_range_selects_everything(self) -> None:
-        self.assertEqual(self.run_services([REGISTRATION], ADD_FOO, revisions=None), "kms,sqs,sts")
+        self.assertEqual(self.run_services([REGISTRATION], ADD_FOO, revisions=None), "sqs,ssm,sts")
 
     def test_registration_edit_when_git_cannot_diff_selects_everything(self) -> None:
-        self.assertEqual(self.run_services([REGISTRATION], None), "kms,sqs,sts")
+        self.assertEqual(self.run_services([REGISTRATION], None), "sqs,ssm,sts")
 
     def test_a_change_under_lambda_selects_lambda_without_a_ledger_row(self) -> None:
         self.assertEqual(self.run_services(["internal/service/lambda/a.go"], None), "lambda")
@@ -415,7 +475,7 @@ class ServicesCommandTest(unittest.TestCase):
         self.assertEqual(self.run_services(["internal/service/lambda/a\nb.go"], None), "lambda")
 
 
-class ParityFileSelectionTest(unittest.TestCase):
+class ParityFileSelectionTest(ServedTestCase):
     """A service's own ledger and exclusions files select that service alone;
     everything else under parity/ stays shared."""
 
@@ -445,6 +505,75 @@ class ParityFileSelectionTest(unittest.TestCase):
         self.assertEqual(ledger.affected_services(paths, KNOWN | {"s3"}), KNOWN | {"s3"})
 
 
+class SettingsFileSelectionTest(unittest.TestCase):
+    """cmd/gostack/settings-<svc>.go maps the configuration onto <svc>'s
+    settings: it is <svc>'s own path. Every other file of cmd/gostack is
+    shared."""
+
+    def test_a_services_settings_file_selects_that_service_and_its_dependents(self) -> None:
+        known = {"s3", "sqs", "sts", "ssm"}
+        with mock.patch.object(ledger, "service_dirs", return_value=known):
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-ssm.go"], known), {"ssm"})
+            # s3 calls sqs, so an sqs change runs s3's suite too.
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-sqs.go"], known), {"sqs", "s3"})
+
+    def test_a_settings_file_does_not_select_every_service_for_a_service_with_routing_hooks(self) -> None:
+        # The file maps configuration and sets no hook; the hooks are in
+        # internal/service/<svc>/, which still selects every service.
+        known = {"s3", "sqs", "sts", "ssm"}
+        self.assertIn("sqs", ledger.ROUTING_REACH)
+        with mock.patch.object(ledger, "service_dirs", return_value=known):
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-sqs.go"], known), {"sqs", "s3"})
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-s3.go"], known), {"s3"})
+            self.assertEqual(ledger.affected_services(["internal/service/sqs/queue.go"], known), known)
+
+    def test_the_sts_settings_file_selects_every_service_like_the_rest_of_sts(self) -> None:
+        known = {"s3", "sqs", "sts", "ssm"}
+        with mock.patch.object(ledger, "service_dirs", return_value=known):
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-sts.go"], known), known)
+
+    def test_a_settings_file_beside_another_services_code_selects_both(self) -> None:
+        known = {"s3", "sqs", "sts", "ssm"}
+        with mock.patch.object(ledger, "service_dirs", return_value=known):
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-ssm.go", "internal/service/sts/a.go"], known), known)
+
+    def test_the_rest_of_cmd_gostack_is_shared(self) -> None:
+        known = {"s3", "sqs", "sts", "ssm"}
+        for path in (
+            "cmd/gostack/settings.go",
+            "cmd/gostack/main.go",
+            "cmd/gostack/settings-.go",
+            "cmd/gostack/settings-nope.go",
+            "cmd/gostack/settings-ssm.txt",
+            "cmd/gostack/sub/settings-ssm.go",
+            "cmd/gostack/xsettings-ssm.go",
+            "internal/settings-ssm.go",
+        ):
+            with self.subTest(path=path), mock.patch.object(ledger, "service_dirs", return_value=known):
+                self.assertEqual(ledger.affected_services([path], known), known)
+
+    def test_a_settings_test_file_selects_nothing(self) -> None:
+        self.assertEqual(ledger.affected_services(["cmd/gostack/settings-ssm_test.go", "cmd/gostack/settings-ssm_internal_test.go"], KNOWN), set())
+
+    def test_a_settings_file_beside_the_registration_lines_selects_what_each_selects(self) -> None:
+        known = {"s3", "sqs", "sts", "ssm"}
+        with mock.patch.object(ledger, "service_dirs", return_value=known):
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-ssm.go", REGISTRATION], known, registration={"ssm"}), {"ssm"})
+            self.assertEqual(ledger.affected_services(["cmd/gostack/settings-ssm.go", REGISTRATION], known), known)
+
+    def test_the_tables_command_lists_the_test_directories_for_the_go_test(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ledger.tables(argparse.Namespace())
+        tables = json.loads(out.getvalue())
+        self.assertEqual(tables["test_dirs"], sorted(ledger.TEST_DIRS))
+        self.assertEqual({svc: tuple(deps) for svc, deps in tables["depends_on"].items()}, ledger.DEPENDS_ON)
+        # The one list of keys declared ahead of the code, which the Go test
+        # reads and which names only keys of DEPENDS_ON.
+        self.assertEqual(tuple(tables["declared_ahead"]), ledger.DECLARED_AHEAD)
+        self.assertLessEqual(set(ledger.DECLARED_AHEAD), set(ledger.DEPENDS_ON))
+
+
 class RealDiffSelectionTest(unittest.TestCase):
     """The selection as parity.yml feeds it: `git diff --name-only -z
     --no-renames` from the base, in a temporary repository."""
@@ -455,12 +584,16 @@ class RealDiffSelectionTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name).resolve()
         self.write(REGISTRATION, SERVICES_GO)
-        for service in ("kms", "s3", "sqs", "sts"):
+        for service in ("ssm", "s3", "sqs", "sts"):
             self.write(f"internal/service/{service}/{service}.go", f"package {service}\n")
             self.write(f"parity/exclusions/{service}.yaml", "# none\n")
         self.write("internal/gateway/gateway.go", "package gateway\n")
         entry = {"localstack": "pass", "gostack": "pass", "reason": ""}
-        ledger.write_ledger(self.repo / "parity" / "ledger", {f"tests/aws/services/{s}/test_x.py::t": entry for s in ("kms", "s3", "sqs", "sts")})
+        rows = {f"tests/aws/services/{s}/test_x.py::t": entry for s in ("ssm", "s3", "sqs", "sts")}
+        # sns has a LocalStack baseline (SQ-213) and no internal/service/sns/:
+        # gostack does not serve it, so no selection may name it.
+        rows["tests/aws/services/sns/test_x.py::t"] = {"localstack": "pass", "gostack": None, "reason": ""}
+        ledger.write_ledger(self.repo / "parity" / "ledger", rows)
         self.git("init", "-q")
         self.base = self.commit("base")
 
@@ -490,21 +623,102 @@ class RealDiffSelectionTest(unittest.TestCase):
         return out.getvalue().strip()
 
     def test_a_change_under_a_service_without_routing_hooks_selects_only_it(self) -> None:
-        self.write("internal/service/kms/keys.go", "package kms\n")
-        self.assertEqual(self.selected(), "kms")
+        self.write("internal/service/ssm/keys.go", "package ssm\n")
+        self.assertEqual(self.selected(), "ssm")
+
+    def test_a_directory_with_no_non_test_go_file_is_no_service_yet(self) -> None:
+        # The Go test counts a package by its non-test files; so does the
+        # selection. A directory with a test file or a README is not served.
+        self.write("internal/service/sns/sns_test.go", "package sns\n")
+        self.write("internal/service/sns/README.md", "notes\n")
+        with mock.patch.object(ledger, "ROOT", self.repo):
+            self.assertNotIn("sns", ledger.service_dirs())
+            self.write("internal/service/sns/sns.go", "package sns\n")
+            self.assertIn("sns", ledger.service_dirs())
+
+    def test_a_service_with_only_a_baseline_is_never_selected(self) -> None:
+        # sns has ledger rows and no directory under internal/service/, and
+        # s3 and sqs depend on it in DEPENDS_ON. Each case is a change that
+        # selects every known service, or a dependent, or the service itself.
+        self.assertEqual(ledger.DEPENDS_ON["s3"], ("kms", "sns", "sqs"))
+        cases = {
+            "internal/service/sqs/routes.go": "s3,sqs,ssm,sts",
+            "internal/service/s3/website.go": "s3,sqs,ssm,sts",
+            "internal/service/sts/operations.go": "s3,sqs,ssm,sts",
+            "go.mod": "s3,sqs,ssm,sts",
+            "internal/gateway/gateway.go": "s3,sqs,ssm,sts",
+            "cmd/gostack/settings-sts.go": "s3,sqs,ssm,sts",
+            "cmd/gostack/settings-sqs.go": "s3,sqs",
+            "internal/service/ssm/keys.go": "ssm",
+            # The service's own files: nothing to run against gostack.
+            "cmd/gostack/settings-sns.go": "",
+            "internal/api/sns/types.go": "s3,sqs,ssm,sts",  # no service directory: shared
+        }
+        for path, want in cases.items():
+            with self.subTest(path=path):
+                self.write(path, "package x\n")
+                self.assertEqual(self.selected(), want)
+                self.git("reset", "-q", "--hard", self.base)
+
+    def test_a_diff_adding_only_a_baseline_services_ledger_and_exclusions_selects_nothing(self) -> None:
+        self.write("parity/ledger/sns.json", (self.repo / "parity" / "ledger" / "sns.json").read_text(encoding="utf-8").replace("pass", "fail"))
+        self.write("parity/exclusions/sns.yaml", "# none\n")
+        self.assertEqual(self.selected(), "")
+
+    def test_once_the_service_directory_exists_the_service_is_selected_again(self) -> None:
+        # The first commit of the sns branch: its directory. From then on every
+        # rule that named sns before names it.
+        self.write("internal/service/sns/sns.go", "package sns\n")
+        self.assertEqual(self.selected(), "s3,sns")
+        self.base = self.git("rev-parse", "HEAD")
+        cases = {
+            "internal/service/sqs/routes.go": "s3,sns,sqs,ssm,sts",
+            "go.mod": "s3,sns,sqs,ssm,sts",
+            "internal/service/sts/operations.go": "s3,sns,sqs,ssm,sts",
+            "internal/service/sns/topics.go": "s3,sns",
+            "cmd/gostack/settings-sns.go": "s3,sns",
+            "parity/ledger/sns.json": "sns",
+            "parity/exclusions/sns.yaml": "sns",
+        }
+        for path, want in cases.items():
+            with self.subTest(path=path):
+                self.write(path, "package x\n" if path.endswith(".go") else "{}\n" if path.endswith(".json") else "# none\n")
+                self.assertEqual(self.selected(), want)
+                self.git("reset", "-q", "--hard", self.base)
+
+    def test_the_services_command_without_changed_prints_only_what_gostack_serves(self) -> None:
+        args = argparse.Namespace(ledger=self.repo / "parity" / "ledger", changed=False, range=None)
+        out = io.StringIO()
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out):
+            ledger.services(args)
+        self.assertEqual(out.getvalue().strip(), "s3,sqs,ssm,sts")
+
+    def test_a_diff_touching_only_one_services_settings_file_selects_that_service_and_its_dependents(self) -> None:
+        self.write("cmd/gostack/settings-sqs.go", "package main\n\n// sqs settings\n")
+        self.assertEqual(self.selected(), "s3,sqs")
+
+    def test_a_new_service_branch_with_its_settings_file_and_two_shared_lines_selects_it_and_its_dependents(self) -> None:
+        # The kms branch: its package, its settings file, one import and one
+        # line in registrations(). s3 will call kms (DEPENDS_ON).
+        self.write("internal/service/kms/x.go", "package kms\n")
+        self.write("cmd/gostack/settings-kms.go", "package main\n")
+        text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
+        text = text.replace("\t\"github.com/kylecannon/gostack/internal/service/sqs\"\n", '\t"github.com/kylecannon/gostack/internal/service/kms"\n\t"github.com/kylecannon/gostack/internal/service/sqs"\n')
+        self.write(REGISTRATION, text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tkms.New(liveSettings(cfg, kmsSettings)).Registration(),\n"))
+        self.assertEqual(self.selected(), "kms,s3")
 
     def test_a_change_under_a_service_with_routing_hooks_selects_every_service(self) -> None:
         # SQ-199 item2: S3's Fallback and Preprocess, and SQS's queue-URL mount.
         for path in ("internal/service/s3/website.go", "internal/service/sqs/routes.go"):
             with self.subTest(path=path):
                 self.write(path, "package x\n")
-                self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+                self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
                 self.git("reset", "-q", "--hard", self.base)
 
     def test_a_rename_from_a_shared_path_into_a_service_selects_every_service(self) -> None:
         # SQ-177 item5 5.r: without --no-renames only the new path was listed.
         self.git("mv", "internal/gateway/gateway.go", "internal/service/sts/gateway.go")
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
     def test_a_quoted_shared_name_selects_every_service(self) -> None:
         # SQ-177 item5 5.u and 5.q: git quoted these names, and the quoted path
@@ -512,51 +726,51 @@ class RealDiffSelectionTest(unittest.TestCase):
         for name in ("é.go", 'a"b.go'):
             with self.subTest(name=name):
                 self.write(f"internal/gateway/{name}", "package gateway\n")
-                self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+                self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
                 self.git("reset", "-q", "--hard", self.base)
 
     def test_a_global_line_with_a_service_comment_beside_a_service_file_selects_every_service(self) -> None:
         # SQ-177 item5 5.g3: only sts.yaml touched, plus a global line ending in // sts.
         self.write("parity/exclusions/sts.yaml", "# none\n# touch\n")
         self.add_to_registration('\nfunc init() { os.Setenv("GOSTACK_LOOSE", "1") } // sts\n')
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
     def test_an_import_line_naming_the_changed_service_selects_only_it_and_its_dependents(self) -> None:
         # SQ-177 item5 5.g1.
-        self.write("internal/service/kms/new.go", "package kms\n")
+        self.write("internal/service/ssm/new.go", "package ssm\n")
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
-        self.write(REGISTRATION, text.replace("import (\n", 'import (\n\t_ "github.com/kylecannon/gostack/internal/service/kms"\n'))
-        self.assertEqual(self.selected(), "kms")
+        self.write(REGISTRATION, text.replace("import (\n", 'import (\n\t_ "github.com/kylecannon/gostack/internal/service/ssm"\n'))
+        self.assertEqual(self.selected(), "ssm")
 
     def test_a_registration_line_for_another_service_selects_it_as_well(self) -> None:
-        self.write("internal/service/kms/new.go", "package kms\n")
-        self.write("internal/service/sns/sns.go", "package sns\n")
+        self.write("internal/service/ssm/new.go", "package ssm\n")
+        self.write("internal/service/iam/iam.go", "package iam\n")
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
-        self.write(REGISTRATION, text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tsns.New().Registration(),\n"))
-        self.assertEqual(self.selected(), "kms,sns")
+        self.write(REGISTRATION, text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tiam.New().Registration(),\n"))
+        self.assertEqual(self.selected(), "iam,ssm")
 
     def test_a_registration_edit_naming_a_service_with_routing_hooks_selects_every_service(self) -> None:
-        self.write("internal/service/kms/new.go", "package kms\n")
+        self.write("internal/service/ssm/new.go", "package ssm\n")
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
         self.write(REGISTRATION, text.replace("\t\tsqs.New().Registration(),\n", "\t\tsqs.New(true).Registration(),\n"))
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
     def test_a_call_of_registrations_that_names_a_service_selects_every_service(self) -> None:
         # SQ-199 item4, the reviewer's case: the call names s3 and changes
         # what every registration is built from.
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
-        text = text.replace("\tp.regs = registrations()\n", "\tp.regs = registrations(cfg, changed, p.kms)\n")
-        self.write(REGISTRATION, text.replace("func registrations() ", "func registrations(cfg *config.Config, changed func(string), kms *kms.Provider) "))
-        self.base = self.commit("registrations takes kms")
-        self.write("internal/service/kms/new.go", "package kms\n")
-        self.write(REGISTRATION, (self.repo / REGISTRATION).read_text(encoding="utf-8").replace("changed, p.kms", "nil, p.kms"))
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        text = text.replace("\tp.regs = registrations()\n", "\tp.regs = registrations(cfg, changed, p.ssm)\n")
+        self.write(REGISTRATION, text.replace("func registrations() ", "func registrations(cfg *config.Config, changed func(string), ssm *ssm.Provider) "))
+        self.base = self.commit("registrations takes ssm")
+        self.write("internal/service/ssm/new.go", "package ssm\n")
+        self.write(REGISTRATION, (self.repo / REGISTRATION).read_text(encoding="utf-8").replace("changed, p.ssm", "nil, p.ssm"))
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
     def test_a_directive_selects_every_service(self) -> None:
         # SQ-199 item5.
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
         self.write(REGISTRATION, "//go:debug madvdontneed=1\n\n" + text)
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
     def test_test_files_and_the_licence_alone_select_nothing(self) -> None:
         # SQ-199 item7.
@@ -570,45 +784,45 @@ class RealDiffSelectionTest(unittest.TestCase):
         # SQ-181 S4, the reviewer's case: operations.go's caller identity feeds
         # every service's account_id fixture.
         self.write("internal/service/sts/operations.go", "package sts\n\n// fixed account\n")
-        self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+        self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
 
-    def add_sns_branch(self) -> str:
+    def add_iam_branch(self) -> str:
         """A new-service branch's own files, its import and its one-line
         registration; returns REGISTRATION_FILE's new text."""
-        self.write("internal/service/sns/sns.go", "package sns\n")
-        self.write("internal/service/sns/sns_test.go", "package sns\n")
-        self.write("internal/api/sns/types.go", "// Code generated by gostack-codegen. DO NOT EDIT.\n\npackage sns\n")
-        self.write("internal/api/sns/operations.go", "package sns\n")
-        self.write("parity/ledger/sns.json", "{}\n")
-        self.write("parity/exclusions/sns.yaml", "# sns\n")
+        self.write("internal/service/iam/iam.go", "package iam\n")
+        self.write("internal/service/iam/iam_test.go", "package iam\n")
+        self.write("internal/api/iam/types.go", "// Code generated by gostack-codegen. DO NOT EDIT.\n\npackage iam\n")
+        self.write("internal/api/iam/operations.go", "package iam\n")
+        self.write("parity/ledger/iam.json", "{}\n")
+        self.write("parity/exclusions/iam.yaml", "# iam\n")
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
-        text = text.replace("\t\"github.com/kylecannon/gostack/internal/service/sqs\"\n", '\t"github.com/kylecannon/gostack/internal/service/sns"\n\t"github.com/kylecannon/gostack/internal/service/sqs"\n')
-        return text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tsns.New(liveSettings(cfg, snsSettings)).Registration(),\n")
+        text = text.replace("\t\"github.com/kylecannon/gostack/internal/service/sqs\"\n", '\t"github.com/kylecannon/gostack/internal/service/iam"\n\t"github.com/kylecannon/gostack/internal/service/sqs"\n')
+        return text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tiam.New(liveSettings(cfg, iamSettings)).Registration(),\n")
 
     def test_a_new_service_branch_that_adds_only_its_own_files_selects_only_itself(self) -> None:
         # SQ-177 item5 5.n: the generated package, the import and the one line
         # in registrations(), as a real new-service branch has them.
-        self.write(REGISTRATION, self.add_sns_branch())
-        self.assertEqual(self.selected(), "sns")
+        self.write(REGISTRATION, self.add_iam_branch())
+        self.assertEqual(self.selected(), "iam")
 
     def test_a_new_service_branch_that_adds_a_helper_to_the_registration_file_selects_every_service(self) -> None:
         # SQ-199 item4 reverses SQ-181 S5: a helper beside the list is code no
         # line-by-line rule can place, so it selects every service.
-        text = self.add_sns_branch() + (
-            "\n// snsSettings maps the configuration onto the settings of the SNS provider.\n"
-            "func snsSettings(current *config.Settings) sns.Settings {\n"
-            "\treturn sns.Settings{}\n"
+        text = self.add_iam_branch() + (
+            "\n// iamSettings maps the configuration onto the settings of the IAM provider.\n"
+            "func iamSettings(current *config.Settings) iam.Settings {\n"
+            "\treturn iam.Settings{}\n"
             "}\n"
         )
         self.write(REGISTRATION, text)
-        self.assertEqual(self.selected(), "kms,s3,sns,sqs,sts")
+        self.assertEqual(self.selected(), "iam,s3,sqs,ssm,sts")
 
     def test_a_new_service_registration_with_a_line_naming_no_service_selects_every_service(self) -> None:
-        self.write("internal/service/sns/sns.go", "package sns\n")
+        self.write("internal/service/iam/iam.go", "package iam\n")
         text = (self.repo / REGISTRATION).read_text(encoding="utf-8")
-        text = text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tsns.New(\n\t\t\tcfg.Settings(),\n\t\t).Registration(),\n")
+        text = text.replace("\t\ts3.New().Registration(),\n", "\t\ts3.New().Registration(),\n\t\tiam.New(\n\t\t\tcfg.Settings(),\n\t\t).Registration(),\n")
         self.write(REGISTRATION, text)
-        self.assertEqual(self.selected(), "kms,s3,sns,sqs,sts")
+        self.assertEqual(self.selected(), "iam,s3,sqs,ssm,sts")
 
     def test_a_makefile_or_api_change_selects_every_service(self) -> None:
         # The Makefile's GEN_SERVICES line and the generator's serviceTable are
@@ -616,7 +830,7 @@ class RealDiffSelectionTest(unittest.TestCase):
         for path in ("Makefile", "api/openapi/gostack.yaml", "internal/service/common/util.go", "codegen/cmd/gostack-codegen/config.go"):
             with self.subTest(path=path):
                 self.write(path, "x\n")
-                self.assertEqual(self.selected(), "kms,s3,sqs,sts")
+                self.assertEqual(self.selected(), "s3,sqs,ssm,sts")
                 self.git("reset", "-q", "--hard", self.base)
 
     def test_a_docs_only_change_selects_nothing(self) -> None:

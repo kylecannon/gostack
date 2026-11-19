@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -154,6 +155,18 @@ class PruneTest(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             ledger.prune(args)
         return out.getvalue(), ledger.load_ledger(self.ledger_path)
+
+    def test_a_service_with_only_a_localstack_baseline_is_pruned_like_the_rest_without_a_demotion(self) -> None:
+        # Its rows have no gostack result: collection is LocalStack's, and a
+        # removed row that never passed in gostack needs no demotion.
+        sns = "tests/aws/services/sns/test_sns.py::T"
+        ledger.write_ledger(self.ledger_path, {**self.before, f"{sns}::kept": row("pass", None), f"{sns}::gone": row("pass", None)})
+        self.listing.write_text(f"{STS}::kept\n{SQS}::kept\n{sns}::kept\n", encoding="utf-8")
+        out, after = self.prune(dry_run=False)
+        self.assertIn(f"removed {sns}::gone", out)
+        self.assertIn(f"{sns}::kept", after)
+        self.assertNotIn(f"{sns}::gone", after)
+        self.assertNotIn("sns", (self.dir / "demotions.yaml").read_text(encoding="utf-8"))
 
     def test_removes_rows_the_collection_lacks_and_prints_them(self) -> None:
         out, after = self.prune(dry_run=False)
@@ -397,6 +410,12 @@ class CheckAgainstBaseTest(unittest.TestCase):
         self.exclusions.mkdir(parents=True)
         (self.exclusions / "sts.yaml").write_text(f'"{STS}::iam": depends-on:iam\n', encoding="utf-8")
         self.demotions = self.repo / "parity" / "demotions.yaml"
+        # check holds a service with gostack results to a package under
+        # internal/service/: its suite is run only while one exists.
+        for served in ("sqs", "sts"):
+            package = self.repo / "internal" / "service" / served
+            package.mkdir(parents=True)
+            (package / f"{served}.go").write_text(f"package {served}\n", encoding="utf-8")
         self.git("init", "-q", "-b", "main")
         self.rows = {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("fail", None, "x")}
 
@@ -435,6 +454,55 @@ class CheckAgainstBaseTest(unittest.TestCase):
         rows = ledger.load_ledger(self.dir)
         rows[nodeid][column] = "fail"
         ledger.write_ledger(self.dir, rows)
+
+    def test_a_service_with_only_a_localstack_baseline_adds_and_stays_without_a_regression(self) -> None:
+        # SQ-213 commits baselines for services gostack does not serve: rows
+        # with a LocalStack column and a null gostack column. No gostack run
+        # includes them, and the ratchet only protects a gostack pass.
+        sns = "tests/aws/services/sns/test_sns.py::T::t"
+        base = self.split_base()
+        self.rows[sns] = row("pass", None)
+        ledger.write_ledger(self.dir, self.rows)
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        base = self.commit("sns baseline")
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        self.flip(sns, "localstack")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"localstack: {sns}", out)
+
+    def test_a_service_deleted_while_its_gostack_results_stay_is_refused(self) -> None:
+        # Selection runs a suite only while internal/service/<svc>/ exists, so
+        # the committed passes of a deleted service would stop being run.
+        base = self.split_base()
+        shutil.rmtree(self.repo / "internal" / "service" / "sqs")
+        for target in (base, "HEAD"):
+            code, out = self.check(target)
+            self.assertEqual(code, 1, out)
+            self.assertIn("sqs: 1 gostack result(s) in the ledger and no internal/service/sqs/ package", out)
+            self.assertIn("remove the rows", out)
+            self.assertNotIn("sts: ", out)
+
+    def test_a_service_with_a_baseline_and_no_gostack_result_needs_no_package(self) -> None:
+        sns = "tests/aws/services/sns/test_sns.py::T::t"
+        excluded = "tests/aws/services/sns/test_sns.py::T::u"
+        self.rows[sns] = row("pass", None)
+        self.rows[excluded] = row("excluded", "excluded", "r")
+        base = self.split_base()
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+
+    def test_a_package_holding_only_a_test_file_is_not_a_service(self) -> None:
+        base = self.split_base()
+        package = self.repo / "internal" / "service" / "sqs"
+        for name in list(package.iterdir()):
+            name.unlink()
+        (package / "queue_test.go").write_text("package sqs\n", encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("no internal/service/sqs/ package", out)
 
     def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
         base = self.split_base()
@@ -715,6 +783,21 @@ class UncommittedTest(unittest.TestCase):
         code, out = self.run_uncommitted("sqs,sts")
         self.assertEqual(code, 0, out)
 
+    def test_a_committed_service_the_run_did_not_include_is_not_compared(self) -> None:
+        # A service with only a LocalStack baseline: no gostack rows, and no
+        # run of it. Neither its rows nor its absence from the junit report is
+        # looked at while another service's run is.
+        sns = "tests/aws/services/sns/test_sns.py::T::t"
+        self.change(sns, "localstack", "pass")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "sns baseline")
+        code, out = self.run_uncommitted("sqs,sts")
+        self.assertEqual(code, 0, out)
+        self.assertIn("sqs, sts", out)
+        code, out = self.run_uncommitted("")
+        self.assertEqual(code, 0, out)
+        self.assertIn("no service", out)
+
     def test_every_difference_of_a_selected_service_fails_and_is_named(self) -> None:
         cases = {
             "a fix left uncommitted": (f"{SQS}::c", "pass", "committed fail, observed pass"),
@@ -844,6 +927,20 @@ class DocsTest(unittest.TestCase):
             "docs/parity.md is stale: run `python3 parity/ledger.py docs` and commit it",
         )
 
+    def test_a_service_with_only_a_localstack_baseline_shows_not_run_and_leaves_the_total_alone(self) -> None:
+        # Rows with no gostack result: the page lists the service with "not
+        # run" and no parity share, and its LocalStack passes are not counted
+        # against the parity of the services gostack ran.
+        rows = {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("pass", "fail", "x")}
+        sns = {f"tests/aws/services/sns/test_sns.py::T::{n}": row("pass", None) for n in "xy"}
+        without, with_sns = self.rendered(rows), self.rendered({**rows, **sns})
+        self.assertIn("| sns | 2 | 0 | 0 | 2 | 0 | not run | n/a |", with_sns)
+        total = {text: next(line for line in text.splitlines() if line.startswith("| **total**")) for text in (without, with_sns)}
+        self.assertTrue(total[without].endswith("| 3 | 0 | 2 | 66.7% |"), total[without])
+        # The LocalStack pass column of the total counts sns's two passes; the
+        # share does not, so the total names what it is of.
+        self.assertTrue(total[with_sns].endswith("| 5 | 0 | 2 | 66.7% (2 of 3) |"), total[with_sns])
+
     def test_a_ledger_whose_docs_were_not_rewritten_is_caught(self) -> None:
         rows = ledger.load_ledger(ledger.LEDGER)
         nodeid = min(n for n, entry in rows.items() if entry["gostack"] == "pass")
@@ -907,6 +1004,11 @@ class MergeRefTest(unittest.TestCase):
         (self.repo / "specs" / "SOURCES.lock").write_text(f"localstack_sha {'a' * 40}\n", encoding="utf-8")
         (self.repo / "internal" / "service" / "sqs").mkdir(parents=True)
         (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n", encoding="utf-8")
+        # Only a service with a directory here is selected: s3 calls sqs and
+        # sts is called by every test session. sns gets none on purpose.
+        for built in ("s3", "sts"):
+            (self.repo / "internal" / "service" / built).mkdir(parents=True)
+            (self.repo / "internal" / "service" / built / f"{built}.go").write_text(f"package {built}\n", encoding="utf-8")
         bin_dir = Path(tmp.name).resolve() / "bin"
         bin_dir.mkdir()
         (bin_dir / "make").write_text(MAKE_SHIM, encoding="utf-8")
@@ -999,14 +1101,15 @@ class MergeRefTest(unittest.TestCase):
         self.assertEqual(outputs["base"], self.tip)
         self.assertEqual(self.git("rev-parse", "HEAD^1"), self.tip)
         # sqs changed: its queue-URL mount reaches every service's requests,
-        # so every service in the merged ledger runs, and s3, which calls sqs.
-        every = {ledger.service_of(n) for n in ledger.load_ledger(self.dir)} | {"s3"}
-        self.assertEqual(outputs["services"], ",".join(sorted(every)))
+        # so every served service in the merged ledger runs, and s3, which calls
+        # sqs. A service main gave ledger rows and no internal/service/ directory
+        # (sns, in the tests that add it) is not run.
+        self.assertEqual(outputs["services"], "s3,sqs,sts")
         return outputs["base"]
 
     def test_a_service_file_main_added_after_the_fork_passes(self) -> None:
         def add_sns() -> None:
-            ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", "pass")})
+            ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", None)})
 
         self.on_main(add_sns)
         self.merge_ref()
