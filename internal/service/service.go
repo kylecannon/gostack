@@ -127,9 +127,10 @@ type Registration struct {
 	// once, after the gateway has drained and after persistence's save. Every
 	// service's Close runs at the same time, each given ctx, which ends at the
 	// services' Close budget (lifecycle.Deadlines.Close), so a slow one takes no
-	// time from the others. A Close returns when ctx ends, or is abandoned when
-	// it does not, so it must not be what a save waits for. A last save follows
-	// when every Close returned in time, so the state they leave is saved.
+	// time from the others. A Close returns when ctx ends, or is abandoned,
+	// with a warning, when it has not returned a moment after, so it must not
+	// be what a save waits for. A last save follows when every Close returned
+	// and ctx has time left, so the state they leave is saved.
 	Close func(ctx context.Context)
 
 	// Bind hands the service the handler it calls other services through in

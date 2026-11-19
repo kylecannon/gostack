@@ -670,10 +670,12 @@ Tests split along the same line:
   4. The persisted state is saved, with a deadline of `Save`. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
      tasks, S3's hijacked responses), all at once, each given a context that
-     ends at `Close`, so a slow one takes no time from another. A `Close` still
-     running at `Close` is abandoned with a warning and never delays the save.
-     When every `Close` returned before `Close`, a last save writes whatever
-     they or a request cut at `Work` changed; when one ran to the deadline,
+     ends at `Close`, so a slow one takes no time from another. A `Close` that
+     has not returned 20 ms after `Close` is abandoned with a warning naming
+     the service, and never delays the save; one that honours its context and
+     returned at the deadline is not abandoned. When every `Close` returned
+     and `Close` has time left, a last save writes whatever they or a request
+     cut at `Work` changed; when one was abandoned or the time is out,
      what the others changed in their `Close` stays unsaved and the save of
      step 4 is the last.
      The first save is `persist.Engine.Stop`, which stops the timer; the last

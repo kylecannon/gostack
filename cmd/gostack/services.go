@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/config"
@@ -64,17 +65,30 @@ func (p *providers) bind(h http.Handler) {
 	}
 }
 
+// closeGrace is how long close waits, once ctx has ended, for a Close that
+// honours ctx to notice and return. A Close that stopped at the deadline returns
+// within it; one that ignores ctx does not, and is the one left behind.
+const closeGrace = 20 * time.Millisecond
+
 // close stops what the services run on their own, such as SQS's message move
 // tasks. Every Close runs at once, given ctx, so a slow one takes no time from
-// the others. It waits until each has returned or ctx has ended, and reports
-// whether each returned before ctx ended. A Close still running then cannot be
-// stopped and is left behind, warned of by the caller: the process exits next.
-func (p *providers) close(ctx context.Context) bool {
-	var closing sync.WaitGroup
+// the others. It waits until each has returned or ctx has ended, and for
+// closeGrace more once it has. It returns the names of the services whose Close
+// had not returned by then. Those cannot be stopped and are left behind, warned
+// of by the caller: the process exits next. A Close that returned, even because
+// ctx ended, is not one of them.
+func (p *providers) close(ctx context.Context) []string {
+	var (
+		closing  sync.WaitGroup
+		returned = make([]atomic.Bool, len(p.regs))
+	)
 
 	for i := range p.regs {
 		if closeFn := p.regs[i].Close; closeFn != nil {
-			closing.Go(func() { closeFn(ctx) })
+			closing.Go(func() {
+				closeFn(ctx)
+				returned[i].Store(true)
+			})
 		}
 	}
 
@@ -85,14 +99,30 @@ func (p *providers) close(ctx context.Context) bool {
 		close(closed)
 	}()
 
-	// A Close that returns because ctx ended did not return in time, whichever
-	// of the two select sees first.
 	select {
 	case <-closed:
-		return ctx.Err() == nil
+		return nil
 	case <-ctx.Done():
-		return false
 	}
+
+	grace := time.NewTimer(closeGrace)
+	defer grace.Stop()
+
+	select {
+	case <-closed:
+		return nil
+	case <-grace.C:
+	}
+
+	var running []string
+
+	for i := range p.regs {
+		if p.regs[i].Close != nil && !returned[i].Load() {
+			running = append(running, p.regs[i].Metadata.Name)
+		}
+	}
+
+	return running
 }
 
 // liveSettings maps the live configuration onto the settings of a component
