@@ -305,7 +305,12 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 	for _, bc := range bt.Cells {
 		hc, ok := ht.cell(bc.ID)
 		if !ok || hc.Problem != "" || bc.Problem != "" {
-			cmp.missing = append(cmp.missing, bt.Name+" "+bc.ID)
+			label := bt.Name + " " + bc.ID
+			if !ok && want.removed(bc) {
+				label += " (removed from the matrix)"
+			}
+
+			cmp.missing = append(cmp.missing, label)
 
 			continue
 		}

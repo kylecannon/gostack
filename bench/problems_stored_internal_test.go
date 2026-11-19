@@ -14,7 +14,14 @@ import (
 // different cells and targets, and the rules for what the head has alone, what
 // it lacks, and what both have but the head has far more of.
 
-const secondID = "sqs/messaging/persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
+const (
+	// secondID and s3ID are cells the quick matrix has.
+	secondID = "sqs/messaging/persist=off/payload=64KiB/queue=standard/shape=single/proto=json/c=16"
+	s3ID     = "s3/objects/persist=off/payload=64KiB/c=16"
+	// goneID is a cell the quick matrix no longer has: one removed on purpose, or
+	// the old name of one that was renamed.
+	goneID = "sqs/messaging/persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
+)
 
 func second() cellResult { return testCell(secondID, 5000, 9000, 100, 90*bytesPerMiB) }
 
@@ -116,7 +123,7 @@ func Test_compare_a_gated_target_or_cell_the_base_has_and_the_head_lacks_fails(t
 // What the head was not asked to measure is not missing from it.
 func Test_compare_does_not_miss_what_the_head_did_not_select(t *testing.T) {
 	s3 := goodCell()
-	s3.ID, s3.Spec.Service = "s3/objects/x", serviceS3
+	s3.ID, s3.Spec.Service = s3ID, serviceS3
 
 	base := reportOf([]cellResult{goodCell(), s3}, nil)
 	base.Targets = append(base.Targets, targetResult{Name: targetSlim, Cells: []cellResult{goodCell()}})
@@ -131,7 +138,7 @@ func Test_compare_does_not_miss_what_the_head_did_not_select(t *testing.T) {
 
 	out, err := compared(t, base, head)
 	require.NoError(t, err, "a head that selected only sqs was not asked for the S3 cell")
-	assert.Contains(t, out, "gostack s3/objects/x", "it is still listed as not compared")
+	assert.Contains(t, out, "gostack "+s3ID, "it is still listed as not compared")
 
 	// A quick run against a full result: the head never asked for most of its cells.
 	base.Profile = profileFull

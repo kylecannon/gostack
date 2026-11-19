@@ -178,7 +178,7 @@ func Test_compare_an_improvement_passes(t *testing.T) {
 }
 
 func Test_compare_a_cell_missing_from_the_head_is_listed_and_fails(t *testing.T) {
-	other := "sqs/messaging/persist=off/payload=1MiB/queue=fifo/shape=batch/proto=query/c=64"
+	other := secondID
 	base := testReport(hostA,
 		testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB), testCell(other, 5000, 9000, 100, 90*bytesPerMiB))
 	head := testReport(hostA, testCell(cellID, 800, 10000, 2700, 50*bytesPerMiB))

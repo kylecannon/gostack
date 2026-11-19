@@ -38,7 +38,8 @@ import (
 //     or operation errors in a cell and operation that are at least
 //     minWorseErrors and more than worseErrors times the base's;
 //   - a cell, or a gated target, that the base has and the head does not,
-//     when both are results of one profile and the head selected the service.
+//     when both are results of one profile, the head selected the service and
+//     the head's own matrix still has the cell.
 //
 // Any other problem on both sides is listed and does not fail. Zero tolerance
 // for a head-only error is deliberate: the committed results hold none in over
@@ -71,17 +72,38 @@ type expectation struct {
 	// same is true when both results are of one profile. A quick run against a
 	// full result was never asked for most of the base's cells.
 	same bool
+	// matrix holds the ids of every cell of the head's profile that a gated
+	// target runs, for every service. compare runs from the head's checkout, so
+	// this is the head's matrix: a base cell it lacks was removed on purpose.
+	matrix map[string]bool
 	// services are the services the head selected, or none for all of them.
 	services []string
+	// baseReps and headReps are the repetitions each result asked of a cell.
+	baseReps, headReps int
 }
 
 func expectationOf(base, head report) expectation {
-	return expectation{same: base.Profile == head.Profile, services: head.Settings.Services}
+	want := expectation{
+		same: base.Profile == head.Profile, matrix: map[string]bool{}, services: head.Settings.Services,
+		baseReps: base.Settings.Reps, headReps: head.Settings.Reps,
+	}
+
+	// Both gated targets persist, so one matrix serves them.
+	for _, c := range cellsFor(head.Profile, target{persistable: true}) {
+		want.matrix[c.id()] = true
+	}
+
+	return want
 }
 
 // covers reports whether the head was asked to measure the base's cell.
 func (e expectation) covers(c cellResult) bool {
-	return e.same && (len(e.services) == 0 || slices.Contains(e.services, c.Spec.Service))
+	return e.same && e.matrix[c.ID] && (len(e.services) == 0 || slices.Contains(e.services, c.Spec.Service))
+}
+
+// removed reports whether the head's matrix no longer has the base's cell.
+func (e expectation) removed(c cellResult) bool {
+	return e.same && !e.matrix[c.ID]
 }
 
 // errorsWorse reports whether the head's count of an operation's errors fails
@@ -103,7 +125,7 @@ func compareProblems(base, head targetResult, want expectation) []problem {
 
 		switch {
 		case ok:
-			out = append(out, cellProblems(base.Name, &bc, hc)...)
+			out = append(out, cellProblems(base.Name, &bc, hc, want)...)
 		case bc.Problem == "" && want.covers(bc):
 			out = append(out, problem{
 				target: base.Name, cell: bc.ID, what: "missing from the head", base: runsText(bc), head: "absent", fails: true,
@@ -114,7 +136,7 @@ func compareProblems(base, head targetResult, want expectation) []problem {
 
 	for _, hc := range head.Cells {
 		if _, ok := base.cell(hc.ID); !ok {
-			out = append(out, cellProblems(base.Name, nil, hc)...)
+			out = append(out, cellProblems(base.Name, nil, hc, want)...)
 		}
 	}
 
@@ -133,10 +155,11 @@ func runsText(c cellResult) string {
 }
 
 // failedCount is how many runs of a cell failed. A cell with no completed run
-// has failed all of them, and an older result may not have named them.
-func failedCount(c cellResult) int {
+// has failed every run its result asked for (reps), and an older result did not
+// name them.
+func failedCount(c cellResult, reps int) int {
 	if c.Problem != "" {
-		return max(len(c.FailedRuns), 1)
+		return max(len(c.FailedRuns), reps, 1)
 	}
 
 	return len(c.FailedRuns)
@@ -147,7 +170,7 @@ func failedCount(c cellResult) int {
 // is the head's alone. A base cell with no completed run has no
 // figures, but what it reported still counts: the head's errors there fail
 // unless they are of a kind the base's problem already was.
-func cellProblems(target string, baseCell *cellResult, head cellResult) []problem {
+func cellProblems(target string, baseCell *cellResult, head cellResult, want expectation) []problem {
 	var base cellResult
 
 	baseRuns := "not in the base"
@@ -166,7 +189,7 @@ func cellProblems(target string, baseCell *cellResult, head cellResult) []proble
 
 	var out []problem
 
-	failedBase, failedHead := failedCount(base), failedCount(head)
+	failedBase, failedHead := failedCount(base, want.baseReps), failedCount(head, want.headReps)
 	baseRan := baseCell != nil && base.Problem == ""
 
 	if failedHead > 0 || (baseRan && (failedBase > 0 || head.Runs != base.Runs)) {

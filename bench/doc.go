@@ -171,8 +171,11 @@
 // A gated target, or a cell with a completed run, that the base has and the
 // head lacks fails as "missing from the head", naming it. A cell or target
 // missing on both sides, a target that is not gated, and a cell the head was
-// not asked to measure (a different profile, or a service the head's settings
-// leave out) do not. Cells with a different number of runs are listed. A row
+// not asked to measure (a different profile, a service the head's settings
+// leave out, or a cell the head's own matrix no longer has, listed as "removed
+// from the matrix") do not. A cell with no completed run in a result that
+// predates failed_runs counts as having failed every run that result's reps
+// asked for. Cells with a different number of runs are listed. A row
 // of a regression or a change computed from fewer runs than the result asked
 // for says so, such as "head 4 of 5 runs", because the overlap rule was sized
 // for the full count. The committed results hold no operation error and no

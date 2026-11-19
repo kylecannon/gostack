@@ -296,8 +296,11 @@ base did not also fail to take, or any of these in a cell only the head has. It 
 head has more failed runs in a cell than the base, or operation errors in the
 same cell and operation that are at least 10 and more than 10 times the base's,
 and when the head lacks a gated target, or a cell the base completed, that it
-was asked to measure ("missing from the head"; a different profile, or a service
-the head did not select, is not asked). Each row prints the cell, the operation
+was asked to measure ("missing from the head"; a different profile, a service
+the head did not select, or a cell the head's matrix no longer has, listed as
+"removed from the matrix", is not asked). A cell with no completed run in a
+result that predates `failed_runs` counts as having failed every run its reps
+asked for. Each row prints the cell, the operation
 and both counts. Any other problem on both sides is listed and does not fail,
 and neither do cells with unequal run counts. Zero tolerance for an error only
 the head has is deliberate: the committed results hold 0 errors in over 900,000

@@ -197,8 +197,17 @@ func (o *options) checkBase() error {
 
 // realPath is the absolute path of p with every symbolic link in it resolved.
 // A directory that does not exist yet is resolved through its nearest parent
-// that does, as the run creates it there.
+// that does, as the run creates it there. A link to a directory that does not
+// exist yet is followed to where the run would create it.
 func realPath(p string) (string, error) {
+	return resolvePath(p, maxLinkDepth)
+}
+
+// maxLinkDepth is how many dangling links realPath follows before it gives up,
+// as the kernel does for a loop.
+const maxLinkDepth = 40
+
+func resolvePath(p string, depth int) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", fmt.Errorf("absolute path: %w", err)
@@ -217,8 +226,42 @@ func realPath(p string) (string, error) {
 			return "", fmt.Errorf("resolve links: %w", err)
 		}
 
+		// A link whose target is not there yet: the run creates the target.
+		if dest, ok := danglingLink(dir); ok {
+			if depth == 0 {
+				return "", fmt.Errorf("resolve links: too many links at %s", dir)
+			}
+
+			resolved, err := resolvePath(dest, depth-1)
+			if err != nil {
+				return "", err
+			}
+
+			return filepath.Join(resolved, rest), nil
+		}
+
 		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
 	}
+}
+
+// danglingLink returns where the symbolic link at path points, made absolute,
+// when path is a link.
+func danglingLink(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return "", false
+	}
+
+	dest, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+
+	if !filepath.IsAbs(dest) {
+		dest = filepath.Join(filepath.Dir(path), dest)
+	}
+
+	return dest, true
 }
 
 // sides lists the images the run measures as one target in alternation: the
