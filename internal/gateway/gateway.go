@@ -63,18 +63,12 @@ type Gateway struct {
 	tlsConfig *tls.Config
 
 	// drainBy is the Unix time in nanoseconds at which Serve stops waiting for
-	// requests in flight, and callsBy the one at which it stops waiting for the
-	// in-process calls. Zero means DrainBy was never called, and each drain
+	// requests in flight. Zero means DrainBy was never called, and the drain
 	// takes defaultDrainTimeout; drainUnlimited means no limit.
 	drainBy atomic.Int64
-	callsBy atomic.Int64
 
-	// planDrain, when set, is asked for drainBy and callsBy when a listener
-	// fails.
-	planDrain func(failedAt time.Time) (requests, calls time.Time)
-
-	// drainCalls, when set, drains the in-process calls (DrainCalls).
-	drainCalls func(ctx context.Context)
+	// planDrain, when set, is asked for drainBy when a listener fails.
+	planDrain func(failedAt time.Time) time.Time
 }
 
 // New builds a gateway for the given registrations. settings is asked for on
@@ -109,8 +103,8 @@ func (g *Gateway) Handler() http.Handler {
 
 // InternalHandler returns the root router for the calls services make to each
 // other: every request it serves is internal (IsInternal), so the gateway
-// serves it while it is stopping, until Serve has drained the in-process calls.
-// Serve never puts it on a listener, so nothing outside the process reaches it.
+// serves it while it is stopping, until EndShutdown. Serve never puts it on a
+// listener.
 func (g *Gateway) InternalHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), internalKey{}, true)))
@@ -136,45 +130,29 @@ func (g *Gateway) BeginShutdown() {
 }
 
 // DrainBy sets the time at which Serve stops waiting for requests in flight and
-// closes what is left, and the time at which it stops waiting for the
-// in-process calls (DrainCalls). The caller plans the drain so that the
-// shutdown hooks, both drains, the save of persisted state and the services'
-// Close keep to one budget. A zero deadline is that plan's "no limit"
-// (SHUTDOWN_TIMEOUT=0), and Serve then waits as long as the drain takes.
-// Without a call, Serve gives each drain defaultDrainTimeout from the moment it
-// starts. Call it before Serve's context ends.
-func (g *Gateway) DrainBy(requests, calls time.Time) {
-	g.drainBy.Store(deadlineNanos(requests))
-	g.callsBy.Store(deadlineNanos(calls))
-}
-
-// deadlineNanos is how drainBy and callsBy store deadline.
-func deadlineNanos(deadline time.Time) int64 {
+// closes what is left. The caller plans the drain so that the shutdown hooks,
+// the drain, the save of persisted state and the services' Close keep to one
+// budget. A zero deadline is that plan's "no limit" (SHUTDOWN_TIMEOUT=0), and
+// Serve then waits for the requests as long as they take. Without a call, Serve
+// waits defaultDrainTimeout from the moment it starts to drain. Call it before
+// Serve's context ends.
+func (g *Gateway) DrainBy(deadline time.Time) {
 	if deadline.IsZero() {
-		return drainUnlimited
+		g.drainBy.Store(drainUnlimited)
+
+		return
 	}
 
-	return deadline.UnixNano()
+	g.drainBy.Store(deadline.UnixNano())
 }
 
 // PlanDrain sets plan, which Serve calls once, with the current time, when a
-// listener fails and Serve starts the shutdown itself. Its results are what
+// listener fails and Serve starts the shutdown itself. Its result is what
 // DrainBy takes. A shutdown that Serve's context asks for does not call it: the
 // caller starts that one, runs the hooks, and sets DrainBy before the context
 // ends. Call it before Serve.
-func (g *Gateway) PlanDrain(plan func(failedAt time.Time) (requests, calls time.Time)) {
+func (g *Gateway) PlanDrain(plan func(failedAt time.Time) time.Time) {
 	g.planDrain = plan
-}
-
-// DrainCalls sets drain, which Serve calls once the requests from outside have
-// drained and the listeners are closed, and before it stops serving the calls
-// services make to each other. drain waits for the calls the services have
-// queued, such as S3's event notifications, and cuts what is left when its
-// context ends, at the second deadline of DrainBy. Until drain returns, the
-// gateway serves internal calls and refuses every other request. Call it before
-// Serve.
-func (g *Gateway) DrainCalls(drain func(ctx context.Context)) {
-	g.drainCalls = drain
 }
 
 // buildRouter builds the root router of g. The middleware runs in the order of
@@ -255,9 +233,8 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
 // down: it refuses new work, waits for running requests until the time DrainBy
 // set (defaultDrainTimeout from now when it was never called), and closes what
-// is left. Then it runs the DrainCalls function, still serving internal calls,
-// and only after that refuses every request. It returns nil after a shutdown
-// that ctx asked for.
+// is left. The gateway still serves internal calls when Serve returns, until
+// EndShutdown. It returns nil after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
 // prior knowledge) on the same port. Serve uses the certificate that Listen
@@ -317,29 +294,23 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 	shutdownErr := g.shutdown(ctx, server)
 
 	serving.Wait()
-	g.drainInternal(ctx)
-	g.phase.Store(phaseStopped)
 
 	return errors.Join(serveErr, shutdownErr)
 }
 
-// drainInternal runs the DrainCalls function, when there is one, until the
-// calls deadline. The gateway is still stopping, so it serves internal calls
-// only, and nothing reaches it from outside: the listeners are closed.
-func (g *Gateway) drainInternal(ctx context.Context) {
-	if g.drainCalls == nil {
-		return
-	}
-
-	ctx, cancel := drainContext(context.WithoutCancel(ctx), g.callsBy.Load())
-	defer cancel()
-
-	g.drainCalls(ctx)
+// EndShutdown makes the gateway refuse every request, internal calls and the
+// developer paths included, so that a call made while the services close never
+// reaches a closed service. Serve leaves the gateway stopping, still serving
+// internal calls, so that the caller can drain the calls the services queued
+// for each other after the requests from outside have drained (the listeners
+// are closed by then); the caller ends the shutdown with this.
+func (g *Gateway) EndShutdown() {
+	g.phase.Store(phaseStopped)
 }
 
 func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	// The caller's context has ended; the shutdown still gets its own time.
-	ctx, cancel := drainContext(context.WithoutCancel(ctx), g.drainBy.Load())
+	ctx, cancel := g.drainContext(context.WithoutCancel(ctx))
 	defer cancel()
 
 	err := server.Shutdown(ctx)
@@ -356,11 +327,11 @@ func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	return nil
 }
 
-// drainContext limits ctx to nanos, a deadline DrainBy set: to
-// defaultDrainTimeout from now when DrainBy was never called, and not at all
-// when DrainBy took a zero deadline.
-func drainContext(ctx context.Context, nanos int64) (context.Context, context.CancelFunc) {
-	switch nanos {
+// drainContext limits ctx to the time DrainBy set, to defaultDrainTimeout from
+// now when DrainBy was never called, and leaves it unlimited when DrainBy took a
+// zero deadline.
+func (g *Gateway) drainContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	switch nanos := g.drainBy.Load(); nanos {
 	case 0:
 		return context.WithTimeout(ctx, defaultDrainTimeout)
 	case drainUnlimited:

@@ -138,9 +138,14 @@ func New() *Client {
 func (c *Client) Bind(h http.Handler) {
 	c.handler.Store(&h)
 
-	if hub, ok := h.(*Hub); ok {
+	hub, _ := h.(*Hub)
+	if hub != nil {
 		hub.add(c)
 	}
+
+	c.queue.mu.Lock()
+	c.queue.hub = hub
+	c.queue.mu.Unlock()
 }
 
 // Bound reports whether Bind has been called.

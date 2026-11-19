@@ -6,7 +6,13 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"time"
 )
+
+// cutGrace is how long Drain waits, once it has cut, for the calls it
+// cancelled to return, so that a call its handler was finishing is counted as
+// served and not as cut.
+const cutGrace = 20 * time.Millisecond
 
 // Hub is the handler the services' clients are bound to, and the set of those
 // clients, so that a shutdown can drain every queue at once. It serves a call
@@ -17,6 +23,13 @@ type Hub struct {
 
 	mu      sync.Mutex
 	clients []*Client
+	// pending counts the calls the hub's clients have queued and not yet done
+	// with: waiting, running, or running their done. A call is counted before a
+	// worker can see it and let go of after its done returns, so a call queued
+	// by a call being served, or by its done, keeps the count above zero.
+	pending int
+	// idle, when not nil, is closed when pending falls to zero.
+	idle chan struct{}
 }
 
 var _ http.Handler = (*Hub)(nil)
@@ -30,27 +43,34 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handler.ServeHTTP(w, r)
 }
 
-// Drain waits until no client has a call queued or running, all at the same
-// time, since a call served can queue another, or until ctx ends. Then it
+// Drain waits until no call of the hub's clients is queued or running, or
+// until ctx ends. The count is one for the whole hub, so a call that queues
+// another on a different client is never missed between two clients. Then it
 // shuts every client's queue: the calls still queued are dropped without
-// their done being called, as Close drops them, the ones running are cancelled
-// and not waited for, and Enqueue refuses every later call. Drain returns the
-// number of calls it cut, and logs it when it is not zero. A client's Close
-// still waits for its workers.
+// their done being called, as Close drops them, the ones running are cancelled,
+// and Enqueue refuses every later call. It waits a short grace for the
+// cancelled calls to return, then logs and returns Cut: a cancelled call that
+// was still answered with a 2xx is not counted. A client's Close still waits
+// for its workers.
 func (h *Hub) Drain(ctx context.Context) int {
-	// A client can go busy again while another is waited for; then all of them
-	// are waited for once more.
-	for ctx.Err() == nil {
-		if h.idle(ctx) {
-			break
-		}
+	select {
+	case <-h.idleSignal():
+	case <-ctx.Done():
 	}
 
-	cut := 0
 	for _, c := range h.members() {
-		cut += c.queue.shut()
+		c.queue.shut()
 	}
 
+	grace, cancel := context.WithTimeout(context.Background(), cutGrace)
+	defer cancel()
+
+	select {
+	case <-h.idleSignal():
+	case <-grace.Done():
+	}
+
+	cut := h.Cut()
 	if cut > 0 {
 		slog.Warn("in-process calls cut at shutdown: still queued or running at the deadline", "count", cut)
 	}
@@ -59,7 +79,9 @@ func (h *Hub) Drain(ctx context.Context) int {
 }
 
 // Cut is the number of calls the hub's clients never served because their
-// queue was shut: cut by Drain or Close, or refused by Enqueue afterwards.
+// queue was shut: dropped while queued, cancelled while running and not
+// answered with a 2xx, or refused by Enqueue afterwards. A call cancelled
+// while running that is still running counts until it is answered.
 func (h *Hub) Cut() int {
 	cut := 0
 
@@ -89,24 +111,42 @@ func (h *Hub) members() []*Client {
 	return slices.Clone(h.clients)
 }
 
-// idle waits for each client in turn to be idle, until ctx ends, and reports
-// whether every client was idle when the last had been waited for.
-func (h *Hub) idle(ctx context.Context) bool {
-	clients := h.members()
+// enter counts a call queued.
+func (h *Hub) enter() {
+	h.mu.Lock()
+	h.pending++
+	h.mu.Unlock()
+}
 
-	for _, c := range clients {
-		select {
-		case <-c.queue.idleSignal():
-		case <-ctx.Done():
-			return false
-		}
+// leave counts a call done with or dropped. The last one signals idle.
+func (h *Hub) leave() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.pending--
+
+	if h.pending == 0 && h.idle != nil {
+		close(h.idle)
+		h.idle = nil
+	}
+}
+
+// idleSignal returns a channel that is closed once no call is pending: at once
+// when none is now.
+func (h *Hub) idleSignal() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.idle == nil {
+		h.idle = make(chan struct{})
 	}
 
-	for _, c := range clients {
-		if !c.Idle() {
-			return false
-		}
+	idle := h.idle
+
+	if h.pending == 0 {
+		close(h.idle)
+		h.idle = nil
 	}
 
-	return true
+	return idle
 }

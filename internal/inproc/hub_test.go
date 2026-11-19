@@ -129,7 +129,8 @@ func Test_Hub(t *testing.T) {
 			begin := time.Now()
 			cut := hub.Drain(ctx)
 
-			assert.Equal(t, 100*time.Millisecond, time.Since(begin), "Drain returned at its deadline")
+			assert.Equal(t, 120*time.Millisecond, time.Since(begin),
+				"Drain cut at its deadline and waited 20 ms for the calls it cancelled, which never return")
 			assert.Equal(t, 1000, cut, "the calls running and the calls queued were cut")
 			assert.Equal(t, 1000, hub.Cut())
 			assert.Equal(t, int32(inproc.MaxInFlight), started.Load(), "only the calls running reached the handler")
@@ -188,5 +189,97 @@ func Test_Hub(t *testing.T) {
 			close(release)
 			client.Close()
 		})
+	})
+}
+
+// Test_Hub_DrainWaitsForAChainOfClients is the review's chain (SQ-294, S2):
+// clients bound a, b, c, and a call on c queues one on b, whose handler queues
+// one on a. Drain has no deadline, so it may return only once the chain has
+// ended, and then it has nothing to cut. Checking each client in turn missed
+// the call on a about once in 1,800 runs.
+func Test_Hub_DrainWaitsForAChainOfClients(t *testing.T) {
+	const iterations = 20000
+
+	early := 0
+
+	var spun atomic.Int64
+
+	for i := range iterations {
+		var a, b *inproc.Client
+
+		var servedA atomic.Int32
+
+		hub := inproc.NewHub(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/c":
+				b.Enqueue(laneCall(0, i), nil)
+			case "/0":
+				// A handler of varying length, so b ends at varying points of the
+				// drain's wait.
+				for range i % 97 {
+					spun.Add(1)
+				}
+
+				a.Enqueue(laneCall(1, i), nil)
+			default:
+				servedA.Add(1)
+			}
+		}))
+
+		a, b = inproc.New(), inproc.New()
+		c := inproc.New()
+
+		a.Bind(hub)
+		b.Bind(hub)
+		c.Bind(hub)
+
+		call := sqsCall("chain")
+		call.Path = "/c"
+		require.True(t, c.Enqueue(call, nil))
+
+		if hub.Drain(context.Background()) != 0 || servedA.Load() != 1 {
+			early++
+		}
+
+		a.Close()
+		b.Close()
+		c.Close()
+	}
+
+	assert.Zero(t, early, "Drain returned before the chain ended in %d of %d runs", early, iterations)
+}
+
+// Test_Hub_DrainCountsOnlyTheCallsItCut: a call running when Drain cuts, whose
+// handler still answers it, was served and is not counted as cut (SQ-294, N3).
+func Test_Hub_DrainCountsOnlyTheCallsItCut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		log := captureLog(t)
+
+		hub := inproc.NewHub(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The cut cancels the call; the handler finishes it all the same.
+			<-r.Context().Done()
+			w.WriteHeader(http.StatusOK)
+		}))
+		client := inproc.New()
+		client.Bind(hub)
+
+		var status atomic.Int32
+
+		require.True(t, client.Enqueue(sqsCall("finishing"), func(resp inproc.Response, err error) {
+			if err == nil {
+				status.Store(int32(resp.Status))
+			}
+		}))
+		synctest.Wait()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		assert.Zero(t, hub.Drain(ctx), "the call was answered")
+		assert.Zero(t, hub.Cut())
+		assert.Equal(t, int32(http.StatusOK), status.Load())
+		assert.NotContains(t, log.String(), "in-process calls cut at shutdown")
+
+		client.Close()
 	})
 }

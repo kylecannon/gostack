@@ -27,9 +27,9 @@ const (
 	// saveShare divides the child's time: the save reserves a quarter of it.
 	saveShare = 4
 
-	// callsShare divides the time before Calls: the drain of the in-process
-	// calls has the last quarter of it.
-	callsShare = 4
+	// secondSaveShare divides the save's reserve: the save after the in-process
+	// calls drain keeps at least the last half of it.
+	secondSaveShare = 2
 )
 
 // Deadlines are the instants a shutdown keeps. A zero time means no limit.
@@ -38,10 +38,10 @@ type Deadlines struct {
 	// share it, in that order, and whatever overruns is cut.
 	Work time.Time
 	// Calls ends the drain of the calls the services queued for each other
-	// in-process, which runs after the requests have drained, since a request
-	// that finishes can queue one. What is still queued then is cut.
+	// in-process. That drain runs after the first save and before the second,
+	// both of which end at Save. What is still queued at Calls is cut.
 	Calls time.Time
-	// Save ends the save of persisted state. It is KillMargin before the
+	// Save ends both saves of persisted state. It is KillMargin before the
 	// supervisor's SIGKILL.
 	Save time.Time
 	// Close ends the services' Close functions, and the shutdown with them. It
@@ -52,30 +52,35 @@ type Deadlines struct {
 
 // PlanShutdown splits timeout, the SHUTDOWN_TIMEOUT the supervisor gives its
 // child between SIGTERM and SIGKILL, for a shutdown that starts at start. The
-// budget has five slots, one after the other: hooks, drain, in-process calls,
-// save and Close.
+// budget has four slots, one after the other: hooks and drain, the save's
+// reserve, Close and the margin before the kill.
 //
-//	start          Work    Calls                 Save    Close  start+timeout
-//	  | hooks, drain | calls |  save (reserved)  | Close | kill |
+//	start          Work                                     Save    Close  start+timeout
+//	  | hooks, drain | save, calls drain |   save again      | Close | kill |
+//	                                   Calls
 //
-// The save is reserved first. Hooks and drain end at Work, and the in-process
-// calls at Calls, however long they take, so state is written before the kill
-// even when they overrun. The services' Close functions get what is left after
-// the save. For a timeout T:
+// The save is reserved first. Hooks and drain end at Work, however long they
+// take, so state is written before the kill even when they overrun. The
+// reserve holds three steps: the first save, the save main always had, runs
+// as soon as the requests have drained and may use all of it, to Save; the
+// in-process calls then drain until Calls, or not at all when the first save
+// ran past it; and a second save writes what the drain changed, to Save. The
+// in-process calls are served all along, during the hooks, the drain and the
+// first save, so the drain only waits for the calls the last requests queued.
+// The services' Close functions get what is left after the save. For a
+// timeout T:
 //
 //	Save  = start + T - KillMargin    (start + T/4 when T <= KillMargin)
-//	Calls = Save - reserve            the reserve is a quarter of the time before
+//	Work  = Save - reserve            the reserve is a quarter of the time before
 //	                                  Save, at least 500 ms when the time allows,
 //	                                  at most half
-//	Work  = Calls - (Calls-start)/4   the calls keep the last quarter before Calls
+//	Calls = Save - reserve/2          the second save keeps half the reserve
 //	Close = start + T - CloseMargin   (Save, when T is too short to leave room)
 //
-// When time runs out, the hooks and the requests are cut first, at Work, then
-// the queued calls, at Calls; neither takes from the save or Close.
-//
 // A timeout of zero or less is no limit, as it is for the supervisor: every
-// deadline is zero, so the hooks, the drain, the calls, the save and Close all
-// wait.
+// deadline is zero, so the hooks, the drain, the saves and Close all wait. The
+// calls drain is the exception, and its caller skips it: nothing would end a
+// call that queues itself again.
 func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 	if timeout <= 0 {
 		return Deadlines{}
@@ -97,10 +102,12 @@ func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 		closeBy = save
 	}
 
-	calls := save.Add(-reserve)
-	work := calls.Add(-calls.Sub(start) / callsShare)
-
-	return Deadlines{Work: work, Calls: calls, Save: save, Close: closeBy}
+	return Deadlines{
+		Work:  save.Add(-reserve),
+		Calls: save.Add(-reserve / secondSaveShare),
+		Save:  save,
+		Close: closeBy,
+	}
 }
 
 // Until returns ctx limited to deadline, or ctx itself when deadline is zero.

@@ -13,10 +13,11 @@
 // # Shutdown deadline
 //
 // [PlanShutdown] splits SHUTDOWN_TIMEOUT for the child's own shutdown: the hooks
-// and the drain of requests share the time up to [Deadlines.Work], the calls the
-// services queued for each other drain until [Deadlines.Calls], the save of
-// persisted state has the next slot, to [Deadlines.Save], which is [KillMargin] before the
-// supervisor's SIGKILL, and the services' Close functions have the last, to
+// and the drain of requests share the time up to [Deadlines.Work], the save of
+// persisted state has the next slot, to [Deadlines.Save], which is [KillMargin]
+// before the supervisor's SIGKILL. Inside it the calls the services queued for
+// each other drain after the first save, until [Deadlines.Calls], and a second
+// save follows them. The services' Close functions have the last slot, to
 // [Deadlines.Close], which is [CloseMargin] before it. docs/architecture.md,
 // under the container contract, has the numbers.
 //

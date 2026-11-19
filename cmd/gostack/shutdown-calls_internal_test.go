@@ -218,13 +218,7 @@ func Test_start_deliversANotificationHeldPastTheSignal(t *testing.T) {
 
 	first := startInProcess(t, log, 1)
 
-	created := first.sqsOK(t, "CreateQueue", map[string]any{"QueueName": "events"})
-	require.NotEmpty(t, created["QueueUrl"])
-
-	first.s3OK(t, http.MethodPut, "/bucket", "")
-	first.s3OK(t, http.MethodPut, "/bucket?notification", `<NotificationConfiguration><QueueConfiguration>`+
-		`<Id>put</Id><Queue>arn:aws:sqs:us-east-1:000000000000:events</Queue><Event>s3:ObjectCreated:*</Event>`+
-		`</QueueConfiguration></NotificationConfiguration>`)
+	first.notifyHeld(t)
 
 	// The configuration's s3:TestEvent went through; hold the next message.
 	armed.Store(true)
@@ -249,18 +243,7 @@ func Test_start_deliversANotificationHeldPastTheSignal(t *testing.T) {
 
 	assert.Equal(t, "acknowledged", second.s3OK(t, http.MethodGet, "/bucket/held", ""))
 
-	queueURL := second.sqsOK(t, "GetQueueUrl", map[string]any{"QueueName": "events"})["QueueUrl"]
-	received := second.sqsOK(t, "ReceiveMessage", map[string]any{"QueueUrl": queueURL, "MaxNumberOfMessages": 10})
-
-	messages, _ := received["Messages"].([]any)
-
-	bodies := make([]string, 0, len(messages))
-
-	for _, m := range messages {
-		message, _ := m.(map[string]any)
-		body, _ := message["Body"].(string)
-		bodies = append(bodies, body)
-	}
+	bodies := second.eventBodies(t)
 
 	require.Len(t, bodies, 2, "the test event and the held event: %v", bodies)
 	assert.Contains(t, strings.Join(bodies, "\n"), `"eventName":"ObjectCreated:Put"`)
@@ -270,13 +253,13 @@ func Test_start_deliversANotificationHeldPastTheSignal(t *testing.T) {
 // Test_serve_cutsQueuedCallsAtTheirDeadline: a thousand calls queued for a
 // destination that never answers cannot hold the shutdown. serve returns
 // inside SHUTDOWN_TIMEOUT, the save runs with its reserve, and the log says how
-// many calls were cut.
+// many calls were cut. The first save runs at once, before the calls drain.
 func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 	const (
 		timeout = 2 * time.Second
-		// The plan for 2 seconds: work ends at 0.75s, the in-process calls at 1s,
+		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
 		// the save at 1.5s.
-		callsAt = time.Second
+		callsAt = 1250 * time.Millisecond
 		saveBy  = timeout - lifecycle.KillMargin
 		slack   = 100 * time.Millisecond
 	)
@@ -309,7 +292,6 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 	hub := inproc.NewHub(gw.InternalHandler())
 	client := inproc.New()
 	client.Bind(hub)
-	gw.DrainCalls(func(ctx context.Context) { hub.Drain(ctx) })
 
 	for i := range 1000 {
 		require.True(t, client.Enqueue(inproc.Call{
@@ -330,14 +312,19 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 		saveBy time.Time
 	}
 
-	saves := make(chan saved, 1)
+	firsts, rests := make(chan saved, 1), make(chan saved, 1)
+	record := func(to chan<- saved, saveCtx context.Context) {
+		deadline, _ := saveCtx.Deadline()
+		to <- saved{at: time.Now(), saveBy: deadline}
+	}
+
 	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
 	done := make(chan error, 1)
 
 	go func() {
-		done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx, _ context.Context) {
-			deadline, _ := saveCtx.Deadline()
-			saves <- saved{at: time.Now(), saveBy: deadline}
+		done <- serve(ctx, gw, listeners, proc, timeout, hub, shutdownSave{
+			first: func(saveCtx context.Context) { record(firsts, saveCtx) },
+			rest:  func(saveCtx, _ context.Context) { record(rests, saveCtx) },
 		})
 	}()
 
@@ -348,13 +335,15 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 
 	stop()
 
-	var got saved
+	var first, rest saved
 
 	select {
-	case got = <-saves:
+	case rest = <-rests:
 	case <-time.After(timeout + 5*time.Second):
 		t.Fatal("the state was never saved")
 	}
+
+	first = <-firsts
 
 	select {
 	case err := <-done:
@@ -364,11 +353,18 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 	}
 
 	assert.Less(t, time.Since(begin), saveBy, "serve returned before the supervisor's SIGKILL, with its margin")
-	assert.GreaterOrEqual(t, got.at.Sub(begin), callsAt-slack, "the queued calls had until Calls")
-	assert.Less(t, got.at.Sub(begin), callsAt+slack, "the queued calls were cut at Calls, not later")
-	assert.LessOrEqual(t, got.saveBy.Sub(begin), saveBy+slack, "the save keeps its reserve")
+	assert.Less(t, first.at.Sub(begin), slack, "the first save did not wait for the calls")
+	assert.LessOrEqual(t, first.saveBy.Sub(begin), saveBy+slack, "the first save may use the whole reserve")
+	assert.GreaterOrEqual(t, rest.at.Sub(begin), callsAt-slack, "the queued calls had until Calls")
+	assert.Less(t, rest.at.Sub(begin), callsAt+slack, "the queued calls were cut at Calls, not later")
+	assert.LessOrEqual(t, rest.saveBy.Sub(begin), saveBy+slack, "the second save keeps the rest of the reserve")
 	assert.Equal(t, 1000, hub.Cut(), "every call was cut: the ones running and the ones queued")
 	assert.Contains(t, log.String(), "in-process calls cut at shutdown")
 	assert.Contains(t, log.String(), "count=1000")
 	assert.Equal(t, int32(inproc.MaxInFlight), reached.Load(), "no queued call reached the destination")
+}
+
+// restOnly is a shutdownSave whose first step does nothing.
+func restOnly(rest func(saveCtx, closeCtx context.Context)) shutdownSave {
+	return shutdownSave{rest: rest}
 }

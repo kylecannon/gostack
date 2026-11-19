@@ -27,6 +27,9 @@ const (
 type queued struct {
 	call Call
 	done func(Response, error)
+	// hub, when not nil, counted the call when it was queued, and is told
+	// when the call is done with or dropped.
+	hub *Hub
 }
 
 // lane holds the calls queued under one lane key. One worker at most serves a
@@ -43,6 +46,8 @@ type queue struct {
 	cancel context.CancelFunc
 
 	mu sync.Mutex
+	// hub is the Hub the client is bound to, if any.
+	hub *Hub
 	// lanes are the lanes with a call waiting or running, by key.
 	lanes map[string]*lane
 	// waiting are the lanes with a call waiting and no worker, in the order
@@ -50,14 +55,14 @@ type queue struct {
 	waiting []*lane
 	queued  int
 	workers int
-	// running counts the calls a worker has taken and not yet answered.
+	// running counts the calls a worker is serving: taken, and not yet
+	// answered by the handler.
 	running int
 	closed  bool
 	// cut counts the calls that were never served because the queue was shut:
-	// those queued or running when it shut, and those Enqueue refused after.
-	cut int
-	// idle, when not nil, is closed when the last worker exits.
-	idle  chan struct{}
+	// those queued when it shut, those running then that were not answered
+	// with a 2xx after all, and those Enqueue refused after.
+	cut   int
 	group sync.WaitGroup
 }
 
@@ -115,14 +120,22 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 
 	q.queued++
 
+	// The hub counts the call before any worker can see it, so a call queued
+	// by a call the hub is waiting for keeps the hub's count above zero.
+	if q.hub != nil {
+		q.hub.enter()
+	}
+
+	item := queued{call: call, done: done, hub: q.hub}
+
 	key := laneKey(call)
 	if l, ok := q.lanes[key]; ok {
-		l.calls = append(l.calls, queued{call: call, done: done})
+		l.calls = append(l.calls, item)
 
 		return true
 	}
 
-	l := &lane{key: key, calls: []queued{{call: call, done: done}}}
+	l := &lane{key: key, calls: []queued{item}}
 
 	if q.lanes == nil {
 		q.lanes = make(map[string]*lane)
@@ -159,59 +172,34 @@ func (c *Client) Close() {
 
 // shut is Close without the wait: it drops the calls still queued, without
 // answering them, cancels the ones in flight, and refuses later Enqueue calls.
-// It counts the calls it dropped or cancelled in cut, and returns how many.
+// It counts the calls it dropped or cancelled in cut; a cancelled call that
+// its handler still answers with a 2xx is taken off the count when it returns.
 // Shutting a queue that is already shut cuts nothing.
-func (q *queue) shut() int {
+func (q *queue) shut() {
 	q.mu.Lock()
 
 	if q.closed {
 		q.mu.Unlock()
 
-		return 0
+		return
 	}
 
-	cut := q.queued + q.running
+	for _, l := range q.lanes {
+		for _, dropped := range l.calls {
+			if dropped.hub != nil {
+				dropped.hub.leave()
+			}
+		}
+	}
 
 	q.closed = true
+	q.cut += q.queued + q.running
 	q.lanes = nil
 	q.waiting = nil
 	q.queued = 0
-	q.cut += cut
 	q.mu.Unlock()
 
 	q.cancel()
-
-	return cut
-}
-
-// idleSignal returns a channel that is closed once no call is queued and no
-// worker runs: at once when that is so now.
-func (q *queue) idleSignal() <-chan struct{} {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.idle == nil {
-		q.idle = make(chan struct{})
-	}
-
-	idle := q.idle
-
-	if q.workers == 0 && q.queued == 0 {
-		close(q.idle)
-		q.idle = nil
-	}
-
-	return idle
-}
-
-// exit is a worker leaving, under q.mu. The last one out signals idle.
-func (q *queue) exit() {
-	q.workers--
-
-	if q.workers == 0 && q.idle != nil {
-		close(q.idle)
-		q.idle = nil
-	}
 }
 
 // work serves the waiting lanes, one call from each in turn, until none waits.
@@ -229,12 +217,32 @@ func (c *Client) work() {
 		resp, err := c.Do(ctx, next.call)
 
 		cancel()
+		c.queue.answered(resp, err)
 
 		if next.done != nil {
 			next.done(resp, err)
 		}
 
+		// After done, so that a call done queues keeps the hub waiting.
+		if next.hub != nil {
+			next.hub.leave()
+		}
+
 		served = l
+	}
+}
+
+// answered is a call's handler returning with resp or err. A call the queue
+// was shut while it ran was counted as cut; one answered with a 2xx all the
+// same was served.
+func (q *queue) answered(resp Response, err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.running--
+
+	if q.closed && err == nil && resp.OK() {
+		q.cut--
 	}
 }
 
@@ -247,12 +255,8 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if served != nil {
-		q.running--
-	}
-
 	if q.closed {
-		q.exit()
+		q.workers--
 
 		return nil, queued{}, false
 	}
@@ -266,7 +270,7 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	}
 
 	if len(q.waiting) == 0 {
-		q.exit()
+		q.workers--
 
 		return nil, queued{}, false
 	}
