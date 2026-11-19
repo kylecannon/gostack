@@ -33,6 +33,7 @@ Every package has a `doc.go` that states its contract; read it first.
 | `internal/service/s3` | S3 provider, see below | provider.go, routing.go, state.go |
 | `internal/api/{sqs,sts,s3}` | generated; `Handler`, `Unimplemented`, `Serve`, codecs, `Metadata`; s3 also `Route`, sharded into `*_N.go` | dispatch*.go, operations.go, types*.go |
 | `internal/api/{dynamodb,dynamodbstreams,sns,kms,secretsmanager,ssm}` | generated ahead of their services so no service branch edits the generator; registered nowhere and not linked into the binary | same layout |
+| `internal/protocol/constraint` | runtime for generated constraint checks: member paths, the `N validation errors detected` message, UTF-16 length, lazily compiled patterns; used by services that set `Validation` in the generator's `serviceTable` (kms, dynamodb, sns) | constraint.go |
 | `codegen/spec` | spec loader, shape model, order-keeping patches, HTTP bindings, endpoints, protocol fixtures | load.go, patch.go, shape.go, http.go, endpoint.go, fixture.go |
 | `codegen/cmd/gostack-codegen` | emitters per output file; REST route rules; fixture packages; per-service config; `emittedNames`, the exported names the generator declares, with a `Shape` suffix for a model shape that collides | emit*.go, route.go, fixtures.go, config.go, names.go |
 | `api/openapi` | embedded `gostack.yaml` | embed.go |
