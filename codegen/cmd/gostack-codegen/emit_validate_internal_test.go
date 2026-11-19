@@ -31,9 +31,11 @@ const validOneModel = `{"metadata":{"protocol":"json","jsonVersion":"1.0","targe
 		"Item":{"type":"structure","required":["Key"],"members":{"Key":{"shape":"String"}}},
 		"Items":{"type":"list","member":{"shape":"Item"},"max":2},
 		"Entries":{"type":"map","key":{"shape":"String"},"value":{"shape":"Item"}},
+		"Groups":{"type":"map","key":{"shape":"String"},"value":{"shape":"Items"}},
 		"DoRequest":{"type":"structure","required":["Id"],"members":{"Id":{"shape":"Id"},
 			"Name":{"shape":"Name"},"Secret":{"shape":"Secret"},"Mode":{"shape":"Mode"},"Code":{"shape":"Code"},
-			"Count":{"shape":"Count"},"Items":{"shape":"Items"},"Entries":{"shape":"Entries"}}},
+			"Count":{"shape":"Count"},"Items":{"shape":"Items"},"Entries":{"shape":"Entries"},
+			"Groups":{"shape":"Groups"}}},
 		"DoResponse":{"type":"structure","members":{}}}}`
 
 // validOneTest runs in the generated package of validOneModel.
@@ -124,8 +126,9 @@ func TestServeDoesNotCheck(t *testing.T) {
 	}
 }
 
-func TestUncheckedPatternIsListed(t *testing.T) {
-	if validateUnchecked != 1 {
+// The pattern of Code, and the Items inside Groups.
+func TestUncheckedAreListed(t *testing.T) {
+	if validateUnchecked != 2 {
 		t.Fatalf("validateUnchecked = %d", validateUnchecked)
 	}
 }

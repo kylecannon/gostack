@@ -13,11 +13,13 @@ import (
 //   - AutoScalingRoleArn: pattern [\u0020-\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF\r\n\t]*, which Go's regexp cannot compile
 //   - BatchGetRequestMap: the constraints of its keys, TableArn
 //   - BatchWriteItemRequestMap: the constraints of its keys, TableArn
+//   - BatchWriteItemRequestMap: the constraints of its values, WriteRequests
 //   - Key: the constraints of its keys, AttributeName
 //   - ExpressionAttributeNameMap: the constraints of its values, AttributeName
 //   - CsvHeaderList: the constraints of its elements, CsvHeader
 //   - ExpectedAttributeMap: the constraints of its keys, AttributeName
 //   - AttributeNameList: the constraints of its elements, AttributeName
+//   - KeyList: the constraints of its elements, Key
 //   - NonKeyAttributeNameList: the constraints of its elements, NonKeyAttributeName
 //   - PutItemInputAttributeMap: the constraints of its keys, AttributeName
 //   - KeyConditions: the constraints of its keys, AttributeName
@@ -26,7 +28,7 @@ import (
 //   - AttributeUpdates: the constraints of its keys, AttributeName
 
 // validateUnchecked counts the constraints listed above.
-const validateUnchecked = 15
+const validateUnchecked = 17
 
 // The patterns of the string shapes, compiled when first used.
 var (

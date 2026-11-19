@@ -301,9 +301,9 @@ written by hand.
   `ValidationException` unless the option names another; `Enums` replaces
   an enum's printed value list where AWS prints another one. The message form
   lives in `internal/protocol/constraint`. Patterns Go's regexp cannot
-  compile, and the constraints of scalar list elements and map keys and
-  values, are left unchecked and listed at the top of the generated
-  `validate.go`. kms, dynamodb and sns have it on; the table tests beside
+  compile, the constraints of scalar list elements and map keys and values,
+  and anything inside a list or map that is itself inside a list or map, are
+  left unchecked and listed at the top of the generated `validate.go`. kms, dynamodb and sns have it on; the table tests beside
   their packages reproduce every such message in LocalStack's snapshots for
   them. Without the option, `ServeValidated` keeps the first-missing-member
   check SQS uses.

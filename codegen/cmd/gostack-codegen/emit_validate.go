@@ -352,9 +352,10 @@ func (v *validator) emitEnum(p *printer, r ref, val string, report func(p *print
 
 // emitNested writes the calls into the structs below a set member: the member
 // itself, the elements of a list, or the values of a map, at the path AWS
-// gives them. The constraints of scalar list elements and of map keys and
-// values are reported by AWS in a form no snapshot pins, so they are listed as
-// unchecked instead.
+// gives them. The constraints of scalar list elements, of map keys and
+// values, and of anything inside a list or map that is itself inside a list
+// or map are reported by AWS in a form no snapshot pins, so they are listed
+// as unchecked instead.
 func (v *validator) emitNested(p *printer, r ref, x, name string) {
 	switch r.shape.Type {
 	case spec.TypeStructure:
@@ -371,12 +372,12 @@ func (v *validator) emitNested(p *printer, r ref, x, name string) {
 			p.f("\t\t\tp := at.Item(%q, i)", name)
 			p.f("\t\t\t%s[i].validate(r, &p)", x)
 			p.f("\t\t}")
-		} else if hasConstraint(elem.shape) {
+		} else if v.leftUnchecked(elem) {
 			v.skip(fmt.Sprintf("%s: the constraints of its elements, %s", r.name, elem.name))
 		}
 	case spec.TypeMap:
 		key, _ := resolve(v.g.p, r.shape.Key)
-		if hasConstraint(key.shape) {
+		if ownConstraint(key.shape) {
 			v.skip(fmt.Sprintf("%s: the constraints of its keys, %s", r.name, key.name))
 		}
 
@@ -387,29 +388,47 @@ func (v *validator) emitNested(p *printer, r ref, x, name string) {
 			p.f("\t\t\tp := at.Entry(%q, k)", name)
 			p.f("\t\t\te.validate(r, &p)")
 			p.f("\t\t}")
-		} else if hasConstraint(elem.shape) {
+		} else if v.leftUnchecked(elem) {
 			v.skip(fmt.Sprintf("%s: the constraints of its values, %s", r.name, elem.name))
 		}
 	default: // a scalar has nothing below it
 	}
 }
 
+// leftUnchecked reports whether a list element or map value that is not a
+// structure with a validate method has a constraint the checks would act on,
+// on itself or anywhere below it: a constrained scalar, or a list or map
+// inside the collection, which no snapshot shows the path form of.
+func (v *validator) leftUnchecked(r ref) bool {
+	if ownConstraint(r.shape) {
+		return true
+	}
+
+	var inner []*spec.Ref
+
+	switch r.shape.Type {
+	case spec.TypeList:
+		inner = []*spec.Ref{r.shape.Member}
+	case spec.TypeMap:
+		inner = []*spec.Ref{r.shape.Key, r.shape.Value}
+	default:
+		return false
+	}
+
+	for _, ir := range inner {
+		e, err := resolve(v.g.p, ir)
+		if err == nil && (v.structValidates(e) || v.leftUnchecked(e)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // structValidates reports whether r is a structure with a validate method.
 func (v *validator) structValidates(r ref) bool {
 	return r.shape.Type == spec.TypeStructure && !r.shape.Document &&
 		v.g.structs[v.g.goTypeName(r.name)].validates
-}
-
-// hasConstraint reports whether a shape has a trait the checks act on, which
-// for a list element or map value would go unchecked.
-func hasConstraint(sh *spec.Shape) bool {
-	if sh.Type == spec.TypeStructure || sh.Type == spec.TypeList || sh.Type == spec.TypeMap {
-		return false
-	}
-
-	minSet := sh.Min != "" && sh.Min != "0"
-
-	return minSet || sh.Max != "" || sh.Pattern != "" || len(sh.Enum) > 0
 }
 
 // markValidation flags the structs below an operation input that get a
