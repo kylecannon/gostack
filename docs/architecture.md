@@ -123,7 +123,8 @@ internal/
   inproc/                    a service's calls to another service of the same process, through the gateway's handler
   config/                    viper-backed LocalStack env vars and their lookup order, PERSIST_* validator, config updates
   store/                     Bundle[State] (account x region), cross-region and cross-account attributes
-  persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats
+  persist/                   dirty tracking, on-demand flush timer, atomic write, load, formats, assets
+  blob/                      body store contract and the ephemeral store (memory, then unlinked temp files)
   lifecycle/                 lifecycle, init hooks (boot/start/ready/shutdown .d, .sh/.py as subprocesses), startup warnings, "Ready." marker, signals
   internalapi/               /_gostack/* canonical handlers, /_localstack/* and /_aws/* developer aliases, always-on protocol paths
   dns/                       DNS server for *.localhost.localstack.cloud (DNS_ADDRESS=0 disables it)
@@ -365,19 +366,19 @@ while idle; the queue holds `inproc.MaxQueued` (4,096) calls and refuses the
 next. A call made before `Bind` gives the client a handler returns
 `ErrNotBound`. S3 uses it to deliver event notifications to SQS.
 
-### S3 body store (`internal/service/s3`)
+### Body store (`internal/blob`)
 
-Object and part bodies live behind `BlobStore` (`Create`, `Open`, `Remove`),
-under ids the store picks, and are streamed in and out. `Ephemeral`, the store
-when S3 is not persisted, keeps a body up to 512 KiB in memory and spills a
-larger one to a temporary file under `/var/lib/localstack/tmp` (the system
-temporary directory when that cannot be made), unlinked at creation. A reader
-that has opened a blob keeps reading it after `Remove`. A range read or a part
-copy opens one blob, seeks and copies into a new one.
+S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,
+`Remove`), under ids the store picks, and are streamed in and out.
+`blob.Ephemeral`, the store when S3 is not persisted, keeps a body up to 512 KiB
+in memory and spills a larger one to a temporary file under
+`/var/lib/localstack/tmp` (the system temporary directory when that cannot be
+made), unlinked at creation. A reader that has opened a blob keeps reading it
+after `Remove`. A range read or a part copy opens one blob, seeks and copies
+into a new one.
 
-S3 persistence is not built. The proposed layout, blobs as files under
-`<base>/s3/assets/blobs/` with immutable ids, is pending the user's ruling
-(SQ-101); nothing in this section depends on it.
+A persisted service keeps its bodies as assets of the persistence engine, through
+`persist.BlobStore` (see Assets and S3 under Persistence).
 
 ## Internal API
 
@@ -553,6 +554,10 @@ Tests split along the same line:
      tasks), with a deadline of `Close`. A `Close` that overruns is abandoned
      with a warning and never delays the save. When every `Close` returned in
      time, a last save writes whatever they or a request cut at `Work` changed.
+     The first save is `persist.Engine.Stop`, which stops the timer; the last
+     is `Engine.Close`, which then releases the descriptors the assets hold
+     (the root on `assets/.gostack` and, with syncfs, the directory kept open
+     for it) once every sync started has returned.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
@@ -662,7 +667,9 @@ cites the lines.
   localstack-persist's non-atomic writes and rustack's save-only-on-shutdown.
 - A load never overlaps a save, so a state file on disk is always a whole old or
   a whole new state. A save, load or shutdown that waits for the other stops
-  waiting when its deadline passes.
+  waiting when its deadline passes. A timed save finishes under the deadline
+  of a save or shutdown that waits for it, and gives way to a load or reset
+  (see the assets section).
 - A failed save is retried until it succeeds. The first retry waits
   max(1 s, `PERSIST_FREQUENCY`) after the failure, and each failure in a row
   doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
@@ -687,7 +694,10 @@ cites the lines.
   never writes the file, and `/_gostack/health` reports `persisted: false` for
   the service. Every later save or load says so: `POST /_gostack/state/save` and
   `/_gostack/state/load` answer 500 with an error naming the service. The other
-  services keep saving, and gostack still starts.
+  services keep saving, and gostack still starts. No later format is tried for
+  that service: it starts empty, as an unsafe service does, so it never runs a
+  state the engine will not save, and its assets are neither swept nor used (S3
+  keeps its bodies in memory).
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -710,10 +720,315 @@ outside the base directory.
 - A link whose target fails to load is the one moved aside; its target is
   untouched.
 
+**Assets.** A service whose state names large files, such as S3's object
+bodies, keeps them beside its state through `Engine.Assets(service)`. The
+answer is nil when the service is not persisted, which is when
+`/_gostack/health` reports `persisted: false`. The service's Snapshotter must
+also be a `Referencer`: `References` yields the ids its live state names, and
+`Restored` the ids the file the last `Restore` read names. SQS is neither and
+is untouched.
+
+- Layout: `<base>/<service>/assets/.gostack/blobs/<id[0:2]>/<id>`, under a
+  random 128-bit hex id the engine picks. A file is written once and never
+  changed. Writes in progress live in `assets/.gostack/tmp/`. The 256 `blobs/`
+  subdirectories are made and fsynced, with every parent up to the base
+  directory, when the assets are opened.
+- gostack touches nothing in `assets/` outside `.gostack/`. localstack-persist
+  keeps S3 objects in the same directory, at `<bucket>/<key>@<version>`, and a
+  bucket name starts with a letter or a digit, so no bucket is named `.gostack`.
+  A volume swapped from localstack-persist keeps its buckets, including ones
+  named `tmp` or `blobs`, through every load, save and reset.
+- Writing happens at request time. `Create` opens a temp file; `Commit` marks
+  the id as committed, renames the file into `blobs/` and returns the id, all
+  before any snapshot can name the id. The mark comes before the rename, so a
+  load's sweep that lists the file also knows the id. A commit does not fsync.
+- A save makes the assets durable. After it takes the snapshot and before it
+  renames the snapshot into place, it syncs every asset committed since the
+  last save that synced, by one of two paths:
+  - **syncfs:** one `syncfs(2)` on the `assets/.gostack` directory, which
+    flushes the dirty data and metadata of every file on its filesystem, the
+    renames into `blobs/<xx>` included.
+  - **per-file fsync:** it fsyncs each asset, 8 at a time, on a descriptor
+    opened for it, then each of their `blobs/<xx>` directories once. It costs
+    about 0.4 ms per pending asset on a Linux volume.
+
+  When the assets open, on Linux, gostack reads the type of the assets
+  filesystem with `fstatfs` and takes syncfs only on a filesystem where the
+  foreign-sync tests of `scripts/writeback-fault.sh` proved that syncfs still
+  reports a lost write after another process's `sync` or `syncfs` ran first:
+  ext4, xfs and btrfs, each run on a loop device on kernel 7.2 (ext2 and ext3
+  share ext4's magic number and kernel code). tmpfs and ramfs take syncfs too,
+  on a different ground: their pages are never written back to a device, so no
+  writeback error exists to lose and the harness cannot inject one, and a flush
+  there is durable against nothing but a process crash, which the rename
+  already covers. Every other filesystem takes the
+  per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, any other, and
+  one whose type cannot be read. Other
+  systems always take the per-file path. One info line per service at startup
+  names the filesystem and the path, such as
+  `persist: asset sync service=s3 fs=overlay sync="per-file fsync"` or
+  `fs=tmpfs sync=syncfs`. A save
+  with no pending asset syncs nothing. A
+  service names an id only after `Commit` returns, and `Commit` records the id
+  before it returns, so every asset a snapshot names is on disk before the
+  snapshot is, an asset committed while the snapshot is taken included. The
+  timed save, the shutdown save and `POST /_gostack/state/save` all take this
+  path.
+- A failed sync is final, the rule Postgres adopted after "fsyncgate". The
+  kernel reports a lost write once: since Linux 5.8, `syncfs` reports a
+  filesystem's writeback error once to each open file, and a file's `fsync`
+  reports its own once; the failed pages are then clean, so a second sync
+  reports success for bytes that are not on disk. So once a sync of a
+  service's assets fails, wherever it ran, the engine turns the service's
+  saving and loading off until restart, as for an unsafe state file: no later
+  save renames a snapshot, the state file on disk stays the last one saved,
+  `/_gostack/health` reports the service `persisted: false`, and one error log
+  line names the cause. The service keeps serving from memory. A restart loads
+  the last saved state and its load sweep removes the bodies that state does
+  not name, so everything changed after the last good save is lost. The
+  `syncfs` runs on one descriptor of `assets/.gostack`, opened with the assets,
+  so on ext4 an error another process's `syncfs` saw first is still reported
+  to it. A writeback error of any file on that filesystem fails the sync, not
+  only an asset's. On overlayfs that does not hold: the first `syncfs` or
+  `sync(2)` on the mount after a failed writeback takes the error, whichever
+  process calls it, from any container on the host, and gostack's own
+  `syncfs` then returns success (SQ-175). That is why overlayfs takes the
+  per-file path, whose `fsync` on a fresh descriptor still reports the error.
+- Only an error of `fsync`, `syncfs` or the close after one is final. On the
+  per-file path, an asset or a directory that cannot be opened (`EACCES`,
+  `EMFILE`, `ENFILE`, `EINTR`) fails that save before its rename and keeps its
+  ids pending for the next one; nothing was written back, so nothing was lost.
+  The flush counts as failed and is retried with the backoff. A path that is
+  gone (`ENOENT`) is skipped: it is an asset `Remove` or a save deleted after
+  the sync took its id, which the sync cannot tell from one something else
+  deleted, and no write of gostack's is lost either way. A snapshot that names
+  a missing asset fails only that object, at its read.
+- After a failed sync the assets stop tracking: an asset committed then is
+  never synced or swept, so it is recorded only as committed since the last
+  save, and its `Remove` deletes it at once. A load sweep that finds the
+  assets failed deletes nothing, because the ids it would keep are no longer
+  tracked; the sweep at restart removes the orphans. A removal of an asset committed
+  before the failure stays queued, because the state file on disk, which a
+  restart loads, may name it; that queue is bounded by the assets committed
+  before the failure. While saves fail for another reason, such as a full
+  disk, every id the assets track is a file on disk not yet deleted, so the
+  tracking is bounded by the files in `assets/.gostack`.
+- Before Linux 5.8, `syncfs` reports no writeback error, so a lost write on an
+  ext4 assets directory goes unnoticed and the save names the body; RHEL 8's
+  4.18 is such a kernel. gostack does not check the kernel version: the
+  container runs on the host's kernel, and Docker Desktop, OrbStack and the
+  GitHub runners gostack is built and tested on run 6.x.
+- The sync runs to the save's deadline: `Save` for the shutdown save, the
+  request's context for `POST /_gostack/state/save`, none for the timed save.
+  When the deadline passes before a pending asset's sync returns, the save
+  fails before it renames the snapshot: the old state file stays, the ids stay
+  pending, and the flush logs one warning. A save with no pending asset does
+  not wait for the sync and may rename after its deadline; its snapshot names
+  only assets an earlier sync made durable. A sync cannot be interrupted, so
+  it goes on alone, and its result still counts: when it fails, the service
+  turns off as above. The next save starts its own sync at once and renames
+  only when its sync and every earlier one have returned without error, so a
+  sync left running delays the next save and never lets it name a body whose
+  write was lost.
+- Save order: a flush saves in two passes, each in the same order. Services
+  with assets to sync, or an earlier sync to wait for, when the flush starts
+  go after the ones with none. Within each group, the service whose last
+  `Snapshot` in this process took less time goes first, then name order; a
+  service not yet snapshotted counts as zero, so a process's first flush is
+  in name order and takes S3's `Snapshot` first. A `Snapshot`, like a sync,
+  cannot be interrupted, and S3's grows with its objects (about 3 µs each), so
+  without the measured order a large S3 with nothing pending would take a
+  short shutdown save's whole deadline before SQS or STS is written. The
+  first pass takes
+  every service's snapshot into temp files and renames at once each one whose
+  assets have nothing to sync, and no earlier sync to wait for, when its
+  `Snapshot` returns: services with no assets among them. It defers the
+  others, temp files kept. The second pass syncs each deferred service's
+  assets and renames its snapshot. So S3's sync, which cannot be interrupted
+  and can take a save's whole deadline, never runs before SQS or STS is
+  written, even when a PUT commits during S3's own `Snapshot`. A deferred
+  snapshot is renamed by the save that took it or discarded, so no older
+  snapshot of a service replaces a newer one. A write after its `Snapshot`
+  returned is for the next save, as it always was; an asset committed between
+  the `Snapshot` and the deferred sync is synced with the rest, though the
+  snapshot does not name it, so every asset the snapshot names is durable
+  before the rename. A service's failure does not stop the services after it;
+  only the end of the save's deadline does, since no save can finish after it.
+  The services share that one deadline, so two services with assets to sync
+  would share its time in order; S3 is the only one today.
+- A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
+  timed save running lends it its own deadline and waits. A `Snapshot` cannot
+  be cut short, so cancelling the timed save would throw away a snapshot
+  already taken and make the shutdown take a second one. The timed save
+  finishes, or is cancelled when the waiter's deadline passes; of several
+  waiters, the first deadline to pass cancels it. A lent deadline that passes
+  acts as the save's own deadline would: a service whose snapshot is taken and
+  whose syncs have returned clean is still renamed, the rest stay dirty, and
+  the flush logs the same warning. The waiter then saves only
+  what is still dirty, with the time left. A timed save that has not started
+  when a waiter arrives skips its flush, and the timer is not armed again
+  while any `Flush`, `Load`, `Close` or reset waits: the last waiter arms it as
+  it stops waiting. With `PERSIST_FREQUENCY=0` the skipped flush would
+  otherwise re-arm at once and spin.
+- A `Load` (`/_gostack/state/load`) or a reset (`/_gostack/state/reset`)
+  cancels the timed save at once: it replaces or discards the state the timed
+  save would write, and a load that waited would restore what the timed save
+  wrote rather than the state saved before the load was asked for.
+- The timed save's context is cancelled with a cause, and only a preempt by
+  `Load` or reset stops a rename. A preempted timed save fails before it
+  renames anything, its services stay dirty for the next save, and it counts
+  as no failure. Every save checks for a preempt after its snapshot and
+  before its rename, so this holds for a service with no asset to sync too. A
+  context's cause is set once, so the preempt cancels a parent of the context
+  a lent deadline cancels: a `Load` that comes after a lent deadline passed
+  still stops the rename. Any other end of a save's context, its own deadline,
+  a lent one or a caller that went away, renames what is finished. Its sync,
+  if one started, goes on as above, and the next save renames only after it
+  returns. A timed save still in its `Snapshot` when `Close` releases the
+  assets fails on the released assets, which counts as giving way and is not
+  logged as a failed flush. A flush is
+  judged by what its services failed with, never by its context: one whose
+  every unsaved service gave way to a cancellation counts as no failure; one
+  with a real error, such as `ENOSPC`, counts with the backoff even when its
+  context was cancelled too; one that saved every service ends a run of
+  failures whatever its context did. A cancelled save does not log its queued
+  removals as stuck.
+- `POST /_gostack/state/load` drains its own removals: when a `Restore` queued
+  the removal of bodies the loaded state does not name, the load marks the
+  service dirty and arms the timer, whose save deletes them once the load is
+  done.
+  So a timed save stuck in a slow sync holds the shutdown until the
+  shutdown's deadline and no longer: the shutdown returns then with what the
+  timed save held still unsaved. A shutdown whose save ran out of time still
+  makes the last flush after `Close`, with what is left of `Close`'s time.
+- Stated limit: writes acknowledged since the last save are lost at
+  `docker stop` when the shutdown save takes longer than its window, and the
+  last state file on disk is what the next start loads. The window is `Save`
+  minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
+  `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same
+  filesystem left dirty, so another tenant with gigabytes unsynced on the
+  volume makes it slow: measured on an OrbStack btrfs volume with one 1 KiB
+  asset pending, 9 ms with nothing else dirty, 0.35 to 0.38 s with 0.5 to
+  0.85 GB dirty, and 1.40 to 1.50 s with 2 GiB dirty (SQ-175). A larger
+  `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose
+  `stop_grace_period`, default 10 s) raised to match, widens the window; a
+  smaller `PERSIST_FREQUENCY` leaves less unsaved when the stop comes. The
+  loss is logged as an error from the shutdown save, and, when the shutdown's
+  own save ran and was cut short, a warning that it was abandoned at its
+  deadline. A timed save the shutdown cancelled logs nothing of its own.
+- With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
+  takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
+  per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
+  Go's fsync is `F_FULLFSYNC`, 1000 pending take 5 to 7 s.
+- `Remove` queues the id. A flush takes the queue before it takes the snapshot,
+  and deletes those files once the snapshot is renamed into place and its
+  directory fsynced. A deletion is not fsynced: if a crash loses it, the file
+  is an orphan the next load removes. A failed save keeps the queue; a
+  deletion that fails is retried after the next save.
+- The exception is an asset committed after the last save ended. No snapshot on
+  disk or in flight can name it, so `Remove` deletes it at once. An asset
+  committed before a save began or while it ran may be named by that snapshot,
+  so its removal waits for the next save, as does one whose save failed. This
+  is what frees space on a full disk: the saves that would delete the queue
+  cannot write, but what was written since the last one can go.
+- A queue that cannot drain is logged once each time its error changes, with
+  the number of ids waiting and the error, and once when it drains again.
+- A crash between a commit and the next snapshot leaves an orphan, and a crash
+  between a snapshot and its deletions leaves a file no snapshot names. A power
+  loss before the next save can leave an unsynced asset empty or cut short; no
+  snapshot names it, so it is an orphan too. No order of crashes or power
+  losses leaves a snapshot that names a missing or partial file. A process kill
+  (`docker kill`) loses nothing the page cache holds.
+- After a service's state loads, the engine deletes temp files no writer holds
+  and every committed asset that neither the live state nor the file just
+  loaded names. The file counts because a request that lands once `Restore`
+  returns can drop an id from the state before it calls `Remove`, while that
+  file, still the one on disk (a load holds the guard a save holds), names the
+  asset. Assets queued for removal are kept too; they go after the next save.
+  The other exception is an asset this process committed that the state does
+  not name: a request may be on its way to naming it, as
+  `POST /_gostack/state/load` can run beside a write. The engine keeps those
+  ids in memory, not by file time, because a file's time is the end of its last
+  write and says nothing about when it was committed. An id leaves that set
+  when it is removed or when a loaded or saved state names it, so a start,
+  which has committed nothing, removes every orphan. The load also drops queued
+  removals of ids the live state names again.
+- The load sweep deletes nothing while a state file of the service sits moved
+  aside (`.unloadable-`), because that file may name the assets. Orphaned
+  assets build up until the file is removed by hand and gostack restarts or
+  loads again. Each Load that skips the sweep for this reason logs a warning
+  naming the service. Queued removals and a reset still apply.
+- `POST /_gostack/state/reset` of a whole service lists its assets, wipes the
+  state, and deletes every listed asset after the next save. A reset scoped to
+  an account or a region leaves removals to the service. A reset holds the
+  guard a save and a load hold. A reset of every service tries each one: a
+  service that cannot be reset (the guard is held past the request) does not
+  stop the ones after it, and the answer is 500 with an error naming each
+  service that failed.
+- A missing asset fails only the object that names it, in whatever way the
+  service decides. The state file is not moved aside for it.
+- Confinement: the assets are reached through an `os.Root` on the assets
+  directory (`assets/.gostack`), kept open for the life of the process. `Open`
+  and `Remove` accept only 32 lower-case hex digits. An assets directory that is
+  a link leaving the base directory turns the service off, as a state-file link
+  does. So does a link or a file where `tmp/`, `blobs/` or a `blobs/<xx>`
+  directory belongs, checked with `Lstat` when the assets open: a link from a
+  fanout directory to `tmp/` would send a commit into the directory Load
+  empties. So does any other failure to open the assets, such as a read-only
+  base directory: the service runs without loading or saving, and health
+  reports `persisted: false`, so no save can name a body a restart loses.
+- A service calls `Remove` only once its state no longer names the id. A write
+  that started before a reset or a load must fail rather than name its asset in
+  the new state. S3's reset and its restore mark the buckets they drop gone,
+  which does this.
+
+**S3.** `PERSIST_S3=1` (or `PERSISTENCE=1`, or `PERSIST_DEFAULT`) persists S3:
+its state at `<base>/s3/store.json` and its object and part bodies as assets.
+
+- gostack opens S3's assets after the engine registers S3 and before the state
+  loads, so the load can sweep them. Once the load accepts S3, S3 writes every
+  body through `persist.NewBlobStore`, the `blob.Store` over them. An assets
+  directory that is unsafe or cannot be opened, such as on a read-only base
+  directory, or a state file the load refuses, such as a link that leaves the
+  base directory, leaves S3 off for saving and loading, with its bodies in
+  memory as without persistence: nothing would save or sweep a body written to
+  disk. gostack still starts, and the state file already on disk is left as it
+  is.
+- The snapshot holds every bucket of every account with all of its
+  subresources, each key's version chain, and each upload in progress with its
+  parts. Bodies are named by blob id. A string that is not valid UTF-8, such as
+  a key, is kept as its bytes, base64 behind a `\u0000b64:` prefix, so two
+  keys never become one. `References` names the body of every version and of
+  every part.
+- Snapshot copies under S3's transfer lock and each bucket's lock in turn, and
+  encodes once they are released. Restore checks the whole file first, then,
+  under the transfer lock, puts each account's restored buckets in place in one
+  step and rebuilds the name index. It builds each bucket's sorted key and
+  upload indexes before the bucket is visible, since every listing walks them.
+  It reads the restored buckets' body ids and version ids before it publishes
+  them, while no request can reach them, and keeps the body ids for `Restored`.
+  Each bucket it replaces is marked gone, so a
+  write that found it fails with `NoSuchBucket` and removes its own body, and
+  the bodies the replaced buckets named that the restored state does not are
+  removed. A file that does not load leaves S3 empty and removes nothing, since
+  the engine sets the file aside and it may name them. The version id sequence
+  moves past the newest restored id.
+- A request that drops a version or a part (a delete, an overwrite, an abort,
+  a part uploaded again, a completion, the delete of a bucket) holds the
+  transfer lock for reading from before the drop to after its `Remove`. A
+  restore between the two would bring back a state that names the body, and
+  the late `Remove` would queue it for the next save to delete; held this way,
+  the restore waits, and its load takes the queued removal back.
+- A body missing from disk makes only the version that names it answer 500
+  `InternalError` when read, and is logged once per id.
+- A reset scoped to an account or a region removes the bodies of the buckets it
+  drops, through `Remove`, once the reset is saved.
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus
-  `assets/`. S3 objects are stored as files, not in the snapshot.
+  `assets/.gostack/` for a service that keeps assets. S3 object bodies are assets, not
+  part of the snapshot.
 - Old localstack-persist data cannot be read, because those files are pickled
   Python objects.
 - The promise covers the compose file. It does not cover the data directory.
@@ -735,6 +1050,7 @@ in the product `go.mod`.
 | santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
 | go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
+| golang.org/x/sys | the asset sync on Linux | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. It was already in the module graph, indirect, so no module was added. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +35,7 @@ func benchProviderOf(tb testing.TB, n int) *Provider {
 	tb.Helper()
 
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
-		NewEphemeral(tb.TempDir()))
+		blob.NewEphemeral(tb.TempDir()))
 	tb.Cleanup(p.Close)
 
 	b := newBucket(benchBucket, benchAccount, regionUSEast1, "", nil)
@@ -88,7 +89,7 @@ func BenchmarkListObjectsV2Paging(b *testing.B) {
 
 		r := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/"+benchBucket, http.NoBody)
 		rc := &request.Context{
-			Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: "bench", Request: r,
+			Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: benchBucket, Request: r,
 		}
 		ctx := request.With(b.Context(), rc)
 
@@ -152,7 +153,7 @@ func BenchmarkListObjectsV2(b *testing.B) {
 		b.Run(tt.name, func(b *testing.B) {
 			r := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/"+benchBucket+"?"+tt.query, http.NoBody)
 			rc := &request.Context{
-				Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: "bench", Request: r,
+				Service: serviceName, AccountID: benchAccount, Region: regionUSEast1, RequestID: benchBucket, Request: r,
 			}
 
 			var size int

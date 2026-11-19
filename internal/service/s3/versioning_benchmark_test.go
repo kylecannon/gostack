@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,7 +45,13 @@ var versionedBenchCells = []struct {
 func versionedBenchServer(b *testing.B, status string) *objectBenchServer {
 	b.Helper()
 
-	s := newObjectBenchServer(b)
+	return enableVersioning(b, newObjectBenchServer(b), status)
+}
+
+// enableVersioning gives the bucket of s the versioning status.
+func enableVersioning(b *testing.B, s *objectBenchServer, status string) *objectBenchServer {
+	b.Helper()
+
 	body := []byte(`<VersioningConfiguration><Status>` + status + `</Status></VersioningConfiguration>`)
 
 	got, _, err := s.send(b.Context(), http.MethodPut, "/bucket?versioning", body, nil)
@@ -171,43 +178,121 @@ func BenchmarkGetObjectByVersion(b *testing.B) {
 	}
 }
 
+// markerReset is how many iterations of the delete=marker row pass before the
+// markers it wrote are removed with the timer stopped.
+const markerReset = 64
+
 // BenchmarkDeleteObjectVersioned measures the two deletes of a bucket with
-// versioning: a delete marker, and the removal of one version, which is a PUT
-// and a DELETE of the version it made per iteration.
+// versioning. Under delete=marker an iteration is one DELETE of a key with no
+// version id, which adds a delete marker; every markerReset iterations the
+// markers are removed with the timer stopped, so the state the row holds, and
+// the snapshot the persist=on rows save every persistFrequency, stays the same
+// size however many iterations the run takes. Under delete=version an iteration
+// is a PUT and a DELETE of the version it made, which leaves nothing behind.
 func BenchmarkDeleteObjectVersioned(b *testing.B) {
-	for _, kind := range []string{"marker", "version"} {
-		for _, workers := range benchConcurrency {
-			b.Run(fmt.Sprintf("delete=%s/concurrency=%d", kind, workers), func(b *testing.B) {
-				s := versionedBenchServer(b, "Enabled")
-				body := bytes.Repeat([]byte("x"), 1<<10)
+	for _, persisted := range persistRows {
+		for _, kind := range []string{"marker", "version"} {
+			for _, workers := range benchConcurrency {
+				name := persistName(persisted, fmt.Sprintf("delete=%s/concurrency=%d", kind, workers))
 
-				b.ReportAllocs()
+				b.Run(name, func(b *testing.B) {
+					s := enableVersioning(b, serverFor(b, persisted), "Enabled")
 
-				for b.Loop() {
-					err := fanOut(workers, func(worker int) error {
-						target := fmt.Sprintf("/bucket/key-%d", worker)
+					if kind == "marker" {
+						benchDeleteMarker(b, s, workers)
 
-						if kind == "marker" {
-							got, _, err := s.send(b.Context(), http.MethodDelete, target, nil, nil)
+						return
+					}
 
-							return expectStatus("DELETE", got, http.StatusNoContent, err)
-						}
-
-						got, id, err := s.send(b.Context(), http.MethodPut, target, body, nil)
-
-						err = expectStatus("PUT", got, http.StatusOK, err)
-						if err != nil {
-							return err
-						}
-
-						got, _, err = s.send(b.Context(), http.MethodDelete, target+"?versionId="+id, nil, nil)
-
-						return expectStatus("DELETE", got, http.StatusNoContent, err)
-					})
-					require.NoError(b, err)
-				}
-			})
+					benchDeleteVersion(b, s, workers)
+				})
+			}
 		}
+	}
+}
+
+// benchDeleteMarker times the DELETEs that make delete markers. Each worker
+// keeps the ids of its own markers, and removeMarkers removes them off the clock.
+func benchDeleteMarker(b *testing.B, s *objectBenchServer, workers int) {
+	b.Helper()
+
+	markers := make([][]string, workers)
+
+	b.ReportAllocs()
+
+	for i := 1; b.Loop(); i++ {
+		err := fanOut(workers, func(worker int) error {
+			got, id, err := s.send(b.Context(), http.MethodDelete, fmt.Sprintf("/bucket/key-%d", worker), nil, nil)
+
+			err = expectStatus("DELETE", got, http.StatusNoContent, err)
+			if err != nil {
+				return err
+			}
+
+			if id == "" {
+				return errors.New("DELETE made no delete marker")
+			}
+
+			markers[worker] = append(markers[worker], id)
+
+			return nil
+		})
+		require.NoError(b, err)
+
+		if i%markerReset == 0 {
+			b.StopTimer()
+			removeMarkers(b, s, markers)
+			b.StartTimer()
+		}
+	}
+}
+
+// removeMarkers deletes every marker version in markers and empties it.
+func removeMarkers(b *testing.B, s *objectBenchServer, markers [][]string) {
+	b.Helper()
+
+	err := fanOut(len(markers), func(worker int) error {
+		for _, id := range markers[worker] {
+			got, _, err := s.send(b.Context(), http.MethodDelete,
+				fmt.Sprintf("/bucket/key-%d?versionId=%s", worker, id), nil, nil)
+
+			err = expectStatus("DELETE marker", got, http.StatusNoContent, err)
+			if err != nil {
+				return err
+			}
+		}
+
+		markers[worker] = markers[worker][:0]
+
+		return nil
+	})
+	require.NoError(b, err)
+}
+
+// benchDeleteVersion times a PUT and the DELETE of the version it made.
+func benchDeleteVersion(b *testing.B, s *objectBenchServer, workers int) {
+	b.Helper()
+
+	body := bytes.Repeat([]byte("x"), 1<<10)
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		err := fanOut(workers, func(worker int) error {
+			target := fmt.Sprintf("/bucket/key-%d", worker)
+
+			got, id, err := s.send(b.Context(), http.MethodPut, target, body, nil)
+
+			err = expectStatus("PUT", got, http.StatusOK, err)
+			if err != nil {
+				return err
+			}
+
+			got, _, err = s.send(b.Context(), http.MethodDelete, target+"?versionId="+id, nil, nil)
+
+			return expectStatus("DELETE", got, http.StatusNoContent, err)
+		})
+		require.NoError(b, err)
 	}
 }
 

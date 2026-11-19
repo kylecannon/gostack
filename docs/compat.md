@@ -71,7 +71,9 @@ change applies from the next one.
 | `PERSIST_FREQUENCY` | Decimal seconds a change waits before the save. Defaults to 10. |
 | `PERSIST_BASE_DIR` | Where the state lives. Defaults to `/persisted-data`. |
 
-S3 does not persist yet (see "S3 limits").
+S3 persists its buckets, objects, versions and uploads in progress, bodies included. Its on-disk layout differs from localstack-persist's, so a data directory does not move between the two. The bodies live in `<base>/s3/assets/.gostack/`, and gostack never touches anything else in `<base>/s3/assets/`, where localstack-persist keeps its buckets: a volume swapped from localstack-persist keeps those files, buckets named `tmp` or `blobs` included. When the assets directory cannot be made, as on a read-only base directory, gostack still starts, keeps S3 in memory, saves nothing for it, and `/_gostack/health` reports S3 as `persisted: false`. The same happens, until restart, once a sync of the bodies to disk fails, such as on an I/O error or a full thin-provisioned volume: S3 keeps serving from memory, the last saved state stays on disk, and a restart loads it, so what changed since that save is lost (`architecture.md`, persistence assets).
+
+S3 writes acknowledged since the last save are lost at `docker stop` when the shutdown save takes longer than its window. It does when another writer has a lot of data unsynced on the same volume. Raise `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose `stop_grace_period`) raised to match, to widen the window, and lower `PERSIST_FREQUENCY` to leave less unsaved. Persistence with no volume mounted at `PERSIST_BASE_DIR` lands on the container's own overlay layer and takes the slower per-file sync path. The startup log names the filesystem and the sync path for each service (`persist: asset sync`). The window, the measurements and the filesystems that get each path are in `architecture.md`, Persistence, Assets.
 
 ## Image and init
 
@@ -162,7 +164,6 @@ What S3 does not do, or does in part, so a client's expectations can be set.
 | `SelectObjectContent` | Answers | `501 NotImplemented`. No test covers it. |
 | KMS | Validates and creates keys | There is no KMS. A key id is not validated. An `aws:kms` write with no key id gets a managed-key ARN derived from the account and region, the same one every call and after a restart. The encryption context is not stored. |
 | Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS only. SNS, Lambda and EventBridge targets are accepted and stored, and nothing is sent. |
-| S3 persistence | Kept by `localstack-persist` | Not yet available. S3 state is lost on restart even when `PERSIST_S3` is set. Once it is, the `PERSIST_*` settings stay the same, and the on-disk layout under the base directory differs from localstack-persist's, so a data directory does not move between the two. |
 
 ## S3 wire details
 

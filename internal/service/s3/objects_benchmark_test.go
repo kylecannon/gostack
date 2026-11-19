@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
@@ -50,14 +51,22 @@ func newObjectBenchServer(b *testing.B) *objectBenchServer {
 	b.Helper()
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
-		s3.NewEphemeral(b.TempDir()))
+		blob.NewEphemeral(b.TempDir()))
 	b.Cleanup(provider.Close)
+
+	return serveObjectBench(b, provider.Registration(), nil)
+}
+
+// serveObjectBench serves reg through the real gateway and creates the bucket.
+// A nil dirtier is persistence off.
+func serveObjectBench(b *testing.B, reg service.Registration, dirtier gateway.Dirtier) *objectBenchServer {
+	b.Helper()
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },
-		[]service.Registration{provider.Registration()},
+		[]service.Registration{reg},
 		nil,
-		nil,
+		dirtier,
 	)
 	require.NoError(b, err)
 
@@ -121,15 +130,25 @@ func fanOut(workers int, fn func(worker int) error) error {
 	return nil
 }
 
-// benchMatrix runs one sub-benchmark for every payload at every concurrency.
+// benchMatrix runs one sub-benchmark for every payload at every concurrency, and
+// then those of persistedPayloads again on a persisted server, under persist=on.
 func benchMatrix(b *testing.B, run func(b *testing.B, s *objectBenchServer, p benchPayload, workers int)) {
 	b.Helper()
 
-	for _, payload := range benchPayloads {
-		for _, workers := range benchConcurrency {
-			b.Run(fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers), func(b *testing.B) {
-				run(b, newObjectBenchServer(b), payload, workers)
-			})
+	for _, persisted := range persistRows {
+		payloads := benchPayloads
+		if persisted == persistOn {
+			payloads = persistedPayloads
+		}
+
+		for _, payload := range payloads {
+			for _, workers := range benchConcurrency {
+				name := persistName(persisted, fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers))
+
+				b.Run(name, func(b *testing.B) {
+					run(b, serverFor(b, persisted), payload, workers)
+				})
+			}
 		}
 	}
 }

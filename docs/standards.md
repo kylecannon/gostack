@@ -40,7 +40,12 @@ specific to gostack.
   - Each service has its own `State`, held in `store.Bundle[State]` keyed by
     account and region. This mirrors `AccountRegionBundle` and
     `CrossRegionAttribute` in `localstack/services/stores.py`.
-  - Locks are per shard and per resource. There is no global lock.
+  - Locks are per shard and per resource. There is no global lock. The one
+    exception: a service may hold a single reader-writer lock across its state,
+    taken for writing by snapshot, restore and reset and for reading by every
+    write (S3's `transfer`), which makes a save wait for writes in flight and
+    makes writes wait while the save copies the state; that cost is known and
+    recorded in the persistence PR.
   - State types must serialize for persistence.
 - **Cross-service calls** (SNS to SQS, Events to Lambda, CloudFormation to
   everything) go through an in-process client that dispatches through the same
@@ -169,6 +174,12 @@ same PR. A missing row is a review blocker.
 Name sub-benchmarks so benchstat lines them up across runs:
 `BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB`. An axis that does
 not apply to a feature is left out, not filled with a placeholder.
+
+A micro benchmark's persistence-on rows sit under the same function as its
+persistence-off rows, with a `persist=on` key first
+(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16`) and no key for
+off, so the base's rows keep their names. `benchstat -col /persist` sets the two
+side by side.
 
 ### Micro benchmarks
 

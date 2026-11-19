@@ -77,11 +77,16 @@
 // A listing cell seeds its bucket inside the load generator's run, so the RSS and
 // CPU the orchestrator reads for it include the seeding. The latencies do not.
 //
-// There are no persistence-on cells yet: gostack's S3 does not persist (SQ-114
-// adds PERSIST_S3=1 cells through s3Persistence), and the LocalStack Community
-// image does not restore S3 under PERSISTENCE=1.
+// Every cell also runs with PERSIST_S3=1 and a tmpfs at /persisted-data, as the
+// SQS cells do. The persistence cells are left out for LocalStack, whose
+// Community image does not restore S3 under PERSISTENCE=1. The tmpfs keeps the
+// disk out of the figure: a cell measures the work persistence adds, the blob
+// written and renamed at request time, and the save, which syncs the blobs
+// committed since the last one and writes the snapshot.
 //
-// -profile full runs 26 cells per image. -profile quick runs 8 of them. The
+// -profile full runs 52 cells per image that persists, 26 on LocalStack.
+// -profile quick runs 11: the 8 persistence-off cells, and the base cell of each
+// workload with persistence on. The
 // agentic workload is 200 cycles of create bucket, put 10 objects, list them,
 // delete them, delete the bucket, at concurrency 16.
 //

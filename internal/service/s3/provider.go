@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
@@ -65,7 +67,22 @@ type Provider struct {
 	settings func() Settings
 	states   *store.Bundle[State]
 	names    nameIndex
-	blobs    BlobStore
+	blobs    blob.Store
+
+	// transfer is held for writing by whatever replaces or copies the set of
+	// buckets as a whole: Snapshot, Restore and Reset. CreateBucket and
+	// DeleteBucket hold it for reading from the name claim to the State change,
+	// so neither falls between a restore's swap of the buckets and of the names.
+	// Every call that drops a version or a part holds it for reading from before
+	// the drop to after it removes the body: a Restore between the
+	// two could bring back a state that names the body, and the late Remove
+	// would then queue a body the restored state needs. It is taken before
+	// State.mu and Bucket.mu, never twice by one call, and never held over a
+	// body's transfer.
+	transfer sync.RWMutex
+	// restored holds the blob ids the snapshot the last Restore read names,
+	// until Restored hands them to the engine. transfer guards it.
+	restored []string
 
 	// client delivers notifications, and checks their targets, through the
 	// gateway. Bind gives it the handler.
@@ -81,7 +98,7 @@ var _ s3api.Handler = (*Provider)(nil)
 // New returns a Provider with no buckets that keeps bodies in blobs. settings
 // is called on every operation, so a configuration change applies to the next
 // one.
-func New(settings func() Settings, blobs BlobStore) *Provider {
+func New(settings func() Settings, blobs blob.Store) *Provider {
 	return &Provider{
 		settings: settings,
 		states:   store.NewBundle(newState, emptyState),
@@ -90,9 +107,17 @@ func New(settings func() Settings, blobs BlobStore) *Provider {
 	}
 }
 
+// UseBlobs makes blobs the store S3 keeps its bodies in, in place of the one New
+// was given: a persisted S3 keeps them as assets of the persistence engine. It
+// is called once, before S3 serves, and after its state loads, since a load
+// can refuse the state file.
+func (p *Provider) UseBlobs(blobs blob.Store) {
+	p.blobs = blobs
+}
+
 // Registration describes S3 to the gateway: the generated dispatcher in front
 // of p, the hosts and legacy rules that make a request S3's, and the lifecycle
-// of its state. Persist arrives with S3 persistence.
+// of its state.
 func (p *Provider) Registration() service.Registration {
 	return service.Registration{
 		Metadata:       s3api.Metadata,
@@ -103,6 +128,7 @@ func (p *Provider) Registration() service.Registration {
 		Preprocess:     p.preprocess,
 		RawBody:        true,
 		OwnCORS:        true,
+		Persist:        p,
 		Reset:          p.Reset,
 		Close:          p.Close,
 	}
@@ -110,8 +136,12 @@ func (p *Provider) Registration() service.Registration {
 
 // Reset empties the state of an account and region: the buckets of that region,
 // their objects and their bodies. An empty account or region matches every one.
-// It backs /_gostack/state/reset.
+// It backs /_gostack/state/reset. A body goes once its bucket has left the
+// State, so a persisted S3 removes only what no state names.
 func (p *Provider) Reset(account, region string) {
+	p.transfer.Lock()
+	defer p.transfer.Unlock()
+
 	p.states.Range(func(owner, _ string, s *State) bool {
 		if account != "" && owner != account {
 			return true
@@ -128,9 +158,9 @@ func (p *Provider) Reset(account, region string) {
 
 // Close waits for the responses still being written on a hijacked connection,
 // which the gateway's drain cannot see, then drops the notifications not yet
-// delivered and lets go of the bodies the BlobStore holds, when it is one that
-// can be closed. The wait ends at the services' Close budget, because a Close
-// that overruns it is abandoned, or at drainLimit.
+// delivered and lets go of the bodies the store holds, when it is one that can
+// be closed. The wait ends at the services' Close budget, because a Close that
+// overruns it is abandoned, or at drainLimit.
 func (p *Provider) Close() {
 	p.taken.drain(drainLimit)
 	p.client.Close()
@@ -204,16 +234,10 @@ func isControlCall(r *http.Request) bool {
 }
 
 // retire marks a bucket that left its State as gone, so a call that found it
-// before cannot write to it, and removes its bodies.
+// before cannot write to it, and removes its bodies. The caller holds the
+// transfer lock, for reading or writing.
 func (p *Provider) retire(b *Bucket) {
-	b.mu.Lock()
-	b.gone = true
-	ids := b.blobIDs()
-	b.clearObjects()
-	b.clearUploads()
-	b.mu.Unlock()
-
-	for _, id := range ids {
+	for _, id := range b.drop() {
 		_ = p.blobs.Remove(id)
 	}
 }

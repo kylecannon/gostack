@@ -1,4 +1,4 @@
-package s3
+package blob
 
 import (
 	"bytes"
@@ -163,8 +163,8 @@ func TestEphemeralReadersOutliveRemove(t *testing.T) {
 	assert.Zero(t, e.Len())
 
 	_, err = e.Open(id)
-	require.ErrorIs(t, err, ErrNoBlob)
-	require.ErrorIs(t, e.Remove(id), ErrNoBlob)
+	require.ErrorIs(t, err, ErrNotFound)
+	require.ErrorIs(t, e.Remove(id), ErrNotFound)
 
 	data, err := io.ReadAll(r)
 	require.NoError(t, err)

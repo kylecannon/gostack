@@ -1,4 +1,4 @@
-package s3
+package blob
 
 import (
 	"bytes"
@@ -25,16 +25,16 @@ const (
 	spillMode   = 0o700
 )
 
-// ErrNoBlob is returned by Open and Remove for an id the store does not hold.
-var ErrNoBlob = errors.New("no such blob")
+// ErrNotFound is returned by Open and Remove for an id the store does not hold.
+var ErrNotFound = errors.New("no such blob")
 
-// BlobStore holds the bodies of objects and parts under ids it picks. A body is
+// Store holds the bodies of objects and parts under ids it picks. A body is
 // written once and never changed: a new body is a new blob. A range read opens
 // the blob and seeks; a copy of a range opens one blob, seeks, and writes into a
 // new one, so no body is ever read into memory whole.
-type BlobStore interface {
+type Store interface {
 	// Create starts a new blob.
-	Create() (BlobWriter, error)
+	Create() (Writer, error)
 	// Open returns a reader of the blob, with its own offset. The blob stays
 	// readable through it until it is closed, even after Remove.
 	Open(id string) (io.ReadSeekCloser, error)
@@ -42,9 +42,9 @@ type BlobStore interface {
 	Remove(id string) error
 }
 
-// BlobWriter receives the body of one blob. Exactly one of Commit and Abort
+// Writer receives the body of one blob. Exactly one of Commit and Abort
 // ends it.
-type BlobWriter interface {
+type Writer interface {
 	io.Writer
 	// Commit stores what was written and returns the new blob's id and size.
 	Commit() (id string, size int64, err error)
@@ -52,7 +52,7 @@ type BlobWriter interface {
 	Abort()
 }
 
-// Ephemeral is the BlobStore of a gostack that does not persist S3: bodies up
+// Ephemeral is the Store of a service whose bodies are not persisted: bodies up
 // to memoryLimit stay in memory, and larger ones spill to a temporary file that
 // is unlinked as soon as it is created, so nothing is left on disk once the
 // process is gone.
@@ -73,7 +73,7 @@ type blob struct {
 	refs int
 }
 
-var _ BlobStore = (*Ephemeral)(nil)
+var _ Store = (*Ephemeral)(nil)
 
 // NewEphemeral returns an empty store that spills large bodies under dir. When
 // dir cannot be created or written, as on a host run outside the container, it
@@ -84,8 +84,8 @@ func NewEphemeral(dir string) *Ephemeral {
 
 // Create starts a new blob.
 //
-//nolint:ireturn // BlobStore's contract returns the BlobWriter interface.
-func (e *Ephemeral) Create() (BlobWriter, error) {
+//nolint:ireturn // Store's contract returns the Writer interface.
+func (e *Ephemeral) Create() (Writer, error) {
 	return &ephemeralWriter{store: e}, nil
 }
 
@@ -101,7 +101,7 @@ func (e *Ephemeral) Open(id string) (io.ReadSeekCloser, error) {
 	e.mu.Unlock()
 
 	if !ok {
-		return nil, fmt.Errorf("open blob %s: %w", id, ErrNoBlob)
+		return nil, fmt.Errorf("open blob %s: %w", id, ErrNotFound)
 	}
 
 	reader := &blobReader{store: e, blob: b}
@@ -124,7 +124,7 @@ func (e *Ephemeral) Remove(id string) error {
 	e.mu.Unlock()
 
 	if !ok {
-		return fmt.Errorf("remove blob %s: %w", id, ErrNoBlob)
+		return fmt.Errorf("remove blob %s: %w", id, ErrNotFound)
 	}
 
 	e.release(b)

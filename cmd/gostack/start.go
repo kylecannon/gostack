@@ -45,19 +45,15 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	})
 	regs := services.regs
 	eng = persist.New(cfg.PersistConfig(serviceNames(regs)...))
-	services.persist(eng)
 
 	// serve saves the state within the shutdown's deadline. The deferred call
 	// covers a start that fails before serve runs, and does nothing after serve.
 	saver := &saver{eng: eng, services: services}
 	defer saver.saveUnlimited(ctx)
 
-	// A service whose state file is unsafe to touch has been logged and runs
-	// without saving; the state routes and the health endpoint say so. It does not
-	// stop the others from starting.
-	err := eng.Load(ctx)
-	if err != nil && !errors.Is(err, persist.ErrUnsafe) {
-		return fmt.Errorf("load persisted state: %w", err)
+	err := loadState(ctx, services, eng)
+	if err != nil {
+		return err
 	}
 
 	hooks := lifecycle.NewHooks(lifecycle.DefaultInitRoot)
@@ -100,6 +96,26 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	}
 
 	return serve(ctx, gw, listeners, proc, cfg.Settings().ShutdownTimeout, saver.save)
+}
+
+// loadState hands eng the persisted services and loads their state. A service
+// whose state file is unsafe to touch has been logged and runs without saving;
+// the state routes and the health endpoint say so. It does not stop the others
+// from starting. S3 takes its assets only once the load has accepted it.
+func loadState(ctx context.Context, services *providers, eng *persist.Engine) error {
+	assets, err := services.persist(eng)
+	if err != nil {
+		return err
+	}
+
+	err = eng.Load(ctx)
+	if err != nil && !errors.Is(err, persist.ErrUnsafe) {
+		return fmt.Errorf("load persisted state: %w", err)
+	}
+
+	services.useAssets(eng, assets)
+
+	return nil
 }
 
 // serve runs the gateway on listeners until ctx ends, and shuts down within one
@@ -256,10 +272,12 @@ type saver struct {
 //
 // What the services' Close changes, and what a request still running at the
 // end of the drain changes, is written by a last flush, when Close finished in
-// time for it.
+// time for it. That flush is the engine's Close, which then releases the
+// assets' descriptors; the first save only stops the timer, so the last flush
+// can still sync and remove assets.
 func (s *saver) save(saveCtx, closeCtx context.Context) {
 	s.once.Do(func() {
-		err := s.eng.Close(saveCtx)
+		err := s.eng.Stop(saveCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}
@@ -268,7 +286,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 			return
 		}
 
-		err = s.eng.Flush(closeCtx)
+		err = s.eng.Close(closeCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}

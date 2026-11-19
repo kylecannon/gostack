@@ -623,11 +623,15 @@ func (p *Provider) commitVersion(b *Bucket, key string, v *Version, check ...fun
 // commitVersionThen is commitVersion with a step that runs once v is the
 // object's current version, under the same hold of the bucket's lock: after
 // every check has passed, never before, so the checks only check and a
-// refused write leaves everything but its own body as it was. A nil then is
-// none.
+// refused write leaves everything but its own body as it was. then returns the
+// blob ids of what it dropped, which go with the replaced versions' bodies. A
+// nil then is none.
 func (p *Provider) commitVersionThen(
-	b *Bucket, key string, v *Version, then func(), check ...func(*Object) error,
+	b *Bucket, key string, v *Version, then func() []string, check ...func(*Object) error,
 ) error {
+	p.transfer.RLock()
+	defer p.transfer.RUnlock()
+
 	b.mu.Lock()
 
 	if b.gone {
@@ -655,8 +659,9 @@ func (p *Provider) commitVersionThen(
 
 	replaced := b.addVersion(key, v)
 
+	var dropped []string
 	if then != nil {
-		then()
+		dropped = then()
 	}
 
 	b.mu.Unlock()
@@ -665,6 +670,10 @@ func (p *Provider) commitVersionThen(
 		if old.BlobID != "" {
 			_ = p.blobs.Remove(old.BlobID)
 		}
+	}
+
+	for _, id := range dropped {
+		_ = p.blobs.Remove(id)
 	}
 
 	return nil

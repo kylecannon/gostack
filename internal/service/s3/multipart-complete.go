@@ -108,11 +108,17 @@ func completeOutput(
 func (p *Provider) commitCompletion(
 	b *Bucket, upload *MultipartUpload, v *Version, ifMatch, ifNoneMatch string,
 ) error {
-	var parts map[int32]*Part
-
-	err := p.commitVersionThen(b, upload.Key, v, func() {
+	return p.commitVersionThen(b, upload.Key, v, func() []string {
 		b.removeUpload(upload.ID)
-		parts, upload.Parts = upload.Parts, nil
+
+		ids := make([]string, 0, len(upload.Parts))
+		for _, part := range upload.Parts {
+			ids = append(ids, part.BlobID)
+		}
+
+		upload.Parts = nil
+
+		return ids
 	}, func(object *Object) error {
 		err := completePrecondition(object, upload, ifMatch, ifNoneMatch)
 		if err != nil {
@@ -127,15 +133,6 @@ func (p *Provider) commitCompletion(
 
 		return nil
 	})
-	if err != nil {
-		return err
-	}
-
-	for _, part := range parts {
-		_ = p.blobs.Remove(part.BlobID)
-	}
-
-	return nil
 }
 
 // prepareCompletion finds the upload, checks the request against it and opens

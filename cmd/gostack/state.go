@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -60,8 +61,10 @@ type stateController struct {
 // Reset wipes the state of the service named by the scope, or of every service
 // that keeps state when the scope names none, persisted or not. A wiped service
 // is marked dirty, so the wipe reaches the disk and a restart does not bring it
-// back; the engine ignores a service it does not save.
-func (c *stateController) Reset(scope internalapi.StateScope) error {
+// back; the engine ignores a service it does not save. A reset of every service
+// tries each one, and returns the errors of the ones that failed joined, each
+// naming its service.
+func (c *stateController) Reset(ctx context.Context, scope internalapi.StateScope) error {
 	if scope.Service != "" {
 		i := slices.IndexFunc(c.regs, func(reg service.Registration) bool {
 			return reg.Metadata.Name == scope.Service
@@ -74,18 +77,25 @@ func (c *stateController) Reset(scope internalapi.StateScope) error {
 			return fmt.Errorf("%w: %s keeps no state to reset", internalapi.ErrNotSupported, scope.Service)
 		}
 
-		c.resetService(&c.regs[i], scope)
-
-		return nil
+		return c.resetService(ctx, &c.regs[i], scope)
 	}
 
+	// A service that fails does not stop the ones after it: stopping would leave
+	// the reset half done with no word of which services it reached.
+	var errs []error
+
 	for i := range c.regs {
-		if c.regs[i].Reset != nil {
-			c.resetService(&c.regs[i], scope)
+		if c.regs[i].Reset == nil {
+			continue
+		}
+
+		err := c.resetService(ctx, &c.regs[i], scope)
+		if err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // Save writes the state of every persisted service now, not only the services
@@ -123,7 +133,24 @@ func (c *stateController) Load(ctx context.Context) error {
 	return nil
 }
 
-func (c *stateController) resetService(reg *service.Registration, scope internalapi.StateScope) {
-	reg.Reset(scope.Account, scope.Region)
-	c.eng.MarkDirty(reg.Metadata.Name)
+// resetService wipes one service inside the scope. A reset of every account and
+// region also removes every asset the service persisted, once the wipe is saved.
+func (c *stateController) resetService(
+	ctx context.Context, reg *service.Registration, scope internalapi.StateScope,
+) error {
+	name := reg.Metadata.Name
+	wipe := func() { reg.Reset(scope.Account, scope.Region) }
+
+	if scope.Account == "" && scope.Region == "" {
+		err := c.eng.ResetAssets(ctx, name, wipe)
+		if err != nil {
+			return fmt.Errorf("reset state: %w", err) // names the service
+		}
+	} else {
+		wipe()
+	}
+
+	c.eng.MarkDirty(name) //nolint:contextcheck // MarkDirty arms a timer, whose callback has no caller context
+
+	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
@@ -94,7 +95,7 @@ func newPresignServer(t *testing.T) (*server, http.Handler) {
 
 	provider := s3.New(func() s3.Settings {
 		return s3.Settings{LocalstackHost: localstackHost, ValidateSignatures: true, GatewayPort: 4566}
-	}, s3.NewEphemeral(t.TempDir()))
+	}, blob.NewEphemeral(t.TempDir()))
 	t.Cleanup(provider.Close)
 
 	gw, err := gateway.New(
