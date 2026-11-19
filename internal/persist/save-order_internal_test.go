@@ -260,3 +260,59 @@ func Test_Engine_LentDeadlineLogsTheAbandonedSave(t *testing.T) {
 		assert.NotContains(t, logs, "flush failed")
 	})
 }
+
+// slowRestore is a stateSnap whose every Restore takes d.
+type slowRestore struct {
+	*stateSnap
+
+	d time.Duration
+}
+
+func (s slowRestore) Restore(r io.Reader) error {
+	time.Sleep(s.d)
+
+	return s.stateSnap.Restore(r)
+}
+
+// Test_Engine_RestoredServiceGoesLastBeforeItsFirstSnapshot checks that a
+// Load gives a restored service its Restore time as a first timing: after a
+// restart where s3 restored slowly and earlier flushes saved only sqs, a flush
+// whose deadline is shorter than s3's Snapshot still writes sqs (SQ-198).
+func Test_Engine_RestoredServiceGoesLastBeforeItsFirstSnapshot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "s3"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s3", "store.json"), []byte("buckets"), 0o600))
+
+		e := New(quietConfig(dir, time.Hour))
+		s3 := &stateSnap{}
+		sqs := &stateSnap{state: "queues-1"}
+		e.Register("s3", slowRestore{stateSnap: s3, d: 400 * time.Millisecond})
+		e.Register("sqs", sqs)
+
+		require.NoError(t, e.Load(t.Context()))
+		require.Equal(t, "buckets", s3.restored)
+
+		for range 3 {
+			e.MarkDirty("sqs")
+			require.NoError(t, e.Flush(t.Context()))
+		}
+
+		sqs.set("queues-2")
+		s3.mu.Lock()
+		s3.during = func() error { time.Sleep(400 * time.Millisecond); return nil }
+		s3.mu.Unlock()
+		e.MarkDirty("s3")
+		e.MarkDirty("sqs")
+
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+
+		_ = e.Flush(ctx)
+
+		assert.Equal(t, "queues-2", readState(t, filepath.Join(dir, "sqs", "store.json")),
+			"s3 restored in 400ms, so it saves after sqs, which has no timing")
+
+		synctest.Wait()
+	})
+}
