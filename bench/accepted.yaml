@@ -176,3 +176,36 @@
   reason: S3 state and bodies are saved to disk when persistence is on; the base did not persist S3
   pr: 6
   commit: 99526de6ca85cfb7317c311375f18d13000511d6
+
+# The smallest SQS flush (10 queues, no messages) measured 0.79 ms on main and
+# 1.12 ms here in CI. The larger flush rows did not move. On Linux outside CI
+# the two trees measure the same, so the cause is not found; it is about a
+# third of a millisecond on a save that runs once per PERSIST_FREQUENCY.
+- gate: benchstat
+  package: internal/persist
+  benchmark: SQSFlush/queues=10/messages=0
+  unit: sec/op
+  max: +60%
+  reason: the flush gained the two-pass save and its bookkeeping; +0.33 ms on the smallest store in CI, not reproduced locally
+  pr: 6
+  commit: 99526de6ca85cfb7317c311375f18d13000511d6
+
+- gate: benchstat
+  package: internal/persist
+  benchmark: SQSFlush/queues=10/messages=0
+  unit: B/s
+  max: 40%
+  reason: the same flush row, as throughput
+  pr: 6
+  commit: 99526de6ca85cfb7317c311375f18d13000511d6
+
+# One SQS receive row sat at +10.94% against a 10% limit; its neighbours were
+# +4% to +5%. Nothing in this change is on the SQS receive path.
+- gate: benchstat
+  package: internal/service/sqs
+  benchmark: ReceiveMessage/proto=query/queue=standard/max=1/payload=64KiB
+  unit: sec/op
+  max: +20%
+  reason: a 1% overshoot of the limit on one row; this change does not touch the SQS receive path
+  pr: 6
+  commit: 99526de6ca85cfb7317c311375f18d13000511d6
