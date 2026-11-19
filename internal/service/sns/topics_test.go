@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	region    = "us-east-1"
-	account   = "000000000000"
-	arnPrefix = "arn:aws:sns:" + region + ":" + account + ":"
+	region     = "us-east-1"
+	account    = "000000000000"
+	arnPrefix  = "arn:aws:sns:" + region + ":" + account + ":"
+	apiVersion = "2010-03-31"
 
 	paramName   = "Name"
 	displayName = "DisplayName"
@@ -66,10 +67,7 @@ type errorReply struct {
 
 // call sends one action with params in region regionName and returns the reply.
 func (c *client) callIn(regionName, action string, params ...string) reply {
-	form := url.Values{"Action": {action}, "Version": {"2010-03-31"}}
-	for i := 0; i+1 < len(params); i += 2 {
-		form.Add(params[i], params[i+1])
-	}
+	form := queryForm(action, params...)
 
 	req, err := http.NewRequestWithContext(c.t.Context(), http.MethodPost, c.server.URL+"/",
 		strings.NewReader(form.Encode()))
@@ -98,6 +96,16 @@ func (c *client) callIn(regionName, action string, params ...string) reply {
 	}
 
 	return reply{status: resp.StatusCode, body: string(body)}
+}
+
+// queryForm is the query form of action with the name and value pairs params.
+func queryForm(action string, params ...string) url.Values {
+	form := url.Values{"Action": {action}, "Version": {apiVersion}}
+	for i := 0; i+1 < len(params); i += 2 {
+		form.Add(params[i], params[i+1])
+	}
+
+	return form
 }
 
 // with returns the client for a subtest's t.
