@@ -32,12 +32,12 @@ func Test_arn_tableName(t *testing.T) {
 			`{` + half + `,"Item":` + stored + `}`,
 		},
 		{
-			"Query", `{"TableName":"` + arnt + `","KeyConditionExpression":"id = :i",` +
+			opQuery, `{"TableName":"` + arnt + `","KeyConditionExpression":"id = :i",` +
 				`"ExpressionAttributeValues":{":i":{"S":"1"}},"ReturnConsumedCapacity":"TOTAL"}`,
 			`{` + half + `,"Count":1,"ScannedCount":1,"Items":[` + stored + `]}`,
 		},
 		{
-			"Scan", `{"TableName":"` + arnt + `","ReturnConsumedCapacity":"TOTAL"}`,
+			opScan, `{"TableName":"` + arnt + `","ReturnConsumedCapacity":"TOTAL"}`,
 			`{` + half + `,"Count":1,"ScannedCount":1,"Items":[` + stored + `]}`,
 		},
 		{

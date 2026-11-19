@@ -23,7 +23,8 @@ const (
 const maxSegments = 1000000
 
 // Scan reads every item of a table or index, or of one segment of it, a page
-// at a time. The legacy ScanFilter, AttributesToGet and ConditionalOperator
+// at a time, projected by its ProjectionExpression or the legacy
+// AttributesToGet. The legacy ScanFilter and ConditionalOperator
 // answer 501.
 func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput, error) {
 	e, r, err := p.scanTarget(ctx, in)
@@ -42,6 +43,10 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 	r.filter, err = x.condition(expression.FilterExpression, in.FilterExpression)
 	if err == nil {
 		r.projection, err = x.projection(in.ProjectionExpression)
+	}
+
+	if err == nil && in.AttributesToGet != nil {
+		err = r.attributesToGet(in.AttributesToGet)
 	}
 
 	if err == nil {
@@ -82,8 +87,14 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, fmt.Errorf("scan: %w", err)
 	}
 
-	if in.ScanFilter != nil || in.AttributesToGet != nil || in.ConditionalOperator != nil {
+	if in.ScanFilter != nil || in.ConditionalOperator != nil {
 		return nil, nil, notImplemented("Scan")
+	}
+
+	err = checkMixed(in.AttributesToGet,
+		namedExpr{paramProjection, in.ProjectionExpression}, namedExpr{paramFilter, in.FilterExpression})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	segment, segments, err := segmentsOf(in.Segment, in.TotalSegments)
@@ -100,7 +111,8 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		}
 	}
 
-	r, err := newReader(e, spec, in.Limit, in.Select, in.ProjectionExpression != nil, in.ConsistentRead)
+	r, err := newReader(e, spec, in.Limit, in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet),
+		in.ConsistentRead)
 	if err != nil {
 		return nil, nil, err
 	}

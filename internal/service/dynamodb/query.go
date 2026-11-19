@@ -29,8 +29,9 @@ const (
 )
 
 // Query reads the items of one partition of a table or index, in range key
-// order, a page at a time. The legacy KeyConditions, QueryFilter,
-// AttributesToGet and ConditionalOperator answer 501.
+// order, a page at a time. AttributesToGet is refused with
+// KeyConditionExpression. The legacy KeyConditions, QueryFilter
+// and ConditionalOperator answer 501.
 func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOutput, error) {
 	e, r, err := p.queryTarget(ctx, in)
 	if err != nil {
@@ -103,11 +104,21 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		}
 	}
 
-	if in.KeyConditions != nil || in.QueryFilter != nil || in.AttributesToGet != nil || in.ConditionalOperator != nil {
+	if in.KeyConditions != nil || in.QueryFilter != nil || in.ConditionalOperator != nil {
 		return nil, nil, notImplemented("Query")
 	}
 
-	r, err := newReader(e, spec, in.Limit, in.Select, in.ProjectionExpression != nil, in.ConsistentRead)
+	// AttributesToGet goes only with the legacy KeyConditions, which answer
+	// 501 above; with KeyConditionExpression it is refused.
+	err = checkMixed(in.AttributesToGet, namedExpr{paramProjection, in.ProjectionExpression},
+		namedExpr{paramFilter, in.FilterExpression},
+		namedExpr{paramKeyCondition, in.KeyConditionExpression})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	r, err := newReader(e, spec, in.Limit, in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet),
+		in.ConsistentRead)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,14 +135,14 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 // newReader makes the checks Query and Scan share before their expressions:
 // Limit, Select, then ConsistentRead on a global index.
 func newReader(
-	e *tableEntry, spec *table.IndexSpec, limit *int32, selectMode *string, hasProjection bool, consistent *bool,
+	e *tableEntry, spec *table.IndexSpec, limit *int32, selectMode *string, projection string, consistent *bool,
 ) (*reader, error) {
 	n, err := limitOf(limit)
 	if err != nil {
 		return nil, err
 	}
 
-	mode, err := chooseSelect(selectMode, hasProjection, spec != nil)
+	mode, err := chooseSelect(selectMode, projection, spec != nil)
 	if err != nil {
 		return nil, err
 	}

@@ -92,11 +92,21 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 	return out, nil
 }
 
-// GetItem reads the item with a key, projected by its ProjectionExpression.
-// The legacy AttributesToGet answers 501.
+// GetItem reads the item with a key, projected by its ProjectionExpression
+// or the legacy AttributesToGet.
 func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetItemOutput, error) {
-	// DynamoDB Local refuses names with no expression before it looks for the
-	// table, here alone.
+	// DynamoDB Local refuses AttributesToGet, and names with no expression,
+	// before it looks for the table, here alone.
+	err := checkMixed(in.AttributesToGet, namedExpr{paramProjection, in.ProjectionExpression})
+	if err != nil {
+		return nil, err
+	}
+
+	legacy, err := attributesToGet(in.AttributesToGet, sameNameTwice)
+	if err != nil {
+		return nil, err
+	}
+
 	x, err := newExprs(in.ExpressionAttributeNames, nil, in.ProjectionExpression != nil, false, "")
 	if err != nil {
 		return nil, err
@@ -107,10 +117,6 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	if in.AttributesToGet != nil {
-		return nil, notImplemented("GetItem")
-	}
-
 	err = checkKey(e, in.Key)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -119,6 +125,10 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 	projection, err := x.projection(in.ProjectionExpression)
 	if err == nil {
 		err = x.done()
+	}
+
+	if projection == nil {
+		projection = legacy
 	}
 
 	if err != nil {

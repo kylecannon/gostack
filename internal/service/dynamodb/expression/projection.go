@@ -73,6 +73,22 @@ func ParseProjection(src string, subs Substitutions, used map[string]struct{}) (
 	return pr, nil
 }
 
+// ProjectAttributes is the projection of the legacy AttributesToGet: each
+// name a whole top-level attribute, taken as written, so "a.b" is the
+// attribute of that name. The names must be distinct and not empty.
+//
+//nolint:ireturn // the parsed forms are the interfaces expression.go declares
+func ProjectAttributes(names []string) Projection {
+	pr := &projection{paths: make([]Path, len(names)), root: &projNode{}}
+
+	for i, name := range names {
+		pr.paths[i] = Path{{Name: name}}
+		pr.root.add(pr.paths[i])
+	}
+
+	return pr
+}
+
 func (p *parser) parsePathList() ([]*operand, error) {
 	var ops []*operand
 

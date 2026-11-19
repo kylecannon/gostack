@@ -30,7 +30,7 @@ const (
 	msgBadSelect     = "Select must be ALL_ATTRIBUTES, ALL_PROJECTED_ATTRIBUTES, COUNT, or SPECIFIC_ATTRIBUTES"
 	msgProjectedOnly = "ALL_PROJECTED_ATTRIBUTES can be used only when Querying using an IndexName"
 	msgSpecificNeeds = "Must specify the AttributesToGet or ProjectionExpression when choosing to get SPECIFIC_ATTRIBUTES"
-	msgSelectProj    = "Cannot specify the ProjectionExpression when choosing to get "
+	msgSelectProj    = "Cannot specify the %s when choosing to get %s"
 	msgConsistentGSI = "Consistent reads are not supported on global secondary indexes"
 	msgStartSize     = "Exclusive Start Key must have same size as table's key schema"
 	msgStartQuery    = "The provided starting key does not match the range key predicate"
@@ -267,10 +267,13 @@ func startMeets(
 
 // chooseSelect checks Select against the projection and the index, and
 // returns the mode in force: SPECIFIC_ATTRIBUTES with a projection,
-// ALL_PROJECTED_ATTRIBUTES on an index, ALL_ATTRIBUTES otherwise.
+// ALL_PROJECTED_ATTRIBUTES on an index, ALL_ATTRIBUTES otherwise. projection
+// names the request's projection parameter, "" when it sets none.
 //
 //nolint:revive // flag-parameter: facts about the request, not modes
-func chooseSelect(mode *string, hasProjection, onIndex bool) (string, error) {
+func chooseSelect(mode *string, projection string, onIndex bool) (string, error) {
+	hasProjection := projection != ""
+
 	if mode == nil {
 		switch {
 		case hasProjection:
@@ -289,11 +292,11 @@ func chooseSelect(mode *string, hasProjection, onIndex bool) (string, error) {
 		}
 	case selectCount:
 		if hasProjection {
-			return "", value.Invalid(msgSelectProj + "only the Count")
+			return "", value.Invalid(fmt.Sprintf(msgSelectProj, projection, "only the Count"))
 		}
 	case selectAll, selectProjected:
 		if hasProjection {
-			return "", value.Invalid(msgSelectProj + *mode)
+			return "", value.Invalid(fmt.Sprintf(msgSelectProj, projection, *mode))
 		}
 
 		if *mode == selectProjected && !onIndex {

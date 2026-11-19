@@ -29,7 +29,7 @@ type batchGet struct {
 // BatchGetItem reads up to 100 items across tables, each table's projected by
 // its own ProjectionExpression. It stops adding items once the next would take
 // the stored bytes read past 16 MB, and returns the keys it did not read in
-// UnprocessedKeys. The legacy AttributesToGet answers 501.
+// UnprocessedKeys. The legacy AttributesToGet projects as ProjectionExpression does.
 func (p *Provider) BatchGetItem(ctx context.Context, in *api.BatchGetItemInput) (*api.BatchGetItemOutput, error) {
 	gets, err := p.caller(ctx).checkBatchGet(in.RequestItems)
 	if err != nil {
@@ -142,6 +142,17 @@ func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (
 		return batchGet{}, value.Invalid(fmt.Sprintf(msgBatchGetEmpty, name))
 	}
 
+	// DynamoDB Local refuses AttributesToGet before it looks for the table.
+	err = checkMixed(request.AttributesToGet, namedExpr{paramProjection, request.ProjectionExpression})
+	if err != nil {
+		return batchGet{}, err
+	}
+
+	legacy, err := attributesToGet(request.AttributesToGet, batchNameTwice)
+	if err != nil {
+		return batchGet{}, err
+	}
+
 	_, e, err := c.lookup(&name)
 	if err != nil {
 		return batchGet{}, err
@@ -150,10 +161,6 @@ func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (
 	err = checkBatchKeys(e, name, request.Keys)
 	if err != nil {
 		return batchGet{}, err
-	}
-
-	if request.AttributesToGet != nil {
-		return batchGet{}, notImplemented("BatchGetItem")
 	}
 
 	x, err := newExprs(request.ExpressionAttributeNames, nil, request.ProjectionExpression != nil, false, "")
@@ -168,6 +175,10 @@ func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (
 
 	if err != nil {
 		return batchGet{}, fmt.Errorf("batch get: %w", err)
+	}
+
+	if projection == nil {
+		projection = legacy
 	}
 
 	return batchGet{name: name, entry: e, request: request, projection: projection}, nil
