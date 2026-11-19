@@ -17,5 +17,5 @@
 - Stdlib `time/tzdata` is embedded in the binary (S3 Object Lock error text names a time zone).
 - Specs: `specs/botocore` (vendored per service), `specs/localstack` (patches and sqs-query), pinned in `specs/SOURCES.lock`, refreshed by `scripts/vendor-specs.sh`.
 - Generated code: `internal/api/` from `make gen`; `make gen-check` fails on drift. botocore rest-xml and rest-json protocol fixtures (`internal/protocol/testdata/botocore`) also generate packages under `internal/protocol/{restxml,restjson}/fixturegen_test`.
-- Parity: `docs/parity.md` (generated), `parity/exclusions.yaml`, `parity/ledger.json`.
+- Parity: `docs/parity.md` (generated), `parity/exclusions/<service>.yaml`, `parity/ledger/<service>.json`.
 - Fuzz: `make fuzz`; seeds in `testdata/fuzz` (awsjson, query, sqs restore).

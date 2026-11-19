@@ -67,9 +67,9 @@ Runtime codec support is in `internal/protocol/{query,awsjson,rest,restxml}`; `i
 
 ## Cross-service calls (`internal/inproc`)
 
-`inproc.Client` serves a call through the handler it was bound to (the gateway's), so the callee runs its own detection, auth and dirty marking. `Enqueue` hands calls to one worker that starts on demand and exits when the queue is empty, with at most 4096 queued; `Do` is the synchronous form.
+`inproc.Client` serves a call through the handler it was bound to (the gateway's), so the callee runs its own detection, auth and dirty marking. A `Call` carries method, path, query and content type (zero values give the json-1.0 `POST /` with `X-Amz-Target`), and `Response` carries the headers. `Enqueue` runs calls in lanes keyed by destination (region, signing name, method, path, target): one lane runs in queue order, different lanes run at once up to 16, workers start on demand and exit when nothing waits, with at most 4096 queued. `Do` is the synchronous form and `Stream` the unbuffered one.
 
 ## Parity and bench (outside the product binary)
 
-- `parity/`: runs LocalStack's own pytest suite against gostack in a container; results in `parity/ledger.json`, rendered to `docs/parity.md`.
+- `parity/`: runs LocalStack's own pytest suite against gostack in a container; results in `parity/ledger/<service>.json` and exclusions in `parity/exclusions/<service>.yaml` (one file per service, so service branches don't collide), rendered to `docs/parity.md`.
 - `bench/`: system workloads with aws-sdk-go-v2; results in `bench/results/`.

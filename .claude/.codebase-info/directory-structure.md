@@ -26,7 +26,7 @@ internal/
   api/                  GENERATED sqs/, sts/ and s3/ (never edit)
 codegen/                cmd/gostack-codegen (emitters), spec/ (spec loader and patches)
 specs/                  vendored botocore JSON, LocalStack patches, SOURCES.lock
-parity/                 run.sh, ledger.py/json, exclusions.yaml, pytest_gostack.py, runner/ (Dockerfile)
+parity/                 run.sh, ledger.py, ledger/<service>.json, exclusions/<service>.yaml, pytest_gostack.py, runner/ (Dockerfile)
 bench/                  loadgen, cells, gate, compare, results/
 docker/                 Dockerfile, Dockerfile.slim
 api/openapi/            gostack.yaml, embedded by embed.go
