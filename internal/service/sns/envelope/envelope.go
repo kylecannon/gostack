@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,9 +28,11 @@ var ErrUnknownType = errors.New("unknown sns envelope type")
 
 // Attribute is one message attribute as the publisher sent it.
 type Attribute struct {
-	Name        string
-	DataType    string
-	StringValue string
+	Name     string
+	DataType string
+	// StringValue is the value of a String or Number attribute. Nil is
+	// written as null, as LocalStack writes an attribute with no StringValue.
+	StringValue *string
 	BinaryValue []byte
 }
 
@@ -49,10 +52,12 @@ type Message struct {
 	Message string
 	// Timestamp is written in UTC to the millisecond.
 	Timestamp time.Time
-	// Attributes keep the publisher's order. A Notification carries them;
-	// none is written when the list is empty.
+	// Attributes are written sorted by name: the publisher's order is gone
+	// before the message gets here, since the request holds them in a map. A
+	// Notification carries them; none is written when the list is empty.
 	Attributes []Attribute
-	// SequenceNumber is written for a FIFO topic only.
+	// SequenceNumber is written for a FIFO topic only, as null when it is
+	// empty, as LocalStack writes a confirmation's missing one.
 	SequenceNumber string
 	// SignatureVersion is the topic's: "2" signs with SHA256, anything else
 	// with SHA1. Empty is written as "1".
@@ -70,18 +75,37 @@ func BaseURL(certHost, externalURL string) string {
 	return strings.TrimRight(externalURL, "/")
 }
 
-// Body returns the envelope for in as JSON. baseURL prefixes SigningCertURL,
-// SubscribeURL and UnsubscribeURL; see BaseURL.
+// Body returns the envelope for in as JSON, for the subscription
+// in.SubscriptionARN. baseURL prefixes SigningCertURL, SubscribeURL and
+// UnsubscribeURL; see BaseURL. A message delivered to more than one
+// subscriber is signed once with Sign instead.
 func (s *Signer) Body(in *Message, baseURL string) ([]byte, error) {
-	// The signed text must be the text a subscriber parses back, so invalid
-	// UTF-8 in the publisher's message or subject becomes U+FFFD in both.
-	m := in
-	if !utf8.ValidString(in.Message) || !utf8.ValidString(in.Subject) {
-		valid := *in
-		valid.Message = strings.ToValidUTF8(in.Message, "�")
-		valid.Subject = strings.ToValidUTF8(in.Subject, "�")
-		m = &valid
+	signed, err := s.Sign(in, baseURL)
+	if err != nil {
+		return nil, err
 	}
+
+	return signed.Body(in.SubscriptionARN), nil
+}
+
+// Signed is a message signed once, whose envelope can be written for any
+// subscriber of its topic: the signature covers no per-subscriber field, the
+// UnsubscribeURL being the only one. It is safe for concurrent use.
+type Signed struct {
+	m    Message
+	f    envelopeFields
+	base string
+	hint int
+}
+
+// Sign signs in for every subscriber of its topic. in.SubscriptionARN is
+// ignored; Body takes each subscriber's.
+//
+// What is signed is exactly what a subscriber parses back: every string
+// field is made valid UTF-8 first, a run of invalid bytes becoming one U+FFFD,
+// so the body and the canonical string hold the same text.
+func (s *Signer) Sign(in *Message, baseURL string) (*Signed, error) {
+	m := valid(in)
 
 	kind := m.Type
 	if kind == "" {
@@ -98,9 +122,7 @@ func (s *Signer) Body(in *Message, baseURL string) ([]byte, error) {
 		fifo:      strings.HasSuffix(m.TopicARN, ".fifo"),
 	}
 
-	if kind == Notification {
-		fields.unsubscribeURL = baseURL + "/?Action=Unsubscribe&SubscriptionArn=" + m.SubscriptionARN
-	} else {
+	if kind != Notification {
 		fields.subscribeURL = baseURL + "/?Action=ConfirmSubscription&TopicArn=" + m.TopicARN + "&Token=" + m.Token
 	}
 
@@ -110,7 +132,7 @@ func (s *Signer) Body(in *Message, baseURL string) ([]byte, error) {
 			fields.version = "1"
 		}
 
-		sig, err := s.sign(canonical(m, &fields), fields.version)
+		sig, err := s.signCanonical(canonical(&m, &fields), fields.version)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +141,59 @@ func (s *Signer) Body(in *Message, baseURL string) ([]byte, error) {
 		fields.certURL = baseURL + CertPath
 	}
 
-	return appendEnvelope(make([]byte, 0, sizeHint(m, &fields)), m, &fields), nil
+	return &Signed{m: m, f: fields, base: baseURL, hint: sizeHint(&m, &fields)}, nil
+}
+
+// Body returns the envelope as JSON for the subscription subscriptionARN, which
+// a Notification's UnsubscribeURL names.
+func (sg *Signed) Body(subscriptionARN string) []byte {
+	f := sg.f
+	if f.kind == Notification {
+		f.unsubscribeURL = sg.base + "/?Action=Unsubscribe&SubscriptionArn=" + validString(subscriptionARN)
+	}
+
+	return appendEnvelope(make([]byte, 0, sg.hint+len(f.unsubscribeURL)), &sg.m, &f)
+}
+
+// valid is a copy of in with every string field valid UTF-8 and the
+// attributes sorted by name.
+func valid(in *Message) Message {
+	m := *in
+	m.MessageID = validString(m.MessageID)
+	m.TopicARN = validString(m.TopicARN)
+	m.Token = validString(m.Token)
+	m.Subject = validString(m.Subject)
+	m.Message = validString(m.Message)
+	m.SequenceNumber = validString(m.SequenceNumber)
+
+	if len(in.Attributes) == 0 {
+		return m
+	}
+
+	m.Attributes = make([]Attribute, len(in.Attributes))
+	for i, a := range in.Attributes {
+		a.Name = validString(a.Name)
+		a.DataType = validString(a.DataType)
+
+		if a.StringValue != nil {
+			a.StringValue = new(validString(*a.StringValue))
+		}
+
+		m.Attributes[i] = a
+	}
+
+	slices.SortFunc(m.Attributes, func(a, b Attribute) int { return strings.Compare(a.Name, b.Name) })
+
+	return m
+}
+
+// validString is s with each run of invalid UTF-8 bytes replaced by U+FFFD.
+func validString(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+
+	return strings.ToValidUTF8(s, "�")
 }
 
 // envelopeFields are the values Body derives from a Message.
@@ -181,7 +255,11 @@ func appendEnvelope(b []byte, m *Message, f *envelopeFields) []byte {
 	b = appendMember(b, "MessageId", m.MessageID)
 
 	if f.fifo {
-		b = appendMember(b, "SequenceNumber", m.SequenceNumber)
+		if m.SequenceNumber == "" {
+			b = appendNull(b, "SequenceNumber")
+		} else {
+			b = appendMember(b, "SequenceNumber", m.SequenceNumber)
+		}
 	}
 
 	if f.kind != Notification {
@@ -235,12 +313,15 @@ func appendAttributes(b []byte, attrs []Attribute) []byte {
 		b = appendString(b, a.DataType)
 		b = append(b, `, "Value": `...)
 
-		if strings.HasPrefix(a.DataType, "Binary") {
+		switch {
+		case strings.HasPrefix(a.DataType, "Binary"):
 			b = append(b, '"')
 			b = base64.StdEncoding.AppendEncode(b, a.BinaryValue)
 			b = append(b, '"')
-		} else {
-			b = appendString(b, a.StringValue)
+		case a.StringValue == nil:
+			b = append(b, "null"...)
+		default:
+			b = appendString(b, *a.StringValue)
 		}
 
 		b = append(b, '}')
@@ -263,6 +344,18 @@ func appendMember(b []byte, name, value string) []byte {
 	return appendString(b, value)
 }
 
+// appendNull writes one member whose value is null, separated as appendMember.
+func appendNull(b []byte, name string) []byte {
+	if b[len(b)-1] != '{' {
+		b = append(b, ", "...)
+	}
+
+	b = append(b, '"')
+	b = append(b, name...)
+
+	return append(b, `": null`...)
+}
+
 // sizeHint is the envelope's length before string escapes: the variable
 // fields plus the fixed names, separators and base64 signature.
 func sizeHint(m *Message, f *envelopeFields) int {
@@ -276,9 +369,18 @@ func sizeHint(m *Message, f *envelopeFields) int {
 		len(f.signature) + len(f.certURL)
 
 	for _, a := range m.Attributes {
-		n += perAttrib + len(a.Name) + len(a.DataType) + len(a.StringValue) +
+		n += perAttrib + len(a.Name) + len(a.DataType) + len(deref(a.StringValue)) +
 			base64.StdEncoding.EncodedLen(len(a.BinaryValue))
 	}
 
 	return n
+}
+
+// deref is what s points to, or "" for nil.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+
+	return *s
 }

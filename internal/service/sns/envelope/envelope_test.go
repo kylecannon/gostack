@@ -76,9 +76,9 @@ func Test_Signer_Body(t *testing.T) {
 	fifoUnsubURL := testBase + "/?Action=Unsubscribe&SubscriptionArn=" + testFIFOSb
 	subURL := testBase + "/?Action=ConfirmSubscription&TopicArn=" + testTopic + "&Token=" + testToken
 	attrs := []envelope.Attribute{
-		{Name: attrNumber, DataType: "Number", StringValue: "1"},
+		{Name: attrNumber, DataType: "Number", StringValue: new("1")},
 		{Name: "bin", DataType: "Binary", BinaryValue: []byte{0, 1, 0xfe, 0xff}},
-		{Name: "a-str", DataType: "String.custom", StringValue: "x&y"},
+		{Name: "a-str", DataType: "String.custom", StringValue: new("x&y")},
 	}
 	attr := func(dataType, value string) map[string]any { return map[string]any{kType: dataType, "Value": value} }
 	numberAttr := attr("Number", "1")

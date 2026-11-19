@@ -90,9 +90,9 @@ func (s *Signer) init() error {
 	return s.err
 }
 
-// sign returns the PKCS1 v1.5 signature of canonical: SHA256 for
+// signCanonical returns the PKCS1 v1.5 signature of canonical: SHA256 for
 // SignatureVersion "2", SHA1 otherwise.
-func (s *Signer) sign(canonical []byte, version string) ([]byte, error) {
+func (s *Signer) signCanonical(canonical []byte, version string) ([]byte, error) {
 	err := s.init()
 	if err != nil {
 		return nil, err

@@ -6,6 +6,9 @@
 // Field order follows AWS: the SQS bodies in LocalStack's aws.validated
 // snapshots for notifications, and the AWS HTTP/HTTPS confirmation document
 // for the confirmations. Byte layout and string escaping follow LocalStack's
-// json.dumps. Raw message delivery and per-protocol message selection are the
+// json.dumps. MessageAttributes are written sorted by name; no snapshot depends
+// on another order, since the snapshot comparison parses the JSON. Sign signs
+// a message once for every subscriber of its topic, and Signed.Body writes it
+// for one. Raw message delivery and per-protocol message selection are the
 // caller's: an envelope wraps the message text it is given.
 package envelope

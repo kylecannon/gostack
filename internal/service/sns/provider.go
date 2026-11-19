@@ -4,10 +4,13 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	api "github.com/kylecannon/gostack/internal/api/sns"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/sns/envelope"
@@ -29,6 +32,17 @@ type Provider struct {
 	// certificate that verifies them. There is one per Provider, so one per
 	// process: each Signer generates its own key pair.
 	signer *envelope.Signer
+
+	// client delivers to SQS through the gateway. pending counts its calls
+	// not yet answered, which Close waits for, and dropped the deliveries
+	// lost.
+	client  *inproc.Client
+	pending pending
+	dropped atomic.Int64
+	// sequence is the last FIFO sequence number handed out.
+	sequence atomic.Uint64
+	// now is the clock of the FIFO deduplication window.
+	now func() time.Time
 }
 
 var _ api.Handler = (*Provider)(nil)
@@ -41,13 +55,27 @@ func New(settings func() Settings) *Provider {
 		settings = func() Settings { return Settings{} }
 	}
 
-	return &Provider{
+	p := &Provider{
 		settings: settings,
 		regions:  store.NewBundle(newState, (*State).reset),
 		accounts: store.NewBundle(newAccountState, (*AccountState).reset),
 		signer:   new(envelope.Signer),
+		client:   inproc.New(),
+		now:      time.Now,
 	}
+
+	// LocalStack starts its sequence at (now + 100) << 33, a 20-digit number
+	// that grows with the clock, so a restart never hands one out twice.
+	start := max(time.Now().Unix(), 0) + sequenceOffset
+	p.sequence.Store(uint64(start) << sequenceShift)
+
+	return p
 }
+
+const (
+	sequenceOffset = 100
+	sequenceShift  = 33
+)
 
 // Registration returns SNS for the gateway.
 func (p *Provider) Registration() service.Registration {
@@ -56,6 +84,8 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mutating: mutating,
 		Reset:    p.Reset,
+		Close:    p.Close,
+		Bind:     p.Bind,
 	}
 }
 

@@ -168,6 +168,8 @@ type Topic struct {
 	// endpoints are the topic's subscriptions by endpoint: a topic has one
 	// subscription per endpoint.
 	endpoints map[string]*Subscription
+	// fifo orders and deduplicates the publishes to a FIFO topic.
+	fifo fifoTopic
 }
 
 // AccountState is what SNS holds for an account across its regions, the

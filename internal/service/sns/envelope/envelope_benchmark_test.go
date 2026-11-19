@@ -34,7 +34,7 @@ func BenchmarkBody(b *testing.B) {
 	attrs := make([]envelope.Attribute, 0, attrCount)
 	for i := range attrCount {
 		n := strconv.Itoa(i)
-		attrs = append(attrs, envelope.Attribute{Name: "attr" + n, DataType: "String", StringValue: "value " + n})
+		attrs = append(attrs, envelope.Attribute{Name: "attr" + n, DataType: dataTypeString, StringValue: new("value " + n)})
 	}
 
 	for _, sig := range []string{"1", "2", sigFIFO} {
