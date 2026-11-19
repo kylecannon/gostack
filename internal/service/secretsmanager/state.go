@@ -52,6 +52,14 @@ func newState(account, region string) *State {
 
 // reset empties the state in place. A secret a call is holding is marked gone,
 // so the call finds it no more.
+//
+// The State holds the replica records of its region, so it is the one that
+// says whether a record exists: when it is emptied, the primary of each record
+// it held forgets the record. The primary keeps the entry, the region and the
+// status it reports, as moto's does when a region's backend is replaced, and a
+// later ReplicateSecretToRegions puts a record there again. Without this a
+// primary would go on holding a record its region no longer has, and a restart
+// would make the record again from it.
 func (s *State) reset() {
 	s.mu.Lock()
 	order := s.order
@@ -64,6 +72,10 @@ func (s *State) reset() {
 		secret.mu.Lock()
 		secret.gone = true
 		secret.mu.Unlock()
+
+		if secret.primary != nil {
+			secret.primary.forget(secret)
+		}
 	}
 }
 

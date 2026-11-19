@@ -69,7 +69,10 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 		return nil, err
 	}
 
-	secret, out, err := p.create(p.stateFor(rc, name), name, in, tags)
+	// The secret goes to the caller's account and region whatever its name looks
+	// like: LocalStack hands CreateSecret to moto as it is, and only the other
+	// operations read a SecretId that is an ARN for the place it names.
+	secret, out, err := p.create(p.stateAt(rc.AccountID, rc.Region), name, in, tags)
 	if err != nil {
 		return nil, err
 	}

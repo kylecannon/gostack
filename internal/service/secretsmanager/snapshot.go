@@ -233,9 +233,14 @@ func (p *Provider) restoreStates(states []stateData) error {
 	return nil
 }
 
-// restoreReplicas makes the records of primary's replicas again. An entry
-// whose region is the primary's own, or whose name or ARN is taken there,
-// gets no record. Nothing else holds primary yet.
+// restoreReplicas makes the records of primary's replicas again, for the
+// entries that had one when the state was saved. A record is placed by
+// identity: its exact name and ARN must be free in its region. A saved state
+// always has them free, because a live region never held a record next to a
+// secret of that exact name or ARN. A lookup is not used: it reads a name that
+// looks like a partial ARN as another secret's, which a live record never
+// collided with. An entry that does not fit, or whose region is the primary's
+// own, gets no record. Nothing else holds primary yet.
 func (p *Provider) restoreReplicas(primary *Secret) {
 	for i := range primary.replicas {
 		r := &primary.replicas[i]
@@ -253,7 +258,7 @@ func (p *Provider) restoreReplicas(primary *Secret) {
 		record := newReplica(primary, r.region)
 
 		state.mu.Lock()
-		if state.lookupLocked(record.name) == nil && state.byARN[record.arn] == nil {
+		if state.byName[record.name] == nil && state.byARN[record.arn] == nil {
 			state.add(record)
 			r.record = record
 		}
@@ -272,8 +277,12 @@ func (s *State) restore(secrets []secretData) ([]*Secret, error) {
 	for i := range secrets {
 		saved := &secrets[i]
 
-		if saved.Name == "" || saved.ARN == "" {
-			return nil, fmt.Errorf("%w: a secret has no name or ARN", errSnapshot)
+		// A file is refused only for what no call can save. CreateSecret makes
+		// an ARN for every secret, and refuses a name a State already holds, as
+		// a key or as the ARN of another secret. The name itself may be empty:
+		// the BYPASS_SECRET_ID_VALIDATION tag lets CreateSecret store one.
+		if saved.ARN == "" {
+			return nil, fmt.Errorf("%w: secret %q has no ARN", errSnapshot, saved.Name)
 		}
 
 		if s.byName[saved.Name] != nil || s.byARN[saved.ARN] != nil {

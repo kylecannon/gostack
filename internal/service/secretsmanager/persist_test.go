@@ -28,6 +28,18 @@ const (
 func startEngine(t *testing.T, dir string, format persist.Format) (*persist.Engine, http.Handler) {
 	t.Helper()
 
+	eng, _, h := startProvider(t, dir, format)
+
+	return eng, h
+}
+
+// startProvider is startEngine that also returns the provider, so a test can
+// reset one account and region as the admin endpoint does.
+func startProvider(
+	t *testing.T, dir string, format persist.Format,
+) (*persist.Engine, *secretsmanager.Provider, http.Handler) {
+	t.Helper()
+
 	eng := persist.New(persist.Config{
 		PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Formats: []persist.Format{format},
 		MountDetector: func(string) bool { return false },
@@ -45,7 +57,7 @@ func startEngine(t *testing.T, dir string, format persist.Format) (*persist.Engi
 
 	secretsmanager.SetFunctionLookup(p, oneFunction)
 
-	return eng, gw.Handler()
+	return eng, p, gw.Handler()
 }
 
 // putSample writes three versions of a secret with a policy, tags and a

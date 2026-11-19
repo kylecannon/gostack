@@ -35,7 +35,8 @@ type replica struct {
 	status  string
 	message string
 	// record is the replica secret in region's State; nil for a Failed entry,
-	// which has none.
+	// which has none, and for an entry whose region was reset since: the State
+	// says whether the record is there (State.reset).
 	record *Secret
 }
 
@@ -75,6 +76,19 @@ func (s *Secret) source() *Secret {
 // holds s's lock.
 func (s *Secret) replicates(record *Secret) bool {
 	return slices.ContainsFunc(s.replicas, func(r replica) bool { return r.record == record })
+}
+
+// forget clears the record of every entry that holds it, for a record whose
+// region was emptied. It takes s's lock, so the caller holds no State's.
+func (s *Secret) forget(record *Secret) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.replicas {
+		if s.replicas[i].record == record {
+			s.replicas[i].record = nil
+		}
+	}
 }
 
 // readable locks the secret that holds found's data and reports whether found
