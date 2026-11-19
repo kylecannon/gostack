@@ -112,8 +112,8 @@ type tracked struct {
 	// assets are the service's assets once opened, or nil.
 	assets *Assets
 	// took is how long the service's last Snapshot in this process took, or the
-	// Restore of the Load that restored it before its first Snapshot, or zero
-	// when it has neither. A flush orders its saves by it; see saveOrder.
+	// Restore of a later Load until its next Snapshot, or zero when it has
+	// neither. A flush orders its saves by it; see saveOrder.
 	took time.Duration
 }
 
@@ -823,8 +823,8 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 //   - whether the service has assets to sync, or an earlier sync to wait for,
 //     at flush start: those go after the ones with none, since their sync can
 //     take the whole deadline;
-//   - the service's last measured Snapshot in this process, or the Restore that
-//     loaded it before its first Snapshot, shortest first, so a large S3 with
+//   - the service's last measured Snapshot in this process, or the Restore of
+//     a later Load until its next Snapshot, shortest first, so a large S3 with
 //     nothing pending, whose Snapshot grows with its objects, does not cost SQS
 //     and STS their save; a service with neither counts as zero, so the first
 //     flush of a process with no state to load is in name order;

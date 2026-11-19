@@ -959,7 +959,7 @@ is untouched.
   go after the ones with none. Within each group, the service whose last
   `Snapshot` in this process took less time goes first, then name order. A
   service a `Load` restored has the time its `Restore` took as that figure
-  until its first `Snapshot`, so a large S3 goes last from a restart's first
+  until its next `Snapshot`, so a large S3 goes last from a restart's first
   flush; a service neither restored nor snapshotted counts as zero, so with no
   state to load a process's first flush is in name order and takes S3's
   `Snapshot` first. A `Snapshot`, like a sync,
