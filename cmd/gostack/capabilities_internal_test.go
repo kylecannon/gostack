@@ -80,6 +80,65 @@ func Test_serviceTable_Capabilities(t *testing.T) {
 	require.Equal(t, want, table.Capabilities(), "a second call gives the same answer")
 }
 
+// fakeDecorator wraps a handler by embedding its interface, which the check
+// cannot see through.
+type fakeDecorator struct{ fakeHandler }
+
+type fakeHandler interface{ One() }
+
+// Test_serviceTable_Capabilities_wrapped checks that a service whose handler
+// embeds an interface reports as unknown, and that the services around it keep
+// their answer: the handler once made the check panic, which left the table
+// holding the services before it and nothing after.
+func Test_serviceTable_Capabilities_wrapped(t *testing.T) {
+	operations := []string{one, two, three, four, five}
+	registration := func(name string, handler any) service.Registration {
+		return service.Registration{
+			Metadata: service.Metadata{Name: name, Operations: operations, OperationMethod: fakeOperationMethod},
+			Handler:  handler,
+		}
+	}
+	table := &serviceTable{
+		regs: []service.Registration{
+			registration("first", &fakeProvider{}),
+			registration("wrapped", &fakeDecorator{fakeHandler: &fakeProvider{}}),
+			registration("last", &fakeProvider{}),
+		},
+		eng: persist.New(persist.Config{}),
+	}
+
+	want := []internalapi.ServiceCapability{
+		{Name: "first", Implemented: []string{two, four}, Total: 5},
+		{Name: "wrapped", Unknown: true, Total: 5},
+		{Name: "last", Implemented: []string{two, four}, Total: 5},
+	}
+	require.Equal(t, want, table.Capabilities())
+	require.Equal(t, want, table.Capabilities())
+}
+
+// Test_serviceTable_Capabilities_failure checks that a check that fails leaves
+// no table behind: a later call runs it again, rather than answering with the
+// services it had reached.
+func Test_serviceTable_Capabilities_failure(t *testing.T) {
+	operations := []string{one, two}
+	good := service.Registration{
+		Metadata: service.Metadata{Name: "good", Operations: operations, OperationMethod: fakeOperationMethod},
+		Handler:  &fakeProvider{},
+	}
+	bad := service.Registration{
+		Metadata: service.Metadata{
+			Name: "bad", Operations: operations,
+			OperationMethod: func(reflect.Type, string) (reflect.Method, bool) { panic("a broken lookup") },
+		},
+		Handler: &fakeProvider{},
+	}
+	table := &serviceTable{regs: []service.Registration{good, bad}, eng: persist.New(persist.Config{})}
+
+	require.PanicsWithValue(t, "a broken lookup", func() { table.Capabilities() })
+	require.PanicsWithValue(t, "a broken lookup", func() { table.Capabilities() },
+		"the second call must not answer with the one service that was reached")
+}
+
 // Test_serviceTable_Capabilities_registered pins what the registered services
 // implement. It is also the guard on the check itself: a toolchain that marks
 // promoted methods differently changes these numbers and fails here, rather

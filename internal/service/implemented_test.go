@@ -96,7 +96,7 @@ func (*nestedProvider) Alpha(context.Context) error { return nil }
 
 // ambiguousProvider has Bravo through two embedded fields: other declares it
 // one level down, helper reaches Unimplemented's two levels down. Go takes the
-// shallower one, which the check does not work out, so it reports unknown.
+// shallower one, which is other's. Echo is helper's.
 type other struct{}
 
 func (other) Bravo(context.Context) error { return nil }
@@ -107,6 +107,71 @@ type ambiguousProvider struct {
 }
 
 func (ambiguousProvider) Alpha(context.Context) error { return nil }
+
+// Handler stands for the generated Handler interface of the fake service.
+type Handler interface {
+	Alpha(context.Context) error
+	Bravo(context.Context) error
+	Charlie(context.Context) error
+	Delta(context.Context) error
+	Echo(context.Context) error
+}
+
+// decorator wraps a Handler: every operation reaches the interface, whose
+// methods have no code the check can read.
+type decorator struct{ Handler }
+
+// declaringDecorator declares Alpha itself, by pointer receiver, over a wrapped
+// Handler.
+type declaringDecorator struct{ Handler }
+
+func (*declaringDecorator) Alpha(context.Context) error { return nil }
+
+// valueDecorator declares Echo by value receiver over a wrapped Handler.
+type valueDecorator struct{ Handler }
+
+func (valueDecorator) Echo(context.Context) error { return nil }
+
+// genericProvider is a provider that is generic.
+type genericProvider[T any] struct{ Unimplemented }
+
+func (*genericProvider[T]) Alpha(context.Context) error { return nil }
+
+// depthProvider reaches the generated Unimplemented two levels down, through
+// base, and a mixin that declares Charlie one level down: Go selects the
+// mixin's Charlie, being the shallower.
+type base struct{ Unimplemented }
+
+type mixin struct{ calls int }
+
+func (m *mixin) Charlie(context.Context) error { m.calls++; return nil }
+
+type depthProvider struct {
+	base
+	mixin
+}
+
+// sameDepthProvider has Charlie at one level through the embedded Unimplemented
+// and at one level through mixin. Go rejects a call of it as ambiguous and
+// leaves the method out of the method set, so the type is not a Handler.
+type sameDepthProvider struct {
+	Unimplemented
+	mixin //nolint:unused // its Charlie is ambiguous, so nothing reaches it but reflection
+}
+
+// deepDeclared reaches a declared Alpha two levels down while its embedded
+// Unimplemented has Alpha one level down: the shallower is Unimplemented's, so
+// Alpha is unimplemented although something deeper declares it.
+type deepest struct{} //nolint:unused // shadowed by Unimplemented's
+
+func (deepest) Alpha(context.Context) error { return nil } //nolint:unused // shadowed by Unimplemented's
+
+type middle struct{ deepest } //nolint:unused // see deepest
+
+type deepDeclared struct {
+	middle //nolint:unused // see deepest
+	Unimplemented
+}
 
 func Test_Implemented(t *testing.T) {
 	tests := []struct {
@@ -126,7 +191,23 @@ func Test_Implemented(t *testing.T) {
 		{name: "Unimplemented itself", handler: Unimplemented{}, want: []string{}, known: true},
 		{name: "pointer to Unimplemented", handler: &Unimplemented{}, want: []string{}, known: true},
 		{name: "nil handler", handler: nil, known: false},
-		{name: "a method two fields embed", handler: &ambiguousProvider{}, known: false},
+		{
+			name: "two fields at different depths", handler: &ambiguousProvider{},
+			want: []string{alpha, bravo, echo}, known: true,
+		},
+		{name: "two embeds, the shallower wins", handler: &depthProvider{}, want: []string{charlie}, known: true},
+		{name: "two embeds, by value, the pointer method is hidden", handler: depthProvider{}, known: false},
+		{name: "a method two fields embed at one depth", handler: &sameDepthProvider{}, known: false},
+		{
+			name: "a shallower Unimplemented wins over a deeper declaration", handler: &deepDeclared{},
+			want: []string{}, known: true,
+		},
+		{name: "interface embedded by pointer", handler: &decorator{Handler: &pointerProvider{}}, known: false},
+		{name: "interface embedded by value", handler: decorator{Handler: &pointerProvider{}}, known: false},
+		{name: "interface embedded, a method declared by pointer", handler: &declaringDecorator{}, known: false},
+		{name: "interface embedded, a method declared by value", handler: valueDecorator{}, known: false},
+		{name: "interface embedded, a method declared by value, by pointer", handler: &valueDecorator{}, known: false},
+		{name: "generic provider", handler: &genericProvider[int]{}, want: []string{alpha}, known: true},
 		{name: "not a handler", handler: struct{}{}, known: false},
 	}
 

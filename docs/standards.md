@@ -62,7 +62,9 @@ specific to gostack.
   takes a string literal; `Type.Method(i)`, `Value.Method` and `MethodByName`
   with a variable make the linker keep every exported method in the binary,
   which cost `bin/gostack` 2.75 MB. Look an operation's method up through the
-  generated `OperationMethod`.
+  generated `OperationMethod`. A lint cannot see a dependency that does it, so
+  `Test_gostack_binaryPrunesMethods` in `cmd/gostack` reads the symbols of the
+  built binary and fails when methods nothing calls are kept.
 
 ## Tests, cheapest first
 

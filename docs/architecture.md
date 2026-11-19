@@ -539,6 +539,32 @@ follows add, migrate, delete.
 | `/_gostack/services/<svc>/...` | Developer endpoints, listed below | `/_aws/<svc>/...` |
 | `/_gostack/debug/pprof/*` | Profiling; only when `DEBUG=1` | none |
 
+What `/_gostack/services` counts, and what it costs:
+
+- "Implemented" means the provider declares the operation's method, as
+  `service.Implemented` reads the compiled method sets. A method that forwards
+  by hand to a generated `Unimplemented` held in a named field, or that is
+  declared only to return the 501, counts as implemented though the call
+  answers 501; this is accepted. Where an operation is reached through several
+  embedded fields, the field at the shallowest depth decides, as Go does.
+  A handler the check cannot read (one that embeds the generated `Handler`
+  interface, a nil one, a missing `Handler`) reports `implemented` and
+  `operations` as null for that service and never fails the request.
+- The lookup costs about 199 bytes per API operation, not per provider
+  method: the generated `OperationMethod` is one switch arm for every
+  operation of the API whether or not a provider serves it. Measured as the
+  difference in loaded sections (`size -m`, not file size, which moves in
+  16 KB pages and includes DWARF) between builds with and without it:
+  50,710 bytes for sts, sqs and s3, and 29,100 bytes for SSM's 146 operations.
+  The nine APIs generated today (471 operations) project to about 115 KB.
+  That is proportional and small beside the dispatch code already generated
+  per operation, and a committed table kept true by a second generator pass
+  over service code is more machinery than the bytes are worth. The decision is
+  revisited if the total passes 1 MB.
+- `Test_gostack_binaryPrunesMethods` in `cmd/gostack` enforces the reflection
+  rule this depends on (`docs/standards.md`): it reads the symbols of the built
+  binary and fails when the linker has stopped pruning methods.
+
 The developer endpoints mirror LocalStack's `openapi.yaml` and source, with the
 same suffix under both prefixes:
 
