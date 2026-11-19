@@ -117,9 +117,13 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   - A service's own paths are `internal/service/<svc>/` and the generated
     `internal/api/<svc>/` once `internal/service/<svc>/` exists (both also
     select the services whose tests depend on `<svc>`),
-    `parity/ledger/<svc>.json` and `parity/exclusions/<svc>.yaml`.
-    Every service's tests depend on `sts`, so a change there selects every
-    service.
+    `parity/ledger/<svc>.json`, `parity/exclusions/<svc>.yaml` and
+    `cmd/gostack/settings-<svc>.go`, the service's settings mapping. The
+    settings file selects `<svc>` and its dependents even for a service whose
+    Registration sets a routing hook, since it sets none. A dependent selects
+    only once it is built: it has ledger rows or an `internal/service/<svc>/`
+    directory. Every service's tests depend on `sts`, so a change there
+    selects every service.
   - A change under the directories of a service whose Registration sets
     `Mount`, `ClaimHost`, `Claim`, `Fallback` or `Preprocess` selects every
     service: those hooks see requests meant for any service. Today that is
@@ -137,8 +141,13 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     from the hooks `registrations()` sets, when a package outside
     `internal/service/<svc>/` imports `internal/api/<svc>/`, or when the
     `DEPENDS_ON` keys are not the services whose package imports
-    `internal/inproc` or another service's package. Which service an
-    in-process call reaches, and the `sts` entry, are reviewed by hand.
+    `internal/inproc` or another service's package. An entry for a service
+    that has a generated `internal/api/<svc>` and no `internal/service/<svc>`
+    yet is allowed, so the tables are seeded before a service is built; an
+    entry for a service with neither fails, as does a registered service,
+    service package or API package with no `TEST_DIRS` entry. Which service an
+    in-process call reaches, the `sts` entry and the `dynamodb` entry (rerun
+    with `dynamodbstreams`) are reviewed by hand.
     `make test` runs it and needs `python3`.
   - On a pull request, the gostack column the run observed for the selected
     services must equal the ledger committed in the merge ref, in either

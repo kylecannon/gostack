@@ -67,15 +67,17 @@ Commands (standard library only):
            affect (empty when none). A path selects every service unless it
            is one service's own path (and that service is not in
            ROUTING_REACH), a Go test file, or is in NO_IMAGE_EFFECT; see
-           affected_services. --range names the change, so a change to
-           cmd/gostack/services.go that only edits whole registrations()
-           entries and service imports selects the services those lines name
-           instead of every service.
+           affected_services. cmd/gostack/settings-<svc>.go is <svc>'s own
+           path too, whether or not <svc> is in ROUTING_REACH. --range names
+           the change, so a change to cmd/gostack/services.go that only edits
+           whole registrations() entries and service imports selects the
+           services those lines name instead of every service.
     test-dirs SERVICES
            Print the LocalStack test path (tests/aws/services/<dir>) of each
            comma separated service, one per line. parity/run.sh runs these.
-    tables Print DEPENDS_ON and ROUTING_REACH as JSON, for the Go test that
-           checks them against the code (cmd/gostack, Test_parityTables).
+    tables Print DEPENDS_ON, ROUTING_REACH and the services of TEST_DIRS as
+           JSON, for the Go test that checks them against the code
+           (cmd/gostack, Test_parityTables).
 """
 
 from __future__ import annotations
@@ -151,12 +153,24 @@ TEST_DIRS = {
     "transcribe": "transcribe",
 }
 SERVICE_OF_DIR = {directory: name for name, directory in TEST_DIRS.items()}
+# The source and API paths of every service in TEST_DIRS are seeded by name
+# (own_service, settings_service), so a service branch adds no entry here:
+# internal/service/<svc>/, internal/api/<svc>/ and cmd/gostack/settings-<svc>.go
+# select <svc> as soon as the service is built.
 
 # The file that lists the registered services. A changed line of it selects
 # the services it names only when it is one whole element of the list
 # registrations() returns, or an import of a service's package; any other
 # changed line of code selects every service (registration_services).
 REGISTRATION_FILE = "cmd/gostack/services.go"
+# Each service's settings mapping is its own file, so a service branch does not
+# edit the registration file for it: cmd/gostack/settings-<svc>.go, where <svc>
+# is in TEST_DIRS, is that service's own path. A test file of it is not in the
+# binary (GO_TEST_SUFFIX), and the shared cmd/gostack/settings.go is not named
+# like one.
+SETTINGS_DIR = "cmd/gostack/"
+SETTINGS_PREFIX = "settings-"
+SETTINGS_SUFFIX = ".go"
 SERVICE_PACKAGE = "github.com/kylecannon/gostack/internal/service/"
 
 # A change under internal/service/<svc>/ or internal/api/<svc>/ (generated from
@@ -204,7 +218,17 @@ PARITY_WORKFLOW = ".github/workflows/parity.yml"
 # The services whose tests a change to another service can break: each key's
 # tests depend on the services it lists, so a change to one of those selects
 # the key too. EVERY_SERVICE as a key is every service the ledger covers.
-# - s3 delivers event notifications to sqs in this process.
+# The seeded entries are for the services built next, so the branch that builds
+# one edits no table. Test_parityTables accepts an entry whose service has a
+# generated internal/api/<svc> package and no internal/service/<svc> yet, and
+# checks it as it checks the rest once the service exists.
+# - s3 delivers event notifications to sqs in this process, and will call sns
+#   and kms.
+# - sns publishes to sqs in this process.
+# - ssm reads secretsmanager parameters.
+# - dynamodbstreams reads dynamodb's state, and dynamodb writes the stream
+#   records dynamodbstreams serves: a change to either runs both. The dynamodb
+#   entry is in no import, so it stays reviewed by hand (Test_parityTables).
 # - LocalStack's session fixtures account_id and secondary_account_id call
 #   sts.get_caller_identity in every service's test session, so a change to
 #   sts can break any service's tests.
@@ -215,7 +239,11 @@ PARITY_WORKFLOW = ".github/workflows/parity.yml"
 # EVERY_SERVICE entry, are not in the imports; they stay reviewed by hand.
 EVERY_SERVICE = "*"
 DEPENDS_ON = {
-    "s3": ("sqs",),
+    "dynamodb": ("dynamodbstreams",),
+    "dynamodbstreams": ("dynamodb",),
+    "s3": ("kms", "sns", "sqs"),
+    "sns": ("sqs",),
+    "ssm": ("secretsmanager",),
     EVERY_SERVICE: ("sts",),
 }
 
@@ -1120,16 +1148,32 @@ def own_service(path: str) -> str | None:
     return None
 
 
+def settings_service(path: str) -> str | None:
+    """The service of cmd/gostack/settings-<svc>.go, when <svc> is in
+    TEST_DIRS, or None. Any other file of cmd/gostack, settings.go included, is
+    shared."""
+    name = path.removeprefix(SETTINGS_DIR)
+    if not path.startswith(SETTINGS_DIR) or "/" in name:
+        return None
+    if not (name.startswith(SETTINGS_PREFIX) and name.endswith(SETTINGS_SUFFIX)):
+        return None
+    service = name[len(SETTINGS_PREFIX) : -len(SETTINGS_SUFFIX)]
+    return service if service in TEST_DIRS else None
+
+
 def with_dependents(services: set[str], known: set[str]) -> set[str]:
     """services and every service whose tests depend on one of them, following
     DEPENDS_ON to its end. A dependency of EVERY_SERVICE adds every known
-    service."""
+    service. A dependent is added only once it is built: it has ledger rows
+    (known) or a directory under internal/service/. A seeded entry for a
+    service nobody has built selects nothing, since the image does not serve it."""
     selected = set(services)
+    built = set(known) | service_dirs()
     while True:
         dependents: set[str] = set()
         for service, dependencies in DEPENDS_ON.items():
             if selected.intersection(dependencies):
-                dependents |= set(known) if service == EVERY_SERVICE else {service}
+                dependents |= set(known) if service == EVERY_SERVICE else {service} & built
         if dependents <= selected:
             return selected
         selected |= dependents
@@ -1151,27 +1195,35 @@ def affected_services(paths: list[str], known: set[str], registration: set[str] 
     - under internal/service/<svc>/ or internal/api/<svc>/: <svc> and the
       services whose tests depend on it (DEPENDS_ON), or every service when
       <svc> is in ROUTING_REACH;
+    - cmd/gostack/settings-<svc>.go: <svc> and its dependents, as for its
+      directory, but never every service on that account: the file maps
+      configuration onto <svc>'s settings and holds none of its routing
+      hooks, so ROUTING_REACH does not apply to it;
     - parity/ledger/<svc>.json or parity/exclusions/<svc>.yaml: <svc>;
     - REGISTRATION_FILE, when registration holds the services its changed
       lines name (registration_services): those, as if their directories had
       changed. None means the change could not be attributed."""
     code: set[str] = set()
+    settings: set[str] = set()
     files: set[str] = set()
     shared = False
     for path in paths:
         if no_image_effect(path):
             continue
         service = own_service(path)
+        settings_file = settings_service(path)
         ledger_file = parity_file_service(path)
         if service is not None:
             code.add(service)
+        elif settings_file is not None:
+            settings.add(settings_file)
         elif ledger_file is not None:
             files.add(ledger_file)
         elif path == REGISTRATION_FILE and registration is not None:
             code |= registration
         else:
             shared = True
-    affected = with_dependents(code, known) | files
+    affected = with_dependents(code | settings, known) | files
     return set(known) | affected if shared or code.intersection(ROUTING_REACH) else affected
 
 
@@ -1211,6 +1263,7 @@ def tables(args: argparse.Namespace) -> None:
                 "depends_on": {service: list(dependencies) for service, dependencies in DEPENDS_ON.items()},
                 "every_service": EVERY_SERVICE,
                 "routing_reach": list(ROUTING_REACH),
+                "test_dirs": sorted(TEST_DIRS),
             },
             sort_keys=True,
         )

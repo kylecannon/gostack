@@ -394,7 +394,19 @@ derive from `registrations()` (the tests through `RegisteredServices` in
 since parity selection reads a changed line of `services.go` as a change to the
 services it names only when the line is one whole element of that list or a
 service import; a settings function or any other code there selects every
-service. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
+service. So a service branch changes two lines in files other branches also
+change, the import and its `registrations()` line, and nothing else shared: the
+service's settings mapping is a pure `func(*config.Settings) T` in its own
+`cmd/gostack/settings-<svc>.go`, which `liveSettings` wraps on the
+registration line, and parity selection reads a change to that file as a change
+to `<svc>` and its dependents, not to every service. The selection tables in
+`parity/ledger.py` are seeded for `dynamodb`, `dynamodbstreams`, `sns`, `kms`,
+`secretsmanager` and `ssm`: their source and API paths follow from the service
+name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
+`ssm` calls `secretsmanager`, `dynamodb` and `dynamodbstreams` run together, and
+`s3` will call `sns` and `kms`), so no service branch edits a table. A
+dependent that is not built yet, with no ledger rows and no
+`internal/service/<svc>`, selects nothing. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
 `Preprocess` sees other services' requests, so a change to that service
 selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
 `Test_parityTables` holds it to `registrations()`.

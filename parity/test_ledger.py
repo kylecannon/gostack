@@ -907,6 +907,9 @@ class MergeRefTest(unittest.TestCase):
         (self.repo / "specs" / "SOURCES.lock").write_text(f"localstack_sha {'a' * 40}\n", encoding="utf-8")
         (self.repo / "internal" / "service" / "sqs").mkdir(parents=True)
         (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n", encoding="utf-8")
+        # s3 calls sqs, and a dependent is selected once it is built.
+        (self.repo / "internal" / "service" / "s3").mkdir(parents=True)
+        (self.repo / "internal" / "service" / "s3" / "bucket.go").write_text("package s3\n", encoding="utf-8")
         bin_dir = Path(tmp.name).resolve() / "bin"
         bin_dir.mkdir()
         (bin_dir / "make").write_text(MAKE_SHIM, encoding="utf-8")
