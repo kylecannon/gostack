@@ -4,6 +4,7 @@ import (
 	"context"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
+	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 

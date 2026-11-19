@@ -236,7 +236,7 @@ func Test_Decrypt_errors(t *testing.T) {
 	t.Run("a Recipient is not implemented", func(t *testing.T) {
 		r := s.call(usEast1, "Decrypt", map[string]any{
 			fieldCiphertextBlob: b64(blob), fieldEncryptionContext: context,
-			"Recipient": map[string]any{"AttestationDocument": b64([]byte("doc"))},
+			"Recipient": map[string]any{fieldAttestation: b64([]byte("doc"))},
 		})
 		require.Equal(t, http.StatusNotImplemented, r.status)
 	})

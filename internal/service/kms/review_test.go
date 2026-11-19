@@ -11,15 +11,15 @@ import (
 const (
 	opGenerateDataKey     = "GenerateDataKey"
 	opGenerateDataKeyPair = "GenerateDataKeyPair"
-	opDecrypt             = "Decrypt"
 	opReEncrypt           = "ReEncrypt"
 	fieldRecipient        = "Recipient"
+	fieldAttestation      = "AttestationDocument"
 	fieldPrivateKey       = "PrivateKeyPlaintext"
 )
 
 // recipient is a RecipientInfo no operation can honour yet.
 func recipient() map[string]any {
-	return map[string]any{"AttestationDocument": b64([]byte("junk"))}
+	return map[string]any{fieldAttestation: b64([]byte("junk"))}
 }
 
 // Test_Recipient_isNotImplemented holds the ruling Decrypt already follows: a

@@ -399,7 +399,7 @@ func Test_DeriveSharedSecret_errors(t *testing.T) {
 
 	r := s.call(usEast1, "DeriveSharedSecret", map[string]any{
 		fieldKeyID: keyID(t, agreement), fieldAgreement: algorithmECDH, fieldPublicKey: peer,
-		"Recipient": map[string]any{"AttestationDocument": b64([]byte("doc"))},
+		"Recipient": map[string]any{fieldAttestation: b64([]byte("doc"))},
 	})
 	require.Equal(t, http.StatusNotImplemented, r.status)
 }
