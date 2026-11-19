@@ -12,6 +12,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
+	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -169,8 +170,10 @@ func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool)
 func serveBatchExecuteStatement(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readBatchExecuteStatement(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -213,8 +216,10 @@ func writeBatchExecuteStatement(w http.ResponseWriter, rc *request.Context, out 
 func serveBatchGetItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readBatchGetItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -257,8 +262,10 @@ func writeBatchGetItem(w http.ResponseWriter, rc *request.Context, out *BatchGet
 func serveBatchWriteItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readBatchWriteItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -301,8 +308,10 @@ func writeBatchWriteItem(w http.ResponseWriter, rc *request.Context, out *BatchW
 func serveCreateBackup(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateBackup(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -345,8 +354,10 @@ func writeCreateBackup(w http.ResponseWriter, rc *request.Context, out *CreateBa
 func serveCreateGlobalTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateGlobalTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -389,8 +400,10 @@ func writeCreateGlobalTable(w http.ResponseWriter, rc *request.Context, out *Cre
 func serveCreateTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -433,8 +446,10 @@ func writeCreateTable(w http.ResponseWriter, rc *request.Context, out *CreateTab
 func serveDeleteBackup(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteBackup(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -477,8 +492,10 @@ func writeDeleteBackup(w http.ResponseWriter, rc *request.Context, out *DeleteBa
 func serveDeleteItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -521,8 +538,10 @@ func writeDeleteItem(w http.ResponseWriter, rc *request.Context, out *DeleteItem
 func serveDeleteResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteResourcePolicy(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -565,8 +584,10 @@ func writeDeleteResourcePolicy(w http.ResponseWriter, rc *request.Context, out *
 func serveDeleteTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -609,8 +630,10 @@ func writeDeleteTable(w http.ResponseWriter, rc *request.Context, out *DeleteTab
 func serveDescribeBackup(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeBackup(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -653,8 +676,10 @@ func writeDescribeBackup(w http.ResponseWriter, rc *request.Context, out *Descri
 func serveDescribeContinuousBackups(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeContinuousBackups(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -697,8 +722,10 @@ func writeDescribeContinuousBackups(w http.ResponseWriter, rc *request.Context, 
 func serveDescribeContributorInsights(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeContributorInsights(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -780,8 +807,10 @@ func writeDescribeEndpoints(w http.ResponseWriter, rc *request.Context, out *Des
 func serveDescribeExport(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeExport(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -824,8 +853,10 @@ func writeDescribeExport(w http.ResponseWriter, rc *request.Context, out *Descri
 func serveDescribeGlobalTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeGlobalTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -868,8 +899,10 @@ func writeDescribeGlobalTable(w http.ResponseWriter, rc *request.Context, out *D
 func serveDescribeGlobalTableSettings(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeGlobalTableSettings(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -912,8 +945,10 @@ func writeDescribeGlobalTableSettings(w http.ResponseWriter, rc *request.Context
 func serveDescribeImport(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeImport(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -956,8 +991,10 @@ func writeDescribeImport(w http.ResponseWriter, rc *request.Context, out *Descri
 func serveDescribeKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeKinesisStreamingDestination(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1039,8 +1076,10 @@ func writeDescribeLimits(w http.ResponseWriter, rc *request.Context, out *Descri
 func serveDescribeTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1083,8 +1122,10 @@ func writeDescribeTable(w http.ResponseWriter, rc *request.Context, out *Describ
 func serveDescribeTableReplicaAutoScaling(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeTableReplicaAutoScaling(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1127,8 +1168,10 @@ func writeDescribeTableReplicaAutoScaling(w http.ResponseWriter, rc *request.Con
 func serveDescribeTimeToLive(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeTimeToLive(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1171,8 +1214,10 @@ func writeDescribeTimeToLive(w http.ResponseWriter, rc *request.Context, out *De
 func serveDisableKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDisableKinesisStreamingDestination(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1215,8 +1260,10 @@ func writeDisableKinesisStreamingDestination(w http.ResponseWriter, rc *request.
 func serveEnableKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readEnableKinesisStreamingDestination(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1259,8 +1306,10 @@ func writeEnableKinesisStreamingDestination(w http.ResponseWriter, rc *request.C
 func serveExecuteStatement(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readExecuteStatement(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1303,8 +1352,10 @@ func writeExecuteStatement(w http.ResponseWriter, rc *request.Context, out *Exec
 func serveExecuteTransaction(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readExecuteTransaction(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1347,8 +1398,10 @@ func writeExecuteTransaction(w http.ResponseWriter, rc *request.Context, out *Ex
 func serveExportTableToPointInTime(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readExportTableToPointInTime(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1391,8 +1444,10 @@ func writeExportTableToPointInTime(w http.ResponseWriter, rc *request.Context, o
 func serveGetItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1435,8 +1490,10 @@ func writeGetItem(w http.ResponseWriter, rc *request.Context, out *GetItemOutput
 func serveGetResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetResourcePolicy(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1479,8 +1536,10 @@ func writeGetResourcePolicy(w http.ResponseWriter, rc *request.Context, out *Get
 func serveImportTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readImportTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1522,6 +1581,13 @@ func writeImportTable(w http.ResponseWriter, rc *request.Context, out *ImportTab
 
 func serveListBackups(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListBackups(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1561,6 +1627,13 @@ func writeListBackups(w http.ResponseWriter, rc *request.Context, out *ListBacku
 
 func serveListContributorInsights(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListContributorInsights(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1600,6 +1673,13 @@ func writeListContributorInsights(w http.ResponseWriter, rc *request.Context, ou
 
 func serveListExports(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListExports(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1639,6 +1719,13 @@ func writeListExports(w http.ResponseWriter, rc *request.Context, out *ListExpor
 
 func serveListGlobalTables(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListGlobalTables(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1678,6 +1765,13 @@ func writeListGlobalTables(w http.ResponseWriter, rc *request.Context, out *List
 
 func serveListImports(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListImports(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1717,6 +1811,13 @@ func writeListImports(w http.ResponseWriter, rc *request.Context, out *ListImpor
 
 func serveListTables(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListTables(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1757,8 +1858,10 @@ func writeListTables(w http.ResponseWriter, rc *request.Context, out *ListTables
 func serveListTagsOfResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListTagsOfResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1801,8 +1904,10 @@ func writeListTagsOfResource(w http.ResponseWriter, rc *request.Context, out *Li
 func servePutItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPutItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1845,8 +1950,10 @@ func writePutItem(w http.ResponseWriter, rc *request.Context, out *PutItemOutput
 func servePutResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPutResourcePolicy(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1889,8 +1996,10 @@ func writePutResourcePolicy(w http.ResponseWriter, rc *request.Context, out *Put
 func serveQuery(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readQuery(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1933,8 +2042,10 @@ func writeQuery(w http.ResponseWriter, rc *request.Context, out *QueryOutput) {
 func serveRestoreTableFromBackup(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRestoreTableFromBackup(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1977,8 +2088,10 @@ func writeRestoreTableFromBackup(w http.ResponseWriter, rc *request.Context, out
 func serveRestoreTableToPointInTime(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRestoreTableToPointInTime(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2021,8 +2134,10 @@ func writeRestoreTableToPointInTime(w http.ResponseWriter, rc *request.Context, 
 func serveScan(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readScan(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2065,8 +2180,10 @@ func writeScan(w http.ResponseWriter, rc *request.Context, out *ScanOutput) {
 func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTagResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2109,8 +2226,10 @@ func writeTagResource(w http.ResponseWriter, rc *request.Context, out *TagResour
 func serveTransactGetItems(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTransactGetItems(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2153,8 +2272,10 @@ func writeTransactGetItems(w http.ResponseWriter, rc *request.Context, out *Tran
 func serveTransactWriteItems(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTransactWriteItems(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2197,8 +2318,10 @@ func writeTransactWriteItems(w http.ResponseWriter, rc *request.Context, out *Tr
 func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUntagResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2241,8 +2364,10 @@ func writeUntagResource(w http.ResponseWriter, rc *request.Context, out *UntagRe
 func serveUpdateContinuousBackups(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateContinuousBackups(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2285,8 +2410,10 @@ func writeUpdateContinuousBackups(w http.ResponseWriter, rc *request.Context, ou
 func serveUpdateContributorInsights(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateContributorInsights(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2329,8 +2456,10 @@ func writeUpdateContributorInsights(w http.ResponseWriter, rc *request.Context, 
 func serveUpdateGlobalTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateGlobalTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2373,8 +2502,10 @@ func writeUpdateGlobalTable(w http.ResponseWriter, rc *request.Context, out *Upd
 func serveUpdateGlobalTableSettings(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateGlobalTableSettings(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2417,8 +2548,10 @@ func writeUpdateGlobalTableSettings(w http.ResponseWriter, rc *request.Context, 
 func serveUpdateItem(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateItem(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2461,8 +2594,10 @@ func writeUpdateItem(w http.ResponseWriter, rc *request.Context, out *UpdateItem
 func serveUpdateKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateKinesisStreamingDestination(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2505,8 +2640,10 @@ func writeUpdateKinesisStreamingDestination(w http.ResponseWriter, rc *request.C
 func serveUpdateTable(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateTable(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2549,8 +2686,10 @@ func writeUpdateTable(w http.ResponseWriter, rc *request.Context, out *UpdateTab
 func serveUpdateTableReplicaAutoScaling(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateTableReplicaAutoScaling(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2593,8 +2732,10 @@ func writeUpdateTableReplicaAutoScaling(w http.ResponseWriter, rc *request.Conte
 func serveUpdateTimeToLive(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateTimeToLive(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2828,193 +2969,4 @@ func (v *TransactionCanceledException) writeError(w http.ResponseWriter, rc *req
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AttributeDefinition) missingRequired() string {
-	if v.AttributeName == nil {
-		return "AttributeName"
-	}
-	if v.AttributeType == nil {
-		return "AttributeType"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingPolicyDescription) missingRequired() string {
-	if v.TargetTrackingScalingPolicyConfiguration != nil {
-		if member := v.TargetTrackingScalingPolicyConfiguration.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingPolicyUpdate) missingRequired() string {
-	if v.TargetTrackingScalingPolicyConfiguration == nil {
-		return "TargetTrackingScalingPolicyConfiguration"
-	}
-	if v.TargetTrackingScalingPolicyConfiguration != nil {
-		if member := v.TargetTrackingScalingPolicyConfiguration.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingSettingsDescription) missingRequired() string {
-	for _, e1 := range v.ScalingPolicies {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingSettingsUpdate) missingRequired() string {
-	if v.ScalingPolicyUpdate != nil {
-		if member := v.ScalingPolicyUpdate.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingTargetTrackingScalingPolicyConfigurationDescription) missingRequired() string {
-	if v.TargetValue == nil {
-		return "TargetValue"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AutoScalingTargetTrackingScalingPolicyConfigurationUpdate) missingRequired() string {
-	if v.TargetValue == nil {
-		return "TargetValue"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BackupDescription) missingRequired() string {
-	if v.BackupDetails != nil {
-		if member := v.BackupDetails.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.SourceTableDetails != nil {
-		if member := v.SourceTableDetails.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.SourceTableFeatureDetails != nil {
-		if member := v.SourceTableFeatureDetails.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BackupDetails) missingRequired() string {
-	if v.BackupArn == nil {
-		return "BackupArn"
-	}
-	if v.BackupName == nil {
-		return "BackupName"
-	}
-	if v.BackupStatus == nil {
-		return "BackupStatus"
-	}
-	if v.BackupType == nil {
-		return "BackupType"
-	}
-	if v.BackupCreationDateTime == nil {
-		return "BackupCreationDateTime"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchExecuteStatementInput) missingRequired() string {
-	if v.Statements == nil {
-		return "Statements"
-	}
-	for _, e1 := range v.Statements {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchGetItemInput) missingRequired() string {
-	if v.RequestItems == nil {
-		return "RequestItems"
-	}
-	for _, e1 := range v.RequestItems {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchGetItemOutput) missingRequired() string {
-	for _, e1 := range v.UnprocessedKeys {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchStatementRequest) missingRequired() string {
-	if v.Statement == nil {
-		return "Statement"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchWriteItemInput) missingRequired() string {
-	if v.RequestItems == nil {
-		return "RequestItems"
-	}
-	for _, e1 := range v.RequestItems {
-		for _, e2 := range e1 {
-			if member := e2.missingRequired(); member != "" {
-				return member
-			}
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchWriteItemOutput) missingRequired() string {
-	for _, e1 := range v.UnprocessedItems {
-		for _, e2 := range e1 {
-			if member := e2.missingRequired(); member != "" {
-				return member
-			}
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *Condition) missingRequired() string {
-	if v.ComparisonOperator == nil {
-		return "ComparisonOperator"
-	}
-	return ""
 }

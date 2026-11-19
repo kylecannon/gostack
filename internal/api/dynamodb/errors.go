@@ -4,6 +4,7 @@ package dynamodb
 
 import (
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 
 // NewBackupInUseException returns the BackupInUseException error with the given message.
@@ -371,11 +372,11 @@ func NewTransactionInProgressException(msg string) *awserr.Error {
 	}
 }
 
-// newMissingRequired returns the error for a request that lacks a required member.
-func newMissingRequired(member string) *awserr.Error {
+// newValidationError returns the error for a request that breaks the constraints r lists.
+func newValidationError(r *constraint.Report) *awserr.Error {
 	return &awserr.Error{
-		Code:       "ValidationError",
-		Message:    "The request must contain the parameter " + member + ".",
+		Code:       "ValidationException",
+		Message:    r.Message(),
 		StatusCode: 400,
 		Fault:      awserr.FaultSender,
 	}

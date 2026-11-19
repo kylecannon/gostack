@@ -280,6 +280,7 @@ func Test_files_JSONAndQuerySeams(t *testing.T) {
 	}{
 		{"jsonone", jsonOneModel, serviceOptions{Unions: true, UnionShapes: []string{attributeValue}}, jsonOneTest},
 		{"queryone", queryOneModel, serviceOptions{}, queryOneTest},
+		{"validone", validOneModel, validOneOptions, validOneTest},
 	}
 
 	pkgs := make([]string, 0, len(cases))

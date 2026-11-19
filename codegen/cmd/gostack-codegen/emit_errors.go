@@ -141,7 +141,11 @@ func (g *generator) errorsFile() (string, error) {
 		}
 	}
 
-	g.missingRequiredFunc(p)
+	if g.opts.Validation != nil {
+		g.validationErrorFunc(p)
+	} else {
+		g.missingRequiredFunc(p)
+	}
 
 	return p.buf.String(), nil
 }

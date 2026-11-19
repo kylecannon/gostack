@@ -30,25 +30,26 @@ func (p *printer) blank() {
 // importPaths maps the package names generated code uses to their import
 // paths. A file imports the ones whose name it mentions.
 var importPaths = map[string]string{
-	"awsjson":  "github.com/kylecannon/gostack/internal/protocol/awsjson",
-	"awserr":   "github.com/kylecannon/gostack/internal/awserr",
-	"bytes":    "bytes",
-	"context":  "context",
-	"errors":   "errors",
-	"http":     "net/http",
-	"io":       "io",
-	"jsontext": "encoding/json/jsontext",
-	"maps":     "maps",
-	"protocol": "github.com/kylecannon/gostack/internal/protocol",
-	"query":    "github.com/kylecannon/gostack/internal/protocol/query",
-	"request":  "github.com/kylecannon/gostack/internal/request",
-	"rest":     "github.com/kylecannon/gostack/internal/protocol/rest",
-	"restxml":  "github.com/kylecannon/gostack/internal/protocol/restxml",
-	"service":  "github.com/kylecannon/gostack/internal/service",
-	"slices":   "slices",
-	"strings":  "strings",
-	"url":      "net/url",
-	"utf8":     "unicode/utf8",
+	"awsjson":    "github.com/kylecannon/gostack/internal/protocol/awsjson",
+	"awserr":     "github.com/kylecannon/gostack/internal/awserr",
+	"bytes":      "bytes",
+	"constraint": "github.com/kylecannon/gostack/internal/protocol/constraint",
+	"context":    "context",
+	"errors":     "errors",
+	"http":       "net/http",
+	"io":         "io",
+	"jsontext":   "encoding/json/jsontext",
+	"maps":       "maps",
+	"protocol":   "github.com/kylecannon/gostack/internal/protocol",
+	"query":      "github.com/kylecannon/gostack/internal/protocol/query",
+	"request":    "github.com/kylecannon/gostack/internal/request",
+	"rest":       "github.com/kylecannon/gostack/internal/protocol/rest",
+	"restxml":    "github.com/kylecannon/gostack/internal/protocol/restxml",
+	"service":    "github.com/kylecannon/gostack/internal/service",
+	"slices":     "slices",
+	"strings":    "strings",
+	"url":        "net/url",
+	"utf8":       "unicode/utf8",
 }
 
 // literals matches what is not code: line comments, interpreted strings and raw
@@ -134,6 +135,10 @@ func (g *generator) files() (map[string][]byte, error) {
 	} else {
 		bodies["codec_json.go"] = g.jsonFile
 		bodies["codec_query.go"] = g.queryFile
+	}
+
+	if g.opts.Validation != nil {
+		bodies["validate.go"] = g.validateFile
 	}
 
 	out := make(map[string][]byte, len(bodies))

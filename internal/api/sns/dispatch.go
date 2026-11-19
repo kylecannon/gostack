@@ -9,6 +9,7 @@ import (
 
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -146,8 +147,10 @@ func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool)
 func serveAddPermission(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readAddPermission(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -196,8 +199,10 @@ func writeAddPermission(w http.ResponseWriter, rc *request.Context, out *AddPerm
 func serveCheckIfPhoneNumberIsOptedOut(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCheckIfPhoneNumberIsOptedOut(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -246,8 +251,10 @@ func writeCheckIfPhoneNumberIsOptedOut(w http.ResponseWriter, rc *request.Contex
 func serveConfirmSubscription(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readConfirmSubscription(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -296,8 +303,10 @@ func writeConfirmSubscription(w http.ResponseWriter, rc *request.Context, out *C
 func serveCreatePlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreatePlatformApplication(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -346,8 +355,10 @@ func writeCreatePlatformApplication(w http.ResponseWriter, rc *request.Context, 
 func serveCreatePlatformEndpoint(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreatePlatformEndpoint(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -396,8 +407,10 @@ func writeCreatePlatformEndpoint(w http.ResponseWriter, rc *request.Context, out
 func serveCreateSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateSMSSandboxPhoneNumber(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -446,8 +459,10 @@ func writeCreateSMSSandboxPhoneNumber(w http.ResponseWriter, rc *request.Context
 func serveCreateTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateTopic(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -496,8 +511,10 @@ func writeCreateTopic(w http.ResponseWriter, rc *request.Context, out *CreateTop
 func serveDeleteEndpoint(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteEndpoint(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -546,8 +563,10 @@ func writeDeleteEndpoint(w http.ResponseWriter, rc *request.Context, out *Delete
 func serveDeletePlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeletePlatformApplication(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -596,8 +615,10 @@ func writeDeletePlatformApplication(w http.ResponseWriter, rc *request.Context, 
 func serveDeleteSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteSMSSandboxPhoneNumber(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -646,8 +667,10 @@ func writeDeleteSMSSandboxPhoneNumber(w http.ResponseWriter, rc *request.Context
 func serveDeleteTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteTopic(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -696,8 +719,10 @@ func writeDeleteTopic(w http.ResponseWriter, rc *request.Context, out *DeleteTop
 func serveGetDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetDataProtectionPolicy(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -746,8 +771,10 @@ func writeGetDataProtectionPolicy(w http.ResponseWriter, rc *request.Context, ou
 func serveGetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetEndpointAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -796,8 +823,10 @@ func writeGetEndpointAttributes(w http.ResponseWriter, rc *request.Context, out 
 func serveGetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetPlatformApplicationAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -936,8 +965,10 @@ func writeGetSMSSandboxAccountStatus(w http.ResponseWriter, rc *request.Context,
 func serveGetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetSubscriptionAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -986,8 +1017,10 @@ func writeGetSubscriptionAttributes(w http.ResponseWriter, rc *request.Context, 
 func serveGetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetTopicAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1036,8 +1069,10 @@ func writeGetTopicAttributes(w http.ResponseWriter, rc *request.Context, out *Ge
 func serveListEndpointsByPlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListEndpointsByPlatformApplication(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1085,6 +1120,13 @@ func writeListEndpointsByPlatformApplication(w http.ResponseWriter, rc *request.
 
 func serveListOriginationNumbers(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListOriginationNumbers(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1220,6 +1262,13 @@ func writeListPlatformApplications(w http.ResponseWriter, rc *request.Context, o
 
 func serveListSMSSandboxPhoneNumbers(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListSMSSandboxPhoneNumbers(rc)
+	if err == nil && validate {
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
+		}
+	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1311,8 +1360,10 @@ func writeListSubscriptions(w http.ResponseWriter, rc *request.Context, out *Lis
 func serveListSubscriptionsByTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListSubscriptionsByTopic(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1361,8 +1412,10 @@ func writeListSubscriptionsByTopic(w http.ResponseWriter, rc *request.Context, o
 func serveListTagsForResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListTagsForResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1456,8 +1509,10 @@ func writeListTopics(w http.ResponseWriter, rc *request.Context, out *ListTopics
 func serveOptInPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readOptInPhoneNumber(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1506,8 +1561,10 @@ func writeOptInPhoneNumber(w http.ResponseWriter, rc *request.Context, out *OptI
 func servePublish(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublish(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1556,8 +1613,10 @@ func writePublish(w http.ResponseWriter, rc *request.Context, out *PublishOutput
 func servePublishBatch(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublishBatch(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1606,8 +1665,10 @@ func writePublishBatch(w http.ResponseWriter, rc *request.Context, out *PublishB
 func servePutDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPutDataProtectionPolicy(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1656,8 +1717,10 @@ func writePutDataProtectionPolicy(w http.ResponseWriter, rc *request.Context, ou
 func serveRemovePermission(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRemovePermission(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1706,8 +1769,10 @@ func writeRemovePermission(w http.ResponseWriter, rc *request.Context, out *Remo
 func serveSetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetEndpointAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1756,8 +1821,10 @@ func writeSetEndpointAttributes(w http.ResponseWriter, rc *request.Context, out 
 func serveSetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetPlatformApplicationAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1806,8 +1873,10 @@ func writeSetPlatformApplicationAttributes(w http.ResponseWriter, rc *request.Co
 func serveSetSMSAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetSMSAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1856,8 +1925,10 @@ func writeSetSMSAttributes(w http.ResponseWriter, rc *request.Context, out *SetS
 func serveSetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetSubscriptionAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1906,8 +1977,10 @@ func writeSetSubscriptionAttributes(w http.ResponseWriter, rc *request.Context, 
 func serveSetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetTopicAttributes(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -1956,8 +2029,10 @@ func writeSetTopicAttributes(w http.ResponseWriter, rc *request.Context, out *Se
 func serveSubscribe(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSubscribe(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2006,8 +2081,10 @@ func writeSubscribe(w http.ResponseWriter, rc *request.Context, out *SubscribeOu
 func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTagResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2056,8 +2133,10 @@ func writeTagResource(w http.ResponseWriter, rc *request.Context, out *TagResour
 func serveUnsubscribe(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUnsubscribe(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2106,8 +2185,10 @@ func writeUnsubscribe(w http.ResponseWriter, rc *request.Context, out *Unsubscri
 func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUntagResource(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2156,8 +2237,10 @@ func writeUntagResource(w http.ResponseWriter, rc *request.Context, out *UntagRe
 func serveVerifySMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readVerifySMSSandboxPhoneNumber(rc)
 	if err == nil && validate {
-		if member := in.missingRequired(); member != "" {
-			err = newMissingRequired(member)
+		var r constraint.Report
+		in.validate(&r, nil)
+		if r.Failed() {
+			err = newValidationError(&r)
 		}
 	}
 	if err != nil {
@@ -2278,443 +2361,4 @@ func (v *VerificationException) writeError(w http.ResponseWriter, rc *request.Co
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *AddPermissionInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.Label == nil {
-		return "Label"
-	}
-	if v.AWSAccountId == nil {
-		return "AWSAccountId"
-	}
-	if v.ActionName == nil {
-		return "ActionName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *BatchResultErrorEntry) missingRequired() string {
-	if v.Id == nil {
-		return "Id"
-	}
-	if v.Code == nil {
-		return "Code"
-	}
-	if v.SenderFault == nil {
-		return "SenderFault"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CheckIfPhoneNumberIsOptedOutInput) missingRequired() string {
-	if v.PhoneNumber == nil {
-		return "phoneNumber"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ConfirmSubscriptionInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.Token == nil {
-		return "Token"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreatePlatformApplicationInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.Platform == nil {
-		return "Platform"
-	}
-	if v.Attributes == nil {
-		return "Attributes"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreatePlatformEndpointInput) missingRequired() string {
-	if v.PlatformApplicationArn == nil {
-		return "PlatformApplicationArn"
-	}
-	if v.Token == nil {
-		return "Token"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateSMSSandboxPhoneNumberInput) missingRequired() string {
-	if v.PhoneNumber == nil {
-		return "PhoneNumber"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateTopicInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	for _, e1 := range v.Tags {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *DeleteEndpointInput) missingRequired() string {
-	if v.EndpointArn == nil {
-		return "EndpointArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *DeletePlatformApplicationInput) missingRequired() string {
-	if v.PlatformApplicationArn == nil {
-		return "PlatformApplicationArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *DeleteSMSSandboxPhoneNumberInput) missingRequired() string {
-	if v.PhoneNumber == nil {
-		return "PhoneNumber"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *DeleteTopicInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetDataProtectionPolicyInput) missingRequired() string {
-	if v.ResourceArn == nil {
-		return "ResourceArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetEndpointAttributesInput) missingRequired() string {
-	if v.EndpointArn == nil {
-		return "EndpointArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetPlatformApplicationAttributesInput) missingRequired() string {
-	if v.PlatformApplicationArn == nil {
-		return "PlatformApplicationArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetSMSSandboxAccountStatusOutput) missingRequired() string {
-	if v.IsInSandbox == nil {
-		return "IsInSandbox"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetSubscriptionAttributesInput) missingRequired() string {
-	if v.SubscriptionArn == nil {
-		return "SubscriptionArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *GetTopicAttributesInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListEndpointsByPlatformApplicationInput) missingRequired() string {
-	if v.PlatformApplicationArn == nil {
-		return "PlatformApplicationArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListSMSSandboxPhoneNumbersOutput) missingRequired() string {
-	if v.PhoneNumbers == nil {
-		return "PhoneNumbers"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListSubscriptionsByTopicInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListTagsForResourceInput) missingRequired() string {
-	if v.ResourceArn == nil {
-		return "ResourceArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListTagsForResourceOutput) missingRequired() string {
-	for _, e1 := range v.Tags {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *MessageAttributeValue) missingRequired() string {
-	if v.DataType == nil {
-		return "DataType"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OptInPhoneNumberInput) missingRequired() string {
-	if v.PhoneNumber == nil {
-		return "phoneNumber"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PublishBatchInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.PublishBatchRequestEntries == nil {
-		return "PublishBatchRequestEntries"
-	}
-	for _, e1 := range v.PublishBatchRequestEntries {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PublishBatchOutput) missingRequired() string {
-	for _, e1 := range v.Failed {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PublishBatchRequestEntry) missingRequired() string {
-	if v.Id == nil {
-		return "Id"
-	}
-	if v.Message == nil {
-		return "Message"
-	}
-	for _, e1 := range v.MessageAttributes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PublishInput) missingRequired() string {
-	if v.Message == nil {
-		return "Message"
-	}
-	for _, e1 := range v.MessageAttributes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PutDataProtectionPolicyInput) missingRequired() string {
-	if v.ResourceArn == nil {
-		return "ResourceArn"
-	}
-	if v.DataProtectionPolicy == nil {
-		return "DataProtectionPolicy"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *RemovePermissionInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.Label == nil {
-		return "Label"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SetEndpointAttributesInput) missingRequired() string {
-	if v.EndpointArn == nil {
-		return "EndpointArn"
-	}
-	if v.Attributes == nil {
-		return "Attributes"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SetPlatformApplicationAttributesInput) missingRequired() string {
-	if v.PlatformApplicationArn == nil {
-		return "PlatformApplicationArn"
-	}
-	if v.Attributes == nil {
-		return "Attributes"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SetSMSAttributesInput) missingRequired() string {
-	if v.Attributes == nil {
-		return "attributes"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SetSubscriptionAttributesInput) missingRequired() string {
-	if v.SubscriptionArn == nil {
-		return "SubscriptionArn"
-	}
-	if v.AttributeName == nil {
-		return "AttributeName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SetTopicAttributesInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.AttributeName == nil {
-		return "AttributeName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *SubscribeInput) missingRequired() string {
-	if v.TopicArn == nil {
-		return "TopicArn"
-	}
-	if v.Protocol == nil {
-		return "Protocol"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *Tag) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Value == nil {
-		return "Value"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *TagResourceInput) missingRequired() string {
-	if v.ResourceArn == nil {
-		return "ResourceArn"
-	}
-	if v.Tags == nil {
-		return "Tags"
-	}
-	for _, e1 := range v.Tags {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *UnsubscribeInput) missingRequired() string {
-	if v.SubscriptionArn == nil {
-		return "SubscriptionArn"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *UntagResourceInput) missingRequired() string {
-	if v.ResourceArn == nil {
-		return "ResourceArn"
-	}
-	if v.TagKeys == nil {
-		return "TagKeys"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *VerificationException) missingRequired() string {
-	if v.Status == nil {
-		return "Status"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *VerifySMSSandboxPhoneNumberInput) missingRequired() string {
-	if v.PhoneNumber == nil {
-		return "PhoneNumber"
-	}
-	if v.OneTimePassword == nil {
-		return "OneTimePassword"
-	}
-	return ""
 }

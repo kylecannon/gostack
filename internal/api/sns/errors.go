@@ -4,6 +4,7 @@ package sns
 
 import (
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 
 // NewAuthorizationErrorException returns the AuthorizationErrorException error with the given message.
@@ -351,11 +352,11 @@ func (v *VerificationException) Err(msg string) error {
 	return &modeledError{err: NewVerificationException(msg), members: v}
 }
 
-// newMissingRequired returns the error for a request that lacks a required member.
-func newMissingRequired(member string) *awserr.Error {
+// newValidationError returns the error for a request that breaks the constraints r lists.
+func newValidationError(r *constraint.Report) *awserr.Error {
 	return &awserr.Error{
 		Code:       "ValidationError",
-		Message:    "The request must contain the parameter " + member + ".",
+		Message:    r.Message(),
 		StatusCode: 400,
 		Fault:      awserr.FaultSender,
 	}

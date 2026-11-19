@@ -91,6 +91,9 @@ type structType struct {
 	decodes    bool
 	encodes    bool
 	needsCheck bool
+	// validates marks a struct below an operation input that gets a validate
+	// method, for a service with the Validation option.
+	validates bool
 	// union marks a struct that gets MembersSet: a union shape of a service
 	// whose options ask for them, or one of its UnionShapes.
 	union bool
@@ -252,6 +255,10 @@ func newModel(name string, opts serviceOptions, p, q *spec.Service) (*generator,
 		return nil, fmt.Errorf("%s: a rest protocol with another one, %v, is not supported", name, g.protocols)
 	}
 
+	if opts.Validation != nil && g.isRest() {
+		return nil, fmt.Errorf("%s: the Validation option is not supported on a rest protocol", name)
+	}
+
 	err := g.build()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -289,6 +296,7 @@ func (g *generator) build() error {
 
 	g.markReachable()
 	g.markChecks()
+	g.markValidation()
 
 	return g.markUnions()
 }

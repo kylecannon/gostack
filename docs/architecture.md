@@ -292,6 +292,21 @@ written by hand.
 - **Unions:** `Unions` and `UnionShapes` in `serviceTable` give a structure a
   `MembersSet() int` that counts the members present, for the handler's
   exactly-one check. They are off by default.
+- **Constraint checks:** `Validation` in `serviceTable` gives every struct
+  below an operation input a `validate` method generated from the model's
+  `required`, `min`, `max`, `enum` and `pattern` traits, and makes
+  `ServeValidated` answer every failure at once in AWS's text, `N validation
+  errors detected: Value 'x' at 'tags.1.member.tagKey' failed to satisfy
+  constraint: Member must ...`, joined by `; ` in model order. The code is
+  `ValidationException` unless the option names another; `Enums` replaces
+  an enum's printed value list where AWS prints another one. The message form
+  lives in `internal/protocol/constraint`. Patterns Go's regexp cannot
+  compile, and the constraints of scalar list elements and map keys and
+  values, are left unchecked and listed at the top of the generated
+  `validate.go`. kms, dynamodb and sns have it on; the table tests beside
+  their packages reproduce every such message in LocalStack's snapshots for
+  them. Without the option, `ServeValidated` keeps the first-missing-member
+  check SQS uses.
 
 #### REST routing and sharding
 

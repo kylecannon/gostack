@@ -42,6 +42,28 @@ type serviceOptions struct {
 	// service treats as one, and that get MembersSet as well: DynamoDB's
 	// AttributeValue.
 	UnionShapes []string
+	// Validation makes ServeValidated check the model's required, min, max,
+	// enum and pattern traits, and answer every failure at once in AWS's
+	// "N validation errors detected" message, in place of the first missing
+	// member. A nil value keeps the missing-member check.
+	Validation *validation
+}
+
+// validation is how a service reports the constraints a request breaks.
+type validation struct {
+	// Code is the error code, ValidationException when empty.
+	Code string
+	// Enums replaces, keyed by enum shape, the value list a failed enum check
+	// prints, where AWS prints another order or set than the model's.
+	Enums map[string]enumText
+}
+
+// enumText is the value list an enum check prints in place of the model's.
+type enumText struct {
+	Values []string
+	// Narrow makes the check accept only Values, for an enum where AWS
+	// rejects a value the model lists.
+	Narrow bool
 }
 
 // missingParam names the error for a missing required member.
@@ -66,12 +88,28 @@ var serviceTable = map[string]serviceOptions{
 		// An AttributeValue sets exactly one of its members, which the model
 		// does not say: DynamoDB answers a ValidationException for none or two.
 		UnionShapes: []string{"AttributeValue"},
+		Validation:  &validation{},
 	},
 	"dynamodbstreams": {},
-	"sns":             {},
-	"kms":             {},
-	"secretsmanager":  {},
-	"ssm":             {Unions: true},
+	// test_sns.py's platform-application and message-attribute snapshots
+	// answer ValidationError, the query form of the code.
+	"sns": {Validation: &validation{Code: "ValidationError"}},
+	"kms": {Validation: &validation{Enums: map[string]enumText{
+		// test_kms.py::TestKMS::test_hmac_create_key_invalid_operations,
+		// create-hmac-key-invalid-key-usage: no KEY_AGREEMENT.
+		"KeyUsageType": {Values: []string{"ENCRYPT_DECRYPT", "SIGN_VERIFY", "GENERATE_VERIFY_MAC"}},
+		// The same test, create-hmac-key-invalid-spec: none of SM2, ML_DSA_*
+		// or ECC_NIST_EDWARDS25519.
+		"KeySpec": {Values: []string{
+			"RSA_2048", "ECC_NIST_P384", "ECC_NIST_P256", "ECC_NIST_P521", "HMAC_384", "RSA_3072",
+			"ECC_SECG_P256K1", "RSA_4096", "SYMMETRIC_DEFAULT", "HMAC_256", "HMAC_224", "HMAC_512",
+		}},
+		// test_kms.py::TestKMS::test_invalid_generate_mac, generate-mac, and
+		// test_invalid_verify_mac, verify-mac.
+		"MacAlgorithmSpec": {Values: []string{"HMAC_SHA_384", "HMAC_SHA_256", "HMAC_SHA_224", "HMAC_SHA_512"}},
+	}}},
+	"secretsmanager": {},
+	"ssm":            {Unions: true},
 	// apigatewayv2 is not in the Makefile's GEN_SERVICES: it is here to prove
 	// that a model with a Route shape generates a package that builds.
 	"apigatewayv2": {},

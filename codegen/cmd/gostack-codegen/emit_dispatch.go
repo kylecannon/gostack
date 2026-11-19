@@ -33,7 +33,13 @@ func (g *generator) dispatchFile() (string, error) {
 
 	g.emitHelpers(p)
 
+	// The validate methods of a service with the Validation option replace
+	// missingRequired.
 	for _, st := range g.sortedStructs() {
+		if g.opts.Validation != nil {
+			break
+		}
+
 		err := g.emitMissingRequired(p, st)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", st.goName, err)
@@ -124,12 +130,24 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 	p.f("func serve%s(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {", op.name)
 	p.f("\tin, err := read%s(rc)", op.name)
 
-	if in.needsCheck {
+	switch {
+	case g.opts.Validation != nil:
+		if in.validates {
+			p.f("\tif err == nil && validate {")
+			p.f("\t\tvar r constraint.Report")
+			p.f("\t\tin.validate(&r, nil)")
+			p.f("\t\tif r.Failed() {")
+			p.f("\t\t\terr = newValidationError(&r)")
+			p.f("\t\t}")
+			p.f("\t}")
+		}
+	case in.needsCheck:
 		p.f("\tif err == nil && validate {")
 		p.f("\t\tif member := in.missingRequired(); member != \"\" {")
 		p.f("\t\t\terr = newMissingRequired(member)")
 		p.f("\t\t}")
 		p.f("\t}")
+	default: // nothing to check
 	}
 
 	p.f("\tif err != nil {")
