@@ -499,6 +499,50 @@ notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
 the lane of the queue's ARN, so the events for one queue arrive in the order
 they were raised and a slow queue holds up no other.
 
+### SNS delivery (`internal/service/sns/lanes.go`)
+
+SNS delivers through lanes of its own, one per destination: a subscribed
+queue, or a dead-letter queue. A destination's deliveries are sent one at a
+time, in the order they entered its lane.
+
+- **Order.** A publish adds its deliveries to their lanes under the topic's
+  lock, and a FIFO topic's under its FIFO lock as well, so the deliveries to
+  one queue keep publish order. Nothing is sent and nothing waits under either
+  lock.
+- **Bound.** A lane holds 256 deliveries (`laneDepth`), the one being sent
+  included. A publish whose lane is full adds its delivery past them, in
+  order, and waits, with no lock held, until the delivery is admitted. One
+  deadline of 10 s (`roomWait`) covers all of a publish's deliveries. A
+  delivery still waiting then fails: it goes to its subscription's dead-letter
+  queue if that queue's lane has room, or is dropped and counted in
+  `Dropped`. Publish answers 200 with its MessageId either way, since a 5xx
+  would make an SDK retry and duplicate the message for every other
+  subscriber. The choice to wait rather than drop is `mayWait`, one function.
+- **Failure.** A delivery SQS refuses goes to its dead-letter queue through
+  that queue's lane, or is dropped. When the dead-letter lane is full, the
+  failed delivery's own lane pauses until it has room, up to the same
+  deadline; nothing blocks. A dead-letter delivery that fails is dropped,
+  never sent to another dead-letter queue. Failed deliveries are logged once
+  per destination every 5 s, with counts.
+- **No idle work.** A lane has no goroutine. Its head is a `SendMessage`
+  queued on the in-process client, and the answer sends the next, so a lane
+  with work always has a call in the client and an empty lane is gone. A
+  stuck destination holds one client worker; the others serve every other
+  lane. When the client's queue is full, the lane waits for the next answer.
+- **Shutdown.** The gateway's `Shutdown` call lifts the bound: every waiting
+  delivery is admitted and none waits from then on, so the publishes still in
+  flight are answered and their deliveries are made in the drain. `Close`
+  refuses later publishes, each counted and logged as dropped, waits until
+  its deadline for the lanes to empty, then stops the client and counts what
+  is left. A call the client dropped without an answer, as a drain of the
+  in-process calls does at its deadline, is found at once (SNS holds a head
+  while the client is idle), so `Close` does not wait for it.
+- **Other transports.** A lane meets its transport in one function,
+  `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
+  destination's head would be sent on a goroutine that lives for that send,
+  with its own timeout and retries, and answer the same way; the bound, the
+  order, the deadline and the shutdown stay as they are.
+
 ### Body store (`internal/blob`)
 
 S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,

@@ -194,6 +194,7 @@ func (ls *lanes) dispatch(jobs []*job) {
 	var waiting []*job
 
 	ls.mu.Lock()
+	wait := ls.wait
 
 	for _, j := range jobs {
 		if j.lane == nil {
@@ -213,7 +214,7 @@ func (ls *lanes) dispatch(jobs []*job) {
 		return
 	}
 
-	deadline := time.NewTimer(ls.wait)
+	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 
 	for i, j := range waiting {
@@ -251,7 +252,7 @@ func (ls *lanes) expire(j *job) {
 // and the lane is parked until an answer frees room; with none, the client
 // was stopped, and every delivery in the lane is cut.
 func (ls *lanes) start(l *lane) {
-	if l.sending || l.parked || l.held != nil || len(l.jobs) == 0 {
+	if ls.closed || l.sending || l.parked || l.held != nil || len(l.jobs) == 0 {
 		ls.tidy(l)
 
 		return
@@ -260,7 +261,7 @@ func (ls *lanes) start(l *lane) {
 	l.sending = true
 	ls.inflight++
 
-	if ls.client.Enqueue(l.jobs[0].call, l.done) {
+	if ls.send(l) {
 		return
 	}
 
@@ -281,6 +282,14 @@ func (ls *lanes) start(l *lane) {
 	}
 
 	ls.tidy(l)
+}
+
+// send hands l's head to its transport, which answers through l.done, on a
+// goroutine of its own, and never blocks; it reports whether the transport
+// took it. It is the one place a lane meets a transport: an SQS SendMessage
+// queued on the in-process client, which counts in inflight.
+func (ls *lanes) send(l *lane) bool {
+	return ls.client.Enqueue(l.jobs[0].call, l.done)
 }
 
 // answered is the transport's answer to l's head, on the client's worker. It

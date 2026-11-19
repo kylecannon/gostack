@@ -266,3 +266,59 @@ func benchPublishBatch(b *testing.B, c publishCell) {
 		b.Fatalf("%d deliveries dropped", dropped)
 	}
 }
+
+// BenchmarkPublishBurst times a burst: publishers PublishBatch calls of ten
+// small raw messages at once, each publisher sending batches of them, to a
+// standard topic, and every delivery. One burst of 16 publishers at 100
+// subscribers owes 160,000 deliveries; any dropped fails the benchmark, which
+// is the loss one shared 4,096-entry queue had.
+//
+//	BenchmarkPublishBurst/subscribers=100/publishers=16/batches=10
+func BenchmarkPublishBurst(b *testing.B) {
+	for _, subscribers := range []int{10, 100} {
+		for _, publishers := range []int{1, 16} {
+			name := fmt.Sprintf("subscribers=%d/publishers=%d/batches=10", subscribers, publishers)
+			b.Run(name, func(b *testing.B) { benchPublishBurst(b, subscribers, publishers, 10) })
+		}
+	}
+}
+
+func benchPublishBurst(b *testing.B, subscribers, publishers, batches int) {
+	pb := newPublishBench(b, publishCell{subscribers: subscribers, raw: true, payload: 256})
+	message := strings.Repeat("m", 256)
+
+	forms := make([]string, publishers)
+	for p := range forms {
+		params := make([]string, 0, 2+benchBatchEntries*4)
+		params = append(params, paramTopicArn, pb.topic)
+
+		for i := range benchBatchEntries {
+			params = append(params, entry(i+1, strconv.Itoa(i), message+strconv.Itoa(p))...)
+		}
+
+		forms[p] = queryForm(opPublishBatch, params...).Encode()
+	}
+
+	b.SetBytes(int64(256 * benchBatchEntries * publishers * batches))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var fail failed
+
+		fanOut(publishers, func(p int) {
+			for range batches {
+				fail.check(pb.call(forms[p]))
+			}
+		})
+
+		if fail.msg != "" {
+			b.Fatal("PublishBatch answered " + fail.msg)
+		}
+
+		pb.provider.AwaitDeliveries(b.Context())
+	}
+
+	if dropped := pb.provider.Dropped(); dropped != 0 {
+		b.Fatalf("%d deliveries dropped", dropped)
+	}
+}

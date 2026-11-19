@@ -218,6 +218,12 @@ are listed at `/_gostack/services/sns/platform-endpoint-messages` and
 `GOSTACK_COMPAT_PATHS=0`), and `POST /_gostack/services/sns/phone-opt-outs` opts a
 number out.
 
+## SNS delivery
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| Deliveries waiting to be sent | Queued without bound on its executor: a publish never waits, and memory grows while a destination is slow | Each destination (a queue, or a dead-letter queue) holds up to 256 deliveries. A publish whose destination is full waits for room, up to 10 s for all of its deliveries; one still waiting then goes to its subscription's dead-letter queue, or is dropped and counted, and the publish still answers 200 | SQ-288 ruling: a delivery to a healthy destination is never dropped, and memory stays bounded. Model in `architecture.md`, "SNS delivery". |
+
 ## Accepted LocalStack-only behavior
 
 gostack copies these although AWS does not have them. Each is a LocalStack switch
