@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"iter"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -62,15 +64,16 @@ func (n *namer) add(id string) {
 	n.mu.Unlock()
 }
 
-// syncRecord is one fsync of an asset or a fanout directory, with the state file
-// on disk when it ran.
+// syncRecord is one sync, with the paths it made durable and the state file on
+// disk when it ran. A per-file fsync covers its one file or directory; a
+// syncfs covers every path in the assets directory at the time.
 type syncRecord struct {
-	path   string
+	paths  []string
 	onDisk string
 }
 
-// recordSyncs replaces the fsync of a with one that records each call and the
-// state file on disk at the time.
+// recordSyncs replaces the sync of a with one that records each call and the
+// state file on disk at the time, then runs the real sync.
 func recordSyncs(a *Assets, stateFile string) func() []syncRecord {
 	var (
 		mu      sync.Mutex
@@ -83,11 +86,16 @@ func recordSyncs(a *Assets, stateFile string) func() []syncRecord {
 			return err //nolint:wrapcheck // a test double
 		}
 
+		paths, err := syncedPaths(a, f)
+		if err != nil {
+			return err
+		}
+
 		mu.Lock()
-		records = append(records, syncRecord{path: filepath.ToSlash(f.Name()), onDisk: string(onDisk)})
+		records = append(records, syncRecord{paths: paths, onDisk: string(onDisk)})
 		mu.Unlock()
 
-		return f.Sync()
+		return defaultSync(f)
 	}
 
 	return func() []syncRecord {
@@ -171,13 +179,17 @@ func Test_Assets_SnapshotNamesOnlySyncedAssets(t *testing.T) {
 	}
 }
 
-// assertSyncedFirst checks that path was fsynced while the state file on disk
+// assertSyncedFirst checks that path was synced while the state file on disk
 // did not yet name id.
 func assertSyncedFirst(t *testing.T, records []syncRecord, path, id string) {
 	t.Helper()
 
 	for _, r := range records {
-		if strings.HasSuffix(r.path, path) && !strings.Contains(r.onDisk, id) {
+		if strings.Contains(r.onDisk, id) {
+			continue
+		}
+
+		if slices.ContainsFunc(r.paths, func(p string) bool { return strings.HasSuffix(p, path) }) {
 			return
 		}
 	}
@@ -215,4 +227,98 @@ func Test_Assets_FailedSyncKeepsTheSnapshotOff(t *testing.T) {
 
 	file, _ := assetPath(id)
 	assertSyncedFirst(t, syncs(), file, id)
+}
+
+// warnings is a slog handler that keeps the messages of the warn records.
+type warnings struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (*warnings) Enabled(context.Context, slog.Level) bool { return true }
+
+func (w *warnings) Handle(_ context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn {
+		w.mu.Lock()
+		w.msgs = append(w.msgs, r.Message)
+		w.mu.Unlock()
+	}
+
+	return nil
+}
+
+func (w *warnings) WithAttrs([]slog.Attr) slog.Handler { return w }
+
+func (w *warnings) WithGroup(string) slog.Handler { return w }
+
+func (w *warnings) all() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return slices.Clone(w.msgs)
+}
+
+// Test_Assets_SaveAbandonedAtItsDeadline checks that a save whose asset sync
+// outlasts its deadline fails before its snapshot is renamed into place: the
+// old state file stays, the asset stays pending, one warning is logged, and the
+// next save syncs the asset and names it.
+func Test_Assets_SaveAbandonedAtItsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		stateFile := filepath.Join(dir, syncService, FormatJSON.fileName())
+		logs := &warnings{}
+		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+		n := &namer{}
+		e.Register(syncService, n)
+
+		a, err := e.Assets(syncService)
+		require.NoError(t, err)
+
+		saved := commitAsset(t, a, "saved")
+		n.add(saved)
+		e.MarkDirty(syncService)
+		require.NoError(t, e.Flush(t.Context()))
+
+		late := commitAsset(t, a, "late")
+		n.add(late)
+
+		release := make(chan struct{})
+		a.fsync = func(f *os.File) error {
+			<-release
+
+			return defaultSync(f)
+		}
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+
+		e.MarkDirty(syncService)
+		require.ErrorIs(t, e.Flush(ctx), context.DeadlineExceeded)
+
+		onDisk, err := os.ReadFile(stateFile)
+		require.NoError(t, err)
+		assert.Equal(t, saved, string(onDisk), "the old state file stays")
+
+		a.mu.Lock()
+		_, pending := a.unsynced[late]
+		a.mu.Unlock()
+		assert.True(t, pending, "the asset stays pending")
+		assert.Len(t, logs.all(), 1, "one warning for the abandoned save")
+
+		// The abandoned sync ends on its own, after the save gave up on it.
+		close(release)
+		synctest.Wait()
+
+		syncs := recordSyncs(a, stateFile)
+
+		require.NoError(t, e.Flush(t.Context()))
+
+		onDisk, err = os.ReadFile(stateFile)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{saved, late}, strings.Split(string(onDisk), "\n"))
+
+		file, _ := assetPath(late)
+		assertSyncedFirst(t, syncs(), file, late)
+		assert.Len(t, logs.all(), 1, "a save in time logs no warning")
+	})
 }

@@ -2,6 +2,7 @@ package persist
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -36,8 +37,6 @@ const (
 	// fanout is the number of directories under blobs: one per first byte of an
 	// id, all made when the assets are opened.
 	fanout = 256
-	// syncWorkers is how many fsyncs a save runs at once.
-	syncWorkers = 8
 )
 
 var (
@@ -126,8 +125,9 @@ type Assets struct {
 	// queued, or "" when the queue is not stuck. It is logged once per change.
 	stuck string
 
-	// fsync makes a file or a directory durable. Tests replace it to record the
-	// order of the syncs.
+	// fsync makes what it is given durable: on Linux the whole filesystem of the
+	// assets directory, with syncfs(2), elsewhere one file or directory. Tests
+	// replace it to record the order of the syncs.
 	fsync func(f *os.File) error
 }
 
@@ -180,7 +180,7 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		fresh:     make(map[string]struct{}),
 		capturing: make(map[string]struct{}),
 		unsynced:  make(map[string]struct{}),
-		fsync:     (*os.File).Sync,
+		fsync:     defaultSync,
 	}, nil
 }
 
@@ -363,15 +363,21 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	return id, nil
 }
 
-// sync fsyncs every asset committed and not yet synced, then each of their
-// directories once. A save calls it after it takes its snapshot and before it
-// renames the snapshot into place: a service names an id only once Commit has
-// returned, and Commit records the id before it returns, so every asset the
-// snapshot names is synced or was synced by an earlier save. An asset deleted
-// since its commit is skipped. On error the ids are kept for the next save,
-// and the save that called it must not rename its snapshot. It is nil-safe,
-// for a service with no assets.
-func (a *Assets) sync() error {
+// sync makes every asset committed and not yet synced durable, with its
+// directory: on Linux with one syncfs of the assets filesystem, elsewhere with
+// an fsync of each asset and then of each of their directories once. A save
+// calls it after it takes its snapshot and before it renames the snapshot into
+// place: a service names an id only once Commit has returned, and Commit
+// records the id before it returns, so every asset the snapshot names is synced
+// or was synced by an earlier save. An asset deleted since its commit is
+// skipped.
+//
+// It waits for the sync only until ctx ends, and then returns ctx's error. A
+// sync cannot be interrupted, so it goes on alone and its result is dropped;
+// the next save syncs the same ids again. On error the ids are kept for the
+// next save, and the save that called it must not rename its snapshot. It is
+// nil-safe, for a service with no assets.
+func (a *Assets) sync(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
@@ -381,102 +387,30 @@ func (a *Assets) sync() error {
 	a.unsynced = make(map[string]struct{})
 	a.mu.Unlock()
 
-	err := a.syncAll(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	// The goroutine ends when its sync does; the buffer lets it end after sync
+	// has stopped waiting.
+	done := make(chan error, 1)
+
+	go func() { done <- a.syncPending(ctx, ids) }()
+
+	var err error
+
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+
 	if err != nil {
 		a.mu.Lock()
 		maps.Copy(a.unsynced, ids)
 		a.mu.Unlock()
 
 		return fmt.Errorf("sync assets: %w", err)
-	}
-
-	return nil
-}
-
-// syncAll fsyncs the assets named ids that are still there, then the directory
-// of each.
-func (a *Assets) syncAll(ids map[string]struct{}) error {
-	files := make([]string, 0, len(ids))
-
-	for id := range ids {
-		path, _ := assetPath(id) // commit made only valid ids.
-		files = append(files, path)
-	}
-
-	there, err := a.syncPaths(files)
-	if err != nil {
-		return err
-	}
-
-	dirs := make(map[string]struct{})
-	for _, path := range there {
-		dirs[dirOf(path)] = struct{}{}
-	}
-
-	_, err = a.syncPaths(slices.Collect(maps.Keys(dirs)))
-
-	return err
-}
-
-// syncPaths fsyncs paths, syncWorkers at a time, and returns the ones that are
-// there. A disk commits concurrent fsyncs together.
-func (a *Assets) syncPaths(paths []string) ([]string, error) {
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		there = make([]string, 0, len(paths))
-		errs  []error
-	)
-
-	next := make(chan string)
-
-	for range min(syncWorkers, len(paths)) {
-		wg.Go(func() {
-			for path := range next {
-				err := a.syncPath(path)
-
-				mu.Lock()
-
-				switch {
-				case err == nil:
-					there = append(there, path)
-				case !errors.Is(err, fs.ErrNotExist):
-					errs = append(errs, err)
-				default:
-				}
-
-				mu.Unlock()
-			}
-		})
-	}
-
-	for _, path := range paths {
-		next <- path
-	}
-
-	close(next)
-	wg.Wait()
-
-	return there, errors.Join(errs...)
-}
-
-// syncPath fsyncs the file or the directory at path in the root.
-func (a *Assets) syncPath(path string) error {
-	f, err := a.root.Open(path)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-
-	err = a.fsync(f)
-	if err != nil {
-		_ = f.Close()
-
-		return fmt.Errorf("sync %s: %w", path, err)
-	}
-
-	err = f.Close()
-	if err != nil {
-		return fmt.Errorf("close %s: %w", path, err)
 	}
 
 	return nil

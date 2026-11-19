@@ -460,7 +460,9 @@ func (e *Engine) due() bool {
 	return !e.closed && !time.Now().Before(e.retryAt)
 }
 
-// writeDirty writes the dirty services. The caller holds sem.
+// writeDirty writes the dirty services. The caller holds sem. A flush that
+// runs out of time is logged once, at warn: the services it did not save keep
+// their last state files, and their assets stay pending for the next save.
 func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 	pending := e.takeDirty()
 	if len(pending) == 0 {
@@ -468,6 +470,15 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 	}
 
 	failed, err := e.writeAll(ctx, pending)
+	if errors.Is(err, context.DeadlineExceeded) {
+		names := make([]string, 0, len(failed))
+		for _, p := range failed {
+			names = append(names, p.name)
+		}
+
+		e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved",
+			"services", names)
+	}
 
 	return e.finish(failed, err), err
 }
@@ -582,7 +593,7 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 			return append(failed, pending[i:]...), errors.Join(append(errs, err)...)
 		}
 
-		err = e.saveAssets(root, p)
+		err = e.saveAssets(ctx, root, p)
 		if err == nil {
 			continue
 		}
@@ -608,9 +619,9 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 // removals queued before the snapshot is taken go once it is on disk, and the
 // assets committed while it is written are not deleted at their Remove, because
 // the snapshot may name them.
-func (e *Engine) saveAssets(root *os.Root, p pendingService) error {
+func (e *Engine) saveAssets(ctx context.Context, root *os.Root, p pendingService) error {
 	removed := p.assets.begin()
-	err := e.save(root, p)
+	err := e.save(ctx, root, p)
 
 	ref, _ := p.snap.(Referencer)
 	p.assets.finish(removed, err, ref)
@@ -620,13 +631,13 @@ func (e *Engine) saveAssets(root *os.Root, p pendingService) error {
 
 // save writes the state files of one service, removes the ones of formats that
 // are no longer listed, and fsyncs the directories it changed.
-func (e *Engine) save(root *os.Root, p pendingService) error {
+func (e *Engine) save(ctx context.Context, root *os.Root, p pendingService) error {
 	err := root.MkdirAll(p.name, dirMode)
 	if err != nil {
 		return fmt.Errorf("create dir: %w", err)
 	}
 
-	dirs, err := e.writeFormats(root, p)
+	dirs, err := e.writeFormats(ctx, root, p)
 	if err != nil {
 		return err
 	}
@@ -656,8 +667,9 @@ func (e *Engine) save(root *os.Root, p pendingService) error {
 // writeFormats snapshots one service straight into a temp file for each listed
 // format, then renames them over the state files. It returns the directories it
 // renamed in, the service's own first. A failed Snapshot or write removes the
-// temp files and leaves the state files as they were.
-func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, err error) {
+// temp files and leaves the state files as they were, and so does a sync of
+// the assets that ctx cuts short.
+func (e *Engine) writeFormats(ctx context.Context, root *os.Root, p pendingService) (dirs []string, err error) {
 	writers := make([]*stateWriter, 0, len(e.formats))
 
 	defer func() {
@@ -682,7 +694,7 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 		outs = append(outs, w.buf)
 	}
 
-	err = snapshot(p, io.MultiWriter(outs...))
+	err = snapshot(ctx, p, io.MultiWriter(outs...))
 	if err != nil {
 		return nil, err
 	}
@@ -717,16 +729,16 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 	return dirs, nil
 }
 
-// snapshot writes the snapshot of one service to w, then fsyncs the assets
-// committed since the last save. Every asset the snapshot names is committed
-// by then, so it is on disk before the snapshot is.
-func snapshot(p pendingService, w io.Writer) error {
+// snapshot writes the snapshot of one service to w, then syncs the assets
+// committed since the last save, until ctx ends. Every asset the snapshot names
+// is committed by then, so it is on disk before the snapshot is.
+func snapshot(ctx context.Context, p pendingService, w io.Writer) error {
 	err := p.snap.Snapshot(w)
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 
-	return p.assets.sync()
+	return p.assets.sync(ctx)
 }
 
 // loaded is what loading one service's state files did.

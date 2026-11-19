@@ -82,7 +82,7 @@ func BenchmarkAssetsCommit(b *testing.B) {
 func BenchmarkSavePendingAssets(b *testing.B) {
 	body := bytes.Repeat([]byte{'x'}, 1<<10)
 
-	for _, pending := range []int{100, 1000} {
+	for _, pending := range []int{100, 1000, 10000} {
 		b.Run(fmt.Sprintf("pending=%d", pending), func(b *testing.B) {
 			base := b.TempDir()
 			run := 0

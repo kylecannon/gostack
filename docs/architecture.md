@@ -734,16 +734,28 @@ is untouched.
   before any snapshot can name the id. The mark comes before the rename, so a
   load's sweep that lists the file also knows the id. A commit does not fsync.
 - A save makes the assets durable. After it takes the snapshot and before it
-  renames the snapshot into place, it fsyncs every asset committed since the
-  last save that synced, 8 at a time, then each of their `blobs/<xx>`
-  directories once. A service names an id only after `Commit` returns, and
-  `Commit` records the id before it returns, so every asset a snapshot names is
-  on disk before the snapshot is, an asset committed while the snapshot is
-  taken included. A failed sync fails the save and keeps the ids for the next
-  one. The timed save, the shutdown save and `POST /_gostack/state/save` all
-  take this path. With 1000 1 KiB assets pending, a save takes about 0.4 s on
-  a Linux Docker volume and 5 to 7 s on macOS, where Go's fsync is
-  `F_FULLFSYNC`.
+  renames the snapshot into place, it syncs every asset committed since the
+  last save that synced. On Linux that is one `syncfs(2)` on the
+  `assets/.gostack` directory, which flushes the dirty data and metadata of
+  every file on its filesystem, the renames into `blobs/<xx>` included. On
+  other systems it fsyncs each asset, 8 at a time, then each of their
+  `blobs/<xx>` directories once. A save with no pending asset syncs nothing. A
+  service names an id only after `Commit` returns, and `Commit` records the id
+  before it returns, so every asset a snapshot names is on disk before the
+  snapshot is, an asset committed while the snapshot is taken included. A
+  failed sync fails the save and keeps the ids for the next one. The timed
+  save, the shutdown save and `POST /_gostack/state/save` all take this path.
+- The sync runs to the save's deadline: `Save` for the shutdown save, the
+  request's context for `POST /_gostack/state/save`, none for the timed save.
+  When the deadline passes first, the save fails before it renames the
+  snapshot: the old state file stays, the ids stay pending, and the flush logs
+  one warning. A sync cannot be interrupted, so it goes on alone and its result
+  is dropped. A shutdown whose save ran out of time still makes the last flush
+  after `Close`, with what is left of `Close`'s time.
+- With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
+  takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
+  per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
+  Go's fsync is `F_FULLFSYNC`, 1000 pending take 5 to 7 s.
 - `Remove` queues the id. A flush takes the queue before it takes the snapshot,
   and deletes those files once the snapshot is renamed into place and its
   directory fsynced. A deletion is not fsynced: if a crash loses it, the file
@@ -874,6 +886,7 @@ in the product `go.mod`.
 | santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
 | go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
+| golang.org/x/sys | the asset sync on Linux | `unix.Syncfs`: one `syncfs(2)` per save makes every pending S3 asset durable. It was already in the module graph, indirect, so no module was added. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |
