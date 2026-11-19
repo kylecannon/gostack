@@ -66,8 +66,16 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 # Benchmarks (docs/standards.md, "Benchmarks").
 #   make bench               every Benchmark* in the repo, BENCH_COUNT runs of BENCH_TIME each, into
 #                            BENCH_OUT. BENCH_TIME is 500ms, half of go test's default, so that the
-#                            matrix at -count=10 stays inside its 15 minute budget.
-#   make bench-system        the system bench, full profile: builds the images, measures gostack,
+#                            matrix at -count=10 stays inside its 15 minute budget. BENCH_PKGS
+#                            narrows it, e.g. BENCH_PKGS="./internal/route/...".
+#   make bench-ab BASE=<dir> HEAD=<dir>
+#                            the CI comparison: the same benchmarks on two checkouts, measured
+#                            interleaved. It builds both trees' benchmark binaries first, then runs
+#                            BENCH_COUNT rounds of one run each, in the order base head, head base,
+#                            ..., so drift over the job lands on both sides. Writes BENCH_BASE_OUT
+#                            and BENCH_HEAD_OUT for benchstat. Each tree builds with its own pinned
+#                            toolchain.
+#   make bench-system      the system bench, full profile: builds the images, measures gostack,
 #                            gostack-slim and the LocalStack image the parity harness built (make
 #                            parity-baseline), writes bench/results/<date>-<sha>.json and .md, then
 #                            compares the run with the newest committed result of the same host
@@ -78,7 +86,13 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 # the load generator image carry the tag of IMAGE, so runs of different tags do not collide.
 BENCH_COUNT ?= 10
 BENCH_TIME ?= 500ms
+BENCH_PKGS ?= ./...
 BENCH_OUT ?= bin/bench.txt
+BENCH_AB_DIR ?= bin/bench-ab
+BENCH_BASE_OUT ?= $(BENCH_AB_DIR)/base.txt
+BENCH_HEAD_OUT ?= $(BENCH_AB_DIR)/head.txt
+# bench-ab runs this Makefile in each tree, so that tree's go.mod pins the toolchain.
+BENCH_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BENCH_SYSTEM_ARGS ?=
 BENCH_TAG = $(lastword $(subst :, ,$(IMAGE)))
 BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
@@ -87,7 +101,7 @@ BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image 
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-system bench-system-quick
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-system bench-system-quick
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -190,8 +204,49 @@ image-slim:
 # and fails, which a pipe to tee would not.
 bench:
 	@mkdir -p $(dir $(BENCH_OUT))
-	go test -run '^$$' -vet=off -bench . -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -timeout 30m ./... >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
+	go test -run '^$$' -vet=off -bench . -benchmem -benchtime=$(BENCH_TIME) -count=$(BENCH_COUNT) -timeout 30m $(BENCH_PKGS) >$(BENCH_OUT) || { cat $(BENCH_OUT); exit 1; }
 	@cat $(BENCH_OUT)
+
+# bench-ab measures BASE and HEAD in alternating rounds, so that a runner that
+# speeds up or slows down during the job moves both sides alike. Both trees are
+# built before the first round, so no compile or cold cache sits inside a
+# measured round, and the binaries run with -vet=off for the reason given above
+# bench. A round runs every benchmark of one tree once (-test.count=1); the
+# rounds go base head, head base, ..., so a steady drift cancels. A failing
+# round prints what its side wrote and fails.
+bench-ab:
+	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-ab BASE=<dir> HEAD=<dir>' >&2; exit 2; }
+	@$(MAKE) -s --no-print-directory -C $(BASE) -f $(BENCH_MAKEFILE) bench-build BENCH_BIN=$(abspath $(BENCH_AB_DIR))/base
+	@$(MAKE) -s --no-print-directory -C $(HEAD) -f $(BENCH_MAKEFILE) bench-build BENCH_BIN=$(abspath $(BENCH_AB_DIR))/head
+	@mkdir -p $(dir $(BENCH_BASE_OUT)) $(dir $(BENCH_HEAD_OUT))
+	@: >$(BENCH_BASE_OUT); : >$(BENCH_HEAD_OUT)
+	@round=1; while [ $$round -le $(BENCH_COUNT) ]; do \
+		if [ $$((round % 2)) -eq 1 ]; then order='base head'; else order='head base'; fi; \
+		for side in $$order; do \
+			if [ $$side = base ]; then out=$(BENCH_BASE_OUT); else out=$(BENCH_HEAD_OUT); fi; \
+			start=$$(date +%s); \
+			while read -r bin dir; do \
+				(cd "$$dir" && "$(abspath $(BENCH_AB_DIR))/$$side/$$bin" -test.run '^$$' -test.bench . -test.benchmem \
+					-test.benchtime=$(BENCH_TIME) -test.count=1 -test.timeout=30m </dev/null) >>"$$out" || { cat "$$out"; exit 1; }; \
+			done <$(abspath $(BENCH_AB_DIR))/$$side/manifest; \
+			echo "round $$round/$(BENCH_COUNT) $$side: $$(($$(date +%s) - start))s"; \
+		done; \
+		round=$$((round + 1)); \
+	done
+
+# Builds the test binary of every package of the current tree that holds a
+# Benchmark function into BENCH_BIN (an absolute path) and lists each as
+# "<binary> <package dir>" in BENCH_BIN/manifest. bench-ab runs it in each tree
+# with -C, so that tree's go.mod sets GOTOOLCHAIN.
+bench-build:
+	@rm -rf $(BENCH_BIN) && mkdir -p $(BENCH_BIN) && : >$(BENCH_BIN)/manifest
+	@go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' $(BENCH_PKGS) >$(BENCH_BIN)/packages
+	@while read -r pkg dir; do \
+		test -n "$$pkg" && grep -qs '^func Benchmark' "$$dir"/*_test.go || continue; \
+		bin="$$(echo "$$pkg" | tr / _).test"; \
+		go test -c -vet=off -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
+		echo "$$bin $$dir" >>$(BENCH_BIN)/manifest; \
+	done <$(BENCH_BIN)/packages
 
 bench-system: image image-slim
 	go run ./bench run -profile full $(BENCH_RUN)

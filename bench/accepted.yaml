@@ -12,7 +12,11 @@
 # rebase merge leaves the commit out of main, so such an entry never expires:
 # delete the entries in the first change after the merge.
 #
-# One entry per metric, in one YAML document. Anything else fails the gate.
+# One entry per metric, in one YAML document. Anything else fails the gate. Two
+# entries that can match one row count as one metric: a benchmark and the same
+# name with a -<digits> suffix ("RouteDetect/host" and "RouteDetect/host-2")
+# match the row "RouteDetect/host-2", so listing both is a load error. The file
+# holds no entries when nothing is accepted.
 #
 # Fields:
 #   gate:      benchstat, or system for `bench compare`.
@@ -23,34 +27,10 @@
 #   max:       the largest accepted change, a finite number above zero with at
 #              most one leading +: "+50%" (the size counts, the sign does not),
 #              or for a system metric the worst accepted head median in the
-#              metric's unit (MiB, ms, s or cycles/s), such as "6 MiB".
+#              metric's unit (MiB, ms, s or cycles/s), such as "6 MiB". A
+#              percent is at most 1000%. An absolute value is at most 65536
+#              MiB, 3600000 ms, 3600 s or 10000000 cycles/s; a larger one is a
+#              load error.
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
-
-- gate: benchstat
-  package: internal/route
-  benchmark: RouteDetect/host
-  unit: sec/op
-  max: +60%
-  reason: S3 virtual-host and website host checks run on every host-routed request
-  pr: 4
-  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa
-
-- gate: system
-  target: gostack
-  cell: idle
-  metric: idle RSS
-  max: +55%
-  reason: S3's generated code and routing tables are resident from start
-  pr: 4
-  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa
-
-- gate: system
-  target: gostack
-  cell: sqs/messaging/persist=off/payload=64KiB/queue=standard/shape=single/proto=json/c=16
-  metric: peak RSS
-  max: +35%
-  reason: the idle RSS shift from S3's generated code, on a cell that sits near the 20% limit
-  pr: 4
-  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa

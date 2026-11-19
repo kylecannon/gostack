@@ -81,7 +81,8 @@
 // SQS cells do. The persistence cells are left out for LocalStack, whose
 // Community image does not restore S3 under PERSISTENCE=1. The tmpfs keeps the
 // disk out of the figure: a cell measures the work persistence adds, the blob
-// written, synced and renamed at request time and the snapshot.
+// written and renamed at request time, and the save, which syncs the blobs
+// committed since the last one and writes the snapshot.
 //
 // -profile full runs 52 cells per image that persists, 26 on LocalStack.
 // -profile quick runs 11: the 8 persistence-off cells, and the base cell of each

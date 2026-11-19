@@ -597,3 +597,32 @@ func Test_Engine_Load_DoesNotOverlapASave(t *testing.T) {
 	require.NoError(t, e.Close(t.Context()))
 	assert.True(t, whole(readFile(t, file)), "the state on disk after the last save is whole")
 }
+
+// Test_Engine_Load_UnsafeServiceIsNotRestored checks that a service the load
+// turns off, because a state file failed and could not be moved aside, is not
+// then restored from another format: it starts empty, as an unsafe service
+// does, so the engine never runs a state it will not save (SQ-190 item 6).
+func Test_Engine_Load_UnsafeServiceIsNotRestored(t *testing.T) {
+	skipIfRoot(t)
+
+	base := t.TempDir()
+	dir := filepath.Join(base, sqs)
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, jsonFile), []byte(garbled), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, binFile), []byte(stateB), 0o600))
+	// Moving the garbled file aside needs write access to its directory.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o750) })
+
+	var logs syncBuffer
+
+	cfg := loggedCfg(base, &logs)
+	cfg.Formats = []persist.Format{persist.FormatJSON, persist.FormatBinary}
+	e := persist.New(cfg)
+	s := &fake{}
+	e.Register(sqs, s)
+
+	require.ErrorIs(t, e.Load(t.Context()), persist.ErrUnsafe)
+	assert.False(t, e.Enabled(sqs))
+	assert.Empty(t, s.get(), "the good store.bin is not restored into a service that is no longer saved")
+}

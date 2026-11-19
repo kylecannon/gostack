@@ -40,7 +40,12 @@ specific to gostack.
   - Each service has its own `State`, held in `store.Bundle[State]` keyed by
     account and region. This mirrors `AccountRegionBundle` and
     `CrossRegionAttribute` in `localstack/services/stores.py`.
-  - Locks are per shard and per resource. There is no global lock.
+  - Locks are per shard and per resource. There is no global lock. The one
+    exception: a service may hold a single reader-writer lock across its state,
+    taken for writing by snapshot, restore and reset and for reading by every
+    write (S3's `transfer`), which makes a save wait for writes in flight and
+    makes writes wait while the save copies the state; that cost is known and
+    recorded in the persistence PR.
   - State types must serialize for persistence.
 - **Cross-service calls** (SNS to SQS, Events to Lambda, CloudFormation to
   everything) go through an in-process client that dispatches through the same
@@ -219,9 +224,14 @@ side by side.
   - each protocol codec, decode and encode, across the payload axis;
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
-- benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
-  regression over 10% with p<0.05 fails the build unless it is accepted
-  (below).
+- benchstat (see Gates) compares ten runs of each benchmark on the base and on
+  the PR. A regression over 10% with p<0.05 fails the build unless it is
+  accepted (below).
+- The gate measures base and head interleaved, never one tree after the other:
+  `make bench-ab` builds both trees' benchmark binaries first, then runs ten
+  rounds of one run per tree, alternating which tree goes first (base head,
+  head base, ...). A runner that speeds up or slows down during the job then
+  moves both sides alike instead of reading as a regression.
 
 ### System bench (`bench/`)
 
@@ -255,10 +265,16 @@ the largest change accepted, a one-line reason, the pull request and a commit
 that carries the cost. Both CI gates read the file and print what it holds
 under "Accepted". A listed metric past its bound, and every unlisted one, still
 fails. A bound is a finite number above zero with at most one leading `+`, as
-`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`);
-an infinite, negative, zero or repeated-sign bound is a load error, as is a
-second entry for one metric or a second YAML document. An entry's `package` is
-the full import path or the path below the module (`internal/route`).
+`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`).
+A percent is at most 1000%. An absolute value is at most 65536 `MiB`, 3600000
+`ms`, 3600 `s` or 10000000 `cycles/s`. An infinite, negative, zero,
+repeated-sign or over-cap bound is a load error, as is a second YAML document
+and a second entry that can match the same row as another: one metric, or a
+benchmark `X` with `X-<digits>` (`RouteDetect/host` and `RouteDetect/host-2`
+both match the row `RouteDetect/host-2`). A benchmark whose own name ends in
+`-<digits>` is listed alone without trouble. A list with no entries is valid.
+An entry's `package` is the full import path or the path below the module
+(`internal/route`).
 
 An entry applies only while the head holds its commit and the base does not, so
 it expires once main holds the commit. The pull request lands with a merge

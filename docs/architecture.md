@@ -662,6 +662,10 @@ Tests split along the same line:
      they or a request cut at `Work` changed; when one ran to the deadline,
      what the others changed in their `Close` stays unsaved and the save of
      step 4 is the last.
+     The first save is `persist.Engine.Stop`, which stops the timer; the last
+     is `Engine.Close`, which then releases the descriptors the assets hold
+     (the root on `assets/.gostack` and, with syncfs, the directory kept open
+     for it) once every sync started has returned.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
@@ -798,7 +802,10 @@ cites the lines.
   never writes the file, and `/_gostack/health` reports `persisted: false` for
   the service. Every later save or load says so: `POST /_gostack/state/save` and
   `/_gostack/state/load` answer 500 with an error naming the service. The other
-  services keep saving, and gostack still starts.
+  services keep saving, and gostack still starts. No later format is tried for
+  that service: it starts empty, as an unsafe service does, so it never runs a
+  state the engine will not save, and its assets are neither swept nor used (S3
+  keeps its bodies in memory).
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -895,6 +902,25 @@ is untouched.
   process calls it, from any container on the host, and gostack's own
   `syncfs` then returns success (SQ-175). That is why overlayfs takes the
   per-file path, whose `fsync` on a fresh descriptor still reports the error.
+- Only an error of `fsync`, `syncfs` or the close after one is final. On the
+  per-file path, an asset or a directory that cannot be opened (`EACCES`,
+  `EMFILE`, `ENFILE`, `EINTR`) fails that save before its rename and keeps its
+  ids pending for the next one; nothing was written back, so nothing was lost.
+  The flush counts as failed and is retried with the backoff. A path that is
+  gone (`ENOENT`) is skipped: it is an asset `Remove` or a save deleted after
+  the sync took its id, which the sync cannot tell from one something else
+  deleted, and no write of gostack's is lost either way. A snapshot that names
+  a missing asset fails only that object, at its read.
+- After a failed sync the assets stop tracking: an asset committed then is
+  never synced or swept, so it is recorded only as committed since the last
+  save, and its `Remove` deletes it at once. A load sweep that finds the
+  assets failed deletes nothing, because the ids it would keep are no longer
+  tracked; the sweep at restart removes the orphans. A removal of an asset committed
+  before the failure stays queued, because the state file on disk, which a
+  restart loads, may name it; that queue is bounded by the assets committed
+  before the failure. While saves fail for another reason, such as a full
+  disk, every id the assets track is a file on disk not yet deleted, so the
+  tracking is bounded by the files in `assets/.gostack`.
 - Before Linux 5.8, `syncfs` reports no writeback error, so a lost write on an
   ext4 assets directory goes unnoticed and the save names the body; RHEL 8's
   4.18 is such a kernel. gostack does not check the kernel version: the
@@ -912,21 +938,73 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
+- Save order: a flush saves in two passes, each in the same order. Services
+  with assets to sync, or an earlier sync to wait for, when the flush starts
+  go after the ones with none. Within each group, the service whose last
+  `Snapshot` in this process took less time goes first, then name order; a
+  service not yet snapshotted counts as zero, so a process's first flush is
+  in name order and takes S3's `Snapshot` first. A `Snapshot`, like a sync,
+  cannot be interrupted, and S3's grows with its objects (about 3 µs each), so
+  without the measured order a large S3 with nothing pending would take a
+  short shutdown save's whole deadline before SQS or STS is written. The
+  first pass takes
+  every service's snapshot into temp files and renames at once each one whose
+  assets have nothing to sync, and no earlier sync to wait for, when its
+  `Snapshot` returns: services with no assets among them. It defers the
+  others, temp files kept. The second pass syncs each deferred service's
+  assets and renames its snapshot. So S3's sync, which cannot be interrupted
+  and can take a save's whole deadline, never runs before SQS or STS is
+  written, even when a PUT commits during S3's own `Snapshot`. A deferred
+  snapshot is renamed by the save that took it or discarded, so no older
+  snapshot of a service replaces a newer one. A write after its `Snapshot`
+  returned is for the next save, as it always was; an asset committed between
+  the `Snapshot` and the deferred sync is synced with the rest, though the
+  snapshot does not name it, so every asset the snapshot names is durable
+  before the rename. A service's failure does not stop the services after it;
+  only the end of the save's deadline does, since no save can finish after it.
+  The services share that one deadline, so two services with assets to sync
+  would share its time in order; S3 is the only one today.
 - A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
   timed save running lends it its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot
   already taken and make the shutdown take a second one. The timed save
   finishes, or is cancelled when the waiter's deadline passes; of several
-  waiters, the first deadline to pass cancels it. The waiter then saves only
+  waiters, the first deadline to pass cancels it. A lent deadline that passes
+  acts as the save's own deadline would: a service whose snapshot is taken and
+  whose syncs have returned clean is still renamed, the rest stay dirty, and
+  the flush logs the same warning. The waiter then saves only
   what is still dirty, with the time left. A timed save that has not started
-  when a waiter arrives skips its flush.
+  when a waiter arrives skips its flush, and the timer is not armed again
+  while any `Flush`, `Load`, `Close` or reset waits: the last waiter arms it as
+  it stops waiting. With `PERSIST_FREQUENCY=0` the skipped flush would
+  otherwise re-arm at once and spin.
 - A `Load` (`/_gostack/state/load`) or a reset (`/_gostack/state/reset`)
   cancels the timed save at once: it replaces or discards the state the timed
   save would write, and a load that waited would restore what the timed save
   wrote rather than the state saved before the load was asked for.
-- A cancelled timed save fails before it renames anything, its services stay
-  dirty for the next save, and it counts as no failure. Its sync, if one
-  started, goes on as above, and the next save renames only after it returns.
+- The timed save's context is cancelled with a cause, and only a preempt by
+  `Load` or reset stops a rename. A preempted timed save fails before it
+  renames anything, its services stay dirty for the next save, and it counts
+  as no failure. Every save checks for a preempt after its snapshot and
+  before its rename, so this holds for a service with no asset to sync too. A
+  context's cause is set once, so the preempt cancels a parent of the context
+  a lent deadline cancels: a `Load` that comes after a lent deadline passed
+  still stops the rename. Any other end of a save's context, its own deadline,
+  a lent one or a caller that went away, renames what is finished. Its sync,
+  if one started, goes on as above, and the next save renames only after it
+  returns. A timed save still in its `Snapshot` when `Close` releases the
+  assets fails on the released assets, which counts as giving way and is not
+  logged as a failed flush. A flush is
+  judged by what its services failed with, never by its context: one whose
+  every unsaved service gave way to a cancellation counts as no failure; one
+  with a real error, such as `ENOSPC`, counts with the backoff even when its
+  context was cancelled too; one that saved every service ends a run of
+  failures whatever its context did. A cancelled save does not log its queued
+  removals as stuck.
+- `POST /_gostack/state/load` drains its own removals: when a `Restore` queued
+  the removal of bodies the loaded state does not name, the load marks the
+  service dirty and arms the timer, whose save deletes them once the load is
+  done.
   So a timed save stuck in a slow sync holds the shutdown until the
   shutdown's deadline and no longer: the shutdown returns then with what the
   timed save held still unsaved. A shutdown whose save ran out of time still

@@ -120,15 +120,14 @@ type Assets struct {
 	committed map[string]struct{}
 	// fresh holds the ids committed since the last save ended, with no save
 	// under way. No snapshot on disk or in flight can name them, so Remove
-	// deletes them at once.
+	// deletes them at once. An id committed while a save is under way is not
+	// fresh: that save's snapshot may name it.
 	fresh map[string]struct{}
-	// capturing holds the ids committed before or during the save under way,
-	// whose snapshot may name them. It is emptied when the save is durable or
-	// has failed, and a Remove of one of its ids waits for the next save.
-	capturing map[string]struct{}
 	// unsynced holds the ids committed and not yet fsynced. A save fsyncs them,
 	// with their directories, before its snapshot is renamed into place.
 	unsynced map[string]struct{}
+	// released is true once Close has released the root and fsDir.
+	released bool
 	// saving is true from begin to finish of a save of the service.
 	saving bool
 	// stuck is the cause of the last save or deletion error that left removals
@@ -157,9 +156,18 @@ type Assets struct {
 	fsync func(f *os.File) error
 }
 
-// errSyncFailed is wrapped by the error of every save of a service after a sync
-// of its assets failed.
-var errSyncFailed = errors.New("an asset sync failed")
+var (
+	// errSyncFailed is wrapped by the error of every save of a service after a
+	// sync of its assets failed.
+	errSyncFailed = errors.New("an asset sync failed")
+	// errNotOpened is wrapped by the error of a per-file sync that could not
+	// open a path, for EACCES, EMFILE, ENFILE or EINTR: nothing was written
+	// back, so the save fails and its ids wait for the next one, but no write
+	// is lost.
+	errNotOpened = errors.New("could not be opened to sync")
+	// errReleased is the error of a sync after Close released the assets.
+	errReleased = errors.New("the assets are closed")
+)
 
 // AssetWriter writes one asset into a temp file. Exactly one of Commit and
 // Abort ends it. It is not safe for concurrent use.
@@ -223,7 +231,6 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		removed:   make(map[string]struct{}),
 		committed: make(map[string]struct{}),
 		fresh:     make(map[string]struct{}),
-		capturing: make(map[string]struct{}),
 		unsynced:  make(map[string]struct{}),
 		fsync:     mode.sync,
 	}, nil
@@ -377,9 +384,13 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	path := dir + "/" + id
 
 	// The id is known as committed before its file is in blobs, so a sweep that
-	// lists the file also finds the id and keeps it.
+	// lists the file also finds the id and keeps it. After a failed sync a
+	// sweep removes nothing until a restart, so the id is not tracked.
 	a.mu.Lock()
-	a.committed[id] = struct{}{}
+	tracked := a.failed == nil
+	if tracked {
+		a.committed[id] = struct{}{}
+	}
 	a.mu.Unlock()
 
 	err = a.root.Rename(tmp, path)
@@ -397,13 +408,17 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.saving {
-		a.capturing[id] = struct{}{}
-	} else {
+	if !a.saving {
 		a.fresh[id] = struct{}{}
 	}
 
-	a.unsynced[id] = struct{}{}
+	// After a failed sync no save syncs again, so the id is only fresh, which
+	// lets Remove delete it at once: no snapshot on disk can name it.
+	if a.failed == nil {
+		a.unsynced[id] = struct{}{}
+	} else {
+		delete(a.committed, id)
+	}
 
 	return id, nil
 }
@@ -437,7 +452,11 @@ func (a *Assets) sync(ctx context.Context) error {
 		return fmt.Errorf("sync assets: %w", err)
 	}
 
-	s := a.startSync()
+	s, err := a.startSync()
+	if err != nil {
+		return fmt.Errorf("sync assets: %w", err)
+	}
+
 	if s == nil {
 		return nil
 	}
@@ -459,9 +478,12 @@ func (a *Assets) sync(ctx context.Context) error {
 	select {
 	case <-s.done:
 	case <-ctx.Done():
-		a.keepUnsynced(s.ids)
+		// A sync that returned as ctx ended counts: the save may rename.
+		if !resolved(s.done) {
+			a.keepUnsynced(s.ids)
 
-		return fmt.Errorf("sync assets: %w", ctx.Err())
+			return fmt.Errorf("sync assets: %w", ctx.Err())
+		}
 	}
 
 	err = cmp.Or(a.failure(), result)
@@ -484,34 +506,131 @@ type pendingSync struct {
 	done chan struct{}
 }
 
-// startSync takes the pending ids for a sync and makes it the newest. It
-// returns nil when nothing is pending.
-func (a *Assets) startSync() *pendingSync {
+// syncDue reports whether a save of the service has assets to sync, or an
+// earlier sync to wait for. When it reports false, every asset a snapshot
+// taken before the call names was synced by a sync that returned clean, so the
+// snapshot may be renamed with no call to sync. It fails as sync does once a
+// sync has failed or Close has released the assets. It is nil-safe, for a
+// service with no assets.
+func (a *Assets) syncDue() (bool, error) {
+	if a == nil {
+		return false, nil
+	}
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// A sync records its failure before its done is closed, so a resolved
+	// lastSync with no failure is a clean one.
+	if a.failed != nil {
+		return false, fmt.Errorf("sync assets: %w", a.failedErr())
+	}
+
+	if a.released {
+		return false, fmt.Errorf("sync assets: %w", errReleased)
+	}
+
+	return len(a.unsynced) > 0 || !resolved(a.lastSync), nil
+}
+
+// resolved reports whether done, the done of a sync, is nil or closed.
+func resolved(done chan struct{}) bool {
+	if done == nil {
+		return true
+	}
+
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+// queued reports whether removals wait for a save. It is nil-safe.
+func (a *Assets) queued() bool {
+	if a == nil {
+		return false
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return len(a.removed) > 0
+}
+
+// close releases the root and the directory kept open for syncfs, once every
+// sync started has returned, so no sync finds them closed and takes that for a
+// lost write. It does not wait for that. Every call after it fails.
+func (a *Assets) close() {
+	a.mu.Lock()
+	if a.released {
+		a.mu.Unlock()
+
+		return
+	}
+
+	a.released = true
+	last := a.lastSync
+	a.mu.Unlock()
+
+	release := func() {
+		_ = a.root.Close()
+
+		if a.fsDir != nil {
+			_ = a.fsDir.Close()
+		}
+	}
+
+	if resolved(last) {
+		release()
+
+		return
+	}
+
+	go func() {
+		<-last
+		release()
+	}()
+}
+
+// startSync takes the pending ids for a sync and makes it the newest. It
+// returns nil when nothing is pending, and an error once Close has released
+// the assets.
+func (a *Assets) startSync() (*pendingSync, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.released {
+		return nil, errReleased
+	}
+
 	if len(a.unsynced) == 0 {
-		return nil
+		return nil, nil //nolint:nilnil // nothing to sync is no error
 	}
 
 	s := &pendingSync{ids: a.unsynced, prev: a.lastSync, done: make(chan struct{})}
 	a.unsynced = make(map[string]struct{})
 	a.lastSync = s.done
 
-	return s
+	return s, nil
 }
 
-// keepUnsynced puts back ids a sync took, for the next save.
+// keepUnsynced puts back ids a sync took, for the next save. After a failed
+// sync there is no next save to sync them.
 func (a *Assets) keepUnsynced(ids map[string]struct{}) {
 	a.mu.Lock()
-	maps.Copy(a.unsynced, ids)
+	if a.failed == nil {
+		maps.Copy(a.unsynced, ids)
+	}
 	a.mu.Unlock()
 }
 
-// syncFailure returns err when it is a failed sync: anything but nil or the
-// end of the sync's context, which leaves ids unsynced but loses nothing.
+// syncFailure returns err when it is a failed sync, which is final: an error
+// of fsync, syncfs or the close after one. Nil, the end of the sync's context,
+// and a path the sync could not open leave ids unsynced but lose nothing.
 func syncFailure(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errNotOpened) {
 		return nil
 	}
 
@@ -519,7 +638,11 @@ func syncFailure(err error) error {
 }
 
 // fail records cause, when it is not nil, as the store's failure, and tells
-// the engine the first time.
+// the engine the first time. From then on nothing syncs or sweeps the assets
+// before a restart, so the ids kept for that are dropped, and a later commit
+// is tracked only as fresh. Queued removals stay queued: they are bounded by
+// the assets committed before the failure, and the state file on disk, which
+// a restart loads, may name them.
 func (a *Assets) fail(cause error) {
 	if cause == nil {
 		return
@@ -530,6 +653,8 @@ func (a *Assets) fail(cause error) {
 
 	if first {
 		a.failed = cause
+		clear(a.unsynced)
+		clear(a.committed)
 	}
 
 	onFail := a.onFail
@@ -565,9 +690,9 @@ func (a *Assets) forget(tmp string) {
 
 // begin starts a save of the service: it returns the ids removed so far and
 // starts a new batch, so the snapshot, taken after it, names none of them. The
-// assets committed since the last save move to the ones the snapshot may name,
-// and so does every asset committed until finish. It is nil-safe, for a service
-// with no assets.
+// assets committed since the last save stop being fresh, since the snapshot may
+// name them, and so does every asset committed until finish. It is nil-safe,
+// for a service with no assets.
 func (a *Assets) begin() []string {
 	if a == nil {
 		return nil
@@ -577,7 +702,6 @@ func (a *Assets) begin() []string {
 	defer a.mu.Unlock()
 
 	a.saving = true
-	maps.Copy(a.capturing, a.fresh)
 	clear(a.fresh)
 
 	ids := make([]string, 0, len(a.removed))
@@ -601,12 +725,16 @@ func (a *Assets) finish(batch []string, saveErr error, ref Referencer) {
 
 	a.mu.Lock()
 	a.saving = false
-	clear(a.capturing)
 	a.mu.Unlock()
 
 	if saveErr != nil {
 		a.requeue(batch)
-		a.trackQueue(saveErr)
+
+		// A save that was cancelled or ran out of time says nothing about whether
+		// a save can finish.
+		if !errors.Is(saveErr, context.Canceled) && !errors.Is(saveErr, context.DeadlineExceeded) {
+			a.trackQueue(saveErr)
+		}
 
 		return
 	}
@@ -828,7 +956,17 @@ func (a *Assets) sweep(refs, loaded map[string]struct{}) (int, error) {
 
 	// Read after the listing: commit marks an id committed before it renames the
 	// file into blobs, so every listed asset this process committed is here.
+	// Once a sync has failed, committed no longer tracks them (see fail), so a
+	// sweep that finds the assets failed removes nothing; the sweep at restart
+	// does. The check shares the hold that copies committed: a sync that fails
+	// after it finds every committed id copied already.
 	a.mu.Lock()
+	if a.failed != nil {
+		a.mu.Unlock()
+
+		return 0, nil
+	}
+
 	maps.DeleteFunc(a.committed, func(id string, _ struct{}) bool {
 		_, named := refs[id]
 

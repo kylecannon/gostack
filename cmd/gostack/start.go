@@ -273,10 +273,12 @@ type saver struct {
 //
 // What the services' Close changes, and what a request still running at the
 // end of the drain changes, is written by a last flush, when Close finished in
-// time for it.
+// time for it. That flush is the engine's Close, which then releases the
+// assets' descriptors; the first save only stops the timer, so the last flush
+// can still sync and remove assets.
 func (s *saver) save(saveCtx, closeCtx context.Context) {
 	s.once.Do(func() {
-		err := s.eng.Close(saveCtx)
+		err := s.eng.Stop(saveCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}
@@ -285,7 +287,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 			return
 		}
 
-		err = s.eng.Flush(closeCtx)
+		err = s.eng.Close(closeCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}

@@ -90,8 +90,14 @@ func (s *State) take(region string) []*Bucket {
 // once, typed with the generated shapes; the operations that read and write
 // them live in their own files. A nil subresource is one never set.
 //
-// mu guards everything that changes after creation. There is no lock above it
-// that an object operation takes.
+// mu guards everything that changes after creation. Above it sits the
+// provider-wide transfer lock (provider.go), which a write takes for reading
+// before it takes any mu: CreateBucket, DeleteBucket, every commit of a version
+// (PutObject, CopyObject, CompleteMultipartUpload), DeleteObject, UploadPart and
+// AbortMultipartUpload. Snapshot, Restore and Reset hold it for writing, so a
+// save or a load sees the buckets between two writes and never in the middle of
+// one. Reads (GetObject, HeadObject, the listings) take no transfer lock, only
+// mu.
 type Bucket struct {
 	mu sync.RWMutex
 	// gone is set once the bucket has left its State, by DeleteBucket or a

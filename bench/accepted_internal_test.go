@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -504,11 +505,240 @@ func Test_benchRow_names_the_benchmark(t *testing.T) {
 	assert.True(t, row("RouteDetect/host-1024").matches(entry), "known limit: -1024 reads as a GOMAXPROCS suffix")
 }
 
-// The committed list must load: CI reads it on every pull request.
+// The committed list must load: CI reads it on every pull request. It holds no
+// entries between a pull request that accepts a regression and the first change
+// after its merge, so it need not hold any.
 func Test_committed_accepted_list_loads(t *testing.T) {
-	entries, err := loadAccepted("accepted.yaml")
+	_, err := loadAccepted("accepted.yaml")
 	require.NoError(t, err)
-	assert.NotEmpty(t, entries)
+}
+
+// A list with no entries is valid, and both gates read it as accepting nothing:
+// a regression fails, and a run with none passes.
+func Test_empty_accepted_list_gates(t *testing.T) {
+	const empty = "# nothing accepted\n"
+
+	quiet := "pkg: github.com/kylecannon/gostack/internal/route\n" +
+		"RouteDetect/host-2   113.0n ± 3%   114.0n ± 1%   ~ (p=0.500 n=10)\n"
+
+	out, err := runGateOn(t, quiet, empty, nil, commitFlags(baseCommit, headCommit)...)
+	require.NoError(t, err)
+	assert.Contains(t, out, "no benchmark regressed")
+
+	out, err = runGate(t, empty, nil, commitFlags(baseCommit, headCommit)...)
+	require.ErrorIs(t, err, errRegression)
+	assert.Contains(t, out, "RouteDetect/host-2 sec/op +44.18%")
+
+	entries, err := parseAccepted([]byte(empty), "test")
+	require.NoError(t, err)
+
+	base, head := idleReports()
+
+	var report bytes.Buffer
+
+	set := acceptedSet{entries: entries}
+	require.ErrorIs(t, compareReports(t.Context(), base, head, set, &report), errRegression)
+	assert.Contains(t, report.String(), "### Accepted (0)")
+
+	report.Reset()
+	require.NoError(t, compareReports(t.Context(), base, base, set, &report))
+}
+
+// Two entries that can match one row are a load error: the gates would take
+// whichever accepts the change. A benchmark and the same name with a
+// -GOMAXPROCS-like suffix match the row of the longer name, but a name that
+// only ends in digits is a real benchmark and loads alone.
+func Test_parseAccepted_overlapping_entries(t *testing.T) {
+	route := benchstatEntry
+	const (
+		host     = "RouteDetect/host"
+		other    = "RouteDetect/other"
+		numbered = "BenchmarkListObjectsV2/delimiter=slash/prefix=folder-7"
+	)
+
+	nl := "\n"
+	body := "  gate: benchstat" + nl + "  package: internal/route" + nl + "  benchmark: " + host + nl +
+		"  unit: sec/op" + nl + "  max: +5%" + nl + "  reason: r" + nl + "  pr: 4" + nl + "  commit: " + acceptCommit + nl
+	mergeKey := "- &a" + nl + body + "- <<: *a" + nl + "  benchmark: " + host + "-2" + nl + "  max: +50%" + nl
+
+	// two lists the benchmarks a then b, both in routePkg with unit sec/op.
+	two := func(a, b string) string {
+		return route(routePkg, a, unitSecOp, "+5%") + route(routePkg, b, unitSecOp, "+50%")
+	}
+
+	refused := map[string]string{
+		"a name and the same with -2": two(host, host+"-2"),
+		"the suffixed name first":     two(host+"-2", host),
+		"a suffix of several digits":  two(host, host+"-128"),
+		"the package spelled in full": route(routePkg, host, unitSecOp, "+5%") +
+			route("github.com/kylecannon/gostack/internal/route", host+"-2", unitSecOp, "+50%"),
+		"a name with digits in it, and without them": two(numbered, strings.TrimSuffix(numbered, "-7")),
+		"a YAML merge key that makes a second entry": mergeKey,
+	}
+
+	for name, give := range refused {
+		t.Run("refuses "+name, func(t *testing.T) {
+			_, err := parseAccepted([]byte(give), "test")
+			require.ErrorIs(t, err, errAccepted)
+			assert.Contains(t, err.Error(), "test entry 2")
+			assert.Contains(t, err.Error(), "same metric as entry 1")
+		})
+	}
+
+	loads := map[string]string{
+		"a benchmark whose own name ends in digits":   route(routePkg, numbered, unitSecOp, "+50%"),
+		"two names that differ by more than a suffix": two(host, other),
+		"a longer name that is not a suffix":          two(host, host+"ile"),
+		"a suffix that is not only digits":            two(host, host+"-2x"),
+		"two numbers, which no GOMAXPROCS suffix is":  two(host, host+"-1-2"),
+		"names that differ in case":                   two(host, "RouteDetect/Host"),
+		"another unit": route(routePkg, host, unitSecOp, "+5%") +
+			route(routePkg, host+"-2", "B/op", "+50%"),
+		"another package": route(routePkg, host, unitSecOp, "+5%") +
+			route("internal/gateway", host+"-2", unitSecOp, "+50%"),
+	}
+
+	for name, give := range loads {
+		t.Run("loads "+name, func(t *testing.T) {
+			entries, err := parseAccepted([]byte(give), "test")
+			require.NoError(t, err)
+			assert.NotEmpty(t, entries)
+		})
+	}
+
+	// The load check and the gate agree on what one row is: two names overlap
+	// exactly when a row the gate could print matches both.
+	names := []string{
+		host, host + "-2", host + "-128", host + "ile", host + "-2x", host + "-1-2", other, numbered,
+		strings.TrimSuffix(numbered, "-7"), "RouteDetect/Host",
+	}
+
+	for _, a := range names {
+		for _, b := range names {
+			ea := &acceptedEntry{Gate: gateBenchstat, Package: routePkg, Benchmark: a, Unit: unitSecOp}
+			eb := &acceptedEntry{Gate: gateBenchstat, Package: routePkg, Benchmark: b, Unit: unitSecOp}
+
+			var shared bool
+
+			for _, row := range []string{a, b, a + "-2", b + "-2"} {
+				r := benchRow{pkg: "github.com/kylecannon/gostack/internal/route", name: row, unit: unitSecOp}
+				shared = shared || (r.matches(ea) && r.matches(eb))
+			}
+
+			assert.Equal(t, shared, ea.overlaps(eb), "%q and %q", a, b)
+		}
+	}
+}
+
+// A percent bound is at most 1000%, and an absolute one at most its unit's cap.
+// A bound at the cap loads and one past it does not.
+func Test_parseAccepted_caps(t *testing.T) {
+	loadSystem := func(bound string) error {
+		_, err := parseAccepted([]byte(strings.Replace(idleEntry, "%s", `"`+bound+`"`, 1)), "test")
+
+		return err
+	}
+
+	loadBenchstat := func(bound string) error {
+		_, err := parseAccepted([]byte(benchstatEntry(routePkg, "RouteDetect/host", unitSecOp, bound)), "test")
+
+		return err
+	}
+
+	for _, bound := range []string{"1000%", "+1000%", "1000.0%", "999.99%"} {
+		require.NoError(t, loadBenchstat(bound), bound)
+		require.NoError(t, loadSystem(bound), bound)
+	}
+
+	for _, bound := range []string{"1000.01%", "+1001%", "5000%", "100000%"} {
+		err := loadBenchstat(bound)
+		require.ErrorIs(t, err, errAccepted, bound)
+		assert.Contains(t, err.Error(), "1000% cap")
+		require.ErrorIs(t, loadSystem(bound), errAccepted, bound)
+	}
+
+	caps := map[string]string{
+		"MiB": "65536", "ms": "3600000", "s": "3600", "cycles/s": "10000000",
+	}
+
+	for unit, value := range caps {
+		require.NoError(t, loadSystem(value+" "+unit), unit)
+
+		past := loadSystem(value + "1 " + unit)
+		require.ErrorIs(t, past, errAccepted, unit)
+		assert.Contains(t, past.Error(), value+" "+unit+" cap")
+
+		fraction := loadSystem(value + ".5 " + unit)
+		require.ErrorIs(t, fraction, errAccepted, unit)
+	}
+
+	require.NoError(t, loadSystem("65535.5 MiB"))
+}
+
+// workflowFile is the part of .github/workflows/bench.yml the gate step test reads.
+type workflowFile struct {
+	Jobs map[string]workflowJob `yaml:"jobs"`
+}
+
+type workflowJob struct {
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowStep struct {
+	Run string `yaml:"run"`
+}
+
+// The gate step fails when the gate exits 1, whatever shell the workflow
+// defaults to, and puts the gate's stderr in the step summary. A load error of
+// the accepted list is written to stderr.
+func Test_workflow_gate_step(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+
+	text, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "bench.yml"))
+	require.NoError(t, err)
+
+	var workflow workflowFile
+
+	require.NoError(t, yaml.Unmarshal(text, &workflow))
+
+	var script string
+
+	for _, step := range workflow.Jobs["benchstat"].Steps {
+		if strings.Contains(step.Run, "bench gate") {
+			script = step.Run
+		}
+	}
+
+	require.NotEmpty(t, script, "the workflow has a step that runs the gate")
+
+	dir := t.TempDir()
+	stub := "#!/bin/sh\necho 'gate: accepted list: max is above the cap' >&2\necho 'regressions over 10%'\nexit 1\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), []byte(stub), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "benchstat.txt"), []byte("x\n"), 0o600))
+
+	summary := filepath.Join(dir, "summary.md")
+
+	// A bare bash, with none of the -e or -o pipefail the workflow's shell adds.
+	cmd := exec.CommandContext(t.Context(), bash, "-c", script)
+	cmd.Env = []string{
+		"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GITHUB_WORKSPACE=" + dir, "RUNNER_TEMP=" + dir, "GITHUB_STEP_SUMMARY=" + summary,
+		"BASE_SHA=" + baseCommit, "HEAD_SHA=" + headCommit,
+	}
+
+	err = cmd.Run()
+
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit, "the step fails when the gate exits 1")
+	assert.Equal(t, 1, exit.ExitCode())
+
+	written, err := os.ReadFile(summary)
+	require.NoError(t, err)
+	assert.Contains(t, string(written), "regressions over 10%")
+	assert.Contains(t, string(written), "accepted list: max is above the cap", "stderr reaches the summary")
 }
 
 func git(t *testing.T, dir string, args ...string) string {
