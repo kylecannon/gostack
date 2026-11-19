@@ -540,8 +540,10 @@ time, in the order they entered its lane.
 - **Other transports.** A lane meets its transport in one function,
   `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
   destination's head would be sent on a goroutine that lives for that send,
-  with its own timeout and retries, and answer the same way; the bound, the
-  order, the deadline and the shutdown stay as they are.
+  with its own timeout and retries, and answer the same way. The bound, the
+  order and the deadline stay as they are. `inflight` must go on counting
+  only the in-process client's calls, since parking and `Close`'s test for a
+  stopped client read it, and `Close` waits for the HTTP sends itself.
 
 ### Body store (`internal/blob`)
 

@@ -121,8 +121,9 @@ type job struct {
 // destination is never dropped and memory stays bounded, so the bound is paid
 // in time: a publisher waits, and the lane a dead-letter delivery comes from
 // pauses. At the deadline the delivery fails, to its dead-letter queue or
-// dropped, and Publish still answers 200. Returning false here drops every
-// delivery that finds its lane full at once, which reverses the ruling.
+// dropped, and Publish still answers 200. Returning false here fails every
+// delivery that finds its lane full at once, to its dead-letter queue or
+// dropped, as the withdrawn contract did: that reverses the ruling.
 func mayWait(j *job) bool {
 	return !j.dead || j.origin != nil
 }
@@ -130,7 +131,9 @@ func mayWait(j *job) bool {
 // add puts j at the tail of the lane of its destination. It is the one place a
 // delivery is refused: a publisher's once Close has begun, any once Close has
 // stopped waiting, and one that finds its lane full and may not wait. A
-// refused delivery is counted and logged as dropped. add reports whether j is
+// delivery refused at Close is dropped; one refused for room fails, to its
+// dead-letter queue when it has one. Each is counted and logged. add reports
+// whether j is
 // in the lane, admitted or waiting.
 func (ls *lanes) add(j *job) bool {
 	if ls.closed || !j.dead && ls.closing {
@@ -143,12 +146,11 @@ func (ls *lanes) add(j *job) bool {
 
 	full := !ls.unbounded && l != nil && len(l.jobs) >= ls.depth
 	if full && !mayWait(j) {
-		reason := reasonNoRoom
 		if j.dead {
-			reason = reasonDLQNoRoom
+			ls.drop(j, reasonDLQNoRoom)
+		} else {
+			ls.fail(j, nil, reasonNoRoom)
 		}
-
-		ls.drop(j, reason)
 
 		return false
 	}
@@ -242,8 +244,10 @@ func (ls *lanes) expire(j *job) {
 	}
 
 	l := j.lane
+	ls.queued++ // see settle
 	ls.remove(j)
 	ls.fail(j, nil, reasonNoRoom)
+	ls.settle()
 	ls.tidy(l)
 }
 
@@ -308,7 +312,10 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 	}
 
 	j := l.jobs[0]
+	ls.queued++ // see settle
 	ls.remove(j)
+
+	defer ls.settle()
 
 	switch {
 	case err == nil && resp.OK():
@@ -467,6 +474,14 @@ func (ls *lanes) remove(j *job) {
 		ls.admitJob(l.jobs[ls.depth-1])
 	}
 
+	ls.settle()
+}
+
+// settle counts one delivery out of the lanes. The last one out signals idle.
+// A delivery that fails is counted once more until its dead-letter delivery
+// is in a lane, so Close and AwaitDeliveries never see the lanes empty
+// between the two.
+func (ls *lanes) settle() {
 	ls.queued--
 	if ls.queued == 0 {
 		close(ls.idle)

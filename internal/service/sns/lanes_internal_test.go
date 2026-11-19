@@ -1,7 +1,9 @@
 package sns
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -28,6 +30,65 @@ func laneFixture(n, lanes int) (*Topic, []delivery) {
 	}
 
 	return topic, deliveries
+}
+
+// Test_lanes_idleAcrossDeadLetter: a delivery fails and goes to its
+// dead-letter queue. The lanes are never idle between the two, so Close and
+// AwaitDeliveries wait for the dead-letter delivery too.
+func Test_lanes_idleAcrossDeadLetter(t *testing.T) {
+	primaryGo, deadEntered, deadGo := make(chan struct{}), make(chan struct{}), make(chan struct{})
+
+	p := New(nil)
+	t.Cleanup(func() { p.Close(t.Context()) })
+
+	// The calls held are let go before Close, when the test fails first.
+	var letGo sync.Once
+
+	release := func() { letGo.Do(func() { close(deadGo) }) }
+	t.Cleanup(release)
+
+	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte("primary")) {
+			<-primaryGo
+			w.WriteHeader(http.StatusInternalServerError)
+
+			return
+		}
+
+		close(deadEntered)
+		<-deadGo
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	topic, deliveries := laneFixture(1, 1)
+	deliveries[0].call.Body = []byte(`"primary"`)
+	deliveries[0].dlq = &inproc.Call{Service: sqsService, Target: sqsSendMessage, Lane: "dlq", Body: []byte(`"dead"`)}
+
+	p.lanes.dispatch(p.queue(topic, deliveries))
+
+	p.lanes.mu.Lock()
+	idle := p.lanes.idle
+	p.lanes.mu.Unlock()
+
+	require.NotNil(t, idle)
+	close(primaryGo)
+
+	select {
+	case <-deadEntered:
+	case <-time.After(time.Minute):
+		t.Fatal("the dead-letter delivery was not sent")
+	}
+
+	select {
+	case <-idle:
+		t.Fatal("the lanes signalled idle with the dead-letter delivery in flight")
+	default:
+	}
+
+	release()
+	<-idle
+	assert.Zero(t, p.Dropped())
 }
 
 // Test_lanes_closeRacesPublish queues 3,000 deliveries over 32 lanes while
