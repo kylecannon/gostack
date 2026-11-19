@@ -16,7 +16,13 @@ const (
 
 	msgNoTable       = "Cannot do operations on a non-existent table"
 	msgKeyNotGiven   = "One of the required keys was not given a value"
+	msgKeyType       = "One or more parameter values were invalid: Type mismatch for key"
+	msgKeyCount      = "The number of conditions on the keys is invalid"
+	msgNullItems     = "Value null at 'transactItems' failed to satisfy constraint: Member must not be null"
 	caseMissingTable = "missing table"
+	caseMissingKey   = "missing key"
+	caseKeyType      = "key type"
+	caseExtraKey     = "extra key"
 )
 
 // rangeKeyTable is a CreateTable body for a provisioned table keyed by id and
@@ -99,12 +105,12 @@ func Test_batchWrite_refusals(t *testing.T) {
 			"The supplied Item contains a null AttributeValue",
 		},
 		{
-			"key type", `{"RequestItems":{"tab1":[{"PutRequest":{"Item":{"id":{"N":"1"}}}}]}}`, codeValidation,
-			"One or more parameter values were invalid: Type mismatch for key",
+			caseKeyType, `{"RequestItems":{"tab1":[{"PutRequest":{"Item":{"id":{"N":"1"}}}}]}}`, codeValidation,
+			msgKeyType,
 		},
 		{
-			"extra key", `{"RequestItems":{"tab1":[{"DeleteRequest":{"Key":{"id":{"S":"1"},"x":{"S":"1"}}}}]}}`,
-			codeValidation, "The number of conditions on the keys is invalid",
+			caseExtraKey, `{"RequestItems":{"tab1":[{"DeleteRequest":{"Key":{"id":{"S":"1"},"x":{"S":"1"}}}}]}}`,
+			codeValidation, msgKeyCount,
 		},
 		{"duplicate", `{"RequestItems":{"tab1":[{"PutRequest":{"Item":{"id":{"S":"1"}}}},` +
 			`{"DeleteRequest":{"Key":{"id":{"S":"1"}}}}]}}`, codeValidation, "Provided list of item keys contains duplicates"},
@@ -233,7 +239,7 @@ func Test_batchGet_refusals(t *testing.T) {
 		{"duplicate after a bad key", `{"RequestItems":{"tab1":{"Keys":[{"x":{"S":"1"}},` + keys(1) + `,` + keys(1) +
 			`]}}}`, codeValidation, "Provided list of item keys contains duplicates"},
 		{
-			"missing key", `{"RequestItems":{"tab1":{"Keys":[{"x":{"S":"1"}}]}}}`, codeValidation,
+			caseMissingKey, `{"RequestItems":{"tab1":{"Keys":[{"x":{"S":"1"}}]}}}`, codeValidation,
 			msgKeyNotGiven,
 		},
 		{"bad key before bad projection", `{"RequestItems":{"tab1":{"Keys":[{"x":{"S":"1"}}],` +

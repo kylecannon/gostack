@@ -82,15 +82,15 @@ func Test_items_errors(t *testing.T) {
 			"Cannot have null key for GetItem, DeleteItem, or UpdateItem",
 		},
 		{
-			"key type", opGet, `{"TableName":"tab1","Key":{"id":{"N":"1"}}}`, codeValidation,
+			caseKeyType, opGet, `{"TableName":"tab1","Key":{"id":{"N":"1"}}}`, codeValidation,
 			"One or more parameter values were invalid: Type mismatch for key",
 		},
 		{
-			"extra key", opDeleteI, `{"TableName":"tab1","Key":{"id":{"S":"a"},"x":{"S":"b"}}}`, codeValidation,
+			caseExtraKey, opDeleteI, `{"TableName":"tab1","Key":{"id":{"S":"a"},"x":{"S":"b"}}}`, codeValidation,
 			"The number of conditions on the keys is invalid",
 		},
 		{
-			"missing key", opPut, `{"TableName":"tab1","Item":{"x":{"S":"a"}}}`, codeValidation,
+			caseMissingKey, opPut, `{"TableName":"tab1","Item":{"x":{"S":"a"}}}`, codeValidation,
 			"One of the required keys was not given a value",
 		},
 		{

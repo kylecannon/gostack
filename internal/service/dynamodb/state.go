@@ -36,6 +36,9 @@ type State struct {
 	// mu guards the map; each table guards itself.
 	mu     sync.RWMutex
 	tables map[string]*tableEntry
+
+	// tokens are the TransactWriteItems ClientRequestTokens in their window.
+	tokens tokens
 }
 
 func newState() *State {
@@ -47,6 +50,7 @@ func (s *State) reset() {
 	defer s.mu.Unlock()
 
 	s.tables = map[string]*tableEntry{}
+	s.tokens.reset()
 }
 
 // table returns the named table, or nil.
