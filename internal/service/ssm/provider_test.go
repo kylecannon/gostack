@@ -6,12 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/kylecannon/gostack/internal/gateway"
-	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/ssm"
 	"github.com/stretchr/testify/require"
 )
@@ -49,14 +46,6 @@ const (
 	kGetMaintenanceWindow    = "GetMaintenanceWindow"
 	kCreateMaintenanceWindow = "CreateMaintenanceWindow"
 	kDeleteMaintenanceWindow = "DeleteMaintenanceWindow"
-	kData                    = "data"
-	kStates                  = "states"
-	kAccount                 = "account"
-	kRegion                  = "region"
-	kParametersX             = "parameters"
-	kVersions                = "versions"
-	kNameX                   = "name"
-	kVersionX                = "version"
 )
 
 const (
@@ -93,15 +82,7 @@ type client struct {
 func newClient(t *testing.T, p *ssm.Provider) *client {
 	t.Helper()
 
-	settings := func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} }
-
-	g, err := gateway.New(settings, []service.Registration{p.Registration()}, nil, nil)
-	require.NoError(t, err)
-
-	server := httptest.NewServer(g.Handler())
-	t.Cleanup(server.Close)
-
-	return &client{t: t, url: server.URL}
+	return clientWith(t, p, nil)
 }
 
 // call sends one json 1.1 call and returns the status and the decoded body.

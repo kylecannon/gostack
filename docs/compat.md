@@ -75,6 +75,8 @@ S3 persists its buckets, objects, versions and uploads in progress, bodies inclu
 
 S3 writes acknowledged since the last save are lost at `docker stop` when the shutdown save takes longer than its window. It does when another writer has a lot of data unsynced on the same volume. Raise `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose `stop_grace_period`) raised to match, to widen the window, and lower `PERSIST_FREQUENCY` to leave less unsaved. Persistence with no volume mounted at `PERSIST_BASE_DIR` lands on the container's own overlay layer and takes the slower per-file sync path. The startup log names the filesystem and the sync path for each service (`persist: asset sync`). The window, the measurements and the filesystems that get each path are in `architecture.md`, Persistence, Assets.
 
+SSM persists every parameter with all its versions, labels and tags, and its maintenance windows. A `SecureString` is written as it is stored, `kms:<key id>:<plaintext>` with `alias/aws/ssm` as the default key id, so its plaintext is on disk in the clear. No KMS call encrypts it, as in LocalStack.
+
 ## Image and init
 
 | Variable | Effect |

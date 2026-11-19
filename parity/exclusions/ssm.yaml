@@ -4,3 +4,10 @@
 # Creates an EventBridge rule on SSM parameter changes and reads the event
 # from an SQS queue. All three parametrizations.
 "tests/aws/services/ssm/test_ssm.py::TestSSM::test_trigger_event_on_systems_manager_change": depends-on:events
+
+# --- depends-on:secretsmanager: ssm ---------------------------------------
+# Resolve /aws/reference/secretsmanager/ names through Secrets Manager's
+# GetSecretValue; the join ticket builds that path once both services exist.
+"tests/aws/services/ssm/test_ssm.py::TestSSM::test_get_secret_parameter": depends-on:secretsmanager
+"tests/aws/services/ssm/test_ssm.py::TestSSM::test_get_inexistent_secret": depends-on:secretsmanager
+"tests/aws/services/ssm/test_ssm.py::TestSSM::test_get_parameters_and_secrets": depends-on:secretsmanager
