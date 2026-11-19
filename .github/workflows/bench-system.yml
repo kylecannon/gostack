@@ -3,9 +3,10 @@ name: bench-system
 # The system bench (docs/standards.md, "Benchmarks"; bench/doc.go).
 #
 # A pull request builds the base and the head image on the same runner, runs the
-# quick profile for gostack alone against each, and compares the two with
-# `bench compare`, which fails the job when a gostack cell regressed with
-# non-overlapping runs and bench/accepted.yaml does not hold it. Both result
+# quick profile for gostack alone against both in one `bench run -base-image`,
+# which alternates the two images in every repeated measurement, and compares
+# the two results with `bench compare`, which fails the job when a gostack cell
+# regressed with non-overlapping runs and bench/accepted.yaml does not hold it. Both result
 # files are uploaded and the comparison goes to the step summary. In both jobs
 # the checkout the comparison runs in has its full history, because the
 # accepted list asks git whether the base and the head hold an entry's commit.
@@ -96,23 +97,19 @@ jobs:
         if: steps.base.outputs.image == 'true'
         working-directory: head
         run: make image IMAGE=gostack:head
-      # The head's load generator drives both images, so the two runs differ only
-      # in the image.
-      - name: Measure the base
+      # One run measures both images with the head's load generator. It alternates
+      # them in every repeated measurement (base head, head base, ...), so a
+      # runner that slows down or speeds up during the job moves both sides alike.
+      # The base's result goes under base/ and the head's under head/.
+      - name: Measure the base and the head
         if: steps.base.outputs.image == 'true'
         working-directory: head
         run: |
-          go run ./bench run -profile quick -targets gostack -gostack-image gostack:base \
-            -commit "$BASE_SHA" -out "$RUNNER_TEMP/base" -loadgen-image gostack-bench-loadgen:base -name-suffix -base
+          go run ./bench run -profile quick -targets gostack \
+            -base-image gostack:base -base-commit "$BASE_SHA" -base-out "$RUNNER_TEMP/base" \
+            -gostack-image gostack:head -commit "$HEAD_SHA" -out "$RUNNER_TEMP/head"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      - name: Measure the head
-        if: steps.base.outputs.image == 'true'
-        working-directory: head
-        run: |
-          go run ./bench run -profile quick -targets gostack -gostack-image gostack:head \
-            -commit "$HEAD_SHA" -out "$RUNNER_TEMP/head" -loadgen-image gostack-bench-loadgen:head -name-suffix -head
-        env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       - name: Compare
         if: steps.base.outputs.image == 'true'
