@@ -341,7 +341,7 @@ func Test_Gateway_drainBy(t *testing.T) {
 
 		begin := time.Now()
 
-		s.gateway.DrainBy(begin.Add(drainWait))
+		s.gateway.DrainBy(begin.Add(drainWait), begin.Add(drainWait))
 		require.NoError(t, s.stop(t))
 		require.Error(t, <-failed)
 		assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the deadline")
@@ -369,7 +369,7 @@ func Test_Gateway_drainBy(t *testing.T) {
 
 		<-started
 
-		s.gateway.DrainBy(time.Now().Add(10 * time.Second))
+		s.gateway.DrainBy(time.Now().Add(10*time.Second), time.Now().Add(10*time.Second))
 		require.NoError(t, s.stop(t))
 		assert.Equal(t, "finished", <-result, "the deadline is 10 s away, so nothing cut it")
 	})
@@ -396,7 +396,7 @@ func Test_Gateway_shutdownCutsLongRequests(t *testing.T) {
 
 	<-started
 
-	s.gateway.DrainBy(time.Now().Add(50 * time.Millisecond))
+	s.gateway.DrainBy(time.Now().Add(50*time.Millisecond), time.Now().Add(50*time.Millisecond))
 
 	require.NoError(t, s.stop(t), "cutting a request at the deadline is not an error")
 	require.Error(t, <-failed)
@@ -429,7 +429,7 @@ func Test_Gateway_drainUnlimited(t *testing.T) {
 
 	<-started
 
-	s.gateway.DrainBy(time.Time{})
+	s.gateway.DrainBy(time.Time{}, time.Time{})
 	time.AfterFunc(held, func() { close(release) })
 
 	begin := time.Now()
@@ -496,10 +496,10 @@ func Test_Gateway_planDrain(t *testing.T) {
 
 	plans := make(chan planned, 2)
 
-	g.PlanDrain(func(failedAt time.Time) time.Time {
+	g.PlanDrain(func(failedAt time.Time) (time.Time, time.Time) {
 		plans <- planned{at: failedAt}
 
-		return failedAt.Add(drainWait)
+		return failedAt.Add(drainWait), failedAt.Add(drainWait)
 	})
 
 	done := make(chan error, 1)

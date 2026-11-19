@@ -132,9 +132,15 @@ func New() *Client {
 	return &Client{queue: queue{ctx: ctx, cancel: cancel}}
 }
 
-// Bind sets the handler calls are served through, normally gateway.Handler().
+// Bind sets the handler calls are served through, normally the gateway's
+// InternalHandler, through a Hub. When h is a Hub, the client joins it, so the
+// hub's Drain covers its queue.
 func (c *Client) Bind(h http.Handler) {
 	c.handler.Store(&h)
+
+	if hub, ok := h.(*Hub); ok {
+		hub.add(c)
+	}
 }
 
 // Bound reports whether Bind has been called.

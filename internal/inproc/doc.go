@@ -19,4 +19,8 @@
 // once, up to MaxInFlight. A call's lane is the Lane its caller names, or else
 // its destination: a region, service, method, path and target. A handler that
 // panics fails its call with ErrAborted, whichever of the three made it.
+//
+// A Hub is the handler every client of the process is bound to. Its Drain is
+// the shutdown's in-process phase: it waits for every queue to empty, until its
+// deadline, then shuts them all and counts the calls it cut.
 package inproc

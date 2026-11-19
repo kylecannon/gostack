@@ -32,10 +32,11 @@ const anyLoopbackPort = "127.0.0.1:0"
 func Test_serve_savesBeforeTheKill(t *testing.T) {
 	const (
 		timeout = 3 * time.Second
-		// The plan for 3 seconds: work ends at 1.875s, the save at 2.5s.
+		// The plan for 3 seconds: work ends at 1.406s, the in-process calls at
+		// 1.875s, the save at 2.5s.
 		saveBy = timeout - lifecycle.KillMargin
 		// The drain keeps waiting, the stuck request in flight, until Work.
-		drainFloor = 1500 * time.Millisecond
+		drainFloor = 1350 * time.Millisecond
 	)
 
 	tests := []struct {
@@ -278,8 +279,9 @@ func callHangingService(t *testing.T, addr string) <-chan string {
 func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 	const (
 		timeout = 2 * time.Second
-		// The plan for 2 seconds: work ends at 1s, the save at 1.5s, Close at 1.9s.
-		workAt  = time.Second
+		// The plan for 2 seconds: work ends at 0.75s, the in-process calls at 1s,
+		// the save at 1.5s, Close at 1.9s.
+		workAt  = 750 * time.Millisecond
 		saveBy  = timeout - lifecycle.KillMargin
 		closeBy = timeout - lifecycle.CloseMargin
 		slack   = 100 * time.Millisecond

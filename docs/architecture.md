@@ -499,6 +499,17 @@ notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
 the lane of the queue's ARN, so the events for one queue arrive in the order
 they were raised and a slow queue holds up no other.
 
+`cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
+the calls through the gateway's `InternalHandler`: the root router with each
+request marked internal, never put on a listener, so nothing from outside can
+pass for an internal call. `Hub.Drain` is the shutdown's in-process phase. It
+waits until every client is idle at once, since a call served can queue
+another, or until its deadline. Then it shuts every queue: calls still queued
+are dropped without their `done` being called, as `Client.Close` drops them,
+calls running are cancelled and not waited for, and `Enqueue` refuses every
+later call. Each of those is counted (`Hub.Cut`), and the drain logs how many
+it cut.
+
 ### Body store (`internal/blob`)
 
 S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,
@@ -670,19 +681,28 @@ Tests split along the same line:
   SIGTERM it sends. The child counts from the moment it sees the signal, which
   is microseconds later, and reads `T` once at start, so an update through
   `/_localstack/config` does not move the deadline. The budget is one, with
-  four slots one after the other: the hooks, the drain, the save and the
-  services' `Close`. `lifecycle.PlanShutdown` plans it once, from the moment
-  the shutdown starts: the signal, or the failure of a listener, which starts
-  the shutdown inside the gateway. The gateway drains only to the time the plan
-  gave it, and a zero time is the plan's "no limit". A shutdown that nothing
-  planned, with no `DrainBy` call and no `PlanDrain`, drains for 5 s.
+  five slots one after the other: the hooks, the drain, the in-process calls,
+  the save and the services' `Close`. `lifecycle.PlanShutdown` plans it once,
+  from the moment the shutdown starts: the signal, or the failure of a
+  listener, which starts the shutdown inside the gateway. The gateway drains
+  only to the times the plan gave it, and a zero time is the plan's "no
+  limit". A shutdown that nothing planned, with no `DrainBy` call and no
+  `PlanDrain`, gives each drain 5 s.
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
      wakes its long polls there.
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
      connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then every
+  4. The listeners are closed, and the gateway still serves internal calls
+     while `Hub.Drain` waits for the calls the services queued for each other,
+     such as S3's event notifications to SQS, until none is left or `Calls`.
+     It runs after the requests have drained, because a request that finishes
+     can queue a call, and before the save, so a delivered notification is in
+     the saved state. At `Calls` the hub cuts what is left and logs the count.
+     From here on the gateway answers every request 503, internal ones too, so
+     a call made while the services close never reaches a closed service.
+  5. The persisted state is saved, with a deadline of `Save`. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
      tasks, S3's hijacked responses), all at once, each given a context that
      ends at `Close`, so a slow one takes no time from another. A `Close` that
@@ -692,7 +712,7 @@ Tests split along the same line:
      and `Close` has time left, a last save writes whatever they or a request
      cut at `Work` changed; when one was abandoned or the time is out,
      what the others changed in their `Close` stays unsaved and the save of
-     step 4 is the last.
+     step 5 is the last.
      The first save is `persist.Engine.Stop`, which stops the timer; the last
      is `Engine.Close`, which then releases the descriptors the assets hold
      (the root on `assets/.gostack` and, with syncfs, the directory kept open
@@ -700,7 +720,8 @@ Tests split along the same line:
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
-  | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | `Work` | 2.531 s | `Calls` minus a quarter of the time before `Calls` |
+  | `Calls` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
   | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
   | `Close` | 4.9 s | `T` minus 100 ms: the time between `Save` and here is `Close`'s |
   | SIGKILL | 5 s | the supervisor, unchanged |
@@ -708,12 +729,14 @@ Tests split along the same line:
   The hooks, the drain and the service `Shutdown` functions share the time up
   to `Work`, and a slow one cannot take the save's reserve: a service function
   that never returns is left behind at `Work`, the hooks that follow it are
-  skipped, and the drain and the save go on without it. A request still running
+  skipped, and the drain and the save go on without it. When time runs out,
+  the hooks and the requests are cut first, at `Work`, then the queued
+  in-process calls, at `Calls`; neither takes from the save or `Close`. A request still running
   when the save starts can have its effect saved or not, and the file is whole
   either way, since the snapshot takes the service locks. For a `T` too short
   to leave room, `Close` falls together with `Save`. `SHUTDOWN_TIMEOUT=0` has
-  no deadline at all: the hooks, the drain, the save and `Close` take what they
-  need. With the supervisor's timer off nothing kills the child, so a stuck
+  no deadline at all: the hooks, the drain, the in-process calls, the save and
+  `Close` take what they need. With the supervisor's timer off nothing kills the child, so a stuck
   hook is the user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at

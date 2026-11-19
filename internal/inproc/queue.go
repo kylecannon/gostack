@@ -50,8 +50,15 @@ type queue struct {
 	waiting []*lane
 	queued  int
 	workers int
+	// running counts the calls a worker has taken and not yet answered.
+	running int
 	closed  bool
-	group   sync.WaitGroup
+	// cut counts the calls that were never served because the queue was shut:
+	// those queued or running when it shut, and those Enqueue refused after.
+	cut int
+	// idle, when not nil, is closed when the last worker exits.
+	idle  chan struct{}
+	group sync.WaitGroup
 }
 
 // laneKey is the lane a call is queued in. It is the call's Lane when the
@@ -96,7 +103,13 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.closed || q.queued >= MaxQueued {
+	if q.closed {
+		q.cut++
+
+		return false
+	}
+
+	if q.queued >= MaxQueued {
 		return false
 	}
 
@@ -138,19 +151,67 @@ func (c *Client) Idle() bool {
 
 // Close drops the calls still queued, cancels the ones in flight and waits for
 // the workers to exit. Later Enqueue calls are refused. It is safe to call more
-// than once.
+// than once. A dropped call's done is never called.
 func (c *Client) Close() {
-	q := &c.queue
+	c.queue.shut()
+	c.queue.group.Wait()
+}
 
+// shut is Close without the wait: it drops the calls still queued, without
+// answering them, cancels the ones in flight, and refuses later Enqueue calls.
+// It counts the calls it dropped or cancelled in cut, and returns how many.
+// Shutting a queue that is already shut cuts nothing.
+func (q *queue) shut() int {
 	q.mu.Lock()
+
+	if q.closed {
+		q.mu.Unlock()
+
+		return 0
+	}
+
+	cut := q.queued + q.running
+
 	q.closed = true
 	q.lanes = nil
 	q.waiting = nil
 	q.queued = 0
+	q.cut += cut
 	q.mu.Unlock()
 
 	q.cancel()
-	q.group.Wait()
+
+	return cut
+}
+
+// idleSignal returns a channel that is closed once no call is queued and no
+// worker runs: at once when that is so now.
+func (q *queue) idleSignal() <-chan struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.idle == nil {
+		q.idle = make(chan struct{})
+	}
+
+	idle := q.idle
+
+	if q.workers == 0 && q.queued == 0 {
+		close(q.idle)
+		q.idle = nil
+	}
+
+	return idle
+}
+
+// exit is a worker leaving, under q.mu. The last one out signals idle.
+func (q *queue) exit() {
+	q.workers--
+
+	if q.workers == 0 && q.idle != nil {
+		close(q.idle)
+		q.idle = nil
+	}
 }
 
 // work serves the waiting lanes, one call from each in turn, until none waits.
@@ -186,8 +247,12 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	if served != nil {
+		q.running--
+	}
+
 	if q.closed {
-		q.workers--
+		q.exit()
 
 		return nil, queued{}, false
 	}
@@ -201,7 +266,7 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	}
 
 	if len(q.waiting) == 0 {
-		q.workers--
+		q.exit()
 
 		return nil, queued{}, false
 	}
@@ -214,6 +279,7 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	l.calls[0] = queued{}
 	l.calls = l.calls[1:]
 	q.queued--
+	q.running++
 
 	return l, head, true
 }

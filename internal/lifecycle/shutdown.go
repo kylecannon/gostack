@@ -26,6 +26,10 @@ const (
 
 	// saveShare divides the child's time: the save reserves a quarter of it.
 	saveShare = 4
+
+	// callsShare divides the time before Calls: the drain of the in-process
+	// calls has the last quarter of it.
+	callsShare = 4
 )
 
 // Deadlines are the instants a shutdown keeps. A zero time means no limit.
@@ -33,6 +37,10 @@ type Deadlines struct {
 	// Work ends the shutdown hooks and the drain of requests in flight. Both
 	// share it, in that order, and whatever overruns is cut.
 	Work time.Time
+	// Calls ends the drain of the calls the services queued for each other
+	// in-process, which runs after the requests have drained, since a request
+	// that finishes can queue one. What is still queued then is cut.
+	Calls time.Time
 	// Save ends the save of persisted state. It is KillMargin before the
 	// supervisor's SIGKILL.
 	Save time.Time
@@ -44,23 +52,30 @@ type Deadlines struct {
 
 // PlanShutdown splits timeout, the SHUTDOWN_TIMEOUT the supervisor gives its
 // child between SIGTERM and SIGKILL, for a shutdown that starts at start. The
-// budget has four slots, one after the other: hooks, drain, save and Close.
+// budget has five slots, one after the other: hooks, drain, in-process calls,
+// save and Close.
 //
-//	start          Work                 Save    Close  start+timeout
-//	  | hooks, drain |  save (reserved)  | Close | kill |
+//	start          Work    Calls                 Save    Close  start+timeout
+//	  | hooks, drain | calls |  save (reserved)  | Close | kill |
 //
-// The save is reserved first. Hooks and drain end at Work, however long they
-// take, so state is written before the kill even when they overrun. The
-// services' Close functions get what is left after the save. For a timeout T:
+// The save is reserved first. Hooks and drain end at Work, and the in-process
+// calls at Calls, however long they take, so state is written before the kill
+// even when they overrun. The services' Close functions get what is left after
+// the save. For a timeout T:
 //
 //	Save  = start + T - KillMargin    (start + T/4 when T <= KillMargin)
-//	Work  = Save - reserve            the reserve is a quarter of the time before
+//	Calls = Save - reserve            the reserve is a quarter of the time before
 //	                                  Save, at least 500 ms when the time allows,
 //	                                  at most half
+//	Work  = Calls - (Calls-start)/4   the calls keep the last quarter before Calls
 //	Close = start + T - CloseMargin   (Save, when T is too short to leave room)
 //
+// When time runs out, the hooks and the requests are cut first, at Work, then
+// the queued calls, at Calls; neither takes from the save or Close.
+//
 // A timeout of zero or less is no limit, as it is for the supervisor: every
-// deadline is zero, so the hooks, the drain, the save and Close all wait.
+// deadline is zero, so the hooks, the drain, the calls, the save and Close all
+// wait.
 func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 	if timeout <= 0 {
 		return Deadlines{}
@@ -82,7 +97,10 @@ func PlanShutdown(start time.Time, timeout time.Duration) Deadlines {
 		closeBy = save
 	}
 
-	return Deadlines{Work: save.Add(-reserve), Save: save, Close: closeBy}
+	calls := save.Add(-reserve)
+	work := calls.Add(-calls.Sub(start) / callsShare)
+
+	return Deadlines{Work: work, Calls: calls, Save: save, Close: closeBy}
 }
 
 // Until returns ctx limited to deadline, or ctx itself when deadline is zero.

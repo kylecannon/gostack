@@ -55,7 +55,8 @@ func Record(r *http.Request, rc *request.Context) {
 }
 
 // IsInternal reports whether ctx belongs to a call that a service made to
-// another one, as marked by the x-localstack-data header.
+// another one: one served through InternalHandler, which nothing outside the
+// process can reach, or one marked by the x-localstack-data header.
 func IsInternal(ctx context.Context) bool {
 	internal, _ := ctx.Value(internalKey{}).(bool)
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,12 +15,18 @@ import (
 	"github.com/kylecannon/gostack/api/openapi"
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/gateway"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/lifecycle"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/service"
 )
+
+// callHandler is the handler the services' calls to each other go through: the
+// gateway's own. A test replaces it to hold a call back until the shutdown has
+// begun.
+var callHandler = func(gw http.Handler) http.Handler { return gw }
 
 // start wires the packages together, serves until ctx ends or the process is
 // killed through the internal API, and shuts down.
@@ -88,7 +95,11 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		return fmt.Errorf("build gateway: %w", err)
 	}
 
-	services.bind(gw.Handler())
+	// The services call each other through a hub, so the shutdown can drain the
+	// calls they queued before the gateway stops serving them.
+	hub := inproc.NewHub(callHandler(gw.InternalHandler()))
+	services.bind(hub)
+	gw.DrainCalls(func(ctx context.Context) { hub.Drain(ctx) })
 
 	listeners, err := gw.Listen(ctx)
 	if err != nil {
@@ -129,7 +140,10 @@ func loadState(ctx context.Context, services *providers, eng *persist.Engine) er
 //  2. The init shutdown hooks run.
 //  3. The gateway drains its requests in flight, and only to the time serve
 //     gives it: the gateway has no timeout of its own.
-//  4. save writes the persisted state, and then stops the services.
+//  4. The gateway, its listeners closed, still serves the calls the services
+//     queued for each other, until none is left or lifecycle.Deadlines.Calls,
+//     when the hub cuts the rest and logs how many. Then it refuses everything.
+//  5. save writes the persisted state, and then stops the services.
 //
 // Steps 1 to 3 end at lifecycle.Deadlines.Work whatever they are doing. save
 // gets two contexts: the first ends at lifecycle.Deadlines.Save, and the second,
@@ -154,7 +168,7 @@ func serve(
 	// move a deadline the supervisor already counts.
 	budget := &shutdownBudget{timeout: shutdownTimeout}
 
-	gw.PlanDrain(func(failedAt time.Time) time.Time { return budget.plan(failedAt).Work })
+	gw.PlanDrain(budget.drain)
 
 	served := make(chan error, 1)
 
@@ -172,7 +186,7 @@ func serve(
 	select {
 	case <-ctx.Done():
 		deadline = budget.plan(time.Now())
-		gw.DrainBy(deadline.Work)
+		gw.DrainBy(deadline.Work, deadline.Calls)
 
 		shutDown(ctx, gw, proc, deadline.Work)
 		stopServing()
@@ -213,6 +227,14 @@ type shutdownBudget struct {
 	mu      sync.Mutex
 	planned bool
 	set     lifecycle.Deadlines
+}
+
+// drain is the plan's two drain deadlines, for gateway.PlanDrain: the requests
+// drain until Work, and the in-process calls until Calls.
+func (b *shutdownBudget) drain(failedAt time.Time) (requests, calls time.Time) {
+	planned := b.plan(failedAt)
+
+	return planned.Work, planned.Calls
 }
 
 // plan returns the deadlines, planned from at on the first call.
