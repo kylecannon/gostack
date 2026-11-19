@@ -18,10 +18,11 @@ name: parity
 # path selects every service in the ledger unless it is one service's own
 # (internal/service/<svc>/, or internal/api/<svc>/ once internal/service/<svc>/
 # exists, which also select the services whose tests depend on <svc> in
-# DEPENDS_ON, or
+# DEPENDS_ON, and every service when <svc> is in ROUTING_REACH, or
 # parity/ledger/<svc>.json, parity/exclusions/<svc>.yaml), or cannot change
-# the image (NO_IMAGE_EFFECT). cmd/gostack/services.go selects the services its
-# changed lines name, or every service when a line of code names none.
+# the image (NO_IMAGE_EFFECT, and every *_test.go). cmd/gostack/services.go
+# selects the services named by its changed lines when each is a whole
+# registrations() entry or a service import, and every service otherwise.
 #
 # A manual run takes a services input, builds the dispatched ref, and compares
 # with the ledger committed at that ref (HEAD).
@@ -182,15 +183,19 @@ jobs:
 
       # The ratchet protects the committed ledger, so on a pull request it has
       # to be the one this run observed: a fix cannot merge without its row
-      # turning pass. Only the selected services ran. It runs after a failed
-      # regression check too, so both reports show. A manual run is how a
-      # ledger to commit is made, and is not gated here.
+      # turning pass, and a committed row of a selected service whose test the
+      # run did not collect (its junit report and the plugin's excluded list)
+      # fails unless it is excluded or demoted. Only the selected services ran.
+      # It runs after a failed regression check too, so both reports show. A
+      # manual run is how a ledger to commit is made, and is not gated here.
+      # docs/parity.md is checked against the committed ledger by the ledger
+      # unit tests in make parity-check, here and in ci.yml.
       - name: Fail on an uncommitted ledger
         if: always() && github.event_name == 'pull_request' && steps.run.outcome == 'success'
         working-directory: gostack
         env:
           SERVICES: ${{ steps.select.outputs.services }}
-        run: python3 parity/ledger.py uncommitted --services "$SERVICES" --rev HEAD
+        run: python3 parity/ledger.py uncommitted --services "$SERVICES" --rev HEAD --junit parity/out/gostack/junit.xml --excluded parity/out/gostack/excluded.json
 
       - name: Report
         if: always() && steps.select.outputs.services != ''

@@ -120,16 +120,36 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     `parity/ledger/<svc>.json` and `parity/exclusions/<svc>.yaml`.
     Every service's tests depend on `sts`, so a change there selects every
     service.
+  - A change under the directories of a service whose Registration sets
+    `Mount`, `ClaimHost`, `Claim`, `Fallback` or `Preprocess` selects every
+    service: those hooks see requests meant for any service. Today that is
+    `s3` and `sqs`.
   - A change to `cmd/gostack/services.go` selects the services its changed
-    lines name, or every service when a changed line of code names none.
-    Blank, comment and bracket-only lines name nothing.
+    lines name when every changed line of code is a whole element of the list
+    `registrations()` returns or an import of a service's package. Any other
+    changed line of code, a `//go:` directive included, selects every
+    service. Blank and comment lines name nothing.
+  - A `*_test.go` file anywhere, and `LICENSE`, select nothing.
   - `parity/ledger.py` lists the paths that cannot change the image
-    (`NO_IMAGE_EFFECT`) and the dependencies between services' tests
-    (`DEPENDS_ON`).
+    (`NO_IMAGE_EFFECT`), the dependencies between services' tests
+    (`DEPENDS_ON`) and the services with routing hooks (`ROUTING_REACH`).
+    `Test_parityTables` in `cmd/gostack` fails when `ROUTING_REACH` differs
+    from the hooks `registrations()` sets, when a package outside
+    `internal/service/<svc>/` imports `internal/api/<svc>/`, or when the
+    `DEPENDS_ON` keys are not the services whose package imports
+    `internal/inproc` or another service's package. Which service an
+    in-process call reaches, and the `sts` entry, are reviewed by hand.
+    `make test` runs it and needs `python3`.
   - On a pull request, the gostack column the run observed for the selected
     services must equal the ledger committed in the merge ref, in either
     direction, or the job fails and names each nodeid. A change commits the
     ledger its run produces, so a fix lands with its row at `pass`.
+  - A committed row of a selected service whose test the run did not collect
+    (its junit report and the plugin's excluded list) fails the same job and
+    is named, unless the row is `excluded` or `parity/demotions.yaml` lists
+    it.
+  - `docs/parity.md` must equal what `parity/ledger.py` renders from the
+    committed ledger; the ledger unit tests check it.
   - A test whose result changes from run to run is excluded with a reason
     and demoted in the same change, never left to flap.
 - **Parity ratchet** (`make parity-check`, in `parity.yml` and in `ci.yml`'s

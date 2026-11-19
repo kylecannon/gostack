@@ -693,8 +693,16 @@ class UncommittedTest(unittest.TestCase):
             rows.setdefault(nodeid, row("pass", None))[column] = status
         ledger.write_ledger(self.dir, rows)
 
-    def run_uncommitted(self, services: str) -> tuple[int, str]:
-        args = argparse.Namespace(ledger=self.dir, services=services, rev="HEAD")
+    def run_uncommitted(self, services: str, collected: set[str] | None = None, excluded: dict[str, str] | None = None) -> tuple[int, str]:
+        """Run uncommitted after a run that collected the given nodeids, by
+        default every row the working tree holds for the services."""
+        if collected is None:
+            selected = set(services.split(","))
+            collected = {n for n in ledger.load_ledger(self.dir) if ledger.service_of(n) in selected}
+        junit, excluded_file = write_run(self.repo / "out", collected, excluded or {})
+        args = argparse.Namespace(
+            ledger=self.dir, services=services, rev="HEAD", junit=junit, excluded=excluded_file, demotions=self.repo / "parity" / "demotions.yaml"
+        )
         out = io.StringIO()
         with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             try:
@@ -741,9 +749,106 @@ class UncommittedTest(unittest.TestCase):
         self.assertEqual(self.run_uncommitted("sqs")[0], 0)
 
     def test_a_service_name_with_no_test_directory_is_refused(self) -> None:
-        code, out = self.run_uncommitted("sqs,nope")
+        code, out = self.run_uncommitted("sqs,nope", collected=set())
         self.assertEqual(code, 1, out)
         self.assertIn("no LocalStack test directory known for service 'nope'", out)
+
+    def commit_row(self, nodeid: str, entry: dict) -> None:
+        ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), nodeid: entry})
+        self.git("add", "-A")
+        self.git("commit", "-qm", "row")
+
+    def test_a_committed_row_the_run_did_not_collect_fails_and_is_named(self) -> None:
+        # SQ-199 item1, the reviewer's case: a made-up row committed as pass.
+        # merge leaves it untouched, so the working tree still matches HEAD.
+        made_up = f"{SQS}::made_up"
+        self.commit_row(made_up, row("pass", "pass"))
+        ran = {f"{SQS}::b", f"{SQS}::c", f"{STS}::a"}
+        code, out = self.run_uncommitted("sqs", collected=ran)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"  {made_up}: committed pass, not collected by this run", out)
+        self.assertNotIn(f"{SQS}::b", out)
+        self.assertNotIn("Commit the ledger", out)
+        for status in ("fail", None):
+            with self.subTest(status=status):
+                self.commit_row(made_up, row("pass", status))
+                code, out = self.run_uncommitted("sqs", collected=ran)
+                self.assertEqual(code, 1, out)
+                self.assertIn(f"  {made_up}: committed {status or 'null'}, not collected by this run", out)
+        # A service the run did not select is not its to observe.
+        self.assertEqual(self.run_uncommitted("sts", collected=ran)[0], 0)
+
+    def test_an_excluded_row_the_run_did_not_collect_passes(self) -> None:
+        self.commit_row(f"{SQS}::gone[x]", row("excluded", "excluded", "requires_in_process"))
+        self.assertEqual(self.run_uncommitted("sqs", collected={f"{SQS}::b", f"{SQS}::c"})[0], 0)
+
+    def test_the_collected_set_is_the_junit_report_and_the_plugins_excluded_list(self) -> None:
+        junit, excluded = write_run(self.repo / "out", {f"{SQS}::b"}, {f"{SQS}::d": "runner-docker"})
+        self.assertEqual(ledger.run_collected(junit, excluded), {f"{SQS}::b", f"{SQS}::d"})
+        # The plugin's list counts on its own, whatever the report holds.
+        junit.write_text(junit_for({f"{SQS}::b": "pass"}), encoding="utf-8")
+        self.assertEqual(ledger.run_collected(junit, excluded), {f"{SQS}::b", f"{SQS}::d"})
+
+    def test_a_row_listed_in_demotions_the_run_did_not_collect_passes(self) -> None:
+        nodeid = f"{SQS}::flaky"
+        self.commit_row(nodeid, row("pass", "fail", "x"))
+        (self.repo / "parity" / "demotions.yaml").write_text(f'"{nodeid}": fails since the receipt handle change\n', encoding="utf-8")
+        self.assertEqual(self.run_uncommitted("sqs", collected={f"{SQS}::b", f"{SQS}::c"})[0], 0)
+
+    def test_a_run_that_left_no_report_fails(self) -> None:
+        junit, excluded = write_run(self.repo / "out", set(), {})
+        for missing in (junit, excluded):
+            with self.subTest(missing=missing.name):
+                write_run(self.repo / "out", set(), {})
+                missing.unlink()
+                args = argparse.Namespace(ledger=self.dir, services="sqs", rev="HEAD", junit=junit, excluded=excluded, demotions=self.repo / "none.yaml")
+                with mock.patch.object(ledger, "ROOT", self.repo), self.assertRaises(SystemExit) as raised:
+                    ledger.uncommitted(args)
+                self.assertIn(f"{missing} is missing", str(raised.exception))
+
+    def test_the_command_line_requires_the_runs_report(self) -> None:
+        for argv in (["uncommitted", "--services", "sqs"], ["uncommitted", "--services", "sqs", "--junit", "j.xml"]):
+            with self.subTest(argv=argv), mock.patch("sys.argv", ["ledger.py", *argv]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                ledger.main()
+            self.assertEqual(raised.exception.code, 2)
+
+
+def write_run(directory: Path, collected: set[str], excluded: dict[str, str]) -> tuple[Path, Path]:
+    """The junit report and excluded.json of a run that collected these
+    nodeids, as parity/run.sh leaves them. An excluded test is in the report
+    as skipped, as the plugin's skip marker puts it there."""
+    directory.mkdir(parents=True, exist_ok=True)
+    junit, excluded_file = directory / "junit.xml", directory / "excluded.json"
+    results = {nodeid: "pass" for nodeid in collected}
+    results.update(dict.fromkeys(excluded, "skip"))
+    junit.write_text(junit_for(results), encoding="utf-8")
+    excluded_file.write_text(json.dumps({"collected": len(results), "excluded": excluded, "unmatched": []}), encoding="utf-8")
+    return junit, excluded_file
+
+
+class DocsTest(unittest.TestCase):
+    """docs/parity.md is rendered from the ledger. The uncommitted gate
+    compares only parity/ledger/, so a stale copy is caught here, by `make
+    parity-check` on every pull request, without a parity run."""
+
+    def rendered(self, rows: dict[str, dict]) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "parity.md"
+            ledger.write_docs(rows, path)
+            return path.read_text(encoding="utf-8")
+
+    def test_the_committed_docs_are_what_the_committed_ledger_renders(self) -> None:
+        self.assertEqual(
+            ledger.DOCS.read_text(encoding="utf-8"),
+            self.rendered(ledger.load_ledger(ledger.LEDGER)),
+            "docs/parity.md is stale: run `python3 parity/ledger.py docs` and commit it",
+        )
+
+    def test_a_ledger_whose_docs_were_not_rewritten_is_caught(self) -> None:
+        rows = ledger.load_ledger(ledger.LEDGER)
+        nodeid = min(n for n, entry in rows.items() if entry["gostack"] == "pass")
+        changed = {**rows, nodeid: {**rows[nodeid], "gostack": "fail"}}
+        self.assertNotEqual(ledger.DOCS.read_text(encoding="utf-8"), self.rendered(changed))
 
 
 WORKFLOW = ledger.ROOT / ".github" / "workflows" / "parity.yml"
@@ -878,7 +983,14 @@ class MergeRefTest(unittest.TestCase):
     def regression(self, base: str, event: str = "pull_request") -> tuple[int, str]:
         return self.step(WORKFLOW, "Fail on a regression", EVENT=event, PARITY_BASE=base)
 
-    def committed_check(self, services: str) -> tuple[int, str]:
+    def committed_check(self, services: str, collected: set[str] | None = None) -> tuple[int, str]:
+        """Run the workflow's uncommitted step after a run that collected the
+        given nodeids, by default every row the working tree holds for
+        services, with the report where parity/run.sh leaves it."""
+        if collected is None:
+            selected = set(services.split(","))
+            collected = {n for n in ledger.load_ledger(self.dir) if ledger.service_of(n) in selected}
+        write_run(self.repo / "parity" / "out" / "gostack", collected, {})
         return self.step(WORKFLOW, "Fail on an uncommitted ledger", SERVICES=services)
 
     def assert_selects_from_the_base_tip(self) -> str:
@@ -886,7 +998,10 @@ class MergeRefTest(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertEqual(outputs["base"], self.tip)
         self.assertEqual(self.git("rev-parse", "HEAD^1"), self.tip)
-        self.assertEqual(outputs["services"], "s3,sqs")  # sqs changed; s3 depends on it
+        # sqs changed: its queue-URL mount reaches every service's requests,
+        # so every service in the merged ledger runs, and s3, which calls sqs.
+        every = {ledger.service_of(n) for n in ledger.load_ledger(self.dir)} | {"s3"}
+        self.assertEqual(outputs["services"], ",".join(sorted(every)))
         return outputs["base"]
 
     def test_a_service_file_main_added_after_the_fork_passes(self) -> None:
@@ -942,6 +1057,20 @@ class MergeRefTest(unittest.TestCase):
         self.set_gostack(self.R, "fail")
         self.set_gostack(f"{STS}::a", "fail")
         self.assertEqual(self.committed_check("s3,sqs")[0], 0)
+
+    def test_a_passing_row_the_run_never_collected_fails_the_uncommitted_step(self) -> None:
+        # SQ-199 item1, the reviewer's case: the branch commits a made-up
+        # sqs row as pass. The run never collects it, merge leaves it as it
+        # is, and before this the step said the ledger matched.
+        made_up = "tests/aws/services/sqs/test_sqs.py::TestSqs::made_up"
+        self.on_branch(lambda: ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), made_up: row("pass", "pass")}))
+        self.merge_ref()
+        self.assert_selects_from_the_base_tip()
+        ran = {self.P, self.R, f"{STS}::a"}
+        code, out = self.committed_check("s3,sqs,sts", collected=ran)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{made_up}: committed pass, not collected by this run", out)
+        self.assertEqual(self.committed_check("s3,sqs,sts", collected=ran | {made_up})[0], 0)
 
     def test_a_head_that_is_not_githubs_merge_fails_the_select_step(self) -> None:
         self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
@@ -1006,6 +1135,9 @@ class MergeRefTest(unittest.TestCase):
         self.assertNotIn("ref: ${{ github.event.pull_request.head.sha", text)
         self.assertIn("if: always() && github.event_name == 'pull_request' && steps.run.outcome == 'success'", text)
         self.assertIn("SERVICES: ${{ steps.select.outputs.services }}", text)
+        script = step_script(WORKFLOW, "Fail on an uncommitted ledger")
+        self.assertIn("--junit parity/out/gostack/junit.xml", script)
+        self.assertIn("--excluded parity/out/gostack/excluded.json", script)
 
     def test_ci_compares_the_merge_ref_with_the_same_base(self) -> None:
         # ci.yml's parity-ledger job and parity.yml read the same HEAD^1.

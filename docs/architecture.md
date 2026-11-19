@@ -98,7 +98,9 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   request and compare it with `HEAD^1`, the base it was merged into
   (`ledger.py merge-parent`). `parity.yml` builds and tests that merged tree,
   and fails when the gostack column it observed for the selected services
-  differs from the ledger committed there (`ledger.py uncommitted`).
+  differs from the ledger committed there, or when a committed row of theirs
+  names a test the run did not collect and is neither `excluded` nor demoted
+  (`ledger.py uncommitted`, given the run's junit report and excluded list).
 - A nodeid's service comes from its test directory (`TEST_DIRS` in
   `parity/ledger.py`). A nodeid in no service's directory, or in another
   service's file, is an error. `ledger.py check` reads the base in either
@@ -390,7 +392,12 @@ persistence engine's service list and the tests' expected service sets all
 derive from `registrations()` (the tests through `RegisteredServices` in
 `cmd/gostack/export_test.go`). `registrations()` keeps one service to a line,
 since parity selection reads a changed line of `services.go` as a change to the
-services it names.
+services it names only when the line is one whole element of that list or a
+service import; a settings function or any other code there selects every
+service. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
+`Preprocess` sees other services' requests, so a change to that service
+selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
+`Test_parityTables` holds it to `registrations()`.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
