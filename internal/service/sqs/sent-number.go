@@ -2,7 +2,7 @@ package sqs
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"io"
 	"math"
 	"math/big"
@@ -83,75 +83,108 @@ func formMembers(form map[string][]string, name string) []string {
 }
 
 // jsonMembers returns, as text, every number or string the json body holds
-// under a member called name. It reads the body and puts it back.
+// under a member called name, in the order the body holds them. It reads the
+// body and puts it back. It walks the body's tokens and keeps only what it
+// returns, so its memory is the body and the nesting, however wide the body.
 func jsonMembers(r *http.Request, name string) []string {
 	if r.Body == nil {
 		return nil
 	}
 
-	raw, err := io.ReadAll(r.Body)
+	raw, err := protocol.ReadBody(r.Body, r.ContentLength)
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 
 	if err != nil {
 		return nil
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-
-	var doc any
-
-	if dec.Decode(&doc) != nil {
+	out, err := collect(raw, name)
+	if err != nil {
 		return nil
-	}
-
-	return collect(doc, name, nil)
-}
-
-// collect appends the scalars called name anywhere in doc. A json number with a
-// fraction or an exponent is cut to an integer, as Python's int(float()) does.
-func collect(doc any, name string, out []string) []string {
-	switch v := doc.(type) {
-	case map[string]any:
-		for key, member := range v {
-			if key == name {
-				out = appendScalar(out, member)
-
-				continue
-			}
-
-			out = collect(member, name, out)
-		}
-	case []any:
-		for _, member := range v {
-			out = collect(member, name, out)
-		}
-	default:
-		// A scalar under another name is not what is looked for.
 	}
 
 	return out
 }
 
-func appendScalar(out []string, v any) []string {
-	switch s := v.(type) {
-	case string:
-		return append(out, s)
-	case json.Number:
-		text := s.String()
+// collect returns the scalars called name anywhere in the first json value of
+// raw. A member called name whose value is an object or a list is not looked
+// into, and a repeated member is read each time it appears.
+func collect(raw []byte, name string) ([]string, error) {
+	// A bytes.Buffer is read in place, where any other reader is copied.
+	dec := jsontext.NewDecoder(bytes.NewBuffer(raw),
+		jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+
+	var out []string
+
+	for {
+		if isMemberName(dec) {
+			tok, err := dec.ReadToken()
+			if err != nil {
+				return nil, err //nolint:wrapcheck // the caller only checks for an error
+			}
+
+			if tok.String() == name {
+				out, err = appendScalar(dec, out)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			continue
+		}
+
+		_, err := dec.ReadToken()
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller only checks for an error
+		}
+
+		if dec.StackDepth() == 0 {
+			return out, nil
+		}
+	}
+}
+
+// isMemberName reports whether the next token of dec is the name of an object
+// member.
+func isMemberName(dec *jsontext.Decoder) bool {
+	kind, length := dec.StackIndex(dec.StackDepth())
+
+	return kind == '{' && length%2 == 0 && dec.PeekKind() != '}'
+}
+
+// appendScalar reads the value after a member called name and appends it when
+// it is a string or a number. A number with a fraction or an exponent is cut to
+// an integer, as Python's int(float()) does.
+func appendScalar(dec *jsontext.Decoder, out []string) ([]string, error) {
+	switch dec.PeekKind() {
+	case '"':
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller only checks for an error
+		}
+
+		return append(out, tok.String()), nil
+	case '0':
+		value, err := dec.ReadValue()
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the caller only checks for an error
+		}
+
+		text := string(value)
 		if !strings.ContainsAny(text, ".eE") {
-			return append(out, text)
+			return append(out, text), nil
 		}
 
 		f, _, err := big.ParseFloat(text, decimalBase, floatPrecision, big.ToZero)
 		if err != nil {
-			return out
+			return out, nil //nolint:nilerr // a number big cannot read is not one to echo
 		}
 
 		n, _ := f.Int(nil)
 
-		return append(out, n.String())
+		return append(out, n.String()), nil
 	default:
-		return out
+		// An object or a list is skipped whole, and so are true, false and null.
+		return out, dec.SkipValue() //nolint:wrapcheck // the caller only checks for an error
 	}
 }

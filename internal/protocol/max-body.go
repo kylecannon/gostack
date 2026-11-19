@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"io"
 	"sync/atomic"
 )
@@ -44,6 +45,25 @@ func LimitBody(r io.Reader) io.Reader {
 	}
 
 	return io.LimitReader(r, limit+1)
+}
+
+// ReadBody reads r through LimitBody into one buffer. A body that states its
+// length, within MaxBody, is read into a buffer of that length and allocated
+// once; io.ReadAll would grow its buffer about 25% at a time and allocate
+// some five times the body on the way. A body of unknown length (-1, as a gzip
+// body has) or one longer than it stated grows as io.ReadAll's does. Check the
+// result with OverBody.
+func ReadBody(r io.Reader, length int64) ([]byte, error) {
+	limit := MaxBody()
+	if length < 0 || (limit > 0 && length > limit) {
+		length = 0
+	}
+
+	buf := bytes.NewBuffer(make([]byte, 0, length+bytes.MinRead))
+
+	_, err := buf.ReadFrom(LimitBody(r))
+
+	return buf.Bytes(), err
 }
 
 // OverBody reports whether n bytes, read through LimitBody, are more than
