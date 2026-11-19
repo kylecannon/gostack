@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // ErrTooLarge is what DecodeWithin returns for a body that would decode into
@@ -90,6 +91,25 @@ var (
 	textUnmarshaler = reflect.TypeFor[encoding.TextUnmarshaler]()
 )
 
+// freeLeaves are the only types with an unmarshaler of their own that cost
+// nothing beyond their container: the timestamps, which read one string or
+// number into a time. Any other type with an unmarshaler is planned through its
+// fields when it is a structure (a generated one decodes its own members, with
+// its timestamps in the format of their shapes), and otherwise costs what a
+// value of type any does, whatever it reads.
+var freeLeaves = map[reflect.Type]bool{
+	reflect.TypeFor[protocol.Time](): true,
+	reflect.TypeFor[ISO8601]():       true,
+	reflect.TypeFor[RFC822]():        true,
+}
+
+// hasUnmarshaler reports whether a value of type t decodes itself.
+func hasUnmarshaler(t reflect.Type) bool {
+	pt := reflect.PointerTo(t)
+
+	return pt.Implements(unmarshalerFrom) || pt.Implements(unmarshaler) || pt.Implements(textUnmarshaler)
+}
+
 func planOf(t reflect.Type) *plan {
 	if p, ok := plans.Load(t); ok {
 		return p.(*plan) //nolint:forcetypeassert // only plans are stored
@@ -150,8 +170,13 @@ func buildPlan(t reflect.Type, built map[reflect.Type]*plan) *plan {
 	p := &plan{}
 	built[t] = p
 
-	pt := reflect.PointerTo(t)
-	if pt.Implements(unmarshalerFrom) || pt.Implements(unmarshaler) || pt.Implements(textUnmarshaler) {
+	if freeLeaves[t] {
+		return p
+	}
+
+	if t.Kind() != reflect.Struct && hasUnmarshaler(t) {
+		p.kind = kindAny
+
 		return p
 	}
 
