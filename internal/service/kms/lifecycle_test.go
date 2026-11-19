@@ -301,6 +301,6 @@ func Test_GenerateRandom(t *testing.T) {
 func Test_unimplemented(t *testing.T) {
 	s := newStack(t)
 
-	r := s.call(usEast1, "Encrypt", map[string]any{fieldKeyID: "alias/x", "Plaintext": "AA=="})
+	r := s.call(usEast1, "ConnectCustomKeyStore", map[string]any{"CustomKeyStoreId": "cks-1"})
 	require.Equal(t, http.StatusNotImplemented, r.status)
 }
