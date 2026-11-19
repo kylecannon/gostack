@@ -517,6 +517,13 @@ func (g *generator) emitRestHelpers(p *printer) {
 	p.f("\treturn awserr.Internal(err.Error())")
 	p.f("}")
 	p.blank()
+	g.emitWriteHandlerError(p)
+	g.emitErrorHelpers(p)
+}
+
+// emitWriteHandlerError writes writeHandlerError, which writes what a handler
+// returned with the members its error carries.
+func (g *generator) emitWriteHandlerError(p *printer) {
 	p.f("// writeHandlerError writes what a handler returned: an error with members of")
 	p.f("// its own, as its Err method made it, with them, and any other one as it is.")
 	p.f("func writeHandlerError(w http.ResponseWriter, rc *request.Context, err error) {")
@@ -532,7 +539,6 @@ func (g *generator) emitRestHelpers(p *printer) {
 	p.f("\twriteError(w, rc, asError(err))")
 	p.f("}")
 	p.blank()
-	g.emitErrorHelpers(p)
 }
 
 // emitErrorHelpers writes writeError, the errors of the protocol and the body
@@ -690,13 +696,13 @@ func (g *generator) errorWriter(extra string) string {
 	return fmt.Sprintf("restxml.%s(w, &restxml.Envelope{RequestID: rc.RequestID}, err, %s)", writer, extra)
 }
 
-// messageNames maps the code of each rest-json error whose shape names its
-// message member other than "message" to that name, which botocore reads the
-// member from.
+// messageNames maps the code of each json or rest-json error whose shape names
+// its message member other than "message" to that name, which botocore reads
+// the member from and LocalStack writes it under.
 func (g *generator) messageNames() map[string]string {
 	names := map[string]string{}
 
-	if !g.hasProtocol(protoRestJSON) {
+	if !g.hasProtocol(protoRestJSON) && !g.hasProtocol(protoJSON) {
 		return names
 	}
 

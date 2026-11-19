@@ -3,6 +3,156 @@
 package dynamodb
 
 // missingRequired returns the name of the first required member v lacks, or "".
+func (v *ConditionCheck) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.TableName == nil {
+		return "TableName"
+	}
+	if v.ConditionExpression == nil {
+		return "ConditionExpression"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ContinuousBackupsDescription) missingRequired() string {
+	if v.ContinuousBackupsStatus == nil {
+		return "ContinuousBackupsStatus"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateBackupInput) missingRequired() string {
+	if v.TableName == nil {
+		return "TableName"
+	}
+	if v.BackupName == nil {
+		return "BackupName"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateBackupOutput) missingRequired() string {
+	if v.BackupDetails != nil {
+		if member := v.BackupDetails.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateGlobalSecondaryIndexAction) missingRequired() string {
+	if v.IndexName == nil {
+		return "IndexName"
+	}
+	if v.KeySchema == nil {
+		return "KeySchema"
+	}
+	if v.Projection == nil {
+		return "Projection"
+	}
+	for _, e1 := range v.KeySchema {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	if v.ProvisionedThroughput != nil {
+		if member := v.ProvisionedThroughput.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateGlobalTableInput) missingRequired() string {
+	if v.GlobalTableName == nil {
+		return "GlobalTableName"
+	}
+	if v.ReplicationGroup == nil {
+		return "ReplicationGroup"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateGlobalTableWitnessGroupMemberAction) missingRequired() string {
+	if v.RegionName == nil {
+		return "RegionName"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateReplicaAction) missingRequired() string {
+	if v.RegionName == nil {
+		return "RegionName"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateReplicationGroupMemberAction) missingRequired() string {
+	if v.RegionName == nil {
+		return "RegionName"
+	}
+	for _, e1 := range v.GlobalSecondaryIndexes {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *CreateTableInput) missingRequired() string {
+	if v.TableName == nil {
+		return "TableName"
+	}
+	for _, e1 := range v.AttributeDefinitions {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.KeySchema {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.LocalSecondaryIndexes {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.GlobalSecondaryIndexes {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	if v.ProvisionedThroughput != nil {
+		if member := v.ProvisionedThroughput.missingRequired(); member != "" {
+			return member
+		}
+	}
+	if v.StreamSpecification != nil {
+		if member := v.StreamSpecification.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.Tags {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
 func (v *CreateTableOutput) missingRequired() string {
 	if v.TableDescription != nil {
 		if member := v.TableDescription.missingRequired(); member != "" {

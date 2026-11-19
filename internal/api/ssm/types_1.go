@@ -1466,9 +1466,29 @@ type ExecutionInputs struct {
 	Automation *AutomationExecutionInputs `json:"Automation,omitzero"`
 }
 
+// MembersSet counts the members of v that are set, present even when empty. A
+// valid ExecutionInputs has exactly one.
+func (v *ExecutionInputs) MembersSet() int {
+	n := 0
+	if v.Automation != nil {
+		n++
+	}
+	return n
+}
+
 // ExecutionPreview is a structure of the ssm API.
 type ExecutionPreview struct {
 	Automation *AutomationExecutionPreview `json:"Automation,omitzero"`
+}
+
+// MembersSet counts the members of v that are set, present even when empty. A
+// valid ExecutionPreview has exactly one.
+func (v *ExecutionPreview) MembersSet() int {
+	n := 0
+	if v.Automation != nil {
+		n++
+	}
+	return n
 }
 
 // FailedCreateAssociation is a structure of the ssm API.
@@ -2097,6 +2117,11 @@ type InstancePropertyStringFilter struct {
 	Operator *string  `json:"Operator,omitzero"`
 }
 
+// InvalidItemContentException is a structure of the ssm API.
+type InvalidItemContentException struct {
+	TypeName *string `json:"TypeName,omitzero"`
+}
+
 // InventoryAggregator is a structure of the ssm API.
 type InventoryAggregator struct {
 	Expression  *string               `json:"Expression,omitzero"`
@@ -2179,6 +2204,16 @@ type InventoryResultItem struct {
 	CaptureTime   *string             `json:"CaptureTime,omitzero"`
 	ContentHash   *string             `json:"ContentHash,omitzero"`
 	Content       []map[string]string `json:"Content,omitzero"`
+}
+
+// ItemContentMismatchException is a structure of the ssm API.
+type ItemContentMismatchException struct {
+	TypeName *string `json:"TypeName,omitzero"`
+}
+
+// ItemSizeLimitExceededException is a structure of the ssm API.
+type ItemSizeLimitExceededException struct {
+	TypeName *string `json:"TypeName,omitzero"`
 }
 
 // LabelParameterVersionInput is a structure of the ssm API.
@@ -2654,6 +2689,16 @@ type NodeType struct {
 	Instance *InstanceInfo `json:"Instance,omitzero"`
 }
 
+// MembersSet counts the members of v that are set, present even when empty. A
+// valid NodeType has exactly one.
+func (v *NodeType) MembersSet() int {
+	n := 0
+	if v.Instance != nil {
+		n++
+	}
+	return n
+}
+
 // NonCompliantSummary is a structure of the ssm API.
 type NonCompliantSummary struct {
 	NonCompliantCount *int32           `json:"NonCompliantCount,omitzero"`
@@ -2722,6 +2767,11 @@ type OpsItem struct {
 	OpsItemArn       *string                     `json:"OpsItemArn,omitzero"`
 }
 
+// OpsItemAlreadyExistsException is a structure of the ssm API.
+type OpsItemAlreadyExistsException struct {
+	OpsItemId *string `json:"OpsItemId,omitzero"`
+}
+
 // OpsItemDataValue is a structure of the ssm API.
 type OpsItemDataValue struct {
 	Value *string `json:"Value,omitzero"`
@@ -2758,9 +2808,27 @@ type OpsItemIdentity struct {
 	Arn *string `json:"Arn,omitzero"`
 }
 
+// OpsItemInvalidParameterException is a structure of the ssm API.
+type OpsItemInvalidParameterException struct {
+	ParameterNames []string `json:"ParameterNames,omitzero"`
+}
+
+// OpsItemLimitExceededException is a structure of the ssm API.
+type OpsItemLimitExceededException struct {
+	ResourceTypes []string `json:"ResourceTypes,omitzero"`
+	Limit         *int32   `json:"Limit,omitzero"`
+	LimitType     *string  `json:"LimitType,omitzero"`
+}
+
 // OpsItemNotification is a structure of the ssm API.
 type OpsItemNotification struct {
 	Arn *string `json:"Arn,omitzero"`
+}
+
+// OpsItemRelatedItemAlreadyExistsException is a structure of the ssm API.
+type OpsItemRelatedItemAlreadyExistsException struct {
+	ResourceUri *string `json:"ResourceUri,omitzero"`
+	OpsItemId   *string `json:"OpsItemId,omitzero"`
 }
 
 // OpsItemRelatedItemSummary is a structure of the ssm API.
@@ -2939,75 +3007,4 @@ type PatchBaselineIdentity struct {
 	OperatingSystem     *string `json:"OperatingSystem,omitzero"`
 	BaselineDescription *string `json:"BaselineDescription,omitzero"`
 	DefaultBaseline     *bool   `json:"DefaultBaseline,omitzero"`
-}
-
-// PatchComplianceData is a structure of the ssm API.
-type PatchComplianceData struct {
-	Title          *string        `json:"Title,omitzero"`
-	KBId           *string        `json:"KBId,omitzero"`
-	Classification *string        `json:"Classification,omitzero"`
-	Severity       *string        `json:"Severity,omitzero"`
-	State          *string        `json:"State,omitzero"`
-	InstalledTime  *protocol.Time `json:"InstalledTime,omitzero"`
-	CVEIds         *string        `json:"CVEIds,omitzero"`
-}
-
-// PatchFilter is a structure of the ssm API.
-type PatchFilter struct {
-	Key    *string  `json:"Key,omitzero"`
-	Values []string `json:"Values,omitzero"`
-}
-
-// PatchFilterGroup is a structure of the ssm API.
-type PatchFilterGroup struct {
-	PatchFilters []PatchFilter `json:"PatchFilters,omitzero"`
-}
-
-// PatchGroupPatchBaselineMapping is a structure of the ssm API.
-type PatchGroupPatchBaselineMapping struct {
-	PatchGroup       *string                `json:"PatchGroup,omitzero"`
-	BaselineIdentity *PatchBaselineIdentity `json:"BaselineIdentity,omitzero"`
-}
-
-// PatchOrchestratorFilter is a structure of the ssm API.
-type PatchOrchestratorFilter struct {
-	Key    *string  `json:"Key,omitzero"`
-	Values []string `json:"Values,omitzero"`
-}
-
-// PatchRule is a structure of the ssm API.
-type PatchRule struct {
-	PatchFilterGroup  *PatchFilterGroup `json:"PatchFilterGroup,omitzero"`
-	ComplianceLevel   *string           `json:"ComplianceLevel,omitzero"`
-	ApproveAfterDays  *int32            `json:"ApproveAfterDays,omitzero"`
-	ApproveUntilDate  *string           `json:"ApproveUntilDate,omitzero"`
-	EnableNonSecurity *bool             `json:"EnableNonSecurity,omitzero"`
-}
-
-// PatchRuleGroup is a structure of the ssm API.
-type PatchRuleGroup struct {
-	PatchRules []PatchRule `json:"PatchRules,omitzero"`
-}
-
-// PatchSource is a structure of the ssm API.
-type PatchSource struct {
-	Name          *string  `json:"Name,omitzero"`
-	Products      []string `json:"Products,omitzero"`
-	Configuration *string  `json:"Configuration,omitzero"`
-}
-
-// PatchStatus is a structure of the ssm API.
-type PatchStatus struct {
-	DeploymentStatus *string        `json:"DeploymentStatus,omitzero"`
-	ComplianceLevel  *string        `json:"ComplianceLevel,omitzero"`
-	ApprovalDate     *protocol.Time `json:"ApprovalDate,omitzero"`
-}
-
-// ProgressCounters is a structure of the ssm API.
-type ProgressCounters struct {
-	TotalSteps     *int32 `json:"TotalSteps,omitzero"`
-	SuccessSteps   *int32 `json:"SuccessSteps,omitzero"`
-	FailedSteps    *int32 `json:"FailedSteps,omitzero"`
-	CancelledSteps *int32 `json:"CancelledSteps,omitzero"`
-	TimedOutSteps  *int32 `json:"TimedOutSteps,omitzero"`
 }

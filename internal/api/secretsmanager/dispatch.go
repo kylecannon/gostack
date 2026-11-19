@@ -1121,10 +1121,44 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 		opts := awsjson.ErrorOptions{
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// messageName is the json name of the message of an error, by its code: the
+// name of its shape's message member, where that is not "message".
+func messageName(code string) string {
+	switch code {
+	case "DecryptionFailure":
+		return "Message"
+	case "EncryptionFailure":
+		return "Message"
+	case "InternalServiceError":
+		return "Message"
+	case "InvalidNextTokenException":
+		return "Message"
+	case "InvalidParameterException":
+		return "Message"
+	case "InvalidRequestException":
+		return "Message"
+	case "LimitExceededException":
+		return "Message"
+	case "MalformedPolicyDocumentException":
+		return "Message"
+	case "PreconditionNotMetException":
+		return "Message"
+	case "PublicPolicyException":
+		return "Message"
+	case "ResourceExistsException":
+		return "Message"
+	case "ResourceNotFoundException":
+		return "Message"
+	default:
+		return ""
 	}
 }
 

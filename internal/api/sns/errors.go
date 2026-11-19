@@ -346,6 +346,11 @@ func NewVerificationException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the VerificationException error with the given message, carrying the members in v.
+func (v *VerificationException) Err(msg string) error {
+	return &modeledError{err: NewVerificationException(msg), members: v}
+}
+
 // newMissingRequired returns the error for a request that lacks a required member.
 func newMissingRequired(member string) *awserr.Error {
 	return &awserr.Error{

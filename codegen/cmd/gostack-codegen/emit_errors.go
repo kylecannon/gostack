@@ -47,13 +47,11 @@ func (g *generator) buildExceptions() error {
 			}
 		}
 
-		if g.isRest() {
-			var err error
+		var err error
 
-			ex.members, err = g.exceptionMembers(name, shape)
-			if err != nil {
-				return fmt.Errorf("error %s: %w", name, err)
-			}
+		ex.members, err = g.exceptionMembers(name, shape)
+		if err != nil {
+			return fmt.Errorf("error %s: %w", name, err)
 		}
 
 		g.exceptions = append(g.exceptions, ex)
@@ -62,9 +60,10 @@ func (g *generator) buildExceptions() error {
 	return nil
 }
 
-// exceptionMembers builds the struct of the members a rest error carries in
-// its headers and body, all but its message, which travels as the error's
-// Message. It is nil for an error with no other member.
+// exceptionMembers builds the struct of the members an error carries beside
+// its message, which travels as the error's Message: in the headers and body
+// of a rest error, beside __type in a json one, and after RequestId in a query
+// ErrorResponse. It is nil for an error with no other member.
 func (g *generator) exceptionMembers(name string, shape *spec.Shape) (*structType, error) {
 	goName := shapeName(name)
 	if _, taken := g.structs[goName]; taken {
@@ -96,6 +95,13 @@ func (g *generator) exceptionMembers(name string, shape *spec.Shape) (*structTyp
 	}
 
 	g.structs[goName] = st
+
+	if g.hasProtocol(protoQuery) && g.q.Shapes[name] != nil {
+		err := g.attachQuery(st, name)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return st, nil
 }

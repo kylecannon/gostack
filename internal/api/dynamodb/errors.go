@@ -36,6 +36,11 @@ func NewConditionalCheckFailedException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ConditionalCheckFailedException error with the given message, carrying the members in v.
+func (v *ConditionalCheckFailedException) Err(msg string) error {
+	return &modeledError{err: NewConditionalCheckFailedException(msg), members: v}
+}
+
 // NewContinuousBackupsUnavailableException returns the ContinuousBackupsUnavailableException error with the given message.
 func NewContinuousBackupsUnavailableException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -216,6 +221,11 @@ func NewProvisionedThroughputExceededException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ProvisionedThroughputExceededException error with the given message, carrying the members in v.
+func (v *ProvisionedThroughputExceededException) Err(msg string) error {
+	return &modeledError{err: NewProvisionedThroughputExceededException(msg), members: v}
+}
+
 // NewReplicaAlreadyExistsException returns the ReplicaAlreadyExistsException error with the given message.
 func NewReplicaAlreadyExistsException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -254,6 +264,11 @@ func NewRequestLimitExceeded(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the RequestLimitExceeded error with the given message, carrying the members in v.
+func (v *RequestLimitExceeded) Err(msg string) error {
+	return &modeledError{err: NewRequestLimitExceeded(msg), members: v}
 }
 
 // NewResourceInUseException returns the ResourceInUseException error with the given message.
@@ -316,6 +331,11 @@ func NewThrottlingException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ThrottlingException error with the given message, carrying the members in v.
+func (v *ThrottlingException) Err(msg string) error {
+	return &modeledError{err: NewThrottlingException(msg), members: v}
+}
+
 // NewTransactionCanceledException returns the TransactionCanceledException error with the given message.
 func NewTransactionCanceledException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -324,6 +344,11 @@ func NewTransactionCanceledException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the TransactionCanceledException error with the given message, carrying the members in v.
+func (v *TransactionCanceledException) Err(msg string) error {
+	return &modeledError{err: NewTransactionCanceledException(msg), members: v}
 }
 
 // NewTransactionConflictException returns the TransactionConflictException error with the given message.

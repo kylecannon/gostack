@@ -280,6 +280,15 @@ written by hand.
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
   generated code calls only these packages.
+- **Modeled errors:** an error shape with members besides its message gets a
+  struct of them and an `Err(msg)` method. json writes the members beside
+  `__type`, and the message under the shape's own member name (`Message` or
+  `message`). query writes them after `RequestId` as children of
+  `ErrorResponse`, where LocalStack writes them and botocore reads them;
+  Smithy's place inside `<Error>` is on botocore's ignore list.
+- **Unions:** `Unions` and `UnionShapes` in `serviceTable` give a structure a
+  `MembersSet() int` that counts the members present, for the handler's
+  exactly-one check. They are off by default.
 
 #### REST routing and sharding
 

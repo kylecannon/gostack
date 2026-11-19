@@ -38,7 +38,7 @@ func serveUnlabelParameterVersion(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.UnlabelParameterVersion(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -82,7 +82,7 @@ func serveUpdateAssociation(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.UpdateAssociation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -126,7 +126,7 @@ func serveUpdateAssociationStatus(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.UpdateAssociationStatus(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -170,7 +170,7 @@ func serveUpdateDocument(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.UpdateDocument(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -214,7 +214,7 @@ func serveUpdateDocumentDefaultVersion(h Handler, w http.ResponseWriter, rc *req
 	}
 	out, herr := h.UpdateDocumentDefaultVersion(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -258,7 +258,7 @@ func serveUpdateDocumentMetadata(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.UpdateDocumentMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -302,7 +302,7 @@ func serveUpdateMaintenanceWindow(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.UpdateMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -346,7 +346,7 @@ func serveUpdateMaintenanceWindowTarget(h Handler, w http.ResponseWriter, rc *re
 	}
 	out, herr := h.UpdateMaintenanceWindowTarget(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -390,7 +390,7 @@ func serveUpdateMaintenanceWindowTask(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.UpdateMaintenanceWindowTask(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -434,7 +434,7 @@ func serveUpdateManagedInstanceRole(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.UpdateManagedInstanceRole(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -478,7 +478,7 @@ func serveUpdateOpsItem(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.UpdateOpsItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -522,7 +522,7 @@ func serveUpdateOpsMetadata(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.UpdateOpsMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -566,7 +566,7 @@ func serveUpdatePatchBaseline(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.UpdatePatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -610,7 +610,7 @@ func serveUpdateResourceDataSync(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.UpdateResourceDataSync(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -654,7 +654,7 @@ func serveUpdateServiceSetting(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.UpdateServiceSetting(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -704,6 +704,32 @@ func asError(err error) *awserr.Error {
 	return awserr.Internal(err.Error())
 }
 
+// writeHandlerError writes what a handler returned: an error with members of
+// its own, as its Err method made it, with them, and any other one as it is.
+func writeHandlerError(w http.ResponseWriter, rc *request.Context, err error) {
+	var me *modeledError
+	if errors.As(err, &me) {
+		me.members.writeError(w, rc, me.err)
+		return
+	}
+	writeError(w, rc, asError(err))
+}
+
+// errorMembers are the members of an error shape, which write the error with them.
+type errorMembers interface {
+	writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error)
+}
+
+// modeledError is an error that carries the members of its shape.
+type modeledError struct {
+	err     *awserr.Error
+	members errorMembers
+}
+
+func (e *modeledError) Error() string { return e.err.Error() }
+
+func (e *modeledError) Unwrap() error { return e.err }
+
 // writeError writes err in the error form of the caller's protocol.
 func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	switch rc.Protocol {
@@ -711,10 +737,218 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 		opts := awsjson.ErrorOptions{
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// messageName is the json name of the message of an error, by its code: the
+// name of its shape's message member, where that is not "message".
+func messageName(code string) string {
+	switch code {
+	case "AccessDeniedException":
+		return "Message"
+	case "AlreadyExistsException":
+		return "Message"
+	case "AssociationDoesNotExist":
+		return "Message"
+	case "AssociationExecutionDoesNotExist":
+		return "Message"
+	case "AssociationVersionLimitExceeded":
+		return "Message"
+	case "AutomationDefinitionNotApprovedException":
+		return "Message"
+	case "AutomationDefinitionNotFoundException":
+		return "Message"
+	case "AutomationDefinitionVersionNotFoundException":
+		return "Message"
+	case "AutomationExecutionLimitExceededException":
+		return "Message"
+	case "AutomationExecutionNotFoundException":
+		return "Message"
+	case "AutomationStepNotFoundException":
+		return "Message"
+	case "ComplianceTypeCountLimitExceededException":
+		return "Message"
+	case "CustomSchemaCountLimitExceededException":
+		return "Message"
+	case "DocumentAlreadyExists":
+		return "Message"
+	case "DocumentLimitExceeded":
+		return "Message"
+	case "DocumentPermissionLimit":
+		return "Message"
+	case "DocumentVersionLimitExceeded":
+		return "Message"
+	case "DoesNotExistException":
+		return "Message"
+	case "DuplicateDocumentContent":
+		return "Message"
+	case "DuplicateDocumentVersionName":
+		return "Message"
+	case "FeatureNotAvailableException":
+		return "Message"
+	case "IdempotentParameterMismatch":
+		return "Message"
+	case "InternalServerError":
+		return "Message"
+	case "InvalidActivation":
+		return "Message"
+	case "InvalidActivationId":
+		return "Message"
+	case "InvalidAggregatorException":
+		return "Message"
+	case "InvalidAssociation":
+		return "Message"
+	case "InvalidAssociationVersion":
+		return "Message"
+	case "InvalidAutomationExecutionParametersException":
+		return "Message"
+	case "InvalidAutomationSignalException":
+		return "Message"
+	case "InvalidAutomationStatusUpdateException":
+		return "Message"
+	case "InvalidDeleteInventoryParametersException":
+		return "Message"
+	case "InvalidDeletionIdException":
+		return "Message"
+	case "InvalidDocument":
+		return "Message"
+	case "InvalidDocumentContent":
+		return "Message"
+	case "InvalidDocumentOperation":
+		return "Message"
+	case "InvalidDocumentSchemaVersion":
+		return "Message"
+	case "InvalidDocumentType":
+		return "Message"
+	case "InvalidDocumentVersion":
+		return "Message"
+	case "InvalidFilter":
+		return "Message"
+	case "InvalidFilterValue":
+		return "Message"
+	case "InvalidInstanceId":
+		return "Message"
+	case "InvalidInventoryGroupException":
+		return "Message"
+	case "InvalidInventoryItemContextException":
+		return "Message"
+	case "InvalidInventoryRequestException":
+		return "Message"
+	case "InvalidItemContentException":
+		return "Message"
+	case "InvalidNextToken":
+		return "Message"
+	case "InvalidNotificationConfig":
+		return "Message"
+	case "InvalidOptionException":
+		return "Message"
+	case "InvalidParameters":
+		return "Message"
+	case "InvalidPermissionType":
+		return "Message"
+	case "InvalidResultAttributeException":
+		return "Message"
+	case "InvalidRole":
+		return "Message"
+	case "InvalidSchedule":
+		return "Message"
+	case "InvalidTag":
+		return "Message"
+	case "InvalidTarget":
+		return "Message"
+	case "InvalidTargetMaps":
+		return "Message"
+	case "InvalidTypeNameException":
+		return "Message"
+	case "InvalidUpdate":
+		return "Message"
+	case "ItemContentMismatchException":
+		return "Message"
+	case "ItemSizeLimitExceededException":
+		return "Message"
+	case "MalformedResourcePolicyDocumentException":
+		return "Message"
+	case "MaxDocumentSizeExceeded":
+		return "Message"
+	case "NoLongerSupportedException":
+		return "Message"
+	case "OpsItemAccessDeniedException":
+		return "Message"
+	case "OpsItemAlreadyExistsException":
+		return "Message"
+	case "OpsItemConflictException":
+		return "Message"
+	case "OpsItemInvalidParameterException":
+		return "Message"
+	case "OpsItemLimitExceededException":
+		return "Message"
+	case "OpsItemNotFoundException":
+		return "Message"
+	case "OpsItemRelatedItemAlreadyExistsException":
+		return "Message"
+	case "OpsItemRelatedItemAssociationNotFoundException":
+		return "Message"
+	case "ResourceDataSyncConflictException":
+		return "Message"
+	case "ResourceDataSyncCountExceededException":
+		return "Message"
+	case "ResourceDataSyncInvalidConfigurationException":
+		return "Message"
+	case "ResourceDataSyncNotFoundException":
+		return "Message"
+	case "ResourceInUseException":
+		return "Message"
+	case "ResourceLimitExceededException":
+		return "Message"
+	case "ResourceNotFoundException":
+		return "Message"
+	case "ResourcePolicyConflictException":
+		return "Message"
+	case "ResourcePolicyInvalidParameterException":
+		return "Message"
+	case "ResourcePolicyLimitExceededException":
+		return "Message"
+	case "ResourcePolicyNotFoundException":
+		return "Message"
+	case "ServiceQuotaExceededException":
+		return "Message"
+	case "ServiceSettingNotFound":
+		return "Message"
+	case "SubTypeCountLimitExceededException":
+		return "Message"
+	case "TargetInUseException":
+		return "Message"
+	case "TargetNotConnected":
+		return "Message"
+	case "ThrottlingException":
+		return "Message"
+	case "TooManyUpdates":
+		return "Message"
+	case "TotalSizeLimitExceededException":
+		return "Message"
+	case "UnsupportedCalendarException":
+		return "Message"
+	case "UnsupportedFeatureRequiredException":
+		return "Message"
+	case "UnsupportedInventoryItemContextException":
+		return "Message"
+	case "UnsupportedInventorySchemaVersionException":
+		return "Message"
+	case "UnsupportedOperatingSystem":
+		return "Message"
+	case "UnsupportedOperationException":
+		return "Message"
+	case "UnsupportedPlatformType":
+		return "Message"
+	case "ValidationException":
+		return "Message"
+	default:
+		return ""
 	}
 }
 
@@ -757,6 +991,246 @@ var errBodyNotUTF8 = &awserr.Error{
 	Message:    "Start of structure or map found where not expected.",
 	StatusCode: 400,
 	Fault:      awserr.FaultSender,
+}
+
+// writeError writes err with the members in v.
+func (v *InvalidItemContentException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ItemContentMismatchException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ItemSizeLimitExceededException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *OpsItemAlreadyExistsException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *OpsItemInvalidParameterException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *OpsItemLimitExceededException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *OpsItemRelatedItemAlreadyExistsException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ResourceDataSyncAlreadyExistsException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ResourceDataSyncNotFoundException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ResourcePolicyInvalidParameterException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ResourcePolicyLimitExceededException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ServiceQuotaExceededException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ThrottlingException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *UnsupportedInventoryItemContextException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ValidationException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
 }
 
 // missingRequired returns the name of the first required member v lacks, or "".
@@ -2545,475 +3019,6 @@ func (v *ListCommandInvocationsInput) missingRequired() string {
 		if member := e1.missingRequired(); member != "" {
 			return member
 		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListCommandsInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListCommandsOutput) missingRequired() string {
-	for _, e1 := range v.Commands {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListComplianceItemsOutput) missingRequired() string {
-	for _, e1 := range v.ComplianceItems {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListDocumentMetadataHistoryInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.Metadata == nil {
-		return "Metadata"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListDocumentVersionsInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListDocumentsInput) missingRequired() string {
-	for _, e1 := range v.DocumentFilterList {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListDocumentsOutput) missingRequired() string {
-	for _, e1 := range v.DocumentIdentifiers {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListInventoryEntriesInput) missingRequired() string {
-	if v.InstanceId == nil {
-		return "InstanceId"
-	}
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListNodesInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListNodesSummaryInput) missingRequired() string {
-	if v.Aggregators == nil {
-		return "Aggregators"
-	}
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.Aggregators {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListOpsItemEventsInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListOpsItemRelatedItemsInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListOpsMetadataInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListResourceComplianceSummariesOutput) missingRequired() string {
-	for _, e1 := range v.ResourceComplianceSummaryItems {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListResourceDataSyncOutput) missingRequired() string {
-	for _, e1 := range v.ResourceDataSyncItems {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListTagsForResourceInput) missingRequired() string {
-	if v.ResourceType == nil {
-		return "ResourceType"
-	}
-	if v.ResourceId == nil {
-		return "ResourceId"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListTagsForResourceOutput) missingRequired() string {
-	for _, e1 := range v.TagList {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *LoggingInfo) missingRequired() string {
-	if v.S3BucketName == nil {
-		return "S3BucketName"
-	}
-	if v.S3Region == nil {
-		return "S3Region"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *MaintenanceWindowExecutionTaskIdentity) missingRequired() string {
-	if v.AlarmConfiguration != nil {
-		if member := v.AlarmConfiguration.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.TriggeredAlarms {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *MaintenanceWindowTask) missingRequired() string {
-	if v.LoggingInfo != nil {
-		if member := v.LoggingInfo.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.AlarmConfiguration != nil {
-		if member := v.AlarmConfiguration.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ModifyDocumentPermissionInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.PermissionType == nil {
-		return "PermissionType"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *NodeAggregator) missingRequired() string {
-	if v.AggregatorType == nil {
-		return "AggregatorType"
-	}
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	if v.AttributeName == nil {
-		return "AttributeName"
-	}
-	for _, e1 := range v.Aggregators {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *NodeFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsAggregator) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.Aggregators {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsItem) missingRequired() string {
-	for _, e1 := range v.RelatedOpsItems {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsItemEventFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	if v.Operator == nil {
-		return "Operator"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsItemFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	if v.Operator == nil {
-		return "Operator"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsItemRelatedItemsFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	if v.Operator == nil {
-		return "Operator"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsMetadataFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *OpsResultAttribute) missingRequired() string {
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ParameterStringFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ParametersFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchComplianceData) missingRequired() string {
-	if v.Title == nil {
-		return "Title"
-	}
-	if v.KBId == nil {
-		return "KBId"
-	}
-	if v.Classification == nil {
-		return "Classification"
-	}
-	if v.Severity == nil {
-		return "Severity"
-	}
-	if v.State == nil {
-		return "State"
-	}
-	if v.InstalledTime == nil {
-		return "InstalledTime"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchFilterGroup) missingRequired() string {
-	if v.PatchFilters == nil {
-		return "PatchFilters"
-	}
-	for _, e1 := range v.PatchFilters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchRule) missingRequired() string {
-	if v.PatchFilterGroup == nil {
-		return "PatchFilterGroup"
-	}
-	if v.PatchFilterGroup != nil {
-		if member := v.PatchFilterGroup.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchRuleGroup) missingRequired() string {
-	if v.PatchRules == nil {
-		return "PatchRules"
-	}
-	for _, e1 := range v.PatchRules {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *PatchSource) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.Products == nil {
-		return "Products"
-	}
-	if v.Configuration == nil {
-		return "Configuration"
 	}
 	return ""
 }

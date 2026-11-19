@@ -156,7 +156,7 @@ func serveAddPermission(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.AddPermission(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -206,7 +206,7 @@ func serveCheckIfPhoneNumberIsOptedOut(h Handler, w http.ResponseWriter, rc *req
 	}
 	out, herr := h.CheckIfPhoneNumberIsOptedOut(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -256,7 +256,7 @@ func serveConfirmSubscription(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.ConfirmSubscription(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -306,7 +306,7 @@ func serveCreatePlatformApplication(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.CreatePlatformApplication(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -356,7 +356,7 @@ func serveCreatePlatformEndpoint(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.CreatePlatformEndpoint(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -406,7 +406,7 @@ func serveCreateSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.CreateSMSSandboxPhoneNumber(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -456,7 +456,7 @@ func serveCreateTopic(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.CreateTopic(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -506,7 +506,7 @@ func serveDeleteEndpoint(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DeleteEndpoint(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -556,7 +556,7 @@ func serveDeletePlatformApplication(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.DeletePlatformApplication(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -606,7 +606,7 @@ func serveDeleteSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.DeleteSMSSandboxPhoneNumber(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -656,7 +656,7 @@ func serveDeleteTopic(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.DeleteTopic(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -706,7 +706,7 @@ func serveGetDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.GetDataProtectionPolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -756,7 +756,7 @@ func serveGetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.GetEndpointAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -806,7 +806,7 @@ func serveGetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc 
 	}
 	out, herr := h.GetPlatformApplicationAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -851,7 +851,7 @@ func serveGetSMSAttributes(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.GetSMSAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -896,7 +896,7 @@ func serveGetSMSSandboxAccountStatus(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.GetSMSSandboxAccountStatus(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -946,7 +946,7 @@ func serveGetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.GetSubscriptionAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -996,7 +996,7 @@ func serveGetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.GetTopicAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1046,7 +1046,7 @@ func serveListEndpointsByPlatformApplication(h Handler, w http.ResponseWriter, r
 	}
 	out, herr := h.ListEndpointsByPlatformApplication(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1091,7 +1091,7 @@ func serveListOriginationNumbers(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.ListOriginationNumbers(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1136,7 +1136,7 @@ func serveListPhoneNumbersOptedOut(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.ListPhoneNumbersOptedOut(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1181,7 +1181,7 @@ func serveListPlatformApplications(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.ListPlatformApplications(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1226,7 +1226,7 @@ func serveListSMSSandboxPhoneNumbers(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.ListSMSSandboxPhoneNumbers(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1271,7 +1271,7 @@ func serveListSubscriptions(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.ListSubscriptions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1321,7 +1321,7 @@ func serveListSubscriptionsByTopic(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.ListSubscriptionsByTopic(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1371,7 +1371,7 @@ func serveListTagsForResource(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.ListTagsForResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1416,7 +1416,7 @@ func serveListTopics(h Handler, w http.ResponseWriter, rc *request.Context, vali
 	}
 	out, herr := h.ListTopics(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1466,7 +1466,7 @@ func serveOptInPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.OptInPhoneNumber(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1516,7 +1516,7 @@ func servePublish(h Handler, w http.ResponseWriter, rc *request.Context, validat
 	}
 	out, herr := h.Publish(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1566,7 +1566,7 @@ func servePublishBatch(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.PublishBatch(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1616,7 +1616,7 @@ func servePutDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.PutDataProtectionPolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1666,7 +1666,7 @@ func serveRemovePermission(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.RemovePermission(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1716,7 +1716,7 @@ func serveSetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.SetEndpointAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1766,7 +1766,7 @@ func serveSetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc 
 	}
 	out, herr := h.SetPlatformApplicationAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1816,7 +1816,7 @@ func serveSetSMSAttributes(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.SetSMSAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1866,7 +1866,7 @@ func serveSetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.SetSubscriptionAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1916,7 +1916,7 @@ func serveSetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.SetTopicAttributes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1966,7 +1966,7 @@ func serveSubscribe(h Handler, w http.ResponseWriter, rc *request.Context, valid
 	}
 	out, herr := h.Subscribe(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2016,7 +2016,7 @@ func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.TagResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2066,7 +2066,7 @@ func serveUnsubscribe(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.Unsubscribe(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2116,7 +2116,7 @@ func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.UntagResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2166,7 +2166,7 @@ func serveVerifySMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.VerifySMSSandboxPhoneNumber(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2222,6 +2222,32 @@ func asError(err error) *awserr.Error {
 	return awserr.Internal(err.Error())
 }
 
+// writeHandlerError writes what a handler returned: an error with members of
+// its own, as its Err method made it, with them, and any other one as it is.
+func writeHandlerError(w http.ResponseWriter, rc *request.Context, err error) {
+	var me *modeledError
+	if errors.As(err, &me) {
+		me.members.writeError(w, rc, me.err)
+		return
+	}
+	writeError(w, rc, asError(err))
+}
+
+// errorMembers are the members of an error shape, which write the error with them.
+type errorMembers interface {
+	writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error)
+}
+
+// modeledError is an error that carries the members of its shape.
+type modeledError struct {
+	err     *awserr.Error
+	members errorMembers
+}
+
+func (e *modeledError) Error() string { return e.err.Error() }
+
+func (e *modeledError) Unwrap() error { return e.err }
+
 // writeError writes err in the error form of the caller's protocol.
 func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	switch rc.Protocol {
@@ -2241,6 +2267,17 @@ func readForm(rc *request.Context) (url.Values, *awserr.Error) {
 		return nil, query.MalformedQueryString()
 	}
 	return vals, nil
+}
+
+// writeError writes err with the members in v.
+func (v *VerificationException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindQuery:
+		env := &query.Envelope{Namespace: queryNamespace, RequestID: rc.RequestID, EscapeQuotes: queryEscapeQuotes}
+		query.WriteModeledError(w, env, err, v.encodeQuery)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
 }
 
 // missingRequired returns the name of the first required member v lacks, or "".
@@ -2659,6 +2696,14 @@ func (v *UntagResourceInput) missingRequired() string {
 	}
 	if v.TagKeys == nil {
 		return "TagKeys"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *VerificationException) missingRequired() string {
+	if v.Status == nil {
+		return "Status"
 	}
 	return ""
 }

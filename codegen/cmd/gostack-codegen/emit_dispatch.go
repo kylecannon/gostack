@@ -138,7 +138,13 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 	p.f("\t}")
 	p.f("\tout, herr := h.%s(request.With(rc.Request.Context(), rc), in)", op.name)
 	p.f("\tif herr != nil {")
-	p.f("\t\twriteError(w, rc, asError(herr))")
+
+	if g.hasModeledErrors() {
+		p.f("\t\twriteHandlerError(w, rc, herr)")
+	} else {
+		p.f("\t\twriteError(w, rc, asError(herr))")
+	}
+
 	p.f("\t\treturn")
 	p.f("\t}")
 	p.f("\tif out == nil {")
@@ -239,8 +245,67 @@ func (g *generator) emitHelpers(p *printer) {
 	p.f("}")
 	p.blank()
 
+	if g.hasModeledErrors() {
+		g.emitWriteHandlerError(p)
+		emitModeledError(p)
+	}
+
 	g.emitWriteError(p)
+	g.emitMessageName(p)
 	g.emitReaders(p)
+
+	for _, ex := range g.exceptions {
+		if ex.members != nil {
+			g.emitMembersErrorWriter(p, ex.members)
+		}
+	}
+}
+
+// emitMembersErrorWriter writes the method that writes an error of a json or
+// query service with the members of its shape: beside __type in json, and in
+// query after the RequestId of the ErrorResponse, where LocalStack writes them
+// (serializer.py, _add_additional_error_tags) and botocore reads them. Smithy's
+// awsQuery puts them inside <Error>, and botocore's ignore list skips that
+// case (QueryComplexError), so LocalStack's place stands.
+func (g *generator) emitMembersErrorWriter(p *printer, st *structType) {
+	p.f("// writeError writes err with the members in v.")
+	p.f("func (v *%s) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {", st.goName)
+	p.f("\tswitch rc.Protocol {")
+
+	if g.hasProtocol(protoJSON) {
+		p.f("\tcase protocol.KindJSON:")
+		p.f("\t\topts := %s", g.jsonErrorOptions("Members: v"))
+		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
+	}
+
+	if g.hasProtocol(protoQuery) {
+		p.f("\tcase protocol.KindQuery:")
+		p.f("\t\tenv := &query.Envelope{Namespace: queryNamespace, RequestID: rc.RequestID, EscapeQuotes: queryEscapeQuotes}")
+		p.f("\t\tquery.WriteModeledError(w, env, err, v.encodeQuery)")
+	}
+
+	p.f("\tdefault:")
+	p.f("\t\thttp.Error(w, err.Message, err.StatusCode)")
+	p.f("\t}")
+	p.f("}")
+	p.blank()
+}
+
+// jsonErrorOptions is the awsjson.ErrorOptions literal of a json error, with
+// extra fields after the ones every json error sets.
+func (g *generator) jsonErrorOptions(extra ...string) string {
+	fields := []string{
+		"QueryCompatible: awsQueryCompatible",
+		"ContentType: \"application/x-amz-json-\" + jsonVersion",
+	}
+
+	if len(g.messageNames()) > 0 {
+		fields = append(fields, "MessageName: messageName(err.Code)")
+	}
+
+	fields = append(fields, extra...)
+
+	return "awsjson.ErrorOptions{\n\t\t\t" + strings.Join(fields, ",\n\t\t\t") + ",\n\t\t}"
 }
 
 // emitReaders writes the functions that read a request body in each protocol.
@@ -322,10 +387,7 @@ func (g *generator) emitWriteError(p *printer) {
 
 	if g.hasProtocol(protoJSON) {
 		p.f("\tcase protocol.KindJSON:")
-		p.f("\t\topts := awsjson.ErrorOptions{")
-		p.f("\t\t\tQueryCompatible: awsQueryCompatible,")
-		p.f("\t\t\tContentType: \"application/x-amz-json-\" + jsonVersion,")
-		p.f("\t\t}")
+		p.f("\t\topts := %s", g.jsonErrorOptions())
 		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
 	}
 

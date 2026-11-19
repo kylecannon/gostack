@@ -91,6 +91,9 @@ type structType struct {
 	decodes    bool
 	encodes    bool
 	needsCheck bool
+	// union marks a struct that gets MembersSet: a union shape of a service
+	// whose options ask for them, or one of its UnionShapes.
+	union bool
 	// payload is the field the shape's payload trait names, sent as the whole
 	// body by a rest protocol, or nil.
 	payload *field
@@ -286,6 +289,37 @@ func (g *generator) build() error {
 
 	g.markReachable()
 	g.markChecks()
+
+	return g.markUnions()
+}
+
+// unionMethod is the method a union struct gets. No member of one may have
+// the same Go name.
+const unionMethod = "MembersSet"
+
+// markUnions flags the structs that get MembersSet: every union shape when the
+// service's Unions option is on, and the shapes its UnionShapes names.
+func (g *generator) markUnions() error {
+	for _, st := range g.structs {
+		st.union = g.opts.Unions && st.shape != nil && st.shape.Union
+	}
+
+	for _, name := range g.opts.UnionShapes {
+		st := g.structs[g.goTypeName(name)]
+		if st == nil || st.shape != g.p.Shapes[name] {
+			return fmt.Errorf("union shape %s is not a structure the service uses", name)
+		}
+
+		st.union = true
+	}
+
+	for _, st := range g.structs {
+		for _, f := range st.fields {
+			if st.union && f.goName == unionMethod {
+				return fmt.Errorf("union %s has a member named %s, the name of its method", st.goName, unionMethod)
+			}
+		}
+	}
 
 	return nil
 }
@@ -638,6 +672,11 @@ func (g *generator) attachQuery(st *structType, queryShape string) error {
 			if cand.goName == exportName(qm.Name) {
 				f = cand
 			}
+		}
+
+		// An error's message travels as the error's Message, not as a field.
+		if f == nil && st.shape != nil && st.shape.Exception && strings.EqualFold(qm.Name, "message") {
+			continue
 		}
 
 		if f == nil {

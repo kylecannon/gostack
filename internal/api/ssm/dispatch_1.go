@@ -352,7 +352,7 @@ func serveAddTagsToResource(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.AddTagsToResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -396,7 +396,7 @@ func serveAssociateOpsItemRelatedItem(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.AssociateOpsItemRelatedItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -440,7 +440,7 @@ func serveCancelCommand(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.CancelCommand(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -484,7 +484,7 @@ func serveCancelMaintenanceWindowExecution(h Handler, w http.ResponseWriter, rc 
 	}
 	out, herr := h.CancelMaintenanceWindowExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -528,7 +528,7 @@ func serveCreateActivation(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.CreateActivation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -572,7 +572,7 @@ func serveCreateAssociation(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.CreateAssociation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -616,7 +616,7 @@ func serveCreateAssociationBatch(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.CreateAssociationBatch(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -660,7 +660,7 @@ func serveCreateDocument(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.CreateDocument(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -704,7 +704,7 @@ func serveCreateMaintenanceWindow(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.CreateMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -748,7 +748,7 @@ func serveCreateOpsItem(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.CreateOpsItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -792,7 +792,7 @@ func serveCreateOpsMetadata(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.CreateOpsMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -836,7 +836,7 @@ func serveCreatePatchBaseline(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.CreatePatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -880,7 +880,7 @@ func serveCreateResourceDataSync(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.CreateResourceDataSync(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -924,7 +924,7 @@ func serveDeleteActivation(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.DeleteActivation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -963,7 +963,7 @@ func serveDeleteAssociation(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.DeleteAssociation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1007,7 +1007,7 @@ func serveDeleteDocument(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DeleteDocument(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1051,7 +1051,7 @@ func serveDeleteInventory(h Handler, w http.ResponseWriter, rc *request.Context,
 	}
 	out, herr := h.DeleteInventory(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1095,7 +1095,7 @@ func serveDeleteMaintenanceWindow(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.DeleteMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1139,7 +1139,7 @@ func serveDeleteOpsItem(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.DeleteOpsItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1183,7 +1183,7 @@ func serveDeleteOpsMetadata(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.DeleteOpsMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1227,7 +1227,7 @@ func serveDeleteParameter(h Handler, w http.ResponseWriter, rc *request.Context,
 	}
 	out, herr := h.DeleteParameter(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1271,7 +1271,7 @@ func serveDeleteParameters(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.DeleteParameters(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1315,7 +1315,7 @@ func serveDeletePatchBaseline(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.DeletePatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1359,7 +1359,7 @@ func serveDeleteResourceDataSync(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.DeleteResourceDataSync(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1403,7 +1403,7 @@ func serveDeleteResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.DeleteResourcePolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1447,7 +1447,7 @@ func serveDeregisterManagedInstance(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.DeregisterManagedInstance(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1491,7 +1491,7 @@ func serveDeregisterPatchBaselineForPatchGroup(h Handler, w http.ResponseWriter,
 	}
 	out, herr := h.DeregisterPatchBaselineForPatchGroup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1535,7 +1535,7 @@ func serveDeregisterTargetFromMaintenanceWindow(h Handler, w http.ResponseWriter
 	}
 	out, herr := h.DeregisterTargetFromMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1579,7 +1579,7 @@ func serveDeregisterTaskFromMaintenanceWindow(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.DeregisterTaskFromMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1618,7 +1618,7 @@ func serveDescribeActivations(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.DescribeActivations(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1657,7 +1657,7 @@ func serveDescribeAssociation(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.DescribeAssociation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1701,7 +1701,7 @@ func serveDescribeAssociationExecutionTargets(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.DescribeAssociationExecutionTargets(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1745,7 +1745,7 @@ func serveDescribeAssociationExecutions(h Handler, w http.ResponseWriter, rc *re
 	}
 	out, herr := h.DescribeAssociationExecutions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1789,7 +1789,7 @@ func serveDescribeAutomationExecutions(h Handler, w http.ResponseWriter, rc *req
 	}
 	out, herr := h.DescribeAutomationExecutions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1833,7 +1833,7 @@ func serveDescribeAutomationStepExecutions(h Handler, w http.ResponseWriter, rc 
 	}
 	out, herr := h.DescribeAutomationStepExecutions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1872,7 +1872,7 @@ func serveDescribeAvailablePatches(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.DescribeAvailablePatches(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1916,7 +1916,7 @@ func serveDescribeDocument(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.DescribeDocument(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1960,7 +1960,7 @@ func serveDescribeDocumentPermission(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.DescribeDocumentPermission(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2004,7 +2004,7 @@ func serveDescribeEffectiveInstanceAssociations(h Handler, w http.ResponseWriter
 	}
 	out, herr := h.DescribeEffectiveInstanceAssociations(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2048,7 +2048,7 @@ func serveDescribeEffectivePatchesForPatchBaseline(h Handler, w http.ResponseWri
 	}
 	out, herr := h.DescribeEffectivePatchesForPatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2092,7 +2092,7 @@ func serveDescribeInstanceAssociationsStatus(h Handler, w http.ResponseWriter, r
 	}
 	out, herr := h.DescribeInstanceAssociationsStatus(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2136,7 +2136,7 @@ func serveDescribeInstanceInformation(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.DescribeInstanceInformation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2180,7 +2180,7 @@ func serveDescribeInstancePatchStates(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.DescribeInstancePatchStates(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2224,7 +2224,7 @@ func serveDescribeInstancePatchStatesForPatchGroup(h Handler, w http.ResponseWri
 	}
 	out, herr := h.DescribeInstancePatchStatesForPatchGroup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2268,7 +2268,7 @@ func serveDescribeInstancePatches(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.DescribeInstancePatches(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2312,7 +2312,7 @@ func serveDescribeInstanceProperties(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.DescribeInstanceProperties(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2351,7 +2351,7 @@ func serveDescribeInventoryDeletions(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.DescribeInventoryDeletions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2395,7 +2395,7 @@ func serveDescribeMaintenanceWindowExecutionTaskInvocations(h Handler, w http.Re
 	}
 	out, herr := h.DescribeMaintenanceWindowExecutionTaskInvocations(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2439,7 +2439,7 @@ func serveDescribeMaintenanceWindowExecutionTasks(h Handler, w http.ResponseWrit
 	}
 	out, herr := h.DescribeMaintenanceWindowExecutionTasks(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2483,7 +2483,7 @@ func serveDescribeMaintenanceWindowExecutions(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.DescribeMaintenanceWindowExecutions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2522,7 +2522,7 @@ func serveDescribeMaintenanceWindowSchedule(h Handler, w http.ResponseWriter, rc
 	}
 	out, herr := h.DescribeMaintenanceWindowSchedule(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2566,7 +2566,7 @@ func serveDescribeMaintenanceWindowTargets(h Handler, w http.ResponseWriter, rc 
 	}
 	out, herr := h.DescribeMaintenanceWindowTargets(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2610,7 +2610,7 @@ func serveDescribeMaintenanceWindowTasks(h Handler, w http.ResponseWriter, rc *r
 	}
 	out, herr := h.DescribeMaintenanceWindowTasks(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2649,7 +2649,7 @@ func serveDescribeMaintenanceWindows(h Handler, w http.ResponseWriter, rc *reque
 	}
 	out, herr := h.DescribeMaintenanceWindows(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2693,7 +2693,7 @@ func serveDescribeMaintenanceWindowsForTarget(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.DescribeMaintenanceWindowsForTarget(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2737,7 +2737,7 @@ func serveDescribeOpsItems(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.DescribeOpsItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2781,7 +2781,7 @@ func serveDescribeParameters(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.DescribeParameters(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2820,7 +2820,7 @@ func serveDescribePatchBaselines(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.DescribePatchBaselines(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2864,7 +2864,7 @@ func serveDescribePatchGroupState(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.DescribePatchGroupState(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2903,7 +2903,7 @@ func serveDescribePatchGroups(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.DescribePatchGroups(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2947,7 +2947,7 @@ func serveDescribePatchProperties(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.DescribePatchProperties(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2991,7 +2991,7 @@ func serveDescribeSessions(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.DescribeSessions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {

@@ -33,7 +33,7 @@ func serveDisassociateOpsItemRelatedItem(h Handler, w http.ResponseWriter, rc *r
 	}
 	out, herr := h.DisassociateOpsItemRelatedItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -77,7 +77,7 @@ func serveGetAccessToken(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.GetAccessToken(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -121,7 +121,7 @@ func serveGetAutomationExecution(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.GetAutomationExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -165,7 +165,7 @@ func serveGetCalendarState(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.GetCalendarState(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -209,7 +209,7 @@ func serveGetCommandInvocation(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.GetCommandInvocation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -253,7 +253,7 @@ func serveGetConnectionStatus(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.GetConnectionStatus(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -292,7 +292,7 @@ func serveGetDefaultPatchBaseline(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.GetDefaultPatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -336,7 +336,7 @@ func serveGetDeployablePatchSnapshotForInstance(h Handler, w http.ResponseWriter
 	}
 	out, herr := h.GetDeployablePatchSnapshotForInstance(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -380,7 +380,7 @@ func serveGetDocument(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.GetDocument(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -424,7 +424,7 @@ func serveGetExecutionPreview(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.GetExecutionPreview(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -468,7 +468,7 @@ func serveGetInventory(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.GetInventory(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -507,7 +507,7 @@ func serveGetInventorySchema(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.GetInventorySchema(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -551,7 +551,7 @@ func serveGetMaintenanceWindow(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.GetMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -595,7 +595,7 @@ func serveGetMaintenanceWindowExecution(h Handler, w http.ResponseWriter, rc *re
 	}
 	out, herr := h.GetMaintenanceWindowExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -639,7 +639,7 @@ func serveGetMaintenanceWindowExecutionTask(h Handler, w http.ResponseWriter, rc
 	}
 	out, herr := h.GetMaintenanceWindowExecutionTask(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -683,7 +683,7 @@ func serveGetMaintenanceWindowExecutionTaskInvocation(h Handler, w http.Response
 	}
 	out, herr := h.GetMaintenanceWindowExecutionTaskInvocation(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -727,7 +727,7 @@ func serveGetMaintenanceWindowTask(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.GetMaintenanceWindowTask(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -771,7 +771,7 @@ func serveGetOpsItem(h Handler, w http.ResponseWriter, rc *request.Context, vali
 	}
 	out, herr := h.GetOpsItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -815,7 +815,7 @@ func serveGetOpsMetadata(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.GetOpsMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -859,7 +859,7 @@ func serveGetOpsSummary(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.GetOpsSummary(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -903,7 +903,7 @@ func serveGetParameter(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.GetParameter(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -947,7 +947,7 @@ func serveGetParameterHistory(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.GetParameterHistory(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -991,7 +991,7 @@ func serveGetParameters(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.GetParameters(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1035,7 +1035,7 @@ func serveGetParametersByPath(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.GetParametersByPath(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1079,7 +1079,7 @@ func serveGetPatchBaseline(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.GetPatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1123,7 +1123,7 @@ func serveGetPatchBaselineForPatchGroup(h Handler, w http.ResponseWriter, rc *re
 	}
 	out, herr := h.GetPatchBaselineForPatchGroup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1167,7 +1167,7 @@ func serveGetResourcePolicies(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.GetResourcePolicies(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1211,7 +1211,7 @@ func serveGetServiceSetting(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.GetServiceSetting(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1255,7 +1255,7 @@ func serveLabelParameterVersion(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.LabelParameterVersion(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1299,7 +1299,7 @@ func serveListAssociationVersions(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.ListAssociationVersions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1343,7 +1343,7 @@ func serveListAssociations(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.ListAssociations(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1387,7 +1387,7 @@ func serveListCommandInvocations(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.ListCommandInvocations(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1431,7 +1431,7 @@ func serveListCommands(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.ListCommands(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1470,7 +1470,7 @@ func serveListComplianceItems(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.ListComplianceItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1509,7 +1509,7 @@ func serveListComplianceSummaries(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.ListComplianceSummaries(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1553,7 +1553,7 @@ func serveListDocumentMetadataHistory(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.ListDocumentMetadataHistory(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1597,7 +1597,7 @@ func serveListDocumentVersions(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.ListDocumentVersions(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1641,7 +1641,7 @@ func serveListDocuments(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.ListDocuments(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1685,7 +1685,7 @@ func serveListInventoryEntries(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.ListInventoryEntries(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1729,7 +1729,7 @@ func serveListNodes(h Handler, w http.ResponseWriter, rc *request.Context, valid
 	}
 	out, herr := h.ListNodes(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1773,7 +1773,7 @@ func serveListNodesSummary(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.ListNodesSummary(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1817,7 +1817,7 @@ func serveListOpsItemEvents(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.ListOpsItemEvents(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1861,7 +1861,7 @@ func serveListOpsItemRelatedItems(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.ListOpsItemRelatedItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1905,7 +1905,7 @@ func serveListOpsMetadata(h Handler, w http.ResponseWriter, rc *request.Context,
 	}
 	out, herr := h.ListOpsMetadata(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1944,7 +1944,7 @@ func serveListResourceComplianceSummaries(h Handler, w http.ResponseWriter, rc *
 	}
 	out, herr := h.ListResourceComplianceSummaries(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1983,7 +1983,7 @@ func serveListResourceDataSync(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.ListResourceDataSync(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2027,7 +2027,7 @@ func serveListTagsForResource(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.ListTagsForResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2071,7 +2071,7 @@ func serveModifyDocumentPermission(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.ModifyDocumentPermission(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2115,7 +2115,7 @@ func servePutComplianceItems(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.PutComplianceItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2159,7 +2159,7 @@ func servePutInventory(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.PutInventory(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2203,7 +2203,7 @@ func servePutParameter(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.PutParameter(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2247,7 +2247,7 @@ func servePutResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.PutResourcePolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2291,7 +2291,7 @@ func serveRegisterDefaultPatchBaseline(h Handler, w http.ResponseWriter, rc *req
 	}
 	out, herr := h.RegisterDefaultPatchBaseline(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2335,7 +2335,7 @@ func serveRegisterPatchBaselineForPatchGroup(h Handler, w http.ResponseWriter, r
 	}
 	out, herr := h.RegisterPatchBaselineForPatchGroup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2379,7 +2379,7 @@ func serveRegisterTargetWithMaintenanceWindow(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.RegisterTargetWithMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2423,7 +2423,7 @@ func serveRegisterTaskWithMaintenanceWindow(h Handler, w http.ResponseWriter, rc
 	}
 	out, herr := h.RegisterTaskWithMaintenanceWindow(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2467,7 +2467,7 @@ func serveRemoveTagsFromResource(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.RemoveTagsFromResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2511,7 +2511,7 @@ func serveResetServiceSetting(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.ResetServiceSetting(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2555,7 +2555,7 @@ func serveResumeSession(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.ResumeSession(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2599,7 +2599,7 @@ func serveSendAutomationSignal(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.SendAutomationSignal(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2643,7 +2643,7 @@ func serveSendCommand(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.SendCommand(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2687,7 +2687,7 @@ func serveStartAccessRequest(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.StartAccessRequest(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2731,7 +2731,7 @@ func serveStartAssociationsOnce(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.StartAssociationsOnce(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2775,7 +2775,7 @@ func serveStartAutomationExecution(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.StartAutomationExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2819,7 +2819,7 @@ func serveStartChangeRequestExecution(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.StartChangeRequestExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2863,7 +2863,7 @@ func serveStartExecutionPreview(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.StartExecutionPreview(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2907,7 +2907,7 @@ func serveStartSession(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.StartSession(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2951,7 +2951,7 @@ func serveStopAutomationExecution(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.StopAutomationExecution(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2995,7 +2995,7 @@ func serveTerminateSession(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.TerminateSession(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {

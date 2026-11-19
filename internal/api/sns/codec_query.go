@@ -1262,6 +1262,12 @@ func (v *UntagResourceInput) decodeQuery(d *query.Decoder, p string) {
 func (v *UntagResourceOutput) encodeQuery(w *query.Writer) {
 }
 
+func (v *VerificationException) encodeQuery(w *query.Writer) {
+	if v.Status != nil {
+		w.String("Status", *v.Status)
+	}
+}
+
 func (v *VerifySMSSandboxPhoneNumberInput) decodeQuery(d *query.Decoder, p string) {
 	v.PhoneNumber = d.String(query.Key(p, "PhoneNumber"))
 	v.OneTimePassword = d.String(query.Key(p, "OneTimePassword"))

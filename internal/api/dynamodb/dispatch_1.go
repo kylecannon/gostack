@@ -179,7 +179,7 @@ func serveBatchExecuteStatement(h Handler, w http.ResponseWriter, rc *request.Co
 	}
 	out, herr := h.BatchExecuteStatement(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -223,7 +223,7 @@ func serveBatchGetItem(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.BatchGetItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -267,7 +267,7 @@ func serveBatchWriteItem(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.BatchWriteItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -311,7 +311,7 @@ func serveCreateBackup(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.CreateBackup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -355,7 +355,7 @@ func serveCreateGlobalTable(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.CreateGlobalTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -399,7 +399,7 @@ func serveCreateTable(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.CreateTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -443,7 +443,7 @@ func serveDeleteBackup(h Handler, w http.ResponseWriter, rc *request.Context, va
 	}
 	out, herr := h.DeleteBackup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -487,7 +487,7 @@ func serveDeleteItem(h Handler, w http.ResponseWriter, rc *request.Context, vali
 	}
 	out, herr := h.DeleteItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -531,7 +531,7 @@ func serveDeleteResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Con
 	}
 	out, herr := h.DeleteResourcePolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -575,7 +575,7 @@ func serveDeleteTable(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.DeleteTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -619,7 +619,7 @@ func serveDescribeBackup(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DescribeBackup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -663,7 +663,7 @@ func serveDescribeContinuousBackups(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.DescribeContinuousBackups(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -707,7 +707,7 @@ func serveDescribeContributorInsights(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.DescribeContributorInsights(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -746,7 +746,7 @@ func serveDescribeEndpoints(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.DescribeEndpoints(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -790,7 +790,7 @@ func serveDescribeExport(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DescribeExport(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -834,7 +834,7 @@ func serveDescribeGlobalTable(h Handler, w http.ResponseWriter, rc *request.Cont
 	}
 	out, herr := h.DescribeGlobalTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -878,7 +878,7 @@ func serveDescribeGlobalTableSettings(h Handler, w http.ResponseWriter, rc *requ
 	}
 	out, herr := h.DescribeGlobalTableSettings(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -922,7 +922,7 @@ func serveDescribeImport(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DescribeImport(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -966,7 +966,7 @@ func serveDescribeKinesisStreamingDestination(h Handler, w http.ResponseWriter, 
 	}
 	out, herr := h.DescribeKinesisStreamingDestination(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1005,7 +1005,7 @@ func serveDescribeLimits(h Handler, w http.ResponseWriter, rc *request.Context, 
 	}
 	out, herr := h.DescribeLimits(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1049,7 +1049,7 @@ func serveDescribeTable(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.DescribeTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1093,7 +1093,7 @@ func serveDescribeTableReplicaAutoScaling(h Handler, w http.ResponseWriter, rc *
 	}
 	out, herr := h.DescribeTableReplicaAutoScaling(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1137,7 +1137,7 @@ func serveDescribeTimeToLive(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.DescribeTimeToLive(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1181,7 +1181,7 @@ func serveDisableKinesisStreamingDestination(h Handler, w http.ResponseWriter, r
 	}
 	out, herr := h.DisableKinesisStreamingDestination(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1225,7 +1225,7 @@ func serveEnableKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc
 	}
 	out, herr := h.EnableKinesisStreamingDestination(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1269,7 +1269,7 @@ func serveExecuteStatement(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.ExecuteStatement(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1313,7 +1313,7 @@ func serveExecuteTransaction(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.ExecuteTransaction(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1357,7 +1357,7 @@ func serveExportTableToPointInTime(h Handler, w http.ResponseWriter, rc *request
 	}
 	out, herr := h.ExportTableToPointInTime(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1401,7 +1401,7 @@ func serveGetItem(h Handler, w http.ResponseWriter, rc *request.Context, validat
 	}
 	out, herr := h.GetItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1445,7 +1445,7 @@ func serveGetResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.GetResourcePolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1489,7 +1489,7 @@ func serveImportTable(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.ImportTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1528,7 +1528,7 @@ func serveListBackups(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.ListBackups(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1567,7 +1567,7 @@ func serveListContributorInsights(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.ListContributorInsights(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1606,7 +1606,7 @@ func serveListExports(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.ListExports(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1645,7 +1645,7 @@ func serveListGlobalTables(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.ListGlobalTables(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1684,7 +1684,7 @@ func serveListImports(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.ListImports(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1723,7 +1723,7 @@ func serveListTables(h Handler, w http.ResponseWriter, rc *request.Context, vali
 	}
 	out, herr := h.ListTables(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1767,7 +1767,7 @@ func serveListTagsOfResource(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.ListTagsOfResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1811,7 +1811,7 @@ func servePutItem(h Handler, w http.ResponseWriter, rc *request.Context, validat
 	}
 	out, herr := h.PutItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1855,7 +1855,7 @@ func servePutResourcePolicy(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.PutResourcePolicy(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1899,7 +1899,7 @@ func serveQuery(h Handler, w http.ResponseWriter, rc *request.Context, validate 
 	}
 	out, herr := h.Query(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1943,7 +1943,7 @@ func serveRestoreTableFromBackup(h Handler, w http.ResponseWriter, rc *request.C
 	}
 	out, herr := h.RestoreTableFromBackup(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -1987,7 +1987,7 @@ func serveRestoreTableToPointInTime(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.RestoreTableToPointInTime(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2031,7 +2031,7 @@ func serveScan(h Handler, w http.ResponseWriter, rc *request.Context, validate b
 	}
 	out, herr := h.Scan(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2075,7 +2075,7 @@ func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.TagResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2119,7 +2119,7 @@ func serveTransactGetItems(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.TransactGetItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2163,7 +2163,7 @@ func serveTransactWriteItems(h Handler, w http.ResponseWriter, rc *request.Conte
 	}
 	out, herr := h.TransactWriteItems(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2207,7 +2207,7 @@ func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, v
 	}
 	out, herr := h.UntagResource(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2251,7 +2251,7 @@ func serveUpdateContinuousBackups(h Handler, w http.ResponseWriter, rc *request.
 	}
 	out, herr := h.UpdateContinuousBackups(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2295,7 +2295,7 @@ func serveUpdateContributorInsights(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.UpdateContributorInsights(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2339,7 +2339,7 @@ func serveUpdateGlobalTable(h Handler, w http.ResponseWriter, rc *request.Contex
 	}
 	out, herr := h.UpdateGlobalTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2383,7 +2383,7 @@ func serveUpdateGlobalTableSettings(h Handler, w http.ResponseWriter, rc *reques
 	}
 	out, herr := h.UpdateGlobalTableSettings(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2427,7 +2427,7 @@ func serveUpdateItem(h Handler, w http.ResponseWriter, rc *request.Context, vali
 	}
 	out, herr := h.UpdateItem(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2471,7 +2471,7 @@ func serveUpdateKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc
 	}
 	out, herr := h.UpdateKinesisStreamingDestination(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2515,7 +2515,7 @@ func serveUpdateTable(h Handler, w http.ResponseWriter, rc *request.Context, val
 	}
 	out, herr := h.UpdateTable(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2559,7 +2559,7 @@ func serveUpdateTableReplicaAutoScaling(h Handler, w http.ResponseWriter, rc *re
 	}
 	out, herr := h.UpdateTableReplicaAutoScaling(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2603,7 +2603,7 @@ func serveUpdateTimeToLive(h Handler, w http.ResponseWriter, rc *request.Context
 	}
 	out, herr := h.UpdateTimeToLive(request.With(rc.Request.Context(), rc), in)
 	if herr != nil {
-		writeError(w, rc, asError(herr))
+		writeHandlerError(w, rc, herr)
 		return
 	}
 	if out == nil {
@@ -2653,6 +2653,32 @@ func asError(err error) *awserr.Error {
 	return awserr.Internal(err.Error())
 }
 
+// writeHandlerError writes what a handler returned: an error with members of
+// its own, as its Err method made it, with them, and any other one as it is.
+func writeHandlerError(w http.ResponseWriter, rc *request.Context, err error) {
+	var me *modeledError
+	if errors.As(err, &me) {
+		me.members.writeError(w, rc, me.err)
+		return
+	}
+	writeError(w, rc, asError(err))
+}
+
+// errorMembers are the members of an error shape, which write the error with them.
+type errorMembers interface {
+	writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error)
+}
+
+// modeledError is an error that carries the members of its shape.
+type modeledError struct {
+	err     *awserr.Error
+	members errorMembers
+}
+
+func (e *modeledError) Error() string { return e.err.Error() }
+
+func (e *modeledError) Unwrap() error { return e.err }
+
 // writeError writes err in the error form of the caller's protocol.
 func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	switch rc.Protocol {
@@ -2660,10 +2686,26 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 		opts := awsjson.ErrorOptions{
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// messageName is the json name of the message of an error, by its code: the
+// name of its shape's message member, where that is not "message".
+func messageName(code string) string {
+	switch code {
+	case "IdempotentParameterMismatchException":
+		return "Message"
+	case "TransactionCanceledException":
+		return "Message"
+	case "TransactionInProgressException":
+		return "Message"
+	default:
+		return ""
 	}
 }
 
@@ -2706,6 +2748,86 @@ var errBodyNotUTF8 = &awserr.Error{
 	Message:    "Start of structure or map found where not expected.",
 	StatusCode: 400,
 	Fault:      awserr.FaultSender,
+}
+
+// writeError writes err with the members in v.
+func (v *ConditionalCheckFailedException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ProvisionedThroughputExceededException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *RequestLimitExceeded) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *ThrottlingException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
+}
+
+// writeError writes err with the members in v.
+func (v *TransactionCanceledException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
+	switch rc.Protocol {
+	case protocol.KindJSON:
+		opts := awsjson.ErrorOptions{
+			QueryCompatible: awsQueryCompatible,
+			ContentType:     "application/x-amz-json-" + jsonVersion,
+			MessageName:     messageName(err.Code),
+			Members:         v,
+		}
+		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
+	default:
+		http.Error(w, err.Message, err.StatusCode)
+	}
 }
 
 // missingRequired returns the name of the first required member v lacks, or "".
@@ -2893,156 +3015,6 @@ func (v *BatchWriteItemOutput) missingRequired() string {
 func (v *Condition) missingRequired() string {
 	if v.ComparisonOperator == nil {
 		return "ComparisonOperator"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ConditionCheck) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.TableName == nil {
-		return "TableName"
-	}
-	if v.ConditionExpression == nil {
-		return "ConditionExpression"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ContinuousBackupsDescription) missingRequired() string {
-	if v.ContinuousBackupsStatus == nil {
-		return "ContinuousBackupsStatus"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateBackupInput) missingRequired() string {
-	if v.TableName == nil {
-		return "TableName"
-	}
-	if v.BackupName == nil {
-		return "BackupName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateBackupOutput) missingRequired() string {
-	if v.BackupDetails != nil {
-		if member := v.BackupDetails.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateGlobalSecondaryIndexAction) missingRequired() string {
-	if v.IndexName == nil {
-		return "IndexName"
-	}
-	if v.KeySchema == nil {
-		return "KeySchema"
-	}
-	if v.Projection == nil {
-		return "Projection"
-	}
-	for _, e1 := range v.KeySchema {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.ProvisionedThroughput != nil {
-		if member := v.ProvisionedThroughput.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateGlobalTableInput) missingRequired() string {
-	if v.GlobalTableName == nil {
-		return "GlobalTableName"
-	}
-	if v.ReplicationGroup == nil {
-		return "ReplicationGroup"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateGlobalTableWitnessGroupMemberAction) missingRequired() string {
-	if v.RegionName == nil {
-		return "RegionName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateReplicaAction) missingRequired() string {
-	if v.RegionName == nil {
-		return "RegionName"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateReplicationGroupMemberAction) missingRequired() string {
-	if v.RegionName == nil {
-		return "RegionName"
-	}
-	for _, e1 := range v.GlobalSecondaryIndexes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *CreateTableInput) missingRequired() string {
-	if v.TableName == nil {
-		return "TableName"
-	}
-	for _, e1 := range v.AttributeDefinitions {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.KeySchema {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.LocalSecondaryIndexes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.GlobalSecondaryIndexes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.ProvisionedThroughput != nil {
-		if member := v.ProvisionedThroughput.missingRequired(); member != "" {
-			return member
-		}
-	}
-	if v.StreamSpecification != nil {
-		if member := v.StreamSpecification.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.Tags {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
 	}
 	return ""
 }

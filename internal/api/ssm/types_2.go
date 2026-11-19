@@ -6,6 +6,77 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol"
 )
 
+// PatchComplianceData is a structure of the ssm API.
+type PatchComplianceData struct {
+	Title          *string        `json:"Title,omitzero"`
+	KBId           *string        `json:"KBId,omitzero"`
+	Classification *string        `json:"Classification,omitzero"`
+	Severity       *string        `json:"Severity,omitzero"`
+	State          *string        `json:"State,omitzero"`
+	InstalledTime  *protocol.Time `json:"InstalledTime,omitzero"`
+	CVEIds         *string        `json:"CVEIds,omitzero"`
+}
+
+// PatchFilter is a structure of the ssm API.
+type PatchFilter struct {
+	Key    *string  `json:"Key,omitzero"`
+	Values []string `json:"Values,omitzero"`
+}
+
+// PatchFilterGroup is a structure of the ssm API.
+type PatchFilterGroup struct {
+	PatchFilters []PatchFilter `json:"PatchFilters,omitzero"`
+}
+
+// PatchGroupPatchBaselineMapping is a structure of the ssm API.
+type PatchGroupPatchBaselineMapping struct {
+	PatchGroup       *string                `json:"PatchGroup,omitzero"`
+	BaselineIdentity *PatchBaselineIdentity `json:"BaselineIdentity,omitzero"`
+}
+
+// PatchOrchestratorFilter is a structure of the ssm API.
+type PatchOrchestratorFilter struct {
+	Key    *string  `json:"Key,omitzero"`
+	Values []string `json:"Values,omitzero"`
+}
+
+// PatchRule is a structure of the ssm API.
+type PatchRule struct {
+	PatchFilterGroup  *PatchFilterGroup `json:"PatchFilterGroup,omitzero"`
+	ComplianceLevel   *string           `json:"ComplianceLevel,omitzero"`
+	ApproveAfterDays  *int32            `json:"ApproveAfterDays,omitzero"`
+	ApproveUntilDate  *string           `json:"ApproveUntilDate,omitzero"`
+	EnableNonSecurity *bool             `json:"EnableNonSecurity,omitzero"`
+}
+
+// PatchRuleGroup is a structure of the ssm API.
+type PatchRuleGroup struct {
+	PatchRules []PatchRule `json:"PatchRules,omitzero"`
+}
+
+// PatchSource is a structure of the ssm API.
+type PatchSource struct {
+	Name          *string  `json:"Name,omitzero"`
+	Products      []string `json:"Products,omitzero"`
+	Configuration *string  `json:"Configuration,omitzero"`
+}
+
+// PatchStatus is a structure of the ssm API.
+type PatchStatus struct {
+	DeploymentStatus *string        `json:"DeploymentStatus,omitzero"`
+	ComplianceLevel  *string        `json:"ComplianceLevel,omitzero"`
+	ApprovalDate     *protocol.Time `json:"ApprovalDate,omitzero"`
+}
+
+// ProgressCounters is a structure of the ssm API.
+type ProgressCounters struct {
+	TotalSteps     *int32 `json:"TotalSteps,omitzero"`
+	SuccessSteps   *int32 `json:"SuccessSteps,omitzero"`
+	FailedSteps    *int32 `json:"FailedSteps,omitzero"`
+	CancelledSteps *int32 `json:"CancelledSteps,omitzero"`
+	TimedOutSteps  *int32 `json:"TimedOutSteps,omitzero"`
+}
+
 // PutComplianceItemsInput is a structure of the ssm API.
 type PutComplianceItemsInput struct {
 	ResourceId       *string                     `json:"ResourceId,omitzero"`
@@ -178,6 +249,11 @@ type ResourceComplianceSummaryItem struct {
 	NonCompliantSummary *NonCompliantSummary        `json:"NonCompliantSummary,omitzero"`
 }
 
+// ResourceDataSyncAlreadyExistsException is a structure of the ssm API.
+type ResourceDataSyncAlreadyExistsException struct {
+	SyncName *string `json:"SyncName,omitzero"`
+}
+
 // ResourceDataSyncAwsOrganizationsSource is a structure of the ssm API.
 type ResourceDataSyncAwsOrganizationsSource struct {
 	OrganizationSourceType *string                              `json:"OrganizationSourceType,omitzero"`
@@ -201,6 +277,12 @@ type ResourceDataSyncItem struct {
 	LastStatus             *string                          `json:"LastStatus,omitzero"`
 	SyncCreatedTime        *protocol.Time                   `json:"SyncCreatedTime,omitzero"`
 	LastSyncStatusMessage  *string                          `json:"LastSyncStatusMessage,omitzero"`
+}
+
+// ResourceDataSyncNotFoundException is a structure of the ssm API.
+type ResourceDataSyncNotFoundException struct {
+	SyncName *string `json:"SyncName,omitzero"`
+	SyncType *string `json:"SyncType,omitzero"`
 }
 
 // ResourceDataSyncOrganizationalUnit is a structure of the ssm API.
@@ -235,6 +317,17 @@ type ResourceDataSyncSourceWithState struct {
 	IncludeFutureRegions    *bool                                   `json:"IncludeFutureRegions,omitzero"`
 	State                   *string                                 `json:"State,omitzero"`
 	EnableAllOpsDataSources *bool                                   `json:"EnableAllOpsDataSources,omitzero"`
+}
+
+// ResourcePolicyInvalidParameterException is a structure of the ssm API.
+type ResourcePolicyInvalidParameterException struct {
+	ParameterNames []string `json:"ParameterNames,omitzero"`
+}
+
+// ResourcePolicyLimitExceededException is a structure of the ssm API.
+type ResourcePolicyLimitExceededException struct {
+	Limit     *int32  `json:"Limit,omitzero"`
+	LimitType *string `json:"LimitType,omitzero"`
 }
 
 // ResultAttribute is a structure of the ssm API.
@@ -328,6 +421,14 @@ type SendCommandInput struct {
 // SendCommandOutput is a structure of the ssm API.
 type SendCommandOutput struct {
 	Command *Command `json:"Command,omitzero"`
+}
+
+// ServiceQuotaExceededException is a structure of the ssm API.
+type ServiceQuotaExceededException struct {
+	ResourceId   *string `json:"ResourceId,omitzero"`
+	ResourceType *string `json:"ResourceType,omitzero"`
+	QuotaCode    *string `json:"QuotaCode,omitzero"`
+	ServiceCode  *string `json:"ServiceCode,omitzero"`
 }
 
 // ServiceSetting is a structure of the ssm API.
@@ -554,6 +655,12 @@ type TerminateSessionOutput struct {
 	SessionId *string `json:"SessionId,omitzero"`
 }
 
+// ThrottlingException is a structure of the ssm API.
+type ThrottlingException struct {
+	QuotaCode   *string `json:"QuotaCode,omitzero"`
+	ServiceCode *string `json:"ServiceCode,omitzero"`
+}
+
 // UnlabelParameterVersionInput is a structure of the ssm API.
 type UnlabelParameterVersionInput struct {
 	Name             *string  `json:"Name,omitzero"`
@@ -565,6 +672,11 @@ type UnlabelParameterVersionInput struct {
 type UnlabelParameterVersionOutput struct {
 	RemovedLabels []string `json:"RemovedLabels,omitzero"`
 	InvalidLabels []string `json:"InvalidLabels,omitzero"`
+}
+
+// UnsupportedInventoryItemContextException is a structure of the ssm API.
+type UnsupportedInventoryItemContextException struct {
+	TypeName *string `json:"TypeName,omitzero"`
 }
 
 // UpdateAssociationInput is a structure of the ssm API.
@@ -839,3 +951,8 @@ type UpdateServiceSettingInput struct {
 
 // UpdateServiceSettingOutput has no members.
 type UpdateServiceSettingOutput struct{}
+
+// ValidationException is a structure of the ssm API.
+type ValidationException struct {
+	ReasonCode *string `json:"ReasonCode,omitzero"`
+}

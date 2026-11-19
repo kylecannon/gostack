@@ -596,6 +596,11 @@ func NewInvalidItemContentException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the InvalidItemContentException error with the given message, carrying the members in v.
+func (v *InvalidItemContentException) Err(msg string) error {
+	return &modeledError{err: NewInvalidItemContentException(msg), members: v}
+}
+
 // NewInvalidKeyId returns the InvalidKeyId error with the given message.
 func NewInvalidKeyId(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -826,6 +831,11 @@ func NewItemContentMismatchException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ItemContentMismatchException error with the given message, carrying the members in v.
+func (v *ItemContentMismatchException) Err(msg string) error {
+	return &modeledError{err: NewItemContentMismatchException(msg), members: v}
+}
+
 // NewItemSizeLimitExceededException returns the ItemSizeLimitExceededException error with the given message.
 func NewItemSizeLimitExceededException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -834,6 +844,11 @@ func NewItemSizeLimitExceededException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the ItemSizeLimitExceededException error with the given message, carrying the members in v.
+func (v *ItemSizeLimitExceededException) Err(msg string) error {
+	return &modeledError{err: NewItemSizeLimitExceededException(msg), members: v}
 }
 
 // NewMalformedResourcePolicyDocumentException returns the MalformedResourcePolicyDocumentException error with the given message.
@@ -886,6 +901,11 @@ func NewOpsItemAlreadyExistsException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the OpsItemAlreadyExistsException error with the given message, carrying the members in v.
+func (v *OpsItemAlreadyExistsException) Err(msg string) error {
+	return &modeledError{err: NewOpsItemAlreadyExistsException(msg), members: v}
+}
+
 // NewOpsItemConflictException returns the OpsItemConflictException error with the given message.
 func NewOpsItemConflictException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -906,6 +926,11 @@ func NewOpsItemInvalidParameterException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the OpsItemInvalidParameterException error with the given message, carrying the members in v.
+func (v *OpsItemInvalidParameterException) Err(msg string) error {
+	return &modeledError{err: NewOpsItemInvalidParameterException(msg), members: v}
+}
+
 // NewOpsItemLimitExceededException returns the OpsItemLimitExceededException error with the given message.
 func NewOpsItemLimitExceededException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -914,6 +939,11 @@ func NewOpsItemLimitExceededException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the OpsItemLimitExceededException error with the given message, carrying the members in v.
+func (v *OpsItemLimitExceededException) Err(msg string) error {
+	return &modeledError{err: NewOpsItemLimitExceededException(msg), members: v}
 }
 
 // NewOpsItemNotFoundException returns the OpsItemNotFoundException error with the given message.
@@ -934,6 +964,11 @@ func NewOpsItemRelatedItemAlreadyExistsException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the OpsItemRelatedItemAlreadyExistsException error with the given message, carrying the members in v.
+func (v *OpsItemRelatedItemAlreadyExistsException) Err(msg string) error {
+	return &modeledError{err: NewOpsItemRelatedItemAlreadyExistsException(msg), members: v}
 }
 
 // NewOpsItemRelatedItemAssociationNotFoundException returns the OpsItemRelatedItemAssociationNotFoundException error with the given message.
@@ -1096,6 +1131,11 @@ func NewResourceDataSyncAlreadyExistsException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ResourceDataSyncAlreadyExistsException error with the given message, carrying the members in v.
+func (v *ResourceDataSyncAlreadyExistsException) Err(msg string) error {
+	return &modeledError{err: NewResourceDataSyncAlreadyExistsException(msg), members: v}
+}
+
 // NewResourceDataSyncConflictException returns the ResourceDataSyncConflictException error with the given message.
 func NewResourceDataSyncConflictException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -1134,6 +1174,11 @@ func NewResourceDataSyncNotFoundException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the ResourceDataSyncNotFoundException error with the given message, carrying the members in v.
+func (v *ResourceDataSyncNotFoundException) Err(msg string) error {
+	return &modeledError{err: NewResourceDataSyncNotFoundException(msg), members: v}
 }
 
 // NewResourceInUseException returns the ResourceInUseException error with the given message.
@@ -1186,6 +1231,11 @@ func NewResourcePolicyInvalidParameterException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ResourcePolicyInvalidParameterException error with the given message, carrying the members in v.
+func (v *ResourcePolicyInvalidParameterException) Err(msg string) error {
+	return &modeledError{err: NewResourcePolicyInvalidParameterException(msg), members: v}
+}
+
 // NewResourcePolicyLimitExceededException returns the ResourcePolicyLimitExceededException error with the given message.
 func NewResourcePolicyLimitExceededException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -1194,6 +1244,11 @@ func NewResourcePolicyLimitExceededException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the ResourcePolicyLimitExceededException error with the given message, carrying the members in v.
+func (v *ResourcePolicyLimitExceededException) Err(msg string) error {
+	return &modeledError{err: NewResourcePolicyLimitExceededException(msg), members: v}
 }
 
 // NewResourcePolicyNotFoundException returns the ResourcePolicyNotFoundException error with the given message.
@@ -1214,6 +1269,11 @@ func NewServiceQuotaExceededException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the ServiceQuotaExceededException error with the given message, carrying the members in v.
+func (v *ServiceQuotaExceededException) Err(msg string) error {
+	return &modeledError{err: NewServiceQuotaExceededException(msg), members: v}
 }
 
 // NewServiceSettingNotFound returns the ServiceSettingNotFound error with the given message.
@@ -1276,6 +1336,11 @@ func NewThrottlingException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the ThrottlingException error with the given message, carrying the members in v.
+func (v *ThrottlingException) Err(msg string) error {
+	return &modeledError{err: NewThrottlingException(msg), members: v}
+}
+
 // NewTooManyTagsError returns the TooManyTagsError error with the given message.
 func NewTooManyTagsError(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -1336,6 +1401,11 @@ func NewUnsupportedInventoryItemContextException(msg string) *awserr.Error {
 	}
 }
 
+// Err returns the UnsupportedInventoryItemContextException error with the given message, carrying the members in v.
+func (v *UnsupportedInventoryItemContextException) Err(msg string) error {
+	return &modeledError{err: NewUnsupportedInventoryItemContextException(msg), members: v}
+}
+
 // NewUnsupportedInventorySchemaVersionException returns the UnsupportedInventorySchemaVersionException error with the given message.
 func NewUnsupportedInventorySchemaVersionException(msg string) *awserr.Error {
 	return &awserr.Error{
@@ -1394,6 +1464,11 @@ func NewValidationException(msg string) *awserr.Error {
 		StatusCode: 400,
 		Fault:      awserr.FaultReceiver,
 	}
+}
+
+// Err returns the ValidationException error with the given message, carrying the members in v.
+func (v *ValidationException) Err(msg string) error {
+	return &modeledError{err: NewValidationException(msg), members: v}
 }
 
 // newMissingRequired returns the error for a request that lacks a required member.

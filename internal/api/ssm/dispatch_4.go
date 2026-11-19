@@ -3,6 +3,475 @@
 package ssm
 
 // missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListCommandsInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListCommandsOutput) missingRequired() string {
+	for _, e1 := range v.Commands {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListComplianceItemsOutput) missingRequired() string {
+	for _, e1 := range v.ComplianceItems {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListDocumentMetadataHistoryInput) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.Metadata == nil {
+		return "Metadata"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListDocumentVersionsInput) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListDocumentsInput) missingRequired() string {
+	for _, e1 := range v.DocumentFilterList {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListDocumentsOutput) missingRequired() string {
+	for _, e1 := range v.DocumentIdentifiers {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListInventoryEntriesInput) missingRequired() string {
+	if v.InstanceId == nil {
+		return "InstanceId"
+	}
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListNodesInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListNodesSummaryInput) missingRequired() string {
+	if v.Aggregators == nil {
+		return "Aggregators"
+	}
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.Aggregators {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListOpsItemEventsInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListOpsItemRelatedItemsInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListOpsMetadataInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListResourceComplianceSummariesOutput) missingRequired() string {
+	for _, e1 := range v.ResourceComplianceSummaryItems {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListResourceDataSyncOutput) missingRequired() string {
+	for _, e1 := range v.ResourceDataSyncItems {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListTagsForResourceInput) missingRequired() string {
+	if v.ResourceType == nil {
+		return "ResourceType"
+	}
+	if v.ResourceId == nil {
+		return "ResourceId"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListTagsForResourceOutput) missingRequired() string {
+	for _, e1 := range v.TagList {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *LoggingInfo) missingRequired() string {
+	if v.S3BucketName == nil {
+		return "S3BucketName"
+	}
+	if v.S3Region == nil {
+		return "S3Region"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *MaintenanceWindowExecutionTaskIdentity) missingRequired() string {
+	if v.AlarmConfiguration != nil {
+		if member := v.AlarmConfiguration.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.TriggeredAlarms {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *MaintenanceWindowTask) missingRequired() string {
+	if v.LoggingInfo != nil {
+		if member := v.LoggingInfo.missingRequired(); member != "" {
+			return member
+		}
+	}
+	if v.AlarmConfiguration != nil {
+		if member := v.AlarmConfiguration.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ModifyDocumentPermissionInput) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.PermissionType == nil {
+		return "PermissionType"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *NodeAggregator) missingRequired() string {
+	if v.AggregatorType == nil {
+		return "AggregatorType"
+	}
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	if v.AttributeName == nil {
+		return "AttributeName"
+	}
+	for _, e1 := range v.Aggregators {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *NodeFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsAggregator) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.Aggregators {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsItem) missingRequired() string {
+	for _, e1 := range v.RelatedOpsItems {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsItemEventFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	if v.Operator == nil {
+		return "Operator"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsItemFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	if v.Operator == nil {
+		return "Operator"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsItemRelatedItemsFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	if v.Operator == nil {
+		return "Operator"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsMetadataFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *OpsResultAttribute) missingRequired() string {
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ParameterStringFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ParametersFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchComplianceData) missingRequired() string {
+	if v.Title == nil {
+		return "Title"
+	}
+	if v.KBId == nil {
+		return "KBId"
+	}
+	if v.Classification == nil {
+		return "Classification"
+	}
+	if v.Severity == nil {
+		return "Severity"
+	}
+	if v.State == nil {
+		return "State"
+	}
+	if v.InstalledTime == nil {
+		return "InstalledTime"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchFilterGroup) missingRequired() string {
+	if v.PatchFilters == nil {
+		return "PatchFilters"
+	}
+	for _, e1 := range v.PatchFilters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchRule) missingRequired() string {
+	if v.PatchFilterGroup == nil {
+		return "PatchFilterGroup"
+	}
+	if v.PatchFilterGroup != nil {
+		if member := v.PatchFilterGroup.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchRuleGroup) missingRequired() string {
+	if v.PatchRules == nil {
+		return "PatchRules"
+	}
+	for _, e1 := range v.PatchRules {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *PatchSource) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.Products == nil {
+		return "Products"
+	}
+	if v.Configuration == nil {
+		return "Configuration"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
 func (v *PutComplianceItemsInput) missingRequired() string {
 	if v.ResourceId == nil {
 		return "ResourceId"
@@ -305,6 +774,17 @@ func (v *SendCommandOutput) missingRequired() string {
 		if member := v.Command.missingRequired(); member != "" {
 			return member
 		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ServiceQuotaExceededException) missingRequired() string {
+	if v.QuotaCode == nil {
+		return "QuotaCode"
+	}
+	if v.ServiceCode == nil {
+		return "ServiceCode"
 	}
 	return ""
 }

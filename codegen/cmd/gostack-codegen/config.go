@@ -35,6 +35,13 @@ type serviceOptions struct {
 	// BodyTime is the format a rest-xml body timestamp in iso8601, the body
 	// default, is written in instead.
 	BodyTime string
+	// Unions gives every structure with the union trait a MembersSet method,
+	// which counts the members set, for the handler's exactly-one check.
+	Unions bool
+	// UnionShapes are structures the model does not mark as unions that the
+	// service treats as one, and that get MembersSet as well: DynamoDB's
+	// AttributeValue.
+	UnionShapes []string
 }
 
 // missingParam names the error for a missing required member.
@@ -54,13 +61,17 @@ var serviceTable = map[string]serviceOptions{
 		// serializer reports as MissingParameter.
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},
 	},
-	"sts":             {},
-	"dynamodb":        {},
+	"sts": {},
+	"dynamodb": {
+		// An AttributeValue sets exactly one of its members, which the model
+		// does not say: DynamoDB answers a ValidationException for none or two.
+		UnionShapes: []string{"AttributeValue"},
+	},
 	"dynamodbstreams": {},
 	"sns":             {},
 	"kms":             {},
 	"secretsmanager":  {},
-	"ssm":             {},
+	"ssm":             {Unions: true},
 	// apigatewayv2 is not in the Makefile's GEN_SERVICES: it is here to prove
 	// that a model with a Route shape generates a package that builds.
 	"apigatewayv2": {},

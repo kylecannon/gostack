@@ -33,6 +33,43 @@ type AttributeValue struct {
 	BOOL *bool                     `json:"BOOL,omitzero"`
 }
 
+// MembersSet counts the members of v that are set, present even when empty. A
+// valid AttributeValue has exactly one.
+func (v *AttributeValue) MembersSet() int {
+	n := 0
+	if v.S != nil {
+		n++
+	}
+	if v.N != nil {
+		n++
+	}
+	if v.B != nil {
+		n++
+	}
+	if v.SS != nil {
+		n++
+	}
+	if v.NS != nil {
+		n++
+	}
+	if v.BS != nil {
+		n++
+	}
+	if v.M != nil {
+		n++
+	}
+	if v.L != nil {
+		n++
+	}
+	if v.NULL != nil {
+		n++
+	}
+	if v.BOOL != nil {
+		n++
+	}
+	return n
+}
+
 // AttributeValueUpdate is a structure of the dynamodb API.
 type AttributeValueUpdate struct {
 	Value  *AttributeValue `json:"Value,omitzero"`
@@ -184,6 +221,13 @@ type BillingModeSummary struct {
 	LastUpdateToPayPerRequestDateTime *protocol.Time `json:"LastUpdateToPayPerRequestDateTime,omitzero"`
 }
 
+// CancellationReason is a structure of the dynamodb API.
+type CancellationReason struct {
+	Item    map[string]AttributeValue `json:"Item,omitzero"`
+	Code    *string                   `json:"Code,omitzero"`
+	Message *string                   `json:"Message,omitzero"`
+}
+
 // Capacity is a structure of the dynamodb API.
 type Capacity struct {
 	ReadCapacityUnits  *float64 `json:"ReadCapacityUnits,omitzero"`
@@ -205,6 +249,11 @@ type ConditionCheck struct {
 	ExpressionAttributeNames            map[string]string         `json:"ExpressionAttributeNames,omitzero"`
 	ExpressionAttributeValues           map[string]AttributeValue `json:"ExpressionAttributeValues,omitzero"`
 	ReturnValuesOnConditionCheckFailure *string                   `json:"ReturnValuesOnConditionCheckFailure,omitzero"`
+}
+
+// ConditionalCheckFailedException is a structure of the dynamodb API.
+type ConditionalCheckFailedException struct {
+	Item map[string]AttributeValue `json:"Item,omitzero"`
 }
 
 // ConsumedCapacity is a structure of the dynamodb API.
@@ -1055,6 +1104,11 @@ type ProvisionedThroughputDescription struct {
 	WriteCapacityUnits     *int64         `json:"WriteCapacityUnits,omitzero"`
 }
 
+// ProvisionedThroughputExceededException is a structure of the dynamodb API.
+type ProvisionedThroughputExceededException struct {
+	ThrottlingReasons []ThrottlingReason `json:"ThrottlingReasons,omitzero"`
+}
+
 // ProvisionedThroughputOverride is a structure of the dynamodb API.
 type ProvisionedThroughputOverride struct {
 	ReadCapacityUnits *int64 `json:"ReadCapacityUnits,omitzero"`
@@ -1256,6 +1310,11 @@ type ReplicationGroupUpdate struct {
 	Create *CreateReplicationGroupMemberAction `json:"Create,omitzero"`
 	Update *UpdateReplicationGroupMemberAction `json:"Update,omitzero"`
 	Delete *DeleteReplicationGroupMemberAction `json:"Delete,omitzero"`
+}
+
+// RequestLimitExceeded is a structure of the dynamodb API.
+type RequestLimitExceeded struct {
+	ThrottlingReasons []ThrottlingReason `json:"ThrottlingReasons,omitzero"`
 }
 
 // RestoreSummary is a structure of the dynamodb API.
@@ -1462,6 +1521,17 @@ type TagResourceInput struct {
 // TagResourceOutput has no members.
 type TagResourceOutput struct{}
 
+// ThrottlingException is a structure of the dynamodb API.
+type ThrottlingException struct {
+	ThrottlingReasons []ThrottlingReason `json:"throttlingReasons,omitzero"`
+}
+
+// ThrottlingReason is a structure of the dynamodb API.
+type ThrottlingReason struct {
+	Reason   *string `json:"reason,omitzero"`
+	Resource *string `json:"resource,omitzero"`
+}
+
 // TimeToLiveDescription is a structure of the dynamodb API.
 type TimeToLiveDescription struct {
 	TimeToLiveStatus *string `json:"TimeToLiveStatus,omitzero"`
@@ -1511,6 +1581,11 @@ type TransactWriteItemsInput struct {
 type TransactWriteItemsOutput struct {
 	ConsumedCapacity      []ConsumedCapacity                 `json:"ConsumedCapacity,omitzero"`
 	ItemCollectionMetrics map[string][]ItemCollectionMetrics `json:"ItemCollectionMetrics,omitzero"`
+}
+
+// TransactionCanceledException is a structure of the dynamodb API.
+type TransactionCanceledException struct {
+	CancellationReasons []CancellationReason `json:"CancellationReasons,omitzero"`
 }
 
 // UntagResourceInput is a structure of the dynamodb API.

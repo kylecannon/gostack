@@ -512,6 +512,11 @@ type UntagResourceInput struct {
 // UntagResourceOutput has no members.
 type UntagResourceOutput struct{}
 
+// VerificationException is a structure of the sns API.
+type VerificationException struct {
+	Status *string `json:"Status,omitzero"`
+}
+
 // VerifySMSSandboxPhoneNumberInput is a structure of the sns API.
 type VerifySMSSandboxPhoneNumberInput struct {
 	PhoneNumber     *string `json:"PhoneNumber,omitzero"`

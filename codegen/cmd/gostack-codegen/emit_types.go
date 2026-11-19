@@ -36,9 +36,33 @@ func (g *generator) typesFile() (string, error) {
 
 		p.f("}")
 		p.blank()
+
+		if st.union {
+			emitMembersSet(p, st)
+		}
 	}
 
 	return p.buf.String(), nil
+}
+
+// emitMembersSet writes the method that counts the members of a union that
+// are set. A member is set when it is present at all: an empty string, list
+// or map, a false boolean and an empty blob each count.
+func emitMembersSet(p *printer, st *structType) {
+	p.f("// %s counts the members of v that are set, present even when empty. A", unionMethod)
+	p.f("// valid %s has exactly one.", st.goName)
+	p.f("func (v *%s) %s() int {", st.goName, unionMethod)
+	p.f("\tn := 0")
+
+	for _, f := range st.fields {
+		p.f("\tif v.%s != nil {", f.goName)
+		p.f("\t\tn++")
+		p.f("\t}")
+	}
+
+	p.f("\treturn n")
+	p.f("}")
+	p.blank()
 }
 
 // operationsFile writes the operation list, the Handler interface and
