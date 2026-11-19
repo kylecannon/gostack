@@ -284,7 +284,9 @@ func runScript(t *testing.T, d direct, data []byte) {
 	}
 }
 
-// walk reads every page of a listing and returns its parameters as one text.
+// walk reads every page of a listing and returns every answer as one text, its
+// NextTokens included: a restored store numbers its parameters from 0, but a
+// token is the offset of its page in the matches, so it is the live store's.
 func (d direct) walk(op string, body obj) string {
 	d.tb.Helper()
 
@@ -305,21 +307,7 @@ func (d direct) walk(op string, body obj) string {
 		token = page.NextToken
 	}
 
-	return stripTokens(all.String())
-}
-
-// stripTokens drops the NextToken of every page: a restored store numbers its
-// parameters from 0, so its tokens differ from the live store's.
-func stripTokens(text string) string {
-	for {
-		i := strings.Index(text, `"NextToken":"`)
-		if i < 0 {
-			return text
-		}
-
-		j := strings.Index(text[i+len(`"NextToken":"`):], `"`)
-		text = text[:i] + text[i+len(`"NextToken":"`)+j+1:]
-	}
+	return all.String()
 }
 
 // dump is the answer of every read SSM has, to every name a script uses.

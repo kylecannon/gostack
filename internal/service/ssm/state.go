@@ -149,8 +149,9 @@ type State struct {
 	nextSeq uint64
 	// gone counts the slots of order that hold no parameter.
 	gone int
-	// gen counts the times the State was locked for writing. A cursor is good
-	// only while it is the gen it was made under.
+	// gen counts the times the State was locked for writing, less the writes
+	// that kept the cursors. A cursor is good only while it is the gen it was
+	// made under.
 	gen uint64
 	// cursors remember where a listing stopped, so its next page starts there
 	// and not at the start of the store. They are shared by readers, which
@@ -166,25 +167,38 @@ type State struct {
 // cursorKey names where a page of a listing starts: the listing, and how many
 // parameters that listing matched before it.
 type cursorKey struct {
-	listing string
+	listing listingKey
 	offset  int
 }
 
 // maxCursors is how many cursors a State keeps. A page that finds its cursor
 // costs what the page walks; one that does not costs a walk from the start,
 // which is what every page cost before.
+//
+// The cache is at most maxCursors entries of a cursorKey (a 32-byte hash and
+// an int) and an int, 48 bytes, so 6 KiB of entries and about 16 KiB with the
+// map's own overhead, in each account and region, whatever the requests are.
 const maxCursors = 128
 
 // lock takes the write lock. Every change to the State is made under it, so
-// every change makes the cursors stale.
+// every change makes the cursors stale, unless the write calls keepCursors.
 func (s *State) lock() {
 	s.mu.Lock()
 	s.gen++
 }
 
+// keepCursors undoes what lock did to the cursors, for a write that has not
+// changed which parameters a listing matches or where in order they are: one
+// that changed nothing, and one that only appended a parameter to order,
+// after every slot a cursor has passed. A write calls it at most once, and
+// only before the next listing, with the lock held for writing.
+func (s *State) keepCursors() {
+	s.gen--
+}
+
 // cursor returns the index in order where the listing resumes at offset, if a
 // page of it ended there since the last change. The caller holds the lock.
-func (s *State) cursor(listing string, offset int) (int, bool) {
+func (s *State) cursor(listing listingKey, offset int) (int, bool) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 
@@ -199,11 +213,11 @@ func (s *State) cursor(listing string, offset int) (int, bool) {
 
 // remember records that the listing resumes at index in order once offset of
 // its parameters are behind it. The caller holds the lock.
-func (s *State) remember(listing string, offset, index int) {
+func (s *State) remember(listing listingKey, offset, index int) {
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 
-	if s.cursorsGen != s.gen || len(s.cursors) >= maxCursors {
+	if s.cursors == nil || s.cursorsGen != s.gen || len(s.cursors) >= maxCursors {
 		s.cursors, s.cursorsGen = make(map[cursorKey]int), s.gen
 	}
 

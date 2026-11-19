@@ -26,6 +26,11 @@ func (p *Provider) CreateMaintenanceWindow(
 		return nil, err
 	}
 
+	err = checkTags(in.Tags)
+	if err != nil {
+		return nil, err
+	}
+
 	w := &window{
 		ID: newWindowID(), Name: in.Name, Description: in.Description, Duration: in.Duration, Cutoff: in.Cutoff,
 		Schedule: in.Schedule, ScheduleTimezone: in.ScheduleTimezone, ScheduleOffset: in.ScheduleOffset,

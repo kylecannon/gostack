@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -331,10 +332,13 @@ func nextToken(h http.Handler, w *sink, op string, body obj, token string) (stri
 	return page.NextToken, nil
 }
 
-// listAllSizes are the sizes the two benchmarks below run at: reading all of a
-// store a page at a time, and deleting all of it a parameter at a time, must
-// cost in proportion to the store.
-var listAllSizes = []int{10_000, 100_000}
+// listAllSize is the size the two benchmarks below run at: reading all of a
+// store a page at a time, and deleting all of it a parameter at a time. A cost
+// that grows with the square of the store is plain at 10,000: a walk that
+// starts from the first parameter on every page takes 748 ms, against 18 ms
+// with a cursor. The benchmarks also ran at 100,000, which took about 8 s of
+// the 12.5 s one run of the two took and showed the same thing.
+const listAllSize = 10_000
 
 // BenchmarkPageThrough reads every parameter of a store a page at a time, one
 // iteration being the whole walk, through GetParametersByPath and
@@ -349,61 +353,60 @@ func BenchmarkPageThrough(b *testing.B) {
 	}
 
 	for _, op := range ops {
-		for _, n := range listAllSizes {
-			b.Run(fmt.Sprintf("op=%s/params=%d", op.op, n), func(b *testing.B) {
-				_, h := filled(b, n)
-				w := newSink()
-				w.body = &bytes.Buffer{}
+		b.Run(fmt.Sprintf("op=%s/params=%d", op.op, listAllSize), func(b *testing.B) {
+			_, h := filled(b, listAllSize)
+			w := newSink()
+			w.body = &bytes.Buffer{}
 
-				b.ReportAllocs()
+			b.ReportAllocs()
 
-				for b.Loop() {
-					pages := 0
+			for b.Loop() {
+				pages := 0
 
-					for token := ""; ; pages++ {
-						var err error
+				for token := ""; ; pages++ {
+					var err error
 
-						token, err = nextToken(h, w, op.op, op.body, token)
-						require.NoError(b, err)
+					token, err = nextToken(h, w, op.op, op.body, token)
+					require.NoError(b, err)
 
-						if token == "" {
-							break
-						}
+					if token == "" {
+						break
 					}
-
-					// Every page but the closing empty one holds ten parameters.
-					require.Equal(b, n/10, pages)
 				}
-			})
-		}
+
+				// Every page but the closing empty one holds ten parameters.
+				require.Equal(b, listAllSize/10, pages)
+			}
+		})
 	}
 }
 
 // BenchmarkDeleteAll deletes every parameter of a store one call at a time, in
-// the order they were made. Filling the store is outside the timer.
+// the order they were made. It times the deletes and nothing else: the store
+// is filled and the heap collected outside the timer, so that the garbage of
+// the fill is not collected inside it, and the request bodies are made once,
+// before the loop.
 func BenchmarkDeleteAll(b *testing.B) {
-	for _, n := range listAllSizes {
-		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
-			b.ReportAllocs()
-
-			for b.Loop() {
-				b.StopTimer()
-
-				_, h := filled(b, n)
-				bodies := make([][]byte, n)
-
-				for i := range n {
-					bodies[i] = benchBody(b, obj{kName: paramName(i)})
-				}
-
-				w := newSink()
-
-				b.StartTimer()
-
-				for i := range n {
-					require.NoError(b, send(h, w, kDeleteParameter, bodies[i]))
-				}
-			}
-		})
+	bodies := make([][]byte, listAllSize)
+	for i := range bodies {
+		bodies[i] = benchBody(b, obj{kName: paramName(i)})
 	}
+
+	b.Run("params="+strconv.Itoa(listAllSize), func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			b.StopTimer()
+
+			_, h := filled(b, listAllSize)
+			w := newSink()
+
+			runtime.GC()
+			b.StartTimer()
+
+			for _, body := range bodies {
+				require.NoError(b, send(h, w, kDeleteParameter, body))
+			}
+		}
+	})
 }

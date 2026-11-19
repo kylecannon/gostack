@@ -2,6 +2,8 @@ package ssm
 
 import (
 	"context"
+	"crypto/sha256"
+	"hash"
 	"strconv"
 	"strings"
 
@@ -94,7 +96,7 @@ func underPath(key, path string, recursive *bool) bool {
 // token this State did not give out, walks from the start and skips offset
 // matches, as every page did. The caller holds the lock.
 func (s *State) page(
-	listing string, offset, limit int, keep func(key string, p *parameter) bool,
+	listing listingKey, offset, limit int, keep func(key string, p *parameter) bool,
 ) ([]*version, *string) {
 	if limit <= 0 {
 		return nil, nil
@@ -135,64 +137,90 @@ func (s *State) page(
 	return page, new(strconv.Itoa(offset + len(page)))
 }
 
-// byPathListing names a GetParametersByPath listing for the cursors: the
-// request without its token and its page size.
-func byPathListing(path string, recursive *bool, filters []ssmapi.ParameterStringFilter) string {
-	var b strings.Builder
+// listingKey names a listing for the cursors: the SHA-256 of the request
+// without its token and its page size. The cache keeps 32 bytes of each
+// request however large the request is.
+//
+// The key is all the cache compares. Two different requests get the same key
+// only by a SHA-256 collision, which takes about 2^128 hashes to find and for
+// which no pair is known, so a cursor is never taken for another listing's.
+// Keeping the request to rule that out is what made the cache as large as the
+// requests it had seen.
+type listingKey [sha256.Size]byte
 
-	b.WriteString("P")
-	writeText(&b, path)
+// listingWriter feeds the parts of a request to a hash.
+type listingWriter struct{ h hash.Hash }
+
+func newListingWriter(kind string) listingWriter {
+	w := listingWriter{h: sha256.New()}
+	w.WriteString(kind)
+
+	return w
+}
+
+// WriteString adds text to the request. A hash.Hash never fails to write.
+func (w listingWriter) WriteString(text string) {
+	w.h.Write([]byte(text))
+}
+
+// sum is the key of what was written.
+func (w listingWriter) sum() listingKey {
+	return listingKey(w.h.Sum(nil))
+}
+
+// byPathListing names a GetParametersByPath listing for the cursors.
+func byPathListing(path string, recursive *bool, filters []ssmapi.ParameterStringFilter) listingKey {
+	w := newListingWriter("P")
+	writeText(w, path)
 
 	if isTrue(recursive) {
-		b.WriteString("r")
+		w.WriteString("r")
 	}
 
 	for i := range filters {
-		writeText(&b, deref(filters[i].Key))
-		writeText(&b, filterOption(&filters[i]))
-		writeTexts(&b, filters[i].Values)
+		writeText(w, deref(filters[i].Key))
+		writeText(w, filterOption(&filters[i]))
+		writeTexts(w, filters[i].Values)
 	}
 
-	return b.String()
+	return w.sum()
 }
 
 // describeListing names a DescribeParameters listing for the cursors.
-func describeListing(filters []ssmapi.ParameterStringFilter, legacy []ssmapi.ParametersFilter) string {
-	var b strings.Builder
-
-	b.WriteString("D")
+func describeListing(filters []ssmapi.ParameterStringFilter, legacy []ssmapi.ParametersFilter) listingKey {
+	w := newListingWriter("D")
 
 	for i := range filters {
-		writeText(&b, deref(filters[i].Key))
-		writeText(&b, filterOption(&filters[i]))
-		writeTexts(&b, filters[i].Values)
+		writeText(w, deref(filters[i].Key))
+		writeText(w, filterOption(&filters[i]))
+		writeTexts(w, filters[i].Values)
 	}
 
-	b.WriteString("|")
+	w.WriteString("|")
 
 	for i := range legacy {
-		writeText(&b, deref(legacy[i].Key))
-		writeTexts(&b, legacy[i].Values)
+		writeText(w, deref(legacy[i].Key))
+		writeTexts(w, legacy[i].Values)
 	}
 
-	return b.String()
+	return w.sum()
 }
 
 // writeText writes text with its length, so two lists of texts that join to
 // the same characters are not the same listing.
-func writeText(b *strings.Builder, text string) {
-	b.WriteString(strconv.Itoa(len(text)))
-	b.WriteString(":")
-	b.WriteString(text)
+func writeText(w listingWriter, text string) {
+	w.WriteString(strconv.Itoa(len(text)))
+	w.WriteString(":")
+	w.WriteString(text)
 }
 
 // writeTexts writes a list of texts, and how many there are.
-func writeTexts(b *strings.Builder, texts []string) {
-	b.WriteString(strconv.Itoa(len(texts)))
-	b.WriteString("[")
+func writeTexts(w listingWriter, texts []string) {
+	w.WriteString(strconv.Itoa(len(texts)))
+	w.WriteString("[")
 
 	for _, text := range texts {
-		writeText(b, text)
+		writeText(w, text)
 	}
 }
 

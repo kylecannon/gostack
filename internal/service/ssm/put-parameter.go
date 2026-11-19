@@ -54,6 +54,11 @@ func checkPut(name string, in *ssmapi.PutParameterInput) error {
 			"constraint: Member must have length greater than or equal to 1.")
 	}
 
+	err := checkTags(in.Tags)
+	if err != nil {
+		return err
+	}
+
 	if isTrue(in.Overwrite) && len(in.Tags) > 0 {
 		return ssmapi.NewValidationException("Invalid request: tags and overwrite can't be used together. To create a " +
 			"parameter with tags, please remove overwrite flag. To update tags for an existing parameter, please use " +
@@ -64,8 +69,26 @@ func checkPut(name string, in *ssmapi.PutParameterInput) error {
 }
 
 // put stores the version a put makes and returns it. The caller holds the lock
-// for writing.
+// for writing, taken with lock.
+//
+// A put keeps the cursors of the listings when it cannot have moved a page:
+// when it is refused, which changes nothing, and when it makes a parameter
+// that was not there, which takes the last place in order, behind every slot a
+// cursor has passed, and so moves no match a cursor counted. A put that adds a
+// version to a parameter can change what the filters see, and drops them.
 func (s *State) put(name string, in *ssmapi.PutParameterInput, now timeNow) (*version, error) {
+	v, created, err := s.store(name, in, now)
+	if err != nil || created {
+		s.keepCursors()
+	}
+
+	return v, err
+}
+
+// store makes the changes of a put, and returns the version it made and
+// whether the parameter is new. An error means nothing was changed: every
+// check is made before the first change.
+func (s *State) store(name string, in *ssmapi.PutParameterInput, now timeNow) (*version, bool, error) {
 	key := storeKey(name)
 	existing := s.params[key]
 	overwrite := isTrue(in.Overwrite)
@@ -73,10 +96,11 @@ func (s *State) put(name string, in *ssmapi.PutParameterInput, now timeNow) (*ve
 	if existing == nil && !overwrite {
 		switch t := deref(in.Type); {
 		case t == "":
-			return nil, ssmapi.NewValidationException("A parameter type is required when you create a parameter.")
+			return nil, false, ssmapi.NewValidationException("A parameter type is required when you create a parameter.")
 		case !validType(t):
-			return nil, ssmapi.NewValidationException("1 validation error detected: Value '" + t + "' at 'type' failed " +
-				"to satisfy constraint: Member must satisfy enum value set: [SecureString, StringList, String]")
+			return nil, false, ssmapi.NewValidationException("1 validation error detected: Value '" + t +
+				"' at 'type' failed to satisfy constraint: Member must satisfy enum value set: " +
+				"[SecureString, StringList, String]")
 		}
 	}
 
@@ -86,7 +110,7 @@ func (s *State) put(name string, in *ssmapi.PutParameterInput, now timeNow) (*ve
 	}
 
 	if dataType != dataTypeText && dataType != dataTypeImage {
-		return nil, ssmapi.NewValidationException("The following data type is not supported: " + dataType +
+		return nil, false, ssmapi.NewValidationException("The following data type is not supported: " + dataType +
 			" (Data type names are all lowercase.)")
 	}
 
@@ -98,13 +122,14 @@ func (s *State) put(name string, in *ssmapi.PutParameterInput, now timeNow) (*ve
 	if existing != nil {
 		err := existing.inherit(v, in)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
 	v.seal(deref(in.Value))
 
-	if existing == nil {
+	created := existing == nil
+	if created {
 		existing = &parameter{}
 		s.add(key, existing)
 	}
@@ -115,7 +140,7 @@ func (s *State) put(name string, in *ssmapi.PutParameterInput, now timeNow) (*ve
 		existing.tags = mergeTags(existing.tags, in.Tags)
 	}
 
-	return v, nil
+	return v, created, nil
 }
 
 // inherit makes v the next version of p: what the request leaves out comes
