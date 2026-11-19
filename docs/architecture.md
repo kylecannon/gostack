@@ -24,7 +24,7 @@ gresau/localstack-persist README and source. Code and test rules are in
 "Parity" means LocalStack's own pytest suite, run unchanged against a running
 gostack container. gostack is at 100% when it passes every test that LocalStack
 passes in the same runner. Tests LocalStack fails are recorded and not
-required. `parity/ledger.json` holds the per-test result.
+required. `parity/ledger/<service>.json` holds the per-test result, one file per service.
 
 About 85 to 90% of tests are pure boto3 or HTTP. Snapshot comparison
 (`localstack-snapshot`) sees only parsed responses, so it works against any
@@ -77,15 +77,20 @@ wraps `monkeypatch.setattr(localstack.config, ...)` and copies each change into
 gostack with `POST /_localstack/config`. gostack runs with
 `GOSTACK_ENABLE_CONFIG_UPDATES=1` in CI. That recovers most of those tests.
 
-What the bridge cannot recover goes in `parity/exclusions.yaml`. Every entry
+What the bridge cannot recover goes in `parity/exclusions/<service>.yaml`. Every entry
 carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
 `runner-docker`, and so on.
 
-### Ledger (`parity/ledger.json`, committed)
+### Ledger (`parity/ledger/<service>.json`, committed)
 
 - Records nodeid to `{localstack, gostack, reason}`.
 - CI fails when any nodeid goes from pass to fail. A regression is never a
   deferral.
+- A nodeid's service comes from its test directory (`TEST_DIRS` in
+  `parity/ledger.py`). A nodeid in no service's directory, or in another
+  service's file, is an error. `ledger.py check` reads the base in either
+  layout, the per-service files or the single `parity/ledger.json` before
+  them, and fails when a service file the base has is gone.
 - `docs/parity.md` is generated from the ledger and shows percentages per
   service.
 - CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
@@ -134,7 +139,7 @@ internal/
 tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
 specs/                       vendored botocore JSON + LocalStack patches + SOURCES.lock
-parity/                      runner Dockerfile, pytest_gostack.py, exclusions.yaml, ledger.json, scripts
+parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, scripts
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
 docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)

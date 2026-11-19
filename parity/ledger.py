@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Parity ledger: merge pytest results, ratchet regressions, render docs/parity.md.
 
-parity/ledger.json maps a pytest nodeid to
+The ledger is one file per service, parity/ledger/<service>.json, named as
+TEST_DIRS names the service. Each maps a pytest nodeid of that service to
     {"localstack": <status>, "gostack": <status>, "reason": <text>}
 where status is one of pass, fail, skip, xfail, excluded, or null (not run).
+A nodeid's service comes from its test directory (TEST_DIRS); a nodeid whose
+directory maps to no service, or that sits in another service's file, is an
+error. The exclusions are one file per service too, parity/exclusions/<service>.yaml,
+and each pattern sits in the file of the service whose tests it matches.
 
 Commands (standard library only):
     merge  --column localstack|gostack --junit FILE --excluded FILE
@@ -12,8 +17,11 @@ Commands (standard library only):
            counts.
     check  [--base REV]
            Fail when a nodeid that passed in the committed ledger (default
-           HEAD:parity/ledger.json) fails in the working-tree ledger, in either
-           column. A regression is never a deferral.
+           HEAD) fails in the working-tree ledger, in either column. A
+           regression is never a deferral. The base is read in either layout:
+           parity/ledger/*.json, or the single parity/ledger.json that came
+           before it. A service file the base has and the working tree lacks
+           fails too. Also checks every exclusions file.
            When parity/out/collected.json exists (written by prune), also warns
            about ledger rows that collection no longer found. Never a failure.
     prune  [--localstack DIR] [--dry-run] [--collected FILE]
@@ -28,7 +36,8 @@ Commands (standard library only):
            Print the services the ledger covers, comma separated. With --changed,
            read changed file paths from stdin and print only the services that
            code change can affect (empty when none): internal/service/<svc>/
-           selects <svc>, and a shared path selects every service. --range
+           selects <svc>, and so do parity/ledger/<svc>.json and
+           parity/exclusions/<svc>.yaml; a shared path selects every service. --range
            A...B lets a change to the registration list that only adds lines
            naming a changed service count as that service's alone.
     test-dirs SERVICES
@@ -49,7 +58,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LEDGER = ROOT / "parity" / "ledger.json"
+LEDGER = ROOT / "parity" / "ledger"
+EXCLUSIONS = ROOT / "parity" / "exclusions"
+# The single-file layouts that came before the per-service files. A base
+# revision may still hold the ledger; neither may come back in the working tree.
+LEGACY_LEDGER = "ledger.json"
+LEGACY_EXCLUSIONS = "exclusions.yaml"
 DOCS = ROOT / "docs" / "parity.md"
 COLLECTED = ROOT / "parity" / "out" / "collected.json"
 RUN_SH = ROOT / "parity" / "run.sh"
@@ -129,10 +143,12 @@ RANK = {"pass": 0, "skip": 1, "xfail": 2, "fail": 3}
 
 
 def service_of(nodeid: str) -> str:
-    if nodeid.startswith(SERVICE_PREFIX):
-        directory = nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0]
-        return SERVICE_OF_DIR.get(directory, directory)
-    return "other"
+    """The service whose test directory holds nodeid. A nodeid outside every
+    TEST_DIRS directory is an error: its row would have no file to live in."""
+    directory = nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0] if nodeid.startswith(SERVICE_PREFIX) else ""
+    if directory not in SERVICE_OF_DIR:
+        raise SystemExit(f"{nodeid}: not under a known service's test directory (TEST_DIRS in parity/ledger.py)")
+    return SERVICE_OF_DIR[directory]
 
 
 def test_dir(service: str) -> str:
@@ -187,14 +203,43 @@ def read_junit(path: Path) -> dict[str, tuple[str, str]]:
     return results
 
 
-# --- ledger file -----------------------------------------------------------
+# --- ledger files ----------------------------------------------------------
 
 
-def load_ledger(path: Path) -> dict[str, dict]:
-    if not path.exists():
+def service_files(directory: Path, suffix: str) -> dict[str, Path]:
+    """service -> file for every <service><suffix> in directory. A file named
+    for no known service is an error."""
+    if not directory.is_dir():
         return {}
-    ledger = json.loads(path.read_text(encoding="utf-8"))
-    validate(ledger, str(path))
+    files = {path.name[: -len(suffix)]: path for path in sorted(directory.glob("*" + suffix))}
+    unknown = sorted(set(files) - set(TEST_DIRS))
+    if unknown:
+        raise SystemExit(f"{directory}: {', '.join(unknown)} name no service in TEST_DIRS (parity/ledger.py)")
+    return files
+
+
+def refuse_legacy(directory: Path, legacy: str) -> None:
+    """The single file the per-service directory replaced must not come back:
+    nothing reads it, so its rows would be silently ignored."""
+    if (directory.parent / legacy).exists():
+        raise SystemExit(f"{directory.parent / legacy}: the single file is replaced by {directory}/<service>; move its rows there")
+
+
+def parse_service_ledger(service: str, text: str, where: str) -> dict[str, dict]:
+    rows = json.loads(text)
+    validate(rows, where)
+    for nodeid in rows:
+        if service_of(nodeid) != service:
+            raise SystemExit(f"{where}: {nodeid} belongs to {service_of(nodeid)}, not {service}")
+    return rows
+
+
+def load_ledger(directory: Path) -> dict[str, dict]:
+    """The union of the per-service files in directory."""
+    refuse_legacy(directory, LEGACY_LEDGER)
+    ledger: dict[str, dict] = {}
+    for service, path in service_files(directory, ".json").items():
+        ledger.update(parse_service_ledger(service, path.read_text(encoding="utf-8"), str(path)))
     return ledger
 
 
@@ -209,11 +254,66 @@ def validate(ledger: object, where: str) -> None:
                 raise SystemExit(f"{where}: {nodeid}: bad {column} status {entry[column]!r}")
 
 
-def write_ledger(path: Path, ledger: dict[str, dict]) -> None:
-    lines = [
-        f"{json.dumps(nodeid)}: {json.dumps(ledger[nodeid], sort_keys=True)}" for nodeid in sorted(ledger)
-    ]
-    path.write_text("{\n" + ",\n".join(lines) + "\n}\n" if lines else "{}\n", encoding="utf-8")
+def split_by_service(ledger: dict[str, dict]) -> dict[str, dict[str, dict]]:
+    by_service: dict[str, dict[str, dict]] = defaultdict(dict)
+    for nodeid, entry in ledger.items():
+        by_service[service_of(nodeid)][nodeid] = entry
+    return dict(by_service)
+
+
+def format_ledger(rows: dict[str, dict]) -> str:
+    lines = [f"{json.dumps(nodeid)}: {json.dumps(rows[nodeid], sort_keys=True)}" for nodeid in sorted(rows)]
+    return "{\n" + ",\n".join(lines) + "\n}\n" if lines else "{}\n"
+
+
+def write_ledger(directory: Path, ledger: dict[str, dict]) -> None:
+    """Write each service's rows, sorted, to its own file. Every nodeid is
+    mapped before anything is written. A service file whose rows are all gone
+    is kept as {} rather than deleted, so check still sees the service."""
+    by_service = split_by_service(ledger)
+    existing = service_files(directory, ".json")
+    directory.mkdir(parents=True, exist_ok=True)
+    for service in sorted(set(by_service) | set(existing)):
+        (directory / f"{service}.json").write_text(format_ledger(by_service.get(service, {})), encoding="utf-8")
+
+
+# --- exclusions files ------------------------------------------------------
+
+# The one line shape an exclusions file may hold besides comments and blank
+# lines: a double-quoted nodeid pattern and a plain reason. pytest_gostack.py
+# reads the files with yaml.safe_load; ledger.py reads them with the standard
+# library, so it accepts only this shape and refuses anything else. A plain
+# reason may not start with a YAML indicator or hold ": " or " #", which YAML
+# would read as a mapping or a comment.
+EXCLUSION_LINE = re.compile(r'^("(?:[^"\\]|\\.)*"): ([^\s"\'#&*!|>%@`{}\[\],?:-]\S*(?:[ \t]+\S+)*)[ \t]*$')
+PLAIN_BREAKERS = re.compile(r": |[ \t]#|:$|^(?:true|false|yes|no|on|off|y|n|null|~|\.?[0-9+.][0-9_.:eE+-]*)$", re.IGNORECASE)
+
+
+def parse_exclusions(service: str, text: str, where: str) -> dict[str, str]:
+    patterns: dict[str, str] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = EXCLUSION_LINE.match(line)
+        if not match or PLAIN_BREAKERS.search(match.group(2)):
+            raise SystemExit(f'{where}:{number}: expected `"nodeid pattern": reason`, got {line!r}')
+        pattern, reason = json.loads(match.group(1)), match.group(2)
+        if pattern in patterns:
+            raise SystemExit(f"{where}:{number}: {pattern} is listed twice")
+        if service_of(pattern) != service:
+            raise SystemExit(f"{where}:{number}: {pattern} matches {service_of(pattern)} tests, not {service}")
+        patterns[pattern] = reason
+    return patterns
+
+
+def load_exclusions(directory: Path) -> dict[str, str]:
+    """pattern -> reason over every per-service exclusions file. A pattern sits
+    in the file of the service whose tests it matches."""
+    refuse_legacy(directory, LEGACY_EXCLUSIONS)
+    patterns: dict[str, str] = {}
+    for service, path in service_files(directory, ".yaml").items():
+        patterns.update(parse_exclusions(service, path.read_text(encoding="utf-8"), str(path)))
+    return patterns
 
 
 # --- merge -----------------------------------------------------------------
@@ -279,25 +379,64 @@ def print_run_counts(column: str, results: dict[str, tuple[str, str]], excluded:
 # --- check -----------------------------------------------------------------
 
 
-def committed_ledger(base: str, path: Path) -> dict[str, dict] | None:
-    relative = path.resolve().relative_to(ROOT).as_posix()
-    shown = subprocess.run(
-        ["git", "-C", str(ROOT), "show", f"{base}:{relative}"], capture_output=True, text=True, check=False
-    )
+def git(*argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *argv], capture_output=True, text=True, check=False)
+
+
+def git_show(base: str, relative: str) -> str:
+    shown = git("show", f"{base}:{relative}")
     if shown.returncode != 0:
+        raise SystemExit(f"parity-check: cannot read {base}:{relative}: {shown.stderr.strip()}")
+    return shown.stdout
+
+
+def committed_ledger(base: str, directory: Path) -> tuple[dict[str, dict], set[str]] | None:
+    """The ledger at base and the services it has rows or a file for, from the
+    per-service files when base has them, else from the single ledger.json that
+    came before them. None only when base has neither (or is no commit)."""
+    relative = directory.resolve().relative_to(ROOT).as_posix()
+    legacy = f"{relative.rsplit('/', 1)[0]}/{LEGACY_LEDGER}" if "/" in relative else LEGACY_LEDGER
+    listed = git("ls-tree", "--name-only", f"{base}^{{tree}}", "--", f"{relative}/", legacy)
+    if listed.returncode != 0:
         return None
-    ledger = json.loads(shown.stdout)
-    validate(ledger, f"{base}:{relative}")
-    return ledger
+    names = listed.stdout.splitlines()
+    files = [n for n in names if n.startswith(f"{relative}/") and n.endswith(".json")]
+    if legacy in names and files:
+        raise SystemExit(f"parity-check: {base} holds both {legacy} and {relative}/; it has no one ledger to compare with")
+    if files:
+        ledger: dict[str, dict] = {}
+        services = set()
+        for name in files:
+            service = name[len(relative) + 1 : -len(".json")]
+            if service not in TEST_DIRS:
+                raise SystemExit(f"parity-check: {base}:{name} names no service in TEST_DIRS")
+            services.add(service)
+            ledger.update(parse_service_ledger(service, git_show(base, name), f"{base}:{name}"))
+        return ledger, services
+    if legacy in names:
+        ledger = json.loads(git_show(base, legacy))
+        validate(ledger, f"{base}:{legacy}")
+        return ledger, {service_of(nodeid) for nodeid in ledger}
+    return None
 
 
 def check(args: argparse.Namespace) -> None:
     current = load_ledger(args.ledger)
-    base = committed_ledger(args.base, args.ledger)
-    if base is None:
-        print(f"parity-check: no committed ledger at {args.base}; {len(current)} entries, nothing to compare")
+    exclusions = load_exclusions(args.exclusions)
+    committed = committed_ledger(args.base, args.ledger)
+    if committed is None:
+        print(
+            f"parity-check: no committed ledger at {args.base}; {len(current)} entries, "
+            f"{len(exclusions)} exclusion patterns, nothing to compare"
+        )
         return
+    base, base_services = committed
     regressions, warnings = [], []
+    # A service file deleted outright would otherwise read as every one of its
+    # rows going missing, which is only a warning.
+    present = set(service_files(args.ledger, ".json"))
+    for service in sorted(base_services - present):
+        regressions.append(f"  {args.ledger.resolve().relative_to(ROOT).as_posix()}/{service}.json: deleted, {args.base} has it")
     for nodeid, before in sorted(base.items()):
         after = current.get(nodeid)
         for column in COLUMNS:
@@ -365,7 +504,7 @@ def collect(localstack: Path | None, services: list[str]) -> str:
 
 def prune(args: argparse.Namespace) -> None:
     ledger = load_ledger(args.ledger)
-    services = sorted({service_of(n) for n in ledger} - {"other"})
+    services = sorted({service_of(n) for n in ledger})
     if not services:
         print("prune: the ledger covers no service")
         return
@@ -428,21 +567,36 @@ def registration_diff(revisions: str) -> str | None:
     return shown.stdout if shown.returncode == 0 else None
 
 
+def parity_file_service(path: str) -> str | None:
+    """The service of a per-service ledger or exclusions file, or None. Any
+    other path under parity/ is shared."""
+    for directory, suffix in (("parity/ledger/", ".json"), ("parity/exclusions/", ".yaml")):
+        name = path.removeprefix(directory)
+        if path.startswith(directory) and "/" not in name and name.endswith(suffix):
+            service = name[: -len(suffix)]
+            return service if service in TEST_DIRS else None
+    return None
+
+
 def affected_services(paths: list[str], known: set[str], registration_adds: bool = False) -> set[str]:
-    """The services that a change to paths can affect. A service directory
-    selects its service when the service has a LocalStack test directory; a shared
-    path selects every known service. registration_adds says the change to
-    REGISTRATION_FILE only adds lines naming the services of the changed
-    directories, so the file is not shared for it."""
+    """The services that a change to paths can affect. A service directory, and
+    the service's own ledger and exclusions files, select the service when it
+    has a LocalStack test directory; a shared path selects every known service.
+    registration_adds says the change to REGISTRATION_FILE only adds lines
+    naming the services of the changed directories, so the file is not shared
+    for it."""
     affected: set[str] = set()
     shared = False
     registration_changed = False
     for raw in paths:
         path = raw.strip()
         service, _, rest = path.removeprefix(SERVICE_DIR).partition("/")
+        own = parity_file_service(path)
         if path.startswith(SERVICE_DIR) and rest:
             if service in TEST_DIRS:
                 affected.add(service)
+        elif own is not None:
+            affected.add(own)
         elif path == REGISTRATION_FILE:
             registration_changed = True
         elif path.startswith(SHARED_PATHS):
@@ -453,7 +607,7 @@ def affected_services(paths: list[str], known: set[str], registration_adds: bool
 
 
 def services(args: argparse.Namespace) -> None:
-    known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)} - {"other"}
+    known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)}
     if not args.changed:
         print(",".join(sorted(known)))
         return
@@ -501,11 +655,11 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
 
     path.write_text(
         "# Parity\n\n"
-        "Generated by `parity/ledger.py` from `parity/ledger.json`. Do not edit.\n\n"
+        "Generated by `parity/ledger.py` from `parity/ledger/`. Do not edit.\n\n"
         "gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tests "
         "that LocalStack passes that gostack also passes in the same runner. Tests LocalStack "
         "fails are recorded and not required. Excluded tests are listed with a reason in "
-        "`parity/exclusions.yaml`.\n\n" + header + "\n".join(rows) + "\n",
+        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
 
@@ -529,7 +683,8 @@ def docs(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ledger", type=Path, default=LEDGER)
+    parser.add_argument("--ledger", type=Path, default=LEDGER, help="the per-service ledger directory")
+    parser.add_argument("--exclusions", type=Path, default=EXCLUSIONS, help="the per-service exclusions directory")
     parser.add_argument("--docs", type=Path, default=DOCS)
     sub = parser.add_subparsers(dest="command", required=True)
 

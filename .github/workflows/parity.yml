@@ -3,14 +3,15 @@ name: parity
 # LocalStack's own pytest suite, run unchanged against a gostack image built
 # from the pull request head (docs/architecture.md, "Parity oracle").
 #
-# The services come from the changed paths: internal/service/<svc>/ selects that
+# The services come from the changed paths: internal/service/<svc>/,
+# parity/ledger/<svc>.json and parity/exclusions/<svc>.yaml select that
 # service, and a shared path (parity/ledger.py, SHARED_PATHS) selects every
 # service in the ledger. cmd/gostack/services.go is shared unless the change to
 # it only adds lines naming the changed services. A change to neither runs
 # nothing. A manual run takes a services input instead.
 #
 # CI never runs the LocalStack baseline. The localstack column of the committed
-# parity/ledger.json is the baseline, and `make parity-check` fails when a test
+# parity/ledger/<service>.json is the baseline, and `make parity-check` fails when a test
 # that passed there now fails. The suite comes from localstack/localstack at the
 # commit pinned in specs/SOURCES.lock. When GitHub cannot serve that commit the
 # job stops, and nothing is vendored in its place.
@@ -158,5 +159,5 @@ jobs:
           name: parity
           path: |
             gostack/parity/out/gostack
-            gostack/parity/ledger.json
+            gostack/parity/ledger/
             gostack/docs/parity.md

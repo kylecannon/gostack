@@ -9,14 +9,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
-import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import ledger
+from test_ledger import git_in, without_git_env
 
 KNOWN = {"sqs", "sts"}
 REGISTRATION = ledger.REGISTRATION_FILE
@@ -46,7 +45,11 @@ class TestDirTest(unittest.TestCase):
     def test_nodeid_of_lambda_maps_back_to_the_service_name(self) -> None:
         self.assertEqual(ledger.service_of("tests/aws/services/lambda_/test_lambda.py::t"), "lambda")
         self.assertEqual(ledger.service_of("tests/aws/services/sqs/test_sqs.py::t"), "sqs")
-        self.assertEqual(ledger.service_of("tests/other/test_x.py::t"), "other")
+
+    def test_a_nodeid_in_no_service_directory_is_an_error(self) -> None:
+        for nodeid in ("tests/other/test_x.py::t", "tests/aws/services/zzz/test_z.py::t"):
+            with self.subTest(nodeid=nodeid), self.assertRaises(SystemExit):
+                ledger.service_of(nodeid)
 
     def test_test_dirs_command_prints_one_path_per_service(self) -> None:
         out = io.StringIO()
@@ -117,11 +120,9 @@ class ServicesCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.ledger = Path(tmp.name) / "ledger.json"
+        self.ledger = Path(tmp.name) / "ledger"
         entry = {"localstack": "pass", "gostack": "pass", "reason": ""}
-        self.ledger.write_text(
-            json.dumps({f"tests/aws/services/{d}/test_x.py::t": entry for d in ("sqs", "sts")}), encoding="utf-8"
-        )
+        ledger.write_ledger(self.ledger, {f"tests/aws/services/{d}/test_x.py::t": entry for d in ("sqs", "sts")})
 
     def run_services(self, paths: list[str], diff: str | None, changed: bool = True, revisions: str | None = "a...b") -> str:
         args = argparse.Namespace(ledger=self.ledger, changed=changed, range=revisions)
@@ -160,18 +161,82 @@ class ServicesCommandTest(unittest.TestCase):
         self.assertEqual(self.run_services(["internal/service/lambda/a.go"], None), "lambda")
 
 
+class ParityFileSelectionTest(unittest.TestCase):
+    """A service's own ledger and exclusions files select that service alone;
+    everything else under parity/ stays shared."""
+
+    def test_a_services_own_ledger_or_exclusions_file_selects_only_it(self) -> None:
+        for path in ("parity/ledger/sqs.json", "parity/exclusions/sqs.yaml"):
+            with self.subTest(path=path):
+                self.assertEqual(ledger.affected_services([path], KNOWN), {"sqs"})
+        self.assertEqual(ledger.affected_services(["parity/ledger/lambda.json"], KNOWN), {"lambda"})
+
+    def test_the_rest_of_parity_is_shared(self) -> None:
+        for path in (
+            "parity/ledger.py",
+            "parity/run.sh",
+            "parity/exclusions/README.md",
+            "parity/ledger/zzz.json",
+            "parity/ledger/sqs.yaml",
+            "parity/ledger/sub/sqs.json",
+            "parity/ledger.json",
+            "parity/exclusions.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(ledger.affected_services([path], KNOWN), KNOWN)
+
+    def test_a_shared_path_beside_a_services_files_selects_every_service(self) -> None:
+        paths = ["parity/ledger/sqs.json", "internal/gateway/gateway.go"]
+        self.assertEqual(ledger.affected_services(paths, KNOWN | {"s3"}), KNOWN | {"s3"})
+
+    def test_a_new_service_branch_that_adds_only_its_own_files_selects_only_itself(self) -> None:
+        without_git_env(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            target = repo / REGISTRATION
+            target.parent.mkdir(parents=True)
+            target.write_text("regs := []{\n\tsqs.Registration(),\n}\n", encoding="utf-8")
+            entry = {"localstack": "pass", "gostack": "pass", "reason": ""}
+            ledger.write_ledger(repo / "parity" / "ledger", {"tests/aws/services/sqs/test_x.py::t": entry})
+            git_in(repo, "init", "-q")
+            git_in(repo, "add", ".")
+            git_in(repo, "commit", "-qm", "base")
+            with mock.patch.dict(ledger.TEST_DIRS, {"foo": "foo"}), mock.patch.dict(ledger.SERVICE_OF_DIR, {"foo": "foo"}):
+                (repo / "internal" / "service" / "foo").mkdir(parents=True)
+                (repo / "internal" / "service" / "foo" / "foo.go").write_text("package foo\n", encoding="utf-8")
+                target.write_text("regs := []{\n\tsqs.Registration(),\n\tfoo.Registration(),\n}\n", encoding="utf-8")
+                ledger.write_ledger(
+                    repo / "parity" / "ledger",
+                    {"tests/aws/services/sqs/test_x.py::t": entry, "tests/aws/services/foo/test_f.py::t": entry},
+                )
+                (repo / "parity" / "exclusions").mkdir()
+                (repo / "parity" / "exclusions" / "foo.yaml").write_text(
+                    '"tests/aws/services/foo/test_f.py::u": depends-on:iam\n', encoding="utf-8"
+                )
+                git_in(repo, "add", ".")
+                git_in(repo, "commit", "-qm", "add foo")
+                changed = git_in(repo, "diff", "--name-only", "HEAD~1...HEAD")
+                self.assertEqual(
+                    sorted(changed.splitlines()),
+                    [REGISTRATION, "internal/service/foo/foo.go", "parity/exclusions/foo.yaml", "parity/ledger/foo.json"],
+                )
+                args = argparse.Namespace(ledger=repo / "parity" / "ledger", changed=True, range="HEAD~1...HEAD")
+                out = io.StringIO()
+                with mock.patch.object(ledger, "ROOT", repo), mock.patch("sys.stdin", io.StringIO(changed)), contextlib.redirect_stdout(out):
+                    ledger.services(args)
+                self.assertEqual(out.getvalue().strip(), "foo")
+
+
 class RegistrationDiffTest(unittest.TestCase):
+    def setUp(self) -> None:
+        without_git_env(self)
+
     def test_a_real_git_diff_of_added_lines_is_recognised(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
 
             def git(*argv: str) -> str:
-                return subprocess.run(
-                    ["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@example.com", *argv],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout
+                return git_in(repo, *argv)
 
             git("init", "-q")
             target = repo / REGISTRATION

@@ -4,12 +4,12 @@
 #
 # Format: "nodeid pattern": the config variables the test patches
 #
-# Patterns match like parity/exclusions.yaml. The list applies only when the
-# bridge is on (GOSTACK_PARITY_BRIDGE=1). A test that is also in exclusions.yaml
+# Patterns match like parity/exclusions/<service>.yaml. The list applies only when the
+# bridge is on (GOSTACK_PARITY_BRIDGE=1). A test that is also in parity/exclusions/
 # stays excluded.
 #
 # A `requires_in_process` test that patches anything else (a module constant,
-# an object inside the server) belongs in exclusions.yaml, not here.
+# an object inside the server) belongs in parity/exclusions/, not here.
 
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
@@ -27,7 +27,7 @@
 # s3: the config variables are S3_SKIP_SIGNATURE_VALIDATION (22 via the
 # patch_s3_skip_signature_validation_false fixture, the rest in the test body),
 # LOCALSTACK_HOST and S3_SKIP_KMS_KEY_VALIDATION. The two KMS tests are also
-# listed in exclusions.yaml as depends-on:kms, which wins.
+# listed in parity/exclusions/s3.yaml as depends-on:kms, which wins.
 "tests/aws/services/s3/test_s3.py::TestS3::test_set_external_hostname": LOCALSTACK_HOST
 "tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key": S3_SKIP_KMS_KEY_VALIDATION
 "tests/aws/services/s3/test_s3.py::TestS3::test_s3_sse_validate_kms_key_state": S3_SKIP_KMS_KEY_VALIDATION

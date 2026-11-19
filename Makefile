@@ -31,7 +31,7 @@ FILES ?=
 #   make parity SERVICES=sqs,sts            the same suite against GOSTACK_IMAGE
 #   make parity-check                       ledger unit tests, then fail when a test that passed in the committed ledger now fails
 #   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout
-# Both runs merge into parity/ledger.json and rewrite docs/parity.md.
+# Both runs merge into parity/ledger/<service>.json and rewrite docs/parity.md.
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
 PARITY_BASE ?= HEAD

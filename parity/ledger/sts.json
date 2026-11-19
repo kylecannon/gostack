@@ -1,0 +1,16 @@
+{
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_assume_role_tag_validation": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_iam_role_chaining_override_transitive_tags": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_non_existent_role": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_role": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_role_with_saml": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_role_with_web_identity": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_expiration_date_format": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_role_access_key[False]": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_role_access_key[True]": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_root": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_user_access_key[False]": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_user_access_key[True]": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:iam"},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_federation_token": {"gostack": "pass", "localstack": "pass", "reason": ""},
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_sts_invalid_parameters": {"gostack": "pass", "localstack": "pass", "reason": ""}
+}

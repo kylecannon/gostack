@@ -102,10 +102,11 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
   `services` input) builds an image from the pull request head and runs
   LocalStack's own tests for the services the change touches against it, then
-  `make parity-check`. A change under `internal/service/<svc>/` selects that
-  service. A change to a shared path (`internal/` outside a service,
-  `cmd/`, `codegen/`, `specs/`, `docker/`, `parity/`, `go.mod`, `go.sum`)
-  selects every service in `parity/ledger.json`. The job fails when a row goes
+  `make parity-check`. A change under `internal/service/<svc>/`, or to
+  `parity/ledger/<svc>.json` or `parity/exclusions/<svc>.yaml`, selects that
+  service. A change to a shared path (`internal/` outside a service, `cmd/`,
+  `codegen/`, `specs/`, `docker/`, the rest of `parity/`, `go.mod`, `go.sum`)
+  selects every service in the ledger. The job fails when a row goes
   from pass to fail. `make parity-check` first runs the ledger's unit tests
   (`parity/test_*.py`), which `ci.yml` also runs on every pull request in its
   `parity-ledger` job. `make parity-prune` removes ledger rows whose test is
