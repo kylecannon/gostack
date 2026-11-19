@@ -46,6 +46,9 @@ const (
 	// regionAP is a third region, next to primaryRegion and replicaRegion.
 	regionAP = "ap-southeast-2"
 
+	// partialARN is a name that is also the partial ARN of s1.
+	partialARN = "arn:aws:secretsmanager:s1"
+
 	stagePrevious = "AWSPREVIOUS"
 	stagePending  = "AWSPENDING"
 	stageCustom   = "custom"
@@ -71,7 +74,7 @@ var (
 	// Manager ARN of a plain name.
 	arnLikeNames = []string{
 		"arn:", "arn:x", "arn:aws:sqs:x:y:p-odd", "arn:aws:sqs:eu-west-1:111111111111:q",
-		"arn:aws:secretsmanager:s1", "arn:aws:secretsmanager:s2",
+		partialARN, "arn:aws:secretsmanager:s2",
 		"arn:aws:secretsmanager:us-east-1:000000000000:secret:s1",
 		"arn:aws:secretsmanager:eu-west-1:000000000000:secret:s2",
 	}

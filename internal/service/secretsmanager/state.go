@@ -89,20 +89,34 @@ func (s *State) lookup(key string) *Secret {
 	return s.lookupLocked(key)
 }
 
+// lookupLocked is lookup for a caller that holds mu. A replica record its
+// primary no longer holds is not a secret and is passed over, so a name it
+// shares with a partial ARN reaches the secret that ARN stands for, as it does
+// once a restart has dropped the record.
 func (s *State) lookupLocked(key string) *Secret {
-	if secret, ok := s.byARN[key]; ok {
-		return secret
+	for _, found := range s.candidates(key) {
+		if found != nil && found.holds() {
+			return found
+		}
 	}
 
-	if secret, ok := s.byName[key]; ok {
-		return secret
+	return nil
+}
+
+// candidates are what key can name, in the order moto tries them: the secret
+// with that ARN, the one with that name, and, for a partial ARN, the one named
+// by the text after its last colon. A missing one is nil. The caller holds mu.
+func (s *State) candidates(key string) [3]*Secret {
+	var found [3]*Secret
+
+	found[0] = s.byARN[key]
+	found[1] = s.byName[key]
+
+	if isSecretsManagerARN(key) {
+		found[2] = s.byName[key[strings.LastIndexByte(key, ':')+1:]]
 	}
 
-	if !isSecretsManagerARN(key) {
-		return nil
-	}
-
-	return s.byName[key[strings.LastIndexByte(key, ':')+1:]]
+	return found
 }
 
 // isSecretsManagerARN reports whether s starts as a Secrets Manager ARN does,

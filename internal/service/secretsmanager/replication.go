@@ -348,27 +348,37 @@ func checkDeletable(secret *Secret, id string) *awserr.Error {
 
 // lookupLive is lookupLocked for a caller that holds mu for writing. A
 // replica record left behind by its primary, which a forced overwrite or a
-// reset of the primary's region took away, is dropped and not found, so its
-// name is free again. Reads never see such a record: readable refuses it.
+// reset of the primary's region took away, is dropped as well as passed over,
+// so its name is free again.
 func (s *State) lookupLive(key string) *Secret {
-	found := s.lookupLocked(key)
-	if found == nil || found.primary == nil {
-		return found
+	for _, found := range s.candidates(key) {
+		if found == nil {
+			continue
+		}
+
+		if found.holds() {
+			return found
+		}
+
+		s.drop(found)
 	}
-
-	primary := found.primary
-
-	primary.mu.Lock()
-	live := !primary.gone && primary.replicates(found)
-	primary.mu.Unlock()
-
-	if live {
-		return found
-	}
-
-	s.drop(found)
 
 	return nil
+}
+
+// holds reports whether s is a secret of its State: anything but a replica
+// record, which is one while its primary is there and lists it. A record is
+// left behind when a forced overwrite or a reset takes its primary away.
+func (s *Secret) holds() bool {
+	primary := s.primary
+	if primary == nil {
+		return true
+	}
+
+	primary.mu.Lock()
+	defer primary.mu.Unlock()
+
+	return !primary.gone && primary.replicates(s)
 }
 
 // primaryFor finds the secret secretID names for an operation only a primary

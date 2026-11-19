@@ -145,7 +145,7 @@ func Test_a_replica_named_like_an_arn_survives_a_restart(t *testing.T) {
 			eng, _, h := startProvider(t, dir, format)
 			ap := restartPlace{firstAccount, regionAP}
 			us := restartPlace{firstAccount, primaryRegion}
-			odd := "arn:aws:secretsmanager:s1"
+			odd := partialARN
 
 			mustSendAs(t, h, ap, "CreateSecret", create(odd, map[string]any{
 				keyString:   "primary",
@@ -161,6 +161,35 @@ func Test_a_replica_named_like_an_arn_survives_a_restart(t *testing.T) {
 			assert.Equal(t, "primary", valueOf(t, restarted, us, odd))
 			assert.Equal(t, ap.region, mustSendAs(t, restarted, us, "DescribeSecret", byOdd)["PrimaryRegion"])
 			assert.Equal(t, "unrelated", valueOf(t, restarted, us, "s1"))
+		})
+	}
+}
+
+// A replica record its primary has left behind is not a secret. Its name,
+// arn:aws:secretsmanager:s1, is also the partial ARN of s1, and a lookup that
+// stopped at the record answered "not found" until a restart dropped it and the
+// same call reached s1.
+func Test_a_record_left_behind_does_not_shadow_a_secret(t *testing.T) {
+	for _, format := range allFormats {
+		t.Run(string(format), func(t *testing.T) {
+			dir := t.TempDir()
+			eng, p, h := startProvider(t, dir, format)
+			ap := restartPlace{firstAccount, regionAP}
+			us := restartPlace{firstAccount, primaryRegion}
+			odd := partialARN
+
+			mustSendAs(t, h, ap, "CreateSecret", create(odd, map[string]any{keyReplicas: regionsOf(us.region)}))
+			mustSendAs(t, h, us, "CreateSecret", create("s1", map[string]any{keyString: "s1"}))
+			assert.Equal(t, odd, mustSendAs(t, h, us, "DescribeSecret", map[string]any{keySecretID: odd})["Name"])
+
+			// The primary's region is reset: its record in us-east-1 is left behind.
+			p.Registration().Reset(ap.account, ap.region)
+
+			assert.Equal(t, "s1", valueOf(t, h, us, odd), "the partial ARN reaches s1")
+
+			restarted := restartOn(t, eng, dir, format)
+
+			assert.Equal(t, "s1", valueOf(t, restarted, us, odd))
 		})
 	}
 }
