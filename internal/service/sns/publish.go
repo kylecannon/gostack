@@ -28,8 +28,6 @@ type message struct {
 
 // content is the message text a protocol gets: its own member of a
 // MessageStructure=json message, else the default one (SnsMessage.message_content).
-//
-//nolint:unparam // HTTP, email and Lambda delivery read their own protocol member.
 func (m *message) content(protocol string) string {
 	if m.bodies == nil {
 		return m.text
@@ -207,7 +205,7 @@ func (t *Topic) contentDeduplication() bool {
 // /_aws/sns/sms-messages, as LocalStack's SmsPhoneNumberPublisher does. The
 // SMS ticket owns what else a send does.
 func recordSMS(st *State, phone string, msg *message) {
-	rec := msg.recorded()
+	rec := msg.recorded(msg.content(protocolSMS))
 	rec.PhoneNumber = phone
 
 	st.mu.Lock()
@@ -229,21 +227,23 @@ func recordEndpointMessage(st *State, arn string, msg *message) error {
 			"Invalid parameter: TargetArn Reason: No endpoint found for the target arn specified")
 	}
 
-	if !strings.EqualFold(endpoint.Attributes["Enabled"], valueTrue) {
+	if !endpoint.enabled() {
 		return api.NewEndpointDisabledException("Endpoint is disabled")
 	}
 
-	rec := msg.recorded()
+	rec := msg.recorded(msg.content(platformOf(arn)))
 	rec.TargetARN = arn
 	st.endpointMessages[arn] = append(st.endpointMessages[arn], rec)
 
 	return nil
 }
 
-// recorded is the message as the developer endpoints list it.
-func (m *message) recorded() RecordedMessage {
+// recorded is the message as the developer endpoints list it, with content as
+// its text: the member of a MessageStructure=json message for the protocol or
+// platform it went to.
+func (m *message) recorded(content string) RecordedMessage {
 	rec := RecordedMessage{
-		MessageID: m.id, Message: m.text, MessageStructure: m.structure, Subject: m.subject,
+		MessageID: m.id, Message: content, MessageStructure: m.structure, Subject: m.subject,
 	}
 
 	if len(m.attrs) > 0 {

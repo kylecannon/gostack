@@ -100,6 +100,7 @@ func (p *Provider) mountDeveloperAPI(r chi.Router) {
 
 	for _, prefix := range prefixes {
 		r.Get(prefix+subscriptionTokensPath+"/*", p.subscriptionToken)
+		p.mountMessages(r, prefix)
 	}
 }
 

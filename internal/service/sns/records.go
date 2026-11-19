@@ -63,7 +63,15 @@ type Subscription struct {
 
 // PlatformApplication is one platform application, LocalStack's
 // PlatformApplicationDetails.
+//
+// The State's lock guards Endpoints, the lock of the application guards
+// Attributes. The State's lock is taken first.
 type PlatformApplication struct {
+	mu sync.Mutex
+
+	// Seq is the application's place in the creation order of its State, which
+	// ListPlatformApplications pages through.
+	Seq uint64
 	// ARN is the platform application ARN.
 	ARN string
 	// Attributes are the application's attributes.
@@ -74,7 +82,13 @@ type PlatformApplication struct {
 }
 
 // PlatformEndpoint is one platform endpoint, LocalStack's PlatformEndpoint.
+// Its lock guards Attributes. The State's lock is taken first.
 type PlatformEndpoint struct {
+	mu sync.Mutex
+
+	// Seq is the endpoint's place in the creation order of its State, which
+	// ListEndpointsByPlatformApplication pages through.
+	Seq uint64
 	// ARN is the endpoint ARN.
 	ARN string
 	// ApplicationARN is the ARN of the endpoint's platform application.

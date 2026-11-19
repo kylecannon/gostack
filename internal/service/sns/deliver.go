@@ -215,6 +215,8 @@ type delivery struct {
 // deleted, before the publish queues its calls gets none. A call queued before
 // the removal answered is delivered.
 func (p *Provider) fanOut(ctx context.Context, rc *request.Context, t *Topic, msgs []*message) {
+	p.recordDevices(t, msgs)
+
 	subs := t.subscribers()
 	if len(subs) == 0 {
 		return

@@ -40,6 +40,10 @@ type State struct {
 	applications map[string]*PlatformApplication
 	// endpoints are the platform endpoints by ARN.
 	endpoints map[string]*PlatformEndpoint
+	// appNext and endpointNext are the creation sequence numbers of the next
+	// platform application and endpoint. Restore sets them past the largest
+	// Seq.
+	appNext, endpointNext uint64
 	// endpointMessages are the messages published to each platform endpoint, by
 	// endpoint ARN, which /_aws/sns/platform-endpoint-messages serves.
 	endpointMessages map[string][]RecordedMessage
@@ -78,6 +82,8 @@ func (s *State) clear() {
 	s.tokens = make(map[string]string)
 	s.applications = make(map[string]*PlatformApplication)
 	s.endpoints = make(map[string]*PlatformEndpoint)
+	s.appNext = 0
+	s.endpointNext = 0
 	s.endpointMessages = make(map[string][]RecordedMessage)
 	s.smsAttributes = make(map[string]string)
 	s.smsMessages = nil

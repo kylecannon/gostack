@@ -44,6 +44,12 @@ func appendString(b []byte, s string) []byte {
 	return append(b, '"')
 }
 
+// AppendJSONDumps writes s as the JSON string Python's json.dumps makes of it,
+// for the developer endpoints that return a message as LocalStack does.
+func AppendJSONDumps(b []byte, s string) []byte {
+	return appendString(b, s)
+}
+
 func appendASCIIEscape(b []byte, c byte) []byte {
 	switch c {
 	case '"', '\\':
