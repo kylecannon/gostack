@@ -105,7 +105,12 @@ func Test_Decrypt_forgedBlobMakesNothing(t *testing.T) {
 	keys := s.ok("ListKeys", nil)
 	changes := s.changes.Load()
 
-	for _, name := range []string{"alias/aws/ssm", aliasS3, "alias/mine"} {
+	// The ARN forms do not parse as key ARNs (no account), so they once fell
+	// through to the alias lookup; the last is 36 bytes, with no padding.
+	for _, name := range []string{
+		"alias/aws/ssm", aliasS3, "alias/mine",
+		"arn::alias/aws/ssm", "arn:aws:kms:us-west-2::alias/aws/es", "arn:aws:kms:us-east-1::alias/aws/s3",
+	} {
 		forged := b64(forgedBlob(name))
 
 		for _, c := range []struct {

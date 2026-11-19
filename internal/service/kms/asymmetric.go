@@ -21,6 +21,11 @@ func (p *Provider) Sign(ctx context.Context, in *api.SignInput) (*api.SignOutput
 		return nil, err
 	}
 
+	err = checkLengths(in.Message, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	k, err := p.dataKey(rc, in.KeyId)
 	if err != nil {
 		return nil, err
@@ -69,6 +74,11 @@ func (p *Provider) Verify(ctx context.Context, in *api.VerifyInput) (*api.Verify
 		return nil, err
 	}
 
+	err = checkLengths(in.Message, in.Signature)
+	if err != nil {
+		return nil, err
+	}
+
 	k, err := p.dataKey(rc, in.KeyId)
 	if err != nil {
 		return nil, err
@@ -109,6 +119,37 @@ func (p *Provider) Verify(ctx context.Context, in *api.VerifyInput) (*api.Verify
 	return &api.VerifyOutput{KeyId: new(k.ARN), SignatureValid: new(true), SigningAlgorithm: in.SigningAlgorithm}, nil
 }
 
+// checkLengths is the model's length check of Sign and Verify, made before
+// the key is looked up, as AWS validates a request first: Message is
+// PlaintextType, 1 to 4096 bytes, and Verify's Signature is CiphertextType,
+// at least 1 byte (Sign passes none). Both are reported, hidden, as AWS
+// reports a blob. A missing member is left to the null checks after the
+// lookup, LocalStack's order. LocalStack checks no length and signs.
+func checkLengths(message, signature []byte) error {
+	const tooShort = "Member must have length greater than or equal to 1"
+
+	var r constraint.Report
+
+	switch {
+	case message == nil:
+	case len(message) == 0:
+		r.Hidden(nil, "message", tooShort)
+	case len(message) > maxMessageBytes:
+		r.Hidden(nil, "message", "Member must have length less than or equal to 4096")
+	default:
+	}
+
+	if signature != nil && len(signature) == 0 {
+		r.Hidden(nil, "signature", tooShort)
+	}
+
+	if r.Failed() {
+		return validation(r.Message())
+	}
+
+	return nil
+}
+
 // signingInput is the part Sign and Verify share after the key lookup and the
 // null checks, in LocalStack's order: the key's usage and state, the digest
 // the algorithm names, then the algorithm's family against the key's spec and
@@ -139,7 +180,8 @@ func signingInput(k *Key, operation, algorithm string, messageType *string, mess
 }
 
 // GetPublicKey answers the key's DER SubjectPublicKeyInfo with the attributes
-// LocalStack selects: KeySpec, KeyUsage and the algorithm lists. A disabled
+// LocalStack selects: KeySpec, KeyUsage and the algorithm lists, with the
+// model's KeyAgreementAlgorithms, which LocalStack leaves out. A disabled
 // key answers too, as AWS does. A symmetric or HMAC key has no public key and
 // answers without one, as LocalStack does.
 func (p *Provider) GetPublicKey(ctx context.Context, in *api.GetPublicKeyInput) (*api.GetPublicKeyOutput, error) {
@@ -154,12 +196,13 @@ func (p *Provider) GetPublicKey(ctx context.Context, in *api.GetPublicKeyInput) 
 	}
 
 	return &api.GetPublicKeyOutput{
-		KeyId:                new(k.ARN),
-		PublicKey:            k.PublicKey,
-		KeySpec:              new(k.Spec),
-		KeyUsage:             new(k.Usage),
-		EncryptionAlgorithms: encryptionAlgorithms(k.Usage, k.Spec),
-		SigningAlgorithms:    signingAlgorithms(k.Usage, k.Spec),
+		KeyId:                  new(k.ARN),
+		PublicKey:              k.PublicKey,
+		KeySpec:                new(k.Spec),
+		KeyUsage:               new(k.Usage),
+		EncryptionAlgorithms:   encryptionAlgorithms(k.Usage, k.Spec),
+		SigningAlgorithms:      signingAlgorithms(k.Usage, k.Spec),
+		KeyAgreementAlgorithms: keyAgreementAlgorithms(k.Usage),
 	}, nil
 }
 

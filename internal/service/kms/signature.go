@@ -208,22 +208,12 @@ func deriveSecret(private any, peer []byte) ([]byte, error) {
 }
 
 func deriveNIST(key *ecdsa.PrivateKey, peer []byte) ([]byte, error) {
-	parsed, err := x509.ParsePKIXPublicKey(peer)
-	if err != nil {
-		return nil, validation("")
-	}
-
-	ecPeer, ok := parsed.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, validation("")
-	}
-
 	own, err := key.ECDH()
 	if err != nil {
 		return nil, validation("")
 	}
 
-	theirs, err := ecPeer.ECDH()
+	theirs, err := nistPeer(key.Curve, own.Curve(), peer)
 	if err != nil {
 		return nil, validation("")
 	}

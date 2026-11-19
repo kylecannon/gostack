@@ -92,21 +92,23 @@ func (p *Provider) Encrypt(ctx context.Context, in *api.EncryptInput) (*api.Encr
 // Decrypt opens a blob this service sealed, finding its key in the blob when
 // the request names none. A KeyId with a blob that does not parse is how an
 // RSA key decrypts what was encrypted offline under its public key. Recipient
-// is answered 501: the CMS envelope LocalStack builds for it is not written
-// yet.
+// is answered 501, before the key is looked up: the CMS envelope LocalStack
+// builds for it is not written yet.
 func (p *Provider) Decrypt(ctx context.Context, in *api.DecryptInput) (*api.DecryptOutput, error) {
 	rc, err := call(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	// Before the lookup, so a Recipient neither finds a key nor makes a
+	// managed alias, as GenerateDataKey and GenerateRandom check it first.
+	if in.Recipient != nil {
+		return nil, awserr.NotImplemented("kms", "Decrypt with a Recipient")
+	}
+
 	k, blob, err := p.sourceKey(rc, in.KeyId, in.CiphertextBlob, "Decrypt")
 	if err != nil {
 		return nil, err
-	}
-
-	if in.Recipient != nil {
-		return nil, awserr.NotImplemented("kms", "Decrypt with a Recipient")
 	}
 
 	plaintext, err := open(k, blob, in.CiphertextBlob, in.EncryptionContext)
@@ -242,24 +244,40 @@ func (p *Provider) sourceKey(rc *request.Context, keyID *string, data []byte, op
 
 // blobKey finds the key a blob names. A blob that did not parse, or names a
 // key ARN of another region, is InvalidCiphertextException, since LocalStack
-// makes both checks inside one try. A blob holds a key id, never an alias:
-// one that does names no key, and is not resolved, since resolving an AWS
-// managed alias makes it and its key.
+// makes both checks inside one try. A blob holds a bare key id, never an alias
+// or an ARN (a key ARN does not fit in its 36 bytes): any other id names no
+// key and is not resolved, since resolving an AWS managed alias, bare or in an
+// ARN, makes it and its key. The NotFoundException is the one LocalStack
+// answers when the lookup finds nothing.
 func (p *Provider) blobKey(rc *request.Context, blob *ciphertext.Blob, parseErr error) (*Key, error) {
 	if parseErr != nil {
 		return nil, api.NewInvalidCiphertextException(undeserializable)
 	}
 
-	place, err := keyPlace(rc, blob.KeyID)
+	_, err := keyPlace(rc, blob.KeyID)
 	if err != nil {
 		return nil, api.NewInvalidCiphertextException(undeserializable)
 	}
 
-	if strings.HasPrefix(place.keyID, aliasPrefix) {
-		return nil, api.NewNotFoundException("Unable to find KMS alias with name " + place.keyID)
+	if !isKeyID(blob.KeyID) {
+		return nil, blobIDNotFound(blob.KeyID)
 	}
 
 	return p.dataKey(rc, &blob.KeyID)
+}
+
+// blobIDNotFound is the NotFoundException for a blob id that is not a key id:
+// the alias LocalStack would look up for an alias or alias ARN, else the id.
+func blobIDNotFound(id string) error {
+	if strings.HasPrefix(id, aliasPrefix) {
+		return api.NewNotFoundException("Unable to find KMS alias with name " + id)
+	}
+
+	if _, name, ok := strings.Cut(id, ":alias/"); ok && strings.HasPrefix(id, arnPrefix) {
+		return api.NewNotFoundException("Unable to find KMS alias with name " + aliasPrefix + name)
+	}
+
+	return api.NewNotFoundException("Invalid keyId '" + id + "'")
 }
 
 // open decrypts data under k: the parsed blob under each of k's materials, or,

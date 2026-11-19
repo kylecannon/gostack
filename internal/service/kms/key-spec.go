@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"io"
@@ -309,8 +310,17 @@ func customPrivateKey(spec string, der []byte) (any, error) {
 }
 
 // parsePrivateKey reads a DER private key in any of the forms
-// load_der_private_key takes: PKCS #8, PKCS #1 and SEC 1.
+// load_der_private_key takes: PKCS #8, PKCS #1 and SEC 1. A byte after the
+// key is refused, as OpenSSL refuses it and parseSECGK1Private does; x509's
+// PKCS #8 reader would take it.
 func parsePrivateKey(der []byte) (any, error) {
+	var whole asn1.RawValue
+
+	rest, err := asn1.Unmarshal(der, &whole)
+	if err != nil || len(rest) != 0 {
+		return nil, errors.New("not one DER value")
+	}
+
 	pkcs8, err := x509.ParsePKCS8PrivateKey(der)
 	if err == nil {
 		return pkcs8, nil
@@ -379,16 +389,32 @@ func (m *material) serializeSECGK1(key *secp256k1.PrivateKey) error {
 }
 
 // encryptionAlgorithms, signingAlgorithms and macAlgorithms are the
-// algorithms LocalStack lists for a key (_populate_*_algorithms).
+// algorithms LocalStack lists for a key (_populate_*_algorithms), except that
+// an ECC key made for ENCRYPT_DECRYPT lists none: LocalStack lists RSA's OAEP
+// algorithms for it, which no ECC key can use.
 func encryptionAlgorithms(usage, spec string) []string {
 	switch {
 	case usage != usageEncrypt:
 		return nil
 	case spec == specSymmetric:
 		return []string{specSymmetric}
-	default:
-		return []string{"RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256"}
 	}
+
+	if _, ok := rsaBits(spec); !ok {
+		return nil
+	}
+
+	return []string{"RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256"}
+}
+
+// keyAgreementAlgorithms is ECDH for a KEY_AGREEMENT key, the model's
+// KeyAgreementAlgorithms. LocalStack lists none.
+func keyAgreementAlgorithms(usage string) []string {
+	if usage != usageKeyAgreement {
+		return nil
+	}
+
+	return []string{algorithmECDH}
 }
 
 func signingAlgorithms(usage, spec string) []string {

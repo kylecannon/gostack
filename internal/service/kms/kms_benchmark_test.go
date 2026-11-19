@@ -134,7 +134,7 @@ func BenchmarkCreateKey(b *testing.B) {
 		{rsa2048, usageEncryptDecrypt},
 	} {
 		b.Run("proto=json/spec="+spec.spec, func(b *testing.B) {
-			body := `{"KeySpec":"` + spec.spec + `",fieldKeyUsage:"` + spec.usage + `"}`
+			body := `{"KeySpec":"` + spec.spec + `","KeyUsage":"` + spec.usage + `"}`
 			newBench(b).loop("CreateKey", body)
 		})
 	}

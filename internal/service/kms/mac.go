@@ -13,8 +13,8 @@ import (
 	"github.com/kylecannon/gostack/internal/request"
 )
 
-// maxMessageBytes is the largest Message GenerateMac and VerifyMac take
-// (PlaintextType).
+// maxMessageBytes is the largest Message GenerateMac, VerifyMac, Sign and
+// Verify take (PlaintextType).
 const maxMessageBytes = 4096
 
 // macHashes are the digests of the MAC algorithms, one per HMAC key spec.
