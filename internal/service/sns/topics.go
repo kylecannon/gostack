@@ -78,7 +78,7 @@ func (p *Provider) CreateTopic(ctx context.Context, in *api.CreateTopicInput) (*
 	return &api.CreateTopicOutput{TopicArn: new(arn)}, nil
 }
 
-// DeleteTopic deletes a topic and its tags. A topic that does not exist is no
+// DeleteTopic deletes a topic, its subscriptions and its tags. A topic that does not exist is no
 // error. Like LocalStack's delete_topic, it acts in the caller's account
 // whatever account the ARN names.
 func (p *Provider) DeleteTopic(ctx context.Context, in *api.DeleteTopicInput) (*api.DeleteTopicOutput, error) {

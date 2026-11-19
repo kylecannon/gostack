@@ -414,23 +414,28 @@ func Test_Provider_ListSubscriptions_pages(t *testing.T) {
 	assert.Len(t, c.listSubs("", "bm90LWEtc3Vi").Subs, 100, "a token that names nothing starts from the first")
 }
 
-// Test_Provider_DeleteTopic_subscriptions: as in LocalStack, a deleted topic's
-// subscriptions stay, listed and readable, until unsubscribed.
+// Test_Provider_DeleteTopic_subscriptions: deleting a topic deletes its
+// subscriptions, as AWS's DeleteTopic reference says, and only its own.
 func Test_Provider_DeleteTopic_subscriptions(t *testing.T) {
 	c := newClient(t)
 	topic := c.createTopic(paramName, "t")
+	other := c.createTopic(paramName, "u")
 	arn := c.subscribeSQS(topic)
+	kept := c.subscribeSQS(other)
 
 	c.ok(nil, "DeleteTopic", paramTopicArn, topic)
 	c.fails(http.StatusNotFound, "NotFound", "Topic does not exist", "ListSubscriptionsByTopic", paramTopicArn, topic)
-	assert.Equal(t, topic, c.subAttributes(arn)["TopicArn"])
+	c.fails(http.StatusNotFound, "NotFound", "Subscription does not exist", "GetSubscriptionAttributes", paramSubArn, arn)
+	c.ok(nil, opUnsub, paramSubArn, arn)
+
+	all := c.listSubs("", "").Subs
+	require.Len(t, all, 1)
+	assert.Equal(t, kept, all[0].SubscriptionArn)
 
 	topic = c.createTopic(paramName, "t")
 	assert.NotEqual(t, arn, c.subscribeSQS(topic), "the new topic has no subscription to the queue")
-
-	c.ok(nil, opUnsub, paramSubArn, arn)
-	assert.Len(t, c.listSubs("", "").Subs, 1)
 	assert.Len(t, c.listSubs(topic, "").Subs, 1)
+	assert.Len(t, c.listSubs("", "").Subs, 2)
 }
 
 func Test_Provider_Subscribe_concurrent(t *testing.T) {

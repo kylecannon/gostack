@@ -101,8 +101,8 @@ func (s *State) add(t *Topic) {
 	s.order = append(s.order, t)
 }
 
-// remove drops the topic with arn and reports whether there was one. The caller
-// holds the lock for writing.
+// remove drops the topic with arn, and its subscriptions, and reports whether
+// there was one. The caller holds the lock for writing.
 func (s *State) remove(arn string) bool {
 	t, ok := s.topics[arn]
 	if !ok {
@@ -114,6 +114,8 @@ func (s *State) remove(arn string) bool {
 	if i, found := slices.BinarySearchFunc(s.order, t.seq, bySeq); found {
 		s.order = slices.Delete(s.order, i, i+1)
 	}
+
+	s.dropSubscriptions(t)
 
 	return true
 }

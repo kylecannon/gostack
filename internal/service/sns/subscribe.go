@@ -259,6 +259,34 @@ func (s *State) addSubscription(t *Topic, sub *Subscription) {
 	t.subs = append(t.subs, sub)
 }
 
+// dropSubscriptions removes every subscription of t, a topic being deleted,
+// from the State. AWS's DeleteTopic reference: "Deletes a topic and all its
+// subscriptions." LocalStack leaves them in its store, listed and readable;
+// the AWS document wins. The caller holds the State's lock for writing.
+func (s *State) dropSubscriptions(t *Topic) {
+	t.mu.Lock()
+	subs := t.subs
+	t.subs, t.endpoints = nil, nil
+	t.mu.Unlock()
+
+	if len(subs) == 0 {
+		return
+	}
+
+	gone := make(map[*Subscription]struct{}, len(subs))
+	for _, sub := range subs {
+		delete(s.subscriptions, sub.ARN)
+		delete(s.tokens, sub.Token)
+		gone[sub] = struct{}{}
+	}
+
+	s.subOrder = slices.DeleteFunc(s.subOrder, func(sub *Subscription) bool {
+		_, ok := gone[sub]
+
+		return ok
+	})
+}
+
 // removeSubscription drops sub from the State and from its topic, when the
 // topic is still there. The caller holds the State's lock for writing.
 func (s *State) removeSubscription(sub *Subscription) {
