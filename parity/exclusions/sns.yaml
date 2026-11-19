@@ -1,0 +1,44 @@
+# sns tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- requires_in_process: sns ---------------------------------------------
+# Most read the SNS provider's store inside the server process
+# (SnsProvider.get_store), which no external container can reach. Each entry
+# names its own need.
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionSES::test_topic_email_subscription_confirmation": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSPlatformEndpoint::test_subscribe_platform_endpoint": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSPlatformEndpoint::test_publish_to_platform_endpoint_is_dispatched": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_publish_sms": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_publish_sms_endpoint": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_is_phone_number_opted_out": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_list_phone_numbers_opted_out": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_opt_in_phone_number": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_opt_out_phone_number_via_endpoint": requires_in_process (marked in LocalStack; posts to the internal opt-out endpoint and reads config.external_service_url(); not listed in parity/bridgeable.yaml)
+"tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_to_platform_endpoint_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_sms_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
+"tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_subscription_tokens_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store; its HTTPServer alone would be bridgeable)
+# These two patch only localstack.config (SNS_CERT_URL_HOST, SNS_SES_SENDER_ADDRESS)
+# and so are candidates for parity/bridgeable.yaml's config kind. The second also
+# reads and clears SES's mailbox through /_aws/ses, so it waits on SES.
+"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host": requires_in_process (patches config.SNS_CERT_URL_HOST; not yet listed in parity/bridgeable.yaml)
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionSES::test_email_sender": requires_in_process (patches config.SNS_SES_SENDER_ADDRESS and reads SES's mailbox)
+
+# --- hard-skipped: sns ----------------------------------------------------
+"tests/aws/services/sns/test_sns.py::TestSNSTopicCrud::test_topic_delivery_policy_crud": hard-skipped (Not properly implemented in Moto, only mocked)
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionCrudV2::test_subscribe_sms_obscure_phone_number": hard-skipped (skipped unless run on AWS, not accepting valid sms endpoint)
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionCrudV2::test_confirm_subscription": hard-skipped (Https for aws lambda URL required but not implemented in localstack lambda)
+"tests/aws/services/sns/test_sns.py::TestSNSPlatformEndpoint::test_create_platform_endpoint_check_idempotency": hard-skipped (Test asserts wrong behaviour)
+"tests/aws/services/sns/test_sns.py::TestSNSPlatformEndpoint::test_publish_to_gcm": hard-skipped (Need to implement credentials validation when creating platform)
+
+# --- depends-on:lambda: sns -----------------------------------------------
+# Each deploys a Lambda function (create_lambda_function, directly or through the
+# create_sns_http_endpoint_and_queue fixture) and subscribes or delivers to it.
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionLambda::test_python_lambda_subscribe_sns_topic": depends-on:lambda
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionLambda::test_sns_topic_as_lambda_dead_letter_queue": depends-on:lambda
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionLambda::test_redrive_policy_lambda_subscription": depends-on:lambda
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionLambda::test_publish_lambda_verify_signature": depends-on:lambda
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_subscribe_external_http_endpoint_lambda_url_sig_validation": depends-on:lambda
+"tests/aws/services/sns/test_sns.py::TestSNSPublishDelivery::test_delivery_lambda": depends-on:lambda
+
+# --- depends-on:firehose: sns ---------------------------------------------
+# Subscribes a Firehose delivery stream that writes to S3, with an IAM role.
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionFirehose::test_publish_to_firehose_with_s3": depends-on:firehose

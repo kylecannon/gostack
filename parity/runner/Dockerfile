@@ -27,10 +27,12 @@ ENV LANG=C.UTF-8 \
     LOCALSTACK_BUILD_GIT_HASH=${LOCALSTACK_SHA}
 
 # gcc/g++ build the few test dependencies without wheels for this platform.
+# nodejs: aws_cdk, which tests/aws/services/dynamodbstreams imports, runs its
+# jsii runtime on node; without it the module does not collect.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl gcc g++ git make
+    apt-get install -y --no-install-recommends ca-certificates curl gcc g++ git make nodejs
 
 WORKDIR /opt/code/localstack
 
