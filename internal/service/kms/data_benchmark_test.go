@@ -9,12 +9,19 @@ import (
 	"testing"
 )
 
+// size32B and size4KiB name the smallest and the largest payload cell of the
+// data, MAC and signing benchmarks.
+const (
+	size32B  = "32B"
+	size4KiB = "4KiB"
+)
+
 // dataPayloads are the plaintext sizes of the Encrypt and Decrypt cells, up to
 // the 4096 bytes Encrypt takes.
 var dataPayloads = []struct {
 	name string
 	size int
-}{{"32B", 32}, {"1KiB", 1024}, {"4KiB", 4096}}
+}{{size32B, 32}, {"1KiB", 1024}, {size4KiB, 4096}}
 
 // dataConcurrency is the number of calls each loop makes at once, all on one
 // key.

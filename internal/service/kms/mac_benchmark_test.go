@@ -12,7 +12,7 @@ import (
 var macPayloads = []struct {
 	name string
 	size int
-}{{"32B", 32}, {"4KiB", 4096}}
+}{{size32B, 32}, {size4KiB, 4096}}
 
 // hmacBenchKey makes an HMAC key of spec outside the timed loop and returns its
 // id.

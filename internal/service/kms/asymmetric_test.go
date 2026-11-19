@@ -30,6 +30,10 @@ const (
 	oaepSHA1          = "RSAES_OAEP_SHA_1"
 	secgK1            = "ECC_SECG_P256K1"
 	ecdsaSHA256       = "ECDSA_SHA_256"
+	ecdsaSHA384       = "ECDSA_SHA_384"
+	ecdsaSHA512       = "ECDSA_SHA_512"
+	rsa3072           = "RSA_3072"
+	rsa4096           = "RSA_4096"
 	pssSHA256         = "RSASSA_PSS_SHA_256"
 	typeDigest        = "DIGEST"
 	typeRaw           = "RAW"
@@ -100,8 +104,8 @@ func Test_SignVerify(t *testing.T) {
 		{spec: rsa2048, algorithm: "RSASSA_PKCS1_V1_5_SHA_384", custom: rsaFixture},
 		{spec: rsa2048, algorithm: "RSASSA_PKCS1_V1_5_SHA_512", custom: rsaFixture},
 		{spec: eccP256, algorithm: ecdsaSHA256},
-		{spec: eccP384, algorithm: "ECDSA_SHA_384"},
-		{spec: eccP521, algorithm: "ECDSA_SHA_512"},
+		{spec: eccP384, algorithm: ecdsaSHA384},
+		{spec: eccP521, algorithm: ecdsaSHA512},
 		{spec: secgK1, algorithm: ecdsaSHA256},
 	}
 
@@ -223,7 +227,7 @@ func Test_SignVerify_errors(t *testing.T) {
 	})
 
 	t.Run("another digest of the family signs, as in LocalStack", func(t *testing.T) {
-		s.ok("Sign", map[string]any{fieldKeyID: keyID(t, ecc), fieldMessage: message, fieldSigningAlgorithm: "ECDSA_SHA_512"})
+		s.ok("Sign", map[string]any{fieldKeyID: keyID(t, ecc), fieldMessage: message, fieldSigningAlgorithm: ecdsaSHA512})
 	})
 
 	t.Run("missing members", func(t *testing.T) {
@@ -268,7 +272,7 @@ func Test_GetPublicKey(t *testing.T) {
 
 	sign := s.createKey(map[string]any{fieldKeySpec: eccP384, fieldKeyUsage: usageSignVerify})
 	out = s.ok("GetPublicKey", map[string]any{fieldKeyID: arn(t, sign)})
-	require.Equal(t, []any{"ECDSA_SHA_384"}, out["SigningAlgorithms"])
+	require.Equal(t, []any{ecdsaSHA384}, out["SigningAlgorithms"])
 	require.NotContains(t, out, "EncryptionAlgorithms")
 
 	// A symmetric key has no public key; LocalStack answers without one.
