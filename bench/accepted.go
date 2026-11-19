@@ -137,34 +137,50 @@ func parseAccepted(data []byte, name string) ([]acceptedEntry, error) {
 		return nil, fmt.Errorf("%w %s: %w", errAccepted, name, err)
 	}
 
-	seen := make(map[[4]string]int, len(entries))
-
 	for i := range entries {
 		err = entries[i].validate()
 		if err != nil {
 			return nil, fmt.Errorf("%s entry %d: %w", name, i+1, err)
 		}
 
-		key := entries[i].key()
-		if first, dup := seen[key]; dup {
-			return nil, fmt.Errorf("%s entry %d: %w: it names the same metric as entry %d (%s); "+
-				"one entry holds a metric, whatever its bound or commit", name, i+1, errAccepted, first, entries[i].subject())
+		for j := range i {
+			if entries[j].overlaps(&entries[i]) {
+				return nil, fmt.Errorf("%s entry %d: %w: it names the same metric as entry %d (%s), or one whose rows it "+
+					"also matches; one entry holds a metric, whatever its bound or commit",
+					name, i+1, errAccepted, j+1, entries[i].subject())
+			}
 		}
-
-		seen[key] = i + 1
 	}
 
 	return entries, nil
 }
 
-// key identifies the metric an entry names, so two entries for one metric are
-// found whichever way the package is spelled.
-func (e *acceptedEntry) key() [4]string {
-	if e.Gate == gateBenchstat {
-		return [4]string{e.Gate, e.fullPackage(), e.Benchmark, e.Unit}
+// overlaps reports whether the entries can match one row, which the gates would
+// resolve by taking whichever accepts the change. Two benchstat entries overlap
+// when their benchmark names match a common row: "host" and "host-2" do (the
+// row "host-2" is "host" on a 2-CPU run, and the benchmark "host-2" on a 1-CPU
+// one), "host" and "hostile" do not. Names compare as benchRow.matches compares
+// them: exactly, apart from the -GOMAXPROCS suffix.
+func (e *acceptedEntry) overlaps(o *acceptedEntry) bool {
+	if e.Gate != o.Gate {
+		return false
 	}
 
-	return [4]string{e.Gate, e.Target, e.Cell, e.Metric}
+	if e.Gate == gateBenchstat {
+		return e.Unit == o.Unit && e.fullPackage() == o.fullPackage() &&
+			(namesBenchmark(e.Benchmark, o.Benchmark) || namesBenchmark(o.Benchmark, e.Benchmark))
+	}
+
+	return e.Target == o.Target && e.Cell == o.Cell && e.Metric == o.Metric
+}
+
+// namesBenchmark reports whether a row named row belongs to the benchmark bench.
+// An entry leaves out the -GOMAXPROCS suffix, so it holds on a runner with any
+// CPU count.
+func namesBenchmark(row, bench string) bool {
+	rest, ok := strings.CutPrefix(row, bench)
+
+	return ok && (rest == "" || procsSuffix.MatchString(rest))
 }
 
 // subject names the metric an entry holds, for an error.
@@ -257,13 +273,37 @@ func (e *acceptedEntry) fields() (own, other map[string]string) {
 	}
 }
 
-// units a system metric is written in: the unit field of the metrics `bench
-// compare` builds.
-var knownUnits = map[string]bool{"MiB": true, "ms": true, "s": true, "cycles/s": true}
+// maxPercent is the largest percent bound. A bound past it is a typo or a way
+// to hold every regression, so it is a load error.
+const maxPercent = 1000
+
+// unitCaps are the units a system metric is written in (the unit field of the
+// metrics `bench compare` builds) and the largest absolute bound for each: 64 GiB
+// of memory, an hour, and 10 million cycles a second. A bound above its cap is
+// not a value the metric takes on any machine this runs on, so it is a load
+// error. docs/standards.md and the header of bench/accepted.yaml state them.
+var unitCaps = map[string]float64{
+	"MiB":      capMiB,
+	"ms":       capMs,
+	"s":        capSeconds,
+	"cycles/s": capCyclesPerSec,
+}
+
+const (
+	mibPerGiB = 1 << 10
+
+	capMiB          = 64 * mibPerGiB       // 64 GiB
+	capMs           = secondsPerHour * 1e3 // an hour
+	capSeconds      = secondsPerHour
+	capCyclesPerSec = 1e7
+
+	secondsPerHour = 3600
+)
 
 // parseLimit reads "+50%" (the sign is the regression's direction and only the
 // size counts) or, for a system metric, "6 MiB": the worst head median accepted.
-// The number is finite and above zero, with at most one leading "+".
+// The number is finite and above zero, with at most one leading "+". A percent
+// is at most maxPercent and an absolute value at most its unit's cap.
 func parseLimit(raw, gate string) (limit, error) {
 	text := strings.TrimSpace(raw)
 
@@ -271,6 +311,10 @@ func parseLimit(raw, gate string) (limit, error) {
 		pct, ok := positiveNumber(number)
 		if !ok {
 			return limit{}, fmt.Errorf("%w: max %q is not a finite percent above zero such as +50%%", errAccepted, raw)
+		}
+
+		if pct > maxPercent {
+			return limit{}, fmt.Errorf("%w: max %q is above the %d%% cap", errAccepted, raw, maxPercent)
 		}
 
 		return limit{percent: pct}, nil
@@ -287,9 +331,14 @@ func parseLimit(raw, gate string) (limit, error) {
 		return limit{}, fmt.Errorf("%w: max %q is not a finite value above zero", errAccepted, raw)
 	}
 
-	if !knownUnits[fields[1]] {
+	capValue, known := unitCaps[fields[1]]
+	if !known {
 		return limit{}, fmt.Errorf("%w: max %q names a unit that no system metric uses; they are MiB, ms, s and cycles/s",
 			errAccepted, raw)
+	}
+
+	if value > capValue {
+		return limit{}, fmt.Errorf("%w: max %q is above the %.0f %s cap", errAccepted, raw, capValue, fields[1])
 	}
 
 	return limit{absolute: value, unit: fields[1]}, nil

@@ -220,10 +220,16 @@ the largest change accepted, a one-line reason, the pull request and a commit
 that carries the cost. Both CI gates read the file and print what it holds
 under "Accepted". A listed metric past its bound, and every unlisted one, still
 fails. A bound is a finite number above zero with at most one leading `+`, as
-`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`);
-an infinite, negative, zero or repeated-sign bound is a load error, as is a
-second entry for one metric or a second YAML document. An entry's `package` is
-the full import path or the path below the module (`internal/route`).
+`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`).
+A percent is at most 1000%. An absolute value is at most 65536 `MiB`, 3600000
+`ms`, 3600 `s` or 10000000 `cycles/s`. An infinite, negative, zero,
+repeated-sign or over-cap bound is a load error, as is a second YAML document
+and a second entry that can match the same row as another: one metric, or a
+benchmark `X` with `X-<digits>` (`RouteDetect/host` and `RouteDetect/host-2`
+both match the row `RouteDetect/host-2`). A benchmark whose own name ends in
+`-<digits>` is listed alone without trouble. A list with no entries is valid.
+An entry's `package` is the full import path or the path below the module
+(`internal/route`).
 
 An entry applies only while the head holds its commit and the base does not, so
 it expires once main holds the commit. The pull request lands with a merge

@@ -69,9 +69,7 @@ func (r benchRow) matches(e *acceptedEntry) bool {
 		return false
 	}
 
-	rest, ok := strings.CutPrefix(r.name, e.Benchmark)
-
-	return ok && (rest == "" || procsSuffix.MatchString(rest))
+	return namesBenchmark(r.name, e.Benchmark)
 }
 
 // gateMain is `bench gate`: it reads benchstat's text output and fails on a
