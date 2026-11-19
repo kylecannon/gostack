@@ -227,12 +227,12 @@ func Test_CreateKey_errors(t *testing.T) {
 		require.NotContains(t, meta, "EncryptionAlgorithms")
 	})
 
-	t.Run("secp256k1 waits for its dependency", func(t *testing.T) {
-		r := s.call(usEast1, "CreateKey", map[string]any{fieldKeySpec: "ECC_SECG_P256K1", fieldKeyUsage: usageSignVerify})
-		require.Equal(t, http.StatusNotImplemented, r.status)
-	})
-
 	t.Run("refused keys are not listed", func(t *testing.T) {
 		require.Equal(t, []any{}, s.ok("ListKeys", nil)["Keys"])
+	})
+
+	t.Run("secp256k1 is made with the dependency", func(t *testing.T) {
+		meta := s.createKey(map[string]any{fieldKeySpec: "ECC_SECG_P256K1", fieldKeyUsage: usageSignVerify})
+		require.Equal(t, []any{"ECDSA_SHA_256"}, meta["SigningAlgorithms"])
 	})
 }

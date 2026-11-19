@@ -177,8 +177,10 @@ func Test_GenerateDataKeyPair_errors(t *testing.T) {
 			s.fails(op, map[string]any{fieldKeyID: id, fieldKeyPairSpec: "SM2"},
 				"UnsupportedOperationException", "KeySpec SM2 is not supported")
 
+			// The secp256k1 pair is made with the dependency; its DER is checked
+			// in Test_GenerateDataKeyPair_secp256k1.
 			r := s.call(usEast1, op, map[string]any{fieldKeyID: id, fieldKeyPairSpec: "ECC_SECG_P256K1"})
-			require.Equal(t, http.StatusNotImplemented, r.status)
+			require.Equal(t, http.StatusOK, r.status)
 		})
 	}
 }

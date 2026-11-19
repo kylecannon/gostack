@@ -9,7 +9,6 @@ import (
 	"io"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
-	"github.com/kylecannon/gostack/internal/awserr"
 )
 
 const (
@@ -52,11 +51,6 @@ func (p *Provider) CreateKey(ctx context.Context, in *api.CreateKeyInput) (*api.
 	req, err := createRequest(in, tags)
 	if err != nil {
 		return nil, err
-	}
-
-	if req.spec == specSECGK1 {
-		// The secp256k1 dependency comes with the asymmetric operations.
-		return nil, awserr.NotImplemented("kms", "CreateKey with KeySpec ECC_SECG_P256K1")
 	}
 
 	k, err := p.newKey(rc.AccountID, rc.Region, req)

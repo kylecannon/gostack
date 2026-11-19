@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.1
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.53.0
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/go-chi/cors v1.2.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3

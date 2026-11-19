@@ -43,8 +43,7 @@ const codeUnsupported = "UnsupportedOperationException"
 // Test_newMaterial_everySpec calls newMaterial with each name of the API's
 // KeySpec enum, read from the vendored botocore model, and a few names that are
 // not in it. A spec it can make gets its material; any other is an error. None
-// panics: ECC_SECG_P256K1, which checkSpec accepts, has no standard-library
-// curve, and the next callers (GenerateDataKeyPair, ReplicateKey) do not run
+// panics: the next callers (GenerateDataKeyPair, ReplicateKey) do not run
 // checkSpec first.
 func Test_newMaterial_everySpec(t *testing.T) {
 	t.Parallel()
@@ -65,7 +64,7 @@ func Test_newMaterial_everySpec(t *testing.T) {
 		{giveSpec: "ECC_NIST_P256"},
 		{giveSpec: "ECC_NIST_P384"},
 		{giveSpec: "ECC_NIST_P521"},
-		{giveSpec: "ECC_SECG_P256K1", wantCode: "InternalFailure", wantHTTP: http.StatusNotImplemented},
+		{giveSpec: "ECC_SECG_P256K1"},
 		{giveSpec: "SM2", wantCode: codeUnsupported, wantHTTP: http.StatusBadRequest},
 		{giveSpec: "ML_DSA_44", wantCode: codeUnsupported, wantHTTP: http.StatusBadRequest},
 		{giveSpec: "ML_DSA_65", wantCode: codeUnsupported, wantHTTP: http.StatusBadRequest},

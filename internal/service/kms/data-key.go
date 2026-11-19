@@ -4,7 +4,6 @@ import (
 	"context"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
-	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 
@@ -197,11 +196,6 @@ func (p *Provider) newDataKeyPair(ctx context.Context, keyID, spec *string,
 
 	if dryRun != nil && *dryRun {
 		return nil, api.NewDryRunOperationException(dryRunMessage)
-	}
-
-	if *spec == specSECGK1 {
-		// The secp256k1 dependency comes with the asymmetric operations.
-		return nil, awserr.NotImplemented("kms", operation+" with KeyPairSpec ECC_SECG_P256K1")
 	}
 
 	pair, err := newMaterial(*spec, nil, p.random)

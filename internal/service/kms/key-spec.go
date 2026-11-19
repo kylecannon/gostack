@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	api "github.com/kylecannon/gostack/internal/api/kms"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
@@ -63,7 +64,8 @@ func rsaBits(spec string) (int, bool) {
 }
 
 // eccCurves are the elliptic-curve specs (ECC_CURVES). secp256k1 has no
-// standard-library curve; its spec is accepted and answered 501 by CreateKey.
+// standard-library curve: its keys are the dependency's, made in
+// secgPrivateKey.
 var eccCurves = map[string]elliptic.Curve{
 	specP256:   elliptic.P256(),
 	specP384:   elliptic.P384(),
@@ -165,8 +167,7 @@ type material struct {
 // custom, the _custom_key_material_ bytes, when there are any (none, as in
 // LocalStack, when the tag's value is empty): the material itself for a
 // symmetric or HMAC key, and a DER private key for an RSA or ECC one. A spec it
-// cannot make is an error, never a panic: checkSpec accepts ECC_SECG_P256K1,
-// which has no standard-library curve, and callers that skip checkSpec may pass
+// cannot make is an error, never a panic: callers that skip checkSpec may pass
 // any string.
 func newMaterial(spec string, custom []byte, random io.Reader) (material, error) {
 	var m material
@@ -253,7 +254,7 @@ func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
 	case !known:
 		return nil, api.NewUnsupportedOperationException("KeySpec " + spec + " is not supported")
 	case curve == nil:
-		return nil, awserr.NotImplemented("kms", "key material of KeySpec "+spec)
+		return secgPrivateKey(custom, random)
 	case len(custom) > 0:
 		return customPrivateKey(spec, custom)
 	}
@@ -261,6 +262,21 @@ func privateKey(spec string, custom []byte, random io.Reader) (any, error) {
 	key, err := ecdsa.GenerateKey(curve, random)
 	if err != nil {
 		return nil, fmt.Errorf("generate %s: %w", spec, err)
+	}
+
+	return key, nil
+}
+
+// secgPrivateKey makes an ECC_SECG_P256K1 private key, or reads custom, a
+// PKCS #8 or SEC 1 key of that curve.
+func secgPrivateKey(custom []byte, random io.Reader) (any, error) {
+	if len(custom) == 0 {
+		return newSECGK1(random)
+	}
+
+	key, err := parseSECGK1Private(custom)
+	if err != nil {
+		return nil, validation("The custom key material is not a DER private key of the secp256k1 curve: " + err.Error())
 	}
 
 	return key, nil
@@ -323,6 +339,8 @@ func (m *material) serialize(private any) error {
 		public = &key.PublicKey
 	case *ecdsa.PrivateKey:
 		public = &key.PublicKey
+	case *secp256k1.PrivateKey:
+		return m.serializeSECGK1(key)
 	default:
 		return validation(fmt.Sprintf("The custom key material is a %T, not an RSA or EC private key.", private))
 	}
@@ -335,6 +353,24 @@ func (m *material) serialize(private any) error {
 	}
 
 	m.public, err = x509.MarshalPKIXPublicKey(public)
+	if err != nil {
+		return validation("The custom key material cannot be kept: " + err.Error())
+	}
+
+	return nil
+}
+
+// serializeSECGK1 is serialize for a secp256k1 key, which crypto/x509 cannot
+// write.
+func (m *material) serializeSECGK1(key *secp256k1.PrivateKey) error {
+	var err error
+
+	m.private, err = marshalSECGK1Private(key)
+	if err != nil {
+		return validation("The custom key material cannot be kept: " + err.Error())
+	}
+
+	m.public, err = marshalSECGK1Public(key.PubKey())
 	if err != nil {
 		return validation("The custom key material cannot be kept: " + err.Error())
 	}
