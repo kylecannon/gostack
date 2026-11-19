@@ -56,13 +56,16 @@ func (r benchRow) lowerIsBetter() bool {
 
 // matches reports whether a benchstat entry names this row. The entry leaves
 // out the -GOMAXPROCS suffix, so it holds on a runner with any CPU count, and
-// names the package by its path or a trailing part of it.
+// names the package by its import path or its path below the module.
+//
+// benchstat's output does not say what GOMAXPROCS was: a benchmark's name only
+// carries the "-N" when N is above 1. A row that is "host-1024" on a 1-CPU run
+// therefore reads the same as "host" on a 1024-CPU run, and the entry for
+// "host" takes both. Telling them apart would take the run's GOMAXPROCS, which
+// the gate is not given. A runner with 2 or more CPUs is not affected: its rows
+// end in "-N" after any such number.
 func (r benchRow) matches(e *acceptedEntry) bool {
-	if e.Gate != gateBenchstat || e.Unit != r.unit {
-		return false
-	}
-
-	if r.pkg != e.Package && !strings.HasSuffix(r.pkg, "/"+e.Package) {
+	if e.Gate != gateBenchstat || e.Unit != r.unit || !e.namesPackage(r.pkg) {
 		return false
 	}
 

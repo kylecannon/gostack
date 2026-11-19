@@ -68,8 +68,15 @@ jobs:
         if: steps.compare.outputs.compared == 'true'
         working-directory: head
         run: |
+          status=0
           go run ./bench gate -accepted bench/accepted.yaml -base "$BASE_SHA" -head "$HEAD_SHA" \
-            < "$GITHUB_WORKSPACE/benchstat.txt"
+            < "$GITHUB_WORKSPACE/benchstat.txt" | tee "$RUNNER_TEMP/gate.txt" || status=$?
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/gate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
