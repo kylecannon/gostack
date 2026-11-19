@@ -1,7 +1,6 @@
 package sns
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
@@ -20,7 +19,8 @@ const dedupWindow = 5 * time.Minute
 // persisted: a restart forgets the window, as SQS's own window is kept.
 type fifoTopic struct {
 	// mu is held from a publish's deduplication check to the queueing of its
-	// deliveries, so the deliveries to one queue keep publish order.
+	// deliveries in their lanes, so the deliveries to one queue keep publish
+	// order. Nothing is sent and nothing waits for room under it.
 	mu sync.Mutex
 	// seen are the ids published in the window, by deduplication id.
 	seen map[string]published
@@ -47,8 +47,10 @@ func (p *Provider) nextSequence() string {
 // first one's message id and sequence number. The deduplication id is the
 // MessageDeduplicationId, or else the SHA-256 of the message. LocalStack
 // leaves deduplication to the queues; the aws.validated
-// test_publish_to_fifo_topic_deduplication_on_topic_level pins AWS's.
-func (p *Provider) publishFIFO(ctx context.Context, rc *request.Context, t *Topic, msgs []*message) {
+// test_publish_to_fifo_topic_deduplication_on_topic_level pins AWS's. It
+// returns the deliveries it queued, for the caller to dispatch once the
+// topic's lock is let go.
+func (p *Provider) publishFIFO(rc *request.Context, t *Topic, msgs []*message) []*job {
 	f := &t.fifo
 
 	f.mu.Lock()
@@ -83,7 +85,7 @@ func (p *Provider) publishFIFO(ctx context.Context, rc *request.Context, t *Topi
 		fresh = append(fresh, msg)
 	}
 
-	p.fanOut(ctx, rc, t, fresh)
+	return p.fanOut(rc, t, fresh)
 }
 
 // expire forgets the ids published before the window. The caller holds f.mu.

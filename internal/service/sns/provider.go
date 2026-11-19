@@ -33,12 +33,10 @@ type Provider struct {
 	// process: each Signer generates its own key pair.
 	signer *envelope.Signer
 
-	// client delivers to SQS through the gateway. pending counts its calls
-	// not yet answered, which Close waits for, and dropped the deliveries
-	// lost.
-	client  *inproc.Client
-	pending pending
-	dropped atomic.Int64
+	// client delivers to SQS through the gateway, and lanes hold the
+	// deliveries, one lane per destination.
+	client *inproc.Client
+	lanes  lanes
 	// sequence is the last FIFO sequence number handed out.
 	sequence atomic.Uint64
 	// now is the clock of the FIFO deduplication window.
@@ -64,6 +62,8 @@ func New(settings func() Settings) *Provider {
 		now:      time.Now,
 	}
 
+	p.lanes.client, p.lanes.depth, p.lanes.wait = p.client, laneDepth, roomWait
+
 	// LocalStack starts its sequence at (now + 100) << 33, a 20-digit number
 	// that grows with the clock, so a restart never hands one out twice.
 	start := max(time.Now().Unix(), 0) + sequenceOffset
@@ -84,6 +84,7 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mutating: mutating,
 		Reset:    p.Reset,
+		Shutdown: p.shutdown,
 		Close:    p.Close,
 		Bind:     p.Bind,
 	}

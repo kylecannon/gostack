@@ -132,12 +132,12 @@ func (p *Provider) publishToTopic(
 	msg.topicARN = t.ARN
 
 	if strings.Contains(arn, fifoSuffix) {
-		p.publishFIFO(ctx, rc, t, []*message{msg})
+		p.lanes.dispatch(p.publishFIFO(rc, t, []*message{msg}))
 
 		return &api.PublishOutput{MessageId: new(msg.id), SequenceNumber: new(msg.sequence)}, nil
 	}
 
-	p.fanOut(ctx, rc, t, []*message{msg})
+	p.lanes.dispatch(p.fanOut(rc, t, []*message{msg}))
 
 	return &api.PublishOutput{MessageId: new(msg.id)}, nil
 }

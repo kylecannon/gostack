@@ -1,7 +1,6 @@
 package sns
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,8 +10,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/sns"
 	"github.com/kylecannon/gostack/internal/inproc"
@@ -32,7 +29,6 @@ const (
 	internalHeader   = "X-Localstack-Data"
 	traceHeader      = "X-Amzn-Trace-Id"
 	traceAttribute   = "AWSTraceHeader"
-	dlqSendTimeout   = 10 * time.Second
 	signatureVersion = "SignatureVersion"
 )
 
@@ -40,29 +36,6 @@ const (
 // the gateway's.
 func (p *Provider) Bind(h http.Handler) {
 	p.client.Bind(h)
-}
-
-// Close waits for the deliveries still queued until ctx ends, so a publish
-// that was acknowledged reaches its queue on a clean stop, then stops the
-// delivery workers, dropping what is left. A delivery cut off so is counted
-// in Dropped and logged.
-func (p *Provider) Close(ctx context.Context) {
-	p.pending.wait(ctx)
-	p.client.Close()
-
-	// The client drops its queued calls without answering them, and has
-	// answered every call it started by the time Close returns, so what is
-	// still pending was dropped.
-	if n := p.pending.drain(); n > 0 {
-		slog.Warn("SNS deliveries dropped at shutdown", "count", n)
-		p.dropped.Add(int64(n))
-	}
-}
-
-// Dropped is the number of deliveries lost: refused or not queued, with no
-// dead-letter queue that took them.
-func (p *Provider) Dropped() int64 {
-	return p.dropped.Load()
 }
 
 // subscriber is what delivery reads of a subscription, taken under its lock.
@@ -208,18 +181,19 @@ type delivery struct {
 	dlq *inproc.Call
 }
 
-// fanOut delivers msgs, published together to t, to every confirmed SQS
-// subscription whose filter policy matches. The bodies are built with no
-// lock held; the calls are queued under t's lock, after a check that each
-// subscription is still the topic's, so a subscription removed, or a topic
-// deleted, before the publish queues its calls gets none. A call queued before
-// the removal answered is delivered.
-func (p *Provider) fanOut(ctx context.Context, rc *request.Context, t *Topic, msgs []*message) {
+// fanOut queues the deliveries of msgs, published together to t, to every
+// confirmed SQS subscription whose filter policy matches, and returns them
+// for lanes.dispatch, which the caller runs once it holds no lock. The bodies
+// are built with no lock held; the deliveries are queued under t's lock, after
+// a check that each subscription is still the topic's, so a subscription
+// removed, or a topic deleted, before the publish queues its deliveries gets
+// none. A delivery queued before the removal answered is made.
+func (p *Provider) fanOut(rc *request.Context, t *Topic, msgs []*message) []*job {
 	p.recordDevices(t, msgs)
 
 	subs := t.subscribers()
 	if len(subs) == 0 {
-		return
+		return nil
 	}
 
 	version := t.attribute(signatureVersion)
@@ -248,7 +222,7 @@ func (p *Provider) fanOut(ctx context.Context, rc *request.Context, t *Topic, ms
 		}
 	}
 
-	p.queue(ctx, t, deliveries)
+	return p.queue(t, deliveries)
 }
 
 // deliveryOf is the SendMessage call that puts m on s's queue.
@@ -301,95 +275,32 @@ func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string)
 	return d, true
 }
 
-// queue queues each delivery whose subscription is still t's. A delivery the
-// queue refuses goes to its dead-letter queue at once, after t's lock is let
-// go.
-func (p *Provider) queue(ctx context.Context, t *Topic, deliveries []delivery) {
-	var refused []delivery
+// queue adds each delivery whose subscription is still t's to the lane of its
+// queue, under t's lock, which fixes the deliveries' order in each lane. It
+// sends nothing and waits for nothing: lanes.dispatch does both, with no lock
+// held.
+func (p *Provider) queue(t *Topic, deliveries []delivery) []*job {
+	ls := &p.lanes
+	jobs := make([]*job, 0, len(deliveries))
 
 	t.mu.Lock()
+	ls.mu.Lock()
 
 	for _, d := range deliveries {
 		if t.endpoints[d.sub.Endpoint] != d.sub {
 			continue
 		}
 
-		if !p.enqueue(d) {
-			refused = append(refused, d)
+		j := &job{call: d.call, dlq: d.dlq}
+		if ls.add(j) {
+			jobs = append(jobs, j)
 		}
 	}
 
+	ls.mu.Unlock()
 	t.mu.Unlock()
 
-	for _, d := range refused {
-		p.deadLetter(ctx, d.dlq, "the delivery queue is full")
-	}
-}
-
-// enqueue queues d's call and reports whether it was taken. When SQS does
-// not take the message, it goes to d's dead-letter queue.
-func (p *Provider) enqueue(d delivery) bool {
-	p.pending.add()
-
-	queued := p.client.Enqueue(d.call, func(resp inproc.Response, err error) {
-		defer p.pending.done()
-
-		if err == nil && resp.OK() {
-			return
-		}
-
-		slog.Info("Unable to forward SNS message to SQS", "queue", d.sub.Endpoint, "status", resp.Status, "error", err)
-
-		if d.dlq == nil {
-			p.dropped.Add(1)
-
-			return
-		}
-
-		p.pending.add()
-
-		if !p.client.Enqueue(*d.dlq, p.deadLetterDone) {
-			p.pending.done()
-			p.dropped.Add(1)
-		}
-	})
-	if !queued {
-		p.pending.done()
-	}
-
-	return queued
-}
-
-// deadLetterDone counts a message its dead-letter queue did not take.
-func (p *Provider) deadLetterDone(resp inproc.Response, err error) {
-	defer p.pending.done()
-
-	if err != nil || !resp.OK() {
-		slog.Info("Unable to send SNS message to its dead-letter queue", "status", resp.Status, "error", err)
-		p.dropped.Add(1)
-	}
-}
-
-// deadLetter sends a message the delivery queue refused to its dead-letter
-// queue, on the caller's goroutine, since that queue is full; with none, the
-// message is dropped and counted.
-func (p *Provider) deadLetter(ctx context.Context, call *inproc.Call, reason string) {
-	if call == nil {
-		slog.Warn("SNS message dropped", "reason", reason)
-		p.dropped.Add(1)
-
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dlqSendTimeout)
-	defer cancel()
-
-	resp, err := p.client.Do(ctx, *call)
-	if err != nil || !resp.OK() {
-		slog.Warn("SNS message dropped: its dead-letter queue did not take it", "reason", reason,
-			"status", resp.Status, "error", err)
-		p.dropped.Add(1)
-	}
+	return jobs
 }
 
 // sendParams are the members of a SendMessage besides the queue.
@@ -491,65 +402,4 @@ func (t *Topic) attribute(name string) string {
 	defer t.mu.Unlock()
 
 	return t.Attributes[name]
-}
-
-// pending counts the deliveries queued and not yet answered, so Close can
-// wait for them.
-type pending struct {
-	mu   sync.Mutex
-	n    int
-	idle chan struct{}
-}
-
-func (w *pending) add() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.n == 0 {
-		w.idle = make(chan struct{})
-	}
-
-	w.n++
-}
-
-func (w *pending) done() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	w.n--
-	if w.n == 0 {
-		close(w.idle)
-	}
-}
-
-// drain forgets the deliveries still pending and returns how many there were.
-func (w *pending) drain() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	n := w.n
-	if n > 0 {
-		w.n = 0
-		close(w.idle)
-	}
-
-	return n
-}
-
-// wait returns when no delivery is pending or ctx ends.
-func (w *pending) wait(ctx context.Context) {
-	w.mu.Lock()
-	if w.n == 0 {
-		w.mu.Unlock()
-
-		return
-	}
-
-	idle := w.idle
-	w.mu.Unlock()
-
-	select {
-	case <-idle:
-	case <-ctx.Done():
-	}
 }

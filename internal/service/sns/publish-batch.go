@@ -63,9 +63,9 @@ func (p *Provider) PublishBatch(ctx context.Context, in *api.PublishBatchInput) 
 	}
 
 	if fifo {
-		p.publishFIFO(ctx, rc, t, msgs)
+		p.lanes.dispatch(p.publishFIFO(rc, t, msgs))
 	} else {
-		p.fanOut(ctx, rc, t, msgs)
+		p.lanes.dispatch(p.fanOut(rc, t, msgs))
 	}
 
 	out := &api.PublishBatchOutput{
