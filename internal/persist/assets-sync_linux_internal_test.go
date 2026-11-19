@@ -3,6 +3,7 @@
 package persist
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // syncModes forces each sync path Linux has, for tests that run under both.
@@ -35,6 +37,38 @@ func Test_Assets_SyncPathOfTheFaultFilesystem(t *testing.T) {
 
 	proven := slices.Contains(slices.Collect(maps.Values(syncfsProven)), name)
 	assert.Equal(t, proven, f.a.fsDir != nil, "%s takes syncfs only when it is proven", name)
+}
+
+// Test_syncChoice checks which sync path each filesystem takes: syncfs for the
+// proven ones and for tmpfs and ramfs (no writeback to fail), the per-file path
+// for overlay, FUSE, an unknown magic number and an unreadable type.
+func Test_syncChoice(t *testing.T) {
+	tests := []struct {
+		name     string
+		magic    uint32
+		statErr  error
+		wantName string
+		wantFS   bool
+	}{
+		{name: "ext4", magic: unix.EXT4_SUPER_MAGIC, wantName: "ext4", wantFS: true},
+		{name: "xfs", magic: unix.XFS_SUPER_MAGIC, wantName: "xfs", wantFS: true},
+		{name: "btrfs", magic: unix.BTRFS_SUPER_MAGIC, wantName: "btrfs", wantFS: true},
+		{name: "tmpfs", magic: unix.TMPFS_MAGIC, wantName: "tmpfs", wantFS: true},
+		{name: "ramfs", magic: unix.RAMFS_MAGIC, wantName: "ramfs", wantFS: true},
+		{name: "overlay", magic: unix.OVERLAYFS_SUPER_MAGIC, wantName: "overlay"},
+		{name: "fuse", magic: unix.FUSE_SUPER_MAGIC, wantName: "fuse"},
+		{name: "unknown", magic: 0x1234abcd, wantName: "0x1234abcd"},
+		{name: "unreadable", magic: unix.TMPFS_MAGIC, statErr: errors.New("boom"), wantName: "unknown (boom)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, byFS := syncChoice(tt.magic, tt.statErr)
+
+			assert.Equal(t, tt.wantName, name)
+			assert.Equal(t, tt.wantFS, byFS)
+		})
+	}
 }
 
 // forceSyncfs makes a sync its whole filesystem with syncfs, whatever

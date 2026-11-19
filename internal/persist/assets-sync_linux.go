@@ -21,9 +21,18 @@ import (
 // ext4, xfs and btrfs passed them on kernel 7.2. ext2 and ext3 have ext4's
 // magic number and are driven by the same kernel code, so they ride on ext4's
 // proof.
+//
+// tmpfs and ramfs are in the list for a different reason, not because a fault
+// test proved them: their pages are never written back to a device, so no
+// writeback error exists to lose, and the fault harness cannot inject one there.
+// A flush on them is durable against nothing but a process crash, which the
+// rename into place already covers. One syncfs per save is the cheapest flush,
+// so they take it rather than a per-file fsync for each asset.
 var syncfsProven = map[uint32]string{
 	unix.BTRFS_SUPER_MAGIC: "btrfs",
 	unix.EXT4_SUPER_MAGIC:  "ext4",
+	unix.RAMFS_MAGIC:       "ramfs",
+	unix.TMPFS_MAGIC:       "tmpfs",
 	unix.XFS_SUPER_MAGIC:   "xfs",
 }
 
@@ -35,7 +44,6 @@ var fsNames = map[uint32]string{
 	unix.NFS_SUPER_MAGIC:       "nfs",
 	unix.OVERLAYFS_SUPER_MAGIC: "overlay",
 	unix.SMB2_SUPER_MAGIC:      "smb2",
-	unix.TMPFS_MAGIC:           "tmpfs",
 	unix.V9FS_MAGIC:            "9p",
 }
 
@@ -51,14 +59,26 @@ func chooseSync(root *os.Root) (syncMode, error) {
 
 	magic, statErr := fsType(dir)
 
-	name, proven := syncfsProven[magic]
-	if statErr == nil && proven {
+	name, byFS := syncChoice(magic, statErr)
+	if byFS {
 		return syncMode{dir: dir, sync: syncFS, fs: name}, nil
 	}
 
 	_ = dir.Close()
 
-	return syncMode{sync: syncFile, fs: fsName(magic, statErr)}, nil
+	return syncMode{sync: syncFile, fs: name}, nil
+}
+
+// syncChoice names the filesystem with magic number magic, or says why its type
+// is unknown, and reports whether it takes syncfs.
+func syncChoice(magic uint32, statErr error) (string, bool) {
+	if statErr == nil {
+		if name, proven := syncfsProven[magic]; proven {
+			return name, true
+		}
+	}
+
+	return fsName(magic, statErr), false
 }
 
 // fsName names the filesystem with magic number magic for the log, or says why

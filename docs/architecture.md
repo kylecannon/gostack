@@ -802,12 +802,17 @@ is untouched.
   foreign-sync tests of `scripts/writeback-fault.sh` proved that syncfs still
   reports a lost write after another process's `sync` or `syncfs` ran first:
   ext4, xfs and btrfs, each run on a loop device on kernel 7.2 (ext2 and ext3
-  share ext4's magic number and kernel code). Every other filesystem takes the
-  per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, tmpfs, any other, and
+  share ext4's magic number and kernel code). tmpfs and ramfs take syncfs too,
+  on a different ground: their pages are never written back to a device, so no
+  writeback error exists to lose and the harness cannot inject one, and a flush
+  there is durable against nothing but a process crash, which the rename
+  already covers. Every other filesystem takes the
+  per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, any other, and
   one whose type cannot be read. Other
   systems always take the per-file path. One info line per service at startup
   names the filesystem and the path, such as
-  `persist: asset sync service=s3 fs=overlay sync="per-file fsync"`. A save
+  `persist: asset sync service=s3 fs=overlay sync="per-file fsync"` or
+  `fs=tmpfs sync=syncfs`. A save
   with no pending asset syncs nothing. A
   service names an id only after `Commit` returns, and `Commit` records the id
   before it returns, so every asset a snapshot names is on disk before the
