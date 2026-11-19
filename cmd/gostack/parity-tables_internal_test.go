@@ -157,6 +157,11 @@ func serviceDir(pkg string) (string, bool) {
 func readParityTables(t *testing.T, root string) parityTables {
 	t.Helper()
 
+	// go test reuses a cached pass unless a file this process opened changed;
+	// python3 reads ledger.py in another process, so open it here too.
+	_, err := os.ReadFile(filepath.Join(root, "parity", "ledger.py"))
+	require.NoError(t, err)
+
 	cmd := exec.CommandContext(t.Context(), "python3", "-I", "-B", "parity/ledger.py", "tables")
 	cmd.Dir = root
 
