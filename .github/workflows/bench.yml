@@ -20,7 +20,9 @@ defaults:
 jobs:
   benchstat:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The measuring step ran 46 minutes before the per-round relink, which adds
+    # about three. 60 left too little room for a slow runner.
+    timeout-minutes: 80
     steps:
       # The gate asks git whether the base and the head hold an accepted
       # entry's commit, which takes the head checkout's full history.
