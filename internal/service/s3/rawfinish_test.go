@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func putExposeEdgeCORS(t *testing.T, srv *httptest.Server) {
 	t.Helper()
 
 	config := []byte(`<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin>` +
-		`<AllowedMethod>PUT</AllowedMethod><AllowedMethod>GET</AllowedMethod>` +
+		`<AllowedMethod>PUT</AllowedMethod><AllowedMethod>GET</AllowedMethod><AllowedMethod>DELETE</AllowedMethod>` +
 		`<ExposeHeader>` + exposeEdge + `</ExposeHeader></CORSRule></CORSConfiguration>`)
 	sum := md5.Sum(config)
 
@@ -258,6 +259,100 @@ func (d *dirtyLog) take() []string {
 	d.names = nil
 
 	return names
+}
+
+func (d *dirtyLog) empty() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return len(d.names) == 0
+}
+
+// markWatch counts the bytes the server writes to a connection while it watches
+// and nothing is marked dirty yet.
+type markWatch struct {
+	dirty    *dirtyLog
+	watching atomic.Bool
+	unmarked atomic.Int64
+}
+
+// watchedListener hands the server connections whose writes markWatch sees,
+// the hijacked ones included: Hijack returns the connection Accept gave.
+type watchedListener struct {
+	net.Listener
+
+	watch *markWatch
+}
+
+func (l watchedListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err //nolint:wrapcheck // net.Listener: the error of the Accept it delegates to.
+	}
+
+	return &watchedConn{Conn: conn, watch: l.watch}, nil
+}
+
+type watchedConn struct {
+	net.Conn
+
+	watch *markWatch
+}
+
+func (c *watchedConn) Write(p []byte) (int, error) {
+	if c.watch.watching.Load() && c.watch.dirty.empty() {
+		c.watch.unmarked.Add(int64(len(p)))
+	}
+
+	return c.Conn.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
+}
+
+// CloseWrite keeps the half-close the raw path lingers with.
+func (c *watchedConn) CloseWrite() error {
+	if closer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return closer.CloseWrite() //nolint:wrapcheck // the error of the CloseWrite it delegates to.
+	}
+
+	return nil
+}
+
+// TestARawWriteIsMarkedDirtyBeforeItsResponseIsSent watches the server's side of
+// the connection: a successful write answered on the raw path is marked dirty
+// before the first byte of its response is written, so a client that reads the
+// success and asks for a save at once finds the change marked. The 200 holds
+// its body back for its length and is sent at the end of the handler; the 204
+// is complete once its head is written.
+func TestARawWriteIsMarkedDirtyBeforeItsResponseIsSent(t *testing.T) {
+	watch := &markWatch{dirty: new(dirtyLog)}
+	srv, _ := newEdgeServer(t, nil, watch.dirty)
+	srv.Listener = watchedListener{Listener: srv.Listener, watch: watch}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	putEdgeObject(t, srv, []byte("hello"))
+	putExposeEdgeCORS(t, srv)
+
+	cross := "Origin: " + crossOrigin + "\r\nContent-Length: 0\r\n"
+
+	for _, tt := range []struct {
+		method, status string
+	}{
+		{method: http.MethodPut, status: "200"},
+		{method: http.MethodDelete, status: "204"},
+	} {
+		watch.dirty.take()
+		watch.unmarked.Store(0)
+		watch.watching.Store(true)
+
+		head, _ := rawRequest(t, srv, tt.method, bucketPath+"/k", cross)
+
+		watch.watching.Store(false)
+
+		require.True(t, strings.HasPrefix(head, "HTTP/1.1 "+tt.status+" "), head)
+		require.Contains(t, head, "\r\nConnection: close\r\n", "the response took the raw path")
+		assert.Zero(t, watch.unmarked.Load(), "%s: bytes sent before the write was marked dirty", tt.method)
+		assert.Equal(t, []string{"s3"}, watch.dirty.take(), "%s: marked once", tt.method)
+	}
 }
 
 // TestARawErrorDoesNotMarkStateDirty shows the gateway learns the status of a

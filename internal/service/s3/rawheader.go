@@ -116,7 +116,8 @@ func (f *inflight) drain(limit time.Duration) {
 }
 
 // statusNoter is implemented by the gateway's status writer. A taken response
-// never reaches its WriteHeader, so the response tells it the status instead.
+// never reaches its WriteHeader, so the response tells it the status instead,
+// and the gateway marks a successful write dirty when it is told.
 type statusNoter interface{ NoteStatus(code int) }
 
 // headerFinisher is implemented by a response writer that adds headers when its
@@ -215,7 +216,10 @@ func (w *responseWriter) takeConn(code int) bool {
 
 	// The gateway's writer never sees a taken response, so it learns the status
 	// here: a 4xx must not mark state dirty, and a panic after this point must
-	// abort the connection instead of writing a 500 into it.
+	// abort the connection instead of writing a 500 into it. A success on a
+	// write marks state dirty here, before a byte of the response is sent: a
+	// 204 or a declared length is complete once its head or body is written,
+	// and the rest at finish, all before the handler returns to the gateway.
 	noteStatus(w.ResponseWriter, code)
 
 	// The writers below this one add their headers in their own WriteHeader,

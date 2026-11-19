@@ -67,13 +67,19 @@ func Test_gate_regressions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := findRegressions(strings.NewReader(tt.give))
+			rows, err := findRegressions(strings.NewReader(tt.give))
 			require.NoError(t, err)
+
+			var got []string
+			for _, r := range rows {
+				got = append(got, r.String())
+			}
+
 			assert.Equal(t, tt.want, got)
 
 			var out bytes.Buffer
 
-			err = gateMain(strings.NewReader(tt.give), &out)
+			err = gateMain(t.Context(), nil, strings.NewReader(tt.give), &out, nil)
 			if len(tt.want) == 0 {
 				require.NoError(t, err)
 				assert.Contains(t, out.String(), "no benchmark regressed")
@@ -92,7 +98,7 @@ func Test_gate_refuses_empty_input(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
 
-			err := gateMain(strings.NewReader(give), &out)
+			err := gateMain(t.Context(), nil, strings.NewReader(give), &out, nil)
 			require.ErrorIs(t, err, errEmptyInput)
 			assert.Empty(t, out.String())
 		})

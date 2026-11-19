@@ -2,7 +2,8 @@ name: bench
 
 # Runs every benchmark in the repo on the base and the head of a pull request,
 # compares them with benchstat, and fails on a regression over 10% at p<0.05
-# (docs/standards.md, "Benchmarks"). The comparison is `go run ./bench gate`.
+# that bench/accepted.yaml does not hold (docs/standards.md, "Benchmarks"). The
+# comparison is `go run ./bench gate`.
 
 on:
   pull_request:
@@ -21,10 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # The gate asks git whether the base and the head hold an accepted
+      # entry's commit, which takes the head checkout's full history.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: head
+          fetch-depth: 0
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -63,4 +67,16 @@ jobs:
       - name: Fail on a regression over 10% at p<0.05
         if: steps.compare.outputs.compared == 'true'
         working-directory: head
-        run: go run ./bench gate < "$GITHUB_WORKSPACE/benchstat.txt"
+        run: |
+          status=0
+          go run ./bench gate -accepted bench/accepted.yaml -base "$BASE_SHA" -head "$HEAD_SHA" \
+            < "$GITHUB_WORKSPACE/benchstat.txt" | tee "$RUNNER_TEMP/gate.txt" || status=$?
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/gate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}

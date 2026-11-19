@@ -186,7 +186,8 @@ side by side.
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
 - benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
-  regression over 10% with p<0.05 fails the build.
+  regression over 10% with p<0.05 fails the build unless it is accepted
+  (below).
 
 ### System bench (`bench/`)
 
@@ -211,6 +212,25 @@ they came from: the scheduled run compares with the artifact the previous
 passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+### Accepted regressions
+
+A regression accepted as the cost of a change is listed in
+`bench/accepted.yaml`, in the pull request that brings it, with its metric,
+the largest change accepted, a one-line reason, the pull request and a commit
+that carries the cost. Both CI gates read the file and print what it holds
+under "Accepted". A listed metric past its bound, and every unlisted one, still
+fails. A bound is a finite number above zero with at most one leading `+`, as
+`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`);
+an infinite, negative, zero or repeated-sign bound is a load error, as is a
+second entry for one metric or a second YAML document. An entry's `package` is
+the full import path or the path below the module (`internal/route`).
+
+An entry applies only while the head holds its commit and the base does not, so
+it expires once main holds the commit. The pull request lands with a merge
+commit, never a squash: a squash or rebase merge leaves the commit out of main,
+so the entry never expires. Delete the entries in the first change after the
+merge.
 
 A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
 such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.
