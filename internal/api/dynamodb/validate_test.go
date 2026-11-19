@@ -49,7 +49,7 @@ func (v validating) UpdateKinesisStreamingDestination(
 func Test_Validate_SnapshotMessages(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	tests := []struct {
 		key  string
 		op   string
 		body string
@@ -75,14 +75,14 @@ func Test_Validate_SnapshotMessages(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.key, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, validating{}, c.op, c.body)
+			code, body := serveJSON(t, validating{}, tt.op, tt.body)
 			assert.Equal(t, http.StatusBadRequest, code)
 			assert.Equal(t, "ValidationException", body["__type"])
-			assert.Equal(t, c.want, body["message"])
+			assert.Equal(t, tt.want, body["message"])
 		})
 	}
 }

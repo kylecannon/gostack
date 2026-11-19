@@ -139,21 +139,37 @@ func Keys[V any](m map[string]V) []string {
 }
 
 // Pattern is a regular expression compiled the first time it is used, so a
-// package with many of them costs nothing at start-up.
+// package with many of them costs nothing at start-up. The generator checks
+// that each expression it emits compiles, so a Pattern that does not is a
+// hand-written one; it never panics, and it matches nothing.
 type Pattern struct {
-	expr string
-	once sync.Once
-	re   *regexp.Regexp
+	compiled func() (*regexp.Regexp, error)
 }
 
-// NewPattern returns a Pattern for expr, which must compile.
+// NewPattern returns a Pattern for expr. A bad expression is reported by Err,
+// not by a panic while a request is served.
 func NewPattern(expr string) *Pattern {
-	return &Pattern{expr: expr}
+	return &Pattern{compiled: sync.OnceValues(func() (*regexp.Regexp, error) {
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return nil, fmt.Errorf("pattern %q: %w", expr, err)
+		}
+
+		return re, nil
+	})}
 }
 
-// MatchString reports whether s matches the expression.
+// MatchString reports whether s matches the expression. It is false for every
+// s when the expression does not compile.
 func (p *Pattern) MatchString(s string) bool {
-	p.once.Do(func() { p.re = regexp.MustCompile(p.expr) })
+	re, err := p.compiled()
 
-	return p.re.MatchString(s)
+	return err == nil && re.MatchString(s)
+}
+
+// Err is why the expression does not compile, or nil when it does.
+func (p *Pattern) Err() error {
+	_, err := p.compiled()
+
+	return err
 }

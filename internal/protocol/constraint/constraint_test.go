@@ -58,4 +58,19 @@ func Test_Pattern_MatchString(t *testing.T) {
 	p := constraint.NewPattern("^(?:[a-z]+)$")
 	assert.True(t, p.MatchString("abc"))
 	assert.False(t, p.MatchString("abc1"))
+	assert.NoError(t, p.Err())
+}
+
+// Test_Pattern_BadExpression checks that an expression that does not compile
+// is an error the first call and every later one, never a panic in a request
+// and never a nil regexp behind it.
+func Test_Pattern_BadExpression(t *testing.T) {
+	t.Parallel()
+
+	p := constraint.NewPattern("([a-z")
+
+	for range 3 {
+		assert.NotPanics(t, func() { assert.False(t, p.MatchString("abc")) })
+		assert.ErrorContains(t, p.Err(), `pattern "([a-z"`)
+	}
 }

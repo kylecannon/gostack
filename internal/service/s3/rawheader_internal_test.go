@@ -3,11 +3,14 @@ package s3
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,4 +107,31 @@ func TestWriteRawHead(t *testing.T) {
 	require.NoError(t, writeRawHead(bufio.NewWriter(&out), http.StatusNotModified, header, ""))
 	assert.NotContains(t, out.String(), "Content-Length")
 	assert.Contains(t, out.String(), "HTTP/1.1 304 Not Modified\r\n")
+}
+
+// TestDrainReturnsWhenItsContextEnds holds a response in flight and gives drain
+// a context that ends long before drainLimit: drain returns at the context's
+// end, not at the limit.
+func TestDrainReturnsWhenItsContextEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const budget = time.Second
+
+		require.Less(t, budget, drainLimit)
+
+		var f inflight
+
+		require.True(t, f.enter(), "a response registers before drain begins")
+
+		ctx, cancel := context.WithTimeout(t.Context(), budget)
+		defer cancel()
+
+		begin := time.Now()
+
+		f.drain(ctx, drainLimit)
+
+		assert.Equal(t, begin.Add(budget), time.Now(), "drain returned when the context ended")
+		assert.False(t, f.enter(), "drain refuses new responses once it has begun")
+
+		f.leave()
+	})
 }

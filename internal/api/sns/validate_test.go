@@ -86,7 +86,7 @@ func Test_Validate_SnapshotMessages(t *testing.T) {
 	const nullAttributes = "1 validation error detected: Value null at 'attributes' failed to satisfy constraint: " +
 		"Member must not be null"
 
-	cases := []struct {
+	tests := []struct {
 		key  string
 		op   string
 		form string
@@ -125,15 +125,15 @@ func Test_Validate_SnapshotMessages(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.key, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
 			t.Parallel()
 
-			code, got := serveQuery(t, validating{}, c.op, c.form)
+			code, got := serveQuery(t, validating{}, tt.op, tt.form)
 			assert.Equal(t, http.StatusBadRequest, code)
 			assert.Equal(t, "Sender", got.Type)
 			assert.Equal(t, "ValidationError", got.Code)
-			assert.Equal(t, c.want, got.Message)
+			assert.Equal(t, tt.want, got.Message)
 		})
 	}
 }
@@ -203,7 +203,7 @@ func (arnFirst) SetPlatformApplicationAttributes(
 func Test_Validate_HandlerRunsChecks(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	tests := []struct {
 		key, arn, code, want string
 	}{
 		{
@@ -221,21 +221,21 @@ func Test_Validate_HandlerRunsChecks(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.key, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
 			t.Parallel()
 
 			code, got := serveQuery(t, arnFirst{}, "SetPlatformApplicationAttributes",
-				"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+c.arn)
+				"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+tt.arn)
 			assert.Equal(t, http.StatusBadRequest, code)
-			assert.Equal(t, c.code, got.Code)
-			assert.Equal(t, c.want, got.Message)
+			assert.Equal(t, tt.code, got.Code)
+			assert.Equal(t, tt.want, got.Message)
 		})
 	}
 
 	// With Attributes set, the checks pass and the handler answers.
 	_, got := serveQuery(t, arnFirst{}, "SetPlatformApplicationAttributes",
-		"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+cases[1].arn+
+		"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+tests[1].arn+
 			"&Attributes.entry.1.key=PlatformPrincipal&Attributes.entry.1.value=dummy")
 	assert.Equal(t, "NotFound", got.Code)
 }

@@ -369,27 +369,37 @@ func TestNames(t *testing.T) {
 }
 `
 
-// Test_files_ShapesNamedLikeEmittedCompile writes the generated package of a
-// collision model into a scratch directory under testdata, which is inside the
-// module so that it can import the module's internal packages, builds it, and
-// runs a round trip through its codec: the Go name of a shape changes, its
-// wire name does not.
-func Test_files_ShapesNamedLikeEmittedCompile(t *testing.T) {
-	t.Parallel()
+// scratchDir makes a scratch directory under this package's testdata, which is
+// inside the module so that a package generated into it can import the module's
+// internal packages, and removes it when the test ends. The directory is its
+// own, uniquely named, so tests running side by side never share one, and
+// testdata itself is shared and never removed. A run that is killed leaves its
+// scratch directory behind, which .gitignore keeps out of the tree.
+func scratchDir(t *testing.T, pattern string) string {
+	t.Helper()
 
 	require.NoError(t, os.MkdirAll("testdata", 0o750))
 
 	//nolint:usetesting // t.TempDir is outside the module, where internal packages cannot be imported
-	scratch, err := os.MkdirTemp("testdata", "collide-*")
+	scratch, err := os.MkdirTemp("testdata", pattern)
 	require.NoError(t, err)
 
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(scratch))
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(scratch)) })
 
-		_ = os.Remove("testdata") // only when nothing else is in it
-	})
+	return scratch
+}
 
-	cases := []struct {
+// Test_files_ShapesNamedLikeEmittedCompile writes the generated package of a
+// collision model into a scratch directory under testdata, builds it, and runs
+// a round trip through its codec: the Go name of a shape changes, its wire name
+// does not. Its Route shape is the case apigatewayv2's model raises, so that
+// service has no entry of its own in the service table.
+func Test_files_ShapesNamedLikeEmittedCompile(t *testing.T) {
+	t.Parallel()
+
+	scratch := scratchDir(t, "collide-*")
+
+	tests := []struct {
 		protocol    string
 		kind        string
 		body        string
@@ -417,11 +427,11 @@ func Test_files_ShapesNamedLikeEmittedCompile(t *testing.T) {
 		},
 	}
 
-	pkgs := make([]string, 0, len(cases))
+	pkgs := make([]string, 0, len(tests))
 
-	for _, c := range cases {
-		_, files := collisionFiles(t, c.protocol)
-		dir := filepath.Join(scratch, strings.ReplaceAll(c.protocol, "-", ""))
+	for _, tt := range tests {
+		_, files := collisionFiles(t, tt.protocol)
+		dir := filepath.Join(scratch, strings.ReplaceAll(tt.protocol, "-", ""))
 
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 
@@ -429,7 +439,7 @@ func Test_files_ShapesNamedLikeEmittedCompile(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), src, 0o600))
 		}
 
-		test := fmt.Sprintf(roundTripTest, c.kind, c.body, c.want, c.failBody, c.wantFailure)
+		test := fmt.Sprintf(roundTripTest, tt.kind, tt.body, tt.want, tt.failBody, tt.wantFailure)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "round_test.go"), []byte(test), 0o600))
 
 		pkgs = append(pkgs, "./"+filepath.ToSlash(dir))

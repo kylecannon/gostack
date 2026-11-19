@@ -268,26 +268,16 @@ func TestErrorMembers(t *testing.T) {
 `
 
 // Test_files_JSONAndQuerySeams generates the packages of jsonOneModel and
-// queryOneModel into a scratch directory under testdata, inside the module so
-// that they can import its internal packages, and runs a test in each: json
-// 1.1 content types and target prefix, json and query errors with members,
-// MembersSet, and a query map of structures holding a blob, both ways.
+// queryOneModel into a scratch directory under testdata (see scratchDir), and
+// runs a test in each: json 1.1 content types and target prefix, json and query
+// errors with members, MembersSet, and a query map of structures holding a
+// blob, both ways.
 func Test_files_JSONAndQuerySeams(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, os.MkdirAll("testdata", 0o750))
+	scratch := scratchDir(t, "seams-*")
 
-	//nolint:usetesting // t.TempDir is outside the module, where internal packages cannot be imported
-	scratch, err := os.MkdirTemp("testdata", "seams-*")
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(scratch))
-
-		_ = os.Remove("testdata") // only when nothing else is in it
-	})
-
-	cases := []struct {
+	tests := []struct {
 		name  string
 		model string
 		opts  serviceOptions
@@ -298,26 +288,26 @@ func Test_files_JSONAndQuerySeams(t *testing.T) {
 		{"validone", validOneModel, validOneOptions, validOneTest},
 	}
 
-	pkgs := make([]string, 0, len(cases))
+	pkgs := make([]string, 0, len(tests))
 
-	for _, c := range cases {
-		svc, err := spec.ParseBytes([]byte(c.model))
+	for _, tt := range tests {
+		svc, err := spec.ParseBytes([]byte(tt.model))
 		require.NoError(t, err)
 
-		g, err := newModel(c.name, c.opts, svc, nil)
+		g, err := newModel(tt.name, tt.opts, svc, nil)
 		require.NoError(t, err)
 
 		files, err := g.files()
 		require.NoError(t, err)
 
-		dir := filepath.Join(scratch, c.name)
+		dir := filepath.Join(scratch, tt.name)
 		require.NoError(t, os.MkdirAll(dir, 0o750))
 
 		for name, src := range files {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), src, 0o600))
 		}
 
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "seam_test.go"), []byte(c.test), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "seam_test.go"), []byte(tt.test), 0o600))
 
 		pkgs = append(pkgs, "./"+filepath.ToSlash(dir))
 	}

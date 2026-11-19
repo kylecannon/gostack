@@ -102,7 +102,7 @@ func Test_Validate_SnapshotMessages(t *testing.T) {
 
 	plaintext := base64.StdEncoding.EncodeToString(make([]byte, 4097))
 
-	cases := []struct {
+	tests := []struct {
 		key  string
 		op   string
 		body string
@@ -181,14 +181,14 @@ func Test_Validate_SnapshotMessages(t *testing.T) {
 		},
 	}
 
-	for _, c := range cases {
-		t.Run(c.key, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, validating{}, c.op, c.body)
+			code, body := serveJSON(t, validating{}, tt.op, tt.body)
 			assert.Equal(t, http.StatusBadRequest, code)
 			assert.Equal(t, "ValidationException", body["__type"])
-			assert.Equal(t, c.want, body["message"])
+			assert.Equal(t, tt.want, body["message"])
 		})
 	}
 }
@@ -209,7 +209,7 @@ func Test_Validate_ValidRequestReachesHandler(t *testing.T) {
 func Test_ServeValidated_NeverChecks(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	tests := []struct {
 		name, op, body string
 	}{
 		{"a number of bytes below the minimum", "GenerateRandom", `{"NumberOfBytes":0}`},
@@ -220,11 +220,11 @@ func Test_ServeValidated_NeverChecks(t *testing.T) {
 			`{"KeyId":"mrk-1","ReplicaRegion":"us-west-2","Tags":[{"TagKey":"` + strings.Repeat("a", 129) + `"}]}`},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, kms.Unimplemented{}, c.op, c.body)
+			code, body := serveJSON(t, kms.Unimplemented{}, tt.op, tt.body)
 			assert.Equal(t, http.StatusNotImplemented, code, body)
 			assert.Contains(t, body["message"], "not yet implemented")
 		})
@@ -256,7 +256,7 @@ func Test_Validate_CustomKeyMaterialTag(t *testing.T) {
 func Test_Validate_UnlistedConstraintsReachHandler(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	tests := []struct {
 		name, op, body string
 	}{
 		// 65 characters, 130 UTF-16 units: within the tag key max of 128.
@@ -266,11 +266,11 @@ func Test_Validate_UnlistedConstraintsReachHandler(t *testing.T) {
 			`{"KeyId":"k","GranteePrincipal":"p","Operations":["Decrypt"],"Name":"a b"}`},
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, validating{}, c.op, c.body)
+			code, body := serveJSON(t, validating{}, tt.op, tt.body)
 			assert.Equal(t, http.StatusNotImplemented, code, body)
 			assert.Contains(t, body["message"], "not yet implemented")
 		})
