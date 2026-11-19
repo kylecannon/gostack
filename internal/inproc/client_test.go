@@ -378,6 +378,67 @@ func Test_Enqueue_KeepsEachDestinationsOrder(t *testing.T) {
 	}
 }
 
+// Test_Enqueue_OrdersCallsByDestinationNotByAccount queues calls from two
+// accounts alternately to one region, service, method, path and target: they
+// are one destination, so they run in queue order and never overlap.
+func Test_Enqueue_OrdersCallsByDestinationNotByAccount(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			mu       sync.Mutex
+			bodies   []string
+			inFlight int
+			most     int
+		)
+
+		release := make(chan struct{})
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+
+			mu.Lock()
+			inFlight++
+			most = max(most, inFlight)
+			bodies = append(bodies, string(body))
+			mu.Unlock()
+
+			<-release
+
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+		}))
+
+		accounts := []string{account, "210987654321"}
+
+		want := make([]string, 0, 6)
+
+		for n := range 6 {
+			call := sqsCall(strconv.Itoa(n))
+			call.Account = accounts[n%2]
+			want = append(want, strconv.Itoa(n))
+
+			require.True(t, client.Enqueue(call, nil))
+		}
+
+		synctest.Wait()
+
+		mu.Lock()
+		assert.Equal(t, 1, inFlight, "two accounts calling one destination share a lane")
+		mu.Unlock()
+
+		close(release)
+		synctest.Wait()
+
+		mu.Lock()
+		assert.Equal(t, want, bodies, "the calls run in the order they were queued")
+		assert.Equal(t, 1, most, "the calls never overlap")
+		mu.Unlock()
+	})
+}
+
 // Test_Stream_ReturnsAtTheHeadAndStreamsTheBody checks the head is the one the
 // handler sent with its status, and the body arrives as it is written.
 func Test_Stream_ReturnsAtTheHeadAndStreamsTheBody(t *testing.T) {

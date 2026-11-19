@@ -54,14 +54,13 @@ type queue struct {
 	group   sync.WaitGroup
 }
 
-// laneKey is the destination of a call: the account and region it acts as, the
-// service, and the method, path and target of the operation. S3's event
-// notifications are SQS SendMessage calls as the bucket's owner to the queue's
-// region, so the events one owner sends to one region arrive in the order they
-// were raised.
+// laneKey is the destination of a call: where it goes, not who sends it. It is
+// the region, the service, and the method, path and target of the operation.
+// The account is not part of it, so calls from different accounts to one
+// destination still run in the order they were queued.
 func laneKey(call Call) string {
-	return call.Account + "\x00" + call.Region + "\x00" + call.Service + "\x00" + methodOf(call) + "\x00" +
-		pathOf(call) + "\x00" + call.Target
+	return call.Region + "\x00" + call.Service + "\x00" + methodOf(call) + "\x00" + pathOf(call) + "\x00" +
+		call.Target
 }
 
 // Enqueue hands call to a worker and returns at once; done, when it is not nil,

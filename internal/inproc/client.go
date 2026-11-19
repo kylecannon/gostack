@@ -72,7 +72,8 @@ type Call struct {
 	// bare name, so {"location": {""}} is "?location", as S3's subresources are.
 	Query url.Values
 	// ContentType is the request's Content-Type. Empty keeps the one Header
-	// names, or else is json 1.0 for a call with a Target and none without.
+	// names, or else json 1.0 when Target is set. The json 1.0 default applies
+	// only with a Target; a call without one gets no default.
 	ContentType string
 	// Body is the request body.
 	Body []byte

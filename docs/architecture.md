@@ -377,8 +377,8 @@ canonical, nothing set after the status) and the body.
   goroutine of its own. Closing the body, or the end of the caller's context,
   cancels the request and fails the handler's next write, and `Close` returns
   once the handler has.
-- `Enqueue` queues a call and returns. Calls to one destination (account,
-  region, signing name, method, path and target) run one at a time in the order
+- `Enqueue` queues a call and returns. Calls to one destination (region,
+  signing name, method, path and target; not the caller's account) run one at a time in the order
   they were queued; different destinations run at once, up to
   `inproc.MaxInFlight` (16), served in turn. A call is in-memory work on this
   process's CPUs, so more at once gains nothing, and the bound keeps a burst,

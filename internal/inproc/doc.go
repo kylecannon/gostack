@@ -15,6 +15,7 @@
 // back as an io.ReadCloser, so neither is ever held whole. Enqueue queues a
 // call for workers that exist only while calls are waiting, so nothing runs
 // while the process is idle. Queued calls to one destination run in the order
-// they were queued; calls to different destinations run at once, up to
-// MaxInFlight.
+// they were queued, whichever account made them; calls to different
+// destinations run at once, up to MaxInFlight. A destination is a region,
+// service, method, path and target.
 package inproc
