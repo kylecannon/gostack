@@ -3,7 +3,6 @@ package inproc
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -73,21 +72,14 @@ func (c *Client) Stream(ctx context.Context, call Call, body io.Reader, size int
 
 	go func() {
 		defer close(s.done)
-		defer func() {
-			var err error
-			if recovered := recover(); recovered != nil {
-				err = fmt.Errorf("%w: %v", ErrAborted, recovered)
-			}
 
-			if !w.committed {
-				failed = err
-				w.finish()
-			}
+		err := serve(handler, w, req)
+		if !w.committed {
+			failed = err
+			w.finish()
+		}
 
-			_ = pw.CloseWithError(err)
-		}()
-
-		handler.ServeHTTP(w, req)
+		_ = pw.CloseWithError(err)
 	}()
 
 	<-ready

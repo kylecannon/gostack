@@ -29,7 +29,7 @@ type queued struct {
 	done func(Response, error)
 }
 
-// lane holds the calls queued for one destination. One worker at most serves a
+// lane holds the calls queued under one lane key. One worker at most serves a
 // lane, one call at a time, so its calls run in the order they were queued.
 type lane struct {
 	key   string
@@ -54,41 +54,56 @@ type queue struct {
 	group   sync.WaitGroup
 }
 
-// laneKey is the destination of a call: where it goes, not who sends it. It is
-// the region, the service, and the method, path and target of the operation.
-// The account is not part of it, so calls from different accounts to one
-// destination still run in the order they were queued.
+// laneKey is the lane a call is queued in. It is the call's Lane when the
+// caller named one. Otherwise it is the call's destination, where it goes and
+// not who sends it: the region, the service, and the method, path and target
+// of the operation. The account is not part of it, so calls from different
+// accounts to one destination still run in the order they were queued.
+//
+// The destination is only what the request line and the target say. A json
+// call that names its resource in the body, such as an SQS SendMessage, shares
+// one lane with every other call of that operation in the region, and two
+// operations on one resource, a PUT and then a DELETE of one S3 key, are two
+// lanes that can finish in either order. A caller that needs a finer or a
+// coarser order sets Lane.
 func laneKey(call Call) string {
+	if call.Lane != "" {
+		return call.Lane
+	}
+
 	return call.Region + "\x00" + call.Service + "\x00" + methodOf(call) + "\x00" + pathOf(call) + "\x00" +
 		call.Target
 }
 
 // Enqueue hands call to a worker and returns at once; done, when it is not nil,
-// gets the answer on the worker's goroutine. The queue holds MaxQueued calls
+// gets the answer on the worker's goroutine, or the error of a call that could
+// not be made or whose handler panicked. The queue holds MaxQueued calls
 // waiting to start: past that, and after Close, Enqueue refuses the call and
 // reports false.
 //
-// Calls with the same destination (laneKey) run one at a time, in the order
-// they were queued. Calls to different destinations run at once, up to
-// MaxInFlight, and a worker serves the waiting destinations in turn, one call
-// each. A worker starts when a call has none to take it and exits when no call
-// is waiting, so nothing runs while idle.
+// Calls in one lane (laneKey: the call's Lane, or else its destination) run one
+// at a time, in the order they were queued. Calls in different lanes run at
+// once, up to MaxInFlight, and a worker serves the waiting lanes in turn, one
+// call each. A worker starts when a call has none to take it and exits when no
+// call is waiting, so nothing runs while idle.
 func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 	if c == nil {
 		return false
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	q := &c.queue
 
-	if c.closed || c.queued >= MaxQueued {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.closed || q.queued >= MaxQueued {
 		return false
 	}
 
-	c.queued++
+	q.queued++
 
 	key := laneKey(call)
-	if l, ok := c.lanes[key]; ok {
+	if l, ok := q.lanes[key]; ok {
 		l.calls = append(l.calls, queued{call: call, done: done})
 
 		return true
@@ -96,16 +111,16 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 
 	l := &lane{key: key, calls: []queued{{call: call, done: done}}}
 
-	if c.lanes == nil {
-		c.lanes = make(map[string]*lane)
+	if q.lanes == nil {
+		q.lanes = make(map[string]*lane)
 	}
 
-	c.lanes[key] = l
-	c.waiting = append(c.waiting, l)
+	q.lanes[key] = l
+	q.waiting = append(q.waiting, l)
 
-	if c.workers < MaxInFlight {
-		c.workers++
-		c.group.Go(c.work)
+	if q.workers < MaxInFlight {
+		q.workers++
+		q.group.Go(c.work)
 	}
 
 	return true
@@ -113,38 +128,43 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 
 // Idle reports whether no call is queued and no worker is running.
 func (c *Client) Idle() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	q := &c.queue
 
-	return c.workers == 0 && c.queued == 0
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.workers == 0 && q.queued == 0
 }
 
 // Close drops the calls still queued, cancels the ones in flight and waits for
 // the workers to exit. Later Enqueue calls are refused. It is safe to call more
 // than once.
 func (c *Client) Close() {
-	c.mu.Lock()
-	c.closed = true
-	c.lanes = nil
-	c.waiting = nil
-	c.queued = 0
-	c.mu.Unlock()
+	q := &c.queue
 
-	c.cancel()
-	c.group.Wait()
+	q.mu.Lock()
+	q.closed = true
+	q.lanes = nil
+	q.waiting = nil
+	q.queued = 0
+	q.mu.Unlock()
+
+	q.cancel()
+	q.group.Wait()
 }
 
 // work serves the waiting lanes, one call from each in turn, until none waits.
+// Do turns a handler's panic into the call's error, so a worker outlives it.
 func (c *Client) work() {
 	var served *lane
 
 	for {
-		l, next, ok := c.next(served)
+		l, next, ok := c.queue.next(served)
 		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.ctx, callTimeout)
+		ctx, cancel := context.WithTimeout(c.queue.ctx, callTimeout)
 		resp, err := c.Do(ctx, next.call)
 
 		cancel()
@@ -162,38 +182,38 @@ func (c *Client) work() {
 // is. When no lane waits, or after Close, the worker is gone, under the same
 // lock, so a call queued a moment later starts a new one. A worker started for
 // a lane that another worker took first finds none and exits.
-func (c *Client) next(served *lane) (*lane, queued, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (q *queue) next(served *lane) (*lane, queued, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
-	if c.closed {
-		c.workers--
+	if q.closed {
+		q.workers--
 
 		return nil, queued{}, false
 	}
 
 	if served != nil {
 		if len(served.calls) > 0 {
-			c.waiting = append(c.waiting, served)
+			q.waiting = append(q.waiting, served)
 		} else {
-			delete(c.lanes, served.key)
+			delete(q.lanes, served.key)
 		}
 	}
 
-	if len(c.waiting) == 0 {
-		c.workers--
+	if len(q.waiting) == 0 {
+		q.workers--
 
 		return nil, queued{}, false
 	}
 
-	l := c.waiting[0]
-	c.waiting[0] = nil
-	c.waiting = c.waiting[1:]
+	l := q.waiting[0]
+	q.waiting[0] = nil
+	q.waiting = q.waiting[1:]
 
 	head := l.calls[0]
 	l.calls[0] = queued{}
 	l.calls = l.calls[1:]
-	c.queued--
+	q.queued--
 
 	return l, head, true
 }

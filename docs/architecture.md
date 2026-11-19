@@ -454,21 +454,28 @@ canonical, nothing set after the status) and the body.
   goroutine of its own. Closing the body, or the end of the caller's context,
   cancels the request and fails the handler's next write, and `Close` returns
   once the handler has.
-- `Enqueue` queues a call and returns. Calls to one destination (region,
-  signing name, method, path and target; not the caller's account) run one at a time in the order
-  they were queued; different destinations run at once, up to
-  `inproc.MaxInFlight` (16), served in turn. A call is in-memory work on this
-  process's CPUs, so more at once gains nothing, and the bound keeps a burst,
-  such as the events of a bulk delete, from crowding out client requests.
-  Workers start with a waiting call and exit when none waits, so nothing runs
-  while idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and
-  refuses the next; each queued call has 30 seconds.
+- `Enqueue` queues a call and returns. Calls in one lane run one at a time in
+  the order they were queued; different lanes run at once, up to
+  `inproc.MaxInFlight` (16), served in turn. A call's lane is the `Call.Lane`
+  its caller names, or else its destination: region, signing name, method,
+  path and target, not the caller's account. The destination misses a
+  resource named in a json body, and splits two operations on one resource
+  (`PUT /b/k`, then `DELETE /b/k`) into two lanes, so a caller that needs a
+  different order sets `Lane`. A call is in-memory work on this process's
+  CPUs, so more at once gains nothing, and the bound keeps a burst, such as
+  the events of a bulk delete, from crowding out client requests. Workers
+  start with a waiting call and exit when none waits, so nothing runs while
+  idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and refuses
+  the next; each queued call has 30 seconds.
 
-A call made before `Bind` gives the client a handler returns `ErrNotBound`. S3
+A call made before `Bind` gives the client a handler returns `ErrNotBound`. A
+handler that panics, as the gateway does to abort a response whose status it
+has written, fails that call with `ErrAborted` for `Do`, `Stream` and
+`Enqueue` alike; the caller's request and the queue's workers carry on. S3
 uses the client to check a notification's queue and to deliver event
-notifications to SQS. Each event is a `SendMessage` as the bucket's owner to
-the queue's region, so the events one owner raises for one region arrive in
-the order they were raised.
+notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
+the lane of the queue's ARN, so the events for one queue arrive in the order
+they were raised and a slow queue holds up no other.
 
 ### Body store (`internal/blob`)
 

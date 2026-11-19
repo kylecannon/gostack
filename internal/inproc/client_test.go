@@ -439,6 +439,168 @@ func Test_Enqueue_OrdersCallsByDestinationNotByAccount(t *testing.T) {
 	})
 }
 
+// gauge is a handler that records the bodies of the calls it serves, in the
+// order they arrive, and how many ran at once, holding each until release is
+// closed.
+type gauge struct {
+	mu       sync.Mutex
+	bodies   []string
+	inFlight int
+	most     int
+	release  chan struct{}
+}
+
+func newGauge() *gauge {
+	return &gauge{release: make(chan struct{})}
+}
+
+func (g *gauge) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+
+	g.mu.Lock()
+	g.inFlight++
+	g.most = max(g.most, g.inFlight)
+	g.bodies = append(g.bodies, string(body))
+	g.mu.Unlock()
+
+	<-g.release
+
+	g.mu.Lock()
+	g.inFlight--
+	g.mu.Unlock()
+}
+
+// running is how many calls the handler holds now.
+func (g *gauge) running() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.inFlight
+}
+
+// Test_Enqueue_OneLaneOrdersCallsToDifferentDestinations queues calls with one
+// Lane but different methods and paths, a PUT and then a DELETE of one S3 key
+// among them: the Lane is the whole key, so they run one at a time in queue
+// order.
+func Test_Enqueue_OneLaneOrdersCallsToDifferentDestinations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := newGauge()
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(g)
+
+		methods := []string{http.MethodPut, http.MethodDelete, http.MethodGet, http.MethodPost}
+		want := make([]string, 0, len(methods))
+
+		for n, method := range methods {
+			call := s3Call(method, "/bucket/key-"+strconv.Itoa(n), nil)
+			call.Body = []byte(strconv.Itoa(n))
+			call.Lane = "arn:aws:s3:::bucket/key"
+			want = append(want, strconv.Itoa(n))
+
+			require.True(t, client.Enqueue(call, nil))
+		}
+
+		synctest.Wait()
+		assert.Equal(t, 1, g.running(), "calls in one lane wait for each other, whatever their destination")
+
+		close(g.release)
+		synctest.Wait()
+
+		g.mu.Lock()
+		assert.Equal(t, want, g.bodies, "the calls run in the order they were queued")
+		assert.Equal(t, 1, g.most, "the calls never overlap")
+		g.mu.Unlock()
+	})
+}
+
+// Test_Enqueue_DifferentLanesToOneDestinationRunAtOnce queues calls to one
+// destination, an SQS SendMessage in one region, each in a Lane of its own, as
+// S3 does for the queues it notifies: they no longer wait for each other.
+func Test_Enqueue_DifferentLanesToOneDestinationRunAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const lanes = 4
+
+		g := newGauge()
+
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(g)
+
+		for n := range lanes {
+			call := sqsCall(strconv.Itoa(n))
+			call.Lane = "arn:aws:sqs:" + region + ":" + account + ":queue-" + strconv.Itoa(n)
+
+			require.True(t, client.Enqueue(call, nil))
+		}
+
+		synctest.Wait()
+		assert.Equal(t, lanes, g.running(), "each lane runs at once")
+
+		close(g.release)
+		synctest.Wait()
+		assert.True(t, client.Idle())
+	})
+}
+
+// abortAfterStatus answers a call whose body is "abort" the way the gateway
+// aborts a response whose status it has already written: it panics with
+// http.ErrAbortHandler. Any other call gets a 200.
+func abortAfterStatus(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+
+	w.WriteHeader(http.StatusInternalServerError)
+
+	if string(body) == "abort" {
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func Test_Do_AHandlerPanicAfterTheStatusIsAnError(t *testing.T) {
+	client := inproc.New()
+	t.Cleanup(client.Close)
+
+	client.Bind(http.HandlerFunc(abortAfterStatus))
+
+	resp, err := client.Do(t.Context(), sqsCall("abort"))
+	require.ErrorIs(t, err, inproc.ErrAborted, "the call fails instead of its caller")
+	assert.Equal(t, inproc.Response{}, resp)
+
+	resp, err = client.Do(t.Context(), sqsCall("fine"))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusInternalServerError, resp.Status)
+}
+
+func Test_Enqueue_AHandlerPanicAfterTheStatusIsTheCallsErrorAndTheWorkerGoesOn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := inproc.New()
+		defer client.Close()
+
+		client.Bind(http.HandlerFunc(abortAfterStatus))
+
+		var (
+			aborted error
+			next    inproc.Response
+			nextErr error
+		)
+
+		require.True(t, client.Enqueue(sqsCall("abort"), func(_ inproc.Response, err error) { aborted = err }))
+		require.True(t, client.Enqueue(sqsCall("fine"), func(resp inproc.Response, err error) {
+			next, nextErr = resp, err
+		}))
+
+		synctest.Wait()
+
+		require.ErrorIs(t, aborted, inproc.ErrAborted, "done gets the panic as the call's error")
+		require.NoError(t, nextErr, "the next call in the lane is still served")
+		assert.Equal(t, http.StatusInternalServerError, next.Status)
+		assert.True(t, client.Idle())
+	})
+}
+
 // Test_Stream_ReturnsAtTheHeadAndStreamsTheBody checks the head is the one the
 // handler sent with its status, and the body arrives as it is written.
 func Test_Stream_ReturnsAtTheHeadAndStreamsTheBody(t *testing.T) {

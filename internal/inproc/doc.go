@@ -14,8 +14,9 @@
 // with the request body read from an io.Reader and the answer's body handed
 // back as an io.ReadCloser, so neither is ever held whole. Enqueue queues a
 // call for workers that exist only while calls are waiting, so nothing runs
-// while the process is idle. Queued calls to one destination run in the order
-// they were queued, whichever account made them; calls to different
-// destinations run at once, up to MaxInFlight. A destination is a region,
-// service, method, path and target.
+// while the process is idle. Queued calls in one lane run in the order they
+// were queued, whichever account made them; calls in different lanes run at
+// once, up to MaxInFlight. A call's lane is the Lane its caller names, or else
+// its destination: a region, service, method, path and target. A handler that
+// panics fails its call with ErrAborted, whichever of the three made it.
 package inproc

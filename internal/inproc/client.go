@@ -44,8 +44,8 @@ var (
 	// handler.
 	ErrNotBound = errors.New("inproc: no handler bound")
 
-	// ErrAborted is the error of a streamed call whose handler panicked, which
-	// is how the gateway aborts a response it has already started.
+	// ErrAborted is the error of a call whose handler panicked, which is how the
+	// gateway aborts a response it has already started.
 	ErrAborted = errors.New("inproc: the handler aborted the response")
 )
 
@@ -79,6 +79,13 @@ type Call struct {
 	Body []byte
 	// Header holds extra request headers.
 	Header http.Header
+	// Lane, when set, is the whole lane key of an Enqueued call: queued calls
+	// with the same Lane run one at a time, in the order they were queued,
+	// whatever their destination, and calls with different Lanes run at once.
+	// Empty puts the call in the lane of its destination: its region, signing
+	// name, method, path and target. It is never sent, and Do and Stream ignore
+	// it.
+	Lane string
 }
 
 // Response is what the handler answered.
@@ -112,7 +119,7 @@ func ok(status int) bool {
 //
 // The zero value is not ready: use New.
 type Client struct {
-	queue
+	queue queue
 
 	handler atomic.Pointer[http.Handler]
 }
@@ -120,10 +127,9 @@ type Client struct {
 // New returns a Client with no handler. The gateway is built from the services
 // the client is given to, so the handler arrives later, through Bind.
 func New() *Client {
-	c := &Client{}
-	c.ctx, c.cancel = context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 
-	return c
+	return &Client{queue: queue{ctx: ctx, cancel: cancel}}
 }
 
 // Bind sets the handler calls are served through, normally gateway.Handler().
@@ -138,7 +144,8 @@ func (c *Client) Bound() bool {
 
 // Do serves call through the handler and returns the answer, its body read
 // whole. A non-2xx answer is a Response, not an error; an error means the call
-// could not be made.
+// could not be made, or its handler panicked (ErrAborted), as the gateway does
+// to abort a response whose status it has already written.
 func (c *Client) Do(ctx context.Context, call Call) (Response, error) {
 	if !c.Bound() {
 		return Response{}, ErrNotBound
@@ -155,10 +162,31 @@ func (c *Client) Do(ctx context.Context, call Call) (Response, error) {
 	var body bytes.Buffer
 
 	w := &writer{header: make(http.Header), body: &body}
-	(*c.handler.Load()).ServeHTTP(w, req)
+
+	err = serve(*c.handler.Load(), w, req)
+	if err != nil {
+		return Response{}, err
+	}
+
 	w.finish()
 
 	return Response{Status: w.status, Header: w.sent, Body: body.Bytes()}, nil
+}
+
+// serve runs the handler and turns a panic into ErrAborted, so that a handler
+// that aborts its response fails the one call instead of the caller: a panic on
+// a queue worker would end the process, and one on a request's goroutine would
+// abort that request too.
+func serve(h http.Handler, w http.ResponseWriter, req *http.Request) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("%w: %v", ErrAborted, recovered)
+		}
+	}()
+
+	h.ServeHTTP(w, req)
+
+	return nil
 }
 
 // detach gives a request a context of its own that ends when ctx does and

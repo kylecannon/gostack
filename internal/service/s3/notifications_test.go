@@ -45,6 +45,14 @@ type notifyStack struct {
 func newNotifyStack(t *testing.T) *notifyStack {
 	t.Helper()
 
+	return newNotifyStackThrough(t, nil)
+}
+
+// newNotifyStackThrough is newNotifyStack with S3's own calls served through
+// wrap(gateway handler) when wrap is not nil.
+func newNotifyStackThrough(t *testing.T, wrap func(http.Handler) http.Handler) *notifyStack {
+	t.Helper()
+
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{Host: localstackHost} }, func(string) {})
@@ -60,7 +68,11 @@ func newNotifyStack(t *testing.T) *notifyStack {
 	)
 	require.NoError(t, err)
 
-	provider.Bind(gw.Handler())
+	if wrap == nil {
+		provider.Bind(gw.Handler())
+	} else {
+		provider.Bind(wrap(gw.Handler()))
+	}
 
 	srv := httptest.NewServer(gw.Handler())
 	t.Cleanup(srv.Close)
@@ -532,6 +544,67 @@ func TestNotificationsHonourTheFilter(t *testing.T) {
 	assert.Equal(t, "testupload/dir1/testfile.txt", objectOf(got[0])[fieldKey])
 
 	assert.Empty(t, n.receive(0), "the other two keys do not match")
+}
+
+// TestNotificationsToOneQueueDoNotWaitForAnother holds every message S3 sends a
+// slow queue and checks the events for another queue arrive meanwhile: each
+// queue is a lane of its own. Before, every SendMessage to one region shared a
+// lane, so the first held message held up the rest.
+func TestNotificationsToOneQueueDoNotWaitForAnother(t *testing.T) {
+	const slowQueue = "slow-queue"
+
+	release := make(chan struct{})
+
+	n := newNotifyStackThrough(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+
+				return
+			}
+
+			if r.Header.Get("X-Amz-Target") == "AmazonSQS.SendMessage" && strings.Contains(string(body), slowQueue) {
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			}
+
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			next.ServeHTTP(w, r)
+		})
+	})
+	t.Cleanup(func() { close(release) })
+
+	n.setup()
+
+	status, out := n.sqsCall("CreateQueue", map[string]any{"QueueName": slowQueue})
+	require.Equal(t, http.StatusOK, status, out)
+
+	slowARN := "arn:aws:sqs:us-east-1:" + notifyAcct + ":" + slowQueue
+	config := `<NotificationConfiguration>` +
+		`<QueueConfiguration><Id>slow</Id><Queue>` + slowARN + `</Queue>` + createdEvents + `</QueueConfiguration>` +
+		`<QueueConfiguration><Id>fast</Id><Queue>` + notifyARN + `</Queue>` + createdEvents + `</QueueConfiguration>` +
+		`</NotificationConfiguration>`
+	put := n.s3Call(http.MethodPut, notificationQuery, config, skipDestinationCheck)
+	require.Equal(t, http.StatusOK, put.status, string(put.body))
+
+	keys := []string{"first", "second", "third"}
+	for _, key := range keys {
+		stored := n.s3Call(http.MethodPut, notifyBucket+"/"+key, "x", nil)
+		require.Equal(t, http.StatusOK, stored.status, string(stored.body))
+	}
+
+	got := n.receive(len(keys))
+
+	delivered := make([]any, 0, len(got))
+	for _, rec := range got {
+		delivered = append(delivered, objectOf(rec)[fieldKey])
+	}
+
+	assert.ElementsMatch(t, []any{"first", "second", "third"}, delivered,
+		"the events for the other queue arrive while the slow queue's are held")
 }
 
 func TestNotificationsToAnUnknownEventAreNotRaised(t *testing.T) {
