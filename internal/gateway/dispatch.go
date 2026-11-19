@@ -75,9 +75,22 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 
 	Record(r, rc)
 
-	reg.Serve(w, rc)
+	// net/http sends the end of a response only after this returns (no service
+	// flushes or declares the length of a write's response), so marking after
+	// Serve comes before the client can read it. A response a service writes
+	// through a connection it took can end before Serve returns: its NoteStatus
+	// settles the mark first, and the settle here then does nothing.
+	sw, tracked := w.(*statusWriter)
+	if !tracked {
+		reg.Serve(w, rc)
+		g.markDirty(w, r, match.Index, rc)
 
-	g.markDirty(w, r, match.Index, rc)
+		return
+	}
+
+	sw.pending = pendingMark{g: g, r: r, rc: rc, index: match.Index, armed: true}
+	reg.Serve(w, rc)
+	sw.settle()
 }
 
 // markDirty tells persistence the service changed, when the call succeeded and

@@ -281,6 +281,49 @@ func Test_Gateway_markDirty(t *testing.T) {
 	}
 }
 
+// Test_Gateway_markDirty_whenATakenResponseNotesItsStatus checks the mark
+// happens when a service that took the connection notes its status, while it
+// still serves: it sends the response itself and can finish it before it
+// returns, so a mark after it returns would let a client read the success of
+// a write the gateway has not yet marked.
+func Test_Gateway_markDirty_whenATakenResponseNotesItsStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		giveStatus int
+		wantMarked []string
+	}{
+		{name: "a success", giveStatus: http.StatusOK, wantMarked: []string{nameSQS}},
+		{name: "no content", giveStatus: http.StatusNoContent, wantMarked: []string{nameSQS}},
+		{name: "an error", giveStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirty := &dirtyLog{}
+
+			var whileServing []string
+
+			reg := sqsRegistration(func(w http.ResponseWriter, _ *request.Context) {
+				noter, ok := w.(interface{ NoteStatus(code int) })
+				require.True(t, ok, "the gateway's writer takes a status a service sends itself")
+
+				noter.NoteStatus(tt.giveStatus)
+
+				// The service writes and ends its response from here on.
+				whileServing = dirty.marked()
+			})
+
+			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			require.NoError(t, err)
+
+			call(t, g.Handler(), sendMessage(t))
+
+			assert.Equal(t, tt.wantMarked, whileServing, "marked before the service sends a byte")
+			assert.Equal(t, tt.wantMarked, dirty.marked(), "marked once")
+		})
+	}
+}
+
 func Test_Gateway_noPersistence(t *testing.T) {
 	g, err := gateway.New(newSettings().get, []service.Registration{sqsRegistration(okServe)}, nil, nil)
 	require.NoError(t, err)

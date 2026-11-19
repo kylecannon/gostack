@@ -351,6 +351,20 @@ type statusWriter struct {
 	http.ResponseWriter
 
 	status int
+
+	// pending is the call serveAWS is serving, whose success marks state dirty.
+	pending pendingMark
+}
+
+// pendingMark holds what markDirty needs to judge one call, so that the mark
+// can run before the call's response reaches the client. A value field of
+// statusWriter, so holding it costs no allocation.
+type pendingMark struct {
+	g     *Gateway
+	r     *http.Request
+	rc    *request.Context
+	index int
+	armed bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -367,9 +381,19 @@ func (w *statusWriter) WriteHeader(code int) {
 // 4xx on such a response reads as 0, counts as a success and marks state dirty,
 // and a panic after the response began would write a 500 into the closed
 // connection. A service finds it through Unwrap, by this method alone.
+//
+// It also marks state dirty for a successful write, here rather than after the
+// service returns: the service sends the response itself and can finish it
+// before it returns, and a client that reads the response and asks for a save
+// at once must find the change marked. A service calls it before it writes a
+// byte, once the call has changed what it changes.
 func (w *statusWriter) NoteStatus(code int) {
 	if w.status == 0 && code >= http.StatusOK {
 		w.status = code
+	}
+
+	if w.status != 0 {
+		w.settle()
 	}
 }
 
@@ -399,4 +423,16 @@ func (w *statusWriter) Unwrap() http.ResponseWriter {
 // nothing sends 200.
 func (w *statusWriter) succeeded() bool {
 	return w.status < http.StatusBadRequest
+}
+
+// settle marks state dirty for the pending call, once: the first call does it
+// and later ones do nothing.
+func (w *statusWriter) settle() {
+	p := &w.pending
+	if !p.armed {
+		return
+	}
+
+	p.armed = false
+	p.g.markDirty(w, p.r, p.index, p.rc)
 }
