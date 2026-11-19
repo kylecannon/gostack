@@ -54,6 +54,10 @@ func (p *Provider) RotateSecret(ctx context.Context, in *api.RotateSecretInput) 
 		return nil, err
 	}
 
+	if secret.primary != nil {
+		return nil, errReplica()
+	}
+
 	req, err := resolveRotation(secret, in)
 	if err != nil {
 		return nil, err

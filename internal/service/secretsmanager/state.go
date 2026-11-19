@@ -116,14 +116,20 @@ func (s *State) add(secret *Secret) {
 // remove takes a secret out of the state for good and marks it gone. The
 // caller holds mu for writing and the secret's lock.
 func (s *State) remove(secret *Secret) {
+	s.drop(secret)
+	secret.gone = true
+}
+
+// drop takes a secret out of the state. The caller holds mu for writing. A
+// replica record is dropped without being marked: whether it is there is its
+// primary's to say.
+func (s *State) drop(secret *Secret) {
 	delete(s.byName, secret.name)
 	delete(s.byARN, secret.arn)
 
 	if i := slices.Index(s.order, secret); i >= 0 {
 		s.order = slices.Delete(s.order, i, i+1)
 	}
-
-	secret.gone = true
 }
 
 // secrets returns the secrets in creation order.
@@ -134,13 +140,17 @@ func (s *State) secrets() []*Secret {
 	return slices.Clone(s.order)
 }
 
-// Secret is one secret, moto's FakeSecret. mu guards every field but the ones
-// fixed at creation: account, region, name and arn.
+// Secret is one secret, moto's FakeSecret, or the record of a replica,
+// moto's ReplicaSecret. mu guards every field but the ones fixed at creation:
+// account, region, name, arn and primary.
 type Secret struct {
 	account string
 	region  string
 	name    string
 	arn     string
+	// primary is set on a replica record, which holds nothing else: its
+	// primary holds the data.
+	primary *Secret
 
 	mu sync.Mutex
 	// gone marks a secret removed from its State, by a forced delete or a reset.
@@ -170,6 +180,9 @@ type Secret struct {
 	versions []*version
 	// current is the id of the AWSCURRENT version, moto's default_version_id.
 	current string
+
+	// replicas is the replication status, in the order regions were added.
+	replicas []replica
 }
 
 type tag struct {

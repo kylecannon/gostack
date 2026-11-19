@@ -40,7 +40,15 @@ func (p *Provider) GetResourcePolicy(
 ) (*api.GetResourcePolicyOutput, error) {
 	var out *api.GetResourcePolicyOutput
 
-	err := p.withSecret(ctx, in.SecretId, func(_ *request.Context, secret *Secret) error {
+	// LocalStack's own get_resource_policy answers a replica too, with no
+	// policy: the replica record has none.
+	err := p.withSource(ctx, in.SecretId, func(_ *request.Context, secret, replica *Secret) error {
+		if replica != nil {
+			out = &api.GetResourcePolicyOutput{ARN: new(replica.arn), Name: new(replica.name)}
+
+			return nil
+		}
+
 		out = &api.GetResourcePolicyOutput{ARN: new(secret.arn), Name: new(secret.name)}
 		if secret.policy != nil && *secret.policy != "" {
 			out.ResourcePolicy = new(*secret.policy)

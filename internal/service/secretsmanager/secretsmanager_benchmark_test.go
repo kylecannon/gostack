@@ -35,13 +35,18 @@ var (
 	benchConcurrency = []int{1, 16, 64}
 )
 
-// send makes one call to h and returns the status.
+// send makes one call to h in us-east-1 and returns the status.
 func send(ctx context.Context, h http.Handler, operation, body string) int {
+	return sendIn(ctx, h, "us-east-1", operation, body)
+}
+
+// sendIn is send signed for region.
+func sendIn(ctx context.Context, h http.Handler, region, operation, body string) int {
 	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "secretsmanager."+operation)
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/us-east-1/secretsmanager/aws4_request, "+
-		"SignedHeaders=host;x-amz-date, Signature=abc")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/"+region+
+		"/secretsmanager/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc")
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -121,6 +126,33 @@ func BenchmarkGetSecretValue(b *testing.B) {
 		for b.Loop() {
 			err := fanOut(workers, func(worker int) error {
 				status := send(b.Context(), h, "GetSecretValue", `{"SecretId":"bench-`+strconv.Itoa(worker)+`"}`)
+				if status != http.StatusOK {
+					return fmt.Errorf("GetSecretValue answered %d", status)
+				}
+
+				return nil
+			})
+			require.NoError(b, err)
+		}
+	})
+}
+
+// BenchmarkGetSecretValueReplica is the GetSecretValue matrix read through a
+// replica in eu-west-1 of each worker's secret, the replication option.
+func BenchmarkGetSecretValueReplica(b *testing.B) {
+	benchMatrix(b, func(b *testing.B, value string, workers int) {
+		h := secretsFor(b, workers, value, plainHandler)
+
+		for worker := range workers {
+			status := send(b.Context(), h, "ReplicateSecretToRegions", `{"SecretId":"bench-`+strconv.Itoa(worker)+
+				`","AddReplicaRegions":[{"Region":"eu-west-1"}]}`)
+			require.Equal(b, http.StatusOK, status)
+		}
+
+		for b.Loop() {
+			err := fanOut(workers, func(worker int) error {
+				status := sendIn(b.Context(), h, "eu-west-1", "GetSecretValue",
+					`{"SecretId":"bench-`+strconv.Itoa(worker)+`"}`)
 				if status != http.StatusOK {
 					return fmt.Errorf("GetSecretValue answered %d", status)
 				}

@@ -27,7 +27,7 @@ func (p *Provider) GetSecretValue(ctx context.Context, in *api.GetSecretValueInp
 		stamped bool
 	)
 
-	err := p.withSecret(ctx, in.SecretId, func(rc *request.Context, secret *Secret) error {
+	err := p.withSource(ctx, in.SecretId, func(rc *request.Context, secret, replica *Secret) error {
 		kerr := checkKMSAccess(rc.AccountID, secret)
 		if kerr != nil {
 			return kerr
@@ -38,6 +38,10 @@ func (p *Provider) GetSecretValue(ctx context.Context, in *api.GetSecretValueInp
 		out, verr = secret.value(in.VersionId, stage)
 		if verr != nil {
 			return verr
+		}
+
+		if replica != nil {
+			out.ARN = new(replica.arn)
 		}
 
 		stamped = secret.stamp(deref(in.VersionId), p.now())
@@ -255,7 +259,11 @@ func (p *Provider) UpdateSecret(ctx context.Context, in *api.UpdateSecretInput) 
 
 	var out *api.UpdateSecretOutput
 
-	err := p.withSecret(ctx, in.SecretId, func(_ *request.Context, secret *Secret) error {
+	// LocalStack answers a replica with InvalidRequestException where moto's
+	// operations answer InvalidParameterException.
+	onReplica := api.NewInvalidRequestException(msgReplica)
+
+	err := p.withSecretOr(ctx, in.SecretId, onReplica, func(_ *request.Context, secret *Secret) error {
 		if secret.deleted() {
 			return api.NewInvalidRequestException(msgUpdateDeleted)
 		}
@@ -384,22 +392,35 @@ func (b *batch) read(secret *Secret, id string, filters []api.Filter) *awserr.Er
 		return nil
 	}
 
-	secret.mu.Lock()
+	found := secret
+
+	secret, ok := readable(found)
+	if !ok {
+		if filters == nil {
+			b.errors = append(b.errors, batchError(id, errSecretNotFound()))
+		}
+
+		return nil
+	}
 	defer secret.mu.Unlock()
 
+	replica := replicaOf(found, secret)
+
 	switch {
-	case filters != nil && (secret.gone || !matches(secret, filters)):
+	case filters != nil && !matches(secret, replica, filters):
 		return nil
 	case filters != nil && secret.deleted():
 		return api.NewInvalidRequestException(msgBatchDeleted)
-	case secret.gone:
-		b.errors = append(b.errors, batchError(id, errSecretNotFound()))
 	case secret.deleted():
 		b.errors = append(b.errors, batchError(id, api.NewInvalidRequestException(msgBatchDeleted)))
 	default:
 		v, err := secret.value(nil, "")
 		if err != nil {
 			return err
+		}
+
+		if replica != nil {
+			v.ARN = new(replica.arn)
 		}
 
 		b.values = append(b.values, api.SecretValueEntry(*v))

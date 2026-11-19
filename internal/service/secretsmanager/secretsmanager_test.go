@@ -21,11 +21,18 @@ const token1 = "11111111-1111-1111-1111-111111111111"
 func call(t *testing.T, h http.Handler, operation, body string) (int, map[string]any) {
 	t.Helper()
 
+	return callIn(t, h, "us-east-1", operation, body)
+}
+
+// callIn is call signed for region.
+func callIn(t *testing.T, h http.Handler, region, operation, body string) (int, map[string]any) {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "secretsmanager."+operation)
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/us-east-1/secretsmanager/aws4_request, "+
-		"SignedHeaders=host;x-amz-date, Signature=abc")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/"+region+
+		"/secretsmanager/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc")
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

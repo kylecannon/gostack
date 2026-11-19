@@ -19,8 +19,16 @@ const (
 )
 
 // withSecret finds the secret secretID names and runs fn with its lock held.
-// A secret a forced delete or a reset took away meanwhile is not found.
+// A secret a forced delete or a reset took away meanwhile is not found. It
+// serves the operations moto refuses on a replica.
 func (p *Provider) withSecret(ctx context.Context, secretID *string, fn func(*request.Context, *Secret) error) error {
+	return p.withSecretOr(ctx, secretID, errReplica(), fn)
+}
+
+// withSecretOr is withSecret answering onReplica for a replica.
+func (p *Provider) withSecretOr(
+	ctx context.Context, secretID *string, onReplica *awserr.Error, fn func(*request.Context, *Secret) error,
+) error {
 	rc, err := callOf(ctx)
 	if err != nil {
 		return err
@@ -29,6 +37,10 @@ func (p *Provider) withSecret(ctx context.Context, secretID *string, fn func(*re
 	secret, err := p.find(rc, secretID)
 	if err != nil {
 		return err
+	}
+
+	if secret.primary != nil {
+		return onReplica
 	}
 
 	secret.mu.Lock()
@@ -57,22 +69,41 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 		return nil, err
 	}
 
-	state := p.stateFor(rc, name)
-
-	state.mu.Lock()
-	defer state.mu.Unlock()
-
-	if existing := state.lookupLocked(name); existing != nil {
-		return nil, existsError(existing, name)
-	}
-
-	versionID, err := versionIDFrom(deref(in.ClientRequestToken))
+	secret, out, err := p.create(p.stateFor(rc, name), name, in, tags)
 	if err != nil {
 		return nil, err
 	}
 
+	// The replicas are made after the State's lock is let go: replication
+	// takes one State lock at a time.
 	if len(in.AddReplicaRegions) > 0 {
-		return nil, awserr.NotImplemented(api.Metadata.Name, "CreateSecret with AddReplicaRegions")
+		p.replicate(secret, replicationOf(in.AddReplicaRegions, in.ForceOverwriteReplicaSecret))
+		out.ReplicationStatus, _ = statusOf(secret)
+	}
+
+	return out, nil
+}
+
+// create is CreateSecret's checks of the name against state, then the new
+// secret, added to state.
+func (p *Provider) create(
+	state *State, name string, in *api.CreateSecretInput, tags []api.Tag,
+) (*Secret, *api.CreateSecretOutput, *awserr.Error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if existing := state.lookupLocked(name); existing != nil {
+		return nil, nil, existsError(existing, name)
+	}
+
+	versionID, err := versionIDFrom(deref(in.ClientRequestToken))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	err = checkReplicaRegions(state.region, in.AddReplicaRegions)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	secret := newSecret(state, name, in, tags, p.now())
@@ -88,7 +119,7 @@ func (p *Provider) CreateSecret(ctx context.Context, in *api.CreateSecretInput) 
 
 	state.add(secret)
 
-	return out, nil
+	return secret, out, nil
 }
 
 // checkCreate is CreateSecret's checks before the lookup: the token's presence,
@@ -168,13 +199,26 @@ func tagsFrom(in []api.Tag) []tag {
 func (p *Provider) DescribeSecret(ctx context.Context, in *api.DescribeSecretInput) (*api.DescribeSecretOutput, error) {
 	var out *api.DescribeSecretOutput
 
-	err := p.withSecret(ctx, in.SecretId, func(_ *request.Context, secret *Secret) error {
-		out = secret.describe()
+	err := p.withSource(ctx, in.SecretId, func(_ *request.Context, secret, replica *Secret) error {
+		out = secret.describeAs(replica)
 
 		return nil
 	})
 
 	return out, err
+}
+
+// describeAs is describe, for a replica record when replica is not nil: its
+// ARN, and the primary's region as PrimaryRegion. The caller holds the
+// secret's lock.
+func (s *Secret) describeAs(replica *Secret) *api.DescribeSecretOutput {
+	out := s.describe()
+	if replica != nil {
+		out.ARN = new(replica.arn)
+		out.PrimaryRegion = new(s.region)
+	}
+
+	return out
 }
 
 // describe is moto's to_dict as LocalStack patches it. The caller holds the
@@ -224,6 +268,7 @@ func (s *Secret) describe() *api.DescribeSecretOutput {
 	}
 
 	s.describeRotation(out)
+	out.ReplicationStatus = s.replicationStatus()
 
 	return out
 }
@@ -296,6 +341,11 @@ func (p *Provider) DeleteSecret(ctx context.Context, in *api.DeleteSecretInput) 
 
 	secret.mu.Lock()
 	defer secret.mu.Unlock()
+
+	err = checkDeletable(secret, id)
+	if err != nil {
+		return nil, err
+	}
 
 	if secret.deleted() && !force {
 		return nil, api.NewInvalidRequestException(msgMarkedDeletedAlready)

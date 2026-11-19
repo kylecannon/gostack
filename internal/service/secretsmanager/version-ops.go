@@ -21,7 +21,7 @@ func (p *Provider) ListSecretVersionIds(
 
 	var out *api.ListSecretVersionIdsOutput
 
-	err := p.withSecret(ctx, in.SecretId, func(_ *request.Context, secret *Secret) error {
+	err := p.withSource(ctx, in.SecretId, func(_ *request.Context, secret, replica *Secret) error {
 		if secret.deleted() {
 			return api.NewInvalidRequestException(msgUpdateDeleted)
 		}
@@ -52,6 +52,9 @@ func (p *Provider) ListSecretVersionIds(
 		})
 
 		out = &api.ListSecretVersionIdsOutput{ARN: new(secret.arn), Name: new(secret.name), Versions: versions}
+		if replica != nil {
+			out.ARN = new(replica.arn)
+		}
 
 		return nil
 	})

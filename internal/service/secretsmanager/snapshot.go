@@ -57,6 +57,18 @@ type secretData struct {
 	Rotation     rotationData  `json:"rotation,omitzero"`
 	Versions     []versionData `json:"versions,omitzero"`
 	Current      string        `json:"current,omitzero"`
+	// Replicas is the replication status of a primary. A replica record is
+	// not saved: restore makes it again from its primary's entry.
+	Replicas []replicaData `json:"replicas,omitzero"`
+}
+
+type replicaData struct {
+	Region  string `json:"region"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	// Record says the region holds the replica's record; a Failed entry has
+	// none.
+	Record bool `json:"record,omitzero"`
 }
 
 type tagData struct {
@@ -92,6 +104,10 @@ func (p *Provider) Snapshot(w io.Writer) error {
 		saved := stateData{Account: account, Region: region}
 
 		for _, secret := range state.secrets() {
+			if secret.primary != nil {
+				continue
+			}
+
 			secret.mu.Lock()
 			if !secret.gone {
 				saved.Secrets = append(saved.Secrets, secret.save())
@@ -149,6 +165,12 @@ func (s *Secret) save() secretData {
 		})
 	}
 
+	for _, r := range s.replicas {
+		saved.Replicas = append(saved.Replicas, replicaData{
+			Region: r.region, Status: r.status, Message: r.message, Record: r.record != nil,
+		})
+	}
+
 	return saved
 }
 
@@ -181,6 +203,8 @@ func (p *Provider) Restore(r io.Reader) error {
 func (p *Provider) restoreStates(states []stateData) error {
 	seen := map[[2]string]bool{}
 
+	var primaries []*Secret
+
 	for i := range states {
 		saved := &states[i]
 		place := [2]string{saved.Account, saved.Region}
@@ -192,34 +216,79 @@ func (p *Provider) restoreStates(states []stateData) error {
 		seen[place] = true
 		state := p.stateAt(saved.Account, saved.Region)
 
-		err := state.restore(saved.Secrets)
+		restored, err := state.restore(saved.Secrets)
 		if err != nil {
 			return err
 		}
+
+		primaries = append(primaries, restored...)
+	}
+
+	// Replica records go in once every State holds its own secrets, so a
+	// record never takes the name of a secret restored after it.
+	for _, primary := range primaries {
+		p.restoreReplicas(primary)
 	}
 
 	return nil
 }
 
-func (s *State) restore(secrets []secretData) error {
+// restoreReplicas makes the records of primary's replicas again. An entry
+// whose region is the primary's own, or whose name or ARN is taken there,
+// gets no record. Nothing else holds primary yet.
+func (p *Provider) restoreReplicas(primary *Secret) {
+	for i := range primary.replicas {
+		r := &primary.replicas[i]
+		if r.record == nil {
+			continue
+		}
+
+		r.record = nil
+
+		if r.region == "" || r.region == primary.region {
+			continue
+		}
+
+		state := p.stateAt(primary.account, r.region)
+		record := newReplica(primary, r.region)
+
+		state.mu.Lock()
+		if state.lookupLocked(record.name) == nil && state.byARN[record.arn] == nil {
+			state.add(record)
+			r.record = record
+		}
+		state.mu.Unlock()
+	}
+}
+
+// restore adds the saved secrets and returns the ones with replicas, whose
+// records the caller makes again.
+func (s *State) restore(secrets []secretData) ([]*Secret, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var primaries []*Secret
 
 	for i := range secrets {
 		saved := &secrets[i]
 
 		if saved.Name == "" || saved.ARN == "" {
-			return fmt.Errorf("%w: a secret has no name or ARN", errSnapshot)
+			return nil, fmt.Errorf("%w: a secret has no name or ARN", errSnapshot)
 		}
 
 		if s.byName[saved.Name] != nil || s.byARN[saved.ARN] != nil {
-			return fmt.Errorf("%w: secret %q appears twice", errSnapshot, saved.Name)
+			return nil, fmt.Errorf("%w: secret %q appears twice", errSnapshot, saved.Name)
 		}
 
-		s.add(restoredSecret(s, saved))
+		secret := restoredSecret(s, saved)
+		s.add(secret)
+
+		if len(secret.replicas) > 0 {
+			primaries = append(primaries, secret)
+		}
 	}
 
-	return nil
+	return primaries, nil
 }
 
 func restoredSecret(s *State, saved *secretData) *Secret {
@@ -251,6 +320,17 @@ func restoredSecret(s *State, saved *secretData) *Secret {
 		secret.versions = append(secret.versions, &version{
 			id: v.ID, stages: v.Stages, created: v.Created, str: v.String, bin: v.Binary, lastAccessed: v.LastAccessed,
 		})
+	}
+
+	// Until restoreReplicas makes the real record, the primary itself marks
+	// an entry that had one.
+	for _, r := range saved.Replicas {
+		entry := replica{region: r.Region, status: r.Status, message: r.Message}
+		if r.Record {
+			entry.record = secret
+		}
+
+		secret.replicas = append(secret.replicas, entry)
 	}
 
 	return secret

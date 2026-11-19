@@ -200,7 +200,12 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 | `RotateSecret` with `RotateImmediately=false` | Crashes on an unbound variable: 500 | Stores the configuration and returns the current version id |
 | `RotateSecret` while a version holds `AWSPENDING` without `AWSCURRENT` | Stores the new configuration, then answers "Previous rotation request is still in progress." | Answers the same error and leaves the configuration as it was |
 | `PutResourcePolicy` without `ResourcePolicy` | Crashes on the missing key: 500 | `400 ValidationException`, AWS's missing-member text |
-| `ReplicateSecretToRegions`, `RemoveRegionsFromReplication`, `CreateSecret` with `AddReplicaRegions` | Create and remove replica secrets in other regions | `501`. No test pins replication. |
+| A replica secret | moto's `ReplicaSecret`: reads through to the primary, writes refused | The same. No test pins replication; gostack follows moto's models. |
+| `ReplicateSecretToRegions` with `ForceOverwriteReplicaSecret` where the region holds a replica of a secret of that name | Stores a second record under the replica's ARN, and a later `RemoveRegionsFromReplication` crashes (500) | Never overwrites a replica: the entry is `Failed`, as for any taken name. A primary secret of that name is replaced, as in moto. |
+| The `Failed` entry's `StatusMessage` | "Replication failed: Secret name simple already exists in region …", the literal word `simple` | Names the secret |
+| `CreateSecret` with the name of a replica in that region | Crashes reading the replica's deletion date: 500 | `400 ResourceExistsException`, as for any taken name |
+| `AddReplicaRegions` entry without `Region` | Crashes on the missing key: 500 | `400 InvalidParameterException`, "Invalid replica region.", before anything is created |
+| `UpdateSecretVersionStage` on a replica | Changes the primary's stages; moving `AWSCURRENT` crashes setting the replica's default version (500) | `400 InvalidParameterException`, "Operation not permitted on a replica secret. Call must be made in primary secret's region." |
 
 ## Accepted LocalStack-only behavior
 

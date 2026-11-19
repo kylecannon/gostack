@@ -41,12 +41,19 @@ func (p *Provider) ListSecrets(ctx context.Context, in *api.ListSecretsInput) (*
 
 	includeDeleted := in.IncludePlannedDeletion != nil && *in.IncludePlannedDeletion
 
+	// A replica is never hidden as deleted: moto's ReplicaSecret has no
+	// deletion date.
 	var matched []*Secret
 
-	for _, secret := range p.stateAt(rc.AccountID, rc.Region).secrets() {
-		secret.mu.Lock()
-		if !secret.gone && (includeDeleted || !secret.deleted()) && matches(secret, in.Filters) {
-			matched = append(matched, secret)
+	for _, found := range p.stateAt(rc.AccountID, rc.Region).secrets() {
+		secret, ok := readable(found)
+		if !ok {
+			continue
+		}
+
+		replica := replicaOf(found, secret)
+		if (includeDeleted || replica != nil || !secret.deleted()) && matches(secret, replica, in.Filters) {
+			matched = append(matched, found)
 		}
 		secret.mu.Unlock()
 	}
@@ -58,9 +65,13 @@ func (p *Provider) ListSecrets(ctx context.Context, in *api.ListSecretsInput) (*
 
 	out := &api.ListSecretsOutput{SecretList: make([]api.SecretListEntry, 0, len(page)), NextToken: next}
 
-	for _, secret := range page {
-		secret.mu.Lock()
-		d := secret.describe()
+	for _, found := range page {
+		secret, ok := readable(found)
+		if !ok {
+			continue
+		}
+
+		d := secret.describeAs(replicaOf(found, secret))
 		secret.mu.Unlock()
 
 		out.SecretList = append(out.SecretList, listEntry(d))
@@ -113,11 +124,12 @@ func listEntry(d *api.DescribeSecretOutput) api.SecretListEntry {
 	}
 }
 
-// matches is moto's _matches: every filter holds. The caller holds the
-// secret's lock and has checked the filters.
-func matches(s *Secret, filters []api.Filter) bool {
+// matches is moto's _matches: every filter holds. s holds the data; replica
+// is the replica record listed, nil for a primary. The caller holds s's lock
+// and has checked the filters.
+func matches(s, replica *Secret, filters []api.Filter) bool {
 	for _, f := range filters {
-		if !matchesFilter(s, deref(f.Key), f.Values) {
+		if !matchesFilter(s, replica, deref(f.Key), f.Values) {
 			return false
 		}
 	}
@@ -125,8 +137,12 @@ func matches(s *Secret, filters []api.Filter) bool {
 	return true
 }
 
-func matchesFilter(s *Secret, key string, values []string) bool {
+func matchesFilter(s, replica *Secret, key string, values []string) bool {
 	switch key {
+	case filterPrimaryRegion:
+		// moto's filter_primary_region: a primary with replicas, or a
+		// replica, whose primary's region is among the values.
+		return (replica != nil || len(s.replicas) > 0) && slices.Contains(values, s.region)
 	case filterName:
 		return matcher(values, []string{s.name}, strings.HasPrefix)
 	case filterDescription:
@@ -174,8 +190,6 @@ func matchesFilter(s *Secret, key string, values []string) bool {
 
 		return matcher(values, texts, matchWords)
 	default:
-		// primary-region: a secret without replicas, which is every secret
-		// here, never matches.
 		return false
 	}
 }
