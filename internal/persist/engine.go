@@ -70,8 +70,8 @@ type Engine struct {
 	// It is nil while the callback does not run.
 	cancelTimed context.CancelFunc
 	// waiting counts the Flush, Load, Close and ResetAssets calls waiting for
-	// sem. While one waits, the timer's flush gives way: it is cancelled, and a
-	// callback that has not started does not.
+	// sem. A timer callback that starts while one waits does not flush; see
+	// acquire for what happens to a timed flush already running.
 	waiting int
 	// flushing is true while a flush, by timer or by hand, holds the services it
 	// took.
@@ -220,7 +220,7 @@ func (e *Engine) ResetAssets(ctx context.Context, service string, wipe func()) e
 		return nil
 	}
 
-	err := e.acquire(ctx)
+	err := e.acquire(ctx, preempt)
 	if err != nil {
 		return fmt.Errorf("reset %s: %w", service, err)
 	}
@@ -267,7 +267,7 @@ func (e *Engine) Flush(ctx context.Context) error {
 		return nil
 	}
 
-	err := e.acquire(ctx)
+	err := e.acquire(ctx, lend)
 	if err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
@@ -304,7 +304,7 @@ func (e *Engine) Load(ctx context.Context) error {
 		return nil
 	}
 
-	err := e.acquire(ctx)
+	err := e.acquire(ctx, preempt)
 	if err != nil {
 		return fmt.Errorf("load: %w", err)
 	}
@@ -360,16 +360,35 @@ func (e *Engine) Close(ctx context.Context) error {
 	return e.Flush(ctx)
 }
 
-// acquire waits for sem until ctx ends. A flush by the timer gives way to it:
-// it is cancelled, so it fails before it renames anything and leaves its
-// services dirty, and the caller, such as a shutdown, saves them within its own
-// deadline. A sync of assets the cancelled flush started still runs, and the
-// caller's own save renames only once it has returned.
-func (e *Engine) acquire(ctx context.Context) error {
+// timedSave is what a caller waiting for sem does to a flush by the timer that
+// runs or waits to run.
+type timedSave int
+
+const (
+	// preempt cancels it at once. Load and ResetAssets replace or discard the
+	// state it would write, so finishing it only delays them, and a Load that
+	// waited for it would restore what it wrote rather than the state last saved
+	// before the Load was asked for.
+	preempt timedSave = iota
+	// lend lets it finish under the caller's deadline: it is cancelled only when
+	// the caller's ctx ends. A Snapshot cannot be cut short, so cancelling a
+	// timed save at once throws away a Snapshot already taken and makes the
+	// caller, such as a shutdown, take a second one. Lent the deadline, a timed
+	// save that can finish in time does, and the caller then saves only what is
+	// still dirty. Of several callers waiting, the first whose ctx ends cancels
+	// it.
+	lend
+)
+
+// acquire waits for sem until ctx ends, and does what mode says to a flush by
+// the timer. A cancelled timed flush fails before it renames anything and
+// leaves its services dirty, with no backoff. A sync of assets it started still
+// runs, and the next save renames only once that sync has returned.
+func (e *Engine) acquire(ctx context.Context, mode timedSave) error {
 	e.mu.Lock()
 	e.waiting++
 
-	if e.cancelTimed != nil {
+	if mode == preempt && e.cancelTimed != nil {
 		e.cancelTimed()
 	}
 	e.mu.Unlock()
@@ -384,6 +403,12 @@ func (e *Engine) acquire(ctx context.Context) error {
 	case e.sem <- struct{}{}:
 		return nil
 	case <-ctx.Done():
+		e.mu.Lock()
+		if e.cancelTimed != nil {
+			e.cancelTimed()
+		}
+		e.mu.Unlock()
+
 		return fmt.Errorf("wait for the running flush or load: %w", ctx.Err())
 	}
 }
@@ -420,7 +445,9 @@ func (e *Engine) disarmLocked() {
 // flushOnTimer is the timer's callback. While it runs, from before it waits for
 // sem to after it schedules the next flush, it is the only flush goroutine: a
 // change in the meantime sets dirtyAgain and arms nothing. Its flush has no
-// deadline, but gives way to any caller waiting for sem (see acquire).
+// deadline of its own: a caller waiting for sem cancels it or lends it its
+// deadline (see acquire), and one already waiting when the callback starts
+// makes it skip the flush.
 func (e *Engine) flushOnTimer(gen uint64) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

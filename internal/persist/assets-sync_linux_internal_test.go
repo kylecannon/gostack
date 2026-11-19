@@ -26,7 +26,3 @@ func syncedPaths(a *Assets, _ *os.File) ([]string, error) {
 
 	return paths, err //nolint:wrapcheck // a test helper
 }
-
-// syncRounds is how many sync calls one sync of assets makes in a row: one
-// syncfs.
-const syncRounds = 1

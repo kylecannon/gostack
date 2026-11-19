@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -162,37 +163,92 @@ func Test_Assets_NextSaveWaitsForAnAbandonedSync(t *testing.T) {
 	})
 }
 
-// Test_Engine_ShutdownPreemptsATimedSave checks that a shutdown save is not
-// starved by a timed save whose asset sync is slow (SQ-164 F2). Every sync call
-// here takes slowSync in all, a syncfs writing back what other tenants of the
-// filesystem dirtied, and the shutdown has 300 ms. Waiting for the timed save
-// to finish and then syncing again takes two slow syncs; cancelling it and
-// syncing alongside the sync it left running takes one.
+// Test_Engine_ShutdownPreemptsATimedSave checks that a timed save stuck in a
+// slow asset sync does not make a shutdown wait past its own deadline (SQ-164
+// F2): the shutdown lends the timed save its deadline, and at that deadline the
+// timed save is abandoned and the shutdown returns. Nothing is renamed, the
+// last state file stays, the services stay dirty with no failure counted, and
+// the next save writes them.
 func Test_Engine_ShutdownPreemptsATimedSave(t *testing.T) {
-	const slowSync = 200 * time.Millisecond
-
 	synctest.Test(t, func(t *testing.T) {
 		f := newSyncFixture(t, 10*time.Millisecond)
-		entered := make(chan struct{}, 64)
-		f.a.fsync = func(file *os.File) error {
-			entered <- struct{}{}
+		saved := f.commit(t, "saved")
+		require.NoError(t, f.e.Flush(t.Context()))
 
-			time.Sleep(slowSync / syncRounds)
-
-			return defaultSync(file)
-		}
+		started, release := gateFirstSync(f.a, nil)
+		defer release()
 
 		first := f.commit(t, "first")
-		<-entered // the timed save is syncing
+		<-started // the timed save is syncing, and the sync is stuck
 
 		acked := f.commit(t, "acknowledged during the timed save")
 
 		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 		defer cancel()
 
-		require.NoError(t, f.e.Close(ctx))
-		assert.ElementsMatch(t, []string{first, acked}, f.onDisk(t))
+		start := time.Now()
+		err := f.e.Close(ctx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, 300*time.Millisecond, time.Since(start), "the shutdown returns at its own deadline")
+		assert.Equal(t, []string{saved}, f.onDisk(t), "the last state file stays")
 		assert.Empty(t, f.logs.errors(), "giving way is no failure")
+
+		release()
+		require.NoError(t, f.e.Flush(t.Context()))
+		assert.ElementsMatch(t, []string{saved, first, acked}, f.onDisk(t))
+	})
+}
+
+// slowNamer is a namer whose every Snapshot takes 200 ms, and which says when a
+// Snapshot has started.
+type slowNamer struct {
+	*namer
+
+	started chan struct{}
+}
+
+func (s slowNamer) Snapshot(w io.Writer) error {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	return s.namer.Snapshot(w)
+}
+
+// Test_Engine_ShutdownBehindATimedSnapshot checks that a shutdown arriving
+// during a timed save's Snapshot does not throw that Snapshot away (SQ-175 M2).
+// The shutdown has 300 ms, which fits one 200 ms Snapshot and not two; it
+// arrives 10 ms into the timed one. The timed save finishes under the
+// shutdown's deadline, and the acknowledged write is on disk.
+func Test_Engine_ShutdownBehindATimedSnapshot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		e := New(Config{
+			PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(slog.DiscardHandler),
+		})
+		n := slowNamer{namer: &namer{}, started: make(chan struct{})}
+		e.Register(syncService, n)
+
+		a, err := e.Assets(syncService)
+		require.NoError(t, err)
+
+		acked := commitAsset(t, a, "acknowledged")
+		n.add(acked)
+		e.MarkDirty(syncService)
+		<-n.started
+		time.Sleep(10 * time.Millisecond)
+
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+
+		require.NoError(t, e.Close(ctx))
+
+		onDisk, err := os.ReadFile(filepath.Join(dir, syncService, FormatJSON.fileName()))
+		require.NoError(t, err)
+		assert.Contains(t, string(onDisk), acked, "the shutdown lost the acknowledged write")
 	})
 }
 
