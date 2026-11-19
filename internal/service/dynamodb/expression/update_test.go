@@ -111,6 +111,7 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 		addType  = operand + "operator: ADD, operand type: "
 		delType  = operand + "operator: DELETE, operand type: "
 		emptyL   = `{":v":{"L":[]}}`
+		parens   = bad + "The expression has redundant parentheses;"
 	)
 
 	tests := []struct {
@@ -208,6 +209,31 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 		{"ADD map", updateAddS, "", `{":v":{"M":{}}}`, addType + "MAP, typeSet: ALLOWED_FOR_ADD_OPERAND"},
 		{"DELETE number", updateDeleteS, "", updateV1, delType + "NUMBER, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
 		{"DELETE list", updateDeleteS, "", emptyL, delType + "LIST, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
+		// Probed on the LocalStack image (SQ-224 probe5, probe6, probe7): the
+		// update grammar shares the condition lexer and its parentheses rules.
+		{"keyword as name", "SET and = :v", "", updateX, syntax + `token: "and", near: "SET and ="`},
+		{"keyword after comma", "SET c = :v, in = :v", "", updateX, syntax + `token: "in", near: ", in ="`},
+		{"keyword in path", "SET c.not = :v", "", updateX, syntax + `token: "not", near: ".not ="`},
+		{"keyword after REMOVE", "REMOVE or", "", "", syntax + `token: "or", near: "REMOVE or"`},
+		{"keyword after value", "SET c = :v AND b", "", updateX, syntax + `token: "AND", near: ":v AND b"`},
+		{"two-character comparator", "SET c = b <= :v", "", updateX, syntax + `token: "<=", near: "b <= :v"`},
+		{"not-equal as one token", "SET c <> :v", "", updateX, syntax + `token: "<>", near: "c <> :v"`},
+		{"leading spaces kept", "   FOO a = :v", "", updateX, syntax + `token: "FOO", near: "   FOO a"`},
+		{"redundant value", "SET c = ((:v))", "", updateX, parens},
+		{"redundant sum", "SET c = ((:n + :n))", "", updateN, parens},
+		{"redundant argument", "SET c = if_not_exists(c, ((:v)))", "", updateX, parens},
+		{"redundant call", "SET c = ((if_not_exists(c, :v)))", "", updateX, parens},
+		{"redundant right operand", "SET c = :n + ((c))", "", updateN, parens},
+		{"redundant before syntax", "SET c = ((:v)) +", "", updateX, parens},
+		{"redundant before unused", "SET c = ((:v))", "", updateXY, parens},
+		{"sum in parens then plus", "SET c = (:n + :n) + :n", "", updateN, syntax + `token: "+", near: ") + :n"`},
+		{"sum in parens on the right", "SET c = :n + (:n + :n)", "", updateN, syntax + `token: "+", near: ":n + :n"`},
+		{
+			"sum in parens as argument", "SET c = if_not_exists(c, (:n + :n))", "", updateN,
+			syntax + `token: "+", near: ":n + :n"`,
+		},
+		{"nested sum in parens", "SET c = ((:n + :n) + :n)", "", updateN, syntax + `token: "+", near: ") + :n"`},
+		{"parens around target", "SET (c) = :v", "", updateX, syntax + `token: "(", near: "SET (c"`},
 	}
 
 	for _, tt := range tests {
@@ -216,6 +242,27 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 
 			_, err := expression.ParseUpdate(tt.giveExpr, updateSubs(t, tt.giveNames, tt.giveValues), nil)
 			requireUpdateError(t, err, tt.wantMsg)
+		})
+	}
+}
+
+// The forms the LocalStack image accepts (SQ-224 probe5, probe6, probe7): ID
+// and CONTAINS are names in an update expression as in a condition, and one
+// pair of parentheses goes around any operand, or a sum as the whole value.
+func Test_ParseUpdate_Accepted(t *testing.T) {
+	t.Parallel()
+
+	for _, expr := range []string{
+		"SET id = :n", "SET ID = :n", "SET contains = :n", "SET CONTAINS = :n",
+		"SET c = (:n)", "SET c = (:n + :n)", "SET c = (:n - :n)", "SET c = (c) + :n",
+		"SET c = :n + (c)", "SET c = ((c) + :n)", "SET c = if_not_exists(c, (:n))",
+		"SET c = (if_not_exists(c, :n))",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(expr, updateSubs(t, "", updateN), nil)
+			require.NoError(t, err)
 		})
 	}
 }

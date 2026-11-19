@@ -1,6 +1,7 @@
 package dynamodb_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -101,6 +102,19 @@ func Test_writes_limits(t *testing.T) {
 	s.fails(t, opPut, `{"TableName":"tab1","Item":{"id":{"S":"a"},"d":`+nested(32)+`}}`, codeValidation, tooDeep)
 	s.fails(t, opUpdateItem, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"UpdateExpression":"SET q = :v",`+
 		`"ExpressionAttributeValues":{":v":`+nested(40)+`}}`, codeValidation,
+		"ExpressionAttributeValues contains invalid value: "+tooDeep+" for key :v")
+
+	// 4,900 levels, about the deepest the shared JSON decoder passes on (it
+	// refuses a 10,000-level item itself, past encoding/json's 10,000 nesting
+	// limit): refused by the 32-level check before anything in the DynamoDB
+	// packages walks the value. value's Test_Validate_deepBounded proves that
+	// check's stack is bounded.
+	const levels = 4900
+
+	deep := strings.Repeat(`{"M":{"a":`, levels) + `{"S":"x"}` + strings.Repeat(`}}`, levels)
+	s.fails(t, opPut, `{"TableName":"tab1","Item":{"id":{"S":"a"},"d":`+deep+`}}`, codeValidation, tooDeep)
+	s.fails(t, opUpdateItem, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"UpdateExpression":"SET q = :v",`+
+		`"ExpressionAttributeValues":{":v":`+deep+`}}`, codeValidation,
 		"ExpressionAttributeValues contains invalid value: "+tooDeep+" for key :v")
 }
 

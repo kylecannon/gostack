@@ -211,6 +211,22 @@ creates a KMS key for the table and reports its ARN; gostack does that once it
 serves KMS. A table given a `KMSMasterKeyId` reports it as an ARN in the
 caller's account and region, as LocalStack does.
 
+## DynamoDB expressions and reads
+
+- A request with two or more malformed `ExpressionAttributeNames` or
+  `ExpressionAttributeValues` keys: gostack names the first in sorted order,
+  LocalStack the first in the request's JSON order. The decoded request map
+  keeps no order. With one bad key the answers are the same.
+- `Scan` with `Segment` and `TotalSegments` puts an item in the segment that
+  the FNV hash of its partition key picks. Every item is in exactly one
+  segment, as in LocalStack, but which segment holds a given item differs
+  from DynamoDB Local's hash.
+- `ReturnItemCollectionMetrics` is accepted and never answered, as the
+  LocalStack image does on every write.
+- A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
+  is not `ALL`: LocalStack's message names the index `id-index` whatever it is
+  called; gostack names the index of the request. No snapshot pins the text.
+
 ## Accepted LocalStack-only behavior
 
 gostack copies these although AWS does not have them. Each is a LocalStack switch

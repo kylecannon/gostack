@@ -244,6 +244,26 @@ func (r *reader) checkStart(start value.Item) error {
 	return nil
 }
 
+// startMeets reports whether a Query's exclusive start key meets its whole key
+// condition: the partition value, and the sort condition when there is one.
+// DynamoDB refuses one that does not, whatever the predicate (probed).
+func startMeets(
+	start value.Item, hashName string, hash *api.AttributeValue, rangeName string, cond table.SortCondition,
+) bool {
+	v := start[hashName]
+	if !value.Equal(&v, hash) {
+		return false
+	}
+
+	if cond.Op == table.SortAny {
+		return true
+	}
+
+	v = start[rangeName]
+
+	return cond.Meets(&v)
+}
+
 // chooseSelect checks Select against the projection and the index, and
 // returns the mode in force: SPECIFIC_ATTRIBUTES with a projection,
 // ALL_PROJECTED_ATTRIBUTES on an index, ALL_ATTRIBUTES otherwise.

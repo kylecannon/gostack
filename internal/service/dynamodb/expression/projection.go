@@ -31,12 +31,10 @@ type projNode struct {
 //
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
 func ParseProjection(src string, subs Substitutions, used map[string]struct{}) (Projection, error) {
-	err := checkSize(ProjectionExpression, src)
+	p, err := newParser(ProjectionExpression, src)
 	if err != nil {
 		return nil, err
 	}
-
-	p := newParser(ProjectionExpression, src)
 
 	ops, err := p.parsePathList()
 	if err != nil {

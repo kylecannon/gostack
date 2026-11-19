@@ -30,12 +30,10 @@ func ParseCondition(kind Kind, src string, subs Substitutions, used map[string]s
 // parseChecked parses a condition grammar expression and runs the checks every
 // condition-grammar member shares.
 func parseChecked(kind Kind, src string, subs Substitutions, used map[string]struct{}) (*cond, *resolver, error) {
-	err := checkSize(kind, src)
+	p, err := newParser(kind, src)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	p := newParser(kind, src)
 
 	c, err := p.parseCondition()
 	if err != nil {

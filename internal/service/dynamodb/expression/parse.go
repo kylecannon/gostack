@@ -124,11 +124,21 @@ func (p *parser) enter() error {
 
 func (p *parser) leave() { p.depth-- }
 
-func newParser(kind Kind, src string) *parser {
-	return &parser{src: src, toks: lex(src), kind: kind}
+// newParser is the one way into every parser of the package: it refuses an
+// empty or oversized expression before lexing, since the size cap is what
+// bounds a parser's work and recursion, and then splits src into tokens.
+func newParser(kind Kind, src string) (*parser, error) {
+	err := checkSize(kind, src)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parser{src: src, toks: lex(src), kind: kind}, nil
 }
 
-// checkSize refuses an empty or oversized expression, before any parsing.
+// checkSize refuses an empty or oversized expression. DynamoDB Local names the
+// size of an oversized condition, filter or key condition, and not of a
+// projection or update expression.
 func checkSize(kind Kind, src string) error {
 	if src == "" {
 		return invalid(kind, "The expression can not be empty;")
@@ -139,7 +149,7 @@ func checkSize(kind Kind, src string) error {
 		return nil
 	}
 
-	if kind == ProjectionExpression {
+	if kind == ProjectionExpression || kind == updateExpression {
 		return invalid(kind, msgTooLarge)
 	}
 
@@ -189,14 +199,14 @@ func equalFold(a, b string) bool {
 }
 
 // syntaxError reports the token at the parser's position as DynamoDB does:
-// the token, and the text from the token before it to the token after it.
+// the token, and the text from the token before it to the token after it. At
+// the first token the text starts at the beginning of the expression, leading
+// spaces and all (probed).
 func (p *parser) syntaxError() error {
 	t := p.peek()
 
-	start := t.start
-	if t.kind == tokEOF && p.pos == 0 {
-		start = 0
-	} else if p.pos > 0 {
+	start := 0
+	if p.pos > 0 {
 		start = p.toks[p.pos-1].start
 	}
 

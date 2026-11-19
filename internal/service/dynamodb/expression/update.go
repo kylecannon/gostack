@@ -71,18 +71,14 @@ var _ Update = (*UpdateExpr)(nil)
 // reserved words, function names, a repeated clause, path depth, undefined
 // names, overlapping paths, and last each action's values and operands.
 func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*UpdateExpr, error) {
-	if text == "" {
-		return nil, value.Invalid(msgUpdateEmpty)
+	base, err := newParser(updateExpression, text)
+	if err != nil {
+		return nil, err
 	}
 
-	// Before lexing: the cap is what bounds the parser's work and recursion.
-	if over, _ := tooLarge(text); over {
-		return nil, value.Invalid(updatePrefix + msgTooLarge)
-	}
+	p := &updateParser{parser: base}
 
-	p := &updateParser{text: text, toks: updateLex(text)}
-
-	err := p.parse()
+	err = p.parse()
 	if err == nil {
 		err = p.index
 	}
@@ -146,7 +142,7 @@ func (u *UpdateExpr) Paths() []Path {
 
 func updateCheckReserved(p *updateParser) error {
 	for _, tok := range p.pathNames {
-		if _, reserved := updateReserved[strings.ToLower(tok.text)]; tok.kind == updateTokName && reserved {
+		if _, isReserved := reserved[strings.ToUpper(tok.text)]; tok.kind == tokIdent && isReserved {
 			return value.Invalid(msgUpdateReserved + tok.text)
 		}
 	}
@@ -193,7 +189,7 @@ func updateCheckDepth(p *updateParser) error {
 // the order they are written, and builds each path.
 func updateResolveNames(p *updateParser, names map[string]string, used map[string]struct{}) error {
 	for _, tok := range p.pathNames {
-		if tok.kind != updateTokNameRef {
+		if tok.kind != tokName {
 			continue
 		}
 
@@ -211,9 +207,9 @@ func updateResolveNames(p *updateParser, names map[string]string, used map[strin
 
 		for i, tok := range path.raw {
 			switch tok.kind {
-			case updateTokNameRef:
+			case tokName:
 				path.path[i] = PathElement{Name: names[tok.text]}
-			case updateTokIndex:
+			case tokIndex:
 				n, _ := strconv.Atoi(tok.text)
 				path.path[i] = PathElement{Index: n}
 			default:

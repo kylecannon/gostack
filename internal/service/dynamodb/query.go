@@ -15,15 +15,17 @@ import (
 // codeNotFound is the code of ResourceNotFoundException.
 const codeNotFound = "ResourceNotFoundException"
 
-// The messages a Query is refused with. msgIndexSelect is LocalStack's own,
-// index name and all (provider.py's query).
+// The messages a Query is refused with. msgIndexSelect is LocalStack's own
+// (provider.py's query), which names the index id-index whatever it is called;
+// no snapshot pins that, so gostack names the index the request asked for.
 const (
 	msgNoKeyCondition = "Either the KeyConditions or KeyConditionExpression parameter must be specified in the request."
 	msgQueryNoIndex   = "Index not found"
 	msgUnknownTable   = "Unknown table: "
 	msgIndexSelect    = "One or more parameter values were invalid: Select type ALL_ATTRIBUTES " +
-		"is not supported for global secondary index id-index because its projection type is not ALL"
-	msgFilterOnKey = "Filter Expression can only contain non-primary key attributes: Primary key attribute: "
+		"is not supported for global secondary index "
+	msgIndexSelectTail = " because its projection type is not ALL"
+	msgFilterOnKey     = "Filter Expression can only contain non-primary key attributes: Primary key attribute: "
 )
 
 // Query reads the items of one partition of a table or index, in range key
@@ -40,25 +42,20 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 		return nil, fmt.Errorf("query: %w", err)
 	}
 
-	err = r.checkStart(in.ExclusiveStartKey)
-	if err == nil && r.start != nil {
-		hashName, hash := kc.Hash()
-		start := r.start[hashName]
+	hashName, hash := kc.Hash()
 
-		if !value.Equal(&start, &hash) {
-			err = value.Invalid(msgStartQuery)
-		}
+	rangeName, cond, ok := kc.Range()
+	if !ok {
+		cond = table.SortCondition{Op: table.SortAny}
+	}
+
+	err = r.checkStart(in.ExclusiveStartKey)
+	if err == nil && r.start != nil && !startMeets(r.start, hashName, &hash, rangeName, cond) {
+		err = value.Invalid(msgStartQuery)
 	}
 
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
-	}
-
-	_, hash := kc.Hash()
-
-	_, cond, ok := kc.Range()
-	if !ok {
-		cond = table.SortCondition{Op: table.SortAny}
 	}
 
 	forward := in.ScanIndexForward == nil || *in.ScanIndexForward
@@ -102,7 +99,7 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		}
 
 		if spec.Global && in.Select != nil && *in.Select == selectAll && spec.Projection.Type != table.ProjectAll {
-			return nil, nil, value.Invalid(msgIndexSelect)
+			return nil, nil, value.Invalid(msgIndexSelect + *in.IndexName + msgIndexSelectTail)
 		}
 	}
 

@@ -29,13 +29,17 @@ const (
 	tokRBracket
 	tokComma
 	tokDot
+	tokPlus
+	tokMinus
 	tokOther
 )
 
-// token is one token: its kind and its byte span in the expression.
+// token is one token: its kind, its byte span in the expression and the text
+// of that span.
 type token struct {
 	kind       tokKind
 	start, end int
+	text       string
 }
 
 // The keywords of the expression grammars. They are case-insensitive and are
@@ -51,11 +55,13 @@ var keywords = func() map[string]struct{} {
 
 var punctuation = map[byte]tokKind{
 	'=': tokEQ, '(': tokLParen, ')': tokRParen, '[': tokLBracket, ']': tokRBracket,
-	',': tokComma, '.': tokDot,
+	',': tokComma, '.': tokDot, '+': tokPlus, '-': tokMinus,
 }
 
-// lex splits src into tokens, ending with one tokEOF at len(src). It never
-// fails: a character the grammar does not use becomes a tokOther the parser
+// lex splits src into tokens, ending with one tokEOF at len(src). It is the one
+// tokenizer of every expression kind: DynamoDB Local reads update expressions
+// with the same lexer as conditions, so AND and <= are single tokens there too
+// (probed). It never fails: a character the grammar does not use becomes a tokOther the parser
 // reports.
 func lex(src string) []token {
 	toks := make([]token, 0, len(src)/2+1)
@@ -69,6 +75,7 @@ func lex(src string) []token {
 		}
 
 		t := lexOne(src, i)
+		t.text = src[t.start:t.end]
 		toks = append(toks, t)
 		i = t.end
 	}

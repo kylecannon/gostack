@@ -1,23 +1,23 @@
 package expression
 
 import (
-	"strconv"
+	"math"
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
+// updateExpression is the Kind of an UpdateExpression: its messages start
+// "Invalid UpdateExpression: ".
+const updateExpression Kind = "UpdateExpression"
+
 // The messages DynamoDB Local answers for an update expression it cannot
 // parse, as LocalStack's image returns them.
 const (
-	updatePrefix        = "Invalid UpdateExpression: "
-	msgUpdateEmpty      = updatePrefix + "The expression can not be empty;"
+	updatePrefix        = "Invalid " + string(updateExpression) + ": "
 	msgUpdateIndexRange = updatePrefix + "List index is not within the allowable range; index: "
 )
-
-// indexBits is the width of the largest list index DynamoDB accepts: a Java int.
-const indexBits = 32
 
 // updateClause is one of the four clauses of an update expression.
 type updateClause int
@@ -43,7 +43,7 @@ var updateClauseNames = map[updateClause]string{
 // updatePathExpr is a document path as written, and once the names are
 // substituted, the path it stands for.
 type updatePathExpr struct {
-	raw  []updateToken
+	raw  []token
 	path Path
 }
 
@@ -62,11 +62,12 @@ const (
 // path, a value, a function call, or a sum or difference of two operands. The
 // value of a ":value" is filled in once the placeholders are checked.
 type updateOperand struct {
-	kind updateOperandKind
-	path *updatePathExpr
-	tok  updateToken // the placeholder of a value, or the name of a function
-	val  api.AttributeValue
-	args []*updateOperand
+	kind   updateOperandKind
+	parens bool // written in parentheses
+	path   *updatePathExpr
+	tok    token // the placeholder of a value, or the name of a function
+	val    api.AttributeValue
+	args   []*updateOperand
 }
 
 // updateAction is one action of a clause: SET target = rhs, REMOVE target,
@@ -78,30 +79,28 @@ type updateAction struct {
 }
 
 // updateParser is a recursive descent parser over the tokens of one update
-// expression. It records, in the order they appear, what the checks after a
-// successful parse need: the clauses, every path, every attribute name and
-// "#name" written in a path, and every function name.
+// expression. It shares the condition parser's tokens, path parser, syntax
+// error and nesting bound, and records, in the order they appear, what the
+// checks after a successful parse need: the clauses, every path, every
+// attribute name and "#name" written in a path, and every function name.
 type updateParser struct {
-	text  string
-	toks  []updateToken
-	pos   int
-	index error
-	depth int // the recursion depth of operand
+	*parser
 
 	actions   []*updateAction
 	clauses   []updateClause
 	paths     []*updatePathExpr
-	pathNames []updateToken
-	funcs     []updateToken
+	pathNames []token
+	funcs     []token
+	index     error // the first list index out of range, reported after the parse
 }
 
 // parse reads the whole expression: one or more clauses, then the end.
 func (p *updateParser) parse() error {
-	if len(p.toks) == 0 {
-		return p.fail()
+	if p.peek().kind == tokEOF {
+		return p.syntaxError()
 	}
 
-	for p.peek() != nil {
+	for p.peek().kind != tokEOF {
 		err := p.clause()
 		if err != nil {
 			return err
@@ -116,11 +115,11 @@ func (p *updateParser) clause() error {
 	tok := p.peek()
 
 	clause, ok := updateClauses[strings.ToUpper(tok.text)]
-	if tok.kind != updateTokName || !ok {
-		return p.fail()
+	if tok.kind != tokKeyword || !ok {
+		return p.syntaxError()
 	}
 
-	p.pos++
+	p.next()
 	p.clauses = append(p.clauses, clause)
 
 	for {
@@ -129,11 +128,11 @@ func (p *updateParser) clause() error {
 			return err
 		}
 
-		if !p.peek().is(",") {
+		if p.peek().kind != tokComma {
 			return nil
 		}
 
-		p.pos++
+		p.next()
 	}
 }
 
@@ -149,13 +148,10 @@ func (p *updateParser) action(clause updateClause) error {
 	switch clause {
 	case updateRemove:
 	case updateSet:
-		if !p.peek().is("=") {
-			return p.fail()
+		err = p.expect(tokEQ)
+		if err == nil {
+			act.rhs, err = p.setValue()
 		}
-
-		p.pos++
-
-		act.rhs, err = p.setValue()
 	default:
 		act.rhs, err = p.valueRef()
 	}
@@ -169,27 +165,31 @@ func (p *updateParser) action(clause updateClause) error {
 	return nil
 }
 
-// setValue reads an operand, or two joined by + or -.
+// setValue reads an operand, or two joined by + or -. Its first operand may be
+// a parenthesized set value; a parenthesized sum or difference is the whole
+// set value and takes no + or - after it, as DynamoDB Local's grammar has it.
 func (p *updateParser) setValue() (*updateOperand, error) {
-	left, err := p.operand()
+	left, err := p.operand(true)
 	if err != nil {
 		return nil, err
 	}
 
 	var kind updateOperandKind
 
-	switch tok := p.peek(); {
-	case tok.is("+"):
+	switch {
+	case left.kind == updateOpPlus || left.kind == updateOpMinus:
+		return left, nil
+	case p.peek().kind == tokPlus:
 		kind = updateOpPlus
-	case tok.is("-"):
+	case p.peek().kind == tokMinus:
 		kind = updateOpMinus
 	default:
 		return left, nil
 	}
 
-	p.pos++
+	p.next()
 
-	right, err := p.operand()
+	right, err := p.operand(false)
 	if err != nil {
 		return nil, err
 	}
@@ -197,38 +197,26 @@ func (p *updateParser) setValue() (*updateOperand, error) {
 	return &updateOperand{kind: kind, args: []*updateOperand{left, right}}, nil
 }
 
-// operand reads a value, a parenthesized set value, a function call or a path.
-func (p *updateParser) operand() (*updateOperand, error) {
-	p.depth++
-	defer func() { p.depth-- }()
+// operand reads a value, a parenthesized operand, a function call or a path.
+// Inside the parentheses comes a set value when sum is true, the first operand
+// of a set value, and an operand otherwise. Parentheses directly around
+// parentheses are refused as redundant when they close.
+func (p *updateParser) operand(sum bool) (*updateOperand, error) {
+	defer p.leave()
 
-	if p.depth > maxNesting {
-		return nil, value.Invalid(updatePrefix + msgTooLarge)
+	err := p.enter()
+	if err != nil {
+		return nil, err
 	}
 
 	tok := p.peek()
 
 	switch {
-	case tok == nil:
-		return nil, p.fail()
-	case tok.kind == updateTokValueRef:
+	case tok.kind == tokValue:
 		return p.valueRef()
-	case tok.is("("):
-		p.pos++
-
-		inner, err := p.setValue()
-		if err != nil {
-			return nil, err
-		}
-
-		if !p.peek().is(")") {
-			return nil, p.fail()
-		}
-
-		p.pos++
-
-		return inner, nil
-	case tok.kind == updateTokName && p.pos+1 < len(p.toks) && p.toks[p.pos+1].is("("):
+	case tok.kind == tokLParen:
+		return p.parenthesized(sum)
+	case tok.kind == tokIdent && p.toks[p.pos+1].kind == tokLParen:
 		return p.call()
 	default:
 		path, err := p.pathExpr()
@@ -240,153 +228,106 @@ func (p *updateParser) operand() (*updateOperand, error) {
 	}
 }
 
+// parenthesized reads "(", a set value or an operand, and ")".
+//
+//nolint:revive // flag-parameter: the grammar position, not a mode
+func (p *updateParser) parenthesized(sum bool) (*updateOperand, error) {
+	p.next()
+
+	var (
+		inner *updateOperand
+		err   error
+	)
+
+	if sum {
+		inner, err = p.setValue()
+	} else {
+		inner, err = p.operand(false)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	err = p.expect(tokRParen)
+	if err != nil {
+		return nil, err
+	}
+
+	if inner.parens {
+		return nil, p.redundant()
+	}
+
+	inner.parens = true
+
+	return inner, nil
+}
+
 // call reads a function name and its parenthesized, comma-separated operands.
 func (p *updateParser) call() (*updateOperand, error) {
-	op := &updateOperand{kind: updateOpCall, tok: p.toks[p.pos]}
+	op := &updateOperand{kind: updateOpCall, tok: p.next()}
 	p.funcs = append(p.funcs, op.tok)
-	p.pos += 2
+	p.next()
 
 	for {
-		arg, err := p.operand()
+		arg, err := p.operand(false)
 		if err != nil {
 			return nil, err
 		}
 
 		op.args = append(op.args, arg)
 
-		switch tok := p.peek(); {
-		case tok.is(","):
-			p.pos++
-		case tok.is(")"):
-			p.pos++
+		switch p.peek().kind {
+		case tokComma:
+			p.next()
+		case tokRParen:
+			p.next()
 
 			return op, nil
 		default:
-			return nil, p.fail()
+			return nil, p.syntaxError()
 		}
 	}
 }
 
 // valueRef reads a ":value" placeholder.
 func (p *updateParser) valueRef() (*updateOperand, error) {
-	tok := p.peek()
-	if tok == nil || tok.kind != updateTokValueRef {
-		return nil, p.fail()
+	if p.peek().kind != tokValue {
+		return nil, p.syntaxError()
 	}
 
-	p.pos++
-
-	return &updateOperand{kind: updateOpValue, tok: *tok}, nil
+	return &updateOperand{kind: updateOpValue, tok: p.next()}, nil
 }
 
-// pathExpr reads a document path: a name, then any run of .name and [index].
+// pathExpr reads a document path with the shared path parser: a name or
+// "#name", then any run of .name and [index]. A clause keyword, like every
+// keyword, is not a name.
 func (p *updateParser) pathExpr() (*updatePathExpr, error) {
-	path := &updatePathExpr{}
+	if k := p.peek().kind; k != tokIdent && k != tokName {
+		return nil, p.syntaxError()
+	}
 
-	err := p.pathName(path)
+	o, err := p.parsePath()
 	if err != nil {
 		return nil, err
 	}
 
-	for {
-		switch tok := p.peek(); {
-		case tok.is("."):
-			p.pos++
+	path := &updatePathExpr{raw: make([]token, len(o.elems))}
 
-			err = p.pathName(path)
-		case tok.is("["):
-			p.pos++
+	for i, e := range o.elems {
+		path.raw[i] = e.tok
 
-			err = p.pathIndex(path)
+		switch {
+		case e.tok.kind != tokIndex:
+			p.pathNames = append(p.pathNames, e.tok)
+		case (e.index < 0 || e.index > math.MaxInt32) && p.index == nil:
+			// Past a Java int: DynamoDB reports it once the whole expression parses.
+			p.index = value.Invalid(msgUpdateIndexRange + "[" + e.tok.text + "]")
 		default:
-			p.paths = append(p.paths, path)
-
-			return path, nil
-		}
-
-		if err != nil {
-			return nil, err
 		}
 	}
-}
 
-// pathName reads one name of a path: a bare name that is not a clause keyword,
-// or a "#name".
-func (p *updateParser) pathName(path *updatePathExpr) error {
-	tok := p.peek()
-	if tok == nil {
-		return p.fail()
-	}
+	p.paths = append(p.paths, path)
 
-	_, keyword := updateClauses[strings.ToUpper(tok.text)]
-
-	switch {
-	case tok.kind == updateTokName && !keyword:
-	case tok.kind == updateTokNameRef:
-	default:
-		return p.fail()
-	}
-
-	p.pos++
-	path.raw = append(path.raw, *tok)
-	p.pathNames = append(p.pathNames, *tok)
-
-	return nil
-}
-
-// pathIndex reads the index and closing bracket of a [index] step. An index
-// past the largest a list may hold is reported only once the whole expression
-// parses, as DynamoDB reports it.
-func (p *updateParser) pathIndex(path *updatePathExpr) error {
-	tok := p.peek()
-	if tok == nil || tok.kind != updateTokIndex {
-		return p.fail()
-	}
-
-	p.pos++
-
-	if !p.peek().is("]") {
-		return p.fail()
-	}
-
-	p.pos++
-
-	_, err := strconv.ParseInt(tok.text, decimalBase, indexBits)
-	if err != nil && p.index == nil {
-		p.index = value.Invalid(msgUpdateIndexRange + "[" + tok.text + "]")
-	}
-
-	path.raw = append(path.raw, *tok)
-
-	return nil
-}
-
-// peek returns the next token, or nil at the end.
-func (p *updateParser) peek() *updateToken {
-	if p.pos >= len(p.toks) {
-		return nil
-	}
-
-	return &p.toks[p.pos]
-}
-
-// fail returns DynamoDB's syntax error for the token at p.pos: the token, and
-// the text from the token before it to the token after it.
-func (p *updateParser) fail() error {
-	token := "<EOF>"
-	start, end := 0, len(p.text)
-
-	if p.pos < len(p.toks) {
-		token = p.toks[p.pos].text
-	}
-
-	if p.pos > 0 {
-		start = p.toks[p.pos-1].start
-	}
-
-	if p.pos+1 < len(p.toks) {
-		end = p.toks[p.pos+1].end
-	}
-
-	return value.Invalid(updatePrefix + "Syntax error; token: \"" + token + "\", near: \"" + p.text[start:end] + "\"")
+	return path, nil
 }

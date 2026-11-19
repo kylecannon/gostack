@@ -155,7 +155,7 @@ func Test_reads_indexes(t *testing.T) {
 			`{"TableName":"tab2","IndexName":"gkey","KeyConditionExpression":"g = :g",` +
 				`"ExpressionAttributeValues":{":g":{"S":"G"}},"Select":"ALL_ATTRIBUTES"}`, codeValidation,
 			"One or more parameter values were invalid: Select type ALL_ATTRIBUTES is not supported for global " +
-				"secondary index id-index because its projection type is not ALL",
+				"secondary index gkey because its projection type is not ALL",
 		},
 		{
 			`{"TableName":"tab2","IndexName":"gkey","KeyConditionExpression":"g = :g",` +
@@ -201,6 +201,58 @@ func Test_reads_indexes(t *testing.T) {
 
 // Test_reads_segments: the segments of a parallel Scan are disjoint and
 // together hold every item.
+// Test_reads_startKeyPredicate: an ExclusiveStartKey must meet the whole key
+// condition, sort predicate included, or the Query is refused (probed on the
+// LocalStack image, SQ-224 probe4).
+func Test_reads_startKeyPredicate(t *testing.T) {
+	t.Parallel()
+
+	s := newStack(t)
+	s.ok(t, "CreateTable", rangeTable)
+	fill(t, s, 1, 0)
+
+	const (
+		refused = "The provided starting key does not match the range key predicate"
+		five    = `,":s":{"N":"5"}`
+	)
+
+	start := func(pk, sk string) string {
+		return `"ExclusiveStartKey":{"pk":{"S":"` + pk + `"},"sk":{"N":"` + sk + `"}}`
+	}
+
+	for _, tt := range []struct {
+		name, cond, values, start string
+		ok                        bool
+	}{
+		{"other partition", "pk = :a", ``, start("zz", "1"), false},
+		{"below greater-than", "pk = :a AND sk > :s", five, start("a", "1"), false},
+		{"at greater-than", "pk = :a AND sk > :s", five, start("a", "5"), false},
+		{"at greater-or-equal", "pk = :a AND sk >= :s", five, start("a", "5"), true},
+		{"above less-than", "pk = :a AND sk < :s", five, start("a", "9"), false},
+		{"not equal", "pk = :a AND sk = :s", five, start("a", "9"), false},
+		{"outside between", "pk = :a AND sk BETWEEN :s AND :t", `,":s":{"N":"5"},":t":{"N":"7"}`, start("a", "9"), false},
+		{"inside between", "pk = :a AND sk BETWEEN :s AND :t", `,":s":{"N":"5"},":t":{"N":"7"}`, start("a", "6"), true},
+	} {
+		body := `{"TableName":"tab2","KeyConditionExpression":"` + tt.cond + `",` +
+			`"ExpressionAttributeValues":{":a":{"S":"a"}` + tt.values + `},` + tt.start + `}`
+		if tt.ok {
+			s.ok(t, opQuery, body)
+
+			continue
+		}
+
+		s.fails(t, opQuery, body, codeValidation, refused)
+	}
+
+	s.fails(t, opQuery, `{"TableName":"tab2","IndexName":"lidx",`+
+		`"KeyConditionExpression":"pk = :a AND begins_with(l, :s)",`+
+		`"ExpressionAttributeValues":{":a":{"S":"a"},":s":{"S":"x"}},`+
+		`"ExclusiveStartKey":{"pk":{"S":"a"},"sk":{"N":"0"},"l":{"S":"L0"}}}`, codeValidation, refused)
+	s.fails(t, opQuery, `{"TableName":"tab2","IndexName":"gkey","KeyConditionExpression":"g = :g",`+
+		`"ExpressionAttributeValues":{":g":{"S":"G"}},`+
+		`"ExclusiveStartKey":{"pk":{"S":"a"},"sk":{"N":"0"},"g":{"S":"H"}}}`, codeValidation, refused)
+}
+
 func Test_reads_segments(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("tab1"))

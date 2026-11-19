@@ -461,6 +461,34 @@ func bounds(p *partition, cond SortCondition) (int, int) {
 	}
 }
 
+// Meets reports whether the range key value v meets c.
+func (c SortCondition) Meets(v *api.AttributeValue) bool {
+	if c.Op == SortAny || len(c.Values) == 0 {
+		return true
+	}
+
+	n := value.Compare(v, &c.Values[0])
+
+	switch c.Op {
+	case SortEQ:
+		return n == 0
+	case SortLT:
+		return n < 0
+	case SortLE:
+		return n <= 0
+	case SortGT:
+		return n > 0
+	case SortGE:
+		return n >= 0
+	case SortBetween:
+		return len(c.Values) == betweenOperands && n >= 0 && value.Compare(v, &c.Values[1]) <= 0
+	case SortBeginsWith:
+		return hasPrefix(v, &c.Values[0])
+	default:
+		return true
+	}
+}
+
 func hasPrefix(v, prefix *api.AttributeValue) bool {
 	switch {
 	case v.S != nil && prefix.S != nil:
