@@ -1,6 +1,9 @@
 package kms_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
@@ -18,10 +21,9 @@ const (
 	fieldSourceKeyID       = "SourceKeyId"
 	fieldDestinationKeyID  = "DestinationKeyId"
 
-	usageMAC    = "GENERATE_VERIFY_MAC"
-	eccP256     = "ECC_NIST_P256"
-	oaepSHA256  = "RSAES_OAEP_SHA_256"
-	tagCustomID = "_custom_id_"
+	usageMAC   = "GENERATE_VERIFY_MAC"
+	eccP256    = "ECC_NIST_P256"
+	oaepSHA256 = "RSAES_OAEP_SHA_256"
 
 	codeInvalidCiphertext = "InvalidCiphertextException"
 	codeIncorrectKey      = "IncorrectKeyException"
@@ -280,6 +282,31 @@ func Test_Encrypt_rsaKey(t *testing.T) {
 		fieldKeyID: id, fieldCiphertextBlob: b64(blob), fieldAlgorithm: oaepSHA256,
 	})
 	require.Equal(t, "rsa", string(blobOf(t, plain, fieldPlaintext)))
+}
+
+// Test_Encrypt_customDERKey holds the answer for an RSA key made from custom
+// DER material, whose symmetric material is that DER: LocalStack's AES fails
+// with a 500, and gostack answers KMSInvalidStateException.
+func Test_Encrypt_customDERKey(t *testing.T) {
+	s := newStack(t)
+
+	private, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	require.NoError(t, err)
+
+	meta := s.createKey(map[string]any{
+		fieldKeySpec: rsa2048, fieldKeyUsage: usageEncryptDecrypt,
+		fieldTags: []map[string]string{customMaterialTag(der)},
+	})
+
+	r := s.call(usEast1, "Encrypt", map[string]any{fieldKeyID: keyID(t, meta), fieldPlaintext: b64([]byte("x"))})
+	require.Equal(t, http.StatusBadRequest, r.status)
+	require.Equal(t, "KMSInvalidStateException", r.errorCode())
+
+	r = s.call(usEast1, "GenerateDataKey", map[string]any{fieldKeyID: keyID(t, meta)})
+	require.Equal(t, "KMSInvalidStateException", r.errorCode())
 }
 
 func Test_ReEncrypt(t *testing.T) {

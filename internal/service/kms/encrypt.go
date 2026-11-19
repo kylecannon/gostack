@@ -247,12 +247,12 @@ func (p *Provider) blobKey(rc *request.Context, blob *ciphertext.Blob, parseErr 
 		return nil, api.NewInvalidCiphertextException(undeserializable)
 	}
 
-	place, err := keyPlace(rc, blob.KeyID)
+	_, err := keyPlace(rc, blob.KeyID)
 	if err != nil {
 		return nil, api.NewInvalidCiphertextException(undeserializable)
 	}
 
-	return p.lookup(place.account, place.region, place.keyID, allowEnabled)
+	return p.dataKey(rc, &blob.KeyID)
 }
 
 // open decrypts data under k: the parsed blob under each of k's materials, or,
