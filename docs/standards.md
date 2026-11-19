@@ -190,9 +190,14 @@ side by side.
   - each protocol codec, decode and encode, across the payload axis;
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
-- benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
-  regression over 10% with p<0.05 fails the build unless it is accepted
-  (below).
+- benchstat (see Gates) compares ten runs of each benchmark on the base and on
+  the PR. A regression over 10% with p<0.05 fails the build unless it is
+  accepted (below).
+- The gate measures base and head interleaved, never one tree after the other:
+  `make bench-ab` builds both trees' benchmark binaries first, then runs ten
+  rounds of one run per tree, alternating which tree goes first (base head,
+  head base, ...). A runner that speeds up or slows down during the job then
+  moves both sides alike instead of reading as a regression.
 
 ### System bench (`bench/`)
 
