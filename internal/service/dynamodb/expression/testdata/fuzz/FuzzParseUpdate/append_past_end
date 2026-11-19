@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET c[5] = :s, c[3] = :s REMOVE c[0]")

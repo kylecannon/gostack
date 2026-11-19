@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET c[2147483648] = :s")
