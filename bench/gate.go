@@ -22,7 +22,7 @@ const (
 	// The gate makes one comparison per benchmark row and unit: 688 in PR
 	// #7's run (CI run 44524892109: 14 packages; sec/op, B/op, allocs/op,
 	// B/s and custom units). With identical code on both sides, chance
-	// alone puts about 34 of them under p<0.001 (688 x 0.05), roughly 17 in
+	// alone puts about 34 of them under p<0.05 (688 x 0.05), roughly 17 in
 	// the worse direction. A noisy runner that also moves one of those over
 	// 10% flags unchanged code: PR #7 at p=0.023 (SQS
 	// ReceiveMessage/proto=query/queue=standard/max=10/payload=1MiB, sec/op
