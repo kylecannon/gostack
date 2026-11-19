@@ -28,12 +28,12 @@ const (
 	containerHeap = 384 << 20
 )
 
-// withInFlight sets the in-flight bound and the wait for the test, and puts
-// both back after it.
-func withInFlight(t *testing.T, bound int64, wait time.Duration) {
+// withInFlight sets the in-flight bound to its default and the wait for the
+// test, and puts both back after it.
+func withInFlight(t *testing.T, wait time.Duration) {
 	t.Helper()
 
-	protocol.SetInFlight(bound)
+	protocol.SetInFlight(protocol.DefaultInFlight)
 	protocol.SetBodyWait(wait)
 	t.Cleanup(func() {
 		protocol.SetInFlight(0)
@@ -83,7 +83,7 @@ func peakHeap(stop <-chan struct{}) <-chan uint64 {
 // wait, with ThrottlingException. Some are served, the heap stays under what
 // the bound admits, and nothing is held once they are answered.
 func Test_Gateway_InFlightBound(t *testing.T) {
-	withInFlight(t, protocol.DefaultInFlight, 2*time.Second)
+	withInFlight(t, 2*time.Second)
 
 	server := httptest.NewServer(wideGateway(t))
 	defer server.Close()
@@ -157,7 +157,7 @@ func Test_Gateway_InFlightBound(t *testing.T) {
 // one byte, then hold the connection open. A body is buffered as it arrives,
 // so each holds what it sent rather than what it stated.
 func Test_Gateway_LyingSender(t *testing.T) {
-	withInFlight(t, protocol.DefaultInFlight, 2*time.Second)
+	withInFlight(t, 2*time.Second)
 
 	server := httptest.NewServer(wideGateway(t))
 	defer server.Close()
@@ -197,14 +197,16 @@ func Test_Gateway_LyingSender(t *testing.T) {
 		"a stated length is not allocated before its bytes arrive")
 }
 
-// Test_Gateway_DenseSmallBodies: 256 clients each send a 64 KiB lifecycle
+// Test_Gateway_ManySmallDenseBodies: 256 clients each send a 64 KiB lifecycle
 // configuration of empty rules at once. None is metered as a body (none passes
-// protocol.FreeBody), but each decodes into about 5 MiB, which the decode
-// budget allows. What decoding holds past protocol.FreeDecode is drawn from the
-// in-flight pool, so the decodings in flight are bounded together: each is
-// answered once it decoded (501, the handler is not there) or with SlowDown,
-// and the heap stays under the pool plus what each request holds for free.
-func Test_Gateway_DenseSmallBodies(t *testing.T) {
+// protocol.FreeBody), and each is answered once it decoded (501, the handler is
+// not there) or with SlowDown. What it proves: a crowd of bodies under the
+// free allowance stays under the pool plus what each request holds for free,
+// and the pool is empty after. It does not prove the decode charge: a 64 KiB
+// body decodes into about 1 MiB live, so the heap stays under the bound with
+// the charge off too (148 MiB measured). Test_Gateway_DecodeChargeBound is the
+// test that fails without it.
+func Test_Gateway_ManySmallDenseBodies(t *testing.T) {
 	const (
 		clients = 256
 		size    = protocol.FreeBody
@@ -213,7 +215,7 @@ func Test_Gateway_DenseSmallBodies(t *testing.T) {
 		perRequest = size + protocol.FreeDecode + 64<<10
 	)
 
-	withInFlight(t, protocol.DefaultInFlight, 2*time.Second)
+	withInFlight(t, 2*time.Second)
 
 	server := httptest.NewServer(wideGateway(t))
 	defer server.Close()
@@ -221,6 +223,7 @@ func Test_Gateway_DenseSmallBodies(t *testing.T) {
 	head, tail := `<LifecycleConfiguration>`, `</LifecycleConfiguration>`
 	body := head + strings.Repeat(`<Rule/>`, (size-len(head)-len(tail))/len(`<Rule/>`)) + tail
 	auth := signed("test", usEast1, nameS3)
+	client := retryingClient(server)
 
 	stop := make(chan struct{})
 	peak := peakHeap(stop)
@@ -242,7 +245,7 @@ func Test_Gateway_DenseSmallBodies(t *testing.T) {
 
 			req.Header.Set(headerAuth, auth)
 
-			resp, err := server.Client().Do(req)
+			resp, err := client.Do(req)
 			if err != nil {
 				t.Error(err)
 

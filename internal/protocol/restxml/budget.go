@@ -44,6 +44,12 @@ func (d *Decoder) chargeToken(tok xml.Token) {
 		d.Charge(n)
 	case xml.EndElement:
 		d.Charge(TokenCost + uintptr(len(t.Name.Space)+len(t.Name.Local)))
+	case xml.Comment:
+		d.Charge(TokenCost + 2*uintptr(len(t)))
+	case xml.Directive:
+		d.Charge(TokenCost + 2*uintptr(len(t)))
+	case xml.ProcInst:
+		d.Charge(TokenCost + uintptr(len(t.Target)) + 2*uintptr(len(t.Inst)))
 	default:
 		d.Charge(TokenCost)
 	}

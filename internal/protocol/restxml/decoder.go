@@ -46,8 +46,9 @@ var ErrMalformed = errors.New("malformed xml")
 // report false and the value methods nil, and Err returns it.
 type Decoder struct {
 	xd     *xml.Decoder
-	stack  []xml.Name // the open elements, to check each end tag
-	attrs  []xml.Attr // the attributes of the element entered last
+	limit  *tokenLimit // what xd reads the body through
+	stack  []xml.Name  // the open elements, to check each end tag
+	attrs  []xml.Attr  // the attributes of the element entered last
 	err    error
 	cost   int64 // what decoding has charged so far (Charge)
 	factor int   // the service's decode factor (protocol.DecodeBudgetAt)
@@ -77,7 +78,9 @@ func NewDecoderFor(r io.Reader, factor int, hold protocol.DecodeHolder) *Decoder
 		covered = protocol.FreeDecode
 	}
 
-	return &Decoder{xd: xml.NewDecoder(&tagLimit{r: r}), factor: factor, hold: hold, covered: covered}
+	limit := newTokenLimit(r)
+
+	return &Decoder{xd: xml.NewDecoder(limit), limit: limit, factor: factor, hold: hold, covered: covered}
 }
 
 // Err returns the first error met so far, or nil.
@@ -93,6 +96,8 @@ func (d *Decoder) Root() (string, bool) {
 	}
 
 	for {
+		d.limit.begin(d.xd.InputOffset())
+
 		tok, err := d.xd.RawToken()
 		if errors.Is(err, io.EOF) {
 			return "", false
@@ -313,6 +318,8 @@ func (d *Decoder) read(b *strings.Builder) bool {
 // token reads the next token inside the current element. The end of the body
 // is an error there.
 func (d *Decoder) token() (xml.Token, bool) {
+	d.limit.begin(d.xd.InputOffset())
+
 	tok, err := d.xd.RawToken()
 	if err != nil {
 		if errors.Is(err, io.EOF) {

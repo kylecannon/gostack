@@ -211,7 +211,8 @@ func Test_Gateway_WideBodies(t *testing.T) {
 		headers                    map[string]string
 		wantStatus                 int
 		wantBody                   string
-		decoded                    int // the body's size once decoded, when it is sent compressed
+		decoded                    int    // the body's size once decoded, when it is sent compressed
+		under                      uint64 // a tighter bound on what the request allocates, when set
 	}{
 		{
 			name: "json: SendMessageBatch of empty entries to the cap", method: http.MethodPost, target: localhost,
@@ -247,6 +248,38 @@ func Test_Gateway_WideBodies(t *testing.T) {
 			name: "rest-xml: one tag name to the cap", method: http.MethodPut,
 			target: localhost + "b?lifecycle", headers: s3Call,
 			body:       repeatTo(`<LifecycleConfiguration><R`, `R`, `/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		// Each construct below holds a stray > and then an open quote, so a
+		// scanner that ends <! and <? at their first > reads the quote as part
+		// of a tag, leaves it inside the real tag's ">" attribute, and reads
+		// the 16 MiB attribute after it as text.
+		{
+			name: "rest-xml: a comment, then a tag of 16 MiB", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call, under: 1 << 20,
+			body: repeatTo(`<LifecycleConfiguration><!-- > <a " --><Rule x="" y=">" z="`, `a`,
+				`"/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		{
+			name: "rest-xml: a CDATA section, then a tag of 16 MiB", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call, under: 1 << 20,
+			body: repeatTo(`<LifecycleConfiguration><![CDATA[ > <a " ]]><Rule x="" y=">" z="`, `a`,
+				`"/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		{
+			name: "rest-xml: a processing instruction, then a tag of 16 MiB", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call, under: 1 << 20,
+			body: repeatTo(`<LifecycleConfiguration><?pi > <a " ?><Rule x="" y=">" z="`, `a`,
+				`"/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		{
+			name: "rest-xml: a DOCTYPE, then a tag of 16 MiB", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call, under: 1 << 20,
+			body: repeatTo(`<!DOCTYPE x '> <a "' ><LifecycleConfiguration><Rule x="" y=">" z="`, `a`,
+				`"/></LifecycleConfiguration>`),
 			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
 		},
 		{
@@ -303,6 +336,11 @@ func Test_Gateway_WideBodies(t *testing.T) {
 			assert.Contains(t, body, tt.wantBody)
 			size := max(tt.decoded, len(tt.body))
 			assert.LessOrEqual(t, total, uint64(4*size+wideSlack), "allocated %d MiB", total>>20)
+
+			if tt.under > 0 {
+				assert.Less(t, total, tt.under, "allocated %d KiB", total>>10)
+			}
+
 			t.Logf("%d MiB allocated for %d MiB", total>>20, size>>20)
 		})
 	}
