@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/kylecannon/gostack/internal/service/sqs
+                                               │  base.txt   │              head.txt               │
+                                               │   lock-ms   │   lock-ms    vs base                │
+Snapshot/queues=1/messages=100000-2              44.72 ± 17%   52.28 ± 14%  +16.93% (p=0.018 n=10)

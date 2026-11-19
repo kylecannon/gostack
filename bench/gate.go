@@ -15,12 +15,32 @@ import (
 
 const (
 	maxRegressionPercent = 10.0
-	significance         = 0.05
-	columnSeparator      = "│"
-	baseMarker           = "vs base"
-	geomeanRow           = "geomean"
-	pkgPrefix            = "pkg: "
-	unitColumn           = 1 // the text between the first two separators of a header row
+	// significance is the p-value a row has to beat to be flagged. benchstat
+	// prints p to three decimals, so the gate flags a row only when it
+	// prints p=0.000, which is p<0.0005.
+	//
+	// The gate makes one comparison per benchmark row and unit: 688 in PR
+	// #7's run (CI run 44524892109: 14 packages; sec/op, B/op, allocs/op,
+	// B/s and custom units). With identical code on both sides, chance
+	// alone puts about 34 of them under p<0.001 (688 x 0.05), roughly 17 in
+	// the worse direction. A noisy runner that also moves one of those over
+	// 10% flags unchanged code: PR #7 at p=0.023 (SQS
+	// ReceiveMessage/proto=query/queue=standard/max=10/payload=1MiB, sec/op
+	// +11.28%) and PR #6 at p=0.018 (SQS Snapshot/queues=1/messages=100000,
+	// lock-ms +16.93%). At p<0.0005 the same 688 comparisons give 688 x
+	// 0.0005 = 0.34 chance crossings in either direction, about 0.17 in the
+	// worse one, before the 10% filter.
+	//
+	// n=10 samples a side still reaches it: the smallest p a Mann-Whitney
+	// test gives is 2/C(20,10) = 1.08e-5, so a regression that separates
+	// the two sides is far inside the threshold. PR #4's RouteDetect/host
+	// (+26.83%) printed p=0.000.
+	significance    = 0.001
+	columnSeparator = "│"
+	baseMarker      = "vs base"
+	geomeanRow      = "geomean"
+	pkgPrefix       = "pkg: "
+	unitColumn      = 1 // the text between the first two separators of a header row
 )
 
 // errRegression is returned when a benchmark got slower, or hungrier, than the
@@ -140,12 +160,12 @@ func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base
 	}
 
 	if len(failed) == 0 {
-		b.WriteString("no benchmark regressed over 10% at p<0.05 outside the accepted list\n")
+		b.WriteString("no benchmark regressed over 10% at p<0.001 outside the accepted list\n")
 
 		return write(out, b.String())
 	}
 
-	b.WriteString("regressions over 10% at p<0.05:\n  " + strings.Join(failed, "\n  ") + "\n")
+	b.WriteString("regressions over 10% at p<0.001:\n  " + strings.Join(failed, "\n  ") + "\n")
 
 	err := write(out, b.String())
 	if err != nil {

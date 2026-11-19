@@ -116,7 +116,7 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   and the runner image is cached on that sha and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
-  at p<0.05.
+  at p<0.001.
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
   manual run against the previous passing run on main with the same profile
@@ -180,8 +180,10 @@ not apply to a feature is left out, not filled with a placeholder.
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
 - benchstat (see Gates) compares ten runs of each benchmark on the base and on
-  the PR. A regression over 10% with p<0.05 fails the build unless it is
-  accepted (below).
+  the PR. A regression over 10% with p<0.001 fails the build unless it is
+  accepted (below). benchstat prints p to three decimals, so the gate flags a
+  row only when it prints `p=0.000`; the comment at `significance` in
+  `bench/gate.go` has the arithmetic.
 - The gate measures base and head interleaved, never one tree after the other:
   `make bench-ab` runs ten rounds of one run per tree, alternating which tree
   goes first (base head, head base, ...). A runner that speeds up or slows down

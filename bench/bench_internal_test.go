@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +91,99 @@ func Test_gate_regressions(t *testing.T) {
 
 			require.ErrorIs(t, err, errRegression)
 			assert.Contains(t, out.String(), tt.want[0])
+		})
+	}
+}
+
+// The gate flags a row only when benchstat prints p=0.000: p=0.023 over 10% is
+// the shape of the false flags on PRs #6 and #7, and p=0.001 sits on the
+// boundary, which significance does not reach.
+func Test_gate_requires_p_of_zero(t *testing.T) {
+	const (
+		header = "pkg: example.com/x\n        │   old.txt   │      new.txt       │\n" +
+			"        │   sec/op    │   sec/op   vs base │\n"
+		costRow = "Slow-8    505.0n ± 1%   563.0n ± 1%  +11.28% (p=PVAL n=10)\n"
+	)
+
+	costAt := func(p string) string { return strings.Replace(costRow, "PVAL", p, 1) }
+
+	tests := []struct {
+		name string
+		give string
+		want []string
+	}{
+		{name: "over 10% at p=0.023 passes", give: costAt("0.023")},
+		{name: "over 10% at p=0.049 passes", give: costAt("0.049")},
+		{name: "over 10% at p=0.001 passes", give: costAt("0.001")},
+		{
+			name: "over 10% at p=0.000 fails", give: costAt("0.000"),
+			want: []string{"Slow-8 sec/op +11.28% (p=0.000)"},
+		},
+		{
+			name: "a throughput drop over 10% at p=0.023 passes",
+			give: "        │   old.txt   │      new.txt       │\n        │     B/s     │    B/s     vs base │\n" +
+				"Slow-8   506.0Mi ± 14%   455.0Mi ± 17%  -10.09% (p=0.023 n=10)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows, err := findRegressions(strings.NewReader(header + tt.give))
+			require.NoError(t, err)
+
+			var got []string
+			for _, r := range rows {
+				got = append(got, r.String())
+			}
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Replays of CI's benchstat output, cut to the rows over 10% either way
+// (testdata/). The two false flags pass, and the real regression PR #4 landed
+// still fails.
+func Test_gate_replays_ci_runs(t *testing.T) {
+	const none = "# nothing accepted\n"
+
+	tests := []struct {
+		name     string
+		file     string
+		wantText string
+		wantRow  string
+	}{
+		{
+			name: "PR #7, identical code on both sides, ReceiveMessage 1MiB at p=0.023", file: "pr7-run-44524892109.txt",
+			wantText: "p=0.023",
+		},
+		{
+			name: "PR #6, Snapshot lock-ms at p=0.018", file: "pr6-run-44517842228.txt",
+			wantText: "p=0.018",
+		},
+		{
+			name: "PR #4, RouteDetect/host at p=0.000", file: "pr4-run-44470444180.txt",
+			wantText: "p=0.000", wantRow: "RouteDetect/host-2 sec/op +26.83% (p=0.000)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text, err := os.ReadFile(filepath.Join("testdata", tt.file))
+			require.NoError(t, err)
+			require.Contains(t, string(text), tt.wantText, "the replay carries the row it is about")
+
+			out, err := runGateOn(t, string(text), none, nil, commitFlags(baseCommit, headCommit)...)
+			if tt.wantRow == "" {
+				require.NoError(t, err)
+				assert.Contains(t, out, "no benchmark regressed")
+
+				return
+			}
+
+			require.ErrorIs(t, err, errRegression)
+			assert.Contains(t, out, tt.wantRow)
+			assert.Contains(t, err.Error(), "1 over the limit", "the improvements on the same run do not count")
 		})
 	}
 }
