@@ -331,6 +331,14 @@ func (p *Provider) BatchGetSecretValue(
 	b := &batch{now: p.now(), errors: []api.APIErrorType{}}
 	state := p.stateAt(rc.AccountID, rc.Region)
 
+	// A call that fails part way has still stamped the secrets read before
+	// the failure, as moto's does, so the change is reported on every return.
+	defer func() {
+		if b.stamped {
+			p.notifyChanged()
+		}
+	}()
+
 	for _, id := range in.SecretIdList {
 		berr := b.read(state.lookup(id), id, nil)
 		if berr != nil {
@@ -345,10 +353,6 @@ func (p *Provider) BatchGetSecretValue(
 				return nil, berr
 			}
 		}
-	}
-
-	if b.stamped {
-		p.notifyChanged()
 	}
 
 	page, next, err := pageOf(b.values, in.MaxResults, in.NextToken)
@@ -432,11 +436,13 @@ func pageOf[T any](items []T, maxResults *int32, nextToken *string) ([]T, *strin
 		size = int(*maxResults)
 	}
 
-	end := start + size
-	if start > len(items) {
-		start = len(items)
+	// An offset past the end is an empty last page; checking it first also
+	// keeps start+size from overflowing on a token near the int maximum.
+	if start >= len(items) {
+		return items[len(items):], nil, nil
 	}
 
+	end := start + size
 	if end >= len(items) {
 		return items[start:], nil, nil
 	}
