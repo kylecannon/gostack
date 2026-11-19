@@ -14,7 +14,11 @@ const (
 
 	// CloseMargin is the least time between the end of the services' Close and the
 	// supervisor's SIGKILL. A Close still running then is abandoned and the
-	// process exits.
+	// process exits, but not at once: the caller waits a short grace past the
+	// deadline (cmd/gostack's closeGrace, 20 ms) for a Close that honours its
+	// context to return, so an abandoned Close leaves 80 ms of the margin, not
+	// 100. That is enough to exit, which takes microseconds after the warning,
+	// and the state was written by the save before Close began.
 	CloseMargin = 100 * time.Millisecond
 
 	// minSaveReserve is the least time kept for saving persisted state.

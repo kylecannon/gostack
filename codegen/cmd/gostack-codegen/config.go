@@ -35,6 +35,60 @@ type serviceOptions struct {
 	// BodyTime is the format a rest-xml body timestamp in iso8601, the body
 	// default, is written in instead.
 	BodyTime string
+	// Unions gives every structure with the union trait a MembersSet method,
+	// which counts the members set, for the handler's exactly-one check.
+	Unions bool
+	// UnionShapes are structures the model does not mark as unions that the
+	// service treats as one, and that get MembersSet as well: DynamoDB's
+	// AttributeValue.
+	UnionShapes []string
+	// Validation gives every operation input a Validate method that checks the
+	// model traits its Checks list and answers every failure at once in AWS's
+	// "N validation errors detected" message. The generated dispatch never
+	// calls it: the service's handler does, where LocalStack makes the check.
+	// A nil value keeps the first-missing-member check ServeValidated runs.
+	Validation *validation
+}
+
+// validation is which constraints a service checks and how it reports the
+// ones a request breaks.
+type validation struct {
+	// Code is the error code, ValidationException when empty.
+	Code string
+	// Checks lists, keyed by "Shape.Member" in the model's own names, the
+	// traits of that member the generated checks enforce, each pinned by the
+	// snapshot its comment names. Every other trait goes unchecked: the model
+	// does not show that AWS enforces it, or how AWS answers, and LocalStack
+	// runs no general model validation. A key that is not a model shape and
+	// member, an unknown trait bit, an entry the generator cannot check, or
+	// one no operation input reaches, fails generation.
+	Checks map[string]check
+	// Enums replaces, keyed by enum shape, the value list a failed enum check
+	// prints, where AWS prints another order or set than the model's. A key
+	// that is no shape, or that no listed enum check uses, fails generation.
+	Enums map[string]enumText
+}
+
+// check is a set of the traits of one member the generated checks enforce.
+type check uint8
+
+const (
+	checkRequired check = 1 << iota
+	checkPattern
+	checkMin
+	checkMax
+	checkEnum
+
+	// checkAll is every trait the generator knows how to check.
+	checkAll = checkRequired | checkPattern | checkMin | checkMax | checkEnum
+)
+
+// enumText is the value list an enum check prints in place of the model's.
+type enumText struct {
+	Values []string
+	// Narrow makes the check accept only Values, for an enum where AWS
+	// rejects a value the model lists.
+	Narrow bool
 }
 
 // missingParam names the error for a missing required member.
@@ -55,6 +109,69 @@ var serviceTable = map[string]serviceOptions{
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},
 	},
 	"sts": {},
+	"dynamodb": {
+		// An AttributeValue sets exactly one of its members, which the model
+		// does not say: DynamoDB answers a ValidationException for none or two.
+		UnionShapes: []string{"AttributeValue"},
+		Validation: &validation{Checks: map[string]check{
+			// test_dynamodb_execute_statement_empy_parameter, invalid-param-error.
+			"ExecuteStatementInput.Parameters": checkMin,
+			// test_kinesis_streaming_destination_crud, update-bad-precision.
+			"UpdateKinesisStreamingConfiguration.ApproximateCreationDateTimePrecision": checkEnum,
+		}},
+	},
+	"dynamodbstreams": {},
+	// test_sns.py's platform-application and message-attribute snapshots
+	// answer ValidationError, the query form of the code.
+	"sns": {Validation: &validation{
+		Code: "ValidationError",
+		Checks: map[string]check{
+			// test_create_platform_application_invalid_attributes[no-args].
+			"CreatePlatformApplicationInput.Attributes": checkRequired,
+			// test_set_platform_application_attributes_non_existing_app[no-args].
+			"SetPlatformApplicationAttributesInput.Attributes": checkRequired,
+			// test_set_platform_endpoint_attributes_invalid_attributes[Empty].
+			"SetEndpointAttributesInput.Attributes": checkRequired,
+			// test_empty_or_wrong_message_attributes, fully_missing_data_type and
+			// batch-fully_missing_data_type.
+			"MessageAttributeValue.DataType": checkRequired,
+		},
+	}},
+	"kms": {Validation: &validation{Checks: map[string]check{
+		// test_kms.py::TestKMS::test_generate_random_invalid_number_of_bytes[0]
+		// and [1025].
+		"GenerateRandomRequest.NumberOfBytes": checkMin | checkMax,
+		// test_create_key_with_invalid_tag_key[too_long_key] and
+		// test_key_with_long_tag_value_raises_error.
+		"Tag.TagKey":   checkMax,
+		"Tag.TagValue": checkMax,
+		// test_hmac_create_key_invalid_operations, create-hmac-key-invalid-spec
+		// and create-hmac-key-invalid-key-usage.
+		"CreateKeyRequest.KeySpec":  checkEnum,
+		"CreateKeyRequest.KeyUsage": checkEnum,
+		// test_invalid_generate_mac and test_invalid_verify_mac.
+		"GenerateMacRequest.MacAlgorithm": checkEnum,
+		"VerifyMacRequest.MacAlgorithm":   checkEnum,
+		// test_derive_shared_secret, response-invalid-key-agreement-algo.
+		"DeriveSharedSecretRequest.KeyAgreementAlgorithm": checkEnum,
+		// test_plaintext_size_for_encrypt, invalid-plaintext-size-encrypt.
+		"EncryptRequest.Plaintext": checkMax,
+	}, Enums: map[string]enumText{
+		// test_kms.py::TestKMS::test_hmac_create_key_invalid_operations,
+		// create-hmac-key-invalid-key-usage: no KEY_AGREEMENT.
+		"KeyUsageType": {Values: []string{"ENCRYPT_DECRYPT", "SIGN_VERIFY", "GENERATE_VERIFY_MAC"}},
+		// The same test, create-hmac-key-invalid-spec: none of SM2, ML_DSA_*
+		// or ECC_NIST_EDWARDS25519.
+		"KeySpec": {Values: []string{
+			"RSA_2048", "ECC_NIST_P384", "ECC_NIST_P256", "ECC_NIST_P521", "HMAC_384", "RSA_3072",
+			"ECC_SECG_P256K1", "RSA_4096", "SYMMETRIC_DEFAULT", "HMAC_256", "HMAC_224", "HMAC_512",
+		}},
+		// test_kms.py::TestKMS::test_invalid_generate_mac, generate-mac, and
+		// test_invalid_verify_mac, verify-mac.
+		"MacAlgorithmSpec": {Values: []string{"HMAC_SHA_384", "HMAC_SHA_256", "HMAC_SHA_224", "HMAC_SHA_512"}},
+	}}},
+	"secretsmanager": {},
+	"ssm":            {Unions: true},
 	"s3": {
 		// LocalStack's S3 serializer writes <Error><Code/><Message/><RequestId/>
 		// with the error's own members after them, as AWS does.

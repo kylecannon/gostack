@@ -3,6 +3,7 @@ package s3_test
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -45,7 +46,7 @@ func newServer(t *testing.T) *server {
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },

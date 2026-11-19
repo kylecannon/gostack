@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run LocalStack's own pytest suite, unchanged, against one target container and
-# merge the result into parity/ledger.json.
+# merge the result into the per-service ledger, parity/ledger/<service>.json.
 #
 #   parity/run.sh gostack     the gostack image         (make parity)
 #   parity/run.sh localstack  LocalStack built from the pinned checkout
@@ -159,7 +159,7 @@ docker run --rm --name "$RUNNER" --network "container:$TARGET" \
 	-v "$ROOT/parity:/parity:ro" -v "$OUT:/out" \
 	-e TEST_SKIP_LOCALSTACK_START=1 \
 	-e GOSTACK_PARITY_BRIDGE=1 \
-	-e GOSTACK_EXCLUSIONS=/parity/exclusions.yaml \
+	-e GOSTACK_EXCLUSIONS=/parity/exclusions \
 	-e GOSTACK_EXCLUDED_OUT=/out/excluded.json \
 	-e GOSTACK_BRIDGEABLE=/parity/bridgeable.yaml \
 	-e GOSTACK_PARITY_TARGET="$COLUMN" \

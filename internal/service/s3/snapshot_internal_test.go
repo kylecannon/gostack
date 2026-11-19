@@ -2,6 +2,7 @@ package s3
 
 import (
 	"bytes"
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func newSnapshotProvider(t testing.TB) *Provider {
 	t.Helper()
 
 	p := New(func() Settings { return Settings{} }, blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(p.Close)
+	t.Cleanup(func() { p.Close(context.WithoutCancel(t.Context())) })
 
 	return p
 }

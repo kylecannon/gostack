@@ -427,11 +427,15 @@ func encodeJSON(v any) ([]byte, error) {
 
 // sendEvent queues the event's message for one queue configuration. The
 // delivery is asynchronous: a queue that is gone, or an unbound client, costs
-// a log line and nothing else, as it does in LocalStack.
+// a log line and nothing else, as it does in LocalStack. The queue's ARN is the
+// call's lane, so the events for one queue arrive in the order they were
+// raised, and a queue that is slow to take them holds up no other.
 func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
-	arn := parseARN(deref(queue.QueueArn))
+	queueARN := deref(queue.QueueArn)
+
+	arn := parseARN(queueARN)
 	if arn.err != nil {
-		slog.Error("S3 notification skipped: unparseable queue ARN", "bucket", ev.bucket, "arn", deref(queue.QueueArn))
+		slog.Error("S3 notification skipped: unparseable queue ARN", "bucket", ev.bucket, "arn", queueARN)
 
 		return
 	}
@@ -449,6 +453,8 @@ func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 
 		return
 	}
+
+	call.Lane = queueARN
 
 	queued := p.client.Enqueue(call, func(resp inproc.Response, err error) {
 		logDelivery(ev.bucket, arn.resource, resp, err)

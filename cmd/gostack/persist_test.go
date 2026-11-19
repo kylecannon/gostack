@@ -393,21 +393,11 @@ func Test_gostack_health_persisted_flag(t *testing.T) {
 	status, body := g.do(t, http.MethodGet, "/_gostack/health", "")
 	require.Equal(t, http.StatusOK, status, body)
 
-	var health struct {
-		Services map[string]struct {
-			Persisted bool `json:"persisted"`
-		} `json:"services"`
-	}
-
-	require.NoError(t, json.Unmarshal([]byte(body), &health))
-	assert.True(t, health.Services["sqs"].Persisted, body)
-	assert.True(t, health.Services["s3"].Persisted, body)
-	assert.False(t, health.Services["sts"].Persisted, body)
+	assert.JSONEq(t, gostackHealth(t, true), body, "a service with state is persisted, one without is not")
 
 	status, body = g.do(t, http.MethodGet, "/_localstack/health", "")
 	require.Equal(t, http.StatusOK, status, body)
-	assert.JSONEq(t, `{"services":{"s3":"running","sqs":"running","sts":"running"},"edition":"community",`+
-		`"version":"`+smokeVersion+`"}`, body)
+	assert.JSONEq(t, localstackHealth(t), body)
 }
 
 // Test_gostack_refuses_a_state_link_out_of_the_base_dir is the ld.so.preload

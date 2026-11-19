@@ -33,7 +33,13 @@ func (g *generator) dispatchFile() (string, error) {
 
 	g.emitHelpers(p)
 
+	// The validate methods of a service with the Validation option replace
+	// missingRequired.
 	for _, st := range g.sortedStructs() {
+		if g.opts.Validation != nil {
+			break
+		}
+
 		err := g.emitMissingRequired(p, st)
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", st.goName, err)
@@ -76,8 +82,15 @@ func (g *generator) emitServe(p *printer) {
 	p.f("\tserve(h, w, rc, false)")
 	p.f("}")
 	p.blank()
-	p.f("// ServeValidated is Serve for an endpoint that rejects a request with a required")
-	p.f("// member missing before it reaches h, as SQS's queue-URL paths do.")
+	if g.opts.Validation != nil {
+		p.f("// ServeValidated is Serve. The generated checks never reject a request on their")
+		p.f("// own for this service: h calls Validate on the input where LocalStack makes the")
+		p.f("// check, and a required member can reach h as nil.")
+	} else {
+		p.f("// ServeValidated is Serve for an endpoint that rejects a request with a required")
+		p.f("// member missing before it reaches h, as SQS's queue-URL paths do.")
+	}
+
 	p.f("func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {")
 	p.f("\tserve(h, w, rc, true)")
 	p.f("}")
@@ -124,7 +137,9 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 	p.f("func serve%s(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {", op.name)
 	p.f("\tin, err := read%s(rc)", op.name)
 
-	if in.needsCheck {
+	// A Validation service's handler runs in.Validate itself, where LocalStack
+	// makes the check, so nothing runs here for it.
+	if g.opts.Validation == nil && in.needsCheck {
 		p.f("\tif err == nil && validate {")
 		p.f("\t\tif member := in.missingRequired(); member != \"\" {")
 		p.f("\t\t\terr = newMissingRequired(member)")
@@ -138,7 +153,13 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 	p.f("\t}")
 	p.f("\tout, herr := h.%s(request.With(rc.Request.Context(), rc), in)", op.name)
 	p.f("\tif herr != nil {")
-	p.f("\t\twriteError(w, rc, asError(herr))")
+
+	if g.hasModeledErrors() {
+		p.f("\t\twriteHandlerError(w, rc, herr)")
+	} else {
+		p.f("\t\twriteError(w, rc, asError(herr))")
+	}
+
 	p.f("\t\treturn")
 	p.f("\t}")
 	p.f("\tif out == nil {")
@@ -239,8 +260,124 @@ func (g *generator) emitHelpers(p *printer) {
 	p.f("}")
 	p.blank()
 
+	if g.hasModeledErrors() {
+		g.emitWriteHandlerError(p)
+		emitModeledError(p)
+	}
+
 	g.emitWriteError(p)
+	g.emitMessageName(p)
 	g.emitReaders(p)
+
+	for _, ex := range g.exceptions {
+		if ex.members != nil {
+			g.emitMembersErrorWriter(p, ex.members)
+		}
+	}
+}
+
+// emitMembersErrorWriter writes the method that writes an error of a json or
+// query service with the members of its shape: beside __type in json, and in
+// query after the RequestId of the ErrorResponse, where LocalStack writes them
+// (serializer.py, _add_additional_error_tags) and botocore reads them. Smithy's
+// awsQuery puts them inside <Error>, and botocore's ignore list skips that
+// case (QueryComplexError), so LocalStack's place stands.
+func (g *generator) emitMembersErrorWriter(p *printer, st *structType) {
+	trim := g.hasProtocol(protoJSON) && emitOmitEmpty(p, st)
+
+	p.f("// writeError writes err with the members in v.")
+	p.f("func (v *%s) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {", st.goName)
+	p.f("\tswitch rc.Protocol {")
+
+	if g.hasProtocol(protoJSON) {
+		members := "v"
+		if trim {
+			members = "v.omitEmpty()"
+		}
+
+		p.f("\tcase protocol.KindJSON:")
+		p.f("\t\topts := %s", g.jsonErrorOptions("Members: "+members))
+		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
+	}
+
+	if g.hasProtocol(protoQuery) {
+		p.f("\tcase protocol.KindQuery:")
+		p.f("\t\tenv := &query.Envelope{Namespace: queryNamespace, RequestID: rc.RequestID, EscapeQuotes: queryEscapeQuotes}")
+		p.f("\t\tquery.WriteModeledError(w, env, err, v.encodeQuery)")
+	}
+
+	p.f("\tdefault:")
+	p.f("\t\thttp.Error(w, err.Message, err.StatusCode)")
+	p.f("\t}")
+	p.f("}")
+	p.blank()
+}
+
+// emitOmitEmpty writes the omitEmpty method of an error's members, which
+// clears every member a json error leaves out: one that is not required and
+// is empty, a zero number, false, or an empty string, list, map or blob. That
+// is LocalStack's rule (serializer.py, JSONResponseSerializer._serialize_error:
+// "if value or member in shape.required_members"). A structure or timestamp
+// member is left as it is: none of the json services has one. It reports
+// whether it wrote the method, which an error with nothing to clear does not.
+func emitOmitEmpty(p *printer, st *structType) bool {
+	body := &printer{}
+
+	for _, f := range st.fields {
+		if f.required {
+			continue
+		}
+
+		x := "c." + f.goName
+
+		switch f.pair.p.shape.Type {
+		case spec.TypeList, spec.TypeMap, spec.TypeBlob:
+			body.f("\tif len(%s) == 0 {", x)
+		case spec.TypeString:
+			body.f("\tif %s != nil && *%s == \"\" {", x, x)
+		case spec.TypeInteger, spec.TypeLong, spec.TypeFloat, spec.TypeDouble:
+			body.f("\tif %s != nil && *%s == 0 {", x, x)
+		case spec.TypeBoolean:
+			body.f("\tif %s != nil && !*%s {", x, x)
+		default:
+			continue
+		}
+
+		body.f("\t\t%s = nil", x)
+		body.f("\t}")
+	}
+
+	if body.buf.Len() == 0 {
+		return false
+	}
+
+	p.f("// omitEmpty returns v without the members a json error leaves out: one that")
+	p.f("// is empty and not required.")
+	p.f("func (v *%s) omitEmpty() *%s {", st.goName, st.goName)
+	p.f("\tc := *v")
+	p.buf.Write(body.buf.Bytes())
+	p.f("\treturn &c")
+	p.f("}")
+	p.blank()
+
+	return true
+}
+
+// jsonErrorOptions is the awsjson.ErrorOptions literal of a json error, with
+// extra fields after the ones every json error sets.
+func (g *generator) jsonErrorOptions(extra ...string) string {
+	fields := []string{
+		"QueryCompatible: awsQueryCompatible",
+		"ContentType: \"application/x-amz-json-\" + jsonVersion",
+	}
+
+	if len(g.messageNames()) > 0 {
+		fields = append(fields, "MessageName: messageName(err.Code)")
+	}
+
+	fields = append(fields, extra...)
+
+	return "awsjson.ErrorOptions{\n\t\t\t" + strings.Join(fields, ",\n\t\t\t") + ",\n\t\t}"
 }
 
 // emitReaders writes the functions that read a request body in each protocol.
@@ -322,10 +459,7 @@ func (g *generator) emitWriteError(p *printer) {
 
 	if g.hasProtocol(protoJSON) {
 		p.f("\tcase protocol.KindJSON:")
-		p.f("\t\topts := awsjson.ErrorOptions{")
-		p.f("\t\t\tQueryCompatible: awsQueryCompatible,")
-		p.f("\t\t\tContentType: \"application/x-amz-json-\" + jsonVersion,")
-		p.f("\t\t}")
+		p.f("\t\topts := %s", g.jsonErrorOptions())
 		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
 	}
 

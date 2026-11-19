@@ -264,17 +264,21 @@ type saver struct {
 }
 
 // save writes the state that changed, then stops the services' own goroutines,
-// each with a budget of its own. The write is the one that has to happen, so it
-// comes first and runs to saveCtx. Stopping a service waits for its goroutines,
-// which no context can interrupt, so a slow Close is abandoned when closeCtx
-// ends, with a warning, and never takes time from the write. Every write stops
-// with its context, and the engine keeps the old file when one is cut short.
+// all at once, under a budget of their own. The write is the one that has to
+// happen, so it comes first and runs to saveCtx. Every Close is given closeCtx
+// and none waits for another; one that has not returned when closeCtx ends is
+// abandoned, with a warning, and never takes time from the write. A Close that
+// returned at the deadline, because it honours its context, is not abandoned.
+// Every write stops with its context, and the engine keeps the old file when
+// one is cut short.
 //
 // What the services' Close changes, and what a request still running at the
-// end of the drain changes, is written by a last flush, when Close finished in
-// time for it. That flush is the engine's Close, which then releases the
-// assets' descriptors; the first save only stops the timer, so the last flush
-// can still sync and remove assets.
+// end of the drain changes, is written by a last flush, when every Close
+// returned and closeCtx has time left for it. That flush is the engine's
+// Close, which then releases the assets' descriptors; the first save is its
+// Stop, which only stops the timer, so the last flush can still sync and remove
+// assets and no service's Close finds them released. Both calls stay as they
+// are: Test_saver_save_order fails when either is swapped.
 func (s *saver) save(saveCtx, closeCtx context.Context) {
 	s.once.Do(func() {
 		err := s.eng.Stop(saveCtx)
@@ -301,26 +305,27 @@ func (s *saver) saveUnlimited(ctx context.Context) {
 	s.save(unlimited, unlimited)
 }
 
-// closeServices runs the services' Close functions and waits for them until ctx
-// ends. It reports whether they all returned. Close functions cannot be
-// cancelled, so one that overruns is left running: the process exits next.
+// closeServices runs the services' Close functions, all at once, until ctx
+// ends. It warns of each whose Close had not returned by then, and reports
+// whether a last save can follow: every Close returned, and ctx still has time
+// for it. A Close that returned at the deadline, because it honours ctx, is not
+// warned of as running, but the last save its return skips is warned of, once,
+// since what the Close changed stays unsaved.
 func (s *saver) closeServices(ctx context.Context) bool {
-	stopped := make(chan struct{})
-
-	go func() {
-		defer close(stopped)
-
-		s.services.close()
-	}()
-
-	select {
-	case <-stopped:
-		return true
-	case <-ctx.Done():
-		slog.Warn("a service did not stop in time; exiting without waiting for it")
+	running := s.services.close(ctx)
+	if len(running) > 0 {
+		slog.Warn("a service did not stop in time; exiting without waiting for it", "services", running)
 
 		return false
 	}
+
+	if ctx.Err() != nil {
+		slog.Warn("the last save was skipped because the close deadline passed; changes made in Close are not saved")
+
+		return false
+	}
+
+	return true
 }
 
 // restart asks the PID 1 supervisor to restart gostack. Without one there is

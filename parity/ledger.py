@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Parity ledger: merge pytest results, ratchet regressions, render docs/parity.md.
 
-parity/ledger.json maps a pytest nodeid to
+The ledger is one file per service, parity/ledger/<service>.json, named as
+TEST_DIRS names the service. Each maps a pytest nodeid of that service to
     {"localstack": <status>, "gostack": <status>, "reason": <text>}
 where status is one of pass, fail, skip, xfail, excluded, or null (not run).
+A nodeid's service comes from its test directory (TEST_DIRS); a nodeid whose
+directory maps to no service, or that sits in another service's file, is an
+error. The exclusions are one file per service too, parity/exclusions/<service>.yaml,
+and each pattern sits in the file of the service whose tests it matches.
 
 Commands (standard library only):
     merge  --column localstack|gostack --junit FILE --excluded FILE
@@ -11,29 +16,66 @@ Commands (standard library only):
            other row untouched, then rewrite docs/parity.md. Prints per-file
            counts.
     check  [--base REV]
-           Fail when a nodeid that passed in the committed ledger (default
-           HEAD:parity/ledger.json) fails in the working-tree ledger, in either
-           column. A regression is never a deferral.
-           When parity/out/collected.json exists (written by prune), also warns
-           about ledger rows that collection no longer found. Never a failure.
+           Compare the working-tree ledger with the one committed at REV
+           (default HEAD; on a pull request CI passes HEAD^1 of GitHub's merge
+           ref, the base the merged tree was made from). It fails when:
+           - a nodeid that was `pass` in the gostack column is anything else
+             now (fail, skip, xfail, excluded, null, or a missing row) and
+             parity/demotions.yaml does not list it. Each one is named;
+           - parity/demotions.yaml lists a nodeid that is `pass` in the
+             gostack column now (the test passes again; remove the entry), or
+             says gone upstream for a row that is still in the ledger;
+           - a nodeid that was `pass` in the localstack column is `fail` now
+             (any other change there only warns);
+           - a service file the base has is gone from the working tree;
+           - REV is no commit, or is the all-zero sha while HEAD has a parent.
+             The all-zero sha with a root HEAD is the first commit, and a
+             commit with no ledger has nothing to compare; both pass.
+           The base is read in either layout: parity/ledger/*.json, or the
+           single parity/ledger.json that came before it. Also checks every
+           exclusions file. When parity/out/collected.json exists (written by
+           prune), also warns about ledger rows that collection no longer
+           found. Never a failure.
+    uncommitted --services SERVICES --junit FILE --excluded FILE [--rev REV]
+           Fail when the gostack column of a listed service in the working
+           tree differs from the file committed at REV (default HEAD), in
+           either direction, a row missing on one side included. Fail too on
+           a row of a listed service committed at REV whose test the run did
+           not collect (not in the run's junit report or excluded list),
+           unless the row is `excluded` or parity/demotions.yaml lists it:
+           merge leaves that row as it was, so the run never observed it.
+           parity.yml runs it after `make parity`, so a pull request carries
+           the ledger its run observed. Other services are not compared.
+    merge-parent --head SHA
+           Print HEAD's first parent when HEAD is GitHub's merge of the pull
+           request head SHA into its base: two parents, the second SHA. Fail
+           otherwise.
     prune  [--localstack DIR] [--dry-run] [--collected FILE]
            Collect the nodeids of the ledger's services with `pytest
            --collect-only -q` in the runner image (parity/run.sh collect, against
            the LocalStack checkout DIR) and remove every ledger row whose nodeid
-           is gone. Prints the removed rows; --dry-run prints them and changes
-           nothing. --collected FILE reads a saved `pytest --collect-only -q`
-           listing instead of running Docker.
+           is gone. A removed row that was `pass` in the gostack column is
+           written to parity/demotions.yaml as gone upstream at the pinned
+           LocalStack sha. Prints the removed rows; --dry-run prints them and
+           changes nothing. --collected FILE reads a saved `pytest
+           --collect-only -q` listing instead of running Docker.
     docs   Rewrite docs/parity.md from the ledger.
-    services [--changed]
-           Print the services the ledger covers, comma separated. With --changed,
-           read changed file paths from stdin and print only the services that
-           code change can affect (empty when none): internal/service/<svc>/
-           selects <svc>, and a shared path selects every service. --range
-           A...B lets a change to the registration list that only adds lines
-           naming a changed service count as that service's alone.
+    services [--changed [--range A..B]]
+           Print the services the ledger covers, comma separated. With
+           --changed, read NUL-separated changed paths from stdin (`git diff
+           --name-only -z --no-renames`) and print the services that change can
+           affect (empty when none). A path selects every service unless it
+           is one service's own path (and that service is not in
+           ROUTING_REACH), a Go test file, or is in NO_IMAGE_EFFECT; see
+           affected_services. --range names the change, so a change to
+           cmd/gostack/services.go that only edits whole registrations()
+           entries and service imports selects the services those lines name
+           instead of every service.
     test-dirs SERVICES
            Print the LocalStack test path (tests/aws/services/<dir>) of each
            comma separated service, one per line. parity/run.sh runs these.
+    tables Print DEPENDS_ON and ROUTING_REACH as JSON, for the Go test that
+           checks them against the code (cmd/gostack, Test_parityTables).
 """
 
 from __future__ import annotations
@@ -49,8 +91,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LEDGER = ROOT / "parity" / "ledger.json"
+LEDGER = ROOT / "parity" / "ledger"
+EXCLUSIONS = ROOT / "parity" / "exclusions"
+# The single-file layouts that came before the per-service files. A base
+# revision may still hold the ledger; neither may come back in the working tree.
+LEGACY_LEDGER = "ledger.json"
+LEGACY_EXCLUSIONS = "exclusions.yaml"
 DOCS = ROOT / "docs" / "parity.md"
+DEMOTIONS = ROOT / "parity" / "demotions.yaml"
+SOURCES_LOCK = ROOT / "specs" / "SOURCES.lock"
 COLLECTED = ROOT / "parity" / "out" / "collected.json"
 RUN_SH = ROOT / "parity" / "run.sh"
 COLUMNS = ("localstack", "gostack")
@@ -103,25 +152,72 @@ TEST_DIRS = {
 }
 SERVICE_OF_DIR = {directory: name for name, directory in TEST_DIRS.items()}
 
-# The file that lists the registered services. Adding a service touches it, so
-# it is shared unless the change only adds lines naming the services it adds.
+# The file that lists the registered services. A changed line of it selects
+# the services it names only when it is one whole element of the list
+# registrations() returns, or an import of a service's package; any other
+# changed line of code selects every service (registration_services).
 REGISTRATION_FILE = "cmd/gostack/services.go"
+SERVICE_PACKAGE = "github.com/kylecannon/gostack/internal/service/"
 
-# A change under internal/service/<svc>/ affects that service alone. A change
-# under SHARED_PATHS affects every service. Anything else (docs/, bench/, tools/,
-# the other workflows) cannot change what the image does.
+# A change under internal/service/<svc>/ or internal/api/<svc>/ (generated from
+# that service's model, imported by internal/service/<svc>/ alone, and own only
+# once that directory exists), where <svc> is in TEST_DIRS, is that service's
+# own. Every other path selects every
+# service, except these, which cannot change what the image does or how the
+# suite runs against it.
 SERVICE_DIR = "internal/service/"
-SHARED_PATHS = (
-    "internal/",  # gateway, protocol, route, persist, config, api and the rest
-    "cmd/",
-    "codegen/",
-    "specs/",
-    "docker/",
-    "parity/",
-    "go.mod",
-    "go.sum",
-    ".github/workflows/parity.yml",
+OWN_DIRS = (SERVICE_DIR, "internal/api/")
+NO_IMAGE_EFFECT = (
+    # Outside the Docker build context (.dockerignore), and not read by parity/.
+    "docs/",
+    "tools/",
+    ".claude/",
+    # In the build context, but its own programs: nothing under cmd/ or
+    # internal/ imports it, so it is not in the binary.
+    "bench/",
+    # Prose in the build context that nothing compiles, embeds or reads.
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "LICENSE",
 )
+# go build leaves out every file with this suffix, wherever it is, so none of
+# them is in the binary. codegen/ stays shared: its non-test code makes
+# internal/api.
+GO_TEST_SUFFIX = "_test.go"
+
+# The services whose Registration sets a hook that runs on requests meant for
+# any service: Mount, ClaimHost, Claim, Fallback or Preprocess. A change to one
+# of them can break another service's suite, so it selects every service.
+# Test_parityTables in cmd/gostack walks registrations() and fails when this
+# differs from the hooks the services set.
+# - s3 claims its hosts, falls back to unsigned path-style calls and
+#   preprocesses every request.
+# - sqs mounts its queue-URL paths, /<account>/<queue>, which a path-style
+#   call to another service can match.
+ROUTING_REACH = ("s3", "sqs")
+# Every workflow but this one: they run checks, they do not build the image
+# parity runs against.
+WORKFLOWS = ".github/workflows/"
+PARITY_WORKFLOW = ".github/workflows/parity.yml"
+
+# The services whose tests a change to another service can break: each key's
+# tests depend on the services it lists, so a change to one of those selects
+# the key too. EVERY_SERVICE as a key is every service the ledger covers.
+# - s3 delivers event notifications to sqs in this process.
+# - LocalStack's session fixtures account_id and secondary_account_id call
+#   sts.get_caller_identity in every service's test session, so a change to
+#   sts can break any service's tests.
+# Test_parityTables in cmd/gostack checks the keys other than EVERY_SERVICE
+# against the code: they are the services whose package imports
+# internal/inproc or another service's package, and each lists every service
+# whose package it imports. Which service an inproc call reaches, and the
+# EVERY_SERVICE entry, are not in the imports; they stay reviewed by hand.
+EVERY_SERVICE = "*"
+DEPENDS_ON = {
+    "s3": ("sqs",),
+    EVERY_SERVICE: ("sts",),
+}
 
 # When one nodeid has several junit testcases (call plus a teardown error), the
 # worst one wins.
@@ -129,10 +225,12 @@ RANK = {"pass": 0, "skip": 1, "xfail": 2, "fail": 3}
 
 
 def service_of(nodeid: str) -> str:
-    if nodeid.startswith(SERVICE_PREFIX):
-        directory = nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0]
-        return SERVICE_OF_DIR.get(directory, directory)
-    return "other"
+    """The service whose test directory holds nodeid. A nodeid outside every
+    TEST_DIRS directory is an error: its row would have no file to live in."""
+    directory = nodeid[len(SERVICE_PREFIX) :].split("/", 1)[0] if nodeid.startswith(SERVICE_PREFIX) else ""
+    if directory not in SERVICE_OF_DIR:
+        raise SystemExit(f"{nodeid}: not under a known service's test directory (TEST_DIRS in parity/ledger.py)")
+    return SERVICE_OF_DIR[directory]
 
 
 def test_dir(service: str) -> str:
@@ -187,14 +285,57 @@ def read_junit(path: Path) -> dict[str, tuple[str, str]]:
     return results
 
 
-# --- ledger file -----------------------------------------------------------
+# --- ledger files ----------------------------------------------------------
 
 
-def load_ledger(path: Path) -> dict[str, dict]:
-    if not path.exists():
+def service_files(directory: Path, suffix: str) -> dict[str, Path]:
+    """service -> file for every <service><suffix> in directory. A file named
+    for no known service is an error."""
+    if not directory.is_dir():
         return {}
-    ledger = json.loads(path.read_text(encoding="utf-8"))
-    validate(ledger, str(path))
+    files = {path.name[: -len(suffix)]: path for path in sorted(directory.glob("*" + suffix))}
+    unknown = sorted(set(files) - set(TEST_DIRS))
+    if unknown:
+        raise SystemExit(f"{directory}: {', '.join(unknown)} name no service in TEST_DIRS (parity/ledger.py)")
+    return files
+
+
+def refuse_legacy(directory: Path, legacy: str) -> None:
+    """The single file the per-service directory replaced must not come back:
+    nothing reads it, so its rows would be silently ignored."""
+    if (directory.parent / legacy).exists():
+        raise SystemExit(f"{directory.parent / legacy}: the single file is replaced by {directory}/<service>; move its rows there")
+
+
+def loads_unique(text: str, where: str) -> object:
+    """json.loads that refuses a key listed twice in one object: the last one
+    would win silently, so a `fail` row could hide behind a later `pass`."""
+
+    def unique(pairs: list[tuple[str, object]]) -> dict:
+        keys = Counter(key for key, _ in pairs)
+        twice = sorted(key for key, count in keys.items() if count > 1)
+        if twice:
+            raise SystemExit(f"{where}: {', '.join(twice)} listed twice")
+        return dict(pairs)
+
+    return json.loads(text, object_pairs_hook=unique)
+
+
+def parse_service_ledger(service: str, text: str, where: str) -> dict[str, dict]:
+    rows = loads_unique(text, where)
+    validate(rows, where)
+    for nodeid in rows:
+        if service_of(nodeid) != service:
+            raise SystemExit(f"{where}: {nodeid} belongs to {service_of(nodeid)}, not {service}")
+    return rows
+
+
+def load_ledger(directory: Path) -> dict[str, dict]:
+    """The union of the per-service files in directory."""
+    refuse_legacy(directory, LEGACY_LEDGER)
+    ledger: dict[str, dict] = {}
+    for service, path in service_files(directory, ".json").items():
+        ledger.update(parse_service_ledger(service, path.read_text(encoding="utf-8"), str(path)))
     return ledger
 
 
@@ -209,11 +350,126 @@ def validate(ledger: object, where: str) -> None:
                 raise SystemExit(f"{where}: {nodeid}: bad {column} status {entry[column]!r}")
 
 
-def write_ledger(path: Path, ledger: dict[str, dict]) -> None:
-    lines = [
-        f"{json.dumps(nodeid)}: {json.dumps(ledger[nodeid], sort_keys=True)}" for nodeid in sorted(ledger)
-    ]
-    path.write_text("{\n" + ",\n".join(lines) + "\n}\n" if lines else "{}\n", encoding="utf-8")
+def split_by_service(ledger: dict[str, dict]) -> dict[str, dict[str, dict]]:
+    by_service: dict[str, dict[str, dict]] = defaultdict(dict)
+    for nodeid, entry in ledger.items():
+        by_service[service_of(nodeid)][nodeid] = entry
+    return dict(by_service)
+
+
+def format_ledger(rows: dict[str, dict]) -> str:
+    lines = [f"{json.dumps(nodeid)}: {json.dumps(rows[nodeid], sort_keys=True)}" for nodeid in sorted(rows)]
+    return "{\n" + ",\n".join(lines) + "\n}\n" if lines else "{}\n"
+
+
+def write_ledger(directory: Path, ledger: dict[str, dict]) -> None:
+    """Write each service's rows, sorted, to its own file. Every nodeid is
+    mapped before anything is written. A service file whose rows are all gone
+    is kept as {} rather than deleted, so check still sees the service."""
+    by_service = split_by_service(ledger)
+    existing = service_files(directory, ".json")
+    directory.mkdir(parents=True, exist_ok=True)
+    for service in sorted(set(by_service) | set(existing)):
+        (directory / f"{service}.json").write_text(format_ledger(by_service.get(service, {})), encoding="utf-8")
+
+
+# --- exclusions files ------------------------------------------------------
+
+# The one line shape an exclusions file may hold besides comments and blank
+# lines: a double-quoted nodeid pattern and a plain reason. pytest_gostack.py
+# reads the files with yaml.safe_load; ledger.py reads them with the standard
+# library, so it accepts only this shape and refuses anything else. A plain
+# reason may not start with a YAML indicator or hold ": " or " #", which YAML
+# would read as a mapping or a comment, nor be a word YAML 1.1 resolves to
+# another type (a bool, null, a number, .inf, .nan, a timestamp, = or <<). A
+# tab is refused anywhere outside a comment's text: YAML refuses it as
+# indentation and between tokens.
+EXCLUSION_LINE = re.compile(r'^("(?:[^"\\]|\\.)*"): ([^\s"\'#&*!|>%@`{}\[\],?:-]\S*(?: +\S+)*) *$')
+PLAIN_BREAKERS = re.compile(
+    r": |[ \t]#|:$|\t"
+    r"|^(?:true|false|yes|no|on|off|y|n|null|~|=|<<|\.?[0-9+.][0-9_.:eE+-]*"
+    r"|[-+]?\.(?:inf|nan)|[-+]?0x[0-9a-f_]+|[-+]?0b[01_]+)$"
+    r"|^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:$|[Tt \t])",
+    re.IGNORECASE,
+)
+
+
+def parse_reason_lines(text: str, where: str) -> dict[str, tuple[int, str]]:
+    """key -> (line number, reason) for every `"key": reason` line. Comments
+    and blank lines are skipped; any other line, and a key listed twice, is an
+    error."""
+    entries: dict[str, tuple[int, str]] = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip(" ").startswith("#"):
+            continue
+        match = EXCLUSION_LINE.match(line)
+        if not match or PLAIN_BREAKERS.search(match.group(2)):
+            raise SystemExit(f'{where}:{number}: expected `"nodeid": reason`, got {line!r}')
+        key, reason = json.loads(match.group(1)), match.group(2)
+        if key in entries:
+            raise SystemExit(f"{where}:{number}: {key} is listed twice")
+        entries[key] = (number, reason)
+    return entries
+
+
+def parse_exclusions(service: str, text: str, where: str) -> dict[str, str]:
+    patterns: dict[str, str] = {}
+    for pattern, (number, reason) in parse_reason_lines(text, where).items():
+        if service_of(pattern) != service:
+            raise SystemExit(f"{where}:{number}: {pattern} matches {service_of(pattern)} tests, not {service}")
+        patterns[pattern] = reason
+    return patterns
+
+
+def load_exclusions(directory: Path) -> dict[str, str]:
+    """pattern -> reason over every per-service exclusions file. A pattern sits
+    in the file of the service whose tests it matches."""
+    refuse_legacy(directory, LEGACY_EXCLUSIONS)
+    patterns: dict[str, str] = {}
+    for service, path in service_files(directory, ".yaml").items():
+        patterns.update(parse_exclusions(service, path.read_text(encoding="utf-8"), str(path)))
+    return patterns
+
+
+# --- demotions -------------------------------------------------------------
+
+DEMOTIONS_HEADER = """\
+# Reviewed demotions: gostack tests that passed and no longer do. `make
+# parity-check` fails when a row that is `pass` in the gostack column at the
+# base is anything else now, unless its nodeid is listed here with a one-line
+# reason. An entry whose test passes again is refused: remove it. `make
+# parity-prune` adds the passing rows it removes, as gone upstream. One exact
+# nodeid per line, sorted; same line grammar as parity/exclusions/.
+"""
+
+
+# The reason prune gives the passing rows it removes.
+GONE_UPSTREAM = "gone upstream"
+
+
+def load_demotions(path: Path) -> dict[str, str]:
+    """nodeid -> reason. No file lists nothing."""
+    if not path.exists():
+        return {}
+    entries = parse_reason_lines(path.read_text(encoding="utf-8"), str(path))
+    for nodeid, (number, _) in entries.items():
+        if "::" not in nodeid:
+            raise SystemExit(f"{path}:{number}: {nodeid} is not a nodeid")
+        service_of(nodeid)
+    return {nodeid: reason for nodeid, (_, reason) in entries.items()}
+
+
+def write_demotions(path: Path, demotions: dict[str, str]) -> None:
+    lines = "".join(f"{json.dumps(nodeid)}: {demotions[nodeid]}\n" for nodeid in sorted(demotions))
+    path.write_text(DEMOTIONS_HEADER + lines, encoding="utf-8")
+
+
+def pinned_localstack_sha() -> str:
+    for line in SOURCES_LOCK.read_text(encoding="utf-8").splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == "localstack_sha":
+            return fields[1]
+    raise SystemExit(f"{SOURCES_LOCK}: no localstack_sha line")
 
 
 # --- merge -----------------------------------------------------------------
@@ -279,37 +535,144 @@ def print_run_counts(column: str, results: dict[str, tuple[str, str]], excluded:
 # --- check -----------------------------------------------------------------
 
 
-def committed_ledger(base: str, path: Path) -> dict[str, dict] | None:
-    relative = path.resolve().relative_to(ROOT).as_posix()
-    shown = subprocess.run(
-        ["git", "-C", str(ROOT), "show", f"{base}:{relative}"], capture_output=True, text=True, check=False
-    )
+def git(*argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(ROOT), *argv], capture_output=True, text=True, check=False)
+
+
+def git_show(base: str, relative: str) -> str:
+    shown = git("show", f"{base}:{relative}")
     if shown.returncode != 0:
+        raise SystemExit(f"parity-check: cannot read {base}:{relative}: {shown.stderr.strip()}")
+    return shown.stdout
+
+
+def committed_ledger(base: str, directory: Path) -> tuple[dict[str, dict], set[str]] | None:
+    """The ledger at base and the services it has rows or a file for, from the
+    per-service files when base has them, else from the single ledger.json that
+    came before them. None only when base has neither. base is a commit
+    (resolve_base)."""
+    relative = directory.resolve().relative_to(ROOT).as_posix()
+    legacy = f"{relative.rsplit('/', 1)[0]}/{LEGACY_LEDGER}" if "/" in relative else LEGACY_LEDGER
+    listed = git("ls-tree", "--name-only", f"{base}^{{tree}}", "--", f"{relative}/", legacy)
+    if listed.returncode != 0:
+        raise SystemExit(f"parity-check: cannot list {base}: {listed.stderr.strip()}")
+    names = listed.stdout.splitlines()
+    files = [n for n in names if n.startswith(f"{relative}/") and n.endswith(".json")]
+    if legacy in names and files:
+        raise SystemExit(f"parity-check: {base} holds both {legacy} and {relative}/; it has no one ledger to compare with")
+    if files:
+        ledger: dict[str, dict] = {}
+        services = set()
+        for name in files:
+            service = name[len(relative) + 1 : -len(".json")]
+            if service not in TEST_DIRS:
+                raise SystemExit(f"parity-check: {base}:{name} names no service in TEST_DIRS")
+            services.add(service)
+            ledger.update(parse_service_ledger(service, git_show(base, name), f"{base}:{name}"))
+        return ledger, services
+    if legacy in names:
+        ledger = loads_unique(git_show(base, legacy), f"{base}:{legacy}")
+        validate(ledger, f"{base}:{legacy}")
+        return ledger, {service_of(nodeid) for nodeid in ledger}
+    return None
+
+
+# An all-zero sha is how GitHub names "no commit": github.event.before of a push
+# that created the branch.
+NULL_SHA = re.compile(r"0{40}|0{64}")
+
+
+def resolve_base(base: str) -> str | None:
+    """The commit base names, or None when there is genuinely nothing before
+    this change: base is the all-zero sha and HEAD is a root commit, the first
+    commit of the repository. An all-zero base with history behind HEAD, or a
+    name that resolves to no commit, fails: comparing with nothing there
+    would pass any regression."""
+    if NULL_SHA.fullmatch(base):
+        if git("rev-parse", "--verify", "--quiet", "HEAD^{commit}").returncode != 0:
+            raise SystemExit("parity-check: the base is the all-zero sha and HEAD is no commit")
+        if git("rev-parse", "--verify", "--quiet", "HEAD^").returncode == 0:
+            raise SystemExit(
+                f"parity-check: the base is the all-zero sha {base}, which names no commit, and HEAD has a parent; "
+                "pass the commit to compare with"
+            )
         return None
-    ledger = json.loads(shown.stdout)
-    validate(ledger, f"{base}:{relative}")
-    return ledger
+    resolved = git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}")
+    if base.startswith("-") or resolved.returncode != 0:
+        raise SystemExit(f"parity-check: the base {base!r} is not a commit in this repository")
+    return resolved.stdout.strip()
+
+
+def stale_demotions(current: dict[str, dict], demotions: dict[str, str], where: str) -> list[str]:
+    """An entry whose test passes in the working tree no longer excuses
+    anything. An excluded, failing or absent row keeps its entry, except that a
+    gone upstream entry needs its row gone: prune deletes the row it writes the
+    entry for, so a row that is still there was not pruned."""
+    stale = []
+    for nodeid in sorted(demotions):
+        if nodeid not in current:
+            continue
+        if current[nodeid]["gostack"] == "pass":
+            stale.append(f"  {where}: {nodeid}: passes in the gostack column again; remove the entry")
+        elif demotions[nodeid].startswith(GONE_UPSTREAM):
+            stale.append(f"  {where}: {nodeid}: says {GONE_UPSTREAM}, but its row is still in the ledger; give the real reason")
+    return stale
+
+
+def compare_rows(base: dict[str, dict], current: dict[str, dict], demotions: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
+    """(regressions, warnings, demoted) between the base and the working tree.
+    gostack: pass to anything else is a regression unless demotions lists it.
+    localstack: pass to fail is a regression and any other change warns; that
+    column records LocalStack's own result and is not gated further."""
+    regressions, warnings, demoted = [], [], []
+    for nodeid, before in sorted(base.items()):
+        after = current.get(nodeid)
+        if before["gostack"] == "pass":
+            now = after["gostack"] if after else "missing"
+            if now != "pass":
+                if nodeid in demotions:
+                    demoted.append(f"  gostack: {nodeid}: pass -> {now} ({demotions[nodeid]})")
+                else:
+                    regressions.append(f"  gostack: {nodeid}: pass -> {now}")
+        if before["localstack"] == "pass":
+            now = after["localstack"] if after else "missing"
+            if now == "fail":
+                regressions.append(f"  localstack: {nodeid}: pass -> fail")
+            elif now != "pass":
+                warnings.append(f"  localstack: {nodeid}: pass -> {now}")
+    return regressions, warnings, demoted
 
 
 def check(args: argparse.Namespace) -> None:
     current = load_ledger(args.ledger)
-    base = committed_ledger(args.base, args.ledger)
-    if base is None:
-        print(f"parity-check: no committed ledger at {args.base}; {len(current)} entries, nothing to compare")
+    exclusions = load_exclusions(args.exclusions)
+    demotions = load_demotions(args.demotions)
+    demotions_name = args.demotions.name
+    stale_entries = stale_demotions(current, demotions, demotions_name)
+    commit = resolve_base(args.base)
+    committed = committed_ledger(commit, args.ledger) if commit is not None else None
+    if committed is None:
+        if stale_entries:
+            print("parity-check: stale demotion(s):\n" + "\n".join(stale_entries), file=sys.stderr)
+            raise SystemExit(1)
+        where = f"at {args.base}" if commit is not None else f"before the first commit ({args.base})"
+        print(
+            f"parity-check: no committed ledger {where}; {len(current)} entries, "
+            f"{len(exclusions)} exclusion patterns, nothing to compare"
+        )
         return
-    regressions, warnings = [], []
-    for nodeid, before in sorted(base.items()):
-        after = current.get(nodeid)
-        for column in COLUMNS:
-            if before[column] != "pass":
-                continue
-            now = after[column] if after else None
-            if now == "fail":
-                regressions.append(f"  {column}: {nodeid}: pass -> fail")
-            elif now != "pass" and after is not None:
-                warnings.append(f"  {column}: {nodeid}: pass -> {now}")
-            elif after is None:
-                warnings.append(f"  {column}: {nodeid}: pass -> missing")
+    base, base_services = committed
+    regressions: list[str] = []
+    # A service file deleted outright would otherwise read as every one of its
+    # rows going missing.
+    present = set(service_files(args.ledger, ".json"))
+    for service in sorted(base_services - present):
+        regressions.append(f"  {args.ledger.resolve().relative_to(ROOT).as_posix()}/{service}.json: deleted, {args.base} has it")
+    rows, warnings, demoted = compare_rows(base, current, demotions)
+    regressions += rows + stale_entries
+    if demoted:
+        print(f"parity-check: {len(demoted)} demotion(s) listed in {demotions_name}:")
+        print("\n".join(demoted))
     for line in warnings:
         print(f"parity-check warning (not a failure):\n{line}" if line is warnings[0] else line)
     stale = stale_rows(current, args.collected)
@@ -322,6 +685,119 @@ def check(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     passing = sum(1 for e in current.values() for c in COLUMNS if e[c] == "pass")
     print(f"parity-check: ok against {args.base} ({len(current)} entries, {passing} column passes)")
+
+
+# --- uncommitted -------------------------------------------------------------
+
+
+def committed_service(rev: str, directory: Path, service: str) -> dict[str, dict]:
+    """The rows of one service's file committed at rev; none when rev has no
+    such file."""
+    relative = f"{directory.resolve().relative_to(ROOT).as_posix()}/{service}.json"
+    listed = git("ls-tree", "--name-only", f"{rev}^{{tree}}", "--", relative)
+    if listed.returncode != 0:
+        raise SystemExit(f"uncommitted: cannot list {rev}: {listed.stderr.strip()}")
+    if not listed.stdout.strip():
+        return {}
+    return parse_service_ledger(service, git_show(rev, relative), f"{rev}:{relative}")
+
+
+def gostack_value(rows: dict[str, dict], nodeid: str) -> str:
+    if nodeid not in rows:
+        return "missing"
+    value = rows[nodeid]["gostack"]
+    return "null" if value is None else value
+
+
+def run_collected(junit: Path, excluded: Path) -> set[str]:
+    """The nodeids a run collected, from what the run wrote: every testcase of
+    its junit report, and every nodeid in the plugin's excluded list. The
+    plugin skips an excluded test, so the report holds it as well; the list is
+    the record merge writes excluded rows from."""
+    for path in (junit, excluded):
+        if not path.is_file():
+            raise SystemExit(f"uncommitted: {path} is missing; the run left nothing to say which tests it collected")
+    return set(read_junit(junit)) | set(json.loads(excluded.read_text(encoding="utf-8"))["excluded"])
+
+
+def uncommitted(args: argparse.Namespace) -> None:
+    """Fail when the gostack column a run wrote into the working tree differs
+    from the ledger committed at --rev, for the services the run selected, or
+    when a committed row of theirs is one the run never collected: merge
+    leaves such a row as it is, so its committed value was not observed."""
+    selected = sorted({name for name in args.services.split(",") if name})
+    for service in selected:
+        test_dir(service)
+    refuse_legacy(args.ledger, LEGACY_LEDGER)
+    files = service_files(args.ledger, ".json")
+    collected = run_collected(args.junit, args.excluded)
+    demotions = load_demotions(args.demotions)
+    differences, unobserved = [], []
+    for service in selected:
+        committed = committed_service(args.rev, args.ledger, service)
+        path = files.get(service)
+        observed = parse_service_ledger(service, path.read_text(encoding="utf-8"), str(path)) if path else {}
+        for nodeid in sorted(committed.keys() | observed.keys()):
+            before, after = gostack_value(committed, nodeid), gostack_value(observed, nodeid)
+            if before != after:
+                differences.append(f"  {nodeid}: committed {before}, observed {after}")
+            elif nodeid in committed and nodeid not in collected and before != "excluded" and nodeid not in demotions:
+                unobserved.append(f"  {nodeid}: committed {before}, not collected by this run")
+    if unobserved:
+        print(
+            f"parity: {len(unobserved)} row(s) committed at {args.rev} name a test this run did not collect:",
+            file=sys.stderr,
+        )
+        print("\n".join(unobserved), file=sys.stderr)
+        print(
+            "A test that is gone upstream leaves the ledger with `make parity-prune`; a row for a test "
+            f"that never existed is removed; either way a passing row needs its entry in {args.demotions.name}.",
+            file=sys.stderr,
+        )
+    if differences:
+        print(
+            f"parity: the gostack column this run observed differs from the ledger committed at {args.rev} "
+            f"in {len(differences)} row(s):",
+            file=sys.stderr,
+        )
+        print("\n".join(differences), file=sys.stderr)
+        print(
+            "Commit the ledger this run wrote (parity/ledger/ in the parity artifact, or `make parity` "
+            "locally): the committed ledger is what the ratchet protects. A test whose result changes "
+            "from run to run is excluded with a reason and demoted, not left to flap.",
+            file=sys.stderr,
+        )
+    if differences or unobserved:
+        raise SystemExit(1)
+    print(f"parity: the gostack column of {', '.join(selected) or 'no service'} matches the ledger committed at {args.rev}")
+
+
+# --- merge-parent ------------------------------------------------------------
+
+
+def merge_parent(args: argparse.Namespace) -> None:
+    """Print HEAD's first parent when HEAD is the merge of the pull request
+    head into its base, as GitHub's merge ref (refs/pull/N/merge) is: exactly
+    two parents, the second being --head, and HEAD not --head itself. Anything
+    else fails, so a run never falls back to comparing the head alone."""
+    shown = git("rev-list", "--parents", "-n", "1", "HEAD")
+    if shown.returncode != 0:
+        raise SystemExit(f"merge-parent: cannot read HEAD: {shown.stderr.strip()}")
+    head, *parents = shown.stdout.split()
+    want = git("rev-parse", "--verify", "--quiet", f"{args.head}^{{commit}}") if args.head and not args.head.startswith("-") else None
+    if want is None or want.returncode != 0:
+        raise SystemExit(f"merge-parent: the pull request head {args.head!r} is not a commit in this checkout")
+    pr_head = want.stdout.strip()
+    if head == pr_head:
+        raise SystemExit(f"merge-parent: HEAD is the pull request head {pr_head}, not GitHub's merge of it into the base")
+    if len(parents) != 2:
+        raise SystemExit(
+            f"merge-parent: HEAD {head} has {len(parents)} parent(s), not 2: it is not GitHub's merge of the pull request "
+            "into its base. GitHub makes no merge ref for a pull request that cannot merge; resolve the conflict."
+        )
+    if parents[1] != pr_head:
+        raise SystemExit(f"merge-parent: HEAD {head} merges {parents[1]}, not the pull request head {pr_head}")
+    print(parents[0])
 
 
 # --- prune -----------------------------------------------------------------
@@ -365,7 +841,7 @@ def collect(localstack: Path | None, services: list[str]) -> str:
 
 def prune(args: argparse.Namespace) -> None:
     ledger = load_ledger(args.ledger)
-    services = sorted({service_of(n) for n in ledger} - {"other"})
+    services = sorted({service_of(n) for n in ledger})
     if not services:
         print("prune: the ledger covers no service")
         return
@@ -391,6 +867,14 @@ def prune(args: argparse.Namespace) -> None:
         )
     if args.dry_run or not stale:
         return
+    # A passing row that is removed stops passing, so check needs a reviewed
+    # demotion for it; the reason says why.
+    passing = [nodeid for nodeid in stale if ledger[nodeid]["gostack"] == "pass"]
+    if passing:
+        demotions = load_demotions(args.demotions)
+        reason = f"{GONE_UPSTREAM} at {pinned_localstack_sha()}"
+        demotions.update(dict.fromkeys(passing, reason))
+        write_demotions(args.demotions, demotions)
     for nodeid in stale:
         del ledger[nodeid]
     write_ledger(args.ledger, ledger)
@@ -400,27 +884,201 @@ def prune(args: argparse.Namespace) -> None:
 # --- services --------------------------------------------------------------
 
 
-def only_adds_service_lines(diff: str, changed: set[str]) -> bool:
-    """True when a `git diff -U0` removes nothing and every added line names one
-    of the changed services as a word (an import, a struct field, a registration
-    line). Anything else, including a line edited in place or a bare `}`, is not
-    provably the registration of a service."""
-    if not changed:
-        return False
-    names = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(changed)) + r")\b")
-    added = 0
-    for line in diff.splitlines():
-        if line.startswith(("+++", "---")) or not line.startswith(("+", "-")):
+# Lines that start like a `//` comment and are read by the go command or the
+# compiler: build constraints, //go:debug, //go:embed, //line and the rest.
+DIRECTIVES = ("//go:", "//line ", "// +build")
+REGISTRATIONS_FUNC = "func registrations("
+REGISTRATIONS_LIST = "return []service.Registration{"
+IMPORT_LINE = re.compile(r'(?:import\s+)?(?:[A-Za-z_]\w*\s+|[._]\s+)?"' + re.escape(SERVICE_PACKAGE) + r'(\w+)"')
+HUNK = re.compile(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+# A diff of REGISTRATION_FILE with this much context is the whole file on
+# both sides, in one hunk.
+WHOLE_FILE = 1_000_000
+
+
+def go_code(line: str) -> tuple[str, str, bool]:
+    """(code, blanked, closed) of one line of Go: code is the line without its
+    `//` comment, blanked is code with the text of every string and rune
+    literal removed, and closed says no literal runs past the line. A
+    directive is code, whole."""
+    if line.lstrip().startswith(DIRECTIVES):
+        return line, line, True
+    code: list[str] = []
+    blanked: list[str] = []
+    quote = None
+    i = 0
+    while i < len(line):
+        char = line[i]
+        if quote is None and line.startswith("//", i):
+            break
+        if quote is None:
+            quote = char if char in "\"'`" else None
+            blanked.append(char)
+        elif char == quote:
+            quote = None
+            blanked.append(char)
+        elif char == "\\" and quote != "`":
+            code.append(line[i : i + 2])
+            i += 2
             continue
-        if line.startswith("-") or not names.search(line):
-            return False
-        added += 1
-    return added > 0
+        code.append(char)
+        i += 1
+    return "".join(code), "".join(blanked), quote is None
+
+
+def block_comment_lines(lines: list[str]) -> set[int]:
+    """The indexes of the lines of Go that open, close or lie inside a `/* */`
+    comment. A `/*` in a string, a rune literal or a `//` comment opens
+    nothing."""
+    inside: set[int] = set()
+    state = None  # None is code; "/*" a block comment; a quote char, a literal.
+    for number, line in enumerate(lines):
+        if state == "/*":
+            inside.add(number)
+        i = 0
+        while i < len(line):
+            two = line[i : i + 2]
+            if state is None:
+                if two == "//":
+                    break
+                if two == "/*":
+                    state = "/*"
+                    inside.add(number)
+                    i += 2
+                    continue
+                if line[i] in "\"'`":
+                    state = line[i]
+            elif state == "/*":
+                if two == "*/":
+                    state = None
+                    i += 2
+                    continue
+            elif line[i] == "\\" and state != "`":
+                i += 2
+                continue
+            elif line[i] == state:
+                state = None
+            i += 1
+        if state in ('"', "'"):
+            state = None  # an interpreted string and a rune end with their line
+    return inside
+
+
+def bracket_depths(code: str) -> tuple[int, int]:
+    """(lowest, last) depth of the brackets in code, starting from 0."""
+    depth = lowest = 0
+    for char in code:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            lowest = min(lowest, depth)
+    return lowest, depth
+
+
+def element_lines(lines: list[str]) -> set[int]:
+    """The indexes of the lines that are each one whole element of the list
+    registrations() returns: directly inside the list, brackets balanced,
+    literals closed, ending in a comma. None when the file has no such list."""
+    start = next((i for i, line in enumerate(lines) if line.startswith(REGISTRATIONS_FUNC)), None)
+    if start is None:
+        return set()
+    opening = None
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("}"):
+            return set()
+        if go_code(lines[i])[1].strip() == REGISTRATIONS_LIST:
+            opening = i
+            break
+    if opening is None:
+        return set()
+    elements: set[int] = set()
+    depth = 1
+    for i in range(opening + 1, len(lines)):
+        _, blanked, closed = go_code(lines[i])
+        lowest, last = bracket_depths(blanked)
+        item = blanked.strip()
+        if depth == 1 and closed and lowest >= 0 and last == 0 and item.endswith(",") and item != ",":
+            elements.add(i)
+        depth += last
+        if depth <= 0:
+            return elements
+    return set()
+
+
+def diff_sides(diff: str) -> tuple[list[str], list[str], list[tuple[str, int]]] | None:
+    """The old file, the new file and each changed line, as ("-", index in the
+    old file) or ("+", index in the new one), of a diff that holds the whole
+    file in one hunk. None for any other diff."""
+    old: list[str] = []
+    new: list[str] = []
+    changed: list[tuple[str, int]] = []
+    hunks = 0
+    for line in diff.split("\n"):
+        if line.startswith("@@"):
+            hunks += 1
+            starts = HUNK.match(line)
+            if hunks > 1 or starts is None or int(starts.group(1)) > 1 or int(starts.group(2)) > 1:
+                return None
+        elif hunks and line.startswith(" "):
+            old.append(line[1:])
+            new.append(line[1:])
+        elif hunks and line.startswith("-"):
+            changed.append(("-", len(old)))
+            old.append(line[1:])
+        elif hunks and line.startswith("+"):
+            changed.append(("+", len(new)))
+            new.append(line[1:])
+    return (old, new, changed) if hunks else None
+
+
+def registration_services(diff: str, names: set[str]) -> set[str] | None:
+    """The services a whole-file diff of REGISTRATION_FILE (registration_diff)
+    changes, from its changed lines:
+    - blank and comment lines name nothing and select nothing; a directive
+      (//go:build, //go:debug) is code;
+    - an import of the package of a service in names names that service;
+    - a line that is one whole element of the list registrations() returns,
+      on the side of the diff it is on, names every service in names that it
+      names as a word outside a comment or a literal.
+    None when any other line of code changed, or a line above names no
+    service: a signature, a call of registrations() or a helper changes every
+    registration, so the change cannot be attributed line by line. A changed
+    line that opens, closes or lies inside a `/* */` comment is code: the block
+    can comment out or bring back an element that did not change. None too
+    for a diff with no changed line or not in the whole-file form."""
+    sides = diff_sides(diff)
+    if sides is None or not sides[2]:
+        return None
+    old, new, changed = sides
+    elements = {"-": element_lines(old), "+": element_lines(new)}
+    blocks = {"-": block_comment_lines(old), "+": block_comment_lines(new)}
+    pattern = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(names)) + r")\b") if names else None
+    found: set[str] = set()
+    for side, index in changed:
+        if index in blocks[side]:
+            return None
+        code, blanked, closed = go_code((old if side == "-" else new)[index])
+        if not code.strip():
+            continue
+        imported = IMPORT_LINE.fullmatch(code.strip())
+        if imported and closed:
+            named = {imported.group(1)} & names
+        elif index in elements[side]:
+            named = set(pattern.findall(blanked)) if pattern else set()
+        else:
+            return None
+        if not named:
+            return None
+        found |= named
+    return found
 
 
 def registration_diff(revisions: str) -> str | None:
+    """REGISTRATION_FILE's diff over revisions, the whole file as context, so
+    each changed line can be placed in the file it belongs to."""
     shown = subprocess.run(
-        ["git", "-C", str(ROOT), "diff", "-U0", revisions, "--", REGISTRATION_FILE],
+        ["git", "-C", str(ROOT), "diff", "--no-ext-diff", f"-U{WHOLE_FILE}", revisions, "--", REGISTRATION_FILE],
         capture_output=True,
         text=True,
         check=False,
@@ -428,47 +1086,135 @@ def registration_diff(revisions: str) -> str | None:
     return shown.stdout if shown.returncode == 0 else None
 
 
-def affected_services(paths: list[str], known: set[str], registration_adds: bool = False) -> set[str]:
-    """The services that a change to paths can affect. A service directory
-    selects its service when the service has a LocalStack test directory; a shared
-    path selects every known service. registration_adds says the change to
-    REGISTRATION_FILE only adds lines naming the services of the changed
-    directories, so the file is not shared for it."""
-    affected: set[str] = set()
+def service_dirs() -> set[str]:
+    """The services with a directory under internal/service/ in the working
+    tree: the names a registration line can register."""
+    root = ROOT / SERVICE_DIR
+    return {p.name for p in root.iterdir() if p.is_dir() and p.name in TEST_DIRS} if root.is_dir() else set()
+
+
+def parity_file_service(path: str) -> str | None:
+    """The service of a per-service ledger or exclusions file, or None. Any
+    other path under parity/ is shared."""
+    for directory, suffix in (("parity/ledger/", ".json"), ("parity/exclusions/", ".yaml")):
+        name = path.removeprefix(directory)
+        if path.startswith(directory) and "/" not in name and name.endswith(suffix):
+            service = name[: -len(suffix)]
+            return service if service in TEST_DIRS else None
+    return None
+
+
+def own_service(path: str) -> str | None:
+    """The service a path under internal/service/<svc>/ or internal/api/<svc>/
+    belongs to, when <svc> is in TEST_DIRS. A file directly under either
+    directory, or a directory there that names no service, is shared. So is
+    internal/api/<svc>/ while internal/service/<svc>/ is not in the tree: a
+    generated package no service uses yet would otherwise select a service
+    the image does not serve."""
+    for directory in OWN_DIRS:
+        if path.startswith(directory):
+            service, slash, _ = path[len(directory) :].partition("/")
+            if not slash or service not in TEST_DIRS:
+                return None
+            return service if directory == SERVICE_DIR or service in service_dirs() else None
+    return None
+
+
+def with_dependents(services: set[str], known: set[str]) -> set[str]:
+    """services and every service whose tests depend on one of them, following
+    DEPENDS_ON to its end. A dependency of EVERY_SERVICE adds every known
+    service."""
+    selected = set(services)
+    while True:
+        dependents: set[str] = set()
+        for service, dependencies in DEPENDS_ON.items():
+            if selected.intersection(dependencies):
+                dependents |= set(known) if service == EVERY_SERVICE else {service}
+        if dependents <= selected:
+            return selected
+        selected |= dependents
+
+
+def no_image_effect(path: str) -> bool:
+    if path.startswith(WORKFLOWS) and path != PARITY_WORKFLOW:
+        return True
+    if path.endswith(GO_TEST_SUFFIX):
+        return True
+    return path in NO_IMAGE_EFFECT or path.startswith(tuple(p for p in NO_IMAGE_EFFECT if p.endswith("/")))
+
+
+def affected_services(paths: list[str], known: set[str], registration: set[str] | None = None) -> set[str]:
+    """The services that a change to paths can affect. Fail-safe: a path
+    selects every known service unless it is
+    - in NO_IMAGE_EFFECT, a Go test file anywhere, or another workflow than
+      parity.yml: nothing;
+    - under internal/service/<svc>/ or internal/api/<svc>/: <svc> and the
+      services whose tests depend on it (DEPENDS_ON), or every service when
+      <svc> is in ROUTING_REACH;
+    - parity/ledger/<svc>.json or parity/exclusions/<svc>.yaml: <svc>;
+    - REGISTRATION_FILE, when registration holds the services its changed
+      lines name (registration_services): those, as if their directories had
+      changed. None means the change could not be attributed."""
+    code: set[str] = set()
+    files: set[str] = set()
     shared = False
-    registration_changed = False
-    for raw in paths:
-        path = raw.strip()
-        service, _, rest = path.removeprefix(SERVICE_DIR).partition("/")
-        if path.startswith(SERVICE_DIR) and rest:
-            if service in TEST_DIRS:
-                affected.add(service)
-        elif path == REGISTRATION_FILE:
-            registration_changed = True
-        elif path.startswith(SHARED_PATHS):
+    for path in paths:
+        if no_image_effect(path):
+            continue
+        service = own_service(path)
+        ledger_file = parity_file_service(path)
+        if service is not None:
+            code.add(service)
+        elif ledger_file is not None:
+            files.add(ledger_file)
+        elif path == REGISTRATION_FILE and registration is not None:
+            code |= registration
+        else:
             shared = True
-    if shared or (registration_changed and not registration_adds):
-        return set(known) | affected
-    return affected
+    affected = with_dependents(code, known) | files
+    return set(known) | affected if shared or code.intersection(ROUTING_REACH) else affected
+
+
+def read_paths(text: str) -> list[str]:
+    """The names `git diff --name-only -z` printed. Names are NUL-terminated
+    and kept byte for byte: a name may hold spaces, quotes or a newline."""
+    if text and "\0" not in text:
+        raise SystemExit("services --changed: expected NUL-separated names from `git diff --name-only -z --no-renames`")
+    return [name for name in text.split("\0") if name]
 
 
 def services(args: argparse.Namespace) -> None:
-    known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)} - {"other"}
+    known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)}
     if not args.changed:
         print(",".join(sorted(known)))
         return
-    paths = sys.stdin.read().splitlines()
-    adds = False
-    if args.range and any(p.strip() == REGISTRATION_FILE for p in paths):
+    paths = read_paths(sys.stdin.read())
+    registration = None
+    if args.range and REGISTRATION_FILE in paths:
         diff = registration_diff(args.range)
         # Git failing to produce the diff keeps every service selected.
-        adds = diff is not None and only_adds_service_lines(diff, affected_services(paths, set()))
-    print(",".join(sorted(affected_services(paths, known, adds))))
+        registration = registration_services(diff, service_dirs()) if diff is not None else None
+    print(",".join(sorted(affected_services(paths, known, registration))))
 
 
 def test_dirs(args: argparse.Namespace) -> None:
     for name in args.services.split(","):
         print(test_dir(name))
+
+
+def tables(args: argparse.Namespace) -> None:
+    """Print the hand-kept tables Test_parityTables in cmd/gostack checks
+    against the code, as JSON."""
+    print(
+        json.dumps(
+            {
+                "depends_on": {service: list(dependencies) for service, dependencies in DEPENDS_ON.items()},
+                "every_service": EVERY_SERVICE,
+                "routing_reach": list(ROUTING_REACH),
+            },
+            sort_keys=True,
+        )
+    )
 
 
 # --- docs ------------------------------------------------------------------
@@ -501,11 +1247,11 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
 
     path.write_text(
         "# Parity\n\n"
-        "Generated by `parity/ledger.py` from `parity/ledger.json`. Do not edit.\n\n"
+        "Generated by `parity/ledger.py` from `parity/ledger/`. Do not edit.\n\n"
         "gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tests "
         "that LocalStack passes that gostack also passes in the same runner. Tests LocalStack "
         "fails are recorded and not required. Excluded tests are listed with a reason in "
-        "`parity/exclusions.yaml`.\n\n" + header + "\n".join(rows) + "\n",
+        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
 
@@ -529,8 +1275,10 @@ def docs(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--ledger", type=Path, default=LEDGER)
+    parser.add_argument("--ledger", type=Path, default=LEDGER, help="the per-service ledger directory")
+    parser.add_argument("--exclusions", type=Path, default=EXCLUSIONS, help="the per-service exclusions directory")
     parser.add_argument("--docs", type=Path, default=DOCS)
+    parser.add_argument("--demotions", type=Path, default=DEMOTIONS, help="the reviewed demotions file")
     sub = parser.add_subparsers(dest="command", required=True)
 
     merge_parser = sub.add_parser("merge", help="merge a run into the ledger")
@@ -539,10 +1287,21 @@ def main() -> None:
     merge_parser.add_argument("--excluded", type=Path, required=True)
     merge_parser.set_defaults(func=merge)
 
-    check_parser = sub.add_parser("check", help="fail on pass -> fail against the committed ledger")
+    check_parser = sub.add_parser("check", help="fail when a test that passed at the base stops passing")
     check_parser.add_argument("--base", default="HEAD", help="git revision holding the committed ledger")
     check_parser.add_argument("--collected", type=Path, default=COLLECTED, help="cached collection from prune")
     check_parser.set_defaults(func=check)
+
+    uncommitted_parser = sub.add_parser("uncommitted", help="fail when a run's gostack column differs from the committed ledger")
+    uncommitted_parser.add_argument("--services", required=True, help="comma separated services the run selected")
+    uncommitted_parser.add_argument("--rev", default="HEAD", help="git revision holding the committed ledger")
+    uncommitted_parser.add_argument("--junit", type=Path, required=True, help="the run's junit report")
+    uncommitted_parser.add_argument("--excluded", type=Path, required=True, help="the run's excluded.json, from pytest_gostack")
+    uncommitted_parser.set_defaults(func=uncommitted)
+
+    merge_parent_parser = sub.add_parser("merge-parent", help="print HEAD^1 when HEAD is GitHub's merge of --head into its base")
+    merge_parent_parser.add_argument("--head", required=True, help="the pull request head sha")
+    merge_parent_parser.set_defaults(func=merge_parent)
 
     prune_parser = sub.add_parser("prune", help="remove ledger rows whose test no longer exists upstream")
     prune_parser.add_argument("--localstack", type=Path, help="the pinned LocalStack checkout (default: where parity/run.sh looks)")
@@ -552,13 +1311,16 @@ def main() -> None:
     prune_parser.set_defaults(func=prune)
 
     services_parser = sub.add_parser("services", help="print the ledger's services, or those a change affects")
-    services_parser.add_argument("--changed", action="store_true", help="read changed paths from stdin")
-    services_parser.add_argument("--range", help="git revisions A...B of the change; lets a registration-only edit of cmd/gostack/services.go not count as shared")
+    services_parser.add_argument("--changed", action="store_true", help="read NUL-separated changed paths from stdin")
+    services_parser.add_argument("--range", help="git revisions A..B of the change; a change to cmd/gostack/services.go then selects the services its changed lines name")
     services_parser.set_defaults(func=services)
 
     dirs_parser = sub.add_parser("test-dirs", help="print the LocalStack test path of each service")
     dirs_parser.add_argument("services", help="comma separated service names")
     dirs_parser.set_defaults(func=test_dirs)
+
+    tables_parser = sub.add_parser("tables", help="print DEPENDS_ON and ROUTING_REACH as JSON")
+    tables_parser.set_defaults(func=tables)
 
     docs_parser = sub.add_parser("docs", help="rewrite docs/parity.md")
     docs_parser.set_defaults(func=docs)

@@ -24,7 +24,7 @@ gresau/localstack-persist README and source. Code and test rules are in
 "Parity" means LocalStack's own pytest suite, run unchanged against a running
 gostack container. gostack is at 100% when it passes every test that LocalStack
 passes in the same runner. Tests LocalStack fails are recorded and not
-required. `parity/ledger.json` holds the per-test result.
+required. `parity/ledger/<service>.json` holds the per-test result, one file per service.
 
 About 85 to 90% of tests are pure boto3 or HTTP. Snapshot comparison
 (`localstack-snapshot`) sees only parsed responses, so it works against any
@@ -77,15 +77,35 @@ wraps `monkeypatch.setattr(localstack.config, ...)` and copies each change into
 gostack with `POST /_localstack/config`. gostack runs with
 `GOSTACK_ENABLE_CONFIG_UPDATES=1` in CI. That recovers most of those tests.
 
-What the bridge cannot recover goes in `parity/exclusions.yaml`. Every entry
+What the bridge cannot recover goes in `parity/exclusions/<service>.yaml`. Every entry
 carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
 `runner-docker`, and so on.
 
-### Ledger (`parity/ledger.json`, committed)
+### Ledger (`parity/ledger/<service>.json`, committed)
 
 - Records nodeid to `{localstack, gostack, reason}`.
-- CI fails when any nodeid goes from pass to fail. A regression is never a
-  deferral.
+- A nodeid that is `pass` in the gostack column at the base stays `pass`.
+  CI fails when it becomes `fail`, `skip`, `xfail`, `excluded` or null, or
+  when its row or its file is removed, and names each nodeid. A regression is
+  never a deferral.
+- The one exit is `parity/demotions.yaml`, one shared file of nodeids, each
+  with a one-line reason, reviewed with the change. An entry whose test is
+  `pass` again fails CI until it is removed. `make parity-prune` writes each
+  gostack pass it removes there as gone upstream at the pinned LocalStack sha.
+- The localstack column is not under this rule: only its pass to fail fails
+  CI.
+- `parity.yml` and `ci.yml` both check out GitHub's merge ref of a pull
+  request and compare it with `HEAD^1`, the base it was merged into
+  (`ledger.py merge-parent`). `parity.yml` builds and tests that merged tree,
+  and fails when the gostack column it observed for the selected services
+  differs from the ledger committed there, or when a committed row of theirs
+  names a test the run did not collect and is neither `excluded` nor demoted
+  (`ledger.py uncommitted`, given the run's junit report and excluded list).
+- A nodeid's service comes from its test directory (`TEST_DIRS` in
+  `parity/ledger.py`). A nodeid in no service's directory, or in another
+  service's file, is an error. `ledger.py check` reads the base in either
+  layout, the per-service files or the single `parity/ledger.json` before
+  them, and fails when a service file the base has is gone.
 - `docs/parity.md` is generated from the ledger and shows percentages per
   service.
 - CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
@@ -113,7 +133,7 @@ are sized against moto's code, not LocalStack's provider files.
 ## Layout
 
 ```
-cmd/gostack/                 main only. Also answers `localstack status services --format=json` (the LocalStack HEALTHCHECK) via argv[0]/subcommand
+cmd/gostack/                 main only: wiring, shutdown, and `registrations()` in services.go, the one list of services. Also answers `localstack status services --format=json` (the LocalStack HEALTHCHECK) via argv[0]/subcommand
 internal/
   gateway/                   listener mux (TLS / HTTP1 / h2c), chi root router, middleware stack, CORS, content decoding, panic recovery
   route/                     service detection: signing name, X-Amz-Target, path rules, host, form Action; explicit ambiguity error
@@ -135,7 +155,7 @@ internal/
 tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
 specs/                       vendored botocore JSON + LocalStack patches + SOURCES.lock
-parity/                      runner Dockerfile, pytest_gostack.py, exclusions.yaml, ledger.json, scripts
+parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, demotions.yaml, scripts
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
 docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)
@@ -265,6 +285,48 @@ written by hand.
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
   generated code calls only these packages.
+- **Modeled errors:** an error shape with members besides its message gets a
+  struct of them and an `Err(msg)` method. json writes the members beside
+  `__type`, and the message under the shape's own member name (`Message` or
+  `message`). query writes them after `RequestId` as children of
+  `ErrorResponse`, where LocalStack writes them and botocore reads them;
+  Smithy's place inside `<Error>` is on botocore's ignore list. json leaves
+  out a member that is not required and is empty (a zero number, false, an
+  empty string, list, map or blob), as LocalStack's serializer does.
+- **Unions:** `Unions` and `UnionShapes` in `serviceTable` give a structure a
+  `MembersSet() int` that counts the members present, for the handler's
+  exactly-one check. They are off by default.
+- **Constraint checks:** a model trait does not show that AWS enforces it, or
+  how AWS answers, and LocalStack runs no general model validation. So
+  `Validation` in `serviceTable` checks only the traits its `Checks` list
+  names, each with the snapshot that pins it in a comment; everything else
+  reaches the handler. A key is exactly `<ModelShapeName>.<ModelMemberName>`,
+  never a Go name or another case, and `Enums` replaces an enum's printed
+  value list where AWS prints another one. A service author adds an entry
+  when a snapshot or an AWS document pins one. Generation fails for a key
+  that is not a model shape and member, an unknown trait bit, a member with
+  no such trait, a pattern Go's regexp cannot compile, a member below a list
+  or map inside a list or map, an entry no operation input reaches, and an
+  `Enums` key that names no shape or that no listed enum check uses. Every
+  operation input of such a service has `Validate() error`, which answers
+  every failure at once in AWS's text, `N validation errors detected: Value
+  'x' at 'tags.1.member.tagKey' failed to satisfy constraint: Member must
+  ...`, joined by `; ` in model order, with `ValidationException` as the
+  code unless the option names another. A length counts characters, as
+  LocalStack's own checks do. The message form lives in
+  `internal/protocol/constraint`. For these services:
+  1. The generated layer never rejects a request on its own: `Serve` and
+     `ServeValidated` do not call `Validate`, for any operation.
+  2. The handler calls `in.Validate()` where LocalStack makes the check, after
+     its own earlier checks and after any filtering of the input (sns
+     `SetPlatformApplicationAttributes` answers a malformed ARN before the
+     missing `Attributes`).
+  3. A required member can reach the handler as nil.
+
+  kms, dynamodb and sns have it on; the table tests beside their packages
+  reproduce every such message in LocalStack's snapshots for them, through a
+  stub handler that calls `Validate`. Without the option, `ServeValidated`
+  keeps the first-missing-member check SQS uses.
 
 #### REST routing and sharding
 
@@ -311,10 +373,31 @@ share a signing name, by the rules of `custom_signing_name_rules` in LocalStack'
 is the Snapshot/Restore pair, which persistence registers only when `PERSIST_*`
 enables the service. `Reset(account, region)` empties the state in place, so a
 call already holding it never writes into state the reset dropped; every
-service that has one joins `/_gostack/state/reset`, persisted or not. `Close`
-stops the service's own goroutines after the gateway drains and before the last
-save. A service that reports changes the gateway cannot see, such as SQS calls
-to a queue URL, takes a `changed(service)` callback in its constructor.
+service that has one joins `/_gostack/state/reset`, persisted or not.
+`Close(ctx)` stops the service's own goroutines after the shutdown save; every
+service's `Close` runs at once, each given the same context, which ends at the
+`Close` deadline. `Bind(handler)` hands a service that calls other services
+the gateway's handler for its `inproc` client, once the gateway is built and
+before the listeners open. A service that reports changes the gateway cannot
+see, such as SQS calls to a queue URL, takes a `changed(service)` callback in
+its constructor. A service with settings maps them from `*config.Settings` with
+a plain function that `liveSettings` wraps, so the mapping is redone only after
+an update through `/_localstack/config`.
+
+Adding a service is one entry in the generator's service table plus
+`GEN_SERVICES`, which generate `internal/api/<svc>`, the package
+`internal/service/<svc>`, and one line in `registrations()` with its import:
+two edits in `cmd/gostack/services.go`. Health, `status services`, the
+persistence engine's service list and the tests' expected service sets all
+derive from `registrations()` (the tests through `RegisteredServices` in
+`cmd/gostack/export_test.go`). `registrations()` keeps one service to a line,
+since parity selection reads a changed line of `services.go` as a change to the
+services it names only when the line is one whole element of that list or a
+service import; a settings function or any other code there selects every
+service. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
+`Preprocess` sees other services' requests, so a change to that service
+selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
+`Test_parityTables` holds it to `registrations()`.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
@@ -359,12 +442,47 @@ account and region derivation call `FromRequest`.
 A service calls another one through `inproc.Client`, which builds an HTTP request
 with a credential scope for the caller's account and region and serves it
 through the gateway's own handler. Detection, account resolution, logging and
-dirty marking all apply, and a service never reaches into another's state. `Do`
-makes a call synchronously. `Enqueue` queues it behind one worker that starts
-with the first queued call and ends when the queue is empty, so nothing runs
-while idle; the queue holds `inproc.MaxQueued` (4,096) calls and refuses the
-next. A call made before `Bind` gives the client a handler returns
-`ErrNotBound`. S3 uses it to deliver event notifications to SQS.
+dirty marking all apply, and a service never reaches into another's state.
+
+An `inproc.Call` names the method, path, query, content type, headers and body,
+so it speaks every protocol. Its zero values are a json 1.0 call: `POST /`,
+`Content-Type: application/x-amz-json-1.0` and the `X-Amz-Target` of `Target`.
+A call without a `Target` sends no `X-Amz-Target` and no default content type,
+and the gateway routes it by the signing name in its credential scope: a query
+call is a form body to SQS, a rest call a path such as `GET /bucket?location`
+to S3. A query parameter with an empty value is sent as its bare name. The
+answer carries the status, the head as a client outside reads it (each name
+canonical, nothing set after the status) and the body.
+
+- `Do` makes a call on the caller's goroutine and reads the answer whole.
+- `Stream` takes the request body as an `io.Reader` and hands back the answer's
+  body as an `io.ReadCloser`, so neither is held whole: an 8 MiB S3 GET
+  allocates about 46 KB against 16 MB through `Do`. The handler runs on a
+  goroutine of its own. Closing the body, or the end of the caller's context,
+  cancels the request and fails the handler's next write, and `Close` returns
+  once the handler has.
+- `Enqueue` queues a call and returns. Calls in one lane run one at a time in
+  the order they were queued; different lanes run at once, up to
+  `inproc.MaxInFlight` (16), served in turn. A call's lane is the `Call.Lane`
+  its caller names, or else its destination: region, signing name, method,
+  path and target, not the caller's account. The destination misses a
+  resource named in a json body, and splits two operations on one resource
+  (`PUT /b/k`, then `DELETE /b/k`) into two lanes, so a caller that needs a
+  different order sets `Lane`. A call is in-memory work on this process's
+  CPUs, so more at once gains nothing, and the bound keeps a burst, such as
+  the events of a bulk delete, from crowding out client requests. Workers
+  start with a waiting call and exit when none waits, so nothing runs while
+  idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and refuses
+  the next; each queued call has 30 seconds.
+
+A call made before `Bind` gives the client a handler returns `ErrNotBound`. A
+handler that panics, as the gateway does to abort a response whose status it
+has written, fails that call with `ErrAborted` for `Do`, `Stream` and
+`Enqueue` alike; the caller's request and the queue's workers carry on. S3
+uses the client to check a notification's queue and to deliver event
+notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
+the lane of the queue's ARN, so the events for one queue arrive in the order
+they were raised and a slow queue holds up no other.
 
 ### Body store (`internal/blob`)
 
@@ -549,11 +667,17 @@ Tests split along the same line:
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
      connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then each
+  4. The persisted state is saved, with a deadline of `Save`. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
-     tasks), with a deadline of `Close`. A `Close` that overruns is abandoned
-     with a warning and never delays the save. When every `Close` returned in
-     time, a last save writes whatever they or a request cut at `Work` changed.
+     tasks, S3's hijacked responses), all at once, each given a context that
+     ends at `Close`, so a slow one takes no time from another. A `Close` that
+     has not returned 20 ms after `Close` is abandoned with a warning naming
+     the service, and never delays the save; one that honours its context and
+     returned at the deadline is not abandoned. When every `Close` returned
+     and `Close` has time left, a last save writes whatever they or a request
+     cut at `Work` changed; when one was abandoned or the time is out,
+     what the others changed in their `Close` stays unsaved and the save of
+     step 4 is the last.
      The first save is `persist.Engine.Stop`, which stops the timer; the last
      is `Engine.Close`, which then releases the descriptors the assets hold
      (the root on `assets/.gostack` and, with syncfs, the directory kept open

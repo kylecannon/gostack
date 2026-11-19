@@ -16,9 +16,54 @@ import (
 	"testing"
 	"time"
 
+	command "github.com/kylecannon/gostack/cmd/gostack"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// runningServices is the services map of the LocalStack health route and of
+// status services: every registered service, running.
+func runningServices(t *testing.T) string {
+	t.Helper()
+
+	running := map[string]string{}
+	for name := range command.RegisteredServices(t) {
+		running[name] = "running"
+	}
+
+	out, err := json.Marshal(running)
+	require.NoError(t, err)
+
+	return string(out)
+}
+
+// localstackHealth is what /_localstack/health answers.
+func localstackHealth(t *testing.T) string {
+	t.Helper()
+
+	return `{"services":` + runningServices(t) + `,"edition":"community","version":"` + smokeVersion + `"}`
+}
+
+// gostackHealth is what /_gostack/health answers: every registered service,
+// running, and persisted when persistence is on and it has state to save.
+func gostackHealth(t *testing.T, persistence bool) string {
+	t.Helper()
+
+	type serviceHealth struct {
+		State     string `json:"state"`
+		Persisted bool   `json:"persisted"`
+	}
+
+	services := map[string]serviceHealth{}
+	for name, saved := range command.RegisteredServices(t) {
+		services[name] = serviceHealth{State: "running", Persisted: persistence && saved}
+	}
+
+	out, err := json.Marshal(map[string]any{"status": "ok", "version": smokeVersion, "services": services})
+	require.NoError(t, err)
+
+	return string(out)
+}
 
 const (
 	smokeVersion  = "smoke"
@@ -150,18 +195,14 @@ func Test_gostack_smoke(t *testing.T) {
 		status, body := g.do(t, http.MethodGet, "/_gostack/health", "")
 
 		assert.Equal(t, http.StatusOK, status)
-		assert.JSONEq(t, `{"status":"ok","version":"`+smokeVersion+
-			`","services":{"s3":{"state":"running","persisted":false},`+
-			`"sqs":{"state":"running","persisted":false},`+
-			`"sts":{"state":"running","persisted":false}}}`, body)
+		assert.JSONEq(t, gostackHealth(t, false), body)
 	})
 
 	t.Run("the LocalStack health route has LocalStack's shape", func(t *testing.T) {
 		status, body := g.do(t, http.MethodGet, "/_localstack/health", "")
 
 		assert.Equal(t, http.StatusOK, status)
-		assert.JSONEq(t, `{"services":{"s3":"running","sqs":"running","sts":"running"},"edition":"community",`+
-			`"version":"`+smokeVersion+`"}`, body)
+		assert.JSONEq(t, localstackHealth(t), body)
 	})
 
 	t.Run("the process reports ready once Ready. is printed", func(t *testing.T) {

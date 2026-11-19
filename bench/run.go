@@ -57,6 +57,23 @@ const (
 type target struct {
 	name, image string
 	persistable bool
+	// side is sideBase or sideHead when the run measures two images of one target
+	// in alternation (-base-image), and empty otherwise.
+	side string
+}
+
+const (
+	sideBase = "base"
+	sideHead = "head"
+)
+
+// label names the target in the log and in container names.
+func (t target) label() string {
+	if t.side == "" {
+		return t.name
+	}
+
+	return t.name + "-" + t.side
 }
 
 // options are the settings of `bench run`.
@@ -71,6 +88,9 @@ type options struct {
 	loadgenImage     string
 	suffix           string
 	commit           string
+	baseImage        string
+	baseCommit       string
+	baseOut          string
 	startupRuns      int
 	idleRuns         int
 	reps             int
@@ -118,14 +138,58 @@ func parseOptions(args []string) (options, error) {
 	}
 
 	opts.targets = selectTargets(*targets, []target{
-		{targetGostack, *gostack, true}, {targetSlim, *slim, true}, {targetLocalstack, *localstack, false},
+		{name: targetGostack, image: *gostack, persistable: true},
+		{name: targetSlim, image: *slim, persistable: true},
+		{name: targetLocalstack, image: *localstack},
 	})
 
 	if len(opts.targets) == 0 {
 		return options{}, fmt.Errorf("-targets %q names no target", *targets)
 	}
 
+	err = opts.checkBase()
+	if err != nil {
+		return options{}, err
+	}
+
 	return opts, nil
+}
+
+// checkBase refuses a two-sided run (-base-image) that cannot write two results
+// a comparison can tell apart.
+func (o *options) checkBase() error {
+	if o.baseImage == "" {
+		if o.baseCommit != "" || o.baseOut != "" {
+			return errors.New("-base-commit and -base-out need -base-image")
+		}
+
+		return nil
+	}
+
+	switch {
+	case len(o.targets) != 1:
+		return fmt.Errorf("-base-image measures one target against its base; -targets names %d", len(o.targets))
+	case o.baseCommit == "" || o.baseOut == "":
+		return errors.New("-base-image needs -base-commit and -base-out")
+	case filepath.Clean(o.baseOut) == filepath.Clean(o.outDir):
+		return fmt.Errorf("-base-out and -out are both %s: the two results would share a name", o.outDir)
+	}
+
+	return nil
+}
+
+// sides lists the images the run measures as one target in alternation: the
+// base image and the target's own under -base-image, else the target alone.
+func (o *options) sides(t target) []target {
+	if o.baseImage == "" {
+		return []target{t}
+	}
+
+	base, head := t, t
+	base.image, base.side = o.baseImage, sideBase
+	head.side = sideHead
+
+	return []target{base, head}
 }
 
 // bind registers the flags that fill o.
@@ -146,6 +210,10 @@ func (o *options) bind(flags *flag.FlagSet) {
 		"bench/accepted.yaml")
 	flags.StringVar(&o.suffix, "name-suffix", "", "appended to container names, to keep parallel runs apart")
 	flags.StringVar(&o.commit, "commit", "", "the commit the images were built from (default: HEAD)")
+	flags.StringVar(&o.baseImage, "base-image", "", "measure this image too, as the base of the one target, "+
+		"alternating the two in every repeated measurement; needs -base-commit and -base-out")
+	flags.StringVar(&o.baseCommit, "base-commit", "", "the commit -base-image was built from")
+	flags.StringVar(&o.baseOut, "base-out", "", "directory for the result file of -base-image")
 	flags.IntVar(&o.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
 	flags.IntVar(&o.idleRuns, "idle-runs", defaultIdleRuns, "containers measured for each idle variant")
 	flags.IntVar(&o.reps, "reps", defaultReps, "times each cell runs")
@@ -255,17 +323,27 @@ func orchestrate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 
 	run := &runner{opts: opts, api: api, log: stderr}
 
-	rep, err := run.measureAll(ctx)
+	reps, err := run.measureAll(ctx)
 	if err != nil {
 		return err
 	}
 
-	path, err := writeReport(opts.outDir, rep)
-	if err != nil {
-		return err
+	// The head's result is written last, so path is the file -compare-dir checks.
+	var path string
+
+	for _, out := range reps {
+		path, err = writeReport(out.dir, out.rep)
+		if err != nil {
+			return err
+		}
+
+		_, err = io.WriteString(stdout, "results: "+path+".json\n")
+		if err != nil {
+			return fmt.Errorf("write summary: %w", err)
+		}
 	}
 
-	_, err = io.WriteString(stdout, "results: "+path+".json\n\n")
+	_, err = io.WriteString(stdout, "\n")
 	if err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
@@ -275,6 +353,12 @@ func orchestrate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 
 	return compareFiles(ctx, "", opts.compareDir, path+".json", accepted, stdout)
+}
+
+// output is one result file of a run and the directory it goes to.
+type output struct {
+	dir string
+	rep report
 }
 
 func (r *runner) logf(format string, args ...any) {
@@ -295,7 +379,49 @@ func fingerprintOf(info engineInfo) fingerprint {
 	}
 }
 
-func (r *runner) measureAll(ctx context.Context) (report, error) {
+// measureAll measures every target and returns the result files to write: one,
+// or under -base-image the base's and then the head's.
+func (r *runner) measureAll(ctx context.Context) ([]output, error) {
+	rep, err := r.header(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	err = r.buildLoadgen(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _, _ = dockerOutput(context.WithoutCancel(ctx), "rmi", "-f", r.opts.loadgenImage) }()
+
+	if r.opts.baseImage != "" {
+		res := r.measureSides(ctx, r.opts.sides(r.opts.targets[0]))
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("interrupted: %w", ctx.Err())
+		}
+
+		base := rep
+		base.Commit, base.Targets = r.opts.baseCommit, res[:1]
+		rep.Targets = res[1:]
+
+		return []output{{r.opts.baseOut, base}, {r.opts.outDir, rep}}, nil
+	}
+
+	for _, t := range r.opts.targets {
+		err := ctx.Err()
+		if err != nil {
+			return nil, fmt.Errorf("interrupted: %w", err)
+		}
+
+		rep.Targets = append(rep.Targets, r.measureSides(ctx, []target{t})...)
+	}
+
+	return []output{{r.opts.outDir, rep}}, nil
+}
+
+// header is a report with everything but the targets: the host, the commit and
+// the settings of the run.
+func (r *runner) header(ctx context.Context) (report, error) {
 	info, err := r.api.info(ctx)
 	if err != nil {
 		return report{}, err
@@ -309,13 +435,6 @@ func (r *runner) measureAll(ctx context.Context) (report, error) {
 	if r.opts.commit != "" {
 		commit = r.opts.commit
 	}
-
-	err = r.buildLoadgen(ctx)
-	if err != nil {
-		return report{}, err
-	}
-
-	defer func() { _, _ = dockerOutput(context.WithoutCancel(ctx), "rmi", "-f", r.opts.loadgenImage) }()
 
 	now := time.Now().UTC()
 	rep := report{
@@ -332,15 +451,6 @@ func (r *runner) measureAll(ctx context.Context) (report, error) {
 			CellSeconds: r.opts.duration.Seconds(), Reps: r.opts.reps,
 			Cycles: r.opts.cycles, CycleConcurrency: r.opts.cycleConcurrency,
 		},
-	}
-
-	for _, t := range r.opts.targets {
-		err := ctx.Err()
-		if err != nil {
-			return rep, fmt.Errorf("interrupted: %w", err)
-		}
-
-		rep.Targets = append(rep.Targets, r.measureTarget(ctx, t))
 	}
 
 	return rep, nil
@@ -380,64 +490,128 @@ func (r *runner) buildLoadgen(ctx context.Context) error {
 	return err
 }
 
-// measureTarget runs every measurement against one image. A measurement that
-// fails is recorded as a problem and the rest still run.
-func (r *runner) measureTarget(ctx context.Context, t target) targetResult {
-	res := targetResult{Name: t.name, Image: t.image}
-	r.logf("== %s (%s)", t.name, t.image)
-
-	size, err := imageBytes(ctx, t.image)
-	res.problem("image size", err)
-
-	res.ImageBytes = size
-
-	res.Startup, err = r.startup(ctx, t)
-	res.problem("startup", err)
-
-	res.Idle.Healthcheck, err = r.idle(ctx, t, variantHealthcheck)
-	res.problem("idle with the HEALTHCHECK", err)
-
-	if r.opts.profile == profileFull {
-		res.Idle.NoHealthcheck, err = r.idle(ctx, t, variantNoHealthcheck)
-		res.problem("idle without the HEALTHCHECK", err)
+// roundOrder is the order the sides run in round i of a repeated measurement:
+// as listed in an even round, reversed in an odd one. Two sides go base head,
+// head base, base head, ..., so a host that slows down or speeds up during the
+// run moves both sides alike instead of reading as a difference between them.
+func roundOrder(round, sides int) []int {
+	order := make([]int, sides)
+	for i := range order {
+		order[i] = i
 	}
 
-	for _, spec := range cellsFor(r.opts.profile, t, r.opts.services...) {
+	if round%half == 1 {
+		slices.Reverse(order)
+	}
+
+	return order
+}
+
+// alternate runs a measurement rounds times on every side, in roundOrder.
+func alternate(rounds, sides int, run func(round, side int)) {
+	for round := range rounds {
+		for _, side := range roundOrder(round, sides) {
+			run(round, side)
+		}
+	}
+}
+
+// measureSides runs every measurement against the sides of one target: one
+// image, or a base and a head measured in alternation. A measurement that fails
+// is recorded as a problem of its side and the rest still run.
+func (r *runner) measureSides(ctx context.Context, sides []target) []targetResult {
+	res := make([]targetResult, len(sides))
+
+	for s, t := range sides {
+		res[s] = targetResult{Name: t.name, Image: t.image}
+		r.logf("== %s (%s)", t.label(), t.image)
+
+		size, err := imageBytes(ctx, t.image)
+		res[s].problem("image size", err)
+
+		res[s].ImageBytes = size
+	}
+
+	startups, errs := r.startup(ctx, sides)
+	for s := range sides {
+		res[s].Startup = startups[s]
+		res[s].problem("startup", errs[s])
+	}
+
+	r.idleVariant(ctx, sides, res, variantHealthcheck)
+
+	if r.opts.profile == profileFull {
+		r.idleVariant(ctx, sides, res, variantNoHealthcheck)
+	}
+
+	for _, spec := range cellsFor(r.opts.profile, sides[0], r.opts.services...) {
 		if ctx.Err() != nil {
 			break
 		}
 
-		cell := r.cell(ctx, t, spec)
-		if cell.Problem != "" {
-			res.Problems = append(res.Problems, "cell "+cell.ID+": "+cell.Problem)
+		for s, cell := range r.cell(ctx, sides, spec) {
+			if cell.Problem != "" {
+				res[s].Problems = append(res[s].Problems, "cell "+cell.ID+": "+cell.Problem)
+			}
+
+			res[s].Cells = append(res[s].Cells, cell)
+		}
+	}
+
+	r.agenticAll(ctx, sides, res)
+
+	return res
+}
+
+// idleVariant measures one idle variant on every side into res.
+func (r *runner) idleVariant(ctx context.Context, sides []target, res []targetResult, variant string) {
+	what := "idle with the HEALTHCHECK"
+	if variant == variantNoHealthcheck {
+		what = "idle without the HEALTHCHECK"
+	}
+
+	idles, errs := r.idle(ctx, sides, variant)
+	for s := range sides {
+		if variant == variantNoHealthcheck {
+			res[s].Idle.NoHealthcheck = idles[s]
+		} else {
+			res[s].Idle.Healthcheck = idles[s]
 		}
 
-		res.Cells = append(res.Cells, cell)
+		res[s].problem(what, errs[s])
 	}
+}
+
+// agenticAll runs each service's agentic workload once on every side, the
+// order of the sides alternating from one workload to the next.
+func (r *runner) agenticAll(ctx context.Context, sides []target, res []targetResult) {
+	var round int
 
 	for _, w := range agenticWorkloads {
 		if len(r.opts.services) > 0 && !slices.Contains(r.opts.services, w.Service()) {
 			continue
 		}
 
-		run, err := r.agentic(ctx, t, w)
-		res.problem("agentic workload ("+w.Service()+")", err)
+		for _, s := range roundOrder(round, len(sides)) {
+			run, err := r.agentic(ctx, sides[s], w)
+			res[s].problem("agentic workload ("+w.Service()+")", err)
 
-		if run.Cycles > 0 {
-			if res.Agentic == nil {
-				res.Agentic = map[string]agenticRun{}
+			if run.Cycles > 0 {
+				if res[s].Agentic == nil {
+					res[s].Agentic = map[string]agenticRun{}
+				}
+
+				res[s].Agentic[w.Service()] = run
 			}
-
-			res.Agentic[w.Service()] = run
 		}
-	}
 
-	return res
+		round++
+	}
 }
 
 // start launches a container of the target and waits for the ready line.
 func (r *runner) start(ctx context.Context, t target, extra ...string) (*instance, time.Duration, error) {
-	inst, err := launch(ctx, r.name(t.name), t.image, extra...)
+	inst, err := launch(ctx, r.name(t.label()), t.image, extra...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -452,32 +626,80 @@ func (r *runner) start(ctx context.Context, t target, extra ...string) (*instanc
 	return inst, took, nil
 }
 
-// startup times startupRuns containers, each stopped at once.
-func (r *runner) startup(ctx context.Context, t target) (startupResult, error) {
-	var res startupResult
+// startup times startupRuns containers on each side, each stopped at once. A
+// side stops at its first failure and its result keeps no spread.
+func (r *runner) startup(ctx context.Context, sides []target) ([]startupResult, []error) {
+	res := make([]startupResult, len(sides))
+	errs := make([]error, len(sides))
 
-	for i := range r.opts.startupRuns {
+	alternate(r.opts.startupRuns, len(sides), func(i, s int) {
+		if errs[s] != nil {
+			return
+		}
+
+		t := sides[s]
+
 		inst, took, err := r.start(ctx, t)
 		if err != nil {
-			return res, fmt.Errorf("run %d: %w", i+1, err)
+			errs[s] = fmt.Errorf("run %d: %w", i+1, err)
+
+			return
 		}
 
 		inst.stop(ctx)
-		r.logf("%s: ready in %s (run %d of %d)", t.name, took.Round(time.Millisecond), i+1, r.opts.startupRuns)
-		res.SamplesMS = append(res.SamplesMS, float64(took.Microseconds())/microsPerMilli)
+		r.logf("%s: ready in %s (run %d of %d)", t.label(), took.Round(time.Millisecond), i+1, r.opts.startupRuns)
+		res[s].SamplesMS = append(res[s].SamplesMS, float64(took.Microseconds())/microsPerMilli)
+	})
+
+	for s := range sides {
+		if errs[s] == nil {
+			res[s].MS = spreadOf(res[s].SamplesMS)
+		}
 	}
 
-	res.MS = spreadOf(res.SamplesMS)
-
-	return res, nil
+	return res, errs
 }
 
-// idle measures idleRuns containers that nothing calls: memory and CPU over the
-// window. With noHealthcheck the container runs without the image HEALTHCHECK,
-// which execs a process every ten seconds, so the difference between the two is
-// the cost of the check.
-func (r *runner) idle(ctx context.Context, t target, variant string) (idleVariant, error) {
-	result := idleVariant{SettleSeconds: r.opts.settle.Seconds(), Seconds: r.opts.idle.Seconds()}
+// idle measures idleRuns containers on each side that nothing calls: memory and
+// CPU over the window. With noHealthcheck the container runs without the image
+// HEALTHCHECK, which execs a process every ten seconds, so the difference
+// between the two is the cost of the check. A side stops at its first failure.
+func (r *runner) idle(ctx context.Context, sides []target, variant string) ([]idleVariant, []error) {
+	rss := make([][]float64, len(sides))
+	cpu := make([][]float64, len(sides))
+	errs := make([]error, len(sides))
+
+	alternate(r.opts.idleRuns, len(sides), func(i, s int) {
+		if errs[s] != nil {
+			return
+		}
+
+		used, err := r.idleRun(ctx, sides[s], variant, i)
+		if err != nil {
+			errs[s] = fmt.Errorf("run %d: %w", i+1, err)
+
+			return
+		}
+
+		rss[s] = append(rss[s], float64(used.MedianRSSBytes))
+		cpu[s] = append(cpu[s], used.CPUPercent)
+	})
+
+	res := make([]idleVariant, len(sides))
+
+	for s := range sides {
+		res[s] = idleVariant{SettleSeconds: r.opts.settle.Seconds(), Seconds: r.opts.idle.Seconds()}
+		if errs[s] == nil {
+			res[s].Runs = len(rss[s])
+			res[s].RSSBytes, res[s].CPUPercent = spreadOf(rss[s]), spreadOf(cpu[s])
+		}
+	}
+
+	return res, errs
+}
+
+// idleRun is run i of idle: one container, settled, then sampled over the window.
+func (r *runner) idleRun(ctx context.Context, t target, variant string, i int) (usage, error) {
 	noHealthcheck := variant == variantNoHealthcheck
 
 	var extra []string
@@ -485,65 +707,57 @@ func (r *runner) idle(ctx context.Context, t target, variant string) (idleVarian
 		extra = []string{"--no-healthcheck"}
 	}
 
-	var rss, cpu []float64
-
-	for i := range r.opts.idleRuns {
-		inst, _, err := r.start(ctx, t, extra...)
-		if err != nil {
-			return result, fmt.Errorf("run %d: %w", i+1, err)
-		}
-
-		r.logf("%s: idle run %d of %d (no HEALTHCHECK %t), settling %s then %s", t.name, i+1, r.opts.idleRuns,
-			noHealthcheck, r.opts.settle, r.opts.idle)
-
-		err = sleep(ctx, r.opts.settle)
-		if err == nil {
-			var used usage
-
-			used, err = r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
-			rss = append(rss, float64(used.MedianRSSBytes))
-			cpu = append(cpu, used.CPUPercent)
-		}
-
-		inst.stop(ctx)
-
-		if err != nil {
-			return result, fmt.Errorf("run %d: %w", i+1, err)
-		}
+	inst, _, err := r.start(ctx, t, extra...)
+	if err != nil {
+		return usage{}, err
 	}
 
-	result.Runs = len(rss)
-	result.RSSBytes, result.CPUPercent = spreadOf(rss), spreadOf(cpu)
+	defer inst.stop(ctx)
 
-	return result, nil
+	r.logf("%s: idle run %d of %d (no HEALTHCHECK %t), settling %s then %s", t.label(), i+1, r.opts.idleRuns,
+		noHealthcheck, r.opts.settle, r.opts.idle)
+
+	err = sleep(ctx, r.opts.settle)
+	if err != nil {
+		return usage{}, err
+	}
+
+	return r.sampled(ctx, inst.name, func(ctx context.Context) error { return sleep(ctx, r.opts.idle) })
 }
 
-// cell measures one cell: reps runs, each one on a fresh container, so that the
-// memory of one run, or one cell, does not carry into the next.
-func (r *runner) cell(ctx context.Context, t target, spec cellSpec) cellResult {
-	var (
-		runs   []runResult
-		failed []string
-	)
+// cell measures one cell on each side: reps runs a side, alternating the sides,
+// each run on a fresh container, so that the memory of one run, or one cell,
+// does not carry into the next.
+func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cellResult {
+	runs := make([][]runResult, len(sides))
+	failed := make([][]string, len(sides))
 
-	for rep := range r.opts.reps {
-		run, err := r.cellRun(ctx, t, spec)
+	alternate(r.opts.reps, len(sides), func(rep, s int) {
+		run, err := r.cellRun(ctx, sides[s], spec)
 		if err != nil {
-			failed = append(failed, fmt.Sprintf("run %d: %v", rep+1, err))
+			failed[s] = append(failed[s], fmt.Sprintf("run %d: %v", rep+1, err))
+
+			return
+		}
+
+		runs[s] = append(runs[s], run)
+	})
+
+	res := make([]cellResult, len(sides))
+
+	for s, t := range sides {
+		r.logf("%s: %s: %d of %d runs", t.label(), spec.id(), len(runs[s]), r.opts.reps)
+
+		if len(runs[s]) == 0 {
+			res[s] = cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed[s], "; ")}
 
 			continue
 		}
 
-		runs = append(runs, run)
+		res[s] = summarizeCell(spec, runs[s])
 	}
 
-	r.logf("%s: %s: %d of %d runs", t.name, spec.id(), len(runs), r.opts.reps)
-
-	if len(runs) == 0 {
-		return cellResult{ID: spec.id(), Spec: spec, Problem: strings.Join(failed, "; ")}
-	}
-
-	return summarizeCell(spec, runs)
+	return res
 }
 
 // loadgenArgs are the flags of `loadgen cell` that describe the cell.

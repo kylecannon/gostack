@@ -51,6 +51,15 @@ func WriteResponse(w http.ResponseWriter, env *Envelope, encode func(*Writer)) {
 // when it has one, and Type is written only for a sender fault, as LocalStack
 // does. The status is err's StatusCode, or 500 when that is zero.
 func WriteError(w http.ResponseWriter, env *Envelope, err *awserr.Error) {
+	WriteModeledError(w, env, err, nil)
+}
+
+// WriteModeledError is WriteError for an error whose shape has members besides
+// its message: encode, when not nil, writes them after RequestId, as children
+// of ErrorResponse. That is where LocalStack writes them
+// (_add_additional_error_tags in serializer.py) and where botocore's query
+// parser reads a modeled error's members from.
+func WriteModeledError(w http.ResponseWriter, env *Envelope, err *awserr.Error, encode func(*Writer)) {
 	xw := getWriter(Options{EscapeQuotes: env.EscapeQuotes})
 	defer putWriter(xw)
 
@@ -75,6 +84,11 @@ func WriteError(w http.ResponseWriter, env *Envelope, err *awserr.Error) {
 
 	xw.Close("Error")
 	xw.String("RequestId", env.RequestID)
+
+	if encode != nil {
+		encode(xw)
+	}
+
 	xw.Close("ErrorResponse")
 
 	status := err.StatusCode

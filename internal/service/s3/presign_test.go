@@ -2,6 +2,7 @@ package s3_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
@@ -96,7 +97,7 @@ func newPresignServer(t *testing.T) (*server, http.Handler) {
 	provider := s3.New(func() s3.Settings {
 		return s3.Settings{LocalstackHost: localstackHost, ValidateSignatures: true, GatewayPort: 4566}
 	}, blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },

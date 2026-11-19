@@ -127,6 +127,14 @@
 // measurement. The scheduled CI run compares with the result the previous
 // passing run on main kept as a workflow artifact (.github/workflows/bench-system.yml).
 //
+// `bench run -base-image B -base-commit C -base-out DIR` measures image B as
+// the base of the one target, next to the target's own image as the head, in
+// one run: each startup run, idle run and run of a cell goes base head, then
+// head base, and so on (roundOrder in run.go). It writes two ordinary result
+// files, the base's in DIR and the head's in -out, for `bench compare`. The
+// pull request workflow measures this way, so drift over the job lands on both
+// sides.
+//
 // `-accepted bench/accepted.yaml` on compare, run and gate holds the regressions
 // a reviewer accepted (accepted.go). An entry applies while the head's commit
 // holds its commit and the base's does not; compare reads both commits from the

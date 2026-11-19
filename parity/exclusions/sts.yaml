@@ -1,0 +1,9 @@
+# sts tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- depends-on:iam: sts --------------------------------------------------
+# These five need IAM (create_role, create_user, create_access_key, put_role_policy).
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_assume_role": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_user_access_key": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSIntegrations::test_get_caller_identity_role_access_key": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_iam_role_chaining_override_transitive_tags": depends-on:iam
+"tests/aws/services/sts/test_sts.py::TestSTSAssumeRoleTagging::test_assume_role_tag_validation": depends-on:iam

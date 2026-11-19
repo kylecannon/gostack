@@ -69,10 +69,13 @@ type pair struct {
 
 // field is one member of a generated struct.
 type field struct {
-	member    string
-	goName    string
-	jsonName  string
-	required  bool
+	member   string
+	goName   string
+	jsonName string
+	required bool
+	// checks are the traits the generated checks enforce, from the service
+	// table's Validation.Checks.
+	checks    check
 	typ       string
 	pair      pair
 	hasQuery  bool
@@ -91,6 +94,12 @@ type structType struct {
 	decodes    bool
 	encodes    bool
 	needsCheck bool
+	// validates marks a struct below an operation input that gets a validate
+	// method, for a service with the Validation option.
+	validates bool
+	// union marks a struct that gets MembersSet: a union shape of a service
+	// whose options ask for them, or one of its UnionShapes.
+	union bool
 	// payload is the field the shape's payload trait names, sent as the whole
 	// body by a rest protocol, or nil.
 	payload *field
@@ -249,6 +258,10 @@ func newModel(name string, opts serviceOptions, p, q *spec.Service) (*generator,
 		return nil, fmt.Errorf("%s: a rest protocol with another one, %v, is not supported", name, g.protocols)
 	}
 
+	if opts.Validation != nil && g.isRest() {
+		return nil, fmt.Errorf("%s: the Validation option is not supported on a rest protocol", name)
+	}
+
 	err := g.build()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -286,6 +299,42 @@ func (g *generator) build() error {
 
 	g.markReachable()
 	g.markChecks()
+
+	err = g.markValidation()
+	if err != nil {
+		return err
+	}
+
+	return g.markUnions()
+}
+
+// unionMethod is the method a union struct gets. No member of one may have
+// the same Go name.
+const unionMethod = "MembersSet"
+
+// markUnions flags the structs that get MembersSet: every union shape when the
+// service's Unions option is on, and the shapes its UnionShapes names.
+func (g *generator) markUnions() error {
+	for _, st := range g.structs {
+		st.union = g.opts.Unions && st.shape != nil && st.shape.Union
+	}
+
+	for _, name := range g.opts.UnionShapes {
+		st := g.structs[g.goTypeName(name)]
+		if st == nil || st.shape != g.p.Shapes[name] {
+			return fmt.Errorf("union shape %s is not a structure the service uses", name)
+		}
+
+		st.union = true
+	}
+
+	for _, st := range g.structs {
+		for _, f := range st.fields {
+			if st.union && f.goName == unionMethod {
+				return fmt.Errorf("union %s has a member named %s, the name of its method", st.goName, unionMethod)
+			}
+		}
+	}
 
 	return nil
 }
@@ -343,7 +392,7 @@ func (g *generator) nameRoots() {
 			switch {
 			case root.ref == nil:
 			case uses[root.ref.Shape] > 1:
-				g.rootNames[root.ref.Shape] = exportName(root.ref.Shape)
+				g.rootNames[root.ref.Shape] = shapeName(root.ref.Shape)
 			default:
 				g.rootNames[root.ref.Shape] = name + root.suffix
 			}
@@ -640,6 +689,11 @@ func (g *generator) attachQuery(st *structType, queryShape string) error {
 			}
 		}
 
+		// An error's message travels as the error's Message, not as a field.
+		if f == nil && st.shape != nil && st.shape.Exception && strings.EqualFold(qm.Name, "message") {
+			continue
+		}
+
 		if f == nil {
 			return fmt.Errorf("query member %s.%s has no counterpart in the primary model", queryShape, qm.Name)
 		}
@@ -665,7 +719,7 @@ func (g *generator) goTypeName(shape string) string {
 		return root
 	}
 
-	return exportName(shape)
+	return shapeName(shape)
 }
 
 // goType is the Go type of a shape reference at the given site.
@@ -841,39 +895,45 @@ func (g *generator) nestedStructs(r ref) []string {
 // markChecks flags the structs that hold a required member somewhere below
 // them, which are the ones ServeValidated has to look through.
 func (g *generator) markChecks() {
-	memo := map[string]bool{}
+	reach := g.structsReaching(func(f *field) bool { return f.required }, g.nestedStructs)
 
-	var needs func(st *structType) bool
+	for _, st := range g.structs {
+		st.needsCheck = reach[st.goName]
+	}
+}
 
-	needs = func(st *structType) bool {
-		if v, ok := memo[st.goName]; ok {
-			return v
+// structsReaching reports, by Go name, the structs that hold a field own is
+// true of, on themselves or on a struct below them that below finds. It
+// repeats until nothing changes, so a struct met again inside a reference
+// cycle is never settled before the cycle is.
+func (g *generator) structsReaching(own func(f *field) bool, below func(r ref) []string) map[string]bool {
+	reach := map[string]bool{}
+
+	for name, st := range g.structs {
+		if slices.ContainsFunc(st.fields, own) {
+			reach[name] = true
 		}
+	}
 
-		memo[st.goName] = false // a cycle adds nothing by itself
+	for changed := true; changed; {
+		changed = false
 
-		result := false
-
-		for _, f := range st.fields {
-			if f.required {
-				result = true
+		for name, st := range g.structs {
+			if reach[name] {
+				continue
 			}
 
-			for _, nested := range g.nestedStructs(f.pair.p) {
-				if needs(g.structs[g.goTypeName(nested)]) {
-					result = true
+			for _, f := range st.fields {
+				if slices.ContainsFunc(below(f.pair.p), func(n string) bool { return reach[g.goTypeName(n)] }) {
+					reach[name], changed = true, true
+
+					break
 				}
 			}
 		}
-
-		memo[st.goName] = result
-
-		return result
 	}
 
-	for _, st := range g.structs {
-		st.needsCheck = needs(st)
-	}
+	return reach
 }
 
 func (g *generator) sortedStructs() []*structType {
