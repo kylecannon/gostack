@@ -22,10 +22,12 @@ import (
 // the columns on it: benchstat -col /persist bench.txt.
 //
 // The server is the one gostack wires under PERSIST_S3=1: bodies are assets of
-// the persistence engine, written to a temp file, synced and renamed while the
-// request runs, and the engine saves the S3 snapshot every persistFrequency.
+// the persistence engine, written to a temp file and renamed while the request
+// runs, with no fsync, and the engine saves the S3 snapshot every
+// persistFrequency, syncing the bodies committed since the last save first.
 // That is short enough that a save is always running or due while the workers
-// write, so the rows show the cost of the two together.
+// write, so the rows show the cost of the two together: the request-time write,
+// the save's sync of the new bodies and its copy of the state.
 
 // persistFrequency is the flush delay of the engine.
 const persistFrequency = 10 * time.Millisecond

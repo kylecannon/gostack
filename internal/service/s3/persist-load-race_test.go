@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +24,9 @@ const (
 	raceFor = 2 * time.Second
 	// stormKeys is the number of keys the storm writes to.
 	stormKeys = 12
+	// stormRounds is how many steps each worker of the storm takes, so the test
+	// costs the same work on every machine.
+	stormRounds = 100
 )
 
 // afterRestore is S3 as the engine sees it, with a step that runs once right
@@ -259,25 +261,15 @@ func TestPersistedS3StormOfWritesAndLoads(t *testing.T) {
 	p.put(versionsPath, versioningBody("Enabled"))
 	p.flush()
 
-	var (
-		stop    = make(chan struct{})
-		workers sync.WaitGroup
-		rounds  atomic.Int64
-	)
+	var workers sync.WaitGroup
 
 	key := func(r *rand.Rand) string { return fmt.Sprintf("/bucket/k%d", r.IntN(stormKeys)) }
 	work := func(step func(r *rand.Rand)) {
 		workers.Go(func() {
 			r := rand.New(rand.NewPCG(rand.Uint64(), 1))
 
-			for {
-				select {
-				case <-stop:
-					return
-				default:
-					step(r)
-					rounds.Add(1)
-				}
+			for range stormRounds {
+				step(r)
 			}
 		})
 	}
@@ -301,11 +293,7 @@ func TestPersistedS3StormOfWritesAndLoads(t *testing.T) {
 		}
 	})
 
-	time.Sleep(raceFor)
-	close(stop)
 	workers.Wait()
-
-	t.Logf("%d requests, loads and saves", rounds.Load())
 
 	assertStormSettled(t, p, "live")
 	p.flush()
