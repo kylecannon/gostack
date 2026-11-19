@@ -21,10 +21,14 @@ func putSample(c *client) any {
 	c.ok(kLabelParameterVersion, obj{kName: appDB, fieldVersion: 1, fieldLabels: []string{"first"}})
 	c.ok(kPutParameter, obj{kName: "plain", kValue: "p", kType: kString})
 
-	return c.ok(kCreateMaintenanceWindow, obj{
-		kName: "w", "Schedule": "rate(1 day)", "Duration": 1, "Cutoff": 0,
-		"AllowUnassociatedTargets": true,
-	})[fieldWindowID]
+	return c.ok(kCreateMaintenanceWindow, dailyWindow("w"))[fieldWindowID]
+}
+
+// dailyWindow is a CreateMaintenanceWindow body for a window named name.
+func dailyWindow(name string) obj {
+	return obj{
+		kName: name, "Schedule": "rate(1 day)", "Duration": 1, "Cutoff": 0, "AllowUnassociatedTargets": true,
+	}
 }
 
 // checkSample reads back through r everything putSample wrote.

@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/gateway"
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service/ssm"
 	"github.com/stretchr/testify/require"
 )
@@ -198,12 +200,23 @@ func BenchmarkPutParameter(b *testing.B) {
 				}
 
 				b.Run(name, func(b *testing.B) {
+					p := ssm.New()
+
+					// The persisted rows go through a real engine whose save is an
+					// hour away, so they measure what a write adds by marking SSM
+					// dirty, not the save itself.
 					var eng gateway.Dirtier
 					if persisted {
-						eng = &marks{}
+						engine := persist.New(persist.Config{
+							PersistVarSet: true, BaseDir: b.TempDir(), Frequency: time.Hour,
+							MountDetector: func(string) bool { return false },
+						})
+						engine.Register(ssmName, p.Registration().Persist)
+						b.Cleanup(func() { require.NoError(b, engine.Close(context.Background())) })
+						eng = engine
 					}
 
-					h := handlerFor(b, ssm.New(), eng)
+					h := handlerFor(b, p, eng)
 					value := strings.Repeat("x", payload.size)
 					bodies := make([][]byte, workers)
 					sinks := make([]*sink, workers)

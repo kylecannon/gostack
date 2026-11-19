@@ -156,6 +156,17 @@ func TestSSMOnlyChangesMarkItDirty(t *testing.T) {
 	}
 
 	before := m.count()
+	id := c.ok(kCreateMaintenanceWindow, dailyWindow("win"))[fieldWindowID]
+	require.Greater(t, m.count(), before, "CreateMaintenanceWindow marks SSM dirty")
+
+	before = m.count()
+	c.ok(kGetMaintenanceWindow, obj{fieldWindowID: id})
+	require.Equal(t, before, m.count(), "GetMaintenanceWindow leaves SSM clean")
+
+	c.ok(kDeleteMaintenanceWindow, obj{fieldWindowID: id})
+	require.Greater(t, m.count(), before, "DeleteMaintenanceWindow marks SSM dirty")
+
+	before = m.count()
 	status, _ := c.call("SendCommand", obj{"DocumentName": "AWS-RunShellScript"})
 	require.Equal(t, 501, status)
 	require.Equal(t, before, m.count(), "a 501 leaves SSM clean")
