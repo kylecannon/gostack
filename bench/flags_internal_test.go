@@ -139,7 +139,10 @@ func Test_the_base_takes_each_cell_from_the_newest_result_that_has_it(t *testing
 	_, ok = base.Targets[0].cell(s3.ID)
 	assert.True(t, ok)
 
-	// A head of SQS alone is held against the SQS cell, not against nothing.
+	// A head of SQS alone is held against the SQS cell, not against nothing, and
+	// the S3 cells it did not select are not missing from it.
+	head.Settings.Services = []string{serviceSQS}
+
 	out, err := compared(t, base, head)
 	require.NoError(t, err)
 	assert.Contains(t, out, "Compared 1 cells")
