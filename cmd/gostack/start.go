@@ -309,7 +309,8 @@ func (s *saver) saveUnlimited(ctx context.Context) {
 // ends. It warns of each whose Close had not returned by then, and reports
 // whether a last save can follow: every Close returned, and ctx still has time
 // for it. A Close that returned at the deadline, because it honours ctx, is not
-// warned of.
+// warned of as running, but the last save its return skips is warned of, once,
+// since what the Close changed stays unsaved.
 func (s *saver) closeServices(ctx context.Context) bool {
 	running := s.services.close(ctx)
 	if len(running) > 0 {
@@ -318,7 +319,13 @@ func (s *saver) closeServices(ctx context.Context) bool {
 		return false
 	}
 
-	return ctx.Err() == nil
+	if ctx.Err() != nil {
+		slog.Warn("the last save was skipped because the close deadline passed; changes made in Close are not saved")
+
+		return false
+	}
+
+	return true
 }
 
 // restart asks the PID 1 supervisor to restart gostack. Without one there is

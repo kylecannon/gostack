@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"iter"
+	"log/slog"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -63,6 +66,70 @@ func Test_saver_save_order(t *testing.T) {
 	}
 
 	require.Error(t, err, "the assets were never released by the last save")
+}
+
+// Test_saver_closeServices_warnsOfASkippedLastSave checks the log of a last
+// save that does not follow: one warning for each cause, and the right one. A
+// Close that honours its context and returns at the deadline is not still
+// running, but the last save is skipped, and the log says that rather than
+// nothing; a Close that ignores it is named as still running, which already
+// says why; and a shutdown with time left warns of neither.
+func Test_saver_closeServices_warnsOfASkippedLastSave(t *testing.T) {
+	const (
+		budget  = 400 * time.Millisecond
+		skipped = "the last save was skipped because the close deadline passed"
+		running = "a service did not stop in time"
+	)
+
+	honours := func(ctx context.Context) { <-ctx.Done() }
+
+	tests := []struct {
+		name string
+		// ignores makes the service's Close wait for release, ignoring ctx.
+		ignores bool
+		closeFn func(context.Context)
+		saves   bool
+		// skipLogs and runningLogs count the warnings of each kind.
+		skipLogs, runningLogs int
+	}{
+		{name: "every Close returns before the deadline", closeFn: func(context.Context) {}, saves: true},
+		{name: "a Close that honours ctx returns at the deadline", closeFn: honours, skipLogs: 1},
+		{name: "a Close that ignores ctx is still running", ignores: true, runningLogs: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var logs bytes.Buffer
+
+				prev := slog.Default()
+
+				slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+				t.Cleanup(func() { slog.SetDefault(prev) })
+
+				release := make(chan struct{})
+
+				reg := registration("svc")
+				reg.Close = tt.closeFn
+
+				if tt.ignores {
+					reg.Close = func(context.Context) { <-release }
+				}
+
+				eng, _ := persistentEngine(t)
+				s := &saver{eng: eng, services: &providers{regs: []service.Registration{reg}}}
+
+				ctx, cancel := context.WithTimeout(t.Context(), budget)
+				defer cancel()
+
+				assert.Equal(t, tt.saves, s.closeServices(ctx))
+				assert.Equal(t, tt.skipLogs, strings.Count(logs.String(), skipped), logs.String())
+				assert.Equal(t, tt.runningLogs, strings.Count(logs.String(), running), logs.String())
+
+				close(release)
+			})
+		})
+	}
 }
 
 // Test_providers_close_reportsWhatIsStillRunning checks that a Close which

@@ -926,6 +926,44 @@ def go_code(line: str) -> tuple[str, str, bool]:
     return "".join(code), "".join(blanked), quote is None
 
 
+def block_comment_lines(lines: list[str]) -> set[int]:
+    """The indexes of the lines of Go that open, close or lie inside a `/* */`
+    comment. A `/*` in a string, a rune literal or a `//` comment opens
+    nothing."""
+    inside: set[int] = set()
+    state = None  # None is code; "/*" a block comment; a quote char, a literal.
+    for number, line in enumerate(lines):
+        if state == "/*":
+            inside.add(number)
+        i = 0
+        while i < len(line):
+            two = line[i : i + 2]
+            if state is None:
+                if two == "//":
+                    break
+                if two == "/*":
+                    state = "/*"
+                    inside.add(number)
+                    i += 2
+                    continue
+                if line[i] in "\"'`":
+                    state = line[i]
+            elif state == "/*":
+                if two == "*/":
+                    state = None
+                    i += 2
+                    continue
+            elif line[i] == "\\" and state != "`":
+                i += 2
+                continue
+            elif line[i] == state:
+                state = None
+            i += 1
+        if state in ('"', "'"):
+            state = None  # an interpreted string and a rune end with their line
+    return inside
+
+
 def bracket_depths(code: str) -> tuple[int, int]:
     """(lowest, last) depth of the brackets in code, starting from 0."""
     depth = lowest = 0
@@ -1005,16 +1043,21 @@ def registration_services(diff: str, names: set[str]) -> set[str] | None:
       names as a word outside a comment or a literal.
     None when any other line of code changed, or a line above names no
     service: a signature, a call of registrations() or a helper changes every
-    registration, so the change cannot be attributed line by line. None too
+    registration, so the change cannot be attributed line by line. A changed
+    line that opens, closes or lies inside a `/* */` comment is code: the block
+    can comment out or bring back an element that did not change. None too
     for a diff with no changed line or not in the whole-file form."""
     sides = diff_sides(diff)
     if sides is None or not sides[2]:
         return None
     old, new, changed = sides
     elements = {"-": element_lines(old), "+": element_lines(new)}
+    blocks = {"-": block_comment_lines(old), "+": block_comment_lines(new)}
     pattern = re.compile(r"\b(?:" + "|".join(re.escape(name) for name in sorted(names)) + r")\b") if names else None
     found: set[str] = set()
     for side, index in changed:
+        if index in blocks[side]:
+            return None
         code, blanked, closed = go_code((old if side == "-" else new)[index])
         if not code.strip():
             continue

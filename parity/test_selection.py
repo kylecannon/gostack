@@ -315,8 +315,31 @@ class RegistrationServicesTest(unittest.TestCase):
     def test_comment_and_blank_line_changes_name_nothing_and_change_nothing(self) -> None:
         changes = (("\t\tsqs.New().Registration(),\n", "\t\t// registrations, one per line\n\n\t\tsqs.New().Registration(),\n"), ("package main\n", "// Package main.\npackage main\n"))
         self.assertEqual(self.services(*changes), set())
-        # A block comment is not read as one: it may hide a whole element.
+        # A block comment is not read as one: it may hide a whole element. See
+        # test_a_changed_line_in_or_opening_a_block_comment_cannot_be_attributed.
         self.assertIsNone(self.services(("\t\tsts.Registration(),\n", "\t\tsts.Registration(),\n\t\t/* not a directive */\n")))
+
+    def test_a_changed_line_in_or_opening_a_block_comment_cannot_be_attributed(self) -> None:
+        # SQ-206 N2, the reviewer's case: a block comment between two edited
+        # lines comments out the element between them. Both edited lines are
+        # whole elements, but the sts line that went dead is unchanged and
+        # would otherwise select nothing.
+        opened = ("\t\tsqs.New().Registration(),\n", "\t\tsqs.New().Registration(), /*,\n")
+        closed = ("\t\ts3.New().Registration(),\n", "\t\t*/ s3.New().Registration(),\n")
+        self.assertIsNone(self.services(opened, closed))
+        # The opening alone, and a line inside the block, too.
+        self.assertIsNone(self.services(opened))
+        self.assertIsNone(self.services(("\t\tsts.Registration(),\n", "\t\t/*\n\t\tsts.Registration(),\n\t\t*/\n")))
+        self.assertIsNone(self.services(("\t\tsqs.New().Registration(),\n", "\t\t/* sqs.New().Registration(), */\n")))
+        # And the other way round: the diff that brings the element back.
+        commented = edited(opened, closed)
+        self.assertIsNone(ledger.registration_services(whole_diff(commented, SERVICES_GO), self.NAMES))
+        # An unchanged block comment, and a /* in a string or a // comment, change nothing.
+        doc = ("func registrations() []service.Registration {\n", "/* registrations lists\n   every service. */\nfunc registrations() []service.Registration {\n")
+        self.assertEqual(ledger.registration_services(whole_diff(edited(doc), edited(doc, ELEMENT_FOO, IMPORT_FOO)), self.NAMES), {"foo"})
+        self.assertEqual(ledger.block_comment_lines(['a := "/*"', "b := `/*", "x`", "c := '\"' // /*", "d := 1"]), set())
+        self.assertEqual(ledger.block_comment_lines(["a /* b", "c", "d */ e", "f"]), {0, 1, 2})
+        self.assertEqual(self.services(IMPORT_FOO, ELEMENT_FOO, ("\t\tsts.Registration(),\n", '\t\tsts.Registration(), // "/*"\n')), {"foo", "sts"})
 
     def test_a_name_that_is_not_a_service_directory_does_not_count(self) -> None:
         self.assertIsNone(ledger.registration_services(ADD_FOO, {"sqs"}))

@@ -69,6 +69,17 @@ func Test_parityTables(t *testing.T) {
 		}
 	})
 
+	// The EveryService entry is in no import: LocalStack's session fixtures
+	// account_id and secondary_account_id call sts.get_caller_identity in every
+	// service's test session, so a change to sts can break any service's tests.
+	// Without the entry an sts change would run only the sts suite, and the
+	// checks above and below pass without it.
+	t.Run("every service depends on sts", func(t *testing.T) {
+		require.Contains(t, tables.DependsOn, tables.EveryService, "DEPENDS_ON in parity/ledger.py")
+		require.Contains(t, tables.DependsOn[tables.EveryService], "sts",
+			"DEPENDS_ON[EVERY_SERVICE] in parity/ledger.py: every service's tests call sts, in LocalStack's account_id fixtures")
+	})
+
 	t.Run("DEPENDS_ON names services that exist", func(t *testing.T) {
 		for svc, dependencies := range tables.DependsOn {
 			if svc != tables.EveryService {
