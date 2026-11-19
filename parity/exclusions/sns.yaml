@@ -16,10 +16,9 @@
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_to_platform_endpoint_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_sms_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_subscription_tokens_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store; its HTTPServer alone would be bridgeable)
-# These two patch only localstack.config (SNS_CERT_URL_HOST, SNS_SES_SENDER_ADDRESS)
-# and so are candidates for parity/bridgeable.yaml's config kind. The second also
-# reads and clears SES's mailbox through /_aws/ses, so it waits on SES.
-"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host": requires_in_process (patches config.SNS_CERT_URL_HOST; not yet listed in parity/bridgeable.yaml)
+# This one patches only localstack.config (SNS_SES_SENDER_ADDRESS), a candidate for
+# parity/bridgeable.yaml's config kind, but it also reads and clears SES's mailbox
+# through /_aws/ses, so it waits on SES.
 "tests/aws/services/sns/test_sns.py::TestSNSSubscriptionSES::test_email_sender": requires_in_process (patches config.SNS_SES_SENDER_ADDRESS and reads SES's mailbox)
 
 # --- hard-skipped: sns ----------------------------------------------------

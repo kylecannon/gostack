@@ -10,6 +10,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/sns/envelope"
 	"github.com/kylecannon/gostack/internal/store"
 )
 
@@ -24,6 +25,10 @@ type Provider struct {
 	// accounts holds each account's state across regions, under
 	// accountRegion.
 	accounts *store.Bundle[AccountState]
+	// signer signs every message the Provider delivers and serves the
+	// certificate that verifies them. There is one per Provider, so one per
+	// process: each Signer generates its own key pair.
+	signer *envelope.Signer
 }
 
 var _ api.Handler = (*Provider)(nil)
@@ -40,6 +45,7 @@ func New(settings func() Settings) *Provider {
 		settings: settings,
 		regions:  store.NewBundle(newState, (*State).reset),
 		accounts: store.NewBundle(newAccountState, (*AccountState).reset),
+		signer:   new(envelope.Signer),
 	}
 }
 

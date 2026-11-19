@@ -1,6 +1,6 @@
 {
-"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host[]": {"gostack": "excluded", "localstack": "excluded", "reason": "requires_in_process (patches config.SNS_CERT_URL_HOST; not yet listed in parity/bridgeable.yaml)"},
-"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host[sns.us-east-1.amazonaws.com]": {"gostack": "excluded", "localstack": "excluded", "reason": "requires_in_process (patches config.SNS_CERT_URL_HOST; not yet listed in parity/bridgeable.yaml)"},
+"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host[]": {"gostack": "fail", "localstack": "pass", "reason": ""},
+"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host[sns.us-east-1.amazonaws.com]": {"gostack": "fail", "localstack": "pass", "reason": ""},
 "tests/aws/services/sns/test_sns.py::TestSNSMultiAccounts::test_cross_account_access": {"gostack": null, "localstack": "pass", "reason": ""},
 "tests/aws/services/sns/test_sns.py::TestSNSMultiAccounts::test_cross_account_publish_to_sqs": {"gostack": null, "localstack": "pass", "reason": ""},
 "tests/aws/services/sns/test_sns.py::TestSNSMultiRegions::test_cross_region_access": {"gostack": null, "localstack": "pass", "reason": ""},

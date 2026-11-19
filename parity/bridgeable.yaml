@@ -78,3 +78,8 @@
 "tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_subscribe_external_http_endpoint": "http-server: confirmation, notification and unsubscribe payloads at the HTTPServer"
 "tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_dlq_external_http_endpoint": "http-server: failed unsubscribe confirmation to the HTTPServer, DLQ checked"
 "tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_subscribe_external_http_endpoint_content_type": "http-server: delivery policy content type seen at the HTTPServer"
+
+# sns, config kind: patches only config.SNS_CERT_URL_HOST, which the bridge forwards.
+# Both parametrizations (empty and a named host) publish to an SQS subscription and
+# read SigningCertURL off the delivered message.
+"tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host": SNS_CERT_URL_HOST

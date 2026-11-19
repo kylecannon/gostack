@@ -80,6 +80,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		ConfigUpdates: cfg.Settings().EnableConfigUpdates,
 		CompatPaths:   cfg.Settings().CompatPaths,
 		Debug:         cfg.Settings().Debug,
+		Protocol:      services.sns.MountProtocol,
 		OpenAPI:       openapi.Spec,
 	}
 
