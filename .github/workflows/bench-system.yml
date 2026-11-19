@@ -100,12 +100,15 @@ jobs:
       # One run measures both images with the head's load generator. It alternates
       # them in every repeated measurement (base head, head base, ...), so a
       # runner that slows down or speeds up during the job moves both sides alike.
-      # The base's result goes under base/ and the head's under head/.
+      # The base's result goes under base/ and the head's under head/. Each cell
+      # runs five times a side, not the default three: compare fails a metric
+      # whose ranges do not overlap, which three runs a side of pure noise do
+      # once in C(6,3) = 20 orderings and five once in C(10,5) = 252.
       - name: Measure the base and the head
         if: steps.base.outputs.image == 'true'
         working-directory: head
         run: |
-          go run ./bench run -profile quick -targets gostack \
+          go run ./bench run -profile quick -targets gostack -reps 5 \
             -base-image gostack:base -base-commit "$BASE_SHA" -base-out "$RUNNER_TEMP/base" \
             -gostack-image gostack:head -commit "$HEAD_SHA" -out "$RUNNER_TEMP/head"
         env:
