@@ -163,7 +163,8 @@ parity-baseline:
 	parity/run.sh localstack
 
 # Runs the ledger's unit tests, then compares the working-tree ledger with the
-# one at PARITY_BASE (default HEAD; parity.yml passes the merge base).
+# one at PARITY_BASE (default HEAD; on a pull request CI passes the base parent
+# of the merge commit it tests).
 parity-check:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s parity -p 'test_*.py'
 	python3 parity/ledger.py check --base $(PARITY_BASE)
