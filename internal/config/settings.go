@@ -104,6 +104,18 @@ type Settings struct {
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
+	// DynamoDBErrorProbability is DYNAMODB_ERROR_PROBABILITY: the chance that a
+	// DynamoDB item read or write is throttled.
+	DynamoDBErrorProbability float64
+	// DynamoDBReadErrorProbability is DYNAMODB_READ_ERROR_PROBABILITY, for item
+	// reads.
+	DynamoDBReadErrorProbability float64
+	// DynamoDBWriteErrorProbability is DYNAMODB_WRITE_ERROR_PROBABILITY, for
+	// item writes.
+	DynamoDBWriteErrorProbability float64
+	// DynamoDBShareDB is DYNAMODB_SHARE_DB, an integer: every account and region
+	// shares one set of tables when it is not 0.
+	DynamoDBShareDB int
 	// ExtraCORSAllowedHeaders is EXTRA_CORS_ALLOWED_HEADERS, split on commas.
 	ExtraCORSAllowedHeaders []string
 	// ExtraCORSExposeHeaders is EXTRA_CORS_EXPOSE_HEADERS, split on commas.
@@ -167,6 +179,10 @@ func (s *Settings) values() map[string]any {
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
 		varExtraCORSAllowedOrigins:         strings.Join(s.ExtraCORSAllowedOrigins, ","),
+		varDynamoDBErrorProbability:        s.DynamoDBErrorProbability,
+		varDynamoDBReadErrorProbability:    s.DynamoDBReadErrorProbability,
+		varDynamoDBWriteErrorProbability:   s.DynamoDBWriteErrorProbability,
+		varDynamoDBShareDB:                 s.DynamoDBShareDB,
 	}
 }
 
@@ -190,6 +206,10 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		return nil, err
 	}
 	logLevel := cmpLogLevel(get(varLSLog), get(varLog))
+	dynamo, err := parseDynamoDB(get)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Settings{
 		GatewayListen:                     uniqueHostPorts(listen),
@@ -224,7 +244,55 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),
 		ExtraCORSAllowedOrigins:           splitList(get(varExtraCORSAllowedOrigins)),
+		DynamoDBErrorProbability:          dynamo.errorProbability,
+		DynamoDBReadErrorProbability:      dynamo.readErrorProbability,
+		DynamoDBWriteErrorProbability:     dynamo.writeErrorProbability,
+		DynamoDBShareDB:                   dynamo.shareDB,
 	}, nil
+}
+
+// dynamoDBSettings are the DYNAMODB_* values.
+type dynamoDBSettings struct {
+	errorProbability      float64
+	readErrorProbability  float64
+	writeErrorProbability float64
+	shareDB               int
+}
+
+// parseDynamoDB reads the DYNAMODB_* settings as LocalStack's config.py does:
+// float(value or 0.0) and int(value or 0), which refuse to start on a value
+// they cannot parse.
+func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
+	var out dynamoDBSettings
+
+	for _, f := range []struct {
+		name string
+		to   *float64
+	}{
+		{varDynamoDBErrorProbability, &out.errorProbability},
+		{varDynamoDBReadErrorProbability, &out.readErrorProbability},
+		{varDynamoDBWriteErrorProbability, &out.writeErrorProbability},
+	} {
+		if value := get(f.name); value != "" {
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return out, fmt.Errorf("%s: %q is not a number", f.name, value)
+			}
+
+			*f.to = parsed
+		}
+	}
+
+	if value := get(varDynamoDBShareDB); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return out, fmt.Errorf("%s: %q is not an integer", varDynamoDBShareDB, value)
+		}
+
+		out.shareDB = parsed
+	}
+
+	return out, nil
 }
 
 // parseGatewayListen parses the comma-separated GATEWAY_LISTEN. The host default

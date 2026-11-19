@@ -74,6 +74,10 @@ var variables = []variable{
 	{name: varDisableCustomCORSAPIGateway},
 	{name: varS3SkipSignatureValidation},
 	{name: varMaxRequestBody, gostackOnly: true},
+	{name: varDynamoDBErrorProbability},
+	{name: varDynamoDBReadErrorProbability},
+	{name: varDynamoDBWriteErrorProbability},
+	{name: varDynamoDBShareDB},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
