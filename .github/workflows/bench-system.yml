@@ -121,7 +121,7 @@ jobs:
           base=$(ls "$RUNNER_TEMP"/base/*.json)
           head=$(ls "$RUNNER_TEMP"/head/*.json)
           status=0
-          go run ./bench compare -accepted bench/accepted.yaml -base "$base" -head "$head" \
+          go run ./bench compare -accepted bench/accepted.yaml -base "$base" -head "$head" 2>&1 \
             | tee "$RUNNER_TEMP/compare.md" || status=$?
           cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
@@ -230,7 +230,7 @@ jobs:
               echo "run $PREVIOUS_RUN stored \`$NAME\` with no result file in it" | tee "$RUNNER_TEMP/compare.md"
               status=1
             else
-              go run ./bench compare -accepted bench/accepted.yaml -base "$previous" -head "$RESULT" \
+              go run ./bench compare -accepted bench/accepted.yaml -base "$previous" -head "$RESULT" 2>&1 \
                 | tee "$RUNNER_TEMP/compare.md" || status=$?
             fi
           fi
