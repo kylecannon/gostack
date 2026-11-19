@@ -830,7 +830,16 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
-- Save order: a flush saves in two passes, each in name order. The first takes
+- Save order: a flush saves in two passes, each in the same order. Services
+  with assets to sync, or an earlier sync to wait for, when the flush starts
+  go after the ones with none. Within each group, the service whose last
+  `Snapshot` in this process took less time goes first, then name order; a
+  service not yet snapshotted counts as zero, so a process's first flush is
+  in name order and takes S3's `Snapshot` first. A `Snapshot`, like a sync,
+  cannot be interrupted, and S3's grows with its objects (about 3 µs each), so
+  without the measured order a large S3 with nothing pending would take a
+  short shutdown save's whole deadline before SQS or STS is written. The
+  first pass takes
   every service's snapshot into temp files and renames at once each one whose
   assets have nothing to sync, and no earlier sync to wait for, when its
   `Snapshot` returns: services with no assets among them. It defers the
@@ -854,8 +863,8 @@ is untouched.
   finishes, or is cancelled when the waiter's deadline passes; of several
   waiters, the first deadline to pass cancels it. A lent deadline that passes
   acts as the save's own deadline would: a service whose snapshot is taken and
-  whose syncs have returned clean is still renamed, and the rest stay dirty.
-  The waiter then saves only
+  whose syncs have returned clean is still renamed, the rest stay dirty, and
+  the flush logs the same warning. The waiter then saves only
   what is still dirty, with the time left. A timed save that has not started
   when a waiter arrives skips its flush, and the timer is not armed again
   while any `Flush`, `Load`, `Close` or reset waits: the last waiter arms it as

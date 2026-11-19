@@ -111,12 +111,17 @@ type tracked struct {
 	unsafe error
 	// assets are the service's assets once opened, or nil.
 	assets *Assets
+	// took is how long the service's last Snapshot in this process took, or zero
+	// before its first. A flush orders its saves by it; see saveOrder.
+	took time.Duration
 }
 
 type pendingService struct {
 	name   string
 	snap   Snapshotter
 	assets *Assets
+	// took is the service's tracked took when the flush took it.
+	took time.Duration
 }
 
 // New returns an Engine for cfg. When cfg turns persistence off, the Engine is
@@ -629,7 +634,7 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 	}
 
 	failed, gaveWay, err := e.writeAll(ctx, pending)
-	if errors.Is(err, context.DeadlineExceeded) {
+	if ranOutOfTime(ctx, err) {
 		names := make([]string, 0, len(failed))
 		for _, p := range failed {
 			names = append(names, p.name)
@@ -640,6 +645,21 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 	}
 
 	return e.conclude(failed, gaveWay, err), err
+}
+
+// ranOutOfTime reports whether err, a flush's error, holds the end of a
+// deadline: the save's own, or one a waiter lent a timed save (see acquire).
+// A lent deadline cancels the timed save, so err holds context.Canceled and
+// the deadline is the context's cause. A preempt is no deadline, even after a
+// lent one ran out. It only picks the log line: what counts as a failure is
+// conclude's.
+func ranOutOfTime(ctx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	return errors.Is(err, context.Canceled) && !preempted(ctx) &&
+		errors.Is(context.Cause(ctx), context.DeadlineExceeded)
 }
 
 // conclude ends a flush by what its services failed with, never by its
@@ -680,8 +700,9 @@ func (e *Engine) redirtyLocked(failed []pendingService) {
 }
 
 // takeDirty clears the dirty bit of every dirty service and returns the safe
-// ones in name order. It also cancels the armed timer, because the services it
-// was armed for are now in the caller's hands.
+// ones in name order; writeAll puts them in saveOrder. It also cancels the
+// armed timer, because the services it was armed for are now in the caller's
+// hands.
 func (e *Engine) takeDirty() []pendingService {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -700,7 +721,7 @@ func (e *Engine) takeDirty() []pendingService {
 		t.dirty = false
 
 		if t.unsafe == nil {
-			pending = append(pending, pendingService{name: name, snap: t.snap, assets: t.assets})
+			pending = append(pending, pendingService{name: name, snap: t.snap, assets: t.assets, took: t.took})
 		}
 	}
 
@@ -757,14 +778,15 @@ func (e *Engine) backoffLocked() time.Duration {
 // A service whose file turns out to be a link that leaves the base dir is not
 // tried again: saving is turned off for it.
 //
-// It saves in two passes, each in name order. The first takes every service's
+// It saves in two passes, each in saveOrder. The first takes every service's
 // snapshot into temp files, and renames at once each one whose assets have
 // nothing to sync, and no earlier sync to wait for, when its Snapshot has
 // returned: services with no assets among them. It defers the others, with
 // their temp files, to the second pass, which syncs their assets and renames
 // them. A sync cannot be interrupted and can take the whole of the deadline,
 // so it never runs before a save that needs none, even when a request commits
-// an asset during the service's own Snapshot. A deferred snapshot is renamed
+// an asset during the service's own Snapshot. saveOrder does the same for a
+// slow Snapshot, which cannot be interrupted either. A deferred snapshot is renamed
 // by the save that took it or not at all, so no older snapshot of a service
 // replaces a newer one. A change after its Snapshot returned is for the next
 // save; an asset committed between the Snapshot and the sync is synced with
@@ -788,10 +810,45 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 	defer func() { _ = root.Close() }()
 
 	run := flushRun{e: e, root: root}
-	deferred := run.firstPass(ctx, pending)
+	deferred := run.firstPass(ctx, saveOrder(pending))
 	run.secondPass(ctx, deferred)
 
 	return run.failed, run.gaveWay, errors.Join(run.errs...)
+}
+
+// saveOrder orders pending, which is in name order, for both passes of a
+// flush, so that a service that can take the shared deadline goes after the
+// ones that cannot. It sorts by, in turn:
+//   - whether the service has assets to sync, or an earlier sync to wait for,
+//     at flush start: those go after the ones with none, since their sync can
+//     take the whole deadline;
+//   - the service's last measured Snapshot in this process, shortest first, so
+//     a large S3 with nothing pending, whose Snapshot grows with its objects,
+//     does not cost SQS and STS their save; a service never snapshotted yet
+//     counts as zero, so the first flush in a process is in name order;
+//   - name.
+//
+// A service whose assets have failed or been released sorts with the pending
+// ones; its save fails in firstPass, which reports why.
+func saveOrder(pending []pendingService) []pendingService {
+	due := make(map[string]bool, len(pending))
+
+	for _, p := range pending {
+		d, err := p.assets.syncDue()
+		due[p.name] = d || err != nil
+	}
+
+	return slices.SortedStableFunc(slices.Values(pending), func(a, b pendingService) int {
+		if due[a.name] != due[b.name] {
+			if due[b.name] {
+				return -1
+			}
+
+			return 1
+		}
+
+		return cmp.Or(cmp.Compare(a.took, b.took), strings.Compare(a.name, b.name))
+	})
 }
 
 // flushRun is what the saves of one flush failed with.
@@ -963,7 +1020,10 @@ func (e *Engine) snapshot(root *os.Root, s *staged) error {
 		outs = append(outs, w.buf)
 	}
 
+	start := time.Now()
 	err = p.snap.Snapshot(io.MultiWriter(outs...))
+	e.measured(p.name, time.Since(start))
+
 	if err != nil {
 		return fmt.Errorf("snapshot: %w", err)
 	}
@@ -976,6 +1036,16 @@ func (e *Engine) snapshot(root *os.Root, s *staged) error {
 	}
 
 	return nil
+}
+
+// measured records how long a Snapshot of service took, for saveOrder.
+func (e *Engine) measured(service string, took time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if t, ok := e.services[service]; ok {
+		t.took = took
+	}
 }
 
 // rename renames a service's snapshot over its state files, removes the ones of
