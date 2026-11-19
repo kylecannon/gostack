@@ -405,8 +405,9 @@ to `<svc>` and its dependents, not to every service. The selection tables in
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
 `ssm` calls `secretsmanager`, `dynamodb` and `dynamodbstreams` run together, and
 `s3` will call `sns` and `kms`), so no service branch edits a table. A
-dependent that is not built yet, with no ledger rows and no
-`internal/service/<svc>`, selects nothing. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
+service is selected for a gostack run only when `internal/service/<svc>/`
+exists: ledger rows alone (a LocalStack baseline) do not count, so an unserved
+service is selected by nothing, as a dependent or otherwise. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
 `Preprocess` sees other services' requests, so a change to that service
 selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
 `Test_parityTables` holds it to `registrations()`.

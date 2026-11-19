@@ -20,7 +20,21 @@ import ledger
 from test_ledger import git_in, without_git_env
 
 KNOWN = {"ssm", "sqs", "sts"}
+# The services with a directory under internal/service/ in the tests that do
+# not build a tree: KNOWN, s3 (a dependent of sqs, with no ledger rows here) and
+# lambda (a service selected by its own path, with none either). Only a served
+# service is ever selected.
+SERVED = KNOWN | {"s3", "lambda"}
 REGISTRATION = ledger.REGISTRATION_FILE
+
+
+class ServedTestCase(unittest.TestCase):
+    """A test case in which SERVED are the services gostack serves."""
+
+    def setUp(self) -> None:
+        patched = mock.patch.object(ledger, "service_dirs", return_value=set(SERVED))
+        patched.start()
+        self.addCleanup(patched.stop)
 
 SERVICES_GO = """\
 package main
@@ -98,7 +112,7 @@ class TestDirTest(unittest.TestCase):
         self.assertEqual(len(set(ledger.TEST_DIRS.values())), len(ledger.TEST_DIRS))
 
 
-class AffectedServicesTest(unittest.TestCase):
+class AffectedServicesTest(ServedTestCase):
     def test_change_under_a_service_directory_selects_that_service(self) -> None:
         got = ledger.affected_services(["internal/service/lambda/function.go"], KNOWN)
         self.assertEqual(got, {"lambda"})
@@ -114,20 +128,22 @@ class AffectedServicesTest(unittest.TestCase):
         self.assertEqual(ledger.DEPENDS_ON["s3"], ("kms", "sns", "sqs"))
         with (
             mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",), "events": ("lambda",)}),
-            mock.patch.object(ledger, "service_dirs", return_value={"lambda", "events"}),
+            mock.patch.object(ledger, "service_dirs", return_value={"ssm", "lambda", "events"}),
         ):
             self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm", "lambda", "events"})
             self.assertEqual(ledger.affected_services(["internal/service/lambda/a.go"], KNOWN), {"lambda", "events"})
 
     def test_a_dependent_that_is_not_built_is_not_selected(self) -> None:
         # A seeded DEPENDS_ON entry names a service nobody has built: the image
-        # does not serve it and the ledger has no rows for it.
-        with mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",)}), mock.patch.object(ledger, "service_dirs", return_value=set()):
+        # does not serve it. Ledger rows do not make it built (SQ-213 commits
+        # LocalStack baselines for services gostack does not serve yet).
+        depends = mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",)})
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm"}):
             self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm"})
-        with mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",)}), mock.patch.object(ledger, "service_dirs", return_value={"lambda"}):
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm", "lambda"}):
             self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN), {"ssm", "lambda"})
-        with mock.patch.object(ledger, "DEPENDS_ON", {"lambda": ("ssm",)}), mock.patch.object(ledger, "service_dirs", return_value=set()):
-            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN | {"lambda"}), {"ssm", "lambda"})
+        with depends, mock.patch.object(ledger, "service_dirs", return_value={"ssm"}):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/keys.go"], KNOWN | {"lambda"}), {"ssm"})
 
     def test_the_services_built_next_are_seeded_with_their_dependencies(self) -> None:
         # The branch that builds one edits no table. Each service in the seeded
@@ -197,7 +213,7 @@ class AffectedServicesTest(unittest.TestCase):
     def test_a_generated_api_package_with_no_service_directory_is_shared(self) -> None:
         # SQ-182 generates packages for services not registered yet; the image
         # serves none of them, so they select what a shared path selects.
-        with mock.patch.object(ledger, "service_dirs", return_value={"sqs"}):
+        with mock.patch.object(ledger, "service_dirs", return_value=set(KNOWN)):
             self.assertEqual(ledger.affected_services(["internal/api/lambda/types.go"], KNOWN), KNOWN)
 
     def test_paths_no_service_owns_select_every_known_service(self) -> None:
@@ -413,7 +429,7 @@ class ServicesCommandTest(unittest.TestCase):
             contextlib.redirect_stdout(out),
             mock.patch("sys.stdin", io.StringIO("".join(p + "\0" for p in paths))),
             mock.patch.object(ledger, "registration_diff", return_value=diff),
-            mock.patch.object(ledger, "service_dirs", return_value={"foo", "ssm", "sqs", "sts", "s3"}),
+            mock.patch.object(ledger, "service_dirs", return_value={"foo", "ssm", "sqs", "sts", "s3", "lambda"}),
         ):
             ledger.services(args)
         return out.getvalue().strip()
@@ -459,7 +475,7 @@ class ServicesCommandTest(unittest.TestCase):
         self.assertEqual(self.run_services(["internal/service/lambda/a\nb.go"], None), "lambda")
 
 
-class ParityFileSelectionTest(unittest.TestCase):
+class ParityFileSelectionTest(ServedTestCase):
     """A service's own ledger and exclusions files select that service alone;
     everything else under parity/ stays shared."""
 
@@ -569,7 +585,11 @@ class RealDiffSelectionTest(unittest.TestCase):
             self.write(f"parity/exclusions/{service}.yaml", "# none\n")
         self.write("internal/gateway/gateway.go", "package gateway\n")
         entry = {"localstack": "pass", "gostack": "pass", "reason": ""}
-        ledger.write_ledger(self.repo / "parity" / "ledger", {f"tests/aws/services/{s}/test_x.py::t": entry for s in ("ssm", "s3", "sqs", "sts")})
+        rows = {f"tests/aws/services/{s}/test_x.py::t": entry for s in ("ssm", "s3", "sqs", "sts")}
+        # sns has a LocalStack baseline (SQ-213) and no internal/service/sns/:
+        # gostack does not serve it, so no selection may name it.
+        rows["tests/aws/services/sns/test_x.py::t"] = {"localstack": "pass", "gostack": None, "reason": ""}
+        ledger.write_ledger(self.repo / "parity" / "ledger", rows)
         self.git("init", "-q")
         self.base = self.commit("base")
 
@@ -601,6 +621,63 @@ class RealDiffSelectionTest(unittest.TestCase):
     def test_a_change_under_a_service_without_routing_hooks_selects_only_it(self) -> None:
         self.write("internal/service/ssm/keys.go", "package ssm\n")
         self.assertEqual(self.selected(), "ssm")
+
+    def test_a_service_with_only_a_baseline_is_never_selected(self) -> None:
+        # sns has ledger rows and no directory under internal/service/, and
+        # s3 and sqs depend on it in DEPENDS_ON. Each case is a change that
+        # selects every known service, or a dependent, or the service itself.
+        self.assertEqual(ledger.DEPENDS_ON["s3"], ("kms", "sns", "sqs"))
+        cases = {
+            "internal/service/sqs/routes.go": "s3,sqs,ssm,sts",
+            "internal/service/s3/website.go": "s3,sqs,ssm,sts",
+            "internal/service/sts/operations.go": "s3,sqs,ssm,sts",
+            "go.mod": "s3,sqs,ssm,sts",
+            "internal/gateway/gateway.go": "s3,sqs,ssm,sts",
+            "cmd/gostack/settings-sts.go": "s3,sqs,ssm,sts",
+            "cmd/gostack/settings-sqs.go": "s3,sqs",
+            "internal/service/ssm/keys.go": "ssm",
+            # The service's own files: nothing to run against gostack.
+            "cmd/gostack/settings-sns.go": "",
+            "internal/api/sns/types.go": "s3,sqs,ssm,sts",  # no service directory: shared
+        }
+        for path, want in cases.items():
+            with self.subTest(path=path):
+                self.write(path, "package x\n")
+                self.assertEqual(self.selected(), want)
+                self.git("reset", "-q", "--hard", self.base)
+
+    def test_a_diff_adding_only_a_baseline_services_ledger_and_exclusions_selects_nothing(self) -> None:
+        self.write("parity/ledger/sns.json", (self.repo / "parity" / "ledger" / "sns.json").read_text(encoding="utf-8").replace("pass", "fail"))
+        self.write("parity/exclusions/sns.yaml", "# none\n")
+        self.assertEqual(self.selected(), "")
+
+    def test_once_the_service_directory_exists_the_service_is_selected_again(self) -> None:
+        # The first commit of the sns branch: its directory. From then on every
+        # rule that named sns before names it.
+        self.write("internal/service/sns/sns.go", "package sns\n")
+        self.assertEqual(self.selected(), "s3,sns")
+        self.base = self.git("rev-parse", "HEAD")
+        cases = {
+            "internal/service/sqs/routes.go": "s3,sns,sqs,ssm,sts",
+            "go.mod": "s3,sns,sqs,ssm,sts",
+            "internal/service/sts/operations.go": "s3,sns,sqs,ssm,sts",
+            "internal/service/sns/topics.go": "s3,sns",
+            "cmd/gostack/settings-sns.go": "s3,sns",
+            "parity/ledger/sns.json": "sns",
+            "parity/exclusions/sns.yaml": "sns",
+        }
+        for path, want in cases.items():
+            with self.subTest(path=path):
+                self.write(path, "package x\n" if path.endswith(".go") else "{}\n" if path.endswith(".json") else "# none\n")
+                self.assertEqual(self.selected(), want)
+                self.git("reset", "-q", "--hard", self.base)
+
+    def test_the_services_command_without_changed_prints_only_what_gostack_serves(self) -> None:
+        args = argparse.Namespace(ledger=self.repo / "parity" / "ledger", changed=False, range=None)
+        out = io.StringIO()
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out):
+            ledger.services(args)
+        self.assertEqual(out.getvalue().strip(), "s3,sqs,ssm,sts")
 
     def test_a_diff_touching_only_one_services_settings_file_selects_that_service_and_its_dependents(self) -> None:
         self.write("cmd/gostack/settings-sqs.go", "package main\n\n// sqs settings\n")

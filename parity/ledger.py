@@ -61,10 +61,13 @@ Commands (standard library only):
            --collect-only -q` listing instead of running Docker.
     docs   Rewrite docs/parity.md from the ledger.
     services [--changed [--range A..B]]
-           Print the services the ledger covers, comma separated. With
+           Print the services gostack runs: those the ledger covers that have
+           a directory under internal/service/, comma separated. A service
+           with ledger rows and no such directory (a LocalStack baseline gostack
+           does not serve yet) is never printed, selected by any path. With
            --changed, read NUL-separated changed paths from stdin (`git diff
            --name-only -z --no-renames`) and print the services that change can
-           affect (empty when none). A path selects every service unless it
+           affect (empty when none). A path selects every such service unless it
            is one service's own path (and that service is not in
            ROUTING_REACH), a Go test file, or is in NO_IMAGE_EFFECT; see
            affected_services. cmd/gostack/settings-<svc>.go is <svc>'s own
@@ -217,7 +220,10 @@ PARITY_WORKFLOW = ".github/workflows/parity.yml"
 
 # The services whose tests a change to another service can break: each key's
 # tests depend on the services it lists, so a change to one of those selects
-# the key too. EVERY_SERVICE as a key is every service the ledger covers.
+# the key too. EVERY_SERVICE as a key is every service the ledger covers. A
+# key is selected only when it is served (a directory under internal/service/):
+# rows in the ledger do not count, so a service with only a LocalStack baseline
+# is never run against gostack.
 # The seeded entries are for the services built next, so the branch that builds
 # one edits no table. Test_parityTables accepts an entry whose service has a
 # generated internal/api/<svc> package and no internal/service/<svc> yet, and
@@ -1161,19 +1167,21 @@ def settings_service(path: str) -> str | None:
     return service if service in TEST_DIRS else None
 
 
-def with_dependents(services: set[str], known: set[str]) -> set[str]:
+def with_dependents(services: set[str], known: set[str], served: set[str]) -> set[str]:
     """services and every service whose tests depend on one of them, following
-    DEPENDS_ON to its end. A dependency of EVERY_SERVICE adds every known
-    service. A dependent is added only once it is built: it has ledger rows
-    (known) or a directory under internal/service/. A seeded entry for a
-    service nobody has built selects nothing, since the image does not serve it."""
+    DEPENDS_ON to its end. A dependent is added only when it is served: it has
+    a directory under internal/service/. A seeded entry for a service nobody
+    has built selects nothing, and ledger rows do not make a service built: the
+    baseline rows of a service gostack does not serve yet have no gostack run to
+    select. A dependency of EVERY_SERVICE adds every known service that is
+    served."""
     selected = set(services)
-    built = set(known) | service_dirs()
     while True:
         dependents: set[str] = set()
         for service, dependencies in DEPENDS_ON.items():
             if selected.intersection(dependencies):
-                dependents |= set(known) if service == EVERY_SERVICE else {service} & built
+                dependents |= known if service == EVERY_SERVICE else {service}
+        dependents &= served
         if dependents <= selected:
             return selected
         selected |= dependents
@@ -1188,8 +1196,13 @@ def no_image_effect(path: str) -> bool:
 
 
 def affected_services(paths: list[str], known: set[str], registration: set[str] | None = None) -> set[str]:
-    """The services that a change to paths can affect. Fail-safe: a path
-    selects every known service unless it is
+    """The services that a change to paths can affect, as a gostack run:
+    only a service gostack serves, one with a directory under internal/service/
+    (service_dirs), is ever selected, whatever selects it. A service with
+    ledger rows and no directory (its LocalStack baseline is committed, gostack
+    does not answer it) is left out, so the image is never asked for a suite it
+    does not serve. Fail-safe: a path selects every known served service unless
+    it is
     - in NO_IMAGE_EFFECT, a Go test file anywhere, or another workflow than
       parity.yml: nothing;
     - under internal/service/<svc>/ or internal/api/<svc>/: <svc> and the
@@ -1223,8 +1236,14 @@ def affected_services(paths: list[str], known: set[str], registration: set[str] 
             code |= registration
         else:
             shared = True
-    affected = with_dependents(code | settings, known) | files
-    return set(known) | affected if shared or code.intersection(ROUTING_REACH) else affected
+    served = service_dirs()
+    # A settings file of a service nobody serves yet changes nothing gostack
+    # does, so its dependents are not selected for it either. A service
+    # directory that is gone (its files are in the diff, it is not in the tree)
+    # still selects its dependents: they called it.
+    affected = with_dependents(code | (settings & served), known, served) | files
+    selected = set(known) | affected if shared or code.intersection(ROUTING_REACH) else affected
+    return selected & served
 
 
 def read_paths(text: str) -> list[str]:
@@ -1238,7 +1257,7 @@ def read_paths(text: str) -> list[str]:
 def services(args: argparse.Namespace) -> None:
     known = {service_of(nodeid) for nodeid in load_ledger(args.ledger)}
     if not args.changed:
-        print(",".join(sorted(known)))
+        print(",".join(sorted(known & service_dirs())))
         return
     paths = read_paths(sys.stdin.read())
     registration = None
@@ -1294,6 +1313,9 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         counts["gs_pass"] = sum(1 for e in entries if e["gostack"] == "pass")
         counts["gs_run"] = sum(1 for e in entries if e["gostack"] not in (None, "excluded"))
         counts["both"] = sum(1 for e in entries if e["localstack"] == "pass" and e["gostack"] == "pass")
+        # The share is over the LocalStack passes of services gostack ran. A
+        # baseline-only service has none, and would otherwise drag the total down.
+        counts["ls_pass_run"] = counts["ls_pass"] if counts["gs_run"] else 0
         totals.update(counts)
         rows.append(format_row(service, counts))
     rows.append(format_row("**total**", totals))
@@ -1313,7 +1335,7 @@ def format_row(label: str, c: Counter) -> str:
     if c["gs_run"] == 0:
         parity = "n/a"
     else:
-        parity = f"{100 * c['both'] / c['ls_pass']:.1f}%" if c["ls_pass"] else "n/a"
+        parity = f"{100 * c['both'] / c['ls_pass_run']:.1f}%" if c["ls_pass_run"] else "n/a"
     gostack = str(c["gs_pass"]) if c["gs_run"] else "not run"
     return (
         f"| {label} | {c['tests']} | {c['excluded']} | {c['skipped']} | {c['ls_pass']} "

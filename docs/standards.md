@@ -113,7 +113,12 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   request as not mergeable. A manual run builds the dispatched ref and
   compares with the ledger committed there.
   - Selection is fail-safe: a changed path selects every service in the ledger
-    unless it is one service's own path or cannot change the image.
+    that gostack serves, unless it is one service's own path or cannot change
+    the image. gostack serves a service when `internal/service/<svc>/` exists;
+    ledger rows do not count. A service with only a LocalStack baseline is never
+    selected, by its own files, as a dependent, by `sts` or by a shared path, and
+    the manual run's default (`ledger.py services`) leaves it out. A change that
+    selects nothing skips every later step of the workflow.
   - A service's own paths are `internal/service/<svc>/` and the generated
     `internal/api/<svc>/` once `internal/service/<svc>/` exists (both also
     select the services whose tests depend on `<svc>`),
@@ -121,9 +126,9 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     `cmd/gostack/settings-<svc>.go`, the service's settings mapping. The
     settings file selects `<svc>` and its dependents even for a service whose
     Registration sets a routing hook, since it sets none. A dependent selects
-    only once it is built: it has ledger rows or an `internal/service/<svc>/`
-    directory. Every service's tests depend on `sts`, so a change there
-    selects every service.
+    only once it is served. Every service's tests depend on `sts`, so a change
+    there selects every service. The first commit of a service branch that adds
+    `internal/service/<svc>/` makes `<svc>` selectable by every rule above.
   - A change under the directories of a service whose Registration sets
     `Mount`, `ClaimHost`, `Claim`, `Fallback` or `Preprocess` selects every
     service: those hooks see requests meant for any service. Today that is
