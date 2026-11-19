@@ -86,7 +86,7 @@ func serveRecursiveShapes(h Handler, w http.ResponseWriter, rc *request.Context)
 
 func readRecursiveShapes(rc *request.Context) (*RecursiveShapesInput, *awserr.Error) {
 	in := &RecursiveShapesInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

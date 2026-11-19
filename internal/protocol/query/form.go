@@ -186,11 +186,20 @@ func MalformedQueryString() *awserr.Error {
 // for a caller that only routes the call. They can hold text that is not UTF-8
 // and are not stored in Form.
 func RequestForm(r *http.Request) (url.Values, error) {
+	return RequestFormHeld(r, nil)
+}
+
+// RequestFormHeld is RequestForm for a call whose decoding is charged to hold
+// (request.Context): what the pairs cost past protocol.FreeDecode is held
+// before any is parsed. When hold refuses, the error wraps protocol.ErrBusy and
+// only the pairs FreeDecode pays for are parsed, for a caller that routes the
+// call.
+func RequestFormHeld(r *http.Request, hold protocol.DecodeHolder) (url.Values, error) {
 	if r.Form != nil {
 		return r.Form, nil
 	}
 
-	values, err := requestValues(r)
+	values, err := requestValues(r, hold)
 	if err != nil {
 		return values, err
 	}
@@ -217,7 +226,7 @@ func readBody(r *http.Request) ([]byte, error) {
 	return body, err //nolint:wrapcheck // the caller wraps it in ErrForm
 }
 
-func requestValues(r *http.Request) (url.Values, error) {
+func requestValues(r *http.Request, hold protocol.DecodeHolder) (url.Values, error) {
 	raw := r.URL.RawQuery
 
 	// Text that is not UTF-8 is still parsed, so a caller that only routes the
@@ -229,18 +238,18 @@ func requestValues(r *http.Request) (url.Values, error) {
 	}
 
 	if !isForm(r.Header.Get("Content-Type")) || r.Body == nil || r.Body == http.NoBody {
-		return parsePairs(raw, nil, failure)
+		return parsePairs(raw, nil, failure, hold)
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		values, _ := parsePairs(raw, nil, nil)
+		values, _ := parsePairs(raw, nil, nil, nil)
 
 		return values, fmt.Errorf("%w: %w", ErrForm, err)
 	}
 
 	if protocol.OverBody(len(body)) {
-		values, _ := parsePairs(raw, nil, nil)
+		values, _ := parsePairs(raw, nil, nil, nil)
 
 		return values, fmt.Errorf("%w: the body is over %d bytes", ErrForm, protocol.MaxBody())
 	}
@@ -249,25 +258,35 @@ func requestValues(r *http.Request) (url.Values, error) {
 		failure = fmt.Errorf("%w: the body is not UTF-8", ErrForm)
 	}
 
-	return parsePairs(raw, body, failure)
+	return parsePairs(raw, body, failure, hold)
 }
 
 // parsePairs parses the pairs of raw, then those of body, and returns them
 // with failure. Pairs that cost more than protocol.DecodeBudget of their text
 // are counted before any is parsed: then only the first refusedPairs are, and
-// the error is errTooManyPairs.
-func parsePairs(raw string, body []byte, failure error) (url.Values, error) {
+// the error is errTooManyPairs. What the pairs cost past protocol.FreeDecode
+// is held from hold, when there is one, before any is parsed.
+func parsePairs(raw string, body []byte, failure error, hold protocol.DecodeHolder) (url.Values, error) {
 	values := url.Values{}
 	limit := int(protocol.DecodeBudget(len(raw)+len(body)) / PairCost)
 
 	_, left, over := pairsEnd(raw, limit, strings.IndexByte)
 	if !over {
-		_, _, over = pairsEnd(body, left, bytes.IndexByte)
+		_, left, over = pairsEnd(body, left, bytes.IndexByte)
 	}
 
+	pairs := limit - left
 	if over {
 		failure = errTooManyPairs
-		limit = refusedPairs
+		limit, pairs = refusedPairs, refusedPairs
+	}
+
+	if cost := int64(pairs) * PairCost; hold != nil && cost > protocol.FreeDecode {
+		_, err := hold.HoldDecode(cost)
+		if err != nil {
+			failure = fmt.Errorf("%w: %w", ErrForm, err)
+			limit = protocol.FreeDecode / PairCost
+		}
 	}
 
 	// Only the text of the pairs parsed is copied out of body.

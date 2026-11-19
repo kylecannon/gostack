@@ -51,11 +51,11 @@ func Test_Plan_UnmarshalerIsNotFree(t *testing.T) {
 	body := `{"Entries":[{}` + strings.Repeat(`,{}`, 1<<20) + `]}`
 	budget := protocol.DecodeBudget(len(body))
 
-	_, _, err := DecodeWithin[stampedWide]([]byte(body), budget)
+	_, _, err := DecodeWithin[stampedWide]([]byte(body), budget, nil)
 	assert.Equal(t, ErrTooLarge, err, "a structure with an unmarshaler is planned through its fields")
 
 	list := `[{}` + strings.Repeat(`,{}`, 1<<20) + `]`
-	_, _, err = DecodeWithin[wideList]([]byte(list), protocol.DecodeBudget(len(list)))
+	_, _, err = DecodeWithin[wideList]([]byte(list), protocol.DecodeBudget(len(list)), nil)
 	assert.Equal(t, ErrTooLarge, err, "any other unmarshaler costs what an untyped value does")
 
 	for leaf := range freeLeaves {

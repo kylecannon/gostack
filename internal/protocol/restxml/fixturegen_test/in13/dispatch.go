@@ -86,7 +86,7 @@ func serveHttpPayloadWithStructure(h Handler, w http.ResponseWriter, rc *request
 
 func readHttpPayloadWithStructure(rc *request.Context) (*HttpPayloadWithStructureInput, *awserr.Error) {
 	in := &HttpPayloadWithStructureInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Nested = &NestedPayload{}
 		in.Nested.decodeXML(xd)

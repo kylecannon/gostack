@@ -1502,7 +1502,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 // body holds. Any other body is dropped once decoded. A body that would decode into
 // more than the call's budget is answered as a body over protocol.MaxBody.
 func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
-	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)))
+	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
 	if err == awsjson.ErrTooLarge {
 		return nil, query.MalformedQueryString()
 	}
@@ -1525,7 +1525,7 @@ var errBodyNotUTF8 = &awserr.Error{
 // readForm gives the parameters of a query call as LocalStack reads them: the URL's
 // before the body's, with no ";" separator and a malformed escape kept as typed.
 func readForm(rc *request.Context) (url.Values, *awserr.Error) {
-	vals, err := query.RequestForm(rc.Request)
+	vals, err := query.RequestFormHeld(rc.Request, rc)
 	if errors.Is(err, protocol.ErrBusy) {
 		return nil, protocol.ThrottledQuery()
 	}

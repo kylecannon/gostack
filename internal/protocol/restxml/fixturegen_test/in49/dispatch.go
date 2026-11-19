@@ -86,7 +86,7 @@ func serveXmlMapWithXmlNamespace(h Handler, w http.ResponseWriter, rc *request.C
 
 func readXmlMapWithXmlNamespace(rc *request.Context) (*XmlMapWithXmlNamespaceInput, *awserr.Error) {
 	in := &XmlMapWithXmlNamespaceInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

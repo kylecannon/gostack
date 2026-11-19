@@ -21,6 +21,7 @@ import (
 const (
 	concurrentBodies = 64
 	throttled        = "ThrottlingException"
+	malformedXML     = "<Code>MalformedXML</Code>"
 
 	// containerHeap is the most heap 64 bodies at the cap may take at once:
 	// three quarters of the 512 MiB container DefaultInFlight is sized for.
@@ -194,4 +195,85 @@ func Test_Gateway_LyingSender(t *testing.T) {
 	t.Logf("peak heap above the start with %d lying senders: %d KiB", concurrentBodies, most>>10)
 	assert.Less(t, most, uint64(concurrentBodies*4*protocol.FreeBody+8<<20),
 		"a stated length is not allocated before its bytes arrive")
+}
+
+// Test_Gateway_DenseSmallBodies: 256 clients each send a 64 KiB lifecycle
+// configuration of empty rules at once. None is metered as a body (none passes
+// protocol.FreeBody), but each decodes into about 5 MiB, which the decode
+// budget allows. What decoding holds past protocol.FreeDecode is drawn from the
+// in-flight pool, so the decodings in flight are bounded together: each is
+// answered once it decoded (501, the handler is not there) or with SlowDown,
+// and the heap stays under the pool plus what each request holds for free.
+func Test_Gateway_DenseSmallBodies(t *testing.T) {
+	const (
+		clients = 256
+		size    = protocol.FreeBody
+		// what a request holds outside the pool: its body, what it decodes for
+		// free, and a connection's buffers and the request's own structures.
+		perRequest = size + protocol.FreeDecode + 64<<10
+	)
+
+	withInFlight(t, protocol.DefaultInFlight, 2*time.Second)
+
+	server := httptest.NewServer(wideGateway(t))
+	defer server.Close()
+
+	head, tail := `<LifecycleConfiguration>`, `</LifecycleConfiguration>`
+	body := head + strings.Repeat(`<Rule/>`, (size-len(head)-len(tail))/len(`<Rule/>`)) + tail
+	auth := signed("test", usEast1, nameS3)
+
+	stop := make(chan struct{})
+	peak := peakHeap(stop)
+
+	var (
+		wg              sync.WaitGroup
+		served, refused atomic.Int64
+	)
+
+	for range clients {
+		wg.Go(func() {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPut, server.URL+"/b?lifecycle",
+				strings.NewReader(body))
+			if err != nil {
+				t.Error(err)
+
+				return
+			}
+
+			req.Header.Set(headerAuth, auth)
+
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Error(err)
+
+				return
+			}
+
+			answer, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			switch {
+			case resp.StatusCode == http.StatusNotImplemented:
+				served.Add(1)
+			case resp.StatusCode == http.StatusServiceUnavailable && strings.Contains(string(answer), "SlowDown"):
+				refused.Add(1)
+			default:
+				t.Errorf("unexpected answer %d %s", resp.StatusCode, answer)
+			}
+		})
+	}
+
+	wg.Wait()
+	close(stop)
+
+	most := <-peak
+	limit := uint64(protocol.DefaultInFlight + clients*perRequest)
+
+	t.Logf("served %d, throttled %d, peak heap above the start %d MiB (limit %d MiB)",
+		served.Load(), refused.Load(), most>>20, limit>>20)
+	assert.Positive(t, served.Load())
+	assert.Less(t, most, limit)
+
+	_, held := protocol.InFlight()
+	assert.Zero(t, held, "every decoding gives back what it held")
 }

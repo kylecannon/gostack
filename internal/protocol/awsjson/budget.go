@@ -33,10 +33,27 @@ var ErrTooLarge = &awserr.Error{
 //
 // Decoding can run twice (DecodeLenient's strict pass, then the lenient one),
 // so one pass is held to half the budget.
-func DecodeWithin[T any](body []byte, budget int64) (v *T, usedLenient bool, err *awserr.Error) {
+//
+// When hold is not nil, a body that could decode into more than
+// protocol.FreeDecode is walked too, and what both passes would hold is charged
+// to hold before decoding. When hold refuses, DecodeWithin returns
+// protocol.ThrottledJSON.
+func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
-	if decodePasses*int64(len(body))*p.perByte > budget && overBudget(body, p, budget/decodePasses) {
-		return nil, false, ErrTooLarge
+
+	bound := decodePasses * int64(len(body)) * p.perByte
+	if bound > budget || (hold != nil && bound > protocol.FreeDecode) {
+		cost, over := walkCost(body, p, budget/decodePasses)
+		if over {
+			return nil, false, ErrTooLarge
+		}
+
+		if hold != nil && decodePasses*cost > protocol.FreeDecode {
+			_, err := hold.HoldDecode(decodePasses * cost)
+			if err != nil {
+				return nil, false, protocol.ThrottledJSON()
+			}
+		}
 	}
 
 	return DecodeLenient[T](body)
@@ -237,13 +254,19 @@ var errOverBudget = errors.New("over budget")
 // overBudget reports whether body, decoded into a value planned by p, would
 // cost more than budget. A body that is not valid json reports false: the
 // decode that follows refuses it, having decoded no more than the walk read.
-func overBudget(body []byte, p *plan, budget int64) bool {
+// walkCost walks body as p plans it and returns what one pass of decoding it
+// holds, or reports over once that passes budget.
+func walkCost(body []byte, p *plan, budget int64) (int64, bool) {
 	w := walker{
 		dec:   jsontext.NewDecoder(bytes.NewBuffer(body), jsontext.AllowDuplicateNames(true)),
 		limit: budget,
 	}
 
-	return errors.Is(w.value(p), errOverBudget)
+	if errors.Is(w.value(p), errOverBudget) {
+		return 0, true
+	}
+
+	return w.cost, false
 }
 
 type walker struct {

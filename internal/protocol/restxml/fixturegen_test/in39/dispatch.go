@@ -86,7 +86,7 @@ func serveXmlAttributesOnPayload(h Handler, w http.ResponseWriter, rc *request.C
 
 func readXmlAttributesOnPayload(rc *request.Context) (*XmlAttributesOnPayloadInput, *awserr.Error) {
 	in := &XmlAttributesOnPayloadInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Payload = &XmlAttributesPayloadRequest{}
 		in.Payload.decodeXML(xd)

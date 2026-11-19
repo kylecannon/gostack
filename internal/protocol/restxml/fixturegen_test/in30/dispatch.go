@@ -86,7 +86,7 @@ func serveOmitsNullSerializesEmptyString(h Handler, w http.ResponseWriter, rc *r
 
 func readOmitsNullSerializesEmptyString(rc *request.Context) (*OmitsNullSerializesEmptyStringInput, *awserr.Error) {
 	in := &OmitsNullSerializesEmptyStringInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

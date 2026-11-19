@@ -86,7 +86,7 @@ func serveHttpPayloadWithXmlNamespaceAndPrefix(h Handler, w http.ResponseWriter,
 
 func readHttpPayloadWithXmlNamespaceAndPrefix(rc *request.Context) (*HttpPayloadWithXmlNamespaceAndPrefixInput, *awserr.Error) {
 	in := &HttpPayloadWithXmlNamespaceAndPrefixInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Nested = &PayloadWithXmlNamespaceAndPrefix{}
 		in.Nested.decodeXML(xd)

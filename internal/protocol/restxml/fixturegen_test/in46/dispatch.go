@@ -86,7 +86,7 @@ func serveXmlLists(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlLists(rc *request.Context) (*XmlListsInput, *awserr.Error) {
 	in := &XmlListsInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

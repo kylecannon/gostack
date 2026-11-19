@@ -307,8 +307,9 @@ func (p *Provider) ReceiveMessage(
 
 	if params.wait > 0 {
 		// The body is decoded: it holds nothing under the in-flight bound while
-		// the call waits.
+		// the call waits, neither its body nor its decoding.
 		protocol.ReleaseBody(ctx)
+		rc.ReleaseDecode()
 
 		var release context.CancelFunc
 

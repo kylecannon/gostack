@@ -238,6 +238,18 @@ func Test_Gateway_WideBodies(t *testing.T) {
 			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
 		},
 		{
+			name: "rest-xml: one start tag of attributes to the cap", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call,
+			body:       repeatTo(`<LifecycleConfiguration><Rule`, ` a=""`, `/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		{
+			name: "rest-xml: one tag name to the cap", method: http.MethodPut,
+			target: localhost + "b?lifecycle", headers: s3Call,
+			body:       repeatTo(`<LifecycleConfiguration><R`, `R`, `/></LifecycleConfiguration>`),
+			wantStatus: http.StatusBadRequest, wantBody: malformedXML,
+		},
+		{
 			name: "rest-xml: DeleteObjects of empty objects to the cap", method: http.MethodPost,
 			target: localhost + "b?delete", headers: s3Call,
 			body:       repeatTo(`<Delete>`, `<Object/>`, `</Delete>`),

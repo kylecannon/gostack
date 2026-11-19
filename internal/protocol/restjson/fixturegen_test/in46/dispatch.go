@@ -171,7 +171,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 // decodeJSONBody reads a json request body into a T, refusing one that would
 // decode into more than the call's budget as a body over protocol.MaxBody.
 func decodeJSONBody[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
-	in, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)))
+	in, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
 	if err == awsjson.ErrTooLarge {
 		return nil, errMalformedBody()
 	}

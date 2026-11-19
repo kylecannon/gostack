@@ -86,7 +86,7 @@ func serveXmlEmptyStrings(h Handler, w http.ResponseWriter, rc *request.Context)
 
 func readXmlEmptyStrings(rc *request.Context) (*XmlEmptyStringsInput, *awserr.Error) {
 	in := &XmlEmptyStringsInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

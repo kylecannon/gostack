@@ -86,7 +86,7 @@ func serveXmlTimestamps(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readXmlTimestamps(rc *request.Context) (*XmlTimestampsInput, *awserr.Error) {
 	in := &XmlTimestampsInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

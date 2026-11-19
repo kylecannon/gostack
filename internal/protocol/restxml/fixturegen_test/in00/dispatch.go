@@ -86,7 +86,7 @@ func serveAllQueryStringTypes(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readAllQueryStringTypes(rc *request.Context) (*AllQueryStringTypesInput, *awserr.Error) {
 	in := &AllQueryStringTypesInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

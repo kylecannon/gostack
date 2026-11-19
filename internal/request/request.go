@@ -2,6 +2,7 @@ package request
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -32,12 +33,42 @@ type Context struct {
 	// bytes of decoded values each byte of the body may cost. Zero is
 	// protocol.DecodeFactor.
 	DecodeFactor int
+
+	decode protocol.DecodeHold
 }
 
 // DecodeBudget is the most bytes decoding a body of n bytes may hold for this
 // call's service: protocol.DecodeBudgetAt with DecodeFactor.
 func (rc *Context) DecodeBudget(n int) int64 {
 	return protocol.DecodeBudgetAt(n, rc.DecodeFactor)
+}
+
+// HoldDecode is protocol.DecodeHolder: it charges what decoding this call's
+// body holds past protocol.FreeDecode against the in-flight bound, unless the
+// call is internal (IsInternal).
+func (rc *Context) HoldDecode(cost int64) (int64, error) {
+	ctx := context.Background()
+	if rc.Request != nil {
+		ctx = rc.Request.Context()
+	}
+
+	if IsInternal(ctx) {
+		rc.decode.Exempt()
+	}
+
+	covered, err := rc.decode.Cover(ctx, cost)
+	if err != nil {
+		return 0, fmt.Errorf("hold %d bytes of decoding: %w", cost, err)
+	}
+
+	return covered, nil
+}
+
+// ReleaseDecode gives back what HoldDecode charged. The gateway calls it when
+// the handler returns; a handler that holds its call open after decoding (an
+// SQS long poll) calls it first.
+func (rc *Context) ReleaseDecode() {
+	rc.decode.Release()
 }
 
 // DefaultCORS is the gateway's CORS policy, which a service that handles CORS

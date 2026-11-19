@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -50,6 +51,9 @@ type Decoder struct {
 	err    error
 	cost   int64 // what decoding has charged so far (Charge)
 	factor int   // the service's decode factor (protocol.DecodeBudgetAt)
+
+	hold    protocol.DecodeHolder // what cost past covered is charged to, or nil
+	covered int64                 // what cost may reach before hold is asked again
 }
 
 // NewDecoder returns a Decoder that reads r, at protocol.DecodeFactor.
@@ -60,7 +64,20 @@ func NewDecoder(r io.Reader) *Decoder {
 // NewDecoderAt returns a Decoder that reads r and holds what it decodes to
 // protocol.DecodeBudgetAt of the bytes read so far and factor (budget.go).
 func NewDecoderAt(r io.Reader, factor int) *Decoder {
-	return &Decoder{xd: xml.NewDecoder(r), factor: factor}
+	return NewDecoderFor(r, factor, nil)
+}
+
+// NewDecoderFor is NewDecoderAt for a call whose decoding is charged to hold
+// (request.Context) once it passes protocol.FreeDecode. When hold refuses,
+// decoding stops with an error that wraps protocol.ErrBusy. A nil hold charges
+// nothing.
+func NewDecoderFor(r io.Reader, factor int, hold protocol.DecodeHolder) *Decoder {
+	covered := int64(math.MaxInt64)
+	if hold != nil {
+		covered = protocol.FreeDecode
+	}
+
+	return &Decoder{xd: xml.NewDecoder(&tagLimit{r: r}), factor: factor, hold: hold, covered: covered}
 }
 
 // Err returns the first error met so far, or nil.

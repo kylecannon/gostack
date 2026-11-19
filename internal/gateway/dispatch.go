@@ -31,7 +31,12 @@ const (
 // and hands the call to the service's Registration. A service that claimed the
 // request by its host at root step 3 has been found already.
 func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
-	form := &formReader{r: r}
+	// rc is made first so that parsing a form to route the call charges its
+	// decoding to it; what it charged is given back when the call is over.
+	rc := &request.Context{Request: r}
+	defer rc.ReleaseDecode()
+
+	form := &formReader{r: r, hold: rc}
 
 	var (
 		match route.Match
@@ -57,16 +62,13 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", identity.Authorization)
 	}
 
-	rc := &request.Context{
-		Service:   match.Service,
-		Operation: route.Operation(r, match.Protocol, form.values),
-		Protocol:  match.Protocol,
-		AccountID: identity.AccountID,
-		Region:    identity.Region,
-		RequestID: newRequestID(),
-
-		DecodeFactor: reg.DecodeFactor,
-	}
+	rc.Service = match.Service
+	rc.Operation = route.Operation(r, match.Protocol, form.values)
+	rc.Protocol = match.Protocol
+	rc.AccountID = identity.AccountID
+	rc.Region = identity.Region
+	rc.RequestID = newRequestID()
+	rc.DecodeFactor = reg.DecodeFactor
 
 	if s := g.settings(); g.selfManagedCORS(r, s) {
 		rc.CORS = defaultCORS{rules: g.cors, checksDisabled: s.DisableCORSChecks}
@@ -199,6 +201,7 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
 // is put back, so the service reads it whole.
 type formReader struct {
 	r    *http.Request
+	hold protocol.DecodeHolder
 	done bool
 	vals url.Values
 }
@@ -208,7 +211,7 @@ func (f *formReader) values() url.Values {
 		f.done = true
 		// A request that cannot be read whole still has the parameters that
 		// read cleanly. The service answers the failure when it reads the form.
-		f.vals, _ = query.RequestForm(f.r)
+		f.vals, _ = query.RequestFormHeld(f.r, f.hold)
 	}
 
 	return f.vals

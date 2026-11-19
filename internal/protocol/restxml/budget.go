@@ -4,6 +4,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -26,14 +27,26 @@ const (
 	appendCost = 5
 )
 
+// attrCost is what one attribute of a start element holds beyond its text: the
+// xml.Attr, and its share of the slice that holds them.
+const attrCost = 2 * unsafe.Sizeof(xml.Attr{})
+
 func (d *Decoder) chargeToken(tok xml.Token) {
-	if text, ok := tok.(xml.CharData); ok {
-		d.Charge(TokenCost + 2*uintptr(len(text)))
+	switch t := tok.(type) {
+	case xml.CharData:
+		d.Charge(TokenCost + 2*uintptr(len(t)))
+	case xml.StartElement:
+		n := TokenCost + uintptr(len(t.Name.Space)+len(t.Name.Local))
+		for _, a := range t.Attr {
+			n += attrCost + uintptr(len(a.Name.Space)+len(a.Name.Local)+len(a.Value))
+		}
 
-		return
+		d.Charge(n)
+	case xml.EndElement:
+		d.Charge(TokenCost + uintptr(len(t.Name.Space)+len(t.Name.Local)))
+	default:
+		d.Charge(TokenCost)
 	}
-
-	d.Charge(TokenCost)
 }
 
 // errOverBudget is the cause of the error a Decoder stops with when what it
@@ -54,6 +67,10 @@ func ErrOverBudget(err error) bool {
 // is refused soon after DecodeSlack, wherever it sits in the body.
 func (d *Decoder) Charge(n uintptr) {
 	d.cost += int64(n) //nolint:gosec // a charge is a type's size or a token's, far below 2^63
+	if d.cost > d.covered {
+		d.cover()
+	}
+
 	if d.cost > protocol.DecodeSlack && d.cost > protocol.DecodeBudgetAt(int(d.xd.InputOffset()), d.factor) {
 		d.fail(errOverBudget)
 	}
@@ -82,4 +99,18 @@ func New[T any](d *Decoder) *T {
 	d.Charge(unsafe.Sizeof(*v))
 
 	return v
+}
+
+// cover charges what decoding holds to the call's hold, or stops decoding with
+// its error.
+func (d *Decoder) cover() {
+	covered, err := d.hold.HoldDecode(d.cost)
+	if err != nil {
+		d.covered = math.MaxInt64
+		d.fail(err)
+
+		return
+	}
+
+	d.covered = covered
 }

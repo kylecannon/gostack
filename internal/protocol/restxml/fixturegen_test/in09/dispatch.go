@@ -86,7 +86,7 @@ func serveFlattenedXmlMapWithXmlName(h Handler, w http.ResponseWriter, rc *reque
 
 func readFlattenedXmlMapWithXmlName(rc *request.Context) (*FlattenedXmlMapWithXmlNameInput, *awserr.Error) {
 	in := &FlattenedXmlMapWithXmlNameInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

@@ -86,7 +86,7 @@ func serveBodyWithXmlName(h Handler, w http.ResponseWriter, rc *request.Context)
 
 func readBodyWithXmlName(rc *request.Context) (*BodyWithXmlNameInput, *awserr.Error) {
 	in := &BodyWithXmlNameInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}

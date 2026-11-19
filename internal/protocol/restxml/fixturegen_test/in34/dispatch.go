@@ -86,7 +86,7 @@ func serveQueryPrecedence(h Handler, w http.ResponseWriter, rc *request.Context)
 
 func readQueryPrecedence(rc *request.Context) (*QueryPrecedenceInput, *awserr.Error) {
 	in := &QueryPrecedenceInput{}
-	xd := restxml.NewDecoderAt(rest.CapBody(rc.Request.Body), rc.DecodeFactor)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
