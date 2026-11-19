@@ -16,6 +16,11 @@
 //
 // The symmetric ciphertext is LocalStack's, in the ciphertext package.
 //
+// A grant lives in the State of the caller's account and region, not the key's,
+// as in LocalStack, and nothing enforces it. GenerateMac and VerifyMac take
+// their key through the same two steps as a data operation, with
+// GENERATE_VERIFY_MAC as the usage.
+//
 // KMS reads no settings: LocalStack's provider reads nothing from its config
 // beyond KMS_PROVIDER, which picks among LocalStack's own implementations.
 package kms
