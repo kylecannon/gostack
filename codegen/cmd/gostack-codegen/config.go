@@ -54,7 +54,13 @@ var serviceTable = map[string]serviceOptions{
 		// serializer reports as MissingParameter.
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},
 	},
-	"sts": {},
+	"sts":             {},
+	"dynamodb":        {},
+	"dynamodbstreams": {},
+	"sns":             {},
+	"kms":             {},
+	"secretsmanager":  {},
+	"ssm":             {},
 	// apigatewayv2 is not in the Makefile's GEN_SERVICES: it is here to prove
 	// that a model with a Route shape generates a package that builds.
 	"apigatewayv2": {},
