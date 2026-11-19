@@ -90,8 +90,16 @@ func certificateOf(t *testing.T, body []byte) *x509.Certificate {
 func verifyNotification(t *testing.T, cert *x509.Certificate, body []byte) {
 	t.Helper()
 
-	var fields map[string]string
-	require.NoError(t, json.Unmarshal(body, &fields))
+	var all map[string]any
+	require.NoError(t, json.Unmarshal(body, &all))
+
+	// MessageAttributes is an object and is not signed.
+	fields := make(map[string]string, len(all))
+	for name, value := range all {
+		if s, ok := value.(string); ok {
+			fields[name] = s
+		}
+	}
 
 	var canonical strings.Builder
 	for _, name := range []string{"Message", "MessageId", "Subject", "Timestamp", paramTopicArn, "Type"} {

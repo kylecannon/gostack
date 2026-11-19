@@ -41,19 +41,14 @@ func (p *Provider) nextSequence() string {
 	return strconv.FormatUint(p.sequence.Add(1), 10)
 }
 
-// publishFIFO publishes msg to the FIFO topic t, as AWS does: a message whose
-// deduplication id the topic saw in the last five minutes is accepted and not
-// delivered again, and the call returns the first one's ids. The
-// deduplication id is the MessageDeduplicationId, or else the SHA-256 of the
-// message. LocalStack leaves deduplication to the queues; the aws.validated
+// publishFIFO publishes msgs, in order, to the FIFO topic t, as AWS does: a
+// message whose deduplication id the topic saw in the last five minutes, in
+// this call or before, is accepted and not delivered again, and takes the
+// first one's message id and sequence number. The deduplication id is the
+// MessageDeduplicationId, or else the SHA-256 of the message. LocalStack
+// leaves deduplication to the queues; the aws.validated
 // test_publish_to_fifo_topic_deduplication_on_topic_level pins AWS's.
-func (p *Provider) publishFIFO(ctx context.Context, rc *request.Context, t *Topic, msg *message) (string, string) {
-	key := msg.dedupID
-	if key == "" {
-		sum := sha256.Sum256([]byte(msg.text))
-		key = hex.EncodeToString(sum[:])
-	}
-
+func (p *Provider) publishFIFO(ctx context.Context, rc *request.Context, t *Topic, msgs []*message) {
 	f := &t.fifo
 
 	f.mu.Lock()
@@ -62,22 +57,33 @@ func (p *Provider) publishFIFO(ctx context.Context, rc *request.Context, t *Topi
 	now := p.now()
 	f.expire(now)
 
-	if first, ok := f.seen[key]; ok {
-		return first.id, first.sequence
+	fresh := make([]*message, 0, len(msgs))
+
+	for _, msg := range msgs {
+		key := msg.dedupID
+		if key == "" {
+			sum := sha256.Sum256([]byte(msg.text))
+			key = hex.EncodeToString(sum[:])
+		}
+
+		if first, ok := f.seen[key]; ok {
+			msg.id, msg.sequence = first.id, first.sequence
+
+			continue
+		}
+
+		msg.sequence = p.nextSequence()
+
+		if f.seen == nil {
+			f.seen = make(map[string]published)
+		}
+
+		f.seen[key] = published{id: msg.id, sequence: msg.sequence, at: now}
+		f.order = append(f.order, key)
+		fresh = append(fresh, msg)
 	}
 
-	msg.sequence = p.nextSequence()
-
-	if f.seen == nil {
-		f.seen = make(map[string]published)
-	}
-
-	f.seen[key] = published{id: msg.id, sequence: msg.sequence, at: now}
-	f.order = append(f.order, key)
-
-	p.fanOut(ctx, rc, t, []*message{msg})
-
-	return msg.id, msg.sequence
+	p.fanOut(ctx, rc, t, fresh)
 }
 
 // expire forgets the ids published before the window. The caller holds f.mu.

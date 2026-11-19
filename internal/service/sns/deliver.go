@@ -44,10 +44,19 @@ func (p *Provider) Bind(h http.Handler) {
 
 // Close waits for the deliveries still queued until ctx ends, so a publish
 // that was acknowledged reaches its queue on a clean stop, then stops the
-// delivery workers, dropping what is left.
+// delivery workers, dropping what is left. A delivery cut off so is counted
+// in Dropped and logged.
 func (p *Provider) Close(ctx context.Context) {
 	p.pending.wait(ctx)
 	p.client.Close()
+
+	// The client drops its queued calls without answering them, and has
+	// answered every call it started by the time Close returns, so what is
+	// still pending was dropped.
+	if n := p.pending.drain(); n > 0 {
+		slog.Warn("SNS deliveries dropped at shutdown", "count", n)
+		p.dropped.Add(int64(n))
+	}
 }
 
 // Dropped is the number of deliveries lost: refused or not queued, with no
@@ -509,6 +518,20 @@ func (w *pending) done() {
 	if w.n == 0 {
 		close(w.idle)
 	}
+}
+
+// drain forgets the deliveries still pending and returns how many there were.
+func (w *pending) drain() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	n := w.n
+	if n > 0 {
+		w.n = 0
+		close(w.idle)
+	}
+
+	return n
 }
 
 // wait returns when no delivery is pending or ctx ends.
