@@ -105,15 +105,10 @@ func Test_items_errors(t *testing.T) {
 		})
 	}
 
-	for _, body := range []string{
-		`{"TableName":"tab1","Item":{"id":{"S":"a"}},"ConditionExpression":"attribute_exists(id)"}`,
-		`{"TableName":"tab1","Item":{"id":{"S":"a"}},"Expected":{"id":{"Exists":false}}}`,
-	} {
-		require.Equal(t, http.StatusNotImplemented, s.call(t, usEast1, opPut, body).status)
-	}
-
+	require.Equal(t, http.StatusNotImplemented, s.call(t, usEast1, opPut,
+		`{"TableName":"tab1","Item":{"id":{"S":"a"}},"Expected":{"id":{"Exists":false}}}`).status)
 	require.Equal(t, http.StatusNotImplemented,
-		s.call(t, usEast1, opGet, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"ProjectionExpression":"id"}`).status)
+		s.call(t, usEast1, opGet, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"AttributesToGet":["id"]}`).status)
 }
 
 // Test_items_consumedCapacity: TOTAL and INDEXES report the units the call

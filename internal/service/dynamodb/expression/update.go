@@ -75,6 +75,11 @@ func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*Up
 		return nil, value.Invalid(msgUpdateEmpty)
 	}
 
+	// Before lexing: the cap is what bounds the parser's work and recursion.
+	if over, _ := tooLarge(text); over {
+		return nil, value.Invalid(updatePrefix + msgTooLarge)
+	}
+
 	p := &updateParser{text: text, toks: updateLex(text)}
 
 	err := p.parse()

@@ -26,7 +26,25 @@ const (
 	maxOperators      = 300
 	maxInOperands     = 100
 	maxDocumentDepth  = 32
+	// maxNesting bounds the recursion of every parser in the package. An
+	// expression within maxExpressionSize cannot nest deeper, since each level
+	// takes at least one character, so the bound never refuses what DynamoDB
+	// accepts; it keeps a parser's stack bounded if it is ever handed a longer
+	// text.
+	maxNesting = maxExpressionSize
 )
+
+// msgTooLarge is the size message without the size, as DynamoDB Local answers
+// it for ProjectionExpression and UpdateExpression.
+const msgTooLarge = "Expression size has exceeded the maximum allowed size;"
+
+// tooLarge reports whether src is over maxExpressionSize UTF-16 code units, and
+// its length in them.
+func tooLarge(src string) (bool, int) {
+	n := utf16Len(src)
+
+	return n > maxExpressionSize, n
+}
 
 // operandKind says what an operand is.
 type operandKind int
@@ -86,11 +104,25 @@ type cond struct {
 
 // parser is a recursive-descent parser over one expression's tokens.
 type parser struct {
-	src  string
-	toks []token
-	pos  int
-	kind Kind
+	src   string
+	toks  []token
+	pos   int
+	kind  Kind
+	depth int // the recursion depth of parseUnary and parseOperand
 }
+
+// enter counts one level of recursion and refuses one past maxNesting; the
+// caller defers leave.
+func (p *parser) enter() error {
+	p.depth++
+	if p.depth > maxNesting {
+		return invalid(p.kind, msgTooLarge)
+	}
+
+	return nil
+}
+
+func (p *parser) leave() { p.depth-- }
 
 func newParser(kind Kind, src string) *parser {
 	return &parser{src: src, toks: lex(src), kind: kind}
@@ -102,13 +134,13 @@ func checkSize(kind Kind, src string) error {
 		return invalid(kind, "The expression can not be empty;")
 	}
 
-	n := utf16Len(src)
-	if n <= maxExpressionSize {
+	over, n := tooLarge(src)
+	if !over {
 		return nil
 	}
 
 	if kind == ProjectionExpression {
-		return invalid(kind, "Expression size has exceeded the maximum allowed size;")
+		return invalid(kind, msgTooLarge)
 	}
 
 	return invalid(kind, "Expression size has exceeded the maximum allowed size; expression size: "+strconv.Itoa(n))
@@ -253,21 +285,28 @@ func (p *parser) parseAnd(allowOperand bool) (*cond, *operand, error) {
 }
 
 func (p *parser) parseUnary(allowOperand bool) (*cond, *operand, error) {
+	defer p.leave()
+
+	err := p.enter()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if p.isKeyword("NOT") {
 		p.next()
 
-		c, _, err := p.parseUnary(false)
-		if err != nil {
-			return nil, nil, err
+		c, _, inner := p.parseUnary(false)
+		if inner != nil {
+			return nil, nil, inner
 		}
 
 		return &cond{kind: condNot, sub: [2]*cond{c}}, nil, nil
 	}
 
 	if p.peek().kind != tokLParen {
-		o, err := p.parseOperand()
-		if err != nil {
-			return nil, nil, err
+		o, inner := p.parseOperand()
+		if inner != nil {
+			return nil, nil, inner
 		}
 
 		return p.parseTail(o, allowOperand)
@@ -395,6 +434,13 @@ func (p *parser) parseList() ([]*operand, error) {
 // parseOperand parses a path, a :value, a function call, or one of them in
 // parentheses.
 func (p *parser) parseOperand() (*operand, error) {
+	defer p.leave()
+
+	err := p.enter()
+	if err != nil {
+		return nil, err
+	}
+
 	t := p.peek()
 
 	switch t.kind {

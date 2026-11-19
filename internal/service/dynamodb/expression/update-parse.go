@@ -86,6 +86,7 @@ type updateParser struct {
 	toks  []updateToken
 	pos   int
 	index error
+	depth int // the recursion depth of operand
 
 	actions   []*updateAction
 	clauses   []updateClause
@@ -198,6 +199,13 @@ func (p *updateParser) setValue() (*updateOperand, error) {
 
 // operand reads a value, a parenthesized set value, a function call or a path.
 func (p *updateParser) operand() (*updateOperand, error) {
+	p.depth++
+	defer func() { p.depth-- }()
+
+	if p.depth > maxNesting {
+		return nil, value.Invalid(updatePrefix + msgTooLarge)
+	}
+
 	tok := p.peek()
 
 	switch {

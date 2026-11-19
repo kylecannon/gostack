@@ -33,16 +33,24 @@ const (
 	msgEmptyValue = "Supplied AttributeValue is empty, must contain exactly one of the supported datatypes"
 	msgTwoTypes   = "Supplied AttributeValue has more than one datatypes set, " +
 		"must contain exactly one of the supported datatypes"
-	msgEmptySS      = "One or more parameter values were invalid: An string set  may not be empty"
-	msgEmptyNS      = "One or more parameter values were invalid: An number set  may not be empty"
-	msgEmptyBS      = "One or more parameter values were invalid: Binary sets should not be empty"
-	msgDuplicateNS  = "Input collection contains duplicates"
-	msgDuplicateBS  = "One or more parameter values were invalid: Input collection of type BS contains duplicates."
-	msgNullNotTrue  = "One or more parameter values were invalid: Null attribute value types must have the value of true"
-	msgEmptyName    = "Empty attribute name"
+	msgEmptySS     = "One or more parameter values were invalid: An string set  may not be empty"
+	msgEmptyNS     = "One or more parameter values were invalid: An number set  may not be empty"
+	msgEmptyBS     = "One or more parameter values were invalid: Binary sets should not be empty"
+	msgDuplicateNS = "Input collection contains duplicates"
+	msgDuplicateBS = "One or more parameter values were invalid: Input collection of type BS contains duplicates."
+	msgNullNotTrue = "One or more parameter values were invalid: Null attribute value types must have the value of true"
+	msgEmptyName   = "Empty attribute name"
+	msgTooDeep     = "Nesting Levels have exceeded supported limits: " +
+		"Attributes in the item have nested levels beyond supported limit"
 	invalidPrefix   = "One or more parameter values were invalid: "
 	duplicatePrefix = invalidPrefix + "Input collection "
 )
+
+// MaxDepth is the most levels a value may nest, the value itself and every
+// map or list around a value inside it counted: DynamoDB refuses a value whose
+// innermost member sits 33 levels down. Validate refuses deeper values before
+// walking them, so every later walk of a validated value is bounded.
+const MaxDepth = 32
 
 // MaxItemSize is the largest item DynamoDB stores, in the bytes ItemSize
 // counts.
@@ -89,12 +97,16 @@ func Type(v *api.AttributeValue) string {
 // ValidateItem checks every attribute of item with Validate, and that no name
 // is empty. It puts the numbers in canonical form in place.
 func ValidateItem(item Item) error {
+	return checkItem(item, 1)
+}
+
+func checkItem(item Item, depth int) error {
 	for name, v := range item {
 		if name == "" {
 			return Invalid(msgEmptyName)
 		}
 
-		err := Validate(&v)
+		err := checkValue(&v, depth)
 		if err != nil {
 			return err
 		}
@@ -107,9 +119,17 @@ func ValidateItem(item Item) error {
 
 // Validate checks v as DynamoDB does: exactly one member, a NULL that is true,
 // numbers DynamoDB can hold, sets that are not empty and hold no duplicate, and
-// the same of every value inside a map or list. It rewrites every number in v
-// to its canonical form.
+// the same of every value inside a map or list, nested no deeper than MaxDepth.
+// It rewrites every number in v to its canonical form.
 func Validate(v *api.AttributeValue) error {
+	return checkValue(v, 1)
+}
+
+func checkValue(v *api.AttributeValue, depth int) error {
+	if depth > MaxDepth {
+		return Invalid(msgTooDeep)
+	}
+
 	switch v.MembersSet() {
 	case 0:
 		return Invalid(msgEmptyValue)
@@ -128,9 +148,9 @@ func Validate(v *api.AttributeValue) error {
 	case TypeBS:
 		return validateBS(v.BS)
 	case TypeM:
-		return ValidateItem(v.M)
+		return checkItem(v.M, depth+1)
 	case TypeL:
-		return validateList(v.L)
+		return validateList(v.L, depth+1)
 	case TypeNULL:
 		if !*v.NULL {
 			return Invalid(msgNullNotTrue)
@@ -152,9 +172,9 @@ func canonicalize(s *string) error {
 	return nil
 }
 
-func validateList(list []api.AttributeValue) error {
+func validateList(list []api.AttributeValue, depth int) error {
 	for i := range list {
-		err := Validate(&list[i])
+		err := checkValue(&list[i], depth)
 		if err != nil {
 			return err
 		}
