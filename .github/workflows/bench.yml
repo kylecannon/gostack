@@ -2,7 +2,7 @@ name: bench
 
 # Runs every benchmark in the repo on the base and the head of a pull request,
 # interleaved (`make bench-ab`), compares them with benchstat, and fails on a
-# regression over 10% at p<0.05 that bench/accepted.yaml does not hold
+# regression over 10% at p<0.001 that bench/accepted.yaml does not hold
 # (docs/standards.md, "Benchmarks"). The comparison is `go run ./bench gate`.
 
 on:
@@ -20,7 +20,9 @@ defaults:
 jobs:
   benchstat:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The measuring step ran 46 minutes before the per-round relink, which adds
+    # about three. 60 left too little room for a slow runner.
+    timeout-minutes: 80
     steps:
       # The gate asks git whether the base and the head hold an accepted
       # entry's commit, which takes the head checkout's full history.
@@ -44,7 +46,9 @@ jobs:
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
       # The head's Makefile measures both trees in alternating rounds, so drift
       # in the runner's speed over the job hits base and head alike, and a base
-      # that predates `make bench-ab` is still measured.
+      # that predates `make bench-ab` is still measured. Before each round it
+      # links both trees again with a new function layout, so where the linker
+      # happened to put a benchmark's code is not read as a regression.
       - name: Benchmark the base and the head, interleaved
         working-directory: head
         run: make bench-ab BASE=../base HEAD=. BENCH_BASE_OUT="$GITHUB_WORKSPACE/base.txt" BENCH_HEAD_OUT="$GITHUB_WORKSPACE/head.txt"
@@ -62,7 +66,7 @@ jobs:
             cat benchstat.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Fail on a regression over 10% at p<0.05
+      - name: Fail on a regression over 10% at p<0.001
         if: steps.compare.outputs.compared == 'true'
         working-directory: head
         run: |

@@ -175,7 +175,7 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
-  at p<0.05.
+  at p<0.001.
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
   manual run against the previous passing run on main with the same profile
@@ -245,13 +245,19 @@ side by side.
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
 - benchstat (see Gates) compares ten runs of each benchmark on the base and on
-  the PR. A regression over 10% with p<0.05 fails the build unless it is
-  accepted (below).
+  the PR. A regression over 10% with p<0.001 fails the build unless it is
+  accepted (below). benchstat prints p to three decimals, so the gate flags a
+  row only when it prints `p=0.000`; the comment at `significance` in
+  `bench/gate.go` has the arithmetic.
 - The gate measures base and head interleaved, never one tree after the other:
-  `make bench-ab` builds both trees' benchmark binaries first, then runs ten
-  rounds of one run per tree, alternating which tree goes first (base head,
-  head base, ...). A runner that speeds up or slows down during the job then
-  moves both sides alike instead of reading as a regression.
+  `make bench-ab` runs ten rounds of one run per tree, alternating which tree
+  goes first (base head, head base, ...). A runner that speeds up or slows down
+  during the job then moves both sides alike instead of reading as a regression.
+- Before each round the gate links both trees' benchmark binaries again, each
+  with its own function layout (`-randlayout`, a different seed per tree and
+  round), because a change elsewhere in the binary can move where a benchmark's
+  functions land, and one fixed layout per tree would read that as a regression
+  in code that did not change.
 
 ### System bench (`bench/`)
 

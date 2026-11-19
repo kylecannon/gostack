@@ -70,9 +70,11 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            narrows it, e.g. BENCH_PKGS="./internal/route/...".
 #   make bench-ab BASE=<dir> HEAD=<dir>
 #                            the CI comparison: the same benchmarks on two checkouts, measured
-#                            interleaved. It builds both trees' benchmark binaries first, then runs
-#                            BENCH_COUNT rounds of one run each, in the order base head, head base,
-#                            ..., so drift over the job lands on both sides. Writes BENCH_BASE_OUT
+#                            interleaved. It runs BENCH_COUNT rounds of one run each, in the order
+#                            base head, head base, ..., so drift over the job lands on both sides,
+#                            and links both trees' benchmark binaries with a new function layout
+#                            before each round, so a layout shift is not read as a regression.
+#                            Writes BENCH_BASE_OUT
 #                            and BENCH_HEAD_OUT for benchstat. Each tree builds with its own pinned
 #                            toolchain.
 #   make bench-system      the system bench, full profile: builds the images, measures gostack,
@@ -208,19 +210,32 @@ bench:
 	@cat $(BENCH_OUT)
 
 # bench-ab measures BASE and HEAD in alternating rounds, so that a runner that
-# speeds up or slows down during the job moves both sides alike. Both trees are
-# built before the first round, so no compile or cold cache sits inside a
-# measured round, and the binaries run with -vet=off for the reason given above
-# bench. A round runs every benchmark of one tree once (-test.count=1); the
-# rounds go base head, head base, ..., so a steady drift cancels. A failing
-# round prints what its side wrote and fails.
+# speeds up or slows down during the job moves both sides alike. Before each
+# round both trees' binaries are linked again with a new function layout
+# (-randlayout): seed 2r-1 for the base and 2r for the head in round r. Where
+# the linker puts each function can move a benchmark on its own, so one fixed
+# layout per tree can read as a regression in code that did not change; a new
+# layout per round turns that into spread within each side. The two sides never share a
+# seed: identical code with one seed links identically, so an A/A comparison
+# would never see layout spread, while different code with one seed gets
+# unrelated layouts anyway. The first round compiles, every later one only
+# relinks from the build cache, and all linking happens before the round's
+# first measurement, so no compile, link or cold cache sits inside a measured
+# run. The binaries run with -vet=off for the reason given above bench. A round
+# runs every benchmark of one tree once (-test.count=1); the rounds go base
+# head, head base, ..., so a steady drift cancels. A failing link or round
+# prints what went wrong and fails.
 bench-ab:
 	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-ab BASE=<dir> HEAD=<dir>' >&2; exit 2; }
-	@$(MAKE) -s --no-print-directory -C $(BASE) -f $(BENCH_MAKEFILE) bench-build BENCH_BIN=$(abspath $(BENCH_AB_DIR))/base
-	@$(MAKE) -s --no-print-directory -C $(HEAD) -f $(BENCH_MAKEFILE) bench-build BENCH_BIN=$(abspath $(BENCH_AB_DIR))/head
 	@mkdir -p $(dir $(BENCH_BASE_OUT)) $(dir $(BENCH_HEAD_OUT))
 	@: >$(BENCH_BASE_OUT); : >$(BENCH_HEAD_OUT)
 	@round=1; while [ $$round -le $(BENCH_COUNT) ]; do \
+		start=$$(date +%s); \
+		$(MAKE) -s --no-print-directory -C $(BASE) -f $(BENCH_MAKEFILE) bench-build \
+			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/base BENCH_LAYOUT=$$((2 * round - 1)) || exit 1; \
+		$(MAKE) -s --no-print-directory -C $(HEAD) -f $(BENCH_MAKEFILE) bench-build \
+			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/head BENCH_LAYOUT=$$((2 * round)) || exit 1; \
+		echo "round $$round/$(BENCH_COUNT) link: $$(($$(date +%s) - start))s"; \
 		if [ $$((round % 2)) -eq 1 ]; then order='base head'; else order='head base'; fi; \
 		for side in $$order; do \
 			if [ $$side = base ]; then out=$(BENCH_BASE_OUT); else out=$(BENCH_HEAD_OUT); fi; \
@@ -237,14 +252,16 @@ bench-ab:
 # Builds the test binary of every package of the current tree that holds a
 # Benchmark function into BENCH_BIN (an absolute path) and lists each as
 # "<binary> <package dir>" in BENCH_BIN/manifest. bench-ab runs it in each tree
-# with -C, so that tree's go.mod sets GOTOOLCHAIN.
+# with -C, so that tree's go.mod sets GOTOOLCHAIN. BENCH_LAYOUT, when set to a
+# nonzero number, links with -randlayout=BENCH_LAYOUT, which shuffles the order
+# of the functions in the binary with that seed.
 bench-build:
 	@rm -rf $(BENCH_BIN) && mkdir -p $(BENCH_BIN) && : >$(BENCH_BIN)/manifest
 	@go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' $(BENCH_PKGS) >$(BENCH_BIN)/packages
 	@while read -r pkg dir; do \
 		test -n "$$pkg" && grep -qs '^func Benchmark' "$$dir"/*_test.go || continue; \
 		bin="$$(echo "$$pkg" | tr / _).test"; \
-		go test -c -vet=off -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
+		go test -c -vet=off $(if $(BENCH_LAYOUT),-ldflags=-randlayout=$(BENCH_LAYOUT)) -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
 		echo "$$bin $$dir" >>$(BENCH_BIN)/manifest; \
 	done <$(BENCH_BIN)/packages
 
