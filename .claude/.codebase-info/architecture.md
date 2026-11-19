@@ -71,5 +71,5 @@ Runtime codec support is in `internal/protocol/{query,awsjson,rest,restxml}`; `i
 
 ## Parity and bench (outside the product binary)
 
-- `parity/`: runs LocalStack's own pytest suite against gostack in a container; results in `parity/ledger/<service>.json` and exclusions in `parity/exclusions/<service>.yaml` (one file per service, so service branches don't collide), rendered to `docs/parity.md`.
+- `parity/`: runs LocalStack's own pytest suite against gostack in a container; results in `parity/ledger/<service>.json` and exclusions in `parity/exclusions/<service>.yaml` (one file per service, so service branches don't collide), rendered to `docs/parity.md`. `ledger.py check` fails when a test that passed at the base stops passing unless `parity/demotions.yaml` lists it with a reason; `ledger.py services --changed` picks the services a diff affects and selects all of them for any path it does not know. `parity.yml` compares with the merge base.
 - `bench/`: system workloads with aws-sdk-go-v2; results in `bench/results/`.
