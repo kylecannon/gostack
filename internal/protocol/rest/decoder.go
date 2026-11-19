@@ -31,6 +31,8 @@ var ErrBodyTooLarge = errors.New("rest: request body is longer than protocol.Max
 // body as if it were complete. A body of exactly MaxBody bytes reads whole. It
 // returns r itself when there is no limit.
 func CapBody(r io.Reader) io.Reader {
+	protocol.ArmBody(r)
+
 	limit := protocol.MaxBody()
 	if limit == 0 {
 		return r

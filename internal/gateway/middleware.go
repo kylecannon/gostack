@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
 	"github.com/kylecannon/gostack/internal/service"
@@ -214,7 +215,9 @@ func (g *Gateway) owner(r *http.Request) *service.Registration {
 
 // decodeContent is root step 6: a gzip request body is decoded before anyone
 // reads it, unless the request's owner sets Registration.RawBody, as
-// LocalStack's ContentDecoder skips s3, which decodes its own.
+// LocalStack's ContentDecoder skips s3, which decodes its own. A body from a
+// listener is then metered against the in-flight bound (meterBody) until the
+// handler returns.
 func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody &&
@@ -225,8 +228,33 @@ func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 			r.ContentLength = -1
 		}
 
+		// A body that states FreeBody bytes or fewer is never metered, so a
+		// small request takes no lock and no atomic here.
+		if r.ContentLength > protocol.FreeBody || r.ContentLength < 0 {
+			if meter := meterBody(r); meter != nil {
+				defer meter.Release()
+
+				r = r.WithContext(protocol.WithBodyMeter(r.Context(), meter))
+				r.Body = meter
+			}
+		}
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// meterBody meters the body of a request from a listener against the in-flight
+// bound (protocol.SetInFlight), after any gzip decoding, so the bound counts
+// decoded bytes. A request that one service makes to another through the
+// gateway (inproc) has no remote address, which only a listener sets, and is
+// not metered: its body was charged when the request that caused it came in.
+// It returns nil when the request has no body or there is no bound.
+func meterBody(r *http.Request) *protocol.BodyMeter {
+	if r.RemoteAddr == "" || r.Body == nil || r.Body == http.NoBody {
+		return nil
+	}
+
+	return protocol.NewBodyMeter(r.Context(), r.Body)
 }
 
 // rawBody reports whether the owner of r reads its body as sent.

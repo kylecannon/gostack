@@ -395,6 +395,19 @@ func requestValue(r *http.Request, name string) string {
 	return r.Form.Get(name)
 }
 
+// unreadableBody is the answer to a json body that could not be read: the
+// throttling error when the bodies in flight left it no room.
+func unreadableBody(err error) *awserr.Error {
+	if errors.Is(err, protocol.ErrBusy) {
+		return protocol.ThrottledJSON()
+	}
+
+	return &awserr.Error{
+		Code: "SerializationException", Message: "The request body could not be read.",
+		StatusCode: http.StatusBadRequest, Fault: awserr.FaultSender,
+	}
+}
+
 // queueURL reads the QueueUrl of a call. A call that says it is from an AWS
 // client (an x-amz- or a form content type) is parsed as a ReceiveMessage
 // request and must be one. Any other call carries the QueueUrl as a query or
@@ -413,10 +426,7 @@ func (c *devCall) queueURL() (string, *awserr.Error) {
 
 		body, err := io.ReadAll(protocol.LimitBody(c.r.Body))
 		if err != nil {
-			return "", &awserr.Error{
-				Code: "SerializationException", Message: "The request body could not be read.",
-				StatusCode: http.StatusBadRequest, Fault: awserr.FaultSender,
-			}
+			return "", unreadableBody(err)
 		}
 
 		if protocol.OverBody(len(body)) {

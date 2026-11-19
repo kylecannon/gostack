@@ -594,6 +594,9 @@ func (g *generator) emitReadBody(p *printer) {
 	p.f("// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.")
 	p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
 	p.f("\tbody, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)")
+	p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+	p.f("\t\treturn nil, %s", g.busyError())
+	p.f("\t}")
 
 	if g.opts.S3Errors {
 		p.f("\tif protocol.OverBody(len(body)) {")
@@ -636,6 +639,18 @@ func (g *generator) emitReadBody(p *printer) {
 // are AWS's for a request that is too big.
 func (g *generator) emitBodyTooLarge(p *printer) {
 	if !g.opts.S3Errors {
+		if g.hasProtocol(protoRestXML) {
+			p.f("// errXMLBody is the error for an xml request body that failed to decode:")
+			p.f("// throttled when the bodies in flight left it no room, malformed otherwise.")
+			p.f("func errXMLBody(err error) *awserr.Error {")
+			p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+			p.f("\t\treturn %s", g.busyError())
+			p.f("\t}")
+			p.f("\treturn errMalformedBody()")
+			p.f("}")
+			p.blank()
+		}
+
 		return
 	}
 
@@ -650,8 +665,12 @@ func (g *generator) emitBodyTooLarge(p *printer) {
 	p.f("}")
 	p.blank()
 	p.f("// errXMLBody is the error for an xml request body that failed to decode: too")
-	p.f("// large when the read hit protocol.MaxBody, malformed otherwise.")
+	p.f("// large when the read hit protocol.MaxBody, SlowDown when the bodies in flight")
+	p.f("// left it no room, malformed otherwise.")
 	p.f("func errXMLBody(err error) *awserr.Error {")
+	p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+	p.f("\t\treturn protocol.SlowDown()")
+	p.f("\t}")
 	p.f("\tif errors.Is(err, rest.ErrBodyTooLarge) {")
 	p.f("\t\treturn errBodyTooLarge()")
 	p.f("\t}")
@@ -662,12 +681,21 @@ func (g *generator) emitBodyTooLarge(p *printer) {
 
 // xmlBodyError is the Go expression a reader returns for an xml decoder whose
 // Err is set.
-func (g *generator) xmlBodyError() string {
-	if g.opts.S3Errors {
-		return "errXMLBody(xd.Err())"
-	}
+func (*generator) xmlBodyError() string {
+	return "errXMLBody(xd.Err())"
+}
 
-	return "errMalformedBody()"
+// busyError is the Go expression for the answer to a body that failed with
+// protocol.ErrBusy: S3's SlowDown, otherwise the protocol's throttling error.
+func (g *generator) busyError() string {
+	switch {
+	case g.opts.S3Errors:
+		return "protocol.SlowDown()"
+	case g.hasProtocol(protoRestXML):
+		return "protocol.ThrottledQuery()"
+	default:
+		return "protocol.ThrottledJSON()"
+	}
 }
 
 func emitModeledError(p *printer) {

@@ -34,6 +34,8 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 
 	// GOSTACK_MAX_REQUEST_BODY is read once, before anything serves.
 	protocol.SetMaxBody(cfg.Settings().MaxRequestBody)
+	// GOSTACK_MAX_IN_FLIGHT_BODIES as well, after the limit it is raised to.
+	protocol.SetInFlight(cfg.Settings().MaxInFlightBodies)
 
 	// The services report changes to the engine, and the engine is configured
 	// from the services' names. Nothing reports a change before the engine is

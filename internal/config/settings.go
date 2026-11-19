@@ -101,6 +101,12 @@ type Settings struct {
 	// limit. It is read at start-up, and a value that cannot be parsed is the
 	// default. A runtime update does not change it.
 	MaxRequestBody int64
+	// MaxInFlightBodies is GOSTACK_MAX_IN_FLIGHT_BODIES: the most bytes the request
+	// bodies being buffered at once may hold in all, 64 MiB by default, never less
+	// than one byte more than MaxRequestBody. Zero means no bound. A body waits
+	// for room in order and is answered with its protocol's throttling error when
+	// none comes in time. It is read at start-up, as MaxRequestBody is.
+	MaxInFlightBodies int64
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -163,6 +169,7 @@ func (s *Settings) values() map[string]any {
 		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
 		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
 		varMaxRequestBody:                  s.MaxRequestBody,
+		varMaxInFlightBodies:               s.MaxInFlightBodies,
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -220,6 +227,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
 		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
 		MaxRequestBody:                    base.maxRequestBody,
+		MaxInFlightBodies:                 base.maxInFlightBodies,
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

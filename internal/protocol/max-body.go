@@ -38,8 +38,11 @@ func SetMaxBody(limit int64) {
 
 // LimitBody returns r limited to one byte more than MaxBody, so that a caller
 // can tell a body of exactly MaxBody bytes from a longer one with OverBody. It
-// returns r itself when there is no limit.
+// returns r itself when there is no limit. It arms r when r is a BodyMeter, as
+// the caller buffers what it reads.
 func LimitBody(r io.Reader) io.Reader {
+	ArmBody(r)
+
 	limit := MaxBody()
 	if limit == 0 {
 		return r
@@ -48,22 +51,26 @@ func LimitBody(r io.Reader) io.Reader {
 	return io.LimitReader(r, limit+1)
 }
 
-// ReadBody reads r through LimitBody into one buffer. A body that states its
-// length, within MaxBody, is read into a buffer of that length and allocated
-// once; io.ReadAll would grow its buffer about 25% at a time and allocate
-// some five times the body on the way. A body of unknown length (-1, as a gzip
-// body has) or one longer than it stated doubles its buffer, never past one
-// byte more than MaxBody, so it allocates at most about three times what it
-// reads. Check the result with OverBody.
+// ReadBody reads r through LimitBody into one buffer, sized by the bytes that
+// arrive and never by the length the client states alone: the first buffer
+// holds FreeBody bytes at most, and each next one doubles, but no further than
+// the stated length (plus room to see the end) while the body keeps to it, and
+// never past one byte more than MaxBody. A body allocates about twice its
+// length in all; io.ReadAll would grow 25% at a time and allocate some five
+// times. A client that states 16 MiB and sends one byte holds FreeBody. Check
+// the result with OverBody.
 func ReadBody(r io.Reader, length int64) ([]byte, error) {
-	const growth = 2
-
 	limit := MaxBody()
 	if length < 0 || (limit > 0 && length > limit) {
-		length = 0
+		length = -1
 	}
 
-	buf := make([]byte, 0, length+bytes.MinRead)
+	first := int64(FreeBody)
+	if length >= 0 {
+		first = min(first, length+bytes.MinRead)
+	}
+
+	buf := make([]byte, 0, first)
 	r = LimitBody(r)
 
 	for {
@@ -72,12 +79,7 @@ func ReadBody(r io.Reader, length int64) ([]byte, error) {
 				return buf, nil
 			}
 
-			next := growth * cap(buf)
-			if limit > 0 {
-				next = int(min(int64(next), limit+1))
-			}
-
-			buf = append(make([]byte, 0, next), buf...)
+			buf = append(make([]byte, 0, nextSize(len(buf), length, limit)), buf...)
 		}
 
 		n, err := r.Read(buf[len(buf):cap(buf)])
@@ -91,6 +93,24 @@ func ReadBody(r io.Reader, length int64) ([]byte, error) {
 			return buf, err
 		}
 	}
+}
+
+// nextSize is the capacity ReadBody grows a full buffer of have bytes to:
+// twice have, but no further than the stated length while the body is shorter,
+// and never past one byte more than limit.
+func nextSize(have int, length, limit int64) int {
+	const growth = 2
+
+	next := growth * int64(have)
+	if length >= 0 && int64(have) < length {
+		next = min(next, length+bytes.MinRead)
+	}
+
+	if limit > 0 {
+		next = min(next, limit+1)
+	}
+
+	return int(next)
 }
 
 // OverBody reports whether n bytes, read through LimitBody, are more than

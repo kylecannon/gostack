@@ -954,6 +954,9 @@ func messageName(code string) string {
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledJSON()
+	}
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",

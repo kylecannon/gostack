@@ -74,6 +74,7 @@ var variables = []variable{
 	{name: varDisableCustomCORSAPIGateway},
 	{name: varS3SkipSignatureValidation},
 	{name: varMaxRequestBody, gostackOnly: true},
+	{name: varMaxInFlightBodies, gostackOnly: true},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
@@ -112,6 +113,9 @@ type baseline struct {
 	// maxRequestBody is GOSTACK_MAX_REQUEST_BODY, which is read at start-up
 	// only: the body readers take their limit once, from protocol.SetMaxBody.
 	maxRequestBody int64
+	// maxInFlightBodies is GOSTACK_MAX_IN_FLIGHT_BODIES, read at start-up only,
+	// as maxRequestBody is.
+	maxInFlightBodies int64
 }
 
 // Load reads the settings from the environment. It first exports every
@@ -148,9 +152,16 @@ func newConfig(environ []string, probe dockerProbe) (*Config, error) {
 
 		maxRequestBody = DefaultMaxRequestBody
 	}
+	maxInFlightBodies, err := parseMaxInFlightBodies(newViper("", nil).GetString(varMaxInFlightBodies))
+	if err != nil {
+		slog.Warn(err.Error() + "; keeping the default")
+
+		maxInFlightBodies = DefaultMaxInFlightBodies
+	}
 	cfg := &Config{
 		base: baseline{
 			listenHost: listenHost, inDocker: inDocker, persist: persist, maxRequestBody: maxRequestBody,
+			maxInFlightBodies: maxInFlightBodies,
 		},
 		overrides: map[string]any{},
 	}

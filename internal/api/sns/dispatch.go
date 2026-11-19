@@ -2094,6 +2094,9 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 // before the body's, with no ";" separator and a malformed escape kept as typed.
 func readForm(rc *request.Context) (url.Values, *awserr.Error) {
 	vals, err := query.RequestForm(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledQuery()
+	}
 	if err != nil {
 		return nil, query.MalformedQueryString()
 	}

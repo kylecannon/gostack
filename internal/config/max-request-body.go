@@ -28,8 +28,23 @@ var byteSuffixes = []struct {
 // count with a KiB, MiB or GiB suffix ("16MiB" and "16777216" are the same).
 // Zero means no limit. An empty value is the default.
 func parseMaxRequestBody(value string) (int64, error) {
+	return parseBytes("GOSTACK_MAX_REQUEST_BODY", value, DefaultMaxRequestBody)
+}
+
+// DefaultMaxInFlightBodies is GOSTACK_MAX_IN_FLIGHT_BODIES when it is not set:
+// what the request bodies being buffered at once may hold in all, in bytes.
+const DefaultMaxInFlightBodies = protocol.DefaultInFlight
+
+// parseMaxInFlightBodies reads GOSTACK_MAX_IN_FLIGHT_BODIES as
+// parseMaxRequestBody reads its variable. Zero means no bound.
+func parseMaxInFlightBodies(value string) (int64, error) {
+	return parseBytes("GOSTACK_MAX_IN_FLIGHT_BODIES", value, DefaultMaxInFlightBodies)
+}
+
+// parseBytes reads a count of bytes named by variable, which is def when empty.
+func parseBytes(variable, value string, def int64) (int64, error) {
 	if value == "" {
-		return DefaultMaxRequestBody, nil
+		return def, nil
 	}
 
 	number, unit := value, int64(1)
@@ -46,7 +61,7 @@ func parseMaxRequestBody(value string) (int64, error) {
 	count, err := strconv.ParseInt(number, 10, 64)
 	if err != nil || count < 0 || count > math.MaxInt64/unit {
 		return 0, fmt.Errorf(
-			"GOSTACK_MAX_REQUEST_BODY: %q is not a number of bytes, or a number with a KiB, MiB or GiB suffix", value)
+			"%s: %q is not a number of bytes, or a number with a KiB, MiB or GiB suffix", variable, value)
 	}
 
 	return count * unit, nil

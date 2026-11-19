@@ -2261,6 +2261,9 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledJSON()
+	}
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",
