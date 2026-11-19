@@ -246,11 +246,12 @@ func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 // meterBody meters the body of a request from a listener against the in-flight
 // bound (protocol.SetInFlight), after any gzip decoding, so the bound counts
 // decoded bytes. A request that one service makes to another through the
-// gateway (inproc) has no remote address, which only a listener sets, and is
-// not metered: its body was charged when the request that caused it came in.
-// It returns nil when the request has no body or there is no bound.
+// gateway (inproc) carries request.MarkInternal on its context, which no header
+// or listener can set, and is not metered: its body was charged when the
+// request that caused it came in. It returns nil when the request has no body
+// or there is no bound.
 func meterBody(r *http.Request) *protocol.BodyMeter {
-	if r.RemoteAddr == "" || r.Body == nil || r.Body == http.NoBody {
+	if r.Body == nil || r.Body == http.NoBody || request.IsInternal(r.Context()) {
 		return nil
 	}
 

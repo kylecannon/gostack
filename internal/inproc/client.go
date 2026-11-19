@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/request"
 )
 
 const (
@@ -212,7 +214,10 @@ func newRequest(ctx context.Context, call Call, body io.Reader, size int64) (*ht
 		target.Path = "/"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, methodOf(call), target.String(), body)
+	// The mark tells the gateway the call is internal: its body is not charged
+	// against the in-flight bound, having been charged when the request that
+	// caused it came in.
+	req, err := http.NewRequestWithContext(request.MarkInternal(ctx), methodOf(call), target.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("inproc: build request: %w", err)
 	}
