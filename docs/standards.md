@@ -229,6 +229,9 @@ are missing, and holds the reason for the layout below.
   a tool dependency of its own module, `tools/go.mod`, run as
   `go tool -modfile=tools/go.mod golangci-lint`. The product `go.mod` carries
   none of its dependencies.
+- **`make lint`** passes `--allow-parallel-runners`, so lints in several
+  worktrees run at once; without it, golangci-lint's machine-wide lock makes
+  the second one exit 3 after five seconds. `make fmt` takes no lock.
 - **Editors and gopls** do not read the Makefile, so the pin does not reach
   them. Run `export GOTOOLCHAIN=$(make -s toolchain)` in the shell that starts
   the editor. Plain `go` commands outside `make` need it too.

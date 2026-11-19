@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"slices"
 	"strconv"
@@ -15,12 +16,17 @@ import (
 )
 
 const (
-	scaleSmall   = 1_000
-	scaleLarge   = 16_000
-	scaleRuns    = 5
-	scaleLimit   = 40
-	scaleLinear  = scaleLarge / scaleSmall
-	scaleCeiling = 5 * time.Second
+	// scaleRuns is how many times each size is decoded. The cost of a size is the
+	// shortest run, so the figure is what the decode costs when nothing else
+	// wants the CPU, and enough runs leave one that nothing interrupted.
+	scaleRuns = 20
+	// scaleExponent is the most the decode may grow faster than its input.
+	// Linear is 1 and the sort of the keys adds a little; the scan this test
+	// exists to catch is 2.
+	scaleExponent = 1.5
+	// scaleCeiling stops one run that has already blown up, so a quadratic decode
+	// fails in seconds and not in minutes.
+	scaleCeiling = 2 * time.Second
 
 	elemOne    = "L.1"
 	elemTwo    = "L.2"
@@ -28,11 +34,18 @@ const (
 	nameMember = "Name"
 )
 
+// scaleSizes are the batch sizes decoded. They are small, so a run is short
+// enough to finish inside one slice of the scheduler on a busy machine, and
+// there are five, so one size that happened to be disturbed moves the fitted
+// exponent little.
+var scaleSizes = []int{500, 1_000, 2_000, 4_000, 8_000}
+
 // bestDecode is the shortest of scaleRuns decodes of a batch of n entries, so a
-// pause of the scheduler or the collector does not decide the ratio.
-func bestDecode(t *testing.T, vals url.Values, n int) time.Duration {
+// pause of the scheduler or the collector does not decide the figure.
+func bestDecode(t *testing.T, n int) time.Duration {
 	t.Helper()
 
+	vals := batchForm(n)
 	best := time.Duration(1<<63 - 1)
 
 	for range scaleRuns {
@@ -42,6 +55,7 @@ func bestDecode(t *testing.T, vals url.Values, n int) time.Duration {
 
 		require.Equal(t, n, entries)
 		require.Equal(t, n, attributes)
+		require.Less(t, took, scaleCeiling, "one decode of %d entries took %v", n, took)
 
 		best = min(best, took)
 	}
@@ -49,22 +63,45 @@ func bestDecode(t *testing.T, vals url.Values, n int) time.Duration {
 	return best
 }
 
-// Test_Decoder_BatchScalesWithEntries pins the decode of a batch to linear time.
-// A key below another used to be found by scanning every key of the form, so
-// decoding n entries took time in n squared: about 256 times as long for 16
-// times the entries. Linear is 16 times, and the bound leaves room for n log n
-// and for timing noise. It runs under the race detector, which slows both sizes
-// alike.
+// growthExponent is the slope of the least-squares line through the points
+// (log size, log cost): the k in cost = c * size^k.
+func growthExponent(sizes []int, costs []time.Duration) float64 {
+	var sumX, sumY, sumXY, sumXX float64
+
+	for i, n := range sizes {
+		x, y := math.Log(float64(n)), math.Log(float64(costs[i]))
+		sumX += x
+		sumY += y
+		sumXY += x * y
+		sumXX += x * x
+	}
+
+	count := float64(len(sizes))
+
+	return (count*sumXY - sumX*sumY) / (count*sumXX - sumX*sumX)
+}
+
+// Test_Decoder_BatchScalesWithEntries pins the decode of a batch to near-linear
+// time. A key below another used to be found by scanning every key of the form,
+// so decoding n entries took time in n squared. The test decodes five sizes,
+// fits the exponent of the cost against the size and requires it under
+// scaleExponent: a quadratic step comes out near 2, a decode over a sorted index
+// near 1.1. It replaced one ratio of two wall-clock figures (1,000 and 16,000
+// entries, limit 40), which failed on a loaded machine (CI run 44592554988
+// measured 40.4; a busy host measured 55.6 and 69.5; alone it measures 21 to
+// 25) because a busy scheduler disturbs the one long run the ratio rests on.
+// The fit does not rest on one figure, and its runs are short. The race
+// detector slows every size alike, so the test needs no skip under it.
 func Test_Decoder_BatchScalesWithEntries(t *testing.T) {
-	small := bestDecode(t, batchForm(scaleSmall), scaleSmall)
-	large := bestDecode(t, batchForm(scaleLarge), scaleLarge)
+	costs := make([]time.Duration, len(scaleSizes))
+	for i, n := range scaleSizes {
+		costs[i] = bestDecode(t, n)
+	}
 
-	ratio := float64(large) / float64(small)
-	t.Logf("%d entries took %v, %d took %v: ratio %.1f (linear is %d)",
-		scaleSmall, small, scaleLarge, large, ratio, scaleLinear)
+	exponent := growthExponent(scaleSizes, costs)
+	t.Logf("%v entries took %v: exponent %.2f (linear is 1, quadratic is 2)", scaleSizes, costs, exponent)
 
-	assert.Less(t, ratio, float64(scaleLimit))
-	assert.Less(t, large, scaleCeiling)
+	assert.Less(t, exponent, scaleExponent)
 }
 
 // scanHas is the answer Has gives: the key itself or any key below it.
