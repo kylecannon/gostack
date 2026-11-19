@@ -34,3 +34,24 @@
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
+
+# Main's persist=on S3 cells measured an S3 that did not persist yet: its
+# bodies stayed in memory. With this change they are written to asset files, so
+# these two cells compare a persisted S3 with an in-memory one.
+- gate: system
+  target: gostack
+  cell: s3/objects/persist=on/payload=64KiB/c=16
+  metric: put p99
+  max: +55%
+  reason: S3 bodies are written to asset files when persistence is on; the base did not persist S3
+  pr: 6
+  commit: 99526de6ca85cfb7317c311375f18d13000511d6
+
+- gate: system
+  target: gostack
+  cell: s3/objects/persist=on/payload=64KiB/c=16
+  metric: throughput
+  max: 30%
+  reason: S3 bodies are written to asset files when persistence is on; the base did not persist S3
+  pr: 6
+  commit: 99526de6ca85cfb7317c311375f18d13000511d6
