@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/gateway"
@@ -435,7 +436,7 @@ func (s *stamped) Snapshot(out io.Writer) error {
 func (*stamped) Restore(io.Reader) error { return nil }
 
 func Test_saver_save(t *testing.T) {
-	newSaver := func(t *testing.T, closeFn func()) (*saver, *stamped) {
+	newSaver := func(t *testing.T, closeFn func(context.Context)) (*saver, *stamped) {
 		t.Helper()
 
 		eng, _ := persistentEngine(t)
@@ -456,7 +457,8 @@ func Test_saver_save(t *testing.T) {
 
 		t.Cleanup(func() { close(stuck) })
 
-		s, snap := newSaver(t, func() {
+		// It ignores its context, as a Close that waits for goroutines does.
+		s, snap := newSaver(t, func(context.Context) {
 			entered <- time.Now()
 
 			<-stuck
@@ -489,7 +491,9 @@ func Test_saver_save(t *testing.T) {
 	t.Run("a Close that finishes in time is followed by a last save of what it changed", func(t *testing.T) {
 		var s *saver
 
-		s, snap := newSaver(t, func() { s.eng.MarkDirty(testService) })
+		s, snap := newSaver(t, func(context.Context) {
+			s.eng.MarkDirty(testService) //nolint:contextcheck // the flush timer has no caller context
+		})
 
 		s.save(t.Context(), t.Context())
 
@@ -499,7 +503,7 @@ func Test_saver_save(t *testing.T) {
 	t.Run("without a deadline Close takes the time it needs", func(t *testing.T) {
 		var finished atomic.Bool
 
-		s, snap := newSaver(t, func() {
+		s, snap := newSaver(t, func(context.Context) {
 			time.Sleep(300 * time.Millisecond)
 			finished.Store(true)
 		})
@@ -518,5 +522,68 @@ func Test_saver_save(t *testing.T) {
 		s.save(t.Context(), t.Context())
 
 		assert.EqualValues(t, 1, snap.snapshots.Load())
+	})
+}
+
+// Test_saver_save_closesEveryServiceAtOnce runs a Close that holds on until its
+// context ends beside a fast one, listed after it: neither waits for the other,
+// both get the whole Close budget, and the shutdown ends at that budget with the
+// fast service's state saved.
+func Test_saver_save_closesEveryServiceAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			fastService = "fast"
+			slowService = "slow"
+		)
+
+		eng, dir := persistentEngine(t)
+		state := &stamped{}
+
+		eng.Register(fastService, state)
+		eng.MarkDirty(fastService)
+
+		// Each Close sends the deadline it was given and the time it returned.
+		slowSaw, fastSaw := make(chan [2]time.Time, 1), make(chan [2]time.Time, 1)
+
+		slow := registration(slowService)
+		slow.Close = func(ctx context.Context) {
+			deadline, _ := ctx.Deadline()
+
+			<-ctx.Done()
+
+			slowSaw <- [2]time.Time{deadline, time.Now()}
+		}
+
+		fast := registration(fastService)
+		fast.Persist = state
+		fast.Close = func(ctx context.Context) {
+			deadline, _ := ctx.Deadline()
+
+			fastSaw <- [2]time.Time{deadline, time.Now()}
+		}
+
+		s := &saver{eng: eng, services: &providers{regs: []service.Registration{slow, fast}}}
+
+		begin := time.Now()
+		closeBy := begin.Add(400 * time.Millisecond)
+
+		saveCtx, cancelSave := context.WithDeadline(t.Context(), begin.Add(200*time.Millisecond))
+		defer cancelSave()
+
+		closeCtx, cancelClose := context.WithDeadline(t.Context(), closeBy)
+		defer cancelClose()
+
+		s.save(saveCtx, closeCtx)
+
+		assert.Equal(t, closeBy, time.Now(), "the shutdown ends at the Close budget")
+
+		slowGot, fastGot := <-slowSaw, <-fastSaw
+		assert.Equal(t, closeBy, slowGot[0], "the slow Close has the whole budget")
+		assert.Equal(t, closeBy, slowGot[1], "and returns at its end")
+		assert.Equal(t, closeBy, fastGot[0], "the fast Close has the whole budget too")
+		assert.Equal(t, begin, fastGot[1], "and did not wait for the slow one")
+
+		assert.EqualValues(t, 1, state.snapshots.Load(), "the fast service's state was saved once")
+		assert.FileExists(t, filepath.Join(dir, fastService, "store.json"))
 	})
 }

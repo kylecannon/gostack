@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,7 +52,7 @@ func TestGoneBucketIsMissingToHeadBucketAndGetBucketLocation(t *testing.T) {
 
 	p := New(func() Settings { return Settings{LocalstackHost: "localhost.localstack.cloud:4566"} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(p.Close)
+	t.Cleanup(func() { p.Close(context.WithoutCancel(t.Context())) })
 
 	b := newBucket("gone-bucket", benchAccount, regionEUWest1, regionEUWest1, nil)
 	p.state(benchAccount).buckets[b.Name] = b

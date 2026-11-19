@@ -94,7 +94,9 @@ func (p *Provider) Registration() service.Registration {
 		Shutdown: p.Shutdown,
 		Persist:  p,
 		Reset:    p.Reset,
-		Close:    p.Close,
+		// Stopping the move tasks waits for the message each one is moving, which
+		// no context can cut short, so the budget does not reach Close.
+		Close: func(context.Context) { p.Close() },
 	}
 }
 

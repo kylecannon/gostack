@@ -1,6 +1,7 @@
 package s3_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"io"
@@ -62,7 +63,7 @@ func startPersistedAs(t *testing.T, dir string, as func(*s3.Provider) persist.Sn
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	reg := provider.Registration()
 	if as != nil {
@@ -422,7 +423,7 @@ func (d *dirtier) count() int {
 func TestS3WritesMarkItDirty(t *testing.T) {
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	marks := &dirtier{}
 

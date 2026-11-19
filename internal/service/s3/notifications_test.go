@@ -2,6 +2,7 @@ package s3_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"io"
@@ -48,7 +49,7 @@ func newNotifyStack(t *testing.T) *notifyStack {
 		blob.NewEphemeral(t.TempDir()))
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{Host: localstackHost} }, func(string) {})
 
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 	t.Cleanup(queues.Close)
 
 	gw, err := gateway.New(
@@ -644,7 +645,7 @@ func TestNotificationsWithoutAGatewayAreNotCheckedOrDelivered(t *testing.T) {
 	// checking its target and raises no event.
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(t.TempDir()))
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },

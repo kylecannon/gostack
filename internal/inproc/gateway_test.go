@@ -1,6 +1,7 @@
 package inproc_test
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"io"
@@ -45,7 +46,7 @@ func newStack(t testing.TB) *stack {
 		blob.NewEphemeral(t.TempDir()))
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{Host: localstackHost} }, func(string) {})
 
-	t.Cleanup(provider.Close)
+	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
 	t.Cleanup(queues.Close)
 
 	gw, err := gateway.New(

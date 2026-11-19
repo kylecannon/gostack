@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 
@@ -123,9 +124,17 @@ type Registration struct {
 	// keeps no state.
 	Reset func(account, region string)
 	// Close stops the goroutines the service runs on its own. It is called
-	// once, after the gateway has drained and after persistence's save, with a
-	// budget of its own (lifecycle.Deadlines.Close). A Close that overruns it is
-	// abandoned, so it must not be what a save waits for. A last save follows
+	// once, after the gateway has drained and after persistence's save. Every
+	// service's Close runs at the same time, each given ctx, which ends at the
+	// services' Close budget (lifecycle.Deadlines.Close), so a slow one takes no
+	// time from the others. A Close returns when ctx ends, or is abandoned when
+	// it does not, so it must not be what a save waits for. A last save follows
 	// when every Close returned in time, so the state they leave is saved.
-	Close func()
+	Close func(ctx context.Context)
+
+	// Bind hands the service the handler it calls other services through in
+	// this process, normally the gateway's, once the gateway is built. It is
+	// called once, before the listeners open. A service that calls no other
+	// service leaves it nil.
+	Bind func(http.Handler)
 }

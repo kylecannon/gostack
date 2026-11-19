@@ -131,7 +131,7 @@ are sized against moto's code, not LocalStack's provider files.
 ## Layout
 
 ```
-cmd/gostack/                 main only. Also answers `localstack status services --format=json` (the LocalStack HEALTHCHECK) via argv[0]/subcommand
+cmd/gostack/                 main only: wiring, shutdown, and `registrations()` in services.go, the one list of services. Also answers `localstack status services --format=json` (the LocalStack HEALTHCHECK) via argv[0]/subcommand
 internal/
   gateway/                   listener mux (TLS / HTTP1 / h2c), chi root router, middleware stack, CORS, content decoding, panic recovery
   route/                     service detection: signing name, X-Amz-Target, path rules, host, form Action; explicit ambiguity error
@@ -353,10 +353,26 @@ share a signing name, by the rules of `custom_signing_name_rules` in LocalStack'
 is the Snapshot/Restore pair, which persistence registers only when `PERSIST_*`
 enables the service. `Reset(account, region)` empties the state in place, so a
 call already holding it never writes into state the reset dropped; every
-service that has one joins `/_gostack/state/reset`, persisted or not. `Close`
-stops the service's own goroutines after the gateway drains and before the last
-save. A service that reports changes the gateway cannot see, such as SQS calls
-to a queue URL, takes a `changed(service)` callback in its constructor.
+service that has one joins `/_gostack/state/reset`, persisted or not.
+`Close(ctx)` stops the service's own goroutines after the shutdown save; every
+service's `Close` runs at once, each given the same context, which ends at the
+`Close` deadline. `Bind(handler)` hands a service that calls other services
+the gateway's handler for its `inproc` client, once the gateway is built and
+before the listeners open. A service that reports changes the gateway cannot
+see, such as SQS calls to a queue URL, takes a `changed(service)` callback in
+its constructor. A service with settings maps them from `*config.Settings` with
+a plain function that `liveSettings` wraps, so the mapping is redone only after
+an update through `/_localstack/config`.
+
+Adding a service is one entry in the generator's service table plus
+`GEN_SERVICES`, which generate `internal/api/<svc>`, the package
+`internal/service/<svc>`, and one line in `registrations()` with its import:
+two edits in `cmd/gostack/services.go`. Health, `status services`, the
+persistence engine's service list and the tests' expected service sets all
+derive from `registrations()` (the tests through `RegisteredServices` in
+`cmd/gostack/export_test.go`). `registrations()` keeps one service to a line,
+since parity selection reads a changed line of `services.go` as a change to the
+services it names.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
@@ -619,11 +635,15 @@ Tests split along the same line:
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
      connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then each
+  4. The persisted state is saved, with a deadline of `Save`. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
-     tasks), with a deadline of `Close`. A `Close` that overruns is abandoned
-     with a warning and never delays the save. When every `Close` returned in
-     time, a last save writes whatever they or a request cut at `Work` changed.
+     tasks, S3's hijacked responses), all at once, each given a context that
+     ends at `Close`, so a slow one takes no time from another. A `Close` still
+     running at `Close` is abandoned with a warning and never delays the save.
+     When every `Close` returned before `Close`, a last save writes whatever
+     they or a request cut at `Work` changed; when one ran to the deadline,
+     what the others changed in their `Close` stays unsaved and the save of
+     step 4 is the last.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |

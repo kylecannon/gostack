@@ -104,19 +104,21 @@ func persistentEngine(t *testing.T) (*persist.Engine, string) {
 }
 
 func Test_serviceTable(t *testing.T) {
+	const stateful, stateless = "stateful", "stateless"
+
 	eng, _ := persistentEngine(t)
-	saved := registration("sqs")
+	saved := registration(stateful)
 	saved.Persist = &widgets{}
-	table := &serviceTable{regs: []service.Registration{saved, registration("sts")}, eng: eng}
+	table := &serviceTable{regs: []service.Registration{saved, registration(stateless)}, eng: eng}
 
 	assert.Equal(t, map[string]internalapi.ServiceState{
-		"sqs": {State: "running", Persisted: true},
-		"sts": {State: "running", Persisted: false},
+		stateful:  {State: "running", Persisted: true},
+		stateless: {State: "running", Persisted: false},
 	}, table.States())
-	assert.Equal(t, []internalapi.ServiceCapability{{Name: "sqs"}, {Name: "sts"}}, table.Capabilities())
+	assert.Equal(t, []internalapi.ServiceCapability{{Name: stateful}, {Name: stateless}}, table.Capabilities())
 
-	off := &serviceTable{regs: []service.Registration{registration("sqs")}, eng: persist.New(persist.Config{})}
-	assert.False(t, off.States()["sqs"].Persisted, "persistence is off")
+	off := &serviceTable{regs: []service.Registration{registration(stateful)}, eng: persist.New(persist.Config{})}
+	assert.False(t, off.States()[stateful].Persisted, "persistence is off")
 	assert.NotPanics(t, off.Check)
 }
 

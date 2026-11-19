@@ -52,7 +52,7 @@ func newObjectBenchServer(b *testing.B) *objectBenchServer {
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(b.TempDir()))
-	b.Cleanup(provider.Close)
+	b.Cleanup(func() { provider.Close(context.WithoutCancel(b.Context())) })
 
 	return serveObjectBench(b, provider.Registration(), nil)
 }

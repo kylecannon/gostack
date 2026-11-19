@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/kylecannon/gostack/internal/blob"
@@ -25,78 +27,124 @@ const s3Service = "s3"
 type providers struct {
 	regs []service.Registration
 
-	// s3 delivers its notifications through the gateway, which is built from
-	// regs and so does not exist yet: bind hands it over.
+	// s3 takes the persistence engine's assets as its body store once its state
+	// has loaded (useAssets).
 	s3 *s3.Provider
 }
 
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	p := &providers{s3: s3.New(s3Settings(cfg), blob.NewEphemeral(blob.DefaultSpillDir))}
+	p := &providers{s3: s3.New(liveSettings(cfg, s3Settings), blob.NewEphemeral(blob.DefaultSpillDir))}
 	p.regs = registrations(cfg, changed, p.s3)
 
 	return p
 }
 
-// bind gives the services that call other services in this process the
-// handler to call them through, normally the gateway's.
-func (p *providers) bind(h http.Handler) {
-	p.s3.Bind(h)
-}
-
 // registrations lists the services the gateway serves. Adding a service is one
 // line here; its Registration carries everything else. A service reads its
 // settings through cfg on each call, so an update through /_localstack/config
-// reaches it.
+// reaches it. Keep one service to a line: parity selection reads a changed
+// line of this file as a change to the services it names.
 func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
 	return []service.Registration{
-		sqs.New(sqsSettings(cfg), changed).Registration(),
+		sqs.New(liveSettings(cfg, sqsSettings), changed).Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
 		s3Provider.Registration(),
 	}
 }
 
-// s3Settings maps the live configuration onto the settings of the S3 provider.
-// S3 asks for them on every request, to claim its hosts, so the mapping is
-// redone only when an update through /_localstack/config has replaced the
-// snapshot.
-func s3Settings(cfg *config.Config) func() s3.Settings {
+// bind gives the services that call other services in this process the
+// handler to call them through, normally the gateway's.
+func (p *providers) bind(h http.Handler) {
+	for i := range p.regs {
+		if bindFn := p.regs[i].Bind; bindFn != nil {
+			bindFn(h)
+		}
+	}
+}
+
+// close stops what the services run on their own, such as SQS's message move
+// tasks. Every Close runs at once, given ctx, so a slow one takes no time from
+// the others. It waits until each has returned or ctx has ended, and reports
+// whether each returned before ctx ended. A Close still running then cannot be
+// stopped and is left behind, warned of by the caller: the process exits next.
+func (p *providers) close(ctx context.Context) bool {
+	var closing sync.WaitGroup
+
+	for i := range p.regs {
+		if closeFn := p.regs[i].Close; closeFn != nil {
+			closing.Go(func() { closeFn(ctx) })
+		}
+	}
+
+	closed := make(chan struct{})
+
+	go func() {
+		closing.Wait()
+		close(closed)
+	}()
+
+	// A Close that returns because ctx ended did not return in time, whichever
+	// of the two select sees first.
+	select {
+	case <-closed:
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// liveSettings maps the live configuration onto the settings of a component
+// with mapTo. The component asks on every call, so the mapping is redone only
+// when an update through /_localstack/config has replaced the snapshot.
+func liveSettings[T any](cfg *config.Config, mapTo func(*config.Settings) T) func() T {
 	type mapped struct {
 		from *config.Settings
-		to   s3.Settings
+		to   T
 	}
 
 	var last atomic.Pointer[mapped]
 
-	return func() s3.Settings {
+	return func() T {
 		current := cfg.Settings()
 
 		if m := last.Load(); m != nil && m.from == current {
 			return m.to
 		}
 
-		m := &mapped{from: current, to: s3.Settings{
-			LocalstackHost:     current.LocalstackHost.String(),
-			ValidateSignatures: !current.S3SkipSignatureValidation,
-		}}
-		if len(current.GatewayListen) > 0 {
-			m.to.GatewayPort = current.GatewayListen[0].Port
-		}
+		m := &mapped{from: current, to: mapTo(current)}
 		last.Store(m)
 
 		return m.to
 	}
 }
 
-// close stops what the services run on their own, such as SQS's message move
-// tasks. It is called after the gateway has drained and before the engine's
-// last flush, so that a task's final state is saved.
-func (p *providers) close() {
-	for i := range p.regs {
-		if closeFn := p.regs[i].Close; closeFn != nil {
-			closeFn()
-		}
+// s3Settings maps the configuration onto the settings of the S3 provider.
+func s3Settings(current *config.Settings) s3.Settings {
+	settings := s3.Settings{
+		LocalstackHost:     current.LocalstackHost.String(),
+		ValidateSignatures: !current.S3SkipSignatureValidation,
+	}
+	if len(current.GatewayListen) > 0 {
+		settings.GatewayPort = current.GatewayListen[0].Port
+	}
+
+	return settings
+}
+
+// sqsSettings maps the configuration onto the settings of the SQS provider.
+func sqsSettings(current *config.Settings) sqs.Settings {
+	return sqs.Settings{
+		EndpointStrategy:     current.SQSEndpointStrategy,
+		DelayRecentlyDeleted: current.SQSDelayRecentlyDeleted,
+		DelayPurgeRetry:      current.SQSDelayPurgeRetry,
+		Host:                 current.LocalstackHost.String(),
+		ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
+		DisableCompatPaths:   !current.CompatPaths,
+
+		EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
+		DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,
 	}
 }
 
@@ -144,39 +192,4 @@ func (p *providers) useAssets(eng *persist.Engine, assets *persist.Assets) {
 	}
 
 	p.s3.UseBlobs(persist.NewBlobStore(assets))
-}
-
-// sqsSettings maps the live configuration onto the settings of the SQS
-// provider. The provider asks on every call, so the mapping is redone only when
-// an update through /_localstack/config has replaced the snapshot.
-func sqsSettings(cfg *config.Config) func() sqs.Settings {
-	type mapped struct {
-		from *config.Settings
-		to   sqs.Settings
-	}
-
-	var last atomic.Pointer[mapped]
-
-	return func() sqs.Settings {
-		current := cfg.Settings()
-
-		if m := last.Load(); m != nil && m.from == current {
-			return m.to
-		}
-
-		m := &mapped{from: current, to: sqs.Settings{
-			EndpointStrategy:     current.SQSEndpointStrategy,
-			DelayRecentlyDeleted: current.SQSDelayRecentlyDeleted,
-			DelayPurgeRetry:      current.SQSDelayPurgeRetry,
-			Host:                 current.LocalstackHost.String(),
-			ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
-			DisableCompatPaths:   !current.CompatPaths,
-
-			EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
-			DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,
-		}}
-		last.Store(m)
-
-		return m.to
-	}
 }

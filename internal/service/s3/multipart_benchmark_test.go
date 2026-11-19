@@ -2,6 +2,7 @@ package s3_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/xml"
@@ -87,7 +88,7 @@ func benchServer(b *testing.B) string {
 
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
 		blob.NewEphemeral(b.TempDir()))
-	b.Cleanup(provider.Close)
+	b.Cleanup(func() { provider.Close(context.WithoutCancel(b.Context())) })
 
 	gw, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
 		[]service.Registration{provider.Registration()}, nil, nil)

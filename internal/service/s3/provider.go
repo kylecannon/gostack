@@ -131,6 +131,7 @@ func (p *Provider) Registration() service.Registration {
 		Persist:        p,
 		Reset:          p.Reset,
 		Close:          p.Close,
+		Bind:           p.Bind,
 	}
 }
 
@@ -159,10 +160,10 @@ func (p *Provider) Reset(account, region string) {
 // Close waits for the responses still being written on a hijacked connection,
 // which the gateway's drain cannot see, then drops the notifications not yet
 // delivered and lets go of the bodies the store holds, when it is one that can
-// be closed. The wait ends at the services' Close budget, because a Close that
-// overruns it is abandoned, or at drainLimit.
-func (p *Provider) Close() {
-	p.taken.drain(drainLimit)
+// be closed. The wait ends when ctx does, at the services' Close budget, or at
+// drainLimit.
+func (p *Provider) Close(ctx context.Context) {
+	p.taken.drain(ctx, drainLimit)
 	p.client.Close()
 
 	if closer, ok := p.blobs.(interface{ Close() }); ok {
