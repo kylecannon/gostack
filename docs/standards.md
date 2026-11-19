@@ -180,7 +180,8 @@ not apply to a feature is left out, not filled with a placeholder.
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
 - benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
-  regression over 10% with p<0.05 fails the build.
+  regression over 10% with p<0.05 fails the build unless it is accepted
+  (below).
 
 ### System bench (`bench/`)
 
@@ -205,6 +206,17 @@ they came from: the scheduled run compares with the artifact the previous
 passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+### Accepted regressions
+
+A regression accepted as the cost of a change is listed in
+`bench/accepted.yaml`, in the pull request that brings it, with its metric,
+the largest change accepted, a one-line reason, the pull request and a commit
+that carries the cost. Both CI gates read the file and print what it holds
+under "Accepted". A listed metric past its bound, and every unlisted one, still
+fails. An entry applies only while the head holds its commit and the base does
+not, so it expires once main holds the commit; the pull request lands with a
+merge commit, never a squash, and an expired entry is deleted.
 
 A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
 such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.

@@ -67,6 +67,7 @@ type options struct {
 	targets          []target
 	outDir           string
 	compareDir       string
+	accepted         string
 	loadgenImage     string
 	suffix           string
 	commit           string
@@ -141,6 +142,8 @@ func (o *options) bind(flags *flag.FlagSet) {
 	flags.StringVar(&o.outDir, "out", "bench/results", "directory for the result files")
 	flags.StringVar(&o.compareDir, "compare-dir", "",
 		"after the run, compare it with the newest committed result in this directory that has this host's fingerprint")
+	flags.StringVar(&o.accepted, "accepted", "", "the accepted-regressions list -compare-dir reads, such as "+
+		"bench/accepted.yaml")
 	flags.StringVar(&o.suffix, "name-suffix", "", "appended to container names, to keep parallel runs apart")
 	flags.StringVar(&o.commit, "commit", "", "the commit the images were built from (default: HEAD)")
 	flags.IntVar(&o.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
@@ -238,6 +241,13 @@ func orchestrate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return err
 	}
 
+	// The list is read before the run, so a bad one fails in a second, not
+	// after the measurement.
+	accepted, err := openAccepted(opts.accepted)
+	if err != nil {
+		return err
+	}
+
 	api, err := newDockerAPI(ctx)
 	if err != nil {
 		return err
@@ -264,7 +274,7 @@ func orchestrate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		return nil
 	}
 
-	return compareFiles(ctx, "", opts.compareDir, path+".json", stdout)
+	return compareFiles(ctx, "", opts.compareDir, path+".json", accepted, stdout)
 }
 
 func (r *runner) logf(format string, args ...any) {

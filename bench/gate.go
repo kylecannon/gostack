@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"regexp"
@@ -17,6 +19,7 @@ const (
 	columnSeparator      = "│"
 	baseMarker           = "vs base"
 	geomeanRow           = "geomean"
+	pkgPrefix            = "pkg: "
 	unitColumn           = 1 // the text between the first two separators of a header row
 )
 
@@ -33,10 +36,65 @@ var errEmptyInput = errors.New("gate: benchstat output is empty, so nothing was 
 // "~" and does not match.
 var comparisonRow = regexp.MustCompile(`^(\S+)\s.*?([+-]\d+(?:\.\d+)?)%\s+\(p=(\d+(?:\.\d+)?)\s+n=`)
 
+// procsSuffix is the -GOMAXPROCS suffix benchstat keeps on a benchmark name.
+var procsSuffix = regexp.MustCompile(`^-\d+$`)
+
+// benchRow is one regressed benchstat row.
+type benchRow struct {
+	pkg, name, unit string
+	delta           float64
+	pValue          string
+}
+
+func (r benchRow) String() string {
+	return fmt.Sprintf("%s %s %+.2f%% (p=%s)", r.name, r.unit, r.delta, r.pValue)
+}
+
+func (r benchRow) lowerIsBetter() bool {
+	return !strings.HasSuffix(r.unit, "/s")
+}
+
+// matches reports whether a benchstat entry names this row. The entry leaves
+// out the -GOMAXPROCS suffix, so it holds on a runner with any CPU count, and
+// names the package by its path or a trailing part of it.
+func (r benchRow) matches(e *acceptedEntry) bool {
+	if e.Gate != gateBenchstat || e.Unit != r.unit {
+		return false
+	}
+
+	if r.pkg != e.Package && !strings.HasSuffix(r.pkg, "/"+e.Package) {
+		return false
+	}
+
+	rest, ok := strings.CutPrefix(r.name, e.Benchmark)
+
+	return ok && (rest == "" || procsSuffix.MatchString(rest))
+}
+
 // gateMain is `bench gate`: it reads benchstat's text output and fails on a
-// regression over maxRegressionPercent at p < significance. Empty input is an
-// error: a gate that read nothing has not checked anything.
-func gateMain(in io.Reader, out io.Writer) error {
+// regression over maxRegressionPercent at p < significance that the accepted
+// list (-accepted, for the commits -base and -head) does not hold. Empty input
+// is an error: a gate that read nothing has not checked anything.
+func gateMain(ctx context.Context, args []string, in io.Reader, out io.Writer, contains containsFunc) error {
+	flags := flag.NewFlagSet("gate", flag.ContinueOnError)
+	acceptedPath := flags.String("accepted", "", "the accepted-regressions list, such as bench/accepted.yaml")
+	base := flags.String("base", "", "the commit benchstat's base column was measured on")
+	head := flags.String("head", "", "the commit benchstat's head column was measured on")
+
+	err := flags.Parse(args)
+	if err != nil {
+		return fmt.Errorf("parse flags: %w", err)
+	}
+
+	accepted, err := openAccepted(*acceptedPath)
+	if err != nil {
+		return err
+	}
+
+	if contains != nil {
+		accepted.contains = contains
+	}
+
 	text, err := io.ReadAll(in)
 	if err != nil {
 		return fmt.Errorf("read benchstat output: %w", err)
@@ -46,45 +104,74 @@ func gateMain(in io.Reader, out io.Writer) error {
 		return errEmptyInput
 	}
 
-	regressions, err := findRegressions(bytes.NewReader(text))
+	rows, err := findRegressions(bytes.NewReader(text))
 	if err != nil {
 		return err
 	}
 
-	if len(regressions) == 0 {
-		_, err = io.WriteString(out, "no benchmark regressed over 10% at p<0.05\n")
-
-		return wrapWrite(err)
-	}
-
-	_, err = io.WriteString(out, "regressions over 10% at p<0.05:\n  "+strings.Join(regressions, "\n  ")+"\n")
-	if err != nil {
-		return wrapWrite(err)
-	}
-
-	return fmt.Errorf("%w: %d over the limit", errRegression, len(regressions))
+	return reportGate(ctx, rows, accepted, *base, *head, out)
 }
 
-func wrapWrite(err error) error {
-	if err != nil {
-		return fmt.Errorf("write result: %w", err)
+// reportGate splits the regressed rows into those the list accepts and the
+// rest, writes both, and fails on the rest.
+func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base, head string, out io.Writer) error {
+	var held, failed []string
+
+	for _, row := range rows {
+		v := accepted.judge(ctx, base, head, row.matches, measured{
+			change: row.delta, unit: row.unit, lowerIsBetter: row.lowerIsBetter(),
+		}.within)
+
+		switch {
+		case v.entry != nil:
+			held = append(held, fmt.Sprintf("%s, within %s: %s", row, v.entry.limit, v.entry.label()))
+		case v.note != "":
+			failed = append(failed, row.String()+"; "+v.note)
+		default:
+			failed = append(failed, row.String())
+		}
 	}
 
-	return nil
+	var b strings.Builder
+
+	if len(held) > 0 {
+		fmt.Fprintf(&b, "Accepted (%d):\n  %s\n", len(held), strings.Join(held, "\n  "))
+	}
+
+	if len(failed) == 0 {
+		b.WriteString("no benchmark regressed over 10% at p<0.05 outside the accepted list\n")
+
+		return write(out, b.String())
+	}
+
+	b.WriteString("regressions over 10% at p<0.05:\n  " + strings.Join(failed, "\n  ") + "\n")
+
+	err := write(out, b.String())
+	if err != nil {
+		return err
+	}
+
+	return fmt.Errorf("%w: %d over the limit", errRegression, len(failed))
 }
 
-// findRegressions returns one line per regressed benchmark and unit. Units that
-// end in "/s" are throughputs, where a drop is the regression; every other unit
+// findRegressions returns each regressed benchmark and unit. Units that end in
+// "/s" are throughputs, where a drop is the regression; every other unit
 // (sec/op, B/op, allocs/op) is a cost, where a rise is.
-func findRegressions(in io.Reader) ([]string, error) {
+func findRegressions(in io.Reader) ([]benchRow, error) {
 	var (
-		found []string
-		unit  string
+		found     []benchRow
+		pkg, unit string
 	)
 
 	scanner := bufio.NewScanner(in)
 	for scanner.Scan() {
 		line := scanner.Text()
+
+		if p, ok := strings.CutPrefix(line, pkgPrefix); ok {
+			pkg = strings.TrimSpace(p)
+
+			continue
+		}
 
 		if strings.Contains(line, baseMarker) && strings.Contains(line, columnSeparator) {
 			unit = unitOf(line)
@@ -108,7 +195,7 @@ func findRegressions(in io.Reader) ([]string, error) {
 		}
 
 		if worse := regressed(unit, delta); worse && pValue < significance {
-			found = append(found, fmt.Sprintf("%s %s %+.2f%% (p=%s)", match[1], unit, delta, match[3]))
+			found = append(found, benchRow{pkg: pkg, name: match[1], unit: unit, delta: delta, pValue: match[3]})
 		}
 	}
 

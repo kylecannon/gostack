@@ -59,7 +59,7 @@ const (
 var gated = map[string]bool{targetGostack: true, targetSlim: true}
 
 // errUsage is the answer to flags that name no pair of files.
-var errUsage = errors.New("usage: bench compare -head B.json (-base A.json | -base-dir DIR)")
+var errUsage = errors.New("usage: bench compare -head B.json (-base A.json | -base-dir DIR) [-accepted FILE]")
 
 type metric struct {
 	target, cell, name string
@@ -73,6 +73,22 @@ type metric struct {
 	// scale and unit render the numbers.
 	scale float64
 	unit  string
+	// accepted is the entry of the accepted list that holds a regression, and
+	// note says why the entries that name a regression do not.
+	accepted *acceptedEntry
+	note     string
+}
+
+// matches reports whether a system entry of the accepted list names the metric.
+func (m metric) matches(e *acceptedEntry) bool {
+	return e.Gate == gateSystem && e.Target == m.target && e.Cell == m.cell && e.Metric == m.name
+}
+
+// within checks the metric's change against an accepted limit.
+func (m metric) within(l limit) string {
+	return measured{
+		change: m.change() * percentScale, head: m.head.Median / m.scale, unit: m.unit, lowerIsBetter: m.lowerIsBetter,
+	}.within(l)
 }
 
 type outcome int
@@ -181,9 +197,31 @@ type comparison struct {
 	compared     int
 	metrics      int
 	regressions  []metric
+	accepted     []metric
 	noise        []metric
 	improvements []metric
 	missing      []string
+}
+
+// settle moves each regression the accepted list holds for base..head out of
+// the regressions, and notes on the rest why a listed entry did not hold them.
+func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, head string) {
+	var still []metric
+
+	for _, m := range cmp.regressions {
+		v := accepted.judge(ctx, base, head, m.matches, m.within)
+		if v.entry != nil {
+			m.accepted = v.entry
+			cmp.accepted = append(cmp.accepted, m)
+
+			continue
+		}
+
+		m.note = v.note
+		still = append(still, m)
+	}
+
+	cmp.regressions = still
 }
 
 func compareTargets(base, head report) comparison {
@@ -244,9 +282,9 @@ func compareTargets(base, head report) comparison {
 }
 
 // compareReports writes the comparison and returns errRegression when a gated
-// metric regressed. A pair of reports that cannot be compared is explained and
-// returns nil.
-func compareReports(base, head report, out io.Writer) error {
+// metric regressed past what the accepted list holds. A pair of reports that
+// cannot be compared is explained and returns nil.
+func compareReports(ctx context.Context, base, head report, accepted acceptedSet, out io.Writer) error {
 	var b strings.Builder
 
 	b.WriteString("## System bench compare\n\n")
@@ -261,6 +299,7 @@ func compareReports(base, head report, out io.Writer) error {
 	}
 
 	cmp := compareTargets(base, head)
+	cmp.settle(ctx, accepted, base.Commit, head.Commit)
 
 	if cmp.metrics == 0 {
 		b.WriteString("Nothing to compare: the two results hold no gostack or gostack-slim cell in common.\n")
@@ -276,6 +315,8 @@ func compareReports(base, head report, out io.Writer) error {
 		limitStartup*percentScale, floorP50, floorP99)
 
 	table(&b, "Regressions", cmp.regressions)
+	notes(&b, cmp.regressions)
+	acceptedTable(&b, cmp.accepted)
 	table(&b, "Changes past the limit with overlapping ranges (noise, not failing)", cmp.noise)
 	table(&b, "Improvements", cmp.improvements)
 
@@ -335,12 +376,56 @@ func table(b *strings.Builder, title string, metrics []metric) {
 	b.WriteString("\n")
 }
 
+// notes lists, under the regressions, why an entry of the accepted list that
+// names one of them does not hold it.
+func notes(b *strings.Builder, regressions []metric) {
+	var listed bool
+
+	for _, m := range regressions {
+		if m.note == "" {
+			continue
+		}
+
+		fmt.Fprintf(b, "- %s `%s` %s: %s\n", m.target, m.cell, m.name, m.note)
+
+		listed = true
+	}
+
+	if listed {
+		b.WriteString("\n")
+	}
+}
+
+// acceptedTable lists the regressions the accepted list holds, with its reason,
+// so they stay in sight in every log.
+func acceptedTable(b *strings.Builder, metrics []metric) {
+	fmt.Fprintf(b, "### Accepted (%d)\n\n", len(metrics))
+
+	if len(metrics) == 0 {
+		b.WriteString("None.\n\n")
+
+		return
+	}
+
+	b.WriteString("| Target | Cell | Metric | Base median (range) | Head median (range) | Change | Accepted up to | " +
+		"Reason |\n")
+	b.WriteString("|---|---|---|---:|---:|---:|---:|---|\n")
+
+	for _, m := range metrics {
+		fmt.Fprintf(b, "| %s | `%s` | %s | %s | %s | %+.1f%% | %s | %s |\n", m.target, m.cell, m.name,
+			m.render(m.base), m.render(m.head), m.change()*percentScale, m.accepted.limit, m.accepted.label())
+	}
+
+	b.WriteString("\n")
+}
+
 // compareMain is `bench compare`.
 func compareMain(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("compare", flag.ContinueOnError)
 	basePath := flags.String("base", "", "the result file to compare against")
 	baseDir := flags.String("base-dir", "", "a directory of committed results: the newest with the head's fingerprint")
 	headPath := flags.String("head", "", "the result file to check")
+	acceptedPath := flags.String("accepted", "", "the accepted-regressions list, such as bench/accepted.yaml")
 
 	err := flags.Parse(args)
 	if err != nil {
@@ -351,12 +436,19 @@ func compareMain(ctx context.Context, args []string, stdout io.Writer) error {
 		return errUsage
 	}
 
-	return compareFiles(ctx, *basePath, *baseDir, *headPath, stdout)
+	accepted, err := openAccepted(*acceptedPath)
+	if err != nil {
+		return err
+	}
+
+	return compareFiles(ctx, *basePath, *baseDir, *headPath, accepted, stdout)
 }
 
 // compareFiles compares head with the file basePath, or with the newest result
 // in baseDir that the host of head can be compared with.
-func compareFiles(ctx context.Context, basePath, baseDir, headPath string, out io.Writer) error {
+func compareFiles(ctx context.Context, basePath, baseDir, headPath string, accepted acceptedSet,
+	out io.Writer,
+) error {
 	head, err := loadReport(headPath)
 	if err != nil {
 		return err
@@ -383,7 +475,7 @@ func compareFiles(ctx context.Context, basePath, baseDir, headPath string, out i
 		}
 	}
 
-	return compareReports(base, head, out)
+	return compareReports(ctx, base, head, accepted, out)
 }
 
 // newestComparable returns the base for head from the results in dir that git

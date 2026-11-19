@@ -5,8 +5,10 @@ name: bench-system
 # A pull request builds the base and the head image on the same runner, runs the
 # quick profile for gostack alone against each, and compares the two with
 # `bench compare`, which fails the job when a gostack cell regressed with
-# non-overlapping runs. Both result files are uploaded and the comparison goes
-# to the step summary.
+# non-overlapping runs and bench/accepted.yaml does not hold it. Both result
+# files are uploaded and the comparison goes to the step summary. In both jobs
+# the checkout the comparison runs in has its full history, because the
+# accepted list asks git whether the base and the head hold an entry's commit.
 #
 # The weekly schedule, and a manual run with the full profile, run the whole
 # matrix for gostack, gostack-slim and LocalStack (reference only, never gating)
@@ -60,6 +62,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: head
+          fetch-depth: 0
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -118,7 +121,8 @@ jobs:
           base=$(ls "$RUNNER_TEMP"/base/*.json)
           head=$(ls "$RUNNER_TEMP"/head/*.json)
           status=0
-          go run ./bench compare -base "$base" -head "$head" | tee "$RUNNER_TEMP/compare.md" || status=$?
+          go run ./bench compare -accepted bench/accepted.yaml -base "$base" -head "$head" \
+            | tee "$RUNNER_TEMP/compare.md" || status=$?
           cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
       - uses: actions/upload-artifact@v4
@@ -145,6 +149,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -224,7 +230,8 @@ jobs:
               echo "run $PREVIOUS_RUN stored \`$NAME\` with no result file in it" | tee "$RUNNER_TEMP/compare.md"
               status=1
             else
-              go run ./bench compare -base "$previous" -head "$RESULT" | tee "$RUNNER_TEMP/compare.md" || status=$?
+              go run ./bench compare -accepted bench/accepted.yaml -base "$previous" -head "$RESULT" \
+                | tee "$RUNNER_TEMP/compare.md" || status=$?
             fi
           fi
           cat "$RUNNER_TEMP/compare.md" >> "$GITHUB_STEP_SUMMARY"

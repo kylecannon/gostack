@@ -67,7 +67,7 @@ func Test_schema_2_ids_are_the_ids_of_the_matrix(t *testing.T) {
 func Test_a_converted_result_compares_cleanly_with_itself(t *testing.T) {
 	var out bytes.Buffer
 
-	err := compareFiles(t.Context(), committedV2, "", committedV2, &out)
+	err := compareFiles(t.Context(), committedV2, "", committedV2, acceptedSet{}, &out)
 	require.NoError(t, err)
 
 	assert.Contains(t, out.String(), "Compared 432 cells")
@@ -196,7 +196,7 @@ func Test_compareFiles_names_the_fingerprint_it_looked_for(t *testing.T) {
 
 	var out bytes.Buffer
 
-	require.NoError(t, compareFiles(t.Context(), "", dir, headPath, &out))
+	require.NoError(t, compareFiles(t.Context(), "", dir, headPath, acceptedSet{}, &out))
 	assert.Contains(t, out.String(), "has the fingerprint of this host")
 	assert.Contains(t, out.String(), hostA.String())
 }

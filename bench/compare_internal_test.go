@@ -48,7 +48,7 @@ func compared(t *testing.T, base, head report) (string, error) {
 
 	var out bytes.Buffer
 
-	err := compareReports(base, head, &out)
+	err := compareReports(t.Context(), base, head, acceptedSet{}, &out)
 
 	return out.String(), err
 }
@@ -268,7 +268,7 @@ func Test_compareFiles_picks_the_newest_result_of_the_same_host(t *testing.T) {
 	// Outside a git checkout every json file counts, and the head is skipped.
 	t.Chdir(t.TempDir())
 
-	err := compareFiles(t.Context(), "", dir, head, &out)
+	err := compareFiles(t.Context(), "", dir, head, acceptedSet{}, &out)
 	require.NoError(t, err)
 	assert.Contains(t, out.String(), "Compared 1 cells")
 	assert.NotContains(t, out.String(), "Not compared")
@@ -282,7 +282,7 @@ func Test_compareFiles_picks_the_newest_result_of_the_same_host(t *testing.T) {
 	require.NoError(t, os.WriteFile(lonelyPath, raw, fileMode))
 
 	out.Reset()
-	require.NoError(t, compareFiles(t.Context(), "", dir, lonelyPath, &out))
+	require.NoError(t, compareFiles(t.Context(), "", dir, lonelyPath, acceptedSet{}, &out))
 	assert.Contains(t, out.String(), "has the fingerprint of this host")
 }
 

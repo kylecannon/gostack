@@ -1,0 +1,50 @@
+# Accepted regressions. `bench gate` (benchstat) and `bench compare` (system
+# bench) read this file in CI; docs/standards.md, "Benchmarks", has the rule.
+#
+# An entry holds a regressed metric that a reviewer accepted as the cost of a
+# change. The metric passes while its change stays within max. Anything not
+# listed, or past its max, still fails.
+#
+# An entry applies only to a comparison whose head holds its commit and whose
+# base does not. Name a commit that already carries the cost, on the branch the
+# pull request merges with a merge commit. Once main holds that commit, every
+# later base does too and the entry has expired; delete it then.
+#
+# Fields:
+#   gate:      benchstat, or system for `bench compare`.
+#   benchstat: package (its import path, or a trailing part of it), benchmark
+#              (without the -GOMAXPROCS suffix) and unit, as benchstat prints it.
+#   system:    target, cell and metric, as `bench compare` prints them.
+#   max:       the largest accepted change: "+50%" (the size counts, the sign
+#              does not), or for a system metric the worst accepted head median
+#              in the metric's unit, such as "6 MiB".
+#   reason:    one line.
+#   pr:        the pull request that accepted it.
+#   commit:    a commit that carries the cost.
+
+- gate: benchstat
+  package: internal/route
+  benchmark: RouteDetect/host
+  unit: sec/op
+  max: +60%
+  reason: S3 virtual-host and website host checks run on every host-routed request
+  pr: 4
+  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa
+
+- gate: system
+  target: gostack
+  cell: idle
+  metric: idle RSS
+  max: +55%
+  reason: S3's generated code and routing tables are resident from start
+  pr: 4
+  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa
+
+- gate: system
+  target: gostack
+  cell: sqs/messaging/persist=off/payload=64KiB/queue=standard/shape=single/proto=json/c=16
+  metric: peak RSS
+  max: +35%
+  reason: the idle RSS shift from S3's generated code, on a cell that sits near the 20% limit
+  pr: 4
+  commit: 8fb22fa3d73e976a0225b14a39cfb276529d06aa

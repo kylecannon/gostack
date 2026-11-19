@@ -21,7 +21,8 @@
 //	                127.0.0.1:4566 inside that namespace. Host port 4566 is never
 //	                bound and no port is published.
 //	bench gate      reads benchstat output on stdin and fails on a regression
-//	                over 10% with p<0.05. The bench workflow runs it.
+//	                over 10% with p<0.05 that the accepted list does not
+//	                hold. The bench workflow runs it.
 //
 // # Workloads and cells
 //
@@ -120,6 +121,12 @@
 // `bench run -compare-dir bench/results` runs the same comparison after the
 // measurement. The scheduled CI run compares with the result the previous
 // passing run on main kept as a workflow artifact (.github/workflows/bench-system.yml).
+//
+// `-accepted bench/accepted.yaml` on compare, run and gate holds the regressions
+// a reviewer accepted (accepted.go). An entry applies while the head's commit
+// holds its commit and the base's does not; compare reads both commits from the
+// result files, gate takes them as -base and -head. A held regression is listed
+// under "Accepted" and does not fail.
 //
 // # The result file
 //
