@@ -384,8 +384,8 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	path := dir + "/" + id
 
 	// The id is known as committed before its file is in blobs, so a sweep that
-	// lists the file also finds the id and keeps it. After a failed sync no
-	// sweep runs until a restart, so it is not tracked.
+	// lists the file also finds the id and keeps it. After a failed sync a
+	// sweep removes nothing until a restart, so the id is not tracked.
 	a.mu.Lock()
 	tracked := a.failed == nil
 	if tracked {
