@@ -39,40 +39,95 @@ func batchWriteBody(worker, size int) string {
 	return `{"RequestItems":{"` + benchTable + `":[` + strings.Join(requests, ",") + `]}}`
 }
 
-// maxBenchBatch is the most items one BatchWriteItem takes.
-const maxBenchBatch = 25
+// batchGetBody is a BatchGetItem body reading the 25 items batchWriteBody
+// puts for worker.
+func batchGetBody(worker int) string {
+	keys := make([]string, maxBenchBatch)
 
-func BenchmarkBatchWriteItem(b *testing.B) {
+	for i := range keys {
+		keys[i] = fmt.Sprintf(`{"id":{"S":"k-%d-%d"}}`, worker, i)
+	}
+
+	return `{"RequestItems":{"` + benchTable + `":{"Keys":[` + strings.Join(keys, ",") + `]}}}`
+}
+
+const (
+	// maxBenchBatch is the most items one BatchWriteItem takes. BatchGetItem
+	// reads the same 25, so its rows line up with the writes'.
+	maxBenchBatch = 25
+
+	// One iteration is a call from every worker, so its cost grows with
+	// workers times the work of one call. A cell whose iteration would carry
+	// more than these is left out: at make bench's 500 ms it runs under 50
+	// iterations, too few for benchstat to judge (SQ-302). That drops the
+	// 32 KiB batches at concurrency 64 and 100 actions at 16 and 64.
+	maxIterationBatchBytes = 16 << 20
+	maxIterationActions    = 640
+)
+
+// batchMatrix runs one sub-benchmark for every batch payload at every
+// concurrency within maxIterationBatchBytes, each on a fresh stack holding the
+// table bench. prepare runs before the timer for each worker.
+func batchMatrix(
+	b *testing.B,
+	operation string,
+	prepare func(b *testing.B, s *stack, worker, size int),
+	body func(worker, size int) string,
+) {
+	b.Helper()
+
 	for _, payload := range batchPayloads {
 		for _, workers := range itemConcurrency {
+			if payload.size*maxBenchBatch*workers > maxIterationBatchBytes {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers), func(b *testing.B) {
 				s := newStack(b)
 				s.ok(b, opCreate, hashTable(benchTable))
 
 				bodies := make([]string, workers)
 				for worker := range workers {
-					bodies[worker] = batchWriteBody(worker, payload.size)
+					prepare(b, s, worker, payload.size)
+					bodies[worker] = body(worker, payload.size)
 				}
 
 				b.SetBytes(int64(payload.size * maxBenchBatch * workers))
 				b.ReportAllocs()
 
 				for b.Loop() {
-					require.NoError(b, s.fanOut(b, opBatchWrite, workers, func(worker int) string { return bodies[worker] }))
+					require.NoError(b, s.fanOut(b, operation, workers, func(worker int) string { return bodies[worker] }))
 				}
 			})
 		}
 	}
 }
 
+// BenchmarkBatchWriteItem: each call puts 25 of the worker's items.
+func BenchmarkBatchWriteItem(b *testing.B) {
+	batchMatrix(b, opBatchWrite, func(*testing.B, *stack, int, int) {}, batchWriteBody)
+}
+
+// BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
+// BatchWriteItem put before the timer starts.
+func BenchmarkBatchGetItem(b *testing.B) {
+	batchMatrix(b, opBatchGet, func(b *testing.B, s *stack, worker, size int) {
+		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
+	}, func(worker, _ int) string { return batchGetBody(worker) })
+}
+
 // transactMatrix runs one sub-benchmark for every number of actions at every
-// concurrency, each on a fresh stack holding the table bench, with body(worker,
-// actions) the request of each worker.
+// concurrency within maxIterationActions, each on a fresh stack holding the
+// table bench, with body(worker, actions) the request of each worker.
 func transactMatrix(b *testing.B, operation string, body func(worker, actions int) string) {
 	b.Helper()
 
 	for _, actions := range transactActions {
 		for _, workers := range itemConcurrency {
+			if actions*workers > maxIterationActions {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("actions=%d/concurrency=%d", actions, workers), func(b *testing.B) {
 				s := newStack(b)
 				s.ok(b, opCreate, hashTable(benchTable))
