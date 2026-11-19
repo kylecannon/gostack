@@ -548,15 +548,25 @@ What `/_gostack/services` counts, and what it costs:
   answers 501; this is accepted. Where an operation is reached through several
   embedded fields, the field at the shallowest depth decides, as Go does.
   A handler the check cannot read (one that embeds the generated `Handler`
-  interface, a nil one, a missing `Handler`) reports `implemented` and
-  `operations` as null for that service and never fails the request.
-- The lookup costs about 199 bytes per API operation, not per provider
-  method: the generated `OperationMethod` is one switch arm for every
-  operation of the API whether or not a provider serves it. Measured as the
-  difference in loaded sections (`size -m`, not file size, which moves in
-  16 KB pages and includes DWARF) between builds with and without it:
-  50,710 bytes for sts, sqs and s3, and 29,100 bytes for SSM's 146 operations.
-  The nine APIs generated today (471 operations) project to about 115 KB.
+  interface, or a missing `Handler`, which is an untyped nil) reports
+  `implemented` and `operations` as null for that service and never fails the
+  request. A typed nil such as `(*T)(nil)` is not missing: the check reads
+  method sets and never calls the handler, so it reports what `T` declares.
+  A struct that embeds itself, or two that embed each other, is walked once
+  round, never forever.
+- The lookup costs a fixed amount plus about 179 bytes per API operation (not
+  per provider method): the generated `OperationMethod` is one switch arm for
+  every operation of the API whether or not a provider serves it. Measured as
+  the difference in loaded sections (`size -m`, not file size, which moves in
+  16 KB pages and includes DWARF) between builds of `main` (7109a08) and of
+  the branch at 68256cf, macOS arm64, `-ldflags "-X main.version=x"`: 52,588
+  bytes for sts, sqs and s3 together, which is 146 operations. Of that,
+  11,557 bytes are `Implemented` and the endpoint, whatever the services; the
+  rest, 41,031 bytes, is the `OperationMethod` switches, and a fit over
+  builds that keep them for 11, 34, 112 and 146 operations gives 179 bytes
+  each plus 14,980 bytes the first one pulls in (reflection's method lookup),
+  so the fixed cost is about 26.5 KB. The nine APIs generated today (471
+  operations) project to about 111 KB.
   That is proportional and small beside the dispatch code already generated
   per operation, and a committed table kept true by a second generator pass
   over service code is more machinery than the bytes are worth. The decision is

@@ -224,6 +224,10 @@ func Test_Implemented(t *testing.T) {
 		{name: "pointer to Unimplemented", handler: &Unimplemented{}, want: []string{}, known: true},
 		{name: "nil handler", handler: nil, known: false},
 		{
+			name: "typed nil handler reports what its type declares", handler: (*pointerProvider)(nil),
+			want: []string{alpha, charlie}, known: true,
+		},
+		{
 			name: "two fields at different depths", handler: &ambiguousProvider{},
 			want: []string{alpha, bravo, echo}, known: true,
 		},
