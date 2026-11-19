@@ -4,6 +4,7 @@ package in15
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // HttpPayloadWithXmlName returns awserr.NotImplemented.
 func (Unimplemented) HttpPayloadWithXmlName(context.Context, *HttpPayloadWithXmlNameInput) (*HttpPayloadWithXmlNameOutput, error) {
 	return nil, awserr.NotImplemented("in15", "HttpPayloadWithXmlName")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in15 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "HttpPayloadWithXmlName":
+		return t.MethodByName("HttpPayloadWithXmlName")
+	default:
+		return reflect.Method{}, false
+	}
 }

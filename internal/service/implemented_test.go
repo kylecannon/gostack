@@ -3,9 +3,18 @@ package service_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
+	dynamodbapi "github.com/kylecannon/gostack/internal/api/dynamodb"
+	dynamodbstreamsapi "github.com/kylecannon/gostack/internal/api/dynamodbstreams"
+	kmsapi "github.com/kylecannon/gostack/internal/api/kms"
+	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	secretsmanagerapi "github.com/kylecannon/gostack/internal/api/secretsmanager"
+	snsapi "github.com/kylecannon/gostack/internal/api/sns"
+	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	ssmapi "github.com/kylecannon/gostack/internal/api/ssm"
+	stsapi "github.com/kylecannon/gostack/internal/api/sts"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/require"
 )
@@ -16,6 +25,25 @@ const alpha, bravo, charlie, delta, echo = "Alpha", "Bravo", "Charlie", "Delta",
 // fiveOperations is the API of the fake service: five operations, each a
 // method of Unimplemented.
 var fiveOperations = []string{alpha, bravo, charlie, delta, echo}
+
+// fiveMethods is the fake service's OperationMethod, written as the generator
+// writes one: every lookup names its method with a constant.
+func fiveMethods(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case alpha:
+		return t.MethodByName(alpha)
+	case bravo:
+		return t.MethodByName(bravo)
+	case charlie:
+		return t.MethodByName(charlie)
+	case delta:
+		return t.MethodByName(delta)
+	case echo:
+		return t.MethodByName(echo)
+	default:
+		return reflect.Method{}, false
+	}
+}
 
 // errNotImplemented is what the fake service's unimplemented operations return.
 var errNotImplemented = errors.New("not implemented")
@@ -104,10 +132,82 @@ func Test_Implemented(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, known := service.Implemented(tt.handler, fiveOperations)
+			got, known := service.Implemented(tt.handler, fiveOperations, fiveMethods)
 
 			require.Equal(t, tt.known, known)
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Test_Implemented_lookup checks that every method is found through the
+// lookup the caller passes, and none other: without one, or with one that
+// finds no method, nothing is known.
+func Test_Implemented_lookup(t *testing.T) {
+	got, known := service.Implemented(&pointerProvider{}, fiveOperations, nil)
+	require.False(t, known)
+	require.Nil(t, got)
+
+	none := func(reflect.Type, string) (reflect.Method, bool) { return reflect.Method{}, false }
+	got, known = service.Implemented(&pointerProvider{}, fiveOperations, none)
+	require.False(t, known)
+	require.Nil(t, got)
+
+	// A lookup that knows only Alpha and Charlie leaves the other three
+	// operations unplaced.
+	partial := func(t reflect.Type, operation string) (reflect.Method, bool) {
+		if operation != alpha && operation != charlie {
+			return reflect.Method{}, false
+		}
+
+		return fiveMethods(t, operation)
+	}
+	got, known = service.Implemented(&pointerProvider{}, fiveOperations, partial)
+	require.False(t, known)
+	require.Nil(t, got)
+
+	got, known = service.Implemented(&pointerProvider{}, []string{alpha, charlie}, partial)
+	require.True(t, known)
+	require.Equal(t, []string{alpha, charlie}, got)
+}
+
+// Test_OperationMethod_generated checks the generated OperationMethod of every
+// generated API: it finds the method of each operation on the generated
+// Unimplemented, nothing for a name that is not an operation, and Metadata
+// carries it.
+func Test_OperationMethod_generated(t *testing.T) {
+	tests := []struct {
+		metadata      service.Metadata
+		unimplemented any
+	}{
+		{dynamodbapi.Metadata, dynamodbapi.Unimplemented{}},
+		{dynamodbstreamsapi.Metadata, dynamodbstreamsapi.Unimplemented{}},
+		{kmsapi.Metadata, kmsapi.Unimplemented{}},
+		{s3api.Metadata, s3api.Unimplemented{}},
+		{secretsmanagerapi.Metadata, secretsmanagerapi.Unimplemented{}},
+		{snsapi.Metadata, snsapi.Unimplemented{}},
+		{sqsapi.Metadata, sqsapi.Unimplemented{}},
+		{ssmapi.Metadata, ssmapi.Unimplemented{}},
+		{stsapi.Metadata, stsapi.Unimplemented{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.metadata.Name, func(t *testing.T) {
+			require.NotNil(t, tt.metadata.OperationMethod)
+
+			typ := reflect.TypeOf(tt.unimplemented)
+			for _, operation := range tt.metadata.Operations {
+				m, found := tt.metadata.OperationMethod(typ, operation)
+				require.True(t, found, operation)
+				require.Equal(t, operation, m.Name)
+			}
+
+			_, found := tt.metadata.OperationMethod(typ, "NotAnOperation")
+			require.False(t, found)
+
+			got, known := service.Implemented(tt.unimplemented, tt.metadata.Operations, tt.metadata.OperationMethod)
+			require.True(t, known)
+			require.Empty(t, got)
 		})
 	}
 }
@@ -123,7 +223,7 @@ func BenchmarkImplemented_ssm(b *testing.B) {
 	handler := &ssmProvider{}
 
 	for b.Loop() {
-		got, known := service.Implemented(handler, ssmapi.Operations)
+		got, known := service.Implemented(handler, ssmapi.Operations, ssmapi.OperationMethod)
 		if !known || len(got) != 0 {
 			b.Fatalf("Implemented = %v, %v", got, known)
 		}

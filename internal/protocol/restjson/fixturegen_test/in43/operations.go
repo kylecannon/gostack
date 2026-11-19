@@ -4,6 +4,7 @@ package in43
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // TestBodyStructure returns awserr.NotImplemented.
 func (Unimplemented) TestBodyStructure(context.Context, *TestBodyStructureInput) (*TestBodyStructureOutput, error) {
 	return nil, awserr.NotImplemented("in43", "TestBodyStructure")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in43 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "TestBodyStructure":
+		return t.MethodByName("TestBodyStructure")
+	default:
+		return reflect.Method{}, false
+	}
 }

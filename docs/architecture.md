@@ -150,7 +150,7 @@ internal/
   dns/                       DNS server for *.localhost.localstack.cloud (DNS_ADDRESS=0 disables it)
   container/                 Lambda container lifecycle on the moby client
   tlscert/                   self-signed generation, custom cert, opt-in fetch
-  api/<svc>/                 GENERATED: types, operation enum, errors, codec, Handler interface, Unimplemented
+  api/<svc>/                 GENERATED: types, operation enum, errors, codec, Handler interface, Unimplemented, OperationMethod
   service/<svc>/             hand-written providers and state
 tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
@@ -533,7 +533,7 @@ follows add, migrate, delete.
 | `GET /_gostack/info` | version, uptime, config summary | `/_localstack/info` |
 | `GET /_gostack/init` | hook status per stage | `/_localstack/init[/<stage>]` |
 | `GET/PATCH /_gostack/config` | runtime config updates; only when `GOSTACK_ENABLE_CONFIG_UPDATES` (or `ENABLE_CONFIG_UPDATES`) is set | `/_localstack/config` (GET/POST) |
-| `GET /_gostack/services` | Capabilities per service, so coverage is stated honestly: `{services: {name: {state, implemented, total, operations}}}`, `operations` being the implemented ones, sorted. An operation is implemented when the provider declares its method instead of reaching the embedded generated `Unimplemented`; a reflection check at the first request finds which (see `service.Implemented`). A service author sets `Handler` to the provider in `Registration()`; without it `implemented` and `operations` are null | none |
+| `GET /_gostack/services` | Capabilities per service, so coverage is stated honestly: `{services: {name: {state, implemented, total, operations}}}`, `operations` being the implemented ones, sorted. An operation is implemented when the provider declares its method instead of reaching the embedded generated `Unimplemented`; a reflection check at the first request finds which (see `service.Implemented`), looking each method up through the generated `OperationMethod` that `Metadata` carries. A service author sets `Handler` to the provider in `Registration()`; without it `implemented` and `operations` are null | none |
 | `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate. `region=` matches the region a state is stored under, so a global service such as STS, stored under `global`, is cleared only by a reset with no `region` or with `region=global` | none |
 | `POST /_gostack/state/save`, `/_gostack/state/load` | Manual persistence triggers | none |
 | `/_gostack/services/<svc>/...` | Developer endpoints, listed below | `/_aws/<svc>/...` |

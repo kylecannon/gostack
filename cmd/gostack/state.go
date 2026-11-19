@@ -54,7 +54,7 @@ func (t *serviceTable) Capabilities() []internalapi.ServiceCapability {
 
 		for i := range t.regs {
 			metadata := &t.regs[i].Metadata
-			implemented, known := service.Implemented(t.regs[i].Handler, metadata.Operations)
+			implemented, known := service.Implemented(t.regs[i].Handler, metadata.Operations, metadata.OperationMethod)
 			t.capabilities = append(t.capabilities, internalapi.ServiceCapability{
 				Name:        metadata.Name,
 				Implemented: implemented,

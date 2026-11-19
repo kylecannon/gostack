@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -30,6 +31,11 @@ type Metadata struct {
 	// other hint. It is empty when the list is not known, and the service then
 	// stays a candidate for any Action.
 	Operations []string
+	// OperationMethod returns the method of a type that implements an
+	// operation, as the generated OperationMethod does. [Implemented] looks
+	// methods up only through it. It is nil when the service has no generated
+	// API, and the operations it implements are then unknown.
+	OperationMethod func(t reflect.Type, operation string) (reflect.Method, bool)
 }
 
 // Snapshotter saves and restores the whole state of a service. It has the

@@ -19,13 +19,14 @@ import (
 
 // Metadata describes the kms service.
 var Metadata = service.Metadata{
-	Name:           "kms",
-	SigningName:    "kms",
-	TargetPrefix:   "TrentService",
-	EndpointPrefix: "kms",
-	APIVersion:     "2014-11-01",
-	Protocols:      []protocol.Kind{protocol.KindJSON},
-	Operations:     Operations,
+	Name:            "kms",
+	SigningName:     "kms",
+	TargetPrefix:    "TrentService",
+	EndpointPrefix:  "kms",
+	APIVersion:      "2014-11-01",
+	Protocols:       []protocol.Kind{protocol.KindJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

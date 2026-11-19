@@ -4,6 +4,7 @@ package out16
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // HttpPayloadWithXmlNamespace returns awserr.NotImplemented.
 func (Unimplemented) HttpPayloadWithXmlNamespace(context.Context, *HttpPayloadWithXmlNamespaceInput) (*HttpPayloadWithXmlNamespaceOutput, error) {
 	return nil, awserr.NotImplemented("out16", "HttpPayloadWithXmlNamespace")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out16 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "HttpPayloadWithXmlNamespace":
+		return t.MethodByName("HttpPayloadWithXmlNamespace")
+	default:
+		return reflect.Method{}, false
+	}
 }

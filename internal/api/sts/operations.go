@@ -4,6 +4,7 @@ package sts
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -99,4 +100,36 @@ func (Unimplemented) GetSessionToken(context.Context, *GetSessionTokenInput) (*G
 // GetWebIdentityToken returns awserr.NotImplemented.
 func (Unimplemented) GetWebIdentityToken(context.Context, *GetWebIdentityTokenInput) (*GetWebIdentityTokenOutput, error) {
 	return nil, awserr.NotImplemented("sts", "GetWebIdentityToken")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the sts API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "AssumeRole":
+		return t.MethodByName("AssumeRole")
+	case "AssumeRoleWithSAML":
+		return t.MethodByName("AssumeRoleWithSAML")
+	case "AssumeRoleWithWebIdentity":
+		return t.MethodByName("AssumeRoleWithWebIdentity")
+	case "AssumeRoot":
+		return t.MethodByName("AssumeRoot")
+	case "DecodeAuthorizationMessage":
+		return t.MethodByName("DecodeAuthorizationMessage")
+	case "GetAccessKeyInfo":
+		return t.MethodByName("GetAccessKeyInfo")
+	case "GetCallerIdentity":
+		return t.MethodByName("GetCallerIdentity")
+	case "GetDelegatedAccessToken":
+		return t.MethodByName("GetDelegatedAccessToken")
+	case "GetFederationToken":
+		return t.MethodByName("GetFederationToken")
+	case "GetSessionToken":
+		return t.MethodByName("GetSessionToken")
+	case "GetWebIdentityToken":
+		return t.MethodByName("GetWebIdentityToken")
+	default:
+		return reflect.Method{}, false
+	}
 }

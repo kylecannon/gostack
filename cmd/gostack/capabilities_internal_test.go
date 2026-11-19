@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
@@ -34,24 +35,45 @@ type fakeProvider struct {
 func (p *fakeProvider) Two()  { p.calls++ }
 func (p *fakeProvider) Four() { p.calls++ }
 
+// The five operations of the fake service.
+const one, two, three, four, five = "One", "Two", "Three", "Four", "Five"
+
+// fakeOperationMethod is the fake service's OperationMethod, written as the
+// generator writes one.
+func fakeOperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case one:
+		return t.MethodByName(one)
+	case two:
+		return t.MethodByName(two)
+	case three:
+		return t.MethodByName(three)
+	case four:
+		return t.MethodByName(four)
+	case five:
+		return t.MethodByName(five)
+	default:
+		return reflect.Method{}, false
+	}
+}
+
 func Test_serviceTable_Capabilities(t *testing.T) {
 	const fake, unnamed = "fake", "unnamed"
 
-	operations := []string{"One", "Two", "Three", "Four", "Five"}
-	withHandler := service.Registration{
-		Metadata: service.Metadata{Name: fake, Operations: operations},
-		Handler:  &fakeProvider{},
-	}
+	operations := []string{one, two, three, four, five}
+	metadata := service.Metadata{Name: fake, Operations: operations, OperationMethod: fakeOperationMethod}
+	withHandler := service.Registration{Metadata: metadata, Handler: &fakeProvider{}}
 	// A service whose Registration does not name its handler still reports its
 	// total; what it implements is unknown.
-	withoutHandler := service.Registration{Metadata: service.Metadata{Name: unnamed, Operations: operations}}
+	metadata.Name = unnamed
+	withoutHandler := service.Registration{Metadata: metadata}
 	table := &serviceTable{
 		regs: []service.Registration{withHandler, withoutHandler},
 		eng:  persist.New(persist.Config{}),
 	}
 
 	want := []internalapi.ServiceCapability{
-		{Name: fake, Implemented: []string{"Two", "Four"}, Total: 5},
+		{Name: fake, Implemented: []string{two, four}, Total: 5},
 		{Name: unnamed, Unknown: true, Total: 5},
 	}
 	require.Equal(t, want, table.Capabilities())
