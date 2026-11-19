@@ -36,6 +36,8 @@ const (
 	// fanout is the number of directories under blobs: one per first byte of an
 	// id, all made when the assets are opened.
 	fanout = 256
+	// syncWorkers is how many fsyncs a save runs at once.
+	syncWorkers = 8
 )
 
 var (
@@ -75,14 +77,19 @@ type Referencer interface {
 // open, so no id or link takes it outside, and whatever else sits in assets,
 // such as localstack-persist's buckets, is never read, changed or removed.
 //
-// The files are ordered so that a crash never leaves a snapshot naming a file
-// that is gone. A new asset is fsynced and renamed into place before Commit
-// returns, so before any snapshot can name it, and a removed one is deleted
-// only after a snapshot that no longer names it is on disk. The exception is an
-// asset committed after the last save ended: no snapshot on disk or in flight
-// can name it, so Remove deletes it at once, which lets a full disk free what
-// the saves that cannot run would not. A crash in between leaves an orphan,
-// which the next Load removes. It is safe for concurrent use.
+// The files are ordered so that a crash, power loss included, never leaves a
+// snapshot naming a file that is gone. A new asset is renamed into place before
+// Commit returns, so before any snapshot can name it, and is fsynced, with its
+// directory, by the next save, after that save has taken its snapshot and
+// before it renames the snapshot into place. So no request waits for an fsync,
+// and a snapshot on disk names only assets that are on disk. A removed asset is
+// deleted only after a snapshot that no longer names it is on disk, with no
+// fsync: an unlink a crash loses leaves an orphan. The exception is an asset
+// committed after the last save ended: no snapshot on disk or in flight can
+// name it, so Remove deletes it at once, which lets a full disk free what the
+// saves that cannot run would not. A crash in between leaves an orphan, which
+// the next Load removes whatever a power loss left of it. It is safe for
+// concurrent use.
 type Assets struct {
 	root *os.Root
 	// dir is the directory the root is on, for the log.
@@ -110,11 +117,18 @@ type Assets struct {
 	// whose snapshot may name them. It is emptied when the save is durable or
 	// has failed, and a Remove of one of its ids waits for the next save.
 	capturing map[string]struct{}
+	// unsynced holds the ids committed and not yet fsynced. A save fsyncs them,
+	// with their directories, before its snapshot is renamed into place.
+	unsynced map[string]struct{}
 	// saving is true from begin to finish of a save of the service.
 	saving bool
 	// stuck is the cause of the last save or deletion error that left removals
 	// queued, or "" when the queue is not stuck. It is logged once per change.
 	stuck string
+
+	// fsync makes a file or a directory durable. Tests replace it to record the
+	// order of the syncs.
+	fsync func(f *os.File) error
 }
 
 // AssetWriter writes one asset into a temp file. Exactly one of Commit and
@@ -165,6 +179,8 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		committed: make(map[string]struct{}),
 		fresh:     make(map[string]struct{}),
 		capturing: make(map[string]struct{}),
+		unsynced:  make(map[string]struct{}),
+		fsync:     (*os.File).Sync,
 	}, nil
 }
 
@@ -225,6 +241,7 @@ func (a *Assets) Remove(id string) error {
 		delete(a.fresh, id)
 		delete(a.committed, id)
 		delete(a.removed, id)
+		delete(a.unsynced, id)
 	} else {
 		a.removed[id] = struct{}{}
 	}
@@ -264,9 +281,9 @@ func (w *AssetWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Commit fsyncs what was written, renames it to blobs/<id[0:2]>/<id> under a
-// new random id, fsyncs that directory, and returns the id and the size. On
-// error nothing is stored.
+// Commit renames what was written to blobs/<id[0:2]>/<id> under a new random
+// id and returns the id and the size. It does not fsync: the next save does,
+// before its snapshot is on disk. On error nothing is stored.
 func (w *AssetWriter) Commit() (string, int64, error) {
 	if w.err != nil {
 		err := w.err
@@ -303,15 +320,7 @@ func (w *AssetWriter) Abort() {
 func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	defer a.forget(tmp)
 
-	err := f.Sync()
-	if err != nil {
-		_ = f.Close()
-		_ = a.root.Remove(tmp)
-
-		return "", fmt.Errorf("sync asset: %w", err)
-	}
-
-	err = f.Close()
+	err := f.Close()
 	if err != nil {
 		_ = a.root.Remove(tmp)
 
@@ -329,10 +338,6 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	a.mu.Unlock()
 
 	err = a.root.Rename(tmp, path)
-	if err == nil {
-		err = syncDir(a.root, dir)
-	}
-
 	if err != nil {
 		_ = a.root.Remove(tmp)
 		_ = a.root.Remove(path)
@@ -353,7 +358,128 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 		a.fresh[id] = struct{}{}
 	}
 
+	a.unsynced[id] = struct{}{}
+
 	return id, nil
+}
+
+// sync fsyncs every asset committed and not yet synced, then each of their
+// directories once. A save calls it after it takes its snapshot and before it
+// renames the snapshot into place: a service names an id only once Commit has
+// returned, and Commit records the id before it returns, so every asset the
+// snapshot names is synced or was synced by an earlier save. An asset deleted
+// since its commit is skipped. On error the ids are kept for the next save,
+// and the save that called it must not rename its snapshot. It is nil-safe,
+// for a service with no assets.
+func (a *Assets) sync() error {
+	if a == nil {
+		return nil
+	}
+
+	a.mu.Lock()
+	ids := a.unsynced
+	a.unsynced = make(map[string]struct{})
+	a.mu.Unlock()
+
+	err := a.syncAll(ids)
+	if err != nil {
+		a.mu.Lock()
+		maps.Copy(a.unsynced, ids)
+		a.mu.Unlock()
+
+		return fmt.Errorf("sync assets: %w", err)
+	}
+
+	return nil
+}
+
+// syncAll fsyncs the assets named ids that are still there, then the directory
+// of each.
+func (a *Assets) syncAll(ids map[string]struct{}) error {
+	files := make([]string, 0, len(ids))
+
+	for id := range ids {
+		path, _ := assetPath(id) // commit made only valid ids.
+		files = append(files, path)
+	}
+
+	there, err := a.syncPaths(files)
+	if err != nil {
+		return err
+	}
+
+	dirs := make(map[string]struct{})
+	for _, path := range there {
+		dirs[dirOf(path)] = struct{}{}
+	}
+
+	_, err = a.syncPaths(slices.Collect(maps.Keys(dirs)))
+
+	return err
+}
+
+// syncPaths fsyncs paths, syncWorkers at a time, and returns the ones that are
+// there. A disk commits concurrent fsyncs together.
+func (a *Assets) syncPaths(paths []string) ([]string, error) {
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		there = make([]string, 0, len(paths))
+		errs  []error
+	)
+
+	next := make(chan string)
+
+	for range min(syncWorkers, len(paths)) {
+		wg.Go(func() {
+			for path := range next {
+				err := a.syncPath(path)
+
+				mu.Lock()
+
+				switch {
+				case err == nil:
+					there = append(there, path)
+				case !errors.Is(err, fs.ErrNotExist):
+					errs = append(errs, err)
+				default:
+				}
+
+				mu.Unlock()
+			}
+		})
+	}
+
+	for _, path := range paths {
+		next <- path
+	}
+
+	close(next)
+	wg.Wait()
+
+	return there, errors.Join(errs...)
+}
+
+// syncPath fsyncs the file or the directory at path in the root.
+func (a *Assets) syncPath(path string) error {
+	f, err := a.root.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+
+	err = a.fsync(f)
+	if err != nil {
+		_ = f.Close()
+
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
+
+	err = f.Close()
+	if err != nil {
+		return fmt.Errorf("close %s: %w", path, err)
+	}
+
+	return nil
 }
 
 func (a *Assets) forget(tmp string) {
@@ -544,6 +670,7 @@ func (a *Assets) apply(ids []string) error {
 
 	for _, id := range gone {
 		delete(a.committed, id)
+		delete(a.unsynced, id)
 	}
 
 	if first != nil {

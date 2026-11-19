@@ -682,9 +682,9 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 		outs = append(outs, w.buf)
 	}
 
-	err = p.snap.Snapshot(io.MultiWriter(outs...))
+	err = snapshot(p, io.MultiWriter(outs...))
 	if err != nil {
-		return nil, fmt.Errorf("snapshot: %w", err)
+		return nil, err
 	}
 
 	for _, w := range writers {
@@ -715,6 +715,18 @@ func (e *Engine) writeFormats(root *os.Root, p pendingService) (dirs []string, e
 	}
 
 	return dirs, nil
+}
+
+// snapshot writes the snapshot of one service to w, then fsyncs the assets
+// committed since the last save. Every asset the snapshot names is committed
+// by then, so it is on disk before the snapshot is.
+func snapshot(p pendingService, w io.Writer) error {
+	err := p.snap.Snapshot(w)
+	if err != nil {
+		return fmt.Errorf("snapshot: %w", err)
+	}
+
+	return p.assets.sync()
 }
 
 // loaded is what loading one service's state files did.

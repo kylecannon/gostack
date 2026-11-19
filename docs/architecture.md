@@ -730,13 +730,25 @@ is untouched.
   A volume swapped from localstack-persist keeps its buckets, including ones
   named `tmp` or `blobs`, through every load, save and reset.
 - Writing happens at request time. `Create` opens a temp file; `Commit` marks
-  the id as committed, renames the file into `blobs/`, fsyncs that directory
-  and returns the id, all before any snapshot can name the id. The mark comes
-  before the rename, so a load's sweep that lists the file also knows the id.
+  the id as committed, renames the file into `blobs/` and returns the id, all
+  before any snapshot can name the id. The mark comes before the rename, so a
+  load's sweep that lists the file also knows the id. A commit does not fsync.
+- A save makes the assets durable. After it takes the snapshot and before it
+  renames the snapshot into place, it fsyncs every asset committed since the
+  last save that synced, 8 at a time, then each of their `blobs/<xx>`
+  directories once. A service names an id only after `Commit` returns, and
+  `Commit` records the id before it returns, so every asset a snapshot names is
+  on disk before the snapshot is, an asset committed while the snapshot is
+  taken included. A failed sync fails the save and keeps the ids for the next
+  one. The timed save, the shutdown save and `POST /_gostack/state/save` all
+  take this path. With 1000 1 KiB assets pending, a save takes about 0.4 s on
+  a Linux Docker volume and 5 to 7 s on macOS, where Go's fsync is
+  `F_FULLFSYNC`.
 - `Remove` queues the id. A flush takes the queue before it takes the snapshot,
   and deletes those files once the snapshot is renamed into place and its
-  directory fsynced. A failed save keeps the queue; a deletion that fails is
-  retried after the next save.
+  directory fsynced. A deletion is not fsynced: if a crash loses it, the file
+  is an orphan the next load removes. A failed save keeps the queue; a
+  deletion that fails is retried after the next save.
 - The exception is an asset committed after the last save ended. No snapshot on
   disk or in flight can name it, so `Remove` deletes it at once. An asset
   committed before a save began or while it ran may be named by that snapshot,
@@ -746,8 +758,11 @@ is untouched.
 - A queue that cannot drain is logged once each time its error changes, with
   the number of ids waiting and the error, and once when it drains again.
 - A crash between a commit and the next snapshot leaves an orphan, and a crash
-  between a snapshot and its deletions leaves a file no snapshot names. No
-  order of crashes leaves a snapshot that names a missing file.
+  between a snapshot and its deletions leaves a file no snapshot names. A power
+  loss before the next save can leave an unsynced asset empty or cut short; no
+  snapshot names it, so it is an orphan too. No order of crashes or power
+  losses leaves a snapshot that names a missing or partial file. A process kill
+  (`docker kill`) loses nothing the page cache holds.
 - After a service's state loads, the engine deletes temp files no writer holds
   and every committed asset that neither the live state nor the file just
   loaded names. The file counts because a request that lands once `Restore`

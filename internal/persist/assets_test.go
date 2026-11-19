@@ -551,6 +551,36 @@ func Test_Assets_CrashBetweenCommitAndSnapshot(t *testing.T) {
 	assert.Empty(t, tempFiles(t, dir))
 }
 
+// Test_Assets_PowerLossBeforeTheSave is one of the crash-ordering tests. A
+// commit does not fsync, so a power loss before the next save can leave the
+// renamed file empty or cut short. No snapshot names it, and the next start
+// removes it like any orphan.
+func Test_Assets_PowerLossBeforeTheSave(t *testing.T) {
+	dir := t.TempDir()
+	e, s, a := openShelf(t, dir)
+
+	kept := put(t, a, "kept")
+	s.add(kept)
+	flush(t, e)
+
+	empty := put(t, a, "lost to the power cut")
+	torn := put(t, a, "cut short by the power cut")
+	s.add(empty)
+	s.add(torn) // in memory only: the power goes before the next flush
+
+	require.NoError(t, os.Truncate(blobFile(dir, empty), 0))
+	require.NoError(t, os.Truncate(blobFile(dir, torn), 3))
+
+	// The restart.
+	e2, s2, _ := openShelf(t, dir)
+	load(t, e2)
+
+	assert.Equal(t, []string{kept}, s2.names())
+	assert.FileExists(t, blobFile(dir, kept))
+	assert.NoFileExists(t, blobFile(dir, empty))
+	assert.NoFileExists(t, blobFile(dir, torn))
+}
+
 // Test_Assets_CrashBetweenSnapshotAndRemoval is one of the crash-ordering
 // tests. The removal of an asset fails after the snapshot without it is on disk,
 // which leaves the disk as a crash at that point does. The next commit removes
