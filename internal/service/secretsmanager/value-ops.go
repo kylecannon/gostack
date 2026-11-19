@@ -309,7 +309,8 @@ func (s *Secret) update(now time.Time, in *api.UpdateSecretInput) *awserr.Error 
 
 // BatchGetSecretValue reads the AWSCURRENT value of several secrets, by id or
 // by filter, as moto does: a secret not found or deleted becomes an entry of
-// Errors when named by id.
+// Errors when named by id, and a deleted secret a filter matches fails the
+// whole call with a 400.
 func (p *Provider) BatchGetSecretValue(
 	ctx context.Context, in *api.BatchGetSecretValueInput,
 ) (*api.BatchGetSecretValueOutput, error) {
@@ -370,7 +371,8 @@ type batch struct {
 
 // read reads the AWSCURRENT value of secret, which id named, or, with filters,
 // of a secret that matches them. A secret not found or deleted becomes an
-// entry of errors when named; any other failure fails the call.
+// entry of errors when named; any other failure, a deleted secret matched by
+// filter included, fails the call.
 func (b *batch) read(secret *Secret, id string, filters []api.Filter) *awserr.Error {
 	if secret == nil {
 		b.errors = append(b.errors, batchError(id, errSecretNotFound()))
@@ -384,10 +386,12 @@ func (b *batch) read(secret *Secret, id string, filters []api.Filter) *awserr.Er
 	switch {
 	case filters != nil && (secret.gone || !matches(secret, filters)):
 		return nil
+	case filters != nil && secret.deleted():
+		return api.NewInvalidRequestException(msgBatchDeleted)
 	case secret.gone:
 		b.errors = append(b.errors, batchError(id, errSecretNotFound()))
 	case secret.deleted():
-		b.errors = append(b.errors, batchError(id, api.NewInvalidRequestException(msgMarkedDeletedAlready)))
+		b.errors = append(b.errors, batchError(id, api.NewInvalidRequestException(msgBatchDeleted)))
 	default:
 		v, err := secret.value(nil, "")
 		if err != nil {

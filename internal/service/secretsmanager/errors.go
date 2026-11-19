@@ -23,6 +23,11 @@ const (
 	// prefix and all, for UpdateSecret and ListSecretVersionIds.
 	msgUpdateDeleted = "An error occurred (InvalidRequestException) when calling the UpdateSecret operation: " +
 		msgMarkedDelete
+	// msgBatchDeleted is moto's own get_secret_value text for a deleted secret,
+	// which BatchGetSecretValue reaches without LocalStack's override. The run
+	// of spaces is moto's: a backslash continuation inside its string literal.
+	msgBatchDeleted = "An error occurred (InvalidRequestException) when calling the GetSecretValue operation: " +
+		"You tried to                 perform the operation on a secret that's currently marked deleted."
 	msgCrossAccount = "You can't access a secret from a different AWS account if you encrypt the secret " +
 		"with the default KMS service key."
 	msgNoValue = "You must provide either SecretString or SecretBinary."
