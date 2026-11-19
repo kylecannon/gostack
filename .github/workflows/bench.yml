@@ -1,9 +1,9 @@
 name: bench
 
 # Runs every benchmark in the repo on the base and the head of a pull request,
-# compares them with benchstat, and fails on a regression over 10% at p<0.05
-# that bench/accepted.yaml does not hold (docs/standards.md, "Benchmarks"). The
-# comparison is `go run ./bench gate`.
+# interleaved (`make bench-ab`), compares them with benchstat, and fails on a
+# regression over 10% at p<0.05 that bench/accepted.yaml does not hold
+# (docs/standards.md, "Benchmarks"). The comparison is `go run ./bench gate`.
 
 on:
   pull_request:
@@ -42,14 +42,12 @@ jobs:
             base/go.sum
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
-      # The head's Makefile runs on both trees, so a base that predates
-      # `make bench` is still measured.
-      - name: Benchmark the base
-        working-directory: base
-        run: make -f ../head/Makefile bench BENCH_OUT="$GITHUB_WORKSPACE/base.txt"
-      - name: Benchmark the head
+      # The head's Makefile measures both trees in alternating rounds, so drift
+      # in the runner's speed over the job hits base and head alike, and a base
+      # that predates `make bench-ab` is still measured.
+      - name: Benchmark the base and the head, interleaved
         working-directory: head
-        run: make bench BENCH_OUT="$GITHUB_WORKSPACE/head.txt"
+        run: make bench-ab BASE=../base HEAD=. BENCH_BASE_OUT="$GITHUB_WORKSPACE/base.txt" BENCH_HEAD_OUT="$GITHUB_WORKSPACE/head.txt"
       - name: Compare
         id: compare
         run: |
