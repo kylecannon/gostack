@@ -35,7 +35,7 @@
 "tests/aws/services/kms/test_kms.py::TestKMS::test_encrypt_validate_plaintext_size_per_key_type[RSA_3072-RSAES_OAEP_SHA_256]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/kms/test_kms.py::TestKMS::test_encrypt_validate_plaintext_size_per_key_type[RSA_4096-RSAES_OAEP_SHA_1]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/kms/test_kms.py::TestKMS::test_encrypt_validate_plaintext_size_per_key_type[RSA_4096-RSAES_OAEP_SHA_256]": {"gostack": "pass", "localstack": "pass", "reason": ""},
-"tests/aws/services/kms/test_kms.py::TestKMS::test_error_messaging_for_invalid_keys": {"gostack": "fail", "localstack": "pass", "reason": ""},
+"tests/aws/services/kms/test_kms.py::TestKMS::test_error_messaging_for_invalid_keys": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/kms/test_kms.py::TestKMS::test_generate_and_verify_mac[HMAC_224-HMAC_SHA_224]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/kms/test_kms.py::TestKMS::test_generate_and_verify_mac[HMAC_256-HMAC_SHA_256]": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/kms/test_kms.py::TestKMS::test_generate_and_verify_mac[HMAC_384-HMAC_SHA_384]": {"gostack": "pass", "localstack": "pass", "reason": ""},
