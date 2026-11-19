@@ -29,8 +29,8 @@ FILES ?=
 # Parity oracle (docs/architecture.md, "Parity oracle"). Needs Docker.
 #   make parity-baseline SERVICES=sqs,sts   LocalStack's own result, built from the pinned checkout
 #   make parity SERVICES=sqs,sts            the same suite against GOSTACK_IMAGE
-#   make parity-check                       ledger unit tests, then fail when a test that passed in the committed ledger now fails
-#   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout
+#   make parity-check                       ledger unit tests, then fail when a gostack pass at PARITY_BASE stops passing unlisted in parity/demotions.yaml
+#   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout, listing passing ones in parity/demotions.yaml
 # Both runs merge into parity/ledger/<service>.json and rewrite docs/parity.md.
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
@@ -163,13 +163,14 @@ parity-baseline:
 	parity/run.sh localstack
 
 # Runs the ledger's unit tests, then compares the working-tree ledger with the
-# one at PARITY_BASE (default HEAD).
+# one at PARITY_BASE (default HEAD; parity.yml passes the merge base).
 parity-check:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s parity -p 'test_*.py'
 	python3 parity/ledger.py check --base $(PARITY_BASE)
 
 # Collects the tests of the pinned LocalStack checkout in the runner image and
-# removes the ledger rows whose test is gone. DRY_RUN=1 lists them and changes
+# removes the ledger rows whose test is gone; a removed gostack pass is written to
+# parity/demotions.yaml as gone upstream. DRY_RUN=1 lists them and changes
 # nothing (make takes a bare --dry-run for itself). LOCALSTACK_DIR picks the checkout.
 parity-prune:
 	python3 parity/ledger.py prune $(if $(LOCALSTACK_DIR),--localstack $(LOCALSTACK_DIR)) $(if $(DRY_RUN),--dry-run)

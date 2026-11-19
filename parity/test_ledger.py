@@ -148,6 +148,7 @@ class PruneTest(unittest.TestCase):
             dry_run=dry_run,
             localstack=None,
             cache=self.dir / "cache.json",
+            demotions=self.dir / "demotions.yaml",
         )
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -161,10 +162,28 @@ class PruneTest(unittest.TestCase):
         self.assertEqual(set(after), {f"{STS}::kept", f"{SQS}::kept"})
         self.assertTrue((self.dir / "parity.md").exists())
 
+    def test_a_removed_row_that_passed_in_gostack_is_written_as_a_demotion(self) -> None:
+        demotions = self.dir / "demotions.yaml"
+        demotions.write_text(f'"{SQS}::older": flaky upstream\n', encoding="utf-8")
+        self.prune(dry_run=False)
+        sha = ledger.pinned_localstack_sha()
+        # STS::gone passed in gostack; SQS::gone[a-b] never ran there, so it
+        # needs no demotion. The entry already there is kept, and the file is
+        # sorted.
+        self.assertEqual(
+            ledger.load_demotions(demotions),
+            {f"{SQS}::older": "flaky upstream", f"{STS}::gone": f"gone upstream at {sha}"},
+        )
+        text = demotions.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith(ledger.DEMOTIONS_HEADER))
+        self.assertEqual(text[len(ledger.DEMOTIONS_HEADER) :], f'"{SQS}::older": flaky upstream\n"{STS}::gone": gone upstream at {sha}\n')
+        self.assertRegex(sha, r"^[0-9a-f]{40}$")
+
     def test_dry_run_prints_the_same_list_and_changes_nothing(self) -> None:
         dry_out, after = self.prune(dry_run=True)
         self.assertEqual(after, self.before)
         self.assertFalse((self.dir / "parity.md").exists())
+        self.assertFalse((self.dir / "demotions.yaml").exists())
         real_out, _ = self.prune(dry_run=False)
         self.assertEqual(dry_out.replace("would remove", "removed"), real_out)
 
@@ -249,6 +268,17 @@ class LayoutTest(unittest.TestCase):
             ledger.load_ledger(self.dir)
         self.assertIn("belongs to sqs, not sts", str(raised.exception))
 
+    def test_a_nodeid_listed_twice_in_one_file_is_an_error(self) -> None:
+        # json.loads keeps the last one, so `pass` would hide the `fail`.
+        (self.dir).mkdir()
+        nodeid = json.dumps(f"{SQS}::b")
+        (self.dir / "sqs.json").write_text(
+            f'{{\n{nodeid}: {json.dumps(row("pass", "fail"))},\n{nodeid}: {json.dumps(row("pass", "pass"))}\n}}\n', encoding="utf-8"
+        )
+        with self.assertRaises(SystemExit) as raised:
+            ledger.load_ledger(self.dir)
+        self.assertIn(f"{SQS}::b listed twice", str(raised.exception))
+
     def test_a_file_named_for_no_service_is_an_error(self) -> None:
         ledger.write_ledger(self.dir, self.rows)
         (self.dir / "nope.json").write_text("{}\n", encoding="utf-8")
@@ -315,6 +345,17 @@ class ExclusionsTest(unittest.TestCase):
             f'"{STS}::a": a: b\n',
             f'"{STS}::a":\n',
             f'"{STS}::a": x\n"{STS}::a": y\n',
+            # The nine shapes PyYAML refuses that the parser used to accept
+            # (SQ-177 item6.out).
+            f'"{STS}::a": a\tb\n',
+            f'\t# c\n"{STS}::a": r\n',
+            f'"{STS}::a": .inf\n',
+            f'"{STS}::a": .NaN\n',
+            f'"{STS}::a": 0x1F\n',
+            f'"{STS}::a": 0b101\n',
+            f'"{STS}::a": =\n',
+            f'"{STS}::a": <<\n',
+            f'"{STS}::a": 2001-12-14 21:59:43.10 -5\n',
         ):
             with self.subTest(line=line):
                 self.write("sts", line)
@@ -337,6 +378,8 @@ class ExclusionsTest(unittest.TestCase):
         for path in ledger.service_files(ledger.EXCLUSIONS, ".yaml").values():
             loaded.update(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
         self.assertEqual(patterns, {k: v.strip() for k, v in loaded.items()})
+        demotions = yaml.safe_load(ledger.DEMOTIONS.read_text(encoding="utf-8")) or {}
+        self.assertEqual(ledger.load_demotions(ledger.DEMOTIONS), {k: v.strip() for k, v in demotions.items()})
 
 
 class CheckAgainstBaseTest(unittest.TestCase):
@@ -353,7 +396,8 @@ class CheckAgainstBaseTest(unittest.TestCase):
         self.exclusions = self.repo / "parity" / "exclusions"
         self.exclusions.mkdir(parents=True)
         (self.exclusions / "sts.yaml").write_text(f'"{STS}::iam": depends-on:iam\n', encoding="utf-8")
-        self.git("init", "-q")
+        self.demotions = self.repo / "parity" / "demotions.yaml"
+        self.git("init", "-q", "-b", "main")
         self.rows = {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("fail", None, "x")}
 
     def git(self, *argv: str) -> str:
@@ -365,7 +409,9 @@ class CheckAgainstBaseTest(unittest.TestCase):
         return self.git("rev-parse", "HEAD")
 
     def check(self, base: str) -> tuple[int, str]:
-        args = argparse.Namespace(ledger=self.dir, exclusions=self.exclusions, base=base, collected=self.repo / "none.json")
+        args = argparse.Namespace(
+            ledger=self.dir, exclusions=self.exclusions, demotions=self.demotions, base=base, collected=self.repo / "none.json"
+        )
         out = io.StringIO()
         with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             try:
@@ -428,14 +474,114 @@ class CheckAgainstBaseTest(unittest.TestCase):
     def test_a_service_file_deleted_while_the_single_file_base_has_its_rows_fails(self) -> None:
         self.assert_deleting_sqs_fails(self.legacy_base())
 
-    def test_a_row_removed_from_a_file_warns_and_passes_as_before(self) -> None:
+    def set_gostack(self, nodeid: str, status: str | None) -> None:
+        rows = ledger.load_ledger(self.dir)
+        rows[nodeid]["gostack"] = status
+        ledger.write_ledger(self.dir, rows)
+
+    def test_a_passing_gostack_row_that_stops_passing_in_any_way_fails_and_is_named(self) -> None:
+        base = self.split_base()
+
+        def remove_row() -> None:
+            rows = ledger.load_ledger(self.dir)
+            del rows[f"{SQS}::b"]
+            ledger.write_ledger(self.dir, rows)
+
+        def empty_file() -> None:
+            (self.dir / "sqs.json").write_text("{}\n", encoding="utf-8")
+
+        demotions = {status: (lambda s=status: self.set_gostack(f"{SQS}::b", s)) for status in ("fail", "skip", "xfail", "excluded", None)}
+        demotions.update({"missing": remove_row, "emptied file": empty_file})
+        for label, demote in demotions.items():
+            with self.subTest(demotion=label):
+                ledger.write_ledger(self.dir, self.rows)
+                demote()
+                code, out = self.check(base)
+                self.assertEqual(code, 1, out)
+                now = "missing" if label in ("missing", "emptied file") else label
+                self.assertIn(f"gostack: {SQS}::b: pass -> {now}", out)
+
+    def test_every_demoted_nodeid_is_named_not_only_the_first(self) -> None:
+        base = self.split_base()
+        self.set_gostack(f"{SQS}::b", "excluded")
+        self.set_gostack(f"{STS}::a", None)
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("2 regression(s)", out)
+        self.assertIn(f"gostack: {SQS}::b: pass -> excluded", out)
+        self.assertIn(f"gostack: {STS}::a: pass -> None", out)
+
+    def test_a_demotion_listed_with_a_reason_passes_and_is_printed(self) -> None:
+        base = self.split_base()
+        self.set_gostack(f"{SQS}::b", "excluded")
+        self.demotions.write_text(f'"{SQS}::b": needs the Docker socket since localstack/localstack#1\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"gostack: {SQS}::b: pass -> excluded (needs the Docker socket since localstack/localstack#1)", out)
+
+    def test_a_later_change_against_a_base_that_holds_the_demotion_passes(self) -> None:
+        self.split_base()
+        self.set_gostack(f"{SQS}::b", "fail")
+        self.demotions.write_text(f'"{SQS}::b": reviewed\n', encoding="utf-8")
+        demoted = self.commit("demote b")
+        # The next change touches something else; the entry stays and is valid.
+        rows = ledger.load_ledger(self.dir)
+        rows[f"{STS}::new"] = row("pass", "pass")
+        ledger.write_ledger(self.dir, rows)
+        code, out = self.check(demoted)
+        self.assertEqual(code, 0, out)
+
+    def test_an_entry_for_an_excluded_failing_or_absent_row_may_stay(self) -> None:
+        base = self.split_base()
+        self.demotions.write_text(f'"{SQS}::c": still failing\n"{SQS}::gone": pruned\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+
+    def test_a_demoted_test_that_passes_again_fails_until_its_entry_is_removed(self) -> None:
+        self.split_base()
+        self.set_gostack(f"{SQS}::b", "fail")
+        self.demotions.write_text(f'"{SQS}::b": reviewed\n', encoding="utf-8")
+        demoted = self.commit("demote b")
+        self.set_gostack(f"{SQS}::b", "pass")
+        code, out = self.check(demoted)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"demotions.yaml: {SQS}::b: passes in the gostack column again; remove the entry", out)
+        self.demotions.write_text("# none\n", encoding="utf-8")
+        self.assertEqual(self.check(demoted)[0], 0)
+
+    def test_a_stale_entry_fails_even_against_a_base_with_no_ledger(self) -> None:
+        (self.repo / "README").write_text("x\n", encoding="utf-8")
+        base = self.commit("no ledger")
+        ledger.write_ledger(self.dir, self.rows)
+        self.demotions.write_text(f'"{SQS}::b": reviewed\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("passes in the gostack column again", out)
+
+    def test_a_duplicate_or_reasonless_demotion_entry_is_refused(self) -> None:
+        base = self.split_base()
+        for text in (f'"{SQS}::c": one\n"{SQS}::c": two\n', f'"{SQS}::c":\n', f'"{SQS}::c": \n', f'"{SQS}::c": ""\n'):
+            with self.subTest(text=text):
+                self.demotions.write_text(text, encoding="utf-8")
+                self.assertEqual(self.check(base)[0], 1)
+
+    def test_the_transition_base_with_the_single_ledger_is_gated_the_same_way(self) -> None:
+        base = self.legacy_base()
+        self.set_gostack(f"{SQS}::b", "excluded")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"gostack: {SQS}::b: pass -> excluded", out)
+        self.demotions.write_text(f'"{SQS}::b": reviewed\n', encoding="utf-8")
+        self.assertEqual(self.check(base)[0], 0)
+
+    def test_the_localstack_column_fails_only_on_pass_to_fail(self) -> None:
         base = self.split_base()
         rows = ledger.load_ledger(self.dir)
-        del rows[f"{SQS}::b"]
+        rows[f"{SQS}::b"]["localstack"] = "skip"
         ledger.write_ledger(self.dir, rows)
         code, out = self.check(base)
         self.assertEqual(code, 0, out)
-        self.assertIn(f"gostack: {SQS}::b: pass -> missing", out)
+        self.assertIn(f"localstack: {SQS}::b: pass -> skip", out)
 
     def test_a_base_with_neither_layout_has_nothing_to_compare(self) -> None:
         (self.repo / "README").write_text("x\n", encoding="utf-8")
@@ -460,6 +606,167 @@ class CheckAgainstBaseTest(unittest.TestCase):
         code, out = self.check(base)
         self.assertNotEqual(code, 0)
         self.assertIn("matches sts tests, not sqs", out)
+
+
+WORKFLOW = ledger.ROOT / ".github" / "workflows" / "parity.yml"
+
+
+def step_script(workflow: Path, name: str) -> str:
+    """The `run: |` block of the step called name, dedented."""
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    start = lines.index(f"      - name: {name}")
+    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    indent = len(lines[run]) - len(lines[run].lstrip()) + 2
+    body = []
+    for line in lines[run + 1 :]:
+        if line.strip() and len(line) - len(line.lstrip()) < indent:
+            break
+        body.append(line[indent:])
+    return "\n".join(body) + "\n"
+
+
+class MergeBaseTest(unittest.TestCase):
+    """parity.yml compares a pull request with the merge base of its base and
+    head, and selects from the paths changed since then. These run the
+    workflow's own select step in a temporary repository: main moves on after
+    the branch forks."""
+
+    P = f"{SQS}::p"
+    R = f"{SQS}::r"
+
+    def setUp(self) -> None:
+        without_git_env(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name).resolve()
+        self.dir = self.repo / "parity" / "ledger"
+        self.dir.mkdir(parents=True)
+        (self.repo / "parity" / "ledger.py").write_bytes((ledger.ROOT / "parity" / "ledger.py").read_bytes())
+        (self.repo / "specs").mkdir()
+        (self.repo / "specs" / "SOURCES.lock").write_text(f"localstack_sha {'a' * 40}\n", encoding="utf-8")
+        (self.repo / "internal" / "service" / "sqs").mkdir(parents=True)
+        (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n", encoding="utf-8")
+        # P passes at the fork. R fails at the fork; main makes it pass later.
+        ledger.write_ledger(self.dir, {self.P: row("pass", "pass"), self.R: row("pass", "fail"), f"{STS}::a": row("pass", "pass")})
+        self.git("init", "-q", "-b", "main")
+        self.fork = self.commit("fork")
+        self.git("checkout", "-qb", "branch")
+        (self.repo / "internal" / "service" / "sqs" / "queue.go").write_text("package sqs\n\n// changed\n", encoding="utf-8")
+        self.head = self.commit("branch change")
+
+    def git(self, *argv: str) -> str:
+        return git_in(self.repo, *argv)
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+        return self.git("rev-parse", "HEAD")
+
+    def on_main(self, change) -> str:
+        self.git("checkout", "-q", "main")
+        change()
+        tip = self.commit("main moves on")
+        self.git("checkout", "-q", "branch")
+        return tip
+
+    def on_branch(self, change) -> None:
+        change()
+        self.head = self.commit("branch")
+
+    def set_gostack(self, nodeid: str, status: str) -> None:
+        rows = ledger.load_ledger(self.dir)
+        rows[nodeid]["gostack"] = status
+        ledger.write_ledger(self.dir, rows)
+
+    def select(self, base_sha: str) -> tuple[int, dict[str, str], str]:
+        """Run the workflow's select step as a pull_request event would."""
+        output, summary = self.repo / "gh-output", self.repo / "gh-summary"
+        env = {**os.environ, "EVENT": "pull_request", "BASE_SHA": base_sha, "HEAD_SHA": self.head, "REQUESTED": "", "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary)}
+        run = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", step_script(WORKFLOW, "Select the services")],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        outputs = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()) if output.exists() else {}
+        return run.returncode, outputs, run.stderr
+
+    def check(self, base: str) -> tuple[int, str]:
+        args = argparse.Namespace(
+            ledger=self.dir,
+            exclusions=self.repo / "parity" / "exclusions",
+            demotions=self.repo / "parity" / "demotions.yaml",
+            base=base,
+            collected=self.repo / "none.json",
+        )
+        out = io.StringIO()
+        with mock.patch.object(ledger, "ROOT", self.repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            try:
+                ledger.check(args)
+            except SystemExit as exit_:
+                return (exit_.code if isinstance(exit_.code, int) else 1), out.getvalue() + str(exit_.code)
+        return 0, out.getvalue()
+
+    def assert_selects_from_the_fork(self, tip: str) -> str:
+        code, outputs, stderr = self.select(tip)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(outputs["base"], self.fork)
+        self.assertEqual(outputs["services"], "s3,sqs")  # sqs changed; s3 calls it
+        return outputs["base"]
+
+    def test_a_service_file_main_added_after_the_fork_does_not_fail_the_branch(self) -> None:
+        def add_sns() -> None:
+            ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", "pass")})
+
+        tip = self.on_main(add_sns)
+        base = self.assert_selects_from_the_fork(tip)
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        # Against main's tip the branch would be blamed for a file it never had.
+        code, out = self.check(tip)
+        self.assertEqual(code, 1, out)
+        self.assertIn("ledger/sns.json: deleted", out)
+
+    def test_a_row_main_fixed_after_the_fork_is_compared_with_the_fork(self) -> None:
+        # R: fail at the fork, pass on main, fail on the branch. The right result
+        # is a pass: this head was built without main's fix, so its `fail` is
+        # what the fork recorded. ci.yml checks the merge ref, which holds
+        # main's `pass` for R, against main's tip.
+        tip = self.on_main(lambda: self.set_gostack(self.R, "pass"))
+        base = self.assert_selects_from_the_fork(tip)
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+        code, out = self.check(tip)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"gostack: {self.R}: pass -> fail", out)
+
+    def test_a_row_that_passed_at_the_fork_and_fails_on_the_branch_fails(self) -> None:
+        tip = self.on_main(lambda: (self.repo / "README.md").write_text("x\n", encoding="utf-8"))
+        self.on_branch(lambda: self.set_gostack(self.P, "fail"))
+        base = self.assert_selects_from_the_fork(tip)
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"gostack: {self.P}: pass -> fail", out)
+
+    def test_no_merge_base_fails_the_select_step(self) -> None:
+        self.git("checkout", "-q", "--orphan", "unrelated")
+        unrelated = self.commit("unrelated history")
+        self.git("checkout", "-q", "branch")
+        for base_sha in (unrelated, "f" * 40):
+            with self.subTest(base=base_sha):
+                code, outputs, stderr = self.select(base_sha)
+                self.assertNotEqual(code, 0)
+                self.assertIn("no merge base", stderr)
+                self.assertNotIn("services", outputs)
+
+    def test_the_check_step_compares_with_the_selected_merge_base(self) -> None:
+        script = step_script(WORKFLOW, "Fail on a regression")
+        self.assertIn("make parity-check", script)
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("PARITY_BASE: ${{ steps.select.outputs.base }}", text)
+        self.assertNotIn("PARITY_BASE: ${{ github.event.pull_request.base.sha", text)
 
 
 if __name__ == "__main__":

@@ -3,18 +3,26 @@ name: parity
 # LocalStack's own pytest suite, run unchanged against a gostack image built
 # from the pull request head (docs/architecture.md, "Parity oracle").
 #
-# The services come from the changed paths: internal/service/<svc>/,
-# parity/ledger/<svc>.json and parity/exclusions/<svc>.yaml select that
-# service, and a shared path (parity/ledger.py, SHARED_PATHS) selects every
-# service in the ledger. cmd/gostack/services.go is shared unless the change to
-# it only adds lines naming the changed services. A change to neither runs
-# nothing. A manual run takes a services input instead.
+# The pull request is compared with the merge base of its base and head, the
+# commit it forked from, never with the base branch's tip: a change that landed
+# there since is not in the head this job builds. No merge base fails the job.
+#
+# The services come from the paths changed since the merge base, read with
+# `git diff --name-only -z --no-renames` so a quoted name and both sides of a
+# rename are seen. `parity/ledger.py services --changed` holds the rules: a
+# path selects every service in the ledger unless it is one service's own
+# (internal/service/<svc>/, which also selects the services that call <svc> in
+# process, or parity/ledger/<svc>.json, parity/exclusions/<svc>.yaml), or
+# cannot change the image (NO_IMAGE_EFFECT). cmd/gostack/services.go selects
+# the services its changed lines name, or every service when a line names none.
+# A manual run takes a services input instead.
 #
 # CI never runs the LocalStack baseline. The localstack column of the committed
-# parity/ledger/<service>.json is the baseline, and `make parity-check` fails when a test
-# that passed there now fails. The suite comes from localstack/localstack at the
-# commit pinned in specs/SOURCES.lock. When GitHub cannot serve that commit the
-# job stops, and nothing is vendored in its place.
+# parity/ledger/<service>.json is the baseline. `make parity-check` fails when
+# a test that passed in the gostack column at the merge base no longer passes
+# and parity/demotions.yaml does not list it. The suite comes from
+# localstack/localstack at the commit pinned in specs/SOURCES.lock. When GitHub
+# cannot serve that commit the job stops, and nothing is vendored in its place.
 
 on:
   pull_request:
@@ -62,15 +70,17 @@ jobs:
         working-directory: gostack
         env:
           EVENT: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REQUESTED: ${{ inputs.services }}
         run: |
+          base=
           if [ "$EVENT" = workflow_dispatch ]; then
             services=${REQUESTED:-$(python3 parity/ledger.py services)}
           else
             [ -n "$BASE_SHA" ] || { echo "no base commit to compare with" >&2; exit 1; }
-            services=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | python3 parity/ledger.py services --changed --range "$BASE_SHA...$HEAD_SHA")
+            base=$(git merge-base "$BASE_SHA" "$HEAD_SHA") || { echo "no merge base of $BASE_SHA and $HEAD_SHA" >&2; exit 1; }
+            services=$(git diff --name-only -z --no-renames "$base" "$HEAD_SHA" | python3 parity/ledger.py services --changed --range "$base...$HEAD_SHA")
           fi
           case "$services" in
           *[!a-z0-9_,]*) echo "services '$services' is not a comma separated list of service names" >&2; exit 1 ;;
@@ -80,6 +90,7 @@ jobs:
           *[!0-9a-f]* | '') echo "specs/SOURCES.lock has no localstack_sha" >&2; exit 1 ;;
           esac
           [ "${#sha}" = 40 ] || { echo "localstack_sha '$sha' is not a full commit sha" >&2; exit 1; }
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           echo "services=$services" >> "$GITHUB_OUTPUT"
           echo "localstack_sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Services: ${services:-none, no changed path affects a service}. LocalStack: $sha" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -139,14 +150,21 @@ jobs:
           PARITY_RUNNER_PREBUILT: "1"
         run: make parity
 
-      # The ledger the change is compared with is the one at the base commit
-      # (the PR base, or the commit before a push), which fetch-depth 0 fetched.
+      # The ledger the change is compared with is the one at the merge base the
+      # select step computed, which fetch-depth 0 fetched. A manual run has no
+      # base and compares with HEAD.
       - name: Fail on a regression
         if: steps.select.outputs.services != ''
         working-directory: gostack
         env:
-          PARITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: make parity-check
+          EVENT: ${{ github.event_name }}
+          PARITY_BASE: ${{ steps.select.outputs.base }}
+        run: |
+          if [ "$EVENT" != workflow_dispatch ] && [ -z "$PARITY_BASE" ]; then
+            echo "no merge base to compare the ledger with" >&2
+            exit 1
+          fi
+          make parity-check
 
       - name: Report
         if: always() && steps.select.outputs.services != ''

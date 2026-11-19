@@ -102,19 +102,34 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
   `services` input) builds an image from the pull request head and runs
   LocalStack's own tests for the services the change touches against it, then
-  `make parity-check`. A change under `internal/service/<svc>/`, or to
-  `parity/ledger/<svc>.json` or `parity/exclusions/<svc>.yaml`, selects that
-  service. A change to a shared path (`internal/` outside a service, `cmd/`,
-  `codegen/`, `specs/`, `docker/`, the rest of `parity/`, `go.mod`, `go.sum`)
-  selects every service in the ledger. The job fails when a row goes
-  from pass to fail. `make parity-check` first runs the ledger's unit tests
-  (`parity/test_*.py`), which `ci.yml` also runs on every pull request in its
-  `parity-ledger` job. `make parity-prune` removes ledger rows whose test is
-  gone from the pinned LocalStack; `make parity-check` warns about them when a
-  collection is cached. `parity/ledger.py services --changed` holds the path
-  rules. CI does not run the LocalStack baseline; the committed ledger is the
-  baseline. The LocalStack suite comes from the commit in `specs/SOURCES.lock`,
-  and the runner image is cached on that sha and `parity/runner/`.
+  `make parity-check`. It compares with the merge base of the pull request's
+  base and head, and fails when there is none.
+  - Selection is fail-safe: a changed path selects every service in the ledger
+    unless it is one service's own path or cannot change the image.
+  - A service's own paths are `internal/service/<svc>/` (which also selects
+    the services that call `<svc>` in process), `parity/ledger/<svc>.json` and
+    `parity/exclusions/<svc>.yaml`.
+  - A change to `cmd/gostack/services.go` selects the services its changed
+    lines name, or every service when a changed line names none.
+  - `parity/ledger.py` lists the paths that cannot change the image
+    (`NO_IMAGE_EFFECT`) and the in-process callers (`IN_PROCESS_CALLS`).
+- **Parity ratchet** (`make parity-check`, in `parity.yml` and in `ci.yml`'s
+  `parity-ledger` job): a test that is `pass` in the gostack column of the
+  ledger at the base stays `pass`. Changing it to `fail`, `skip`, `xfail`,
+  `excluded` or null fails the check, and so do removing its row and emptying
+  its file. The check names every such nodeid.
+  - The one exit is an entry in `parity/demotions.yaml`: the nodeid and a
+    one-line reason, reviewed with the change.
+  - An entry whose test is `pass` again fails the check until it is removed.
+  - `make parity-prune` removes the rows whose test is gone from the pinned
+    LocalStack and writes each removed gostack pass there as gone upstream.
+  - The localstack column is not under the ratchet. Only its pass to fail
+    fails the check, and any other change there is a warning.
+  - `make parity-check` first runs the ledger's unit tests
+    (`parity/test_*.py`). CI does not run the LocalStack baseline; the
+    committed ledger is the baseline. The LocalStack suite comes from the
+    commit in `specs/SOURCES.lock`, and the runner image is cached on that sha
+    and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
   at p<0.05.

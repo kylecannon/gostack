@@ -84,8 +84,18 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
 ### Ledger (`parity/ledger/<service>.json`, committed)
 
 - Records nodeid to `{localstack, gostack, reason}`.
-- CI fails when any nodeid goes from pass to fail. A regression is never a
-  deferral.
+- A nodeid that is `pass` in the gostack column at the base stays `pass`.
+  CI fails when it becomes `fail`, `skip`, `xfail`, `excluded` or null, or
+  when its row or its file is removed, and names each nodeid. A regression is
+  never a deferral.
+- The one exit is `parity/demotions.yaml`, one shared file of nodeids, each
+  with a one-line reason, reviewed with the change. An entry whose test is
+  `pass` again fails CI until it is removed. `make parity-prune` writes each
+  gostack pass it removes there as gone upstream at the pinned LocalStack sha.
+- The localstack column is not under this rule: only its pass to fail fails
+  CI.
+- `parity.yml` compares a pull request with the merge base of its base and
+  head. `ci.yml` checks out the merge ref and compares it with the base tip.
 - A nodeid's service comes from its test directory (`TEST_DIRS` in
   `parity/ledger.py`). A nodeid in no service's directory, or in another
   service's file, is an error. `ledger.py check` reads the base in either
@@ -139,7 +149,7 @@ internal/
 tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
 specs/                       vendored botocore JSON + LocalStack patches + SOURCES.lock
-parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, scripts
+parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, demotions.yaml, scripts
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
 docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)
