@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,16 +20,15 @@ const (
 	noValue     = "n/a"
 
 	// reportSchema is the version of the result file. Version 1, the first
-	// system bench, had no cells and no fingerprint.
-	reportSchema = 2
+	// system bench, had no cells and no fingerprint. Version 2 had SQS's send,
+	// receive and delete as fields of a cell, and a cell id without a service.
+	// Version 3 keys a cell's operations by name and starts its id with the
+	// service and workload; loadReport converts version 2.
+	reportSchema = 3
 
-	// slowP99us is the p99 above which a cell at concurrency 16 is listed.
-	slowP99us   = 50_000
-	attentionAt = levelMid
-
-	opSend    = "send"
-	opReceive = "receive"
-	opDelete  = "delete"
+	// cycleColumns are the columns of a cell table after its operations: cycles a
+	// second, operations a second and peak RSS.
+	cycleColumns = 3
 )
 
 // report is the content of bench/results/<date>-<sha>.json.
@@ -69,15 +70,17 @@ type hostInfo struct {
 }
 
 type settings struct {
-	Profile          string  `json:"profile"`
-	StartupRuns      int     `json:"startup_runs"`
-	IdleRuns         int     `json:"idle_runs"`
-	SettleSeconds    float64 `json:"settle_seconds"`
-	IdleSeconds      float64 `json:"idle_seconds"`
-	CellSeconds      float64 `json:"cell_seconds"`
-	Reps             int     `json:"reps"`
-	Cycles           int     `json:"cycles"`
-	CycleConcurrency int     `json:"cycle_concurrency"`
+	Profile          string   `json:"profile"`
+	Services         []string `json:"services,omitempty"`
+	Notes            []string `json:"notes,omitempty"`
+	StartupRuns      int      `json:"startup_runs"`
+	IdleRuns         int      `json:"idle_runs"`
+	SettleSeconds    float64  `json:"settle_seconds"`
+	IdleSeconds      float64  `json:"idle_seconds"`
+	CellSeconds      float64  `json:"cell_seconds"`
+	Reps             int      `json:"reps"`
+	Cycles           int      `json:"cycles"`
+	CycleConcurrency int      `json:"cycle_concurrency"`
 }
 
 // spread is the minimum, median and maximum of the runs of one measurement.
@@ -107,73 +110,116 @@ type opSpread struct {
 	P99us  spread `json:"p99_us"`
 }
 
-// cellResult is every run of one cell.
+// cellResult is every run of one cell. Ops holds each operation the workload
+// timed, by name.
 type cellResult struct {
-	ID            string   `json:"id"`
-	Spec          cellSpec `json:"spec"`
-	Runs          int      `json:"runs"`
-	Send          opSpread `json:"send"`
-	Receive       opSpread `json:"receive"`
-	Delete        opSpread `json:"delete"`
-	CyclesPerSec  spread   `json:"cycles_per_sec"`
-	PeakRSSBytes  spread   `json:"peak_rss_bytes"`
-	CPUPercent    spread   `json:"cpu_percent"`
-	EmptyReceives int      `json:"empty_receives"`
-	Problem       string   `json:"problem,omitempty"`
+	ID           string              `json:"id"`
+	Spec         cellSpec            `json:"spec"`
+	Runs         int                 `json:"runs"`
+	Ops          map[string]opSpread `json:"ops"`
+	CyclesPerSec spread              `json:"cycles_per_sec"`
+	// OpsPerSec counts every timed operation of every kind, so a cycle of a put
+	// and a get is two.
+	OpsPerSec        spread         `json:"ops_per_sec"`
+	BaselineRSSBytes spread         `json:"baseline_rss_bytes"`
+	PeakRSSBytes     spread         `json:"peak_rss_bytes"`
+	CPUPercent       spread         `json:"cpu_percent"`
+	Counters         map[string]int `json:"counters,omitempty"`
+	Problem          string         `json:"problem,omitempty"`
 }
 
 // summarizeCell folds the runs of one cell.
-func summarizeCell(spec cellSpec, runs []cellRun) cellResult {
-	cell := cellResult{ID: spec.id(), Spec: spec, Runs: len(runs)}
+func summarizeCell(spec cellSpec, runs []runResult) cellResult {
+	cell := cellResult{ID: spec.id(), Spec: spec, Runs: len(runs), Ops: map[string]opSpread{}}
 
-	op := func(pick func(cellRun) opStats) opSpread {
-		p50, p99 := make([]float64, 0, len(runs)), make([]float64, 0, len(runs))
+	names := map[string]bool{}
 
-		out := opSpread{}
-
-		for _, run := range runs {
-			stats := pick(run)
-			out.Count += stats.Count
-			out.Errors += stats.Errors
-
-			p50 = append(p50, float64(stats.P50us))
-			p99 = append(p99, float64(stats.P99us))
+	for _, run := range runs {
+		for name := range run.Ops {
+			names[name] = true
 		}
-
-		out.P50us, out.P99us = spreadOf(p50), spreadOf(p99)
-
-		return out
 	}
 
-	cell.Send = op(func(r cellRun) opStats { return r.Send })
-	cell.Receive = op(func(r cellRun) opStats { return r.Receive })
-	cell.Delete = op(func(r cellRun) opStats { return r.Delete })
+	for name := range names {
+		cell.Ops[name] = foldOp(runs, name)
+	}
 
-	rate, peak, cpu := make([]float64, 0, len(runs)), make([]float64, 0, len(runs)), make([]float64, 0, len(runs))
+	n := len(runs)
+	rate, opsRate, base := make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
+	peak, cpu := make([]float64, 0, n), make([]float64, 0, n)
 
 	for _, run := range runs {
 		rate = append(rate, run.CyclesPerSec)
+		opsRate = append(opsRate, run.opsPerSec())
+		base = append(base, float64(run.Usage.BaselineRSSBytes))
 		peak = append(peak, float64(run.Usage.PeakRSSBytes))
 		cpu = append(cpu, run.Usage.CPUPercent)
-		cell.EmptyReceives += run.EmptyReceives
+
+		for name, n := range run.Counters {
+			if cell.Counters == nil {
+				cell.Counters = map[string]int{}
+			}
+
+			cell.Counters[name] += n
+		}
 	}
 
-	cell.CyclesPerSec, cell.PeakRSSBytes, cell.CPUPercent = spreadOf(rate), spreadOf(peak), spreadOf(cpu)
+	cell.CyclesPerSec, cell.OpsPerSec = spreadOf(rate), spreadOf(opsRate)
+	cell.BaselineRSSBytes, cell.PeakRSSBytes, cell.CPUPercent = spreadOf(base), spreadOf(peak), spreadOf(cpu)
 
 	return cell
 }
 
+// foldOp folds the latency of one operation over the runs that timed it.
+func foldOp(runs []runResult, name string) opSpread {
+	var (
+		out      opSpread
+		p50, p99 []float64
+	)
+
+	for _, run := range runs {
+		stats, ok := run.Ops[name]
+		if !ok {
+			continue
+		}
+
+		out.Count += stats.Count
+		out.Errors += stats.Errors
+
+		p50 = append(p50, float64(stats.P50us))
+		p99 = append(p99, float64(stats.P99us))
+	}
+
+	out.P50us, out.P99us = spreadOf(p50), spreadOf(p99)
+
+	return out
+}
+
+// opsPerSec is the operations of the run, of every kind, a second.
+func (r runResult) opsPerSec() float64 {
+	if r.Seconds <= 0 {
+		return 0
+	}
+
+	total := 0
+	for _, stats := range r.Ops {
+		total += stats.Count
+	}
+
+	return float64(total) / r.Seconds
+}
+
 // targetResult holds every measurement of one image. A measurement that could
-// not be taken is absent and named in Problems.
+// not be taken is absent and named in Problems. Agentic is by service.
 type targetResult struct {
-	Name       string        `json:"name"`
-	Image      string        `json:"image"`
-	ImageBytes uint64        `json:"image_bytes"`
-	Startup    startupResult `json:"startup"`
-	Idle       idleResult    `json:"idle"`
-	Cells      []cellResult  `json:"cells"`
-	Agentic    agenticRun    `json:"agentic"`
-	Problems   []string      `json:"problems,omitempty"`
+	Name       string                `json:"name"`
+	Image      string                `json:"image"`
+	ImageBytes uint64                `json:"image_bytes"`
+	Startup    startupResult         `json:"startup"`
+	Idle       idleResult            `json:"idle"`
+	Cells      []cellResult          `json:"cells"`
+	Agentic    map[string]agenticRun `json:"agentic,omitempty"`
+	Problems   []string              `json:"problems,omitempty"`
 }
 
 type startupResult struct {
@@ -222,16 +268,38 @@ func (r report) target(name string) (*targetResult, bool) {
 	return nil, false
 }
 
-// loadReport reads a result file. A file of schema 1 loads with no cells.
+var errNewerSchema = errors.New("result file is of a newer schema than this tool reads")
+
+// loadReport reads a result file. A file of schema 1 loads with no cells, and a
+// file of schema 2 is converted to schema 3.
 func loadReport(path string) (report, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // a path the user names
 	if err != nil {
 		return report{}, fmt.Errorf("read %s: %w", path, err)
 	}
 
+	var head struct {
+		Schema int `json:"schema"`
+	}
+
+	err = json.Unmarshal(raw, &head)
+	if err != nil {
+		return report{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+
+	if head.Schema > reportSchema {
+		return report{}, fmt.Errorf("%w: %s is schema %d, this tool reads up to %d",
+			errNewerSchema, path, head.Schema, reportSchema)
+	}
+
 	var rep report
 
-	err = json.Unmarshal(raw, &rep)
+	if head.Schema == schemaV2 {
+		rep, err = decodeV2(raw)
+	} else {
+		err = json.Unmarshal(raw, &rep)
+	}
+
 	if err != nil {
 		return report{}, fmt.Errorf("decode %s: %w", path, err)
 	}
@@ -290,10 +358,27 @@ func (r report) markdown() string {
 	}
 
 	r.agenticTable(&b)
-	r.attention(&b)
+	r.notes(&b)
+	r.flags(&b)
 	r.problemList(&b)
 
 	return b.String()
+}
+
+// notes writes the lines the run was given with -note: what the person who ran
+// it knows about the host or the build that the numbers do not say.
+func (r report) notes(b *strings.Builder) {
+	if len(r.Settings.Notes) == 0 {
+		return
+	}
+
+	b.WriteString("## Notes\n\n")
+
+	for _, note := range r.Settings.Notes {
+		b.WriteString("- " + note + "\n")
+	}
+
+	b.WriteString("\n")
 }
 
 func (r report) footprintTable(b *strings.Builder) {
@@ -315,6 +400,30 @@ func (r report) footprintTable(b *strings.Builder) {
 	fmt.Fprintln(b)
 }
 
+// workloadCells groups cells by the workload they belong to, in the order the
+// workloads first appear.
+func workloadCells(cells []cellResult) ([]cellSpec, [][]cellResult) {
+	var (
+		heads  []cellSpec
+		groups [][]cellResult
+	)
+
+	for _, c := range cells {
+		i := slices.IndexFunc(heads, func(h cellSpec) bool {
+			return h.Service == c.Spec.Service && h.Workload == c.Spec.Workload
+		})
+		if i < 0 {
+			heads = append(heads, c.Spec)
+			groups = append(groups, nil)
+			i = len(heads) - 1
+		}
+
+		groups[i] = append(groups[i], c)
+	}
+
+	return heads, groups
+}
+
 func cellTable(b *strings.Builder, t targetResult) {
 	fmt.Fprintf(b, "## Cells: %s\n\n", t.Name)
 
@@ -325,101 +434,87 @@ func cellTable(b *strings.Builder, t targetResult) {
 	}
 
 	b.WriteString("Milliseconds, p50 / p99, of each operation of the cell's cycle. Cycles/s is whole cycles " +
-		"(a batch cycle moves ten messages).\n\n")
-	b.WriteString("| Cell | Send | Receive | Delete | Cycles/s | Peak RSS |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|\n")
+		"(a batch cycle moves ten messages, a listing cycle pages through every key). Ops/s counts every " +
+		"timed operation.\n\n")
 
-	for _, c := range t.Cells {
-		if c.Problem != "" {
-			fmt.Fprintf(b, "| `%s` | %s | | | | |\n", c.ID, c.Problem)
+	heads, groups := workloadCells(t.Cells)
+	for i, cells := range groups {
+		fmt.Fprintf(b, "### %s/%s\n\n", heads[i].Service, heads[i].Workload)
 
-			continue
+		ops := orderedOps(heads[i].Service, heads[i].Workload, cells)
+
+		b.WriteString("| Cell | " + strings.Join(ops, " | ") + " | Cycles/s | Ops/s | Peak RSS |\n")
+		b.WriteString("|---|" + strings.Repeat("---:|", len(ops)+cycleColumns) + "\n")
+
+		for _, c := range cells {
+			if c.Problem != "" {
+				fmt.Fprintf(b, "| `%s` | %s |%s\n", c.ID, c.Problem, strings.Repeat(" |", len(ops)+cycleColumns-1))
+
+				continue
+			}
+
+			fmt.Fprintf(b, "| `%s` |", c.ID)
+
+			for _, op := range ops {
+				fmt.Fprintf(b, " %s |", opPair(c.Ops[op]))
+			}
+
+			fmt.Fprintf(b, " %.0f | %.0f | %s |\n", c.CyclesPerSec.Median, c.OpsPerSec.Median,
+				mib(uint64(c.PeakRSSBytes.Median)))
 		}
 
-		fmt.Fprintf(b, "| `%s` | %s | %s | %s | %.0f | %s |\n", c.ID, opPair(c.Send), opPair(c.Receive),
-			opPair(c.Delete), c.CyclesPerSec.Median, mib(uint64(c.PeakRSSBytes.Median)))
+		fmt.Fprintln(b)
+	}
+}
+
+// agenticServices lists the services some target has an agentic result for, and
+// the services this program can run one for.
+func (r report) agenticServices() []string {
+	seen := map[string]bool{}
+
+	for _, w := range agenticWorkloads {
+		if len(r.Settings.Services) == 0 || slices.Contains(r.Settings.Services, w.Service()) {
+			seen[w.Service()] = true
+		}
 	}
 
-	fmt.Fprintln(b)
+	for _, t := range r.Targets {
+		for service := range t.Agentic {
+			seen[service] = true
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func (r report) agenticTable(b *strings.Builder) {
 	b.WriteString("## Agentic workload\n\n")
-	fmt.Fprintf(b, "%d cycles of create queue, send 10, receive 10, delete queue, at concurrency %d.\n\n",
+	fmt.Fprintf(b, "%d cycles of create, use and delete per service, at concurrency %d.\n\n",
 		r.Settings.Cycles, r.Settings.CycleConcurrency)
-	b.WriteString("| Target | Total time | Cycle p50 / p99 | Errors | RSS before | Peak RSS |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| Target | Service | Total time | Cycle p50 / p99 | Errors | RSS before | Peak RSS |\n")
+	b.WriteString("|---|---|---:|---:|---:|---:|---:|\n")
 
-	for _, t := range r.Targets {
-		a := t.Agentic
-		if a.Cycles == 0 {
-			fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s |\n", t.Name, noValue, noValue, noValue, noValue, noValue)
+	for _, service := range r.agenticServices() {
+		for _, t := range r.Targets {
+			a := t.Agentic[service]
+			if a.Cycles == 0 {
+				fmt.Fprintf(b, "| %s | %s | %s | %s | %s | %s | %s |\n",
+					t.Name, service, noValue, noValue, noValue, noValue, noValue)
 
-			continue
+				continue
+			}
+
+			fmt.Fprintf(b, "| %s | %s | %.2f s | %.1f / %.1f ms | %d | %s | %s |\n", t.Name, service, a.Seconds,
+				a.CycleP50ms, a.CycleP99ms, a.Errors, mib(a.Usage.BaselineRSSBytes), mib(a.Usage.PeakRSSBytes))
 		}
-
-		fmt.Fprintf(b, "| %s | %.2f s | %.1f / %.1f ms | %d | %s | %s |\n", t.Name, a.Seconds, a.CycleP50ms, a.CycleP99ms,
-			a.Errors, mib(a.Usage.BaselineRSSBytes), mib(a.Usage.PeakRSSBytes))
 	}
 
 	fmt.Fprintln(b)
 }
 
-// attention lists the cells the task asks to see: where a gostack target is
-// slower than LocalStack, and where its p99 is over 50 ms at concurrency 16.
-// Both are observations, not failures.
-func (r report) attention(b *strings.Builder) {
-	var slower, slow []string
-
-	reference, hasReference := r.target(targetLocalstack)
-
-	for _, t := range r.Targets {
-		if !strings.HasPrefix(t.Name, targetGostack) {
-			continue
-		}
-
-		for _, c := range t.Cells {
-			if c.Problem != "" {
-				continue
-			}
-
-			if hasReference {
-				if ref, ok := reference.cell(c.ID); ok && ref.Problem == "" {
-					if why := slowerThan(c, ref); why != "" {
-						slower = append(slower, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, why))
-					}
-				}
-			}
-
-			slow = append(slow, slowTail(t.Name, c)...)
-		}
-	}
-
-	b.WriteString("## Cells where gostack is slower than LocalStack\n\n")
-	writeList(b, slower, "none (or LocalStack was not measured)")
-	b.WriteString("## Cells with p99 above 50 ms at concurrency 16\n\n")
-	writeList(b, slow, "none")
-}
-
-// slowTail lists the operations of a cell at concurrency 16 whose p99 is over 50 ms.
-func slowTail(target string, c cellResult) []string {
-	if c.Spec.Concurrency != attentionAt {
-		return nil
-	}
-
-	var lines []string
-
-	for _, o := range []struct {
-		name string
-		op   opSpread
-	}{{opSend, c.Send}, {opReceive, c.Receive}, {opDelete, c.Delete}} {
-		if o.op.P99us.Median > slowP99us {
-			lines = append(lines, fmt.Sprintf("- %s `%s`: %s p99 %.1f ms",
-				target, c.ID, o.name, o.op.P99us.Median/microsPerMilli))
-		}
-	}
-
-	return lines
+// opNames lists the operations of the cell in report order.
+func (c cellResult) opNames() []string {
+	return orderedOps(c.Spec.Service, c.Spec.Workload, []cellResult{c})
 }
 
 func writeList(b *strings.Builder, lines []string, none string) {
@@ -430,29 +525,6 @@ func writeList(b *strings.Builder, lines []string, none string) {
 	}
 
 	b.WriteString(strings.Join(lines, "\n") + "\n\n")
-}
-
-// slowerThan says how a gostack cell is slower than its LocalStack twin, by
-// median: fewer cycles a second, or a higher p50 on some operation. It returns
-// "" when it is not.
-func slowerThan(c, ref cellResult) string {
-	var reasons []string
-
-	if c.CyclesPerSec.Median < ref.CyclesPerSec.Median {
-		reasons = append(reasons, fmt.Sprintf("%.0f cycles/s against %.0f", c.CyclesPerSec.Median, ref.CyclesPerSec.Median))
-	}
-
-	for _, o := range []struct {
-		name      string
-		got, want opSpread
-	}{{opSend, c.Send, ref.Send}, {opReceive, c.Receive, ref.Receive}, {opDelete, c.Delete, ref.Delete}} {
-		if o.got.P50us.Median > o.want.P50us.Median && o.want.P50us.Median > 0 {
-			reasons = append(reasons, fmt.Sprintf("%s p50 %.2f ms against %.2f", o.name,
-				o.got.P50us.Median/microsPerMilli, o.want.P50us.Median/microsPerMilli))
-		}
-	}
-
-	return strings.Join(reasons, "; ")
 }
 
 func (r report) problemList(b *strings.Builder) {

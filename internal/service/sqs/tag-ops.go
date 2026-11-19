@@ -43,9 +43,12 @@ func (p *Provider) TagQueue(ctx context.Context, in *sqsapi.TagQueueInput) (*sqs
 	return &sqsapi.TagQueueOutput{}, nil
 }
 
-// checkTags refuses a tag whose key or value is not UTF-8, with the error that
-// LocalStack answers for characters SQS does not accept. Two keys that differ
+// checkTags refuses a tag whose key or value is not UTF-8. Two keys that differ
 // only in invalid bytes would be one key in a snapshot, and fail every save.
+// Neither protocol's reader lets such a tag through (a query "%FF" stays the
+// text "%FF", as in LocalStack, which answers 200; a json body that is not UTF-8
+// is refused first), so this guards callers that skip the readers. The error is
+// the message-body one, and no wire request meets it.
 func checkTags(tags map[string]string) *awserr.Error {
 	for key, value := range tags {
 		if !utf8.ValidString(key) || !utf8.ValidString(value) {

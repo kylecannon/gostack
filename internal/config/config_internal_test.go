@@ -59,6 +59,7 @@ func Test_Load_defaults(t *testing.T) {
 	require.Equal(t, 5*time.Second, got.ShutdownTimeout)
 	require.True(t, got.CompatPaths)
 	require.True(t, got.ResponseHeaderEnabled)
+	require.True(t, got.S3SkipSignatureValidation)
 	require.False(t, got.Debug)
 	require.False(t, got.FailFast)
 	require.False(t, got.EnableConfigUpdates)
@@ -79,6 +80,23 @@ func Test_Load_gatewayFlags(t *testing.T) {
 	require.True(t, cfg.Settings().ParityAWSAccessKeyID)
 	require.True(t, cfg.Settings().DisablePreflightProcessing)
 	require.Equal(t, true, cfg.Values()[varParityAWSAccessKeyID])
+}
+
+func Test_Load_disableCustomCORS(t *testing.T) {
+	isolate(t)
+	require.Empty(t, mustLoad(t).Settings().CustomCORSDisabled())
+
+	t.Setenv("DISABLE_CUSTOM_CORS_S3", "1")
+	cfg := mustLoad(t)
+
+	require.True(t, cfg.Settings().DisableCustomCORSS3)
+	require.False(t, cfg.Settings().DisableCustomCORSAPIGateway)
+	require.Equal(t, []string{"s3"}, cfg.Settings().CustomCORSDisabled())
+	require.Equal(t, true, cfg.Values()[varDisableCustomCORSS3])
+	require.Equal(t, false, cfg.Values()[varDisableCustomCORSAPIGateway])
+
+	require.NoError(t, cfg.Set(varDisableCustomCORSAPIGateway, true))
+	require.Equal(t, []string{"s3", "apigateway"}, cfg.Settings().CustomCORSDisabled())
 }
 
 func Test_Load_listenDefaultFollowsInDocker(t *testing.T) {
@@ -225,6 +243,14 @@ func Test_Load_variableForms(t *testing.T) {
 			check: func(t *testing.T, got *Settings) {
 				t.Helper()
 				require.False(t, got.ResponseHeaderEnabled)
+			},
+		},
+		{
+			name: "S3 signature checks are skipped unless the value is false",
+			give: map[string]string{varS3SkipSignatureValidation: "0"},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.False(t, got.S3SkipSignatureValidation)
 			},
 		},
 		{

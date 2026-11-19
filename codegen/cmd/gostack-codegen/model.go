@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -16,10 +17,31 @@ import (
 type ref struct {
 	name  string
 	shape *spec.Shape
-	loc   string
+	loc   string // the locationName trait
 	flat  bool
 	tsfmt string
+
+	// The rest protocol traits. binding is the location trait, spec.Location*,
+	// and "" for a body member.
+	binding      string
+	xmlns        *spec.XMLNamespace
+	xmlAttr      bool
+	streaming    bool
+	hostLabel    bool
+	eventPayload bool
+	eventHeader  bool
+	// jsonvalue marks a string header that carries json text in base64.
+	jsonvalue bool
 }
+
+// The Go types of the values the rest emitters treat apart.
+const (
+	typeBytes      = "[]byte"
+	typeStringPtr  = "*string"
+	typeDocument   = "jsontext.Value"
+	typeReader     = "io.Reader"
+	typeReadCloser = "io.ReadCloser"
+)
 
 // site says where a value sits. A struct member holds a scalar by pointer, so
 // absence shows as nil. A list element or map value holds it by value.
@@ -30,7 +52,7 @@ const (
 	siteElement
 )
 
-// direction says whether the query codec decodes a struct or encodes it.
+// direction says whether a codec decodes a struct or encodes it.
 type direction int
 
 const (
@@ -64,9 +86,14 @@ type structType struct {
 	queryShape *spec.Shape
 	fields     []*field
 	queryOrder []*field
-	decodeQ    bool
-	encodeQ    bool
+	// decodes and encodes mark a struct below an operation input, which a
+	// codec decodes, and one below an output or an error, which it encodes.
+	decodes    bool
+	encodes    bool
 	needsCheck bool
+	// payload is the field the shape's payload trait names, sent as the whole
+	// body by a rest protocol, or nil.
+	payload *field
 }
 
 // operation is one operation of the service.
@@ -76,6 +103,35 @@ type operation struct {
 	output      *structType
 	queryResult string
 	queryOutput bool
+	http        httpBinding
+	deprecated  bool
+	// outRoot is the root element of a rest-xml response body that has no
+	// payload member: the locationName of the operation's output reference, or
+	// of its shape, or else the shape's name, renamed by the service's
+	// ResponseRoots. outNS is the namespace that root declares. A request
+	// body's root is read under any name, so the input reference's traits are
+	// not kept.
+	outRoot string
+	outNS   *spec.XMLNamespace
+}
+
+// httpBinding is where a rest protocol puts an operation: its method, request
+// URI path and literal query, and the status of a successful response, 0 when
+// the model leaves it to the protocol.
+type httpBinding struct {
+	method string
+	path   []pathSegment
+	query  []spec.QueryLiteral
+	code   int
+}
+
+// pathSegment is one part of a request URI path between slashes: a literal, or
+// a label that binds the uri member of the input it names. A greedy label,
+// {Key+}, takes the rest of the path, slashes included.
+type pathSegment struct {
+	literal string
+	label   *field
+	greedy  bool
 }
 
 // exception is one error shape.
@@ -85,6 +141,9 @@ type exception struct {
 	status    int
 	sender    bool
 	queryCode string
+	// members are the members a rest error carries besides its message, nil
+	// when it has none.
+	members *structType
 }
 
 // generator holds one service's models and what is derived from them.
@@ -102,12 +161,29 @@ type generator struct {
 }
 
 const (
-	protoJSON  = "json"
-	protoQuery = "query"
+	protoJSON     = "json"
+	protoQuery    = "query"
+	protoRestJSON = "rest-json"
+	protoRestXML  = "rest-xml"
 )
 
 func (g *generator) hasProtocol(name string) bool {
 	return slices.Contains(g.protocols, name)
+}
+
+// isRest reports whether the service speaks rest-xml or rest-json.
+func (g *generator) isRest() bool {
+	return g.hasProtocol(protoRestXML) || g.hasProtocol(protoRestJSON)
+}
+
+// responseNS is the namespace the root element of a rest-xml response body
+// declares: the service's ResponseNamespace, or else ns, the model's.
+func (g *generator) responseNS(ns *spec.XMLNamespace) *spec.XMLNamespace {
+	if g.opts.ResponseNamespace != "" {
+		return &spec.XMLNamespace{URI: g.opts.ResponseNamespace}
+	}
+
+	return ns
 }
 
 // newGenerator reads the models of one service and works out its structs,
@@ -123,10 +199,27 @@ func newGenerator(name string, loader *spec.Loader) (*generator, error) {
 		return nil, fmt.Errorf("load %s: %w", name, err)
 	}
 
+	var q *spec.Service
+
+	if opts.QueryModel != "" {
+		q, err = loader.File(opts.QueryModel)
+		if err != nil {
+			return nil, fmt.Errorf("load %s query model: %w", name, err)
+		}
+	}
+
+	return newModel(name, opts, p, q)
+}
+
+// newModel works out the structs, operations and exceptions of a service from
+// its primary model p and, for a service whose query protocol another model
+// describes, that query model q.
+func newModel(name string, opts serviceOptions, p, q *spec.Service) (*generator, error) {
 	g := &generator{
 		name:      name,
 		opts:      opts,
 		p:         p,
+		q:         q,
 		ops:       map[string]*operation{},
 		structs:   map[string]*structType{},
 		rootNames: map[string]string{},
@@ -134,12 +227,7 @@ func newGenerator(name string, loader *spec.Loader) (*generator, error) {
 
 	g.protocols = declaredProtocols(p)
 
-	if opts.QueryModel != "" {
-		g.q, err = loader.File(opts.QueryModel)
-		if err != nil {
-			return nil, fmt.Errorf("load %s query model: %w", name, err)
-		}
-
+	if q != nil {
 		if !g.hasProtocol(protoQuery) {
 			g.protocols = append(g.protocols, protoQuery)
 		}
@@ -148,12 +236,20 @@ func newGenerator(name string, loader *spec.Loader) (*generator, error) {
 	}
 
 	for _, proto := range g.protocols {
-		if proto != protoJSON && proto != protoQuery {
+		switch proto {
+		case protoJSON, protoQuery, protoRestJSON, protoRestXML:
+		default:
 			return nil, fmt.Errorf("%s: protocol %q is not supported yet", name, proto)
 		}
 	}
 
-	err = g.build()
+	// A rest service routes, reads and writes errors its own way, so it
+	// speaks no other protocol beside its one rest protocol.
+	if g.isRest() && len(g.protocols) > 1 {
+		return nil, fmt.Errorf("%s: a rest protocol with another one, %v, is not supported", name, g.protocols)
+	}
+
+	err := g.build()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
@@ -172,28 +268,71 @@ func declaredProtocols(svc *spec.Service) []string {
 
 func (g *generator) build() error {
 	g.opNames = sortedKeys(g.p.Operations)
-
-	err := g.nameRoots()
-	if err != nil {
-		return err
-	}
+	g.nameRoots()
 
 	for _, name := range g.opNames {
-		err = g.buildOperation(name)
+		err := g.buildOperation(name)
 		if err != nil {
 			return fmt.Errorf("operation %s: %w", name, err)
 		}
 	}
 
+	g.streamPayloads()
+
+	err := g.buildExceptions()
+	if err != nil {
+		return err
+	}
+
 	g.markReachable()
 	g.markChecks()
 
-	return g.buildExceptions()
+	return nil
 }
 
-// nameRoots gives the input and output shape of each operation the Go name
-// <Operation>Input and <Operation>Output.
-func (g *generator) nameRoots() error {
+// streamPayloads types a streaming blob or string payload as a stream, so a
+// body is never buffered: an io.Reader in a request, an io.ReadCloser in a
+// response, which Serve closes once written. A struct that is the root of both
+// takes the io.ReadCloser, which is an io.Reader too.
+func (g *generator) streamPayloads() {
+	for _, name := range g.opNames {
+		op := g.ops[name]
+
+		for _, root := range []struct {
+			st  *structType
+			typ string
+		}{{op.input, typeReader}, {op.output, typeReadCloser}} {
+			f := root.st.payload
+			if f == nil || !f.pair.p.streaming || f.typ == typeReadCloser {
+				continue
+			}
+
+			if t := f.pair.p.shape.Type; t == spec.TypeBlob || t == spec.TypeString {
+				f.typ = root.typ
+			}
+		}
+	}
+}
+
+// nameRoots names the Go type of each operation's input and output shape. The
+// root of one operation is <Operation>Input or <Operation>Output. A shape that
+// several operations share keeps its own name, and they all use that one type:
+// S3's GetBucketNotification and GetBucketNotificationConfiguration both take
+// a GetBucketNotificationConfigurationRequest, and five lambda operations
+// answer with a FunctionConfiguration.
+func (g *generator) nameRoots() {
+	uses := map[string]int{}
+
+	for _, name := range g.opNames {
+		op := g.p.Operations[name]
+
+		for _, r := range []*spec.Ref{op.Input, op.Output} {
+			if r != nil {
+				uses[r.Shape]++
+			}
+		}
+	}
+
 	for _, name := range g.opNames {
 		op := g.p.Operations[name]
 
@@ -201,25 +340,33 @@ func (g *generator) nameRoots() error {
 			ref    *spec.Ref
 			suffix string
 		}{{op.Input, "Input"}, {op.Output, "Output"}} {
-			if root.ref == nil {
-				continue
+			switch {
+			case root.ref == nil:
+			case uses[root.ref.Shape] > 1:
+				g.rootNames[root.ref.Shape] = exportName(root.ref.Shape)
+			default:
+				g.rootNames[root.ref.Shape] = name + root.suffix
 			}
-
-			if prev, dup := g.rootNames[root.ref.Shape]; dup {
-				return fmt.Errorf("shape %s is the input or output of both %s and %s", root.ref.Shape, prev, name+root.suffix)
-			}
-
-			g.rootNames[root.ref.Shape] = name + root.suffix
 		}
 	}
-
-	return nil
 }
 
 func (g *generator) buildOperation(name string) error {
 	op := g.p.Operations[name]
-	out := &operation{name: name}
+	out := &operation{name: name, deprecated: op.Deprecated}
 	g.ops[name] = out
+
+	if op.Output != nil {
+		out.outRoot, out.outNS = op.Output.LocationName, op.Output.XMLNamespace
+
+		if shape := g.p.Shapes[op.Output.Shape]; shape != nil {
+			out.outRoot = cmp.Or(out.outRoot, shape.LocationName, op.Output.Shape)
+			out.outNS = cmp.Or(out.outNS, shape.XMLNamespace)
+		}
+
+		out.outRoot = cmp.Or(g.opts.ResponseRoots[out.outRoot], out.outRoot)
+		out.outNS = g.responseNS(out.outNS)
+	}
 
 	var err error
 
@@ -254,13 +401,77 @@ func (g *generator) buildOperation(name string) error {
 		}
 	}
 
-	return nil
+	if op.HTTP != nil {
+		out.http, err = bindHTTP(op.HTTP, out.input)
+	}
+
+	return err
+}
+
+// bindHTTP reads an operation's http trait and binds each label of its path to
+// the uri member of the input that the label names.
+func bindHTTP(h *spec.HTTP, input *structType) (httpBinding, error) {
+	b := httpBinding{method: h.Method, query: h.Query(), code: h.ResponseCode}
+
+	path := strings.TrimPrefix(h.Path(), "/")
+	if path == "" {
+		return b, nil
+	}
+
+	for part := range strings.SplitSeq(path, "/") {
+		inner, isLabel := strings.CutPrefix(part, "{")
+		if !isLabel {
+			if strings.ContainsAny(part, "{}") {
+				return b, fmt.Errorf("request URI %s: a label must be a whole path segment", h.RequestURI)
+			}
+
+			b.path = append(b.path, pathSegment{literal: part})
+
+			continue
+		}
+
+		label, ok := strings.CutSuffix(inner, "}")
+		if !ok || label == "" || strings.ContainsAny(label, "{}") {
+			return b, fmt.Errorf("request URI %s: malformed label %s", h.RequestURI, part)
+		}
+
+		seg := pathSegment{}
+		label, seg.greedy = strings.CutSuffix(label, "+")
+
+		for _, f := range input.fields {
+			if f.pair.p.binding == spec.LocationURI && wireName(f) == label {
+				seg.label = f
+			}
+		}
+
+		if seg.label == nil {
+			return b, fmt.Errorf("request URI %s: no uri member of %s is named %s", h.RequestURI, input.goName, label)
+		}
+
+		b.path = append(b.path, seg)
+	}
+
+	return b, nil
+}
+
+// wireName is the name a member has on the wire: its locationName, or else its
+// member name.
+func wireName(f *field) string {
+	if f.pair.p.loc != "" {
+		return f.pair.p.loc
+	}
+
+	return f.member
 }
 
 // rootStruct builds the struct of an operation's input or output. A missing
 // shape gives an empty struct, so every operation has both.
 func (g *generator) rootStruct(goName string, pr, qr *spec.Ref) (*structType, error) {
 	if pr == nil {
+		if _, taken := g.structs[goName]; taken {
+			return nil, fmt.Errorf("the Go type %s of an absent root is a shape's as well", goName)
+		}
+
 		st := &structType{goName: goName}
 		g.structs[goName] = st
 
@@ -286,11 +497,16 @@ func (g *generator) rootStruct(goName string, pr, qr *spec.Ref) (*structType, er
 // structure below it, once.
 func (g *generator) structFor(shapeName string) (*structType, error) {
 	goName := g.goTypeName(shapeName)
+	shape := g.p.Shapes[shapeName]
+
 	if st, ok := g.structs[goName]; ok {
+		if st.shape != shape {
+			return nil, fmt.Errorf("shape %s and another shape would both be the Go type %s", shapeName, goName)
+		}
+
 		return st, nil
 	}
 
-	shape := g.p.Shapes[shapeName]
 	if shape == nil || shape.Type != spec.TypeStructure {
 		return nil, fmt.Errorf("shape %s is not a structure", shapeName)
 	}
@@ -306,10 +522,18 @@ func (g *generator) structFor(shapeName string) (*structType, error) {
 
 		st.fields = append(st.fields, f)
 
+		if m.Name == shape.Payload {
+			st.payload = f
+		}
+
 		err = g.buildNested(f.pair.p)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	if shape.Payload != "" && st.payload == nil {
+		return nil, fmt.Errorf("shape %s has no payload member %s", shapeName, shape.Payload)
 	}
 
 	// A root shape is matched to the query model's through its operation, in
@@ -327,6 +551,10 @@ func (g *generator) structFor(shapeName string) (*structType, error) {
 
 // buildNested builds the structs a member's type refers to.
 func (g *generator) buildNested(r ref) error {
+	if r.shape.Document {
+		return nil
+	}
+
 	switch r.shape.Type {
 	case spec.TypeStructure:
 		_, err := g.structFor(r.name)
@@ -362,9 +590,13 @@ func (g *generator) newField(shape *spec.Shape, m spec.Member) (*field, error) {
 		return nil, err
 	}
 
-	err = g.checkJSONTimestamp(r)
-	if err != nil {
-		return nil, err
+	// A member bound outside the body holds its timestamps in the formats of
+	// its location, which package rest reads and writes.
+	if r.binding == "" {
+		err = g.checkJSONTimestamp(r)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	jsonName := m.Name
@@ -438,9 +670,14 @@ func (g *generator) goTypeName(shape string) string {
 
 // goType is the Go type of a shape reference at the given site.
 func (g *generator) goType(r ref, at site) (string, error) {
+	// A document is any json value, kept as its text. nil is absent.
+	if r.shape.Document {
+		return typeDocument, nil
+	}
+
 	scalar, ok := scalarTypes[r.shape.Type]
 	if ok {
-		if at == siteMember && scalar != "[]byte" && scalar != "*protocol.Time" {
+		if at == siteMember && scalar != typeBytes && scalar != "*protocol.Time" {
 			return "*" + scalar, nil
 		}
 
@@ -508,26 +745,42 @@ func resolve(svc *spec.Service, r *spec.Ref) (ref, error) {
 		return ref{}, fmt.Errorf("unknown shape %q", r.Shape)
 	}
 
-	out := ref{name: r.Shape, shape: shape, loc: shape.LocationName, flat: shape.Flattened, tsfmt: shape.TimestampFormat}
-	if r.LocationName != "" {
-		out.loc = r.LocationName
+	out := ref{
+		name:         r.Shape,
+		shape:        shape,
+		loc:          shape.LocationName,
+		flat:         shape.Flattened || r.Flattened,
+		tsfmt:        shape.TimestampFormat,
+		binding:      r.Location,
+		xmlns:        shape.XMLNamespace,
+		xmlAttr:      r.XMLAttribute,
+		streaming:    shape.Streaming || r.Streaming,
+		hostLabel:    r.HostLabel,
+		eventPayload: r.EventPayload,
+		eventHeader:  r.EventHeader,
+		jsonvalue:    shape.JSONValue || r.JSONValue,
 	}
 
-	if r.Flattened {
-		out.flat = true
+	if r.LocationName != "" {
+		out.loc = r.LocationName
 	}
 
 	if r.TimestampFormat != "" {
 		out.tsfmt = r.TimestampFormat
 	}
 
+	if r.XMLNamespace != nil {
+		out.xmlns = r.XMLNamespace
+	}
+
 	return out, nil
 }
 
-// markReachable flags the structs the query codec has to decode, those below an
-// operation input, and to encode, those below an output.
+// markReachable flags the structs the query or rest codec has to decode, those
+// below an operation input, and to encode, those below an output or the
+// members of a rest error.
 func (g *generator) markReachable() {
-	if g.q == nil {
+	if g.q == nil && !g.isRest() {
 		return
 	}
 
@@ -535,12 +788,18 @@ func (g *generator) markReachable() {
 		g.markStruct(g.ops[name].input, decoding)
 		g.markStruct(g.ops[name].output, encoding)
 	}
+
+	for _, ex := range g.exceptions {
+		if ex.members != nil {
+			g.markStruct(ex.members, encoding)
+		}
+	}
 }
 
 func (g *generator) markStruct(st *structType, dir direction) {
-	flag := &st.encodeQ
+	flag := &st.encodes
 	if dir == decoding {
-		flag = &st.decodeQ
+		flag = &st.decodes
 	}
 
 	if *flag {
@@ -559,6 +818,10 @@ func (g *generator) markStruct(st *structType, dir direction) {
 // nestedStructs lists the structure shapes directly below a type: the type
 // itself, or the element of a list or map.
 func (g *generator) nestedStructs(r ref) []string {
+	if r.shape.Document {
+		return nil
+	}
+
 	switch r.shape.Type {
 	case spec.TypeStructure:
 		return []string{r.name}

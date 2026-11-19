@@ -1,0 +1,2 @@
+go test fuzz v1
+string("<AccessControlPolicy><AccessControlList><Grant><Grantee xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"CanonicalUser\"><ID>1</ID></Grantee><Permission>READ</Permission></Grant></AccessControlList></AccessControlPolicy>")

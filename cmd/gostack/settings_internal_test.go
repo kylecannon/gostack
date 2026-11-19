@@ -2,12 +2,31 @@ package main
 
 import (
 	"testing"
-	"time"
 
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func Test_s3Settings(t *testing.T) {
+	t.Setenv("GATEWAY_LISTEN", "127.0.0.1:4570,127.0.0.1:4571")
+	t.Setenv("S3_SKIP_SIGNATURE_VALIDATION", "1")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	settings := s3Settings(cfg)
+	got := settings()
+
+	assert.False(t, got.ValidateSignatures)
+	assert.Equal(t, 4570, got.GatewayPort)
+
+	t.Run("the config bridge's false turns validation on", func(t *testing.T) {
+		require.NoError(t, cfg.Set("S3_SKIP_SIGNATURE_VALIDATION", false))
+
+		assert.True(t, settings().ValidateSignatures)
+	})
+}
 
 func Test_settingsFunc(t *testing.T) {
 	t.Setenv("GATEWAY_LISTEN", "127.0.0.1:4570,127.0.0.1:4571")
@@ -15,7 +34,7 @@ func Test_settingsFunc(t *testing.T) {
 	t.Setenv("DISABLE_PREFLIGHT_PROCESSING", "1")
 	t.Setenv("EXTRA_CORS_ALLOWED_ORIGINS", "https://a.example,https://b.example")
 	t.Setenv("GOSTACK_LOCALSTACK_HOST", "stack.test:4570")
-	t.Setenv("SHUTDOWN_TIMEOUT", "7")
+	t.Setenv("DISABLE_CUSTOM_CORS_S3", "1")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -28,8 +47,8 @@ func Test_settingsFunc(t *testing.T) {
 	assert.True(t, got.DisablePreflightProcessing)
 	assert.Equal(t, "https://a.example,https://b.example", got.ExtraCORSAllowedOrigins)
 	assert.Equal(t, "stack.test", got.LocalstackHost)
-	assert.Equal(t, 7*time.Second, got.ShutdownTimeout)
 	assert.True(t, got.ResponseHeaderEnabled)
+	assert.Equal(t, []string{"s3"}, got.DisableCustomCORS)
 
 	t.Run("an update through the config shows from the next call on", func(t *testing.T) {
 		require.NoError(t, cfg.Set("FAIL_FAST", true))

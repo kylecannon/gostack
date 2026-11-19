@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kylecannon/gostack/internal/account"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/service"
 )
@@ -55,8 +56,13 @@ type Table struct {
 	// claims holds the Registration.Claim of each service, by index. It is nil
 	// in the known table, which has no claims.
 	claims []func(*http.Request) bool
+	// defaults maps a signing name to the index of its Registration.SigningDefault.
+	defaults map[string]int
 	// hostClaims are the services with a Registration.ClaimHost.
 	hostClaims []hostClaim
+	// fallbacks are the services with a Registration.Fallback, in registration
+	// order.
+	fallbacks []requestClaim
 	// known detects the services LocalStack has, registered or not. It is nil in
 	// that table itself.
 	known *Table
@@ -72,13 +78,24 @@ type hostClaim struct {
 	claim func(host string) bool
 }
 
+type requestClaim struct {
+	index int
+	claim func(*http.Request) bool
+}
+
 // NewTable builds the detection table for the registered services. It fails on
 // a service without a name or protocol, and on two services with the same name.
+// It panics on two SigningDefault services with one signing name, which is a
+// mistake in the code that registers them.
 func NewTable(regs []service.Registration) (*Table, error) {
 	metadata := make([]service.Metadata, len(regs))
 	claims := make([]func(*http.Request) bool, len(regs))
+	defaults := make(map[string]int)
 
-	var hostClaims []hostClaim
+	var (
+		hostClaims []hostClaim
+		fallbacks  []requestClaim
+	)
 
 	for i := range regs {
 		metadata[i] = regs[i].Metadata
@@ -87,6 +104,19 @@ func NewTable(regs []service.Registration) (*Table, error) {
 		if regs[i].ClaimHost != nil {
 			hostClaims = append(hostClaims, hostClaim{index: i, claim: regs[i].ClaimHost})
 		}
+
+		if regs[i].Fallback != nil {
+			fallbacks = append(fallbacks, requestClaim{index: i, claim: regs[i].Fallback})
+		}
+
+		if signing := regs[i].Metadata.SigningName; regs[i].SigningDefault && signing != "" {
+			if other, dup := defaults[signing]; dup {
+				panic(fmt.Sprintf("services %q and %q are both the SigningDefault of signing name %q",
+					regs[other].Metadata.Name, regs[i].Metadata.Name, signing))
+			}
+
+			defaults[signing] = i
+		}
 	}
 
 	t, err := buildTable(metadata)
@@ -94,7 +124,7 @@ func NewTable(regs []service.Registration) (*Table, error) {
 		return nil, err
 	}
 
-	t.claims, t.hostClaims = claims, hostClaims
+	t.claims, t.defaults, t.hostClaims, t.fallbacks = claims, defaults, hostClaims, fallbacks
 
 	t.known, err = buildTable(knownServices)
 	if err != nil {
@@ -180,38 +210,61 @@ func buildTable(services []service.Metadata) (*Table, error) {
 }
 
 // Detect finds the service and protocol that r is addressed to. It looks, in
-// this order, at the signing name in the Authorization credential scope, the
-// X-Amz-Target prefix, the host, and the form Action with Version as the
-// tie-break, and returns at the first step that leaves a single service.
+// this order, at the service a Preprocess marked r for (service.Own), the
+// signing name of the Authorization header (account.FromAuthorization), the
+// X-Amz-Target prefix, the host, the form Action with Version as the
+// tie-break, and last each Registration.Fallback. It returns at the first step
+// that leaves a single service.
+//
+// The mark comes ahead of every other step, as LocalStack's ServiceNameParser
+// keeps the service an earlier handler set (aws/handlers/service.py:38). A mark
+// that names no service in the table is ignored. A request that Claim took by
+// its host is not detected at all, so a mark never takes it from its claimant:
+// the gateway keeps other services' Preprocess from marking it.
 //
 // form returns the merged query string and form body parameters. It is called
 // only when the earlier steps leave the request open, and may be nil.
 //
+// The signing name is the header's alone, as service_router.py:64-77 reads it:
+// the scope of a presigned URL names no service here.
+//
 // A signing name that several services share goes to the one of them whose
-// Registration.Claim alone claims r, as service_router.py's
-// custom_signing_name_rules does right after its signing-name step. Its
-// fallback, which sends a request no rule matches to the service named after
-// the signing name, is not here: the service that needs it says so with its
-// own Claim.
+// Registration.Claim alone claims r, and when none claims it to the one marked
+// SigningDefault, as service_router.py's custom_signing_name_rules does right
+// after its signing-name step.
+//
+// A signing name that no registered service has and a service LocalStack has
+// does is that service's call, which Unregistered names: Detect returns
+// ErrNoService at once, before any Fallback can take the request, as LocalStack
+// routes it to the service and then answers that it is not enabled
+// (service_router.py:374-379). When the other indicators point at a registered
+// service instead, Unregistered names none and detection goes on.
+//
+// The host step skips a host that contains ".s3.", so a virtual-host bucket
+// named after another service's endpoint prefix is not that service's
+// (service_router.py:428).
 //
 // The form step is LocalStack's service_router.py step 5: the query services
 // that have the Action are the candidates, and Version narrows them when more
 // than one is left. A service whose Metadata lists no Operations has any
-// Action. Detect reports AmbiguousError when more than one service is left.
+// Action.
+//
+// The Fallback step is LocalStack's legacy_s3_rules, which runs after every
+// other step, even when they leave more than one service. The first Fallback
+// in registration order to claim r wins. Detect reports AmbiguousError when no
+// Fallback claims r and more than one service is left.
 func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
-	var candidates []int
+	if owner := t.index(service.OwnerOf(r)); owner >= 0 {
+		return t.match(owner, r)
+	}
 
-	if signing := signingName(r.Header.Get("Authorization")); signing != "" {
-		found := t.bySigning[signing]
-		if len(found) == 1 {
-			return t.match(found[0], r)
-		}
+	signed, candidates, err := t.bySigningName(r)
+	if err != nil {
+		return Match{}, err
+	}
 
-		if i, ok := t.claimedAmong(found, r); ok {
-			return t.match(i, r)
-		}
-
-		candidates = union(candidates, found)
+	if signed >= 0 {
+		return t.match(signed, r)
 	}
 
 	if prefix, operation := target(r.Header.Get("X-Amz-Target")); prefix != "" && operation != "" {
@@ -230,17 +283,12 @@ func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
 		return t.match(candidates[0], r)
 	}
 
-	for _, e := range t.endpoints {
-		if !hasHostPrefix(r.Host, e.prefix) {
-			continue
-		}
-
-		if len(e.services) == 1 {
-			return t.match(e.services[0], r)
-		}
-
-		candidates = union(candidates, e.services)
+	hosted := t.byHost(r.Host)
+	if len(hosted) == 1 {
+		return t.match(hosted[0], r)
 	}
+
+	candidates = union(candidates, hosted)
 
 	if form != nil {
 		found := t.queryCandidates(form())
@@ -251,14 +299,87 @@ func (t *Table) Detect(r *http.Request, form func() url.Values) (Match, error) {
 		candidates = union(candidates, found)
 	}
 
-	switch len(candidates) {
-	case 0:
-		return Match{}, ErrNoService
-	case 1:
+	if len(candidates) == 1 {
 		return t.match(candidates[0], r)
-	default:
-		return Match{}, t.ambiguous(candidates)
 	}
+
+	if i, ok := t.fallback(r); ok {
+		return t.match(i, r)
+	}
+
+	if len(candidates) == 0 {
+		return Match{}, ErrNoService
+	}
+
+	return Match{}, t.ambiguous(candidates)
+}
+
+// bySigningName is Detect's signing-name step. It returns the index of the
+// service the signing name settles on, or -1 and the services that share it. It
+// returns ErrNoService for a call to a service LocalStack has and gostack does
+// not run.
+func (t *Table) bySigningName(r *http.Request) (int, []int, error) {
+	signing := signingName(r)
+	if signing == "" {
+		return -1, nil, nil
+	}
+
+	found := t.bySigning[signing]
+	if len(found) == 1 {
+		return found[0], nil, nil
+	}
+
+	if i, ok := t.claimedAmong(signing, found, r); ok {
+		return i, nil, nil
+	}
+
+	if len(found) == 0 && t.known != nil && len(t.known.bySigning[signing]) > 0 {
+		if _, ok := t.Unregistered(r); ok {
+			return -1, nil, ErrNoService
+		}
+	}
+
+	// A copy, since Detect edits its candidates in place.
+	return -1, slices.Clone(found), nil
+}
+
+// byHost returns the services whose endpoint prefix starts host. Prefixes are
+// tried longest first, and the first that is one service's alone is the
+// answer. A host that contains ".s3." matches none (service_router.py:428),
+// without regard to case, as hasHostPrefix matches; "s" is the label's one
+// letter.
+func (t *Table) byHost(host string) []int {
+	if strings.Contains(host, ".s3.") || strings.Contains(host, ".S3.") {
+		return nil
+	}
+
+	var found []int
+
+	for _, e := range t.endpoints {
+		if !hasHostPrefix(host, e.prefix) {
+			continue
+		}
+
+		if len(e.services) == 1 {
+			return e.services
+		}
+
+		found = union(found, e.services)
+	}
+
+	return found
+}
+
+// fallback returns the first service in registration order whose
+// Registration.Fallback claims r.
+func (t *Table) fallback(r *http.Request) (int, bool) {
+	for _, f := range t.fallbacks {
+		if f.claim(r) {
+			return f.index, true
+		}
+	}
+
+	return 0, false
 }
 
 // Operation returns the operation a request of the given protocol calls: the
@@ -282,9 +403,11 @@ func Operation(r *http.Request, kind protocol.Kind, form func() url.Values) stri
 	}
 }
 
-// claimedAmong returns the one service among found whose Claim claims r. It is
-// false when none or more than one does.
-func (t *Table) claimedAmong(found []int, r *http.Request) (int, bool) {
+// claimedAmong returns the one service among found, which share the signing
+// name, whose Claim claims r, or the signing name's SigningDefault when none
+// does. It is false when more than one claims r, or none does and there is no
+// default.
+func (t *Table) claimedAmong(signing string, found []int, r *http.Request) (int, bool) {
 	if t.claims == nil {
 		return 0, false
 	}
@@ -304,7 +427,13 @@ func (t *Table) claimedAmong(found []int, r *http.Request) (int, bool) {
 		claimed = i
 	}
 
-	return claimed, claimed >= 0
+	if claimed >= 0 {
+		return claimed, true
+	}
+
+	i, ok := t.defaults[signing]
+
+	return i, ok
 }
 
 // queryCandidates returns the services that can answer a form request with
@@ -359,6 +488,11 @@ func (t *Table) ambiguous(candidates []int) *AmbiguousError {
 	slices.Sort(names)
 
 	return &AmbiguousError{Services: names}
+}
+
+// index returns the position of the service named name, or -1.
+func (t *Table) index(name string) int {
+	return slices.IndexFunc(t.services, func(meta service.Metadata) bool { return meta.Name == name })
 }
 
 // match settles the protocol for the service at index i.
@@ -430,6 +564,13 @@ func union(a, b []int) []int {
 	return a
 }
 
+// signingName returns the signing name of r's Authorization header, or "".
+func signingName(r *http.Request) string {
+	cred, _ := account.FromAuthorization(r)
+
+	return cred.SigningName
+}
+
 // target splits an X-Amz-Target value into its service prefix and operation.
 // A value without a dot is all operation.
 func target(header string) (string, string) {
@@ -444,32 +585,4 @@ func target(header string) (string, string) {
 // hasHostPrefix reports whether host starts with "<prefix>.".
 func hasHostPrefix(host, prefix string) bool {
 	return len(host) > len(prefix) && host[len(prefix)] == '.' && strings.EqualFold(host[:len(prefix)], prefix)
-}
-
-// signingName returns the service name in the credential scope of a SigV4
-// Authorization header, or "".
-func signingName(authorization string) string {
-	scheme, info, found := strings.Cut(strings.TrimSpace(authorization), " ")
-	if !found || !strings.EqualFold(scheme, "AWS4-HMAC-SHA256") {
-		return ""
-	}
-
-	for pair := range strings.SplitSeq(info, ",") {
-		key, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
-		if !ok || key != "Credential" {
-			continue
-		}
-
-		// access key / date / region / signing name / aws4_request
-		const scopeFields = 5
-
-		fields := strings.Split(strings.Trim(value, `"`), "/")
-		if len(fields) != scopeFields {
-			return ""
-		}
-
-		return fields[3]
-	}
-
-	return ""
 }

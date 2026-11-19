@@ -1,0 +1,407 @@
+package account_test
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"testing"
+
+	"github.com/kylecannon/gostack/internal/account"
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	euWest1    = "eu-west-1"
+	signingSQS = "sqs"
+)
+
+// presignedV4 is the query string of a presigned SigV4 URL, URL-encoded as
+// botocore writes it.
+func presignedV4(scope string) string {
+	return "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=" + url.QueryEscape(scope) +
+		"&X-Amz-Date=20130524T000000Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=abc"
+}
+
+// presignedV2 is the query string of a presigned SigV2 URL.
+func presignedV2(key string) string {
+	return "AWSAccessKeyId=" + url.QueryEscape(key) + "&Expires=1700000000&Signature=abc"
+}
+
+func credentialRequest(t *testing.T, authorization, query string) *http.Request {
+	t.Helper()
+
+	target := "http://localhost:4566/bucket/key"
+	if query != "" {
+		target += "?" + query
+	}
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, nil)
+	if authorization != "" {
+		r.Header.Set("Authorization", authorization)
+	}
+
+	return r
+}
+
+func Test_FromRequest(t *testing.T) {
+	const (
+		key      = "AKIAIOSFODNN7EXAMPLE"
+		fullV4   = key + "/20130524/" + euWest1 + "/s3/aws4_request"
+		sigV2Hdr = "AWS " + key + ":frJIUN8DYpKDtOLCwo//yllqDzg="
+	)
+
+	tests := []struct {
+		name     string
+		giveAuth string
+		giveQS   string
+		want     account.Credential
+		wantOK   bool
+	}{
+		// A SigV4 Authorization header.
+		{
+			name:     "sigv4",
+			giveAuth: sign(key, usEast1),
+			want:     account.Credential{AccessKey: key, SigningName: signingSQS, Region: usEast1},
+			wantOK:   true,
+		},
+		{
+			name:     "sigv4 account as key",
+			giveAuth: sign("123456789012", euWest1),
+			want:     account.Credential{AccessKey: "123456789012", SigningName: signingSQS, Region: euWest1},
+			wantOK:   true,
+		},
+		{
+			name:     "sigv4 scheme in lower case",
+			giveAuth: "aws4-hmac-sha256 Credential=" + fullV4 + ", SignedHeaders=host, Signature=abc",
+			want:     account.Credential{AccessKey: key, SigningName: "s3", Region: euWest1},
+			wantOK:   true,
+		},
+		{
+			name:     "sigv4 without spaces after the commas",
+			giveAuth: "AWS4-HMAC-SHA256 SignedHeaders=host,Credential=" + fullV4 + ",Signature=abc",
+			want:     account.Credential{AccessKey: key, SigningName: "s3", Region: euWest1},
+			wantOK:   true,
+		},
+		{
+			name:     "sigv4 with a quoted credential",
+			giveAuth: `AWS4-HMAC-SHA256 Credential="` + fullV4 + `", SignedHeaders=host, Signature=abc`,
+			want:     account.Credential{AccessKey: key, SigningName: "s3", Region: euWest1},
+			wantOK:   true,
+		},
+		{
+			// LocalStack's account and region regexes need only key/date/region/,
+			// its service router all five fields.
+			name:     "sigv4 scope of four fields has no signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=K/20130524/" + euWest1 + "/sqs",
+			want:     account.Credential{AccessKey: "K", Region: euWest1},
+			wantOK:   true,
+		},
+		{
+			name:     "sigv4 scope of six fields has no signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=K/20130524/" + euWest1 + "/sqs/aws4_request/x",
+			want:     account.Credential{AccessKey: "K", Region: euWest1},
+			wantOK:   true,
+		},
+		{name: "sigv4 without a credential", giveAuth: "AWS4-HMAC-SHA256 SignedHeaders=host"},
+		{name: "sigv4 with a short scope", giveAuth: "AWS4-HMAC-SHA256 Credential=AKIA/20130524/us-east-1"},
+		{
+			// The service router reads any five fields; the account and region
+			// regexes need a key, date and region.
+			name:     "sigv4 with an empty region keeps its signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=K/20130524//sqs/aws4_request",
+			want:     account.Credential{SigningName: signingSQS},
+		},
+		{
+			name:     "sigv4 with an empty key keeps its signing name",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=/20130524/us-east-1/sqs/aws4_request",
+			want:     account.Credential{SigningName: signingSQS},
+		},
+		{name: "sigv4 scheme alone", giveAuth: "AWS4-HMAC-SHA256"},
+
+		// A SigV2 Authorization header.
+		{name: "sigv2", giveAuth: sigV2Hdr, want: account.Credential{AccessKey: key}, wantOK: true},
+		{
+			name: "sigv2 without signature", giveAuth: "AWS 123456789012",
+			want: account.Credential{AccessKey: "123456789012"}, wantOK: true,
+		},
+		{name: "sigv2 with an empty key", giveAuth: "AWS :sig"},
+		{name: "sigv2 prefix alone", giveAuth: "AWS "},
+
+		// Neither.
+		{name: "other scheme", giveAuth: "Bearer abc"},
+		{name: "nothing"},
+
+		// The query string of a presigned SigV4 URL.
+		{
+			name:   "presigned sigv4",
+			giveQS: presignedV4(fullV4),
+			want:   account.Credential{AccessKey: key, SigningName: "s3", Region: euWest1},
+			wantOK: true,
+		},
+		{name: "presigned sigv4 with a short scope", giveQS: presignedV4(key + "/20130524/" + euWest1)},
+		{
+			name:   "presigned sigv4 with an empty region",
+			giveQS: presignedV4(key + "/20130524//s3/aws4_request"),
+			want:   account.Credential{SigningName: "s3"},
+		},
+		{name: "presigned sigv4 with an empty credential", giveQS: "X-Amz-Credential=&AWSAccessKeyId=" + key},
+
+		// The query string of a presigned SigV2 URL.
+		{name: "presigned sigv2", giveQS: presignedV2(key), want: account.Credential{AccessKey: key}, wantOK: true},
+		{name: "presigned sigv2 with an empty key", giveQS: presignedV2("")},
+		{name: "a query without a credential", giveQS: "versioning"},
+
+		// The order of the sources.
+		{
+			name:   "the sigv4 query wins over the sigv2 one",
+			giveQS: presignedV2("V2KEY") + "&" + presignedV4(fullV4),
+			want:   account.Credential{AccessKey: key, SigningName: "s3", Region: euWest1},
+			wantOK: true,
+		},
+		{
+			name:     "a header wins over the query",
+			giveAuth: sigV2Hdr,
+			giveQS:   presignedV4("OTHER/20130524/us-west-2/s3/aws4_request"),
+			want:     account.Credential{AccessKey: key},
+			wantOK:   true,
+		},
+		{
+			// LocalStack's S3 reads the presigned query only when the request has
+			// no Authorization header.
+			name:     "a header that is not a credential still keeps the query out",
+			giveAuth: "Bearer abc",
+			giveQS:   presignedV4(fullV4),
+		},
+		{
+			name:     "a malformed header still keeps the query out",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=K",
+			giveQS:   presignedV4(fullV4),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := account.FromRequest(credentialRequest(t, tt.giveAuth, tt.giveQS))
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Test_QueryScope: the credential a presigned URL is validated with is the one
+// FromRequest takes the account and region from, on any query, including the
+// ones Go's decoder drops a pair of: a ';' or an escape that is not hex.
+func Test_QueryScope(t *testing.T) {
+	const scope = "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/s3/aws4_request"
+
+	tests := []struct {
+		name      string
+		giveQuery string
+		want      string
+	}{
+		{name: "a credential", giveQuery: presignedV4(scope), want: scope},
+		{
+			name: "a plus is a space", giveQuery: "X-Amz-Credential=a+b/20130524/" + euWest1 + "/s3/aws4_request",
+			want: "a b/20130524/" + euWest1 + "/s3/aws4_request",
+		},
+		{name: "a semicolon drops the pair", giveQuery: "X-Amz-Credential=" + scope + ";x&other=1"},
+		{name: "a bad escape drops the pair", giveQuery: "X-Amz-Credential=" + scope + "%zz&other=1"},
+		{name: "a semicolon elsewhere keeps the credential", giveQuery: "other=a;b&X-Amz-Credential=" + scope, want: scope},
+		{name: "no credential", giveQuery: "versioning"},
+		{name: "no query"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := credentialRequest(t, "", tt.giveQuery)
+
+			got := account.QueryScope(r)
+			assert.Equal(t, tt.want, got)
+
+			cred, ok := account.FromRequest(r)
+
+			parsed, _ := account.ParseScope(got)
+			if got == "" {
+				assert.False(t, ok, "FromRequest sees no credential where QueryScope sees none")
+
+				return
+			}
+
+			assert.Equal(t, parsed.AccessKey, cred.AccessKey)
+			assert.Equal(t, parsed.Region, cred.Region)
+		})
+	}
+}
+
+func Test_ParseScope(t *testing.T) {
+	const shortKey = "key"
+
+	tests := []struct {
+		name   string
+		give   string
+		want   account.Scope
+		wantOK bool
+	}{
+		{
+			name: "a complete scope",
+			give: "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/s3/aws4_request",
+			want: account.Scope{
+				AccessKey: "AKIAIOSFODNN7EXAMPLE", Date: "20130524", Region: euWest1, Service: "s3",
+			},
+			wantOK: true,
+		},
+		{name: "empty fields are the caller's to judge", give: "///s3/", want: account.Scope{Service: "s3"}, wantOK: true},
+		{
+			name: "four fields keep the ones they have", give: shortKey + "/20130524/" + euWest1 + "/s3",
+			want: account.Scope{AccessKey: shortKey, Date: "20130524", Region: euWest1, Service: "s3"},
+		},
+		{
+			name: "six fields keep the first four", give: shortKey + "/20130524/" + euWest1 + "/s3/aws4_request/extra",
+			want: account.Scope{AccessKey: shortKey, Date: "20130524", Region: euWest1, Service: "s3"},
+		},
+		{name: "a bare key", give: "key", want: account.Scope{AccessKey: "key"}},
+		{name: "empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := account.ParseScope(tt.give)
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func Test_FromAuthorization(t *testing.T) {
+	const scope = "AKIAIOSFODNN7EXAMPLE/20130524/" + euWest1 + "/" + signingSQS + "/aws4_request"
+
+	tests := []struct {
+		name     string
+		giveAuth string
+		giveQS   string
+		want     account.Credential
+		wantOK   bool
+	}{
+		{
+			name:     "a sigv4 header",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=" + scope + ", SignedHeaders=host, Signature=abc",
+			giveQS:   presignedV4("OTHER/20130524/us-west-2/s3/aws4_request"),
+			want:     account.Credential{AccessKey: "AKIAIOSFODNN7EXAMPLE", SigningName: signingSQS, Region: euWest1},
+			wantOK:   true,
+		},
+		{name: "a presigned sigv4 URL", giveQS: presignedV4(scope)},
+		{name: "a presigned sigv2 URL", giveQS: presignedV2("AKIAIOSFODNN7EXAMPLE")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := account.FromAuthorization(credentialRequest(t, tt.giveAuth, tt.giveQS))
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func Test_Resolve(t *testing.T) {
+	tests := []struct {
+		name       string
+		giveAuth   string
+		giveQS     string
+		giveParity bool
+		want       account.Identity
+	}{
+		{
+			name: "no credential",
+			want: account.Identity{AccountID: zeroAccount, Region: usEast1, Authorization: ""},
+		},
+		{
+			name:     "known region and account key",
+			giveAuth: sign("123456789012", euWest1),
+			want: account.Identity{
+				AccountID: "123456789012", Region: euWest1, Authorization: sign("123456789012", euWest1),
+			},
+		},
+		{
+			name:     "test key",
+			giveAuth: sign("test", "us-west-2"),
+			want:     account.Identity{AccountID: zeroAccount, Region: "us-west-2", Authorization: sign("test", "us-west-2")},
+		},
+		{
+			name:       "parity decodes AKIA",
+			giveAuth:   sign("AKIARZPUZDIKGB2VALC4", "ap-south-1"),
+			giveParity: true,
+			want: account.Identity{
+				AccountID: "123456789012", Region: "ap-south-1", Authorization: sign("AKIARZPUZDIKGB2VALC4", "ap-south-1"),
+			},
+		},
+		{
+			name:     "unknown region is rewritten",
+			giveAuth: sign("123456789012", "xx-south-1"),
+			want: account.Identity{
+				AccountID: "123456789012", Region: usEast1, Authorization: sign("123456789012", usEast1),
+			},
+		},
+		{
+			name:     "gov region is outside the aws partition",
+			giveAuth: sign("test", "us-gov-west-1"),
+			want:     account.Identity{AccountID: zeroAccount, Region: usEast1, Authorization: sign("test", usEast1)},
+		},
+		{
+			// botocore's get_available_regions("s3", "aws") has no aws-global, so
+			// LocalStack rewrites it as it does any other unknown region.
+			name:     "aws-global is rewritten",
+			giveAuth: sign("123456789012", "aws-global"),
+			want: account.Identity{
+				AccountID: "123456789012", Region: usEast1, Authorization: sign("123456789012", usEast1),
+			},
+		},
+		{
+			name:     "sigv2 has account and no region",
+			giveAuth: "AWS 123456789012:sig",
+			want:     account.Identity{AccountID: "123456789012", Region: usEast1, Authorization: "AWS 123456789012:sig"},
+		},
+		{
+			name:     "a malformed header gives the defaults",
+			giveAuth: "AWS4-HMAC-SHA256 Credential=123456789012/20130524",
+			want: account.Identity{
+				AccountID: zeroAccount, Region: usEast1, Authorization: "AWS4-HMAC-SHA256 Credential=123456789012/20130524",
+			},
+		},
+		{
+			name:   "a presigned sigv4 URL gives its key's account and its region",
+			giveQS: presignedV4(accessKey(t, "LKIA", "123456789012") + "/20130524/" + euWest1 + "/s3/aws4_request"),
+			want:   account.Identity{AccountID: "123456789012", Region: euWest1},
+		},
+		{
+			name:   "a presigned sigv4 URL in an unknown region is not rewritten",
+			giveQS: presignedV4(accessKey(t, "LSIA", "123456789013") + "/20130524/xx-south-1/s3/aws4_request"),
+			want:   account.Identity{AccountID: "123456789013", Region: usEast1},
+		},
+		{
+			name:   "a presigned sigv2 URL gives its key's account and the default region",
+			giveQS: presignedV2(accessKey(t, "LSIA", "424242424243")),
+			want:   account.Identity{AccountID: "424242424243", Region: usEast1},
+		},
+		{
+			name:       "parity decodes the AKIA key of a presigned URL",
+			giveQS:     presignedV2("AKIARZPUZDIKGB2VALC4"),
+			giveParity: true,
+			want:       account.Identity{AccountID: "123456789012", Region: usEast1},
+		},
+		{
+			name:       "an LKIA key of a presigned URL is not decoded under parity",
+			giveQS:     presignedV4(accessKey(t, "LKIA", "123456789012") + "/20130524/" + euWest1 + "/s3/aws4_request"),
+			giveParity: true,
+			want:       account.Identity{AccountID: zeroAccount, Region: euWest1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, account.Resolve(credentialRequest(t, tt.giveAuth, tt.giveQS), tt.giveParity))
+		})
+	}
+}

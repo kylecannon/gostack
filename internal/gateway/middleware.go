@@ -15,6 +15,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
+	"github.com/kylecannon/gostack/internal/service"
 )
 
 // internalRequestHeader carries the parameters of a call that one service makes
@@ -157,28 +158,67 @@ func isInternalPath(path string) bool {
 	return isDeveloperPath(path) || strings.HasPrefix(path, "/_aws")
 }
 
-// hooked wraps a seam in the middleware chain. The hook is read when a request
-// arrives, so it can be set after the router is built.
-func hooked(hook func() Hook) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if h := hook(); h != nil {
-				if replaced := h(r); replaced != nil {
+// preprocess is root step 4, LocalStack's preprocess_request: the Preprocess
+// of each registration, in registration order, sees every request before CORS
+// and content decoding, and may replace it.
+//
+// A request that step 3 claimed by its host belongs to the claiming service.
+// The gateway marks it with service.Own for the claimant, so its RawBody,
+// OwnCORS and route detection apply without a Preprocess to say so, and no
+// other service's Preprocess sees it: a mark from one would take the request
+// from its claimant, whose gzip decoding and CORS it would skip. The claimant's
+// own Preprocess still runs, as it is how S3 rewrites a virtual-host request.
+// A claim that is an error (served as one) has no claimant, so nothing is
+// marked and no Preprocess runs, and the gateway's own paths, which no claim
+// takes, are not marked.
+func (g *Gateway) preprocess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claimed, isClaimed := claimOf(r)
+
+		if isClaimed && claimed.err == nil && !isInternalPath(r.URL.Path) {
+			r = service.Own(r, g.regs[claimed.match.Index].Metadata.Name)
+		}
+
+		for i := range g.regs {
+			if isClaimed && (claimed.err != nil || claimed.match.Index != i) {
+				continue
+			}
+
+			if preprocess := g.regs[i].Preprocess; preprocess != nil {
+				if replaced := preprocess(r); replaced != nil {
 					r = replaced
 				}
 			}
+		}
 
-			next.ServeHTTP(w, r)
-		})
+		next.ServeHTTP(w, r)
+	})
+}
+
+// owner returns the Registration of the service a Preprocess marked r for
+// (service.Own), or nil.
+func (g *Gateway) owner(r *http.Request) *service.Registration {
+	name := service.OwnerOf(r)
+	if name == "" {
+		return nil
 	}
+
+	for i := range g.regs {
+		if g.regs[i].Metadata.Name == name {
+			return &g.regs[i]
+		}
+	}
+
+	return nil
 }
 
 // decodeContent is root step 6: a gzip request body is decoded before anyone
-// reads it. LocalStack skips S3 here because S3 does its own decoding; that
-// skip arrives with S3.
-func decodeContent(next http.Handler) http.Handler {
+// reads it, unless the request's owner sets Registration.RawBody, as
+// LocalStack's ContentDecoder skips s3, which decodes its own.
+func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody {
+		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody &&
+			!g.rawBody(r) {
 			r.Body = &gzipBody{src: r.Body}
 			r.Header.Set("Content-Encoding", "identity")
 			r.Header.Del("Content-Length")
@@ -187,6 +227,13 @@ func decodeContent(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// rawBody reports whether the owner of r reads its body as sent.
+func (g *Gateway) rawBody(r *http.Request) bool {
+	owner := g.owner(r)
+
+	return owner != nil && owner.RawBody
 }
 
 // gzipBody decodes gzip when it is first read, so a body that is not gzip fails
@@ -304,6 +351,20 @@ type statusWriter struct {
 	http.ResponseWriter
 
 	status int
+
+	// pending is the call serveAWS is serving, whose success marks state dirty.
+	pending pendingMark
+}
+
+// pendingMark holds what markDirty needs to judge one call, so that the mark
+// can run before the call's response reaches the client. A value field of
+// statusWriter, so holding it costs no allocation.
+type pendingMark struct {
+	g     *Gateway
+	r     *http.Request
+	rc    *request.Context
+	index int
+	armed bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -313,6 +374,27 @@ func (w *statusWriter) WriteHeader(code int) {
 	}
 
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// NoteStatus records the status of a response the service writes through a
+// connection it took with Hijack, which never reaches WriteHeader. Without it a
+// 4xx on such a response reads as 0, counts as a success and marks state dirty,
+// and a panic after the response began would write a 500 into the closed
+// connection. A service finds it through Unwrap, by this method alone.
+//
+// It also marks state dirty for a successful write, here rather than after the
+// service returns: the service sends the response itself and can finish it
+// before it returns, and a client that reads the response and asks for a save
+// at once must find the change marked. A service calls it before it writes a
+// byte, once the call has changed what it changes.
+func (w *statusWriter) NoteStatus(code int) {
+	if w.status == 0 && code >= http.StatusOK {
+		w.status = code
+	}
+
+	if w.status != 0 {
+		w.settle()
+	}
 }
 
 func (w *statusWriter) Write(p []byte) (int, error) {
@@ -341,4 +423,16 @@ func (w *statusWriter) Unwrap() http.ResponseWriter {
 // nothing sends 200.
 func (w *statusWriter) succeeded() bool {
 	return w.status < http.StatusBadRequest
+}
+
+// settle marks state dirty for the pending call, once: the first call does it
+// and later ones do nothing.
+func (w *statusWriter) settle() {
+	p := &w.pending
+	if !p.armed {
+		return
+	}
+
+	p.armed = false
+	p.g.markDirty(w, p.r, p.index, p.rc)
 }

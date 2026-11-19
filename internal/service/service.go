@@ -67,8 +67,9 @@ type Registration struct {
 	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a
 	// Lambda function URL or an S3 website by its host alone. A claimed request
 	// skips the routes other services mount, but not the /_localstack, /_gostack
-	// and /_aws ones. A request that more than one service claims is detected as
-	// if none had.
+	// and /_aws ones, and the gateway marks it with Own for the claimant, so
+	// RawBody and OwnCORS apply to it. A request that more than one service
+	// claims is detected as if none had, and has no owner.
 	ClaimHost func(host string) bool
 	// Claim picks the service among those that share the request's signing
 	// name, as LocalStack's custom_signing_name_rules picks s3control over s3 by
@@ -76,6 +77,40 @@ type Registration struct {
 	// and the request is the service's when it is the only one of them to
 	// claim it.
 	Claim func(r *http.Request) bool
+	// SigningDefault marks the service that takes a request when the signing
+	// name is shared and no Claim claims it, as custom_signing_name_rules sends
+	// such a request to the service named after the signing name: s3, not
+	// s3control. At most one service per signing name sets it; route.NewTable
+	// panics on two.
+	SigningDefault bool
+	// Fallback claims a request after every other detection step has failed to
+	// settle on one service, LocalStack's legacy_s3_rules: S3 takes an unsigned
+	// path-style call this way. The first Fallback in registration order to
+	// return true wins.
+	Fallback func(r *http.Request) bool
+	// Preprocess sees every request at root step 4, after the host claims and
+	// before CORS and content decoding, as LocalStack's preprocess_request
+	// handlers do: S3 marks a path-style request to a bucket it has there with
+	// Own, and rewrites a virtual-host one. It returns the request to carry on
+	// with, usually the one Own returns, or nil to keep r. The Preprocess of
+	// each service runs in registration order, each given the request the one
+	// before returned. A request a ClaimHost claimed is marked for the claimant
+	// before its Preprocess runs, so a service that owns its host needs none, and
+	// it reaches only the claimant's Preprocess, so another service's Own cannot
+	// take it. A claim that is an error marks nothing and runs none, and neither
+	// does a request to the gateway's own paths.
+	Preprocess func(r *http.Request) *http.Request
+	// RawBody makes root content decoding skip a request the service owns (Own),
+	// so Serve reads the body as sent, gzip included, with its Content-Encoding.
+	// LocalStack's ContentDecoder skips s3 this way.
+	RawBody bool
+	// OwnCORS makes root CORS skip a request the service owns (Own): no origin
+	// check, no preflight answer, no CORS response headers. The service handles
+	// CORS itself, as LocalStack's should_enforce_self_managed_service leaves s3
+	// and execute-api calls to their services (aws/handlers/cors.py:154-171).
+	// DISABLE_CUSTOM_CORS_<NAME>, NAME being Metadata.Name in upper case, turns
+	// the skip off.
+	OwnCORS bool
 
 	// Persist saves and restores the service's state. The persistence engine
 	// uses it only when PERSIST_* enables the service. It is nil for a service
@@ -88,7 +123,9 @@ type Registration struct {
 	// keeps no state.
 	Reset func(account, region string)
 	// Close stops the goroutines the service runs on its own. It is called
-	// once, after the gateway has drained and before persistence's last save, so
-	// the state they leave is saved.
+	// once, after the gateway has drained and after persistence's save, with a
+	// budget of its own (lifecycle.Deadlines.Close). A Close that overruns it is
+	// abandoned, so it must not be what a save waits for. A last save follows
+	// when every Close returned in time, so the state they leave is saved.
 	Close func()
 }

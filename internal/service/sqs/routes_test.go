@@ -146,17 +146,16 @@ func Test_InvalidUTF8_neverReachesAQueue(t *testing.T) {
 		}
 	})
 
-	t.Run("a raw byte in a json body is LocalStack's 500", func(t *testing.T) {
+	t.Run("a raw byte in a json body is a 400 SerializationException", func(t *testing.T) {
 		body := `{"QueueUrl":"` + queueURL + `","MessageBody":"` + invalidBody + `"}`
 
 		for _, target := range []string{"/", queueBase + "never-invalid"} {
 			got := s.jsonCall(target, opSendMessage, body)
 
-			assert.Equal(t, http.StatusInternalServerError, got.status, target+" "+got.body)
-			assert.JSONEq(t, `{"__type":"CommonServiceException","message":`+
-				`"exception while calling sqs with unknown operation: HTTP body could not be parsed as JSON."}`,
+			assert.Equal(t, http.StatusBadRequest, got.status, target+" "+got.body)
+			assert.JSONEq(t, `{"__type":"SerializationException","message":`+
+				`"Start of structure or map found where not expected."}`,
 				got.body, target)
-			assert.Equal(t, []string{"InternalError;Sender"}, headerValues(got.header, "x-amzn-query-error"), target)
 		}
 	})
 

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test%2F20261118%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261118T121823Z&X-Amz-SignedHeaders=host%3Bx-amz-content-sha256&X-Amz-Expires=604801&x-amz-meta-a=%C3%A9&If-Match=%22e%22&X-Amz-Signature=00")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kylecannon/gostack/internal/account"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
@@ -50,7 +51,7 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reg := &g.regs[match.Index]
-	identity := account.Resolve(r.Header.Get("Authorization"), g.settings().ParityAWSAccessKeyID)
+	identity := account.Resolve(r, g.settings().ParityAWSAccessKeyID)
 
 	if r.Header.Get("Authorization") != identity.Authorization {
 		r.Header.Set("Authorization", identity.Authorization)
@@ -65,24 +66,59 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 		RequestID: newRequestID(),
 	}
 
+	if s := g.settings(); g.selfManagedCORS(r, s) {
+		rc.CORS = defaultCORS{rules: g.cors, checksDisabled: s.DisableCORSChecks}
+	}
+
 	r = r.WithContext(request.With(r.Context(), rc))
 	rc.Request = r
 
 	Record(r, rc)
 
-	reg.Serve(w, rc)
+	// net/http sends the end of a response only after this returns (no service
+	// flushes or declares the length of a write's response), so marking after
+	// Serve comes before the client can read it. A response a service writes
+	// through a connection it took can end before Serve returns: its NoteStatus
+	// settles the mark first, and the settle here then does nothing.
+	sw, tracked := w.(*statusWriter)
+	if !tracked {
+		reg.Serve(w, rc)
+		g.markDirty(w, r, match.Index, rc)
 
-	g.markDirty(w, reg.Mutating, rc)
+		return
+	}
+
+	sw.pending = pendingMark{g: g, r: r, rc: rc, index: match.Index, armed: true}
+	reg.Serve(w, rc)
+	sw.settle()
 }
 
 // markDirty tells persistence the service changed, when the call succeeded and
 // the operation is one that changes state.
-func (g *Gateway) markDirty(w http.ResponseWriter, mutating func(string) bool, rc *request.Context) {
-	if g.eng == nil || rc.Operation == "" {
+//
+// A rest service names the operation itself, when its generated router finds
+// it. One that answers a call with success and leaves rc.Operation empty while
+// it sets Mutating has a bug: its Mutating is never asked and the change is
+// never saved. That is logged once per service, persistence on or off.
+func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, rc *request.Context) {
+	if sw, ok := w.(*statusWriter); ok && !sw.succeeded() {
 		return
 	}
 
-	if sw, ok := w.(*statusWriter); ok && !sw.succeeded() {
+	mutating := g.regs[index].Mutating
+
+	if rc.Operation == "" {
+		rest := rc.Protocol == protocol.KindRestJSON || rc.Protocol == protocol.KindRestXML
+		if rest && mutating != nil && g.unnamed[index].CompareAndSwap(false, true) {
+			slog.ErrorContext(r.Context(),
+				"a rest call succeeded without naming its operation, so Mutating is never asked "+
+					"and persistence does not save the change", "service", rc.Service)
+		}
+
+		return
+	}
+
+	if g.eng == nil {
 		return
 	}
 

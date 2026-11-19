@@ -16,6 +16,7 @@
 
 - AWS data plane: any path, routed by `internal/route`, served in `internal/gateway/dispatch.go`.
 - SQS queue-URL paths: `internal/service/sqs/routes.go`.
+- S3: virtual hosts (`<bucket>.s3.*`, website hosts) claimed by `ClaimHost`, legacy path rules by `Fallback`, both in `internal/service/s3/routing.go`; operations resolved by the generated `Route` in `internal/api/s3`.
 - Internal API: `internal/internalapi/mount.go` (`/_gostack/*` canonical, `/_localstack/*` aliases, `/_aws/sqs/messages`). See [communication.md](communication.md).
 
 ## Make targets (`Makefile`)

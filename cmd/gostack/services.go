@@ -1,11 +1,13 @@
 package main
 
 import (
+	"net/http"
 	"sync/atomic"
 
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
@@ -15,22 +17,68 @@ import (
 // and all three have to reach the same instance.
 type providers struct {
 	regs []service.Registration
+
+	// s3 delivers its notifications through the gateway, which is built from
+	// regs and so does not exist yet: bind hands it over.
+	s3 *s3.Provider
 }
 
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	return &providers{regs: registrations(cfg, changed)}
+	p := &providers{s3: s3.New(s3Settings(cfg), s3.NewEphemeral(s3.DefaultSpillDir))}
+	p.regs = registrations(cfg, changed, p.s3)
+
+	return p
+}
+
+// bind gives the services that call other services in this process the
+// handler to call them through, normally the gateway's.
+func (p *providers) bind(h http.Handler) {
+	p.s3.Bind(h)
 }
 
 // registrations lists the services the gateway serves. Adding a service is one
 // line here; its Registration carries everything else. A service reads its
 // settings through cfg on each call, so an update through /_localstack/config
 // reaches it.
-func registrations(cfg *config.Config, changed func(name string)) []service.Registration {
+func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
 	return []service.Registration{
 		sqs.New(sqsSettings(cfg), changed).Registration(),
 		sts.Registration(func() bool { return cfg.Settings().ParityAWSAccessKeyID }),
+		s3Provider.Registration(),
+	}
+}
+
+// s3Settings maps the live configuration onto the settings of the S3 provider.
+// S3 asks for them on every request, to claim its hosts, so the mapping is
+// redone only when an update through /_localstack/config has replaced the
+// snapshot.
+func s3Settings(cfg *config.Config) func() s3.Settings {
+	type mapped struct {
+		from *config.Settings
+		to   s3.Settings
+	}
+
+	var last atomic.Pointer[mapped]
+
+	return func() s3.Settings {
+		current := cfg.Settings()
+
+		if m := last.Load(); m != nil && m.from == current {
+			return m.to
+		}
+
+		m := &mapped{from: current, to: s3.Settings{
+			LocalstackHost:     current.LocalstackHost.String(),
+			ValidateSignatures: !current.S3SkipSignatureValidation,
+		}}
+		if len(current.GatewayListen) > 0 {
+			m.to.GatewayPort = current.GatewayListen[0].Port
+		}
+		last.Store(m)
+
+		return m.to
 	}
 }
 

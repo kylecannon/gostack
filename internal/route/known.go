@@ -14,6 +14,11 @@ import (
 // Detect except the form Action: a bare Action names no service LocalStack
 // could tell apart from the ones that are registered.
 //
+// When those indicators leave the request open, a signing name in the
+// Authorization header that is a known service's own name picks that service,
+// as service_router.py:496-497 does last: a call signed for apigateway, which
+// apigatewayv2 shares, is apigateway's.
+//
 // Match.Index is meaningless for an unregistered service; Match.Service and
 // Match.Protocol are the answer. The result is false when no single unregistered
 // service claims the request, which includes a service that is registered.
@@ -22,7 +27,15 @@ func (t *Table) Unregistered(r *http.Request) (Match, bool) {
 	// signing name two services share is still told apart by its target.
 	match, err := t.known.Detect(r, nil)
 	if err != nil {
-		return Match{}, false
+		i := t.known.index(signingName(r))
+		if i < 0 {
+			return Match{}, false
+		}
+
+		match, err = t.known.match(i, r)
+		if err != nil {
+			return Match{}, false
+		}
 	}
 
 	if slices.ContainsFunc(t.services, func(s service.Metadata) bool { return s.Name == match.Service }) {

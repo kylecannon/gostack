@@ -40,7 +40,7 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	case "loadgen":
 		return loadgenMain(ctx, args[1:], stdout)
 	case "gate":
-		return gateMain(stdin, stdout)
+		return gateMain(ctx, args[1:], stdin, stdout, nil)
 	default:
 		return fmt.Errorf("unknown command %q: %s", args[0], usage1)
 	}

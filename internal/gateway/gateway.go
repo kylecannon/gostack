@@ -23,9 +23,16 @@ const (
 	// headers, and to send its first byte. There is no write timeout: SQS
 	// long-polls for 20 seconds and responses stream.
 	readHeaderTimeout = 30 * time.Second
-	// defaultShutdownTimeout is how long a graceful shutdown waits when the
-	// settings name no timeout.
-	defaultShutdownTimeout = 5 * time.Second
+
+	// defaultDrainTimeout is how long Serve waits for requests in flight when
+	// nothing planned the drain: DrainBy was never called and no PlanDrain
+	// plan applied. A client holding a request open cannot stall a shutdown
+	// longer than this.
+	defaultDrainTimeout = 5 * time.Second
+
+	// drainUnlimited is the drainBy value DrainBy stores for a zero deadline,
+	// an explicit request to wait without limit (SHUTDOWN_TIMEOUT=0).
+	drainUnlimited int64 = -1
 )
 
 const (
@@ -45,7 +52,9 @@ type Gateway struct {
 	corsEnforced *cors.Cors
 	corsOpen     *cors.Cors
 
-	preprocess Hook
+	// unnamed records, by registration, that markDirty has logged a rest call
+	// that succeeded without naming its operation, so it logs only the first.
+	unnamed []atomic.Bool
 
 	phase   atomic.Int32
 	handler http.Handler
@@ -54,8 +63,12 @@ type Gateway struct {
 	tlsConfig *tls.Config
 
 	// drainBy is the Unix time in nanoseconds at which Serve stops waiting for
-	// requests in flight. Zero means it was not set.
+	// requests in flight. Zero means DrainBy was never called, and the drain
+	// takes defaultDrainTimeout; drainUnlimited means no limit.
 	drainBy atomic.Int64
+
+	// planDrain, when set, is asked for drainBy when a listener fails.
+	planDrain func(failedAt time.Time) time.Time
 }
 
 // New builds a gateway for the given registrations. settings is asked for on
@@ -75,7 +88,7 @@ func New(
 		return nil, fmt.Errorf("build service table: %w", err)
 	}
 
-	g := &Gateway{settings: settings, regs: regs, table: table, eng: eng}
+	g := &Gateway{settings: settings, regs: regs, table: table, eng: eng, unnamed: make([]atomic.Bool, len(regs))}
 	g.cors = newCORSRules(settings())
 	g.corsEnforced, g.corsOpen = newCORSHandlers(g.cors)
 	g.handler = buildRouter(g, internal)
@@ -86,13 +99,6 @@ func New(
 // Handler returns the root router.
 func (g *Gateway) Handler() http.Handler {
 	return g.handler
-}
-
-// SetPreprocessHook sets the seam at root step 4, where a service can mark a
-// request it handles itself before CORS and content decoding. Call it before
-// Serve.
-func (g *Gateway) SetPreprocessHook(h Hook) {
-	g.preprocess = h
 }
 
 // BeginShutdown makes the gateway refuse every request except internal calls
@@ -114,12 +120,29 @@ func (g *Gateway) BeginShutdown() {
 }
 
 // DrainBy sets the time at which Serve stops waiting for requests in flight and
-// closes what is left. Without it Serve waits Settings.ShutdownTimeout from the
-// moment it starts to drain, which is only right when nothing else shares that
-// time: the runtime sets it so that the shutdown hooks, the drain and the save of
-// persisted state keep to one deadline. Call it before Serve's context ends.
+// closes what is left. The caller plans the drain so that the shutdown hooks,
+// the drain, the save of persisted state and the services' Close keep to one
+// budget. A zero deadline is that plan's "no limit" (SHUTDOWN_TIMEOUT=0), and
+// Serve then waits for the requests as long as they take. Without a call, Serve
+// waits defaultDrainTimeout from the moment it starts to drain. Call it before
+// Serve's context ends.
 func (g *Gateway) DrainBy(deadline time.Time) {
+	if deadline.IsZero() {
+		g.drainBy.Store(drainUnlimited)
+
+		return
+	}
+
 	g.drainBy.Store(deadline.UnixNano())
+}
+
+// PlanDrain sets plan, which Serve calls once, with the current time, when a
+// listener fails and Serve starts the shutdown itself. Its result is what
+// DrainBy takes. A shutdown that Serve's context asks for does not call it: the
+// caller starts that one, runs the hooks, and sets DrainBy before the context
+// ends. Call it before Serve.
+func (g *Gateway) PlanDrain(plan func(failedAt time.Time) time.Time) {
+	g.planDrain = plan
 }
 
 // buildRouter builds the root router of g. The middleware runs in the order of
@@ -135,15 +158,15 @@ func (g *Gateway) DrainBy(deadline time.Time) {
 func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(markInternal)                                // 1
-	r.Use(g.shutdownGuard)                             // 2
-	r.Use(g.claimService)                              // 3
-	r.Use(hooked(func() Hook { return g.preprocess })) // 4
-	r.Use(g.corsMiddleware)                            // 5
-	r.Use(decodeContent)                               // 6
-	r.Use(g.responseHeaders)                           // 7
-	r.Use(g.recoverPanic)                              // 8
-	r.Use(g.serveClaimed)                              // 3, continued
+	r.Use(markInternal)      // 1
+	r.Use(g.shutdownGuard)   // 2
+	r.Use(g.claimService)    // 3
+	r.Use(g.preprocess)      // 4
+	r.Use(g.corsMiddleware)  // 5
+	r.Use(g.decodeContent)   // 6
+	r.Use(g.responseHeaders) // 7
+	r.Use(g.recoverPanic)    // 8
+	r.Use(g.serveClaimed)    // 3, continued
 
 	if internal != nil {
 		internal(r)
@@ -156,6 +179,10 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	}
 
 	r.HandleFunc("/*", g.serveAWS)
+	// chi registers "/*" for the methods it knows. Any other method token
+	// reaches the services too, so that S3 answers a method no operation takes
+	// with its own 405 instead of chi's empty one.
+	r.MethodNotAllowed(g.serveAWS)
 
 	return r
 }
@@ -195,8 +222,8 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
 // down: it refuses new work, waits for running requests until the time DrainBy
-// set, or Settings.ShutdownTimeout from now, and closes what is left. It returns
-// nil after a shutdown that ctx asked for.
+// set (defaultDrainTimeout from now when it was never called), and closes what
+// is left. It returns nil after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
 // prior knowledge) on the same port. Serve uses the certificate that Listen
@@ -246,6 +273,9 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 	select {
 	case <-ctx.Done():
 	case serveErr = <-failed:
+		if g.planDrain != nil {
+			g.DrainBy(g.planDrain(time.Now()))
+		}
 	}
 
 	g.BeginShutdown()
@@ -277,17 +307,16 @@ func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {
 	return nil
 }
 
-// drainContext limits ctx to the time DrainBy set, or to Settings.ShutdownTimeout
-// from now when it was not set.
+// drainContext limits ctx to the time DrainBy set, to defaultDrainTimeout from
+// now when DrainBy was never called, and leaves it unlimited when DrainBy took a
+// zero deadline.
 func (g *Gateway) drainContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if nanos := g.drainBy.Load(); nanos != 0 {
+	switch nanos := g.drainBy.Load(); nanos {
+	case 0:
+		return context.WithTimeout(ctx, defaultDrainTimeout)
+	case drainUnlimited:
+		return ctx, func() {}
+	default:
 		return context.WithDeadline(ctx, time.Unix(0, nanos))
 	}
-
-	timeout := g.settings().ShutdownTimeout
-	if timeout <= 0 {
-		timeout = defaultShutdownTimeout
-	}
-
-	return context.WithTimeout(ctx, timeout)
 }

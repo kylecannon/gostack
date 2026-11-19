@@ -19,7 +19,11 @@ const (
 	// maxBatchBytes is the largest total size of the bodies and attributes of a
 	// batch. It is a constant, not the queue's MaximumMessageSize.
 	maxBatchBytes = 1048576
-	// maxAttributeName is the length from which a message attribute name or type
+	// longestAttributeName is the longest message attribute name, in characters.
+	// AWS documents "up to 256 characters"; LocalStack refuses 256 and gostack
+	// accepts it (docs/compat.md).
+	longestAttributeName = 256
+	// maxAttributeName is the length from which a message attribute type
 	// is too long.
 	maxAttributeName = 256
 	// maxFIFOIDLength is the length of a MessageGroupId or a
@@ -138,7 +142,7 @@ func checkAttributes(attrs map[string]sqsapi.MessageAttributeValue) *awserr.Erro
 }
 
 func checkAttributeName(name string) *awserr.Error {
-	if utf8.RuneCountInString(name) >= maxAttributeName {
+	if utf8.RuneCountInString(name) > longestAttributeName {
 		return invalidParameterValue("Message (user) attribute names must be shorter than 256 Bytes")
 	}
 

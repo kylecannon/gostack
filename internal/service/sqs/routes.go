@@ -26,9 +26,6 @@ const (
 	queryNamespace  = "http://queue.amazonaws.com/doc/2012-11-05/"
 	jsonContentType = "application/x-amz-json-1.0"
 
-	// credentialScopeRegion is the index of the region in the "/" separated
-	// X-Amz-Credential value: key, date, region, service, terminator.
-	credentialScopeRegion = 2
 	// maxRegionLength is the longest region name a State is keyed by.
 	maxRegionLength = 32
 	// uuidSize is the number of random bytes of a request id.
@@ -67,10 +64,9 @@ func (p *Provider) mount(r chi.Router) {
 // context that the gateway builds for every other call.
 func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	settings := p.settings()
-	authorization := r.Header.Get("Authorization")
-	identity := account.Resolve(authorization, settings.ParityAWSAccessKeyID)
+	identity := account.Resolve(r, settings.ParityAWSAccessKeyID)
 
-	if authorization != identity.Authorization {
+	if r.Header.Get("Authorization") != identity.Authorization {
 		r.Header.Set("Authorization", identity.Authorization)
 	}
 
@@ -169,7 +165,10 @@ func writeQueryError(w http.ResponseWriter, rc *request.Context, err *awserr.Err
 // queueURLRegion is the region a queue URL call is made in, which LocalStack
 // reads from the part of the URL that carries it: the path of the path
 // strategy, the host of the standard and domain ones. A URL with no region in
-// it takes the region of the credentials, as LocalStack's legacy handler does.
+// it takes the region of the credentials, as LocalStack's legacy handler does
+// (query_api.py:100): the X-Amz-Credential of a presigned URL, even beside an
+// Authorization header, else credentialRegion, the region the call resolved
+// to.
 //
 // The region becomes the key of a State, and a snapshot has to write that key
 // and read it back, so a candidate that is not shaped like a region (see
@@ -184,9 +183,9 @@ func queueURLRegion(r *http.Request, credentialRegion string) string {
 		return region
 	}
 
-	parts := strings.Split(r.URL.Query().Get("X-Amz-Credential"), "/")
-	if len(parts) > credentialScopeRegion && validRegion(parts[credentialScopeRegion]) {
-		return parts[credentialScopeRegion]
+	// account.FromRequest prefers the header, so it is given the query alone.
+	if cred, _ := account.FromRequest(&http.Request{URL: r.URL}); validRegion(cred.Region) {
+		return cred.Region
 	}
 
 	return credentialRegion

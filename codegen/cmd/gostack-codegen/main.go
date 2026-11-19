@@ -28,14 +28,20 @@ func run(args []string, stdout io.Writer) error {
 	specs := fs.String("specs", "specs", "directory the service models are read from")
 	out := fs.String("out", "internal/api", "directory the service packages are written to")
 	services := fs.String("services", "", "comma-separated botocore service names to generate")
+	fixtures := fs.String("fixtures", "",
+		"botocore protocol fixture directory; generates a service for each rest fixture group under -out instead")
 
 	err := fs.Parse(args)
 	if err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
+	if *fixtures != "" {
+		return runFixtures(*fixtures, *out, stdout)
+	}
+
 	if *services == "" {
-		return errors.New("-services is required")
+		return errors.New("-services or -fixtures is required")
 	}
 
 	loader, err := spec.NewLoader(*specs)
@@ -69,12 +75,26 @@ func run(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// runFixtures generates the fixture services of the fixtures directory into
+// out, a directory relative to the module root.
+func runFixtures(fixtures, out string, stdout io.Writer) error {
+	outRoot, err := os.OpenRoot(out)
+	if err != nil {
+		return fmt.Errorf("open output directory: %w", err)
+	}
+
+	defer func() { _ = outRoot.Close() }()
+
+	return generateFixtures(fixtures, out, outRoot, stdout)
+}
+
 const (
 	dirPerm  = 0o750
 	filePerm = 0o600
 )
 
-// generate writes the six files of one service into outRoot/<service>.
+// generate writes the files of one service into outRoot/<service>, then
+// deletes the generated files there that this run did not write.
 func generate(name string, loader *spec.Loader, outRoot *os.Root) error {
 	g, err := newGenerator(name, loader)
 	if err != nil {
@@ -98,5 +118,70 @@ func generate(name string, loader *spec.Loader, outRoot *os.Root) error {
 		}
 	}
 
+	return removeStale(outRoot, name, files)
+}
+
+// removeStale deletes the Go files in dir that start with generatedHeader and
+// are not among written, so a file the generator no longer produces does not
+// stay behind for gen-check to miss. The hand-written files beside them stay.
+func removeStale(outRoot *os.Root, dir string, written map[string][]byte) error {
+	d, err := outRoot.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", dir, err)
+	}
+
+	entries, err := d.ReadDir(-1)
+	_ = d.Close()
+
+	if err != nil {
+		return fmt.Errorf("list %s: %w", dir, err)
+	}
+
+	for _, e := range entries {
+		_, current := written[e.Name()]
+		if current || !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+
+		file := dir + "/" + e.Name()
+
+		generated, err := isGenerated(outRoot, file)
+		if err != nil {
+			return err
+		}
+
+		if !generated {
+			continue
+		}
+
+		err = outRoot.Remove(file)
+		if err != nil {
+			return fmt.Errorf("remove stale %s: %w", file, err)
+		}
+	}
+
 	return nil
+}
+
+// isGenerated reports whether a file starts with the header of generated code.
+func isGenerated(outRoot *os.Root, file string) (bool, error) {
+	f, err := outRoot.Open(file)
+	if err != nil {
+		return false, fmt.Errorf("open %s: %w", file, err)
+	}
+
+	defer func() { _ = f.Close() }()
+
+	head := make([]byte, len(generatedHeader))
+
+	_, err = io.ReadFull(f, head)
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", file, err)
+	}
+
+	return string(head) == generatedHeader, nil
 }

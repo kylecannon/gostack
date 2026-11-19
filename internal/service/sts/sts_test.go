@@ -37,6 +37,10 @@ const (
 	// lsiaAccount is the key LKIARZPUZDIKAAAAAAAA of internal/account's tests with the other prefix.
 	lsiaAccount   = "LSIARZPUZDIKAAAAAAAA"
 	lsiaAccountID = "123456789012"
+	// asiaAccount is lsiaAccount with the prefix of a real AWS key.
+	asiaAccount = "ASIARZPUZDIKAAAAAAAA"
+	// firstTagKeyParam is the query parameter of the key of the first session tag.
+	firstTagKeyParam = "Tags.member.1.Key"
 )
 
 func TestMain(m *testing.M) {
@@ -169,8 +173,8 @@ func Test_GetCallerIdentity(t *testing.T) {
 		{name: "the default key", giveKey: defaultKey, wantAccount: "000000000000"},
 		{name: "a key that is an account", giveKey: "000000000002", wantAccount: "000000000002"},
 		{name: "an LSIA key", giveKey: lsiaAccount, wantAccount: lsiaAccountID},
-		{name: "an ASIA key without parity", giveKey: "ASIARZPUZDIKAAAAAAAA", wantAccount: "000000000000"},
-		{name: "an ASIA key with parity", giveKey: "ASIARZPUZDIKAAAAAAAA", giveParity: true, wantAccount: lsiaAccountID},
+		{name: "an ASIA key without parity", giveKey: asiaAccount, wantAccount: "000000000000"},
+		{name: "an ASIA key with parity", giveKey: asiaAccount, giveParity: true, wantAccount: lsiaAccountID},
 	}
 
 	for _, tt := range tests {
@@ -341,43 +345,91 @@ func Test_AssumeRole_invalidParameters(t *testing.T) {
 	}
 }
 
+// Test_AssumeRole_tags checks the tags and TransitiveTagKeys of one call, as
+// LocalStack's AssumeRole does (probed on 8b9a79f): the checks run only when
+// the call passes tags, and in the order duplicate keys, then transitive keys.
 func Test_AssumeRole_tags(t *testing.T) {
+	const (
+		teamKey   = "Team"
+		teamLower = "team"
+		teamUpper = "TEAM"
+
+		duplicateMessage   = "Duplicate tag keys found. Please note that Tag keys are case insensitive."
+		notIncludedMessage = "The specified transitive tag key must be included in the requested tags."
+	)
+
+	team := [2]string{teamKey, "a"}
+
 	tests := []struct {
 		name        string
-		give        url.Values
-		wantMessage string
+		giveTags    [][2]string
+		giveTrans   []string
+		wantMessage string // empty: the call succeeds
 	}{
 		{
-			name: "duplicate keys differing in case",
-			give: url.Values{
-				"Tags.member.1.Key": {"Team"}, "Tags.member.1.Value": {"a"},
-				"Tags.member.2.Key": {"team"}, "Tags.member.2.Value": {"b"},
-			},
-			wantMessage: "Duplicate tag keys found. Please note that Tag keys are case insensitive.",
+			name:        "duplicate keys differing in case",
+			giveTags:    [][2]string{team, {teamLower, "b"}},
+			wantMessage: duplicateMessage,
+		},
+		{name: "duplicate keys, exactly equal", giveTags: [][2]string{team, {teamKey, "b"}}, wantMessage: duplicateMessage},
+		{
+			name:        "duplicate keys, the second and third",
+			giveTags:    [][2]string{team, {otherTag, "b"}, {"OTHER", "c"}},
+			wantMessage: duplicateMessage,
 		},
 		{
-			name: "transitive key that is not a tag",
-			give: url.Values{
-				"Tags.member.1.Key": {"Team"}, "Tags.member.1.Value": {"a"},
-				"TransitiveTagKeys.member.1": {"Other"},
-			},
-			wantMessage: "The specified transitive tag key must be included in the requested tags.",
+			name:        "duplicate keys, one of them transitive",
+			giveTags:    [][2]string{team, {teamUpper, "b"}},
+			giveTrans:   []string{teamKey},
+			wantMessage: duplicateMessage,
 		},
+		{
+			name:        "duplicate keys come before a transitive key that is no tag",
+			giveTags:    [][2]string{team, {teamLower, "b"}},
+			giveTrans:   []string{otherTag},
+			wantMessage: duplicateMessage,
+		},
+		{name: "keys that differ by more than case", giveTags: [][2]string{team, {"Teams", "b"}}},
+		{
+			name:        "a transitive key that is not a tag",
+			giveTags:    [][2]string{team},
+			giveTrans:   []string{otherTag},
+			wantMessage: notIncludedMessage,
+		},
+		{
+			name:        "one transitive key that is a tag and one that is not",
+			giveTags:    [][2]string{team},
+			giveTrans:   []string{teamLower, otherTag},
+			wantMessage: notIncludedMessage,
+		},
+		{name: "a transitive key in other case", giveTags: [][2]string{team}, giveTrans: []string{teamUpper}},
+		{name: "the same transitive key twice", giveTags: [][2]string{team}, giveTrans: []string{teamKey, teamUpper}},
+		{
+			name:      "a transitive key and a tag that is not",
+			giveTags:  [][2]string{team, {otherTag, "b"}},
+			giveTrans: []string{teamKey},
+		},
+		// LocalStack tests the transitive keys only inside "if tags:".
+		{name: "a transitive key and no tags", giveTrans: []string{otherTag}},
+		{name: "no tags"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newServer(t, false)
 
-			tt.give.Set(paramAction, opAssumeRole)
-			tt.give.Set(paramRoleArn, "arn:aws:iam::000000000000:role/r")
-			tt.give.Set(paramSession, "ss")
+			got := assumeWith(t, server, defaultKey, validRoleArn, tagParams(tt.giveTags, tt.giveTrans...))
 
-			got := call(t, server, defaultKey, tt.give, "")
+			if tt.wantMessage == "" {
+				assert.Equal(t, http.StatusOK, got.status, got.body)
+
+				return
+			}
 
 			assert.Equal(t, http.StatusBadRequest, got.status)
 			assert.Contains(t, got.body, "<Code>InvalidParameterValue</Code>")
-			assert.Contains(t, got.body, tt.wantMessage)
+			assert.Contains(t, got.body, "<Type>Sender</Type>")
+			assert.Contains(t, got.body, "<Message>"+tt.wantMessage+"</Message>")
 		})
 	}
 }
@@ -472,7 +524,7 @@ func Test_GetSessionToken(t *testing.T) {
 		Credentials credentials `xml:"GetSessionTokenResult>Credentials"`
 	}
 
-	got := decode[result](t, call(t, server, "000000000002", url.Values{paramAction: {"GetSessionToken"}}, ""))
+	got := decode[result](t, call(t, server, "000000000002", url.Values{paramAction: {opSession}}, ""))
 
 	assert.Equal(t, "000000000002", account.FromAccessKey(got.Credentials.AccessKeyID, false))
 
@@ -504,7 +556,7 @@ type jsonSessionTokenResult struct {
 func Test_GetSessionToken_acceptJSON(t *testing.T) {
 	server := newServer(t, false)
 
-	got := call(t, server, defaultKey, url.Values{paramAction: {"GetSessionToken"}}, "application/json")
+	got := call(t, server, defaultKey, url.Values{paramAction: {opSession}}, "application/json")
 
 	require.Equal(t, http.StatusOK, got.status, got.body)
 	assert.Equal(t, "application/json", got.header.Get("Content-Type"))

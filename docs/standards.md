@@ -16,6 +16,17 @@ specific to gostack.
   - The generator splits each service's output across several files (types,
     codecs, operations) and never writes one giant file. A single 93k-line
     file costs the `whitespace` linter 16s per lint.
+  - Sharded: a file whose declarations run past about 3,000 lines (`maxShardLines`
+    in `codegen/cmd/gostack-codegen/emit.go`) becomes `<name>_1.go`,
+    `<name>_2.go` and so on, cut at declaration boundaries. `make gen` deletes
+    a generated file it no longer writes, so a shard that is no longer needed
+    does not linger, and `make gen-check` fails on one that does.
+  - A rest service's routing table is checked every time the generator runs: it
+    refuses two operations that bind the same request. The per-operation test,
+    `Test_routeRules_EveryOperation` in
+    `codegen/cmd/gostack-codegen/route_internal_test.go`, sends each rule its
+    own request and expects the operation back. It is built on the S3 model
+    today, so a second rest service needs its own router builder there first.
 - **Handler files.** One file per operation or tight operation group, for
   example `internal/service/sqs/send-message.go`.
 - **Unimplemented operations** return 501 through the embedded generated
@@ -48,10 +59,10 @@ specific to gostack.
 1. **Unit tests** follow conventions-go.md: table tests, `testify/require`,
    `synctest` for time, `-race` always.
 2. **Codec conformance.** `scripts/vendor-specs.sh` fetches botocore's
-   protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json}.json`)
+   protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json,rest-xml,rest-json}.json`)
    into `internal/protocol/testdata/botocore` and records them in
-   `specs/SOURCES.lock`. Every protocol a codec implements passes them: query
-   and json so far, and rest-json, rest-xml, ec2 and cbor as their services
+   `specs/SOURCES.lock`. Every protocol a codec implements passes them: query,
+   json, rest-xml and rest-json so far, and ec2 and cbor as their services
    arrive. Every Smithy trait the codec honors gets its own test.
    aws-emulator's dropped `@timestampFormat` is the cautionary case.
 3. **Fuzzing.**
@@ -108,7 +119,8 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   at p<0.05.
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
-  manual run of the full matrix against the last committed result.
+  manual run against the previous passing run on main with the same profile
+  and host fingerprint, which is kept as a workflow artifact.
 - **Fuzz** (`fuzz.yml`, nightly and by hand) runs `make fuzz FUZZTIME=60s`, which
   runs every `Fuzz*` function for 60s. A crash uploads the new
   `testdata/fuzz` entries and the log as the `fuzz-crashes` artifact.
@@ -167,8 +179,14 @@ not apply to a feature is left out, not filled with a placeholder.
   - each protocol codec, decode and encode, across the payload axis;
   - SigV4 parsing;
   - every service operation's handler path, across its matrix.
-- benchstat (see Gates) compares `-count=10` runs on main and on the PR. A
-  regression over 10% with p<0.05 fails the build.
+- benchstat (see Gates) compares ten runs of each benchmark on the base and on
+  the PR. A regression over 10% with p<0.05 fails the build unless it is
+  accepted (below).
+- The gate measures base and head interleaved, never one tree after the other:
+  `make bench-ab` builds both trees' benchmark binaries first, then runs ten
+  rounds of one run per tree, alternating which tree goes first (base head,
+  head base, ...). A runner that speeds up or slows down during the job then
+  moves both sides alike instead of reading as a regression.
 
 ### System bench (`bench/`)
 
@@ -184,11 +202,42 @@ LocalStack image. Measured:
 
 An "agentic" workload runs many short create, use and delete cycles across
 every implemented service. Results are committed to
-`bench/results/<date>-<sha>.json`. `go run ./bench compare` checks a run
-against the newest committed result and fails when a gostack cell regresses
-past its threshold; `make bench-system` runs it after measuring. LocalStack
-cells are reference numbers and never gate. A latency also has to rise by 0.05 ms
-(p50) or 0.5 ms (p99) to regress, so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+`bench/results/<date>-<sha>.json` as human records. `go run ./bench compare`
+checks a run against the newest committed result with the same host
+fingerprint and fails when a gostack cell regresses past its threshold;
+`make bench-system` runs it after measuring. CI never compares against the
+committed files, because a runner never has the fingerprint of the machine
+they came from: the scheduled run compares with the artifact the previous
+passing run on main uploaded. LocalStack cells are reference numbers and never
+gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
+so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+### Accepted regressions
+
+A regression accepted as the cost of a change is listed in
+`bench/accepted.yaml`, in the pull request that brings it, with its metric,
+the largest change accepted, a one-line reason, the pull request and a commit
+that carries the cost. Both CI gates read the file and print what it holds
+under "Accepted". A listed metric past its bound, and every unlisted one, still
+fails. A bound is a finite number above zero with at most one leading `+`, as
+`+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`);
+an infinite, negative, zero or repeated-sign bound is a load error, as is a
+second entry for one metric or a second YAML document. An entry's `package` is
+the full import path or the path below the module (`internal/route`).
+
+An entry applies only while the head holds its commit and the base does not, so
+it expires once main holds the commit. The pull request lands with a merge
+commit, never a squash: a squash or rebase merge leaves the commit out of main,
+so the entry never expires. Delete the entries in the first change after the
+merge.
+
+A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
+such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.
+A cell holds its operations as a map from name to latency, and declares the
+environment variable that turns its persistence on. A service is added by
+registering a workload in `bench/` (`Service`, `Name`, `Ops`, `Cells`, `Run`);
+the report and the compare gate read the operations from the result and name
+none. A file of schema 2 is converted when it is loaded.
 
 ### Runtime knobs
 

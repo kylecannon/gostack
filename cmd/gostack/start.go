@@ -17,6 +17,7 @@ import (
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/lifecycle"
 	"github.com/kylecannon/gostack/internal/persist"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/service"
 )
 
@@ -30,6 +31,9 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	// Cancelling ctx is how the kill action stops the process.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// GOSTACK_MAX_REQUEST_BODY is read once, before anything serves.
+	protocol.SetMaxBody(cfg.Settings().MaxRequestBody)
 
 	// The services report changes to the engine, and the engine is configured
 	// from the services' names. Nothing reports a change before the engine is
@@ -46,7 +50,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	// serve saves the state within the shutdown's deadline. The deferred call
 	// covers a start that fails before serve runs, and does nothing after serve.
 	saver := &saver{eng: eng, services: services}
-	defer saver.save(context.WithoutCancel(ctx))
+	defer saver.saveUnlimited(ctx)
 
 	// A service whose state file is unsafe to touch has been logged and runs
 	// without saving; the state routes and the health endpoint say so. It does not
@@ -83,15 +87,12 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 		OpenAPI:       openapi.Spec,
 	}
 
-	gw, err := gateway.New(
-		settingsFunc(cfg),
-		regs,
-		func(r chi.Router) { internalapi.Mount(r, deps) },
-		dirtier,
-	)
+	gw, err := gateway.New(settingsFunc(cfg), regs, func(r chi.Router) { internalapi.Mount(r, deps) }, dirtier)
 	if err != nil {
 		return fmt.Errorf("build gateway: %w", err)
 	}
+
+	services.bind(gw.Handler())
 
 	listeners, err := gw.Listen(ctx)
 	if err != nil {
@@ -102,7 +103,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 }
 
 // serve runs the gateway on listeners until ctx ends, and shuts down within one
-// deadline, derived from shutdownTimeout (SHUTDOWN_TIMEOUT), that the supervisor's
+// budget, planned from shutdownTimeout (SHUTDOWN_TIMEOUT), that the supervisor's
 // SIGKILL follows. The signal does not reach the gateway directly. The order is
 // LocalStack's (runtime.py shutdown), with the save reserved ahead of everything
 // that can overrun:
@@ -110,21 +111,34 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 //  1. The gateway refuses AWS calls, and each service is told to let go of the
 //     requests it holds, so that SQS wakes its long polls.
 //  2. The init shutdown hooks run.
-//  3. The gateway drains its requests in flight.
-//  4. save writes the persisted state.
+//  3. The gateway drains its requests in flight, and only to the time serve
+//     gives it: the gateway has no timeout of its own.
+//  4. save writes the persisted state, and then stops the services.
 //
-// Steps 1 to 3 end at lifecycle.Deadlines.Work whatever they are doing, and save
-// runs until lifecycle.Deadlines.Save. A zero shutdownTimeout is no limit.
+// Steps 1 to 3 end at lifecycle.Deadlines.Work whatever they are doing. save
+// gets two contexts: the first ends at lifecycle.Deadlines.Save, and the second,
+// for the services' Close, at lifecycle.Deadlines.Close. A zero shutdownTimeout
+// is no limit for all of them.
+//
+// The budget is planned once, from the moment the shutdown starts: the signal,
+// or the failure of a listener. A failing listener makes the gateway drain by
+// itself, before this function can act, so the gateway asks for the plan.
 func serve(
 	ctx context.Context,
 	gw *gateway.Gateway,
 	listeners []net.Listener,
 	proc *lifecycle.Process,
 	shutdownTimeout time.Duration,
-	save func(context.Context),
+	save func(saveCtx, closeCtx context.Context),
 ) error {
 	serveCtx, stopServing := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopServing()
+
+	// SHUTDOWN_TIMEOUT is read once: an update through /_localstack/config does not
+	// move a deadline the supervisor already counts.
+	budget := &shutdownBudget{timeout: shutdownTimeout}
+
+	gw.PlanDrain(func(failedAt time.Time) time.Time { return budget.plan(failedAt).Work })
 
 	served := make(chan error, 1)
 
@@ -141,33 +155,60 @@ func serve(
 
 	select {
 	case <-ctx.Done():
-		deadline = lifecycle.PlanShutdown(time.Now(), shutdownTimeout)
-		if !deadline.Work.IsZero() {
-			gw.DrainBy(deadline.Work)
-		}
+		deadline = budget.plan(time.Now())
+		gw.DrainBy(deadline.Work)
 
 		shutDown(ctx, gw, proc, deadline.Work)
 		stopServing()
 
 		err = <-served
 	case err = <-served:
-		// The gateway stopped on its own and has drained. Only the hooks and the
-		// save are left, and they keep to the deadline from here.
-		deadline = lifecycle.PlanShutdown(time.Now(), shutdownTimeout)
+		// The gateway stopped on its own and has drained, within the plan it asked
+		// for. Only the hooks and the save are left, and they keep to that plan.
+		deadline = budget.plan(time.Now())
 
 		shutDown(ctx, gw, proc, deadline.Work)
 	}
 
-	saveCtx, cancel := lifecycle.Until(context.WithoutCancel(ctx), deadline.Save)
-	defer cancel()
+	unlimited := context.WithoutCancel(ctx)
 
-	save(saveCtx)
+	saveCtx, cancelSave := lifecycle.Until(unlimited, deadline.Save)
+	defer cancelSave()
+
+	closeCtx, cancelClose := lifecycle.Until(unlimited, deadline.Close)
+	defer cancelClose()
+
+	save(saveCtx, closeCtx)
 
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("serve: %w", err)
 	}
 
 	return nil
+}
+
+// shutdownBudget plans a shutdown's deadlines once, for the moment the shutdown
+// starts, and gives the same plan to every later caller. The shutdown starts at
+// the signal, or at the failure of a listener, and no shutdown spends the
+// timeout twice.
+type shutdownBudget struct {
+	timeout time.Duration
+
+	mu      sync.Mutex
+	planned bool
+	set     lifecycle.Deadlines
+}
+
+// plan returns the deadlines, planned from at on the first call.
+func (b *shutdownBudget) plan(at time.Time) lifecycle.Deadlines {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.planned {
+		b.set, b.planned = lifecycle.PlanShutdown(at, b.timeout), true
+	}
+
+	return b.set
 }
 
 // shutDown makes the gateway refuse AWS calls, tells each service to let go of
@@ -207,37 +248,61 @@ type saver struct {
 }
 
 // save writes the state that changed, then stops the services' own goroutines,
-// and then writes what that changed. The first write is the one that has to
-// happen, so it comes first: stopping a service waits for its goroutines, which
-// ctx cannot interrupt, and a request that was still running when the gateway
-// closed can mark the state dirty again. Every write stops with ctx, and the
-// engine keeps the old file when one is cut short.
-func (s *saver) save(ctx context.Context) {
+// each with a budget of its own. The write is the one that has to happen, so it
+// comes first and runs to saveCtx. Stopping a service waits for its goroutines,
+// which no context can interrupt, so a slow Close is abandoned when closeCtx
+// ends, with a warning, and never takes time from the write. Every write stops
+// with its context, and the engine keeps the old file when one is cut short.
+//
+// What the services' Close changes, and what a request still running at the
+// end of the drain changes, is written by a last flush, when Close finished in
+// time for it.
+func (s *saver) save(saveCtx, closeCtx context.Context) {
 	s.once.Do(func() {
-		err := s.eng.Flush(ctx)
+		err := s.eng.Close(saveCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}
 
-		stopped := make(chan struct{})
-
-		go func() {
-			defer close(stopped)
-
-			s.services.close()
-		}()
-
-		select {
-		case <-stopped:
-		case <-ctx.Done():
-			slog.Warn("a service did not stop in time; saving without waiting for it")
+		if !s.closeServices(closeCtx) {
+			return
 		}
 
-		err = s.eng.Close(ctx)
+		err = s.eng.Flush(closeCtx)
 		if err != nil {
 			slog.Error("save persisted state", "error", err)
 		}
 	})
+}
+
+// saveUnlimited is save with no deadline, for a start that fails before serve
+// runs.
+func (s *saver) saveUnlimited(ctx context.Context) {
+	unlimited := context.WithoutCancel(ctx)
+
+	s.save(unlimited, unlimited)
+}
+
+// closeServices runs the services' Close functions and waits for them until ctx
+// ends. It reports whether they all returned. Close functions cannot be
+// cancelled, so one that overruns is left running: the process exits next.
+func (s *saver) closeServices(ctx context.Context) bool {
+	stopped := make(chan struct{})
+
+	go func() {
+		defer close(stopped)
+
+		s.services.close()
+	}()
+
+	select {
+	case <-stopped:
+		return true
+	case <-ctx.Done():
+		slog.Warn("a service did not stop in time; exiting without waiting for it")
+
+		return false
+	}
 }
 
 // restart asks the PID 1 supervisor to restart gostack. Without one there is

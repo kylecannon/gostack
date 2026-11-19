@@ -26,7 +26,8 @@ func (g *generator) jsonFile() (string, error) {
 	for _, name := range g.opNames {
 		in := g.ops[name].input.goName
 
-		p.f("// decode%sJSON reads the json body of a %s request.", name, name)
+		p.f("// decode%sJSON reads the json body of a %s request, for a caller that has", name, name)
+		p.f("// the body alone. A call's own reader goes through decodeJSON.")
 		p.f("func decode%sJSON(body []byte) (*%s, *awserr.Error) {", name, in)
 		p.f("\treturn awsjson.Decode[%s](body)", in)
 		p.f("}")
@@ -52,7 +53,7 @@ func timeFields(st *structType) []timeField {
 	var out []timeField
 
 	for _, f := range st.fields {
-		if f.pair.p.shape.Type != spec.TypeTimestamp {
+		if f.pair.p.shape.Type != spec.TypeTimestamp || !inJSONBody(st, f) {
 			continue
 		}
 

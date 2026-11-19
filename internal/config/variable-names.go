@@ -30,4 +30,8 @@ const (
 	varOverrideInDocker                = "OVERRIDE_IN_DOCKER"
 	varParityAWSAccessKeyID            = "PARITY_AWS_ACCESS_KEY_ID"
 	varDisablePreflightProcessing      = "DISABLE_PREFLIGHT_PROCESSING"
+	varDisableCustomCORSS3             = "DISABLE_CUSTOM_CORS_S3"
+	varDisableCustomCORSAPIGateway     = "DISABLE_CUSTOM_CORS_APIGATEWAY"
+	varS3SkipSignatureValidation       = "S3_SKIP_SIGNATURE_VALIDATION"
+	varMaxRequestBody                  = "MAX_REQUEST_BODY"
 )

@@ -25,6 +25,12 @@ func (g *generator) typesFile() (string, error) {
 		p.f("type %s struct {", st.goName)
 
 		for _, f := range st.fields {
+			if !inJSONBody(st, f) {
+				p.f("\t%s %s `json:\"-\"`", f.goName, f.typ)
+
+				continue
+			}
+
 			p.f("\t%s %s `json:\"%s,omitzero\"`", f.goName, f.typ, f.jsonName)
 		}
 
@@ -55,7 +61,7 @@ func (g *generator) operationsFile() (string, error) {
 	p.f("type Handler interface {")
 
 	for _, name := range g.opNames {
-		p.f("\t%s", handlerSignature(name))
+		p.f("\t%s", handlerSignature(g.ops[name]))
 	}
 
 	p.f("}")
@@ -68,8 +74,10 @@ func (g *generator) operationsFile() (string, error) {
 	p.blank()
 
 	for _, name := range g.opNames {
+		op := g.ops[name]
+
 		p.f("// %s returns awserr.NotImplemented.", name)
-		p.f("func (Unimplemented) %s(context.Context, *%sInput) (*%sOutput, error) {", name, name, name)
+		p.f("func (Unimplemented) %s(context.Context, *%s) (*%s, error) {", name, op.input.goName, op.output.goName)
 		p.f("\treturn nil, awserr.NotImplemented(%q, %q)", g.name, name)
 		p.f("}")
 		p.blank()
@@ -78,15 +86,31 @@ func (g *generator) operationsFile() (string, error) {
 	return p.buf.String(), nil
 }
 
-func handlerSignature(op string) string {
-	return fmt.Sprintf("%s(ctx context.Context, in *%sInput) (*%sOutput, error)", op, op, op)
+// inJSONBody reports whether a member is one of the json object a rest-json
+// body holds: not one bound to a header or the status, and not the payload,
+// which is the whole body by itself. A querystring or uri member stays in, as
+// botocore reads a response's from the body. json and query services have
+// neither kind, so every member of theirs is in.
+func inJSONBody(st *structType, f *field) bool {
+	switch f.pair.p.binding {
+	case spec.LocationHeader, spec.LocationHeaders, spec.LocationStatusCode:
+		return false
+	default:
+		return st.payload != f
+	}
+}
+
+// handlerSignature is the Handler method of an operation. Operations that
+// share a root shape share its type.
+func handlerSignature(op *operation) string {
+	return fmt.Sprintf("%s(ctx context.Context, in *%s) (*%s, error)", op.name, op.input.goName, op.output.goName)
 }
 
 // checkJSONTimestamp rejects the timestamp forms the json codec cannot write:
 // a timestampFormat other than epoch seconds on a list element or a map value.
 // On a struct member the generated struct swaps the field while it is encoded.
 func (g *generator) checkJSONTimestamp(r ref) error {
-	if !g.hasProtocol(protoJSON) {
+	if !g.hasProtocol(protoJSON) && !g.hasProtocol(protoRestJSON) {
 		return nil
 	}
 

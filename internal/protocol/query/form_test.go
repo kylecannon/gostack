@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,10 +147,31 @@ func Test_RequestForm_rawInvalidUTF8(t *testing.T) {
 func Test_RequestForm_tooLarge(t *testing.T) {
 	t.Parallel()
 
-	r := formRequest(t, "", "a="+strings.Repeat("x", query.MaxFormBody))
+	r := formRequest(t, "", "a="+strings.Repeat("x", int(protocol.DefaultMaxBody)))
 
 	_, err := query.RequestForm(r)
 	require.ErrorIs(t, err, query.ErrForm)
+}
+
+// TestRequestFormFollowsSetMaxBody: a body of exactly protocol.MaxBody bytes
+// reads, one byte more fails, and with no limit a body over the default reads.
+func TestRequestFormFollowsSetMaxBody(t *testing.T) {
+	t.Cleanup(func() { protocol.SetMaxBody(protocol.DefaultMaxBody) })
+
+	protocol.SetMaxBody(10)
+
+	got, err := query.RequestForm(formRequest(t, "", "a=12345678"))
+	require.NoError(t, err)
+	assert.Equal(t, "12345678", got.Get("a"))
+
+	_, err = query.RequestForm(formRequest(t, "", "a=123456789"))
+	require.ErrorIs(t, err, query.ErrForm)
+
+	protocol.SetMaxBody(0)
+
+	got, err = query.RequestForm(formRequest(t, "", "a="+strings.Repeat("x", int(protocol.DefaultMaxBody)+1)))
+	require.NoError(t, err)
+	assert.Len(t, got.Get("a"), int(protocol.DefaultMaxBody)+1)
 }
 
 func Test_RequestForm_keepsAForm(t *testing.T) {

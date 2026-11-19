@@ -3,6 +3,7 @@
 package sqs
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net/http"
@@ -137,7 +138,7 @@ func readAddPermission(rc *request.Context) (*AddPermissionInput, *awserr.Error)
 		if err != nil {
 			return nil, err
 		}
-		return decodeAddPermissionJSON(body)
+		return decodeJSON[AddPermissionInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -195,7 +196,7 @@ func readCancelMessageMoveTask(rc *request.Context) (*CancelMessageMoveTaskInput
 		if err != nil {
 			return nil, err
 		}
-		return decodeCancelMessageMoveTaskJSON(body)
+		return decodeJSON[CancelMessageMoveTaskInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -253,7 +254,7 @@ func readChangeMessageVisibility(rc *request.Context) (*ChangeMessageVisibilityI
 		if err != nil {
 			return nil, err
 		}
-		return decodeChangeMessageVisibilityJSON(body)
+		return decodeJSON[ChangeMessageVisibilityInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -311,7 +312,7 @@ func readChangeMessageVisibilityBatch(rc *request.Context) (*ChangeMessageVisibi
 		if err != nil {
 			return nil, err
 		}
-		return decodeChangeMessageVisibilityBatchJSON(body)
+		return decodeJSON[ChangeMessageVisibilityBatchInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -369,7 +370,7 @@ func readCreateQueue(rc *request.Context) (*CreateQueueInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeCreateQueueJSON(body)
+		return decodeJSON[CreateQueueInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -427,7 +428,7 @@ func readDeleteMessage(rc *request.Context) (*DeleteMessageInput, *awserr.Error)
 		if err != nil {
 			return nil, err
 		}
-		return decodeDeleteMessageJSON(body)
+		return decodeJSON[DeleteMessageInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -485,7 +486,7 @@ func readDeleteMessageBatch(rc *request.Context) (*DeleteMessageBatchInput, *aws
 		if err != nil {
 			return nil, err
 		}
-		return decodeDeleteMessageBatchJSON(body)
+		return decodeJSON[DeleteMessageBatchInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -543,7 +544,7 @@ func readDeleteQueue(rc *request.Context) (*DeleteQueueInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeDeleteQueueJSON(body)
+		return decodeJSON[DeleteQueueInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -601,7 +602,7 @@ func readGetQueueAttributes(rc *request.Context) (*GetQueueAttributesInput, *aws
 		if err != nil {
 			return nil, err
 		}
-		return decodeGetQueueAttributesJSON(body)
+		return decodeJSON[GetQueueAttributesInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -659,7 +660,7 @@ func readGetQueueUrl(rc *request.Context) (*GetQueueUrlInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeGetQueueUrlJSON(body)
+		return decodeJSON[GetQueueUrlInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -717,7 +718,7 @@ func readListDeadLetterSourceQueues(rc *request.Context) (*ListDeadLetterSourceQ
 		if err != nil {
 			return nil, err
 		}
-		return decodeListDeadLetterSourceQueuesJSON(body)
+		return decodeJSON[ListDeadLetterSourceQueuesInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -775,7 +776,7 @@ func readListMessageMoveTasks(rc *request.Context) (*ListMessageMoveTasksInput, 
 		if err != nil {
 			return nil, err
 		}
-		return decodeListMessageMoveTasksJSON(body)
+		return decodeJSON[ListMessageMoveTasksInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -833,7 +834,7 @@ func readListQueueTags(rc *request.Context) (*ListQueueTagsInput, *awserr.Error)
 		if err != nil {
 			return nil, err
 		}
-		return decodeListQueueTagsJSON(body)
+		return decodeJSON[ListQueueTagsInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -886,7 +887,7 @@ func readListQueues(rc *request.Context) (*ListQueuesInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeListQueuesJSON(body)
+		return decodeJSON[ListQueuesInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -944,7 +945,7 @@ func readPurgeQueue(rc *request.Context) (*PurgeQueueInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodePurgeQueueJSON(body)
+		return decodeJSON[PurgeQueueInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1002,7 +1003,7 @@ func readReceiveMessage(rc *request.Context) (*ReceiveMessageInput, *awserr.Erro
 		if err != nil {
 			return nil, err
 		}
-		return decodeReceiveMessageJSON(body)
+		return decodeJSON[ReceiveMessageInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1060,7 +1061,7 @@ func readRemovePermission(rc *request.Context) (*RemovePermissionInput, *awserr.
 		if err != nil {
 			return nil, err
 		}
-		return decodeRemovePermissionJSON(body)
+		return decodeJSON[RemovePermissionInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1118,7 +1119,7 @@ func readSendMessage(rc *request.Context) (*SendMessageInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeSendMessageJSON(body)
+		return decodeJSON[SendMessageInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1176,7 +1177,7 @@ func readSendMessageBatch(rc *request.Context) (*SendMessageBatchInput, *awserr.
 		if err != nil {
 			return nil, err
 		}
-		return decodeSendMessageBatchJSON(body)
+		return decodeJSON[SendMessageBatchInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1234,7 +1235,7 @@ func readSetQueueAttributes(rc *request.Context) (*SetQueueAttributesInput, *aws
 		if err != nil {
 			return nil, err
 		}
-		return decodeSetQueueAttributesJSON(body)
+		return decodeJSON[SetQueueAttributesInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1292,7 +1293,7 @@ func readStartMessageMoveTask(rc *request.Context) (*StartMessageMoveTaskInput, 
 		if err != nil {
 			return nil, err
 		}
-		return decodeStartMessageMoveTaskJSON(body)
+		return decodeJSON[StartMessageMoveTaskInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1350,7 +1351,7 @@ func readTagQueue(rc *request.Context) (*TagQueueInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeTagQueueJSON(body)
+		return decodeJSON[TagQueueInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1408,7 +1409,7 @@ func readUntagQueue(rc *request.Context) (*UntagQueueInput, *awserr.Error) {
 		if err != nil {
 			return nil, err
 		}
-		return decodeUntagQueueJSON(body)
+		return decodeJSON[UntagQueueInput](rc, body)
 	case protocol.KindQuery:
 		vals, err := readForm(rc)
 		if err != nil {
@@ -1474,7 +1475,7 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 }
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(io.LimitReader(rc.Request.Body, query.MaxFormBody+1))
+	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",
@@ -1483,7 +1484,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 			Fault:      awserr.FaultSender,
 		}
 	}
-	if len(body) > query.MaxFormBody {
+	if protocol.OverBody(len(body)) {
 		return nil, query.MalformedQueryString()
 	}
 	if !utf8.Valid(body) {
@@ -1492,21 +1493,26 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 	return body, nil
 }
 
-// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8. LocalStack's
-// parser raises, and its exception handler turns that into a 500 of this form.
-//
-// OPEN QUESTION: a lone surrogate escape and broken json answer 400
-// SerializationException (awsjson.Decode), so the three malformed-body cases do not
-// share a status. The botocore protocol fixtures have no malformed request body case
-// and the Smithy awsJson1_0 spec says nothing on it, so neither settles which one
-// AWS sends. No parity test pins any of them, so the LocalStack answer stays here.
+// decodeJSON reads the json body of a call into a T. A body that only the lenient
+// reading takes stays on the request: only that reading clamps an integer past the
+// int32 range, and a handler that refuses one echoes the text sent, which only the
+// body holds. Any other body is dropped once decoded.
+func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
+	in, lenient, err := awsjson.DecodeLenient[T](body)
+	if lenient {
+		rc.Request.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	return in, err
+}
+
+// errBodyNotUTF8 is the answer to a json body that is not valid UTF-8: the same as
+// broken json and a lone surrogate escape (awsjson.Decode). LocalStack answers 500
+// here, which is a crash in its parser and not an answer to copy.
 var errBodyNotUTF8 = &awserr.Error{
-	Code: "CommonServiceException",
-	Message: "exception while calling sqs with unknown operation: " +
-		"HTTP body could not be parsed as JSON.",
-	StatusCode: 500,
+	Code:       "SerializationException",
+	Message:    "Start of structure or map found where not expected.",
+	StatusCode: 400,
 	Fault:      awserr.FaultSender,
-	QueryCode:  "InternalError",
 }
 
 // readForm gives the parameters of a query call as LocalStack reads them: the URL's

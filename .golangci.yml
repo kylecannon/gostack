@@ -98,8 +98,12 @@ linters:
       # the called method's signature, e.g. `func (io.Reader).Read(...)` or
       # `func (*bufio.Reader).Read(...)`. ignore-interface-regexps alone is not enough:
       # it skips the interface-method report, and the external-package report still fires.
+      # An AWS error built by generated code (`s3api.NewInvalidRequest`,
+      # `(*s3api.InvalidDigest).Err`) or by awserr (`awserr.Internal`) is the reply
+      # itself, so a handler returns it unwrapped.
       ignore-sig-regexps:
         - ^func \(\*?(io|bufio)\.
+        - gostack/internal/(api/[a-z0-9]+|awserr)\.
   exclusions:
     generated: lax
     paths:

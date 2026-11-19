@@ -255,3 +255,18 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     if _bridge_enabled():
         _install_bridge()
+
+
+@pytest.fixture(autouse=True)
+def _gostack_snapshot_headers(request: pytest.FixtureRequest) -> None:
+    """Keep ``x-gostack`` out of snapshots, as LocalStack's conftest does for ``x-localstack``.
+
+    Every gostack response carries both headers. A test that snapshots
+    ``ResponseMetadata.HTTPHeaders`` would otherwise differ from its recorded
+    AWS snapshot by the one header. Only tests that already use the ``snapshot``
+    fixture get the transformer.
+    """
+    if "snapshot" not in request.fixturenames:
+        return
+    snapshot = request.getfixturevalue("snapshot")
+    snapshot.add_transformer(snapshot.transform.remove_key("x-gostack"))

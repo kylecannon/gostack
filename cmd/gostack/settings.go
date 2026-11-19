@@ -12,8 +12,10 @@ import (
 // gateway asks on every request, so the mapping is redone only when an update
 // through /_localstack/config has replaced the snapshot.
 //
-// SHUTDOWN_TIMEOUT=0 means "wait without a limit" in config and "five seconds"
-// to the gateway. The value passes through as it is.
+// SHUTDOWN_TIMEOUT is not mapped. start reads it once and plans one budget from
+// it, with four slots: the shutdown hooks, the drain, the save and the services'
+// Close (lifecycle.PlanShutdown). The gateway keeps no timeout of its own, and
+// SHUTDOWN_TIMEOUT=0 is no limit for all four.
 func settingsFunc(cfg *config.Config) func() gateway.Settings {
 	type mapped struct {
 		from *config.Settings
@@ -45,7 +47,6 @@ func gatewaySettings(s *config.Settings) gateway.Settings {
 	return gateway.Settings{
 		Listen:                     listen,
 		CustomSSLCertPath:          s.CustomSSLCertPath,
-		ShutdownTimeout:            s.ShutdownTimeout,
 		FailFast:                   s.FailFast,
 		ResponseHeaderEnabled:      s.ResponseHeaderEnabled,
 		ParityAWSAccessKeyID:       s.ParityAWSAccessKeyID,
@@ -56,5 +57,6 @@ func gatewaySettings(s *config.Settings) gateway.Settings {
 		ExtraCORSAllowedHeaders:    strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		ExtraCORSExposeHeaders:     strings.Join(s.ExtraCORSExposeHeaders, ","),
 		LocalstackHost:             s.LocalstackHost.Host,
+		DisableCustomCORS:          s.CustomCORSDisabled(),
 	}
 }

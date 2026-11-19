@@ -23,6 +23,27 @@ type Context struct {
 	RequestID string
 	// Request is the inbound HTTP request.
 	Request *http.Request
+	// CORS is the gateway's own CORS policy, set only when the request's
+	// owner handles CORS itself (Registration.OwnCORS, DISABLE_CUSTOM_CORS_*
+	// not set for it). It is nil when the gateway's CORS has answered the
+	// request already.
+	CORS DefaultCORS
+}
+
+// DefaultCORS is the gateway's CORS policy, which a service that handles CORS
+// itself falls back to for the requests its own rules do not cover, as
+// LocalStack's S3 CORS handler calls CorsEnforcer and CorsResponseEnricher.
+type DefaultCORS interface {
+	// OriginAllowed is CorsEnforcer.is_cors_origin_allowed: whether the
+	// Origin, or else the Referer, is one the gateway allows. A request with
+	// neither is allowed.
+	OriginAllowed(header http.Header) bool
+	// ChecksDisabled is DISABLE_CORS_CHECKS.
+	ChecksDisabled() bool
+	// AddHeaders is CorsResponseEnricher.add_cors_headers: it adds the
+	// Access-Control-* headers the gateway sends to a request with an Origin,
+	// except the ones response already holds.
+	AddHeaders(response http.Header, r *http.Request)
 }
 
 type contextKey struct{}

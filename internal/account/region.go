@@ -1,8 +1,8 @@
 package account
 
 import (
+	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -10,14 +10,9 @@ import (
 // unknown one is rewritten to.
 const DefaultRegion = "us-east-1"
 
-const (
-	scopeMarker = "Credential="
-	// scopeFields is the number of "/" separated parts that must follow
-	// the marker: key, date, region and the rest of the scope.
-	scopeFields = 4
-	sigV4Prefix = "AWS4-"
-	sigV2Prefix = "AWS "
-)
+// scopeFields is the number of "/" separated parts of a scopePattern match:
+// "Credential=<key>", date, region and the empty rest.
+const scopeFields = 4
 
 // regions are the regions of the aws partition that have an S3 endpoint, which
 // LocalStack takes as the regions available everywhere
@@ -49,23 +44,23 @@ type Identity struct {
 	// was unknown.
 	Region string
 	// Authorization is the Authorization header the call carries from here on.
-	// It differs from the one passed to Resolve only when the region was
-	// rewritten, in which case its credential scope names the new region.
+	// It differs from the request's only when the region was rewritten, in
+	// which case its credential scope names the new region.
 	Authorization string
 }
 
-// Resolve derives the account and region of a call from its Authorization
-// header. An absent header, or one without a credential scope, gives the
-// default account and us-east-1. parity is PARITY_AWS_ACCESS_KEY_ID.
-func Resolve(authorization string, parity bool) Identity {
-	accessKey := AccessKeyFromAuthorization(authorization)
-	if accessKey == "" {
-		accessKey = Default
-	}
+// Resolve derives the account and region of a call from the credential
+// FromRequest reads. A call without one gives the default account and
+// us-east-1, and so does a SigV2 call for the region. An unknown region is
+// rewritten in the Authorization header only: the query of a presigned URL is
+// signed as it stands. parity is PARITY_AWS_ACCESS_KEY_ID.
+func Resolve(r *http.Request, parity bool) Identity {
+	cred, _ := FromRequest(r)
+	authorization := r.Header.Get("Authorization")
 
 	id := Identity{
-		AccountID:     FromAccessKey(accessKey, parity),
-		Region:        RegionFromAuthorization(authorization),
+		AccountID:     FromAccessKey(cred.AccessKey, parity),
+		Region:        cred.Region,
 		Authorization: authorization,
 	}
 
@@ -89,37 +84,6 @@ func KnownRegion(region string) bool {
 	return ok
 }
 
-// AccessKeyFromAuthorization returns the access key ID of a SigV4 or SigV2
-// Authorization header, or "" when there is none.
-func AccessKeyFromAuthorization(authorization string) string {
-	switch {
-	case strings.HasPrefix(authorization, sigV4Prefix):
-		fields, ok := credential(authorization)
-		if !ok {
-			return ""
-		}
-
-		return fields[0]
-	case strings.HasPrefix(authorization, sigV2Prefix):
-		key, _, _ := strings.Cut(strings.TrimPrefix(authorization, sigV2Prefix), ":")
-
-		return key
-	default:
-		return ""
-	}
-}
-
-// RegionFromAuthorization returns the region in the credential scope of an
-// Authorization header, or "" when there is none.
-func RegionFromAuthorization(authorization string) string {
-	fields, ok := credential(authorization)
-	if !ok {
-		return ""
-	}
-
-	return fields[2]
-}
-
 // RewriteRegion returns authorization with the region of every credential scope
 // replaced by region.
 func RewriteRegion(authorization, region string) string {
@@ -128,24 +92,4 @@ func RewriteRegion(authorization, region string) string {
 
 		return parts[0] + "/" + parts[1] + "/" + region + "/"
 	})
-}
-
-// credential splits the first credential scope after "Credential=" into its
-// access key, date and region. The ok result is false when there is none.
-func credential(authorization string) ([3]string, bool) {
-	_, scope, found := strings.Cut(authorization, scopeMarker)
-	if !found {
-		return [3]string{}, false
-	}
-
-	parts := strings.SplitN(scope, "/", scopeFields)
-	if len(parts) < scopeFields {
-		return [3]string{}, false
-	}
-
-	if slices.Contains(parts[:scopeFields-1], "") {
-		return [3]string{}, false
-	}
-
-	return [3]string{parts[0], parts[1], parts[2]}, true
 }

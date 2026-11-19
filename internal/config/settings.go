@@ -86,6 +86,21 @@ type Settings struct {
 	DisableCORSHeaders bool
 	// DisablePreflightProcessing is DISABLE_PREFLIGHT_PROCESSING.
 	DisablePreflightProcessing bool
+	// DisableCustomCORSS3 is DISABLE_CUSTOM_CORS_S3: the gateway's CORS rules
+	// apply to S3 requests too.
+	DisableCustomCORSS3 bool
+	// DisableCustomCORSAPIGateway is DISABLE_CUSTOM_CORS_APIGATEWAY: the
+	// gateway's CORS rules apply to API Gateway requests too.
+	DisableCustomCORSAPIGateway bool
+	// S3SkipSignatureValidation is S3_SKIP_SIGNATURE_VALIDATION: S3 accepts a
+	// presigned URL whose signature does not match, has expired, or leaves
+	// headers unsigned. It is true unless the variable is a false value.
+	S3SkipSignatureValidation bool
+	// MaxRequestBody is GOSTACK_MAX_REQUEST_BODY: the most bytes of a request
+	// body that is not streamed gostack reads, 16 MiB by default. Zero means no
+	// limit. It is read at start-up, and a value that cannot be parsed is the
+	// default. A runtime update does not change it.
+	MaxRequestBody int64
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -95,6 +110,22 @@ type Settings struct {
 	ExtraCORSExposeHeaders []string
 	// ExtraCORSAllowedOrigins is EXTRA_CORS_ALLOWED_ORIGINS, split on commas.
 	ExtraCORSAllowedOrigins []string
+}
+
+// CustomCORSDisabled names the services whose DISABLE_CUSTOM_CORS_<NAME> is
+// set, by service name, for gateway.Settings.DisableCustomCORS.
+func (s *Settings) CustomCORSDisabled() []string {
+	var services []string
+
+	if s.DisableCustomCORSS3 {
+		services = append(services, "s3")
+	}
+
+	if s.DisableCustomCORSAPIGateway {
+		services = append(services, "apigateway")
+	}
+
+	return services
 }
 
 // values returns the settings by their LocalStack names, as GET
@@ -128,6 +159,10 @@ func (s *Settings) values() map[string]any {
 		varDisableCORSChecks:               s.DisableCORSChecks,
 		varDisableCORSHeaders:              s.DisableCORSHeaders,
 		varDisablePreflightProcessing:      s.DisablePreflightProcessing,
+		varDisableCustomCORSS3:             s.DisableCustomCORSS3,
+		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
+		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
+		varMaxRequestBody:                  s.MaxRequestBody,
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -181,6 +216,10 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisableCORSChecks:                 isTrue(get(varDisableCORSChecks)),
 		DisableCORSHeaders:                isTrue(get(varDisableCORSHeaders)),
 		DisablePreflightProcessing:        isTrue(get(varDisablePreflightProcessing)),
+		DisableCustomCORSS3:               isTrue(get(varDisableCustomCORSS3)),
+		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
+		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
+		MaxRequestBody:                    base.maxRequestBody,
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

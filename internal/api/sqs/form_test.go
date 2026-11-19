@@ -109,10 +109,9 @@ func Test_Serve_JSONBodyThatIsNotUTF8(t *testing.T) {
 	rec := call(t, sqs.Serve, h, "SendMessage", protocol.KindJSON, `{"QueueUrl":"q","MessageBody":"a`+"\xff"+`b"}`)
 
 	assert.False(t, called)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.JSONEq(t, `{"__type":"CommonServiceException","message":`+
-		`"exception while calling sqs with unknown operation: HTTP body could not be parsed as JSON."}`,
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.JSONEq(t, `{"__type":"SerializationException","message":`+
+		`"Start of structure or map found where not expected."}`,
 		rec.Body.String())
-	assert.Equal(t, []string{"InternalError;Sender"}, header(rec, "x-amzn-query-error"))
 	assert.Equal(t, []string{"application/x-amz-json-1.0"}, header(rec, "Content-Type"))
 }

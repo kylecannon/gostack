@@ -70,6 +70,10 @@ var variables = []variable{
 	{name: varOverrideInDocker},
 	{name: varParityAWSAccessKeyID},
 	{name: varDisablePreflightProcessing},
+	{name: varDisableCustomCORSS3},
+	{name: varDisableCustomCORSAPIGateway},
+	{name: varS3SkipSignatureValidation},
+	{name: varMaxRequestBody, gostackOnly: true},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
@@ -105,6 +109,9 @@ type baseline struct {
 	// inDocker is the in_docker() answer.
 	inDocker bool
 	persist  Persist
+	// maxRequestBody is GOSTACK_MAX_REQUEST_BODY, which is read at start-up
+	// only: the body readers take their limit once, from protocol.SetMaxBody.
+	maxRequestBody int64
 }
 
 // Load reads the settings from the environment. It first exports every
@@ -135,8 +142,16 @@ func newConfig(environ []string, probe dockerProbe) (*Config, error) {
 	for _, warning := range warnings {
 		slog.Warn(warning)
 	}
+	maxRequestBody, err := parseMaxRequestBody(newViper("", nil).GetString(varMaxRequestBody))
+	if err != nil {
+		slog.Warn(err.Error() + "; keeping the default")
+
+		maxRequestBody = DefaultMaxRequestBody
+	}
 	cfg := &Config{
-		base:      baseline{listenHost: listenHost, inDocker: inDocker, persist: persist},
+		base: baseline{
+			listenHost: listenHost, inDocker: inDocker, persist: persist, maxRequestBody: maxRequestBody,
+		},
 		overrides: map[string]any{},
 	}
 	settings, err := cfg.build(cfg.overrides)

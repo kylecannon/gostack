@@ -83,10 +83,11 @@ func Test_Gateway_serviceNotEnabled(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		give     *http.Request
-		wantType string
-		wantBody string
+		name        string
+		give        *http.Request
+		wantType    string
+		wantBody    string
+		wantService string
 	}{
 		{
 			name: "json service",
@@ -120,7 +121,18 @@ func Test_Gateway_serviceNotEnabled(t *testing.T) {
 			name: "query service",
 			give: newRequest(t, http.MethodPost, "http://localhost:4566/", "Action=ListUsers&Version=2010-05-08",
 				map[string]string{headerAuth: signed("test", usEast1, "iam"), headerType: formType}),
-			wantType: contentXML,
+			wantType:    contentXML,
+			wantService: "iam",
+		},
+		{
+			// s3control shares the signing name; LocalStack's custom rule sends
+			// any other path to s3 (service_router.py:204).
+			name: "rest-xml service",
+			give: newRequest(t, http.MethodPost, "http://localhost:4566/", "", map[string]string{
+				headerAuth: signed("test", usEast1, nameS3),
+			}),
+			wantType:    contentXML,
+			wantService: nameS3,
 		},
 	}
 
@@ -140,8 +152,59 @@ func Test_Gateway_serviceNotEnabled(t *testing.T) {
 				return
 			}
 
-			assert.Contains(t, body, "<Code>InternalFailure</Code><Message>"+notEnabled("iam")+"</Message>")
+			assert.Contains(t, body, "<Code>InternalFailure</Code><Message>"+notEnabled(tt.wantService)+"</Message>")
 			assert.Contains(t, body, "<ErrorResponse>")
 		})
 	}
+}
+
+// Test_Gateway_serviceNotEnabledBeforeFallback is service_router.py:374-379: a
+// call signed for a service LocalStack has and gostack does not run is that
+// service's, even when s3's Fallback would claim every request.
+func Test_Gateway_serviceNotEnabledBeforeFallback(t *testing.T) {
+	s3, served := s3Registration()
+	s3.Fallback = func(*http.Request) bool { return true }
+
+	g := newGateway(t, newSettings(), []service.Registration{sqsRegistration(okServe), stsRegistration(okServe), s3})
+
+	tests := []struct {
+		name        string
+		give        *http.Request
+		wantService string
+	}{
+		{
+			name: "lambda",
+			give: newRequest(t, http.MethodGet, "http://localhost:4566/2015-03-31/functions/f", "", map[string]string{
+				headerAuth: signed("test", usEast1, "lambda"),
+			}),
+			wantService: "lambda",
+		},
+		{
+			name: "dynamodb through the aws cli",
+			give: newRequest(t, http.MethodPost, "http://localhost:4566/", "{}", map[string]string{
+				headerAuth:   signed("test", usEast1, "dynamodb"),
+				headerTarget: "DynamoDB_20120810.ListTables",
+				headerType:   jsonType,
+				"User-Agent": "aws-cli/2.15.0 Python/3.11",
+			}),
+			wantService: "dynamodb",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, body := call(t, g.Handler(), tt.give)
+
+			assert.Equal(t, http.StatusNotImplemented, resp.StatusCode)
+			assert.Contains(t, body, "Service '"+tt.wantService+"' is not enabled.")
+			assert.Zero(t, served.Load(), "s3 never serves it")
+		})
+	}
+
+	t.Run("an unsigned call still reaches the Fallback", func(t *testing.T) {
+		resp, _ := call(t, g.Handler(), newRequest(t, http.MethodGet, "http://localhost:4566/bucket/key", "", nil))
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, int64(1), served.Load())
+	})
 }

@@ -199,6 +199,19 @@ func Test_Gateway_markDirty(t *testing.T) {
 	failing := func(w http.ResponseWriter, _ *request.Context) { w.WriteHeader(http.StatusBadRequest) }
 	panicking := func(http.ResponseWriter, *request.Context) { panic("boom") }
 	custom := func(operation string) bool { return operation == "Purge" }
+	// A service that takes the connection answers without calling WriteHeader,
+	// and tells the gateway the status it sent instead.
+	taken := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			if noter, ok := w.(interface{ NoteStatus(code int) }); ok {
+				noter.NoteStatus(code)
+
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+		}
+	}
 
 	operation := func(op string) func(*testing.T) *http.Request {
 		return func(t *testing.T) *http.Request {
@@ -228,6 +241,14 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "receive", giveServe: okServe, giveRequest: operation("ReceiveMessage")},
 		{name: "an error response", giveServe: failing, giveRequest: operation("SendMessage")},
 		{name: "a panic", giveServe: panicking, giveRequest: operation("SendMessage")},
+		{
+			name: "an error on a taken connection", giveServe: taken(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"),
+		},
+		{
+			name: "a success on a taken connection", giveServe: taken(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
 		{name: "no operation", giveServe: okServe, giveRequest: operation("")},
 		{
 			name: "own rule marks", giveServe: okServe, giveMutating: custom,
@@ -260,6 +281,49 @@ func Test_Gateway_markDirty(t *testing.T) {
 	}
 }
 
+// Test_Gateway_markDirty_whenATakenResponseNotesItsStatus checks the mark
+// happens when a service that took the connection notes its status, while it
+// still serves: it sends the response itself and can finish it before it
+// returns, so a mark after it returns would let a client read the success of
+// a write the gateway has not yet marked.
+func Test_Gateway_markDirty_whenATakenResponseNotesItsStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		giveStatus int
+		wantMarked []string
+	}{
+		{name: "a success", giveStatus: http.StatusOK, wantMarked: []string{nameSQS}},
+		{name: "no content", giveStatus: http.StatusNoContent, wantMarked: []string{nameSQS}},
+		{name: "an error", giveStatus: http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirty := &dirtyLog{}
+
+			var whileServing []string
+
+			reg := sqsRegistration(func(w http.ResponseWriter, _ *request.Context) {
+				noter, ok := w.(interface{ NoteStatus(code int) })
+				require.True(t, ok, "the gateway's writer takes a status a service sends itself")
+
+				noter.NoteStatus(tt.giveStatus)
+
+				// The service writes and ends its response from here on.
+				whileServing = dirty.marked()
+			})
+
+			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			require.NoError(t, err)
+
+			call(t, g.Handler(), sendMessage(t))
+
+			assert.Equal(t, tt.wantMarked, whileServing, "marked before the service sends a byte")
+			assert.Equal(t, tt.wantMarked, dirty.marked(), "marked once")
+		})
+	}
+}
+
 func Test_Gateway_noPersistence(t *testing.T) {
 	g, err := gateway.New(newSettings().get, []service.Registration{sqsRegistration(okServe)}, nil, nil)
 	require.NoError(t, err)
@@ -278,9 +342,9 @@ func Test_Gateway_noService(t *testing.T) {
 		{name: "root", give: newRequest(t, http.MethodGet, "http://localhost:4566/", "", nil)},
 		{name: "unknown path", give: newRequest(t, http.MethodGet, "http://localhost:4566/nothing/here", "", nil)},
 		{
-			name: "an unregistered service",
+			name: "a signing name no service has",
 			give: newRequest(t, http.MethodPost, "http://localhost:4566/", "", map[string]string{
-				headerAuth: signed("test", usEast1, "s3"),
+				headerAuth: signed("test", usEast1, "bogus"),
 			}),
 		},
 		{
