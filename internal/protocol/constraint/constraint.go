@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // Path is where a value sits in a request, spelled as AWS spells it: the
@@ -109,17 +109,12 @@ func (r *Report) Message() string {
 	return strconv.Itoa(len(r.failures)) + " validation " + noun + " detected: " + strings.Join(r.failures, "; ")
 }
 
-// Length is the length a string constraint measures: UTF-16 code units, as
-// the Java services count them, so a character outside the Basic Multilingual
-// Plane counts two.
+// Length is the length a string constraint measures: characters (Unicode
+// code points), as LocalStack's own checks count them with Python's len, so
+// a character outside the Basic Multilingual Plane counts one. No snapshot
+// pins AWS's count.
 func Length(s string) int {
-	n := 0
-
-	for _, c := range s {
-		n += utf16.RuneLen(c)
-	}
-
-	return n
+	return utf8.RuneCountInString(s)
 }
 
 // Number is the text of a number in a message.

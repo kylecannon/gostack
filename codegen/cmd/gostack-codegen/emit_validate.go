@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -24,21 +26,22 @@ const (
 // javaUnicode is a \uXXXX escape of a Java pattern, which Go writes \x{XXXX}.
 var javaUnicode = regexp.MustCompile(`\\u([0-9A-Fa-f]{4})`)
 
-// validator holds what the validate.go file of a service collects while it is
-// written: the pattern variables, and the constraints it leaves unchecked.
+// validator holds the pattern variables the validate.go file of a service
+// collects while it is written.
 type validator struct {
-	g         *generator
-	patterns  map[string]string // Go expression to variable name
-	order     []string          // Go expressions in the order they were named
-	unchecked []string
-	seen      map[string]bool // unchecked lines already listed
+	g        *generator
+	patterns map[string]string // Go expression to variable name
+	order    []string          // Go expressions in the order they were named
 }
 
-// validateFile writes the validate method of every struct below an operation
-// input that has a constraint somewhere below it, and the patterns they use.
+// validateFile writes the Validate method of every operation input, the
+// validate method of every struct below one that holds a member the service
+// table lists, and the patterns they use.
 func (g *generator) validateFile() (string, error) {
-	v := &validator{g: g, patterns: map[string]string{}, seen: map[string]bool{}}
+	v := &validator{g: g, patterns: map[string]string{}}
 	body := &printer{}
+
+	g.emitInputValidate(body)
 
 	for _, st := range g.sortedStructs() {
 		if !st.validates {
@@ -53,20 +56,8 @@ func (g *generator) validateFile() (string, error) {
 
 	p := &printer{}
 
-	if len(v.unchecked) > 0 {
-		p.f("// The checks below leave these constraints of the model unchecked; a")
-		p.f("// handler that needs them checks them itself:")
-		p.f("//")
-
-		for _, line := range v.unchecked {
-			p.f("//   - %s", line)
-		}
-
-		p.blank()
-		p.f("// validateUnchecked counts the constraints listed above.")
-		p.f("const validateUnchecked = %d", len(v.unchecked))
-		p.blank()
-	}
+	p.f("// Only the members listed in the generator's service table are checked.")
+	p.blank()
 
 	if len(v.order) > 0 {
 		p.f("// The patterns of the string shapes, compiled when first used.")
@@ -85,16 +76,51 @@ func (g *generator) validateFile() (string, error) {
 	return p.buf.String(), nil
 }
 
-// skip lists a constraint the checks leave out.
-func (v *validator) skip(line string) {
-	if !v.seen[line] {
-		v.seen[line] = true
-		v.unchecked = append(v.unchecked, line)
+// emitInputValidate writes the exported Validate method of each operation
+// input, which a handler calls to run the checks at its own point.
+func (g *generator) emitInputValidate(p *printer) {
+	seen := map[string]bool{}
+
+	var inputs []*structType
+
+	for _, name := range g.opNames {
+		in := g.ops[name].input
+		if !seen[in.goName] {
+			seen[in.goName] = true
+			inputs = append(inputs, in)
+		}
+	}
+
+	slices.SortFunc(inputs, func(a, b *structType) int { return strings.Compare(a.goName, b.goName) })
+
+	for _, in := range inputs {
+		p.f("// Validate returns the error for the listed constraints v breaks, or nil.")
+		p.f("// ServeValidated runs it before the handler, except for an operation whose")
+		p.f("// handler runs it itself.")
+
+		if !in.validates {
+			p.f("func (*%s) Validate() error {", in.goName)
+			p.f("\treturn nil")
+			p.f("}")
+			p.blank()
+
+			continue
+		}
+
+		p.f("func (v *%s) Validate() error {", in.goName)
+		p.f("\tvar r constraint.Report")
+		p.f("\tv.validate(&r, nil)")
+		p.f("\tif r.Failed() {")
+		p.f("\t\treturn newValidationError(&r)")
+		p.f("\t}")
+		p.f("\treturn nil")
+		p.f("}")
+		p.blank()
 	}
 }
 
 func (v *validator) emitStruct(p *printer, st *structType) error {
-	p.f("// validate records in r every constraint of the model v breaks, at the path at.")
+	p.f("// validate records in r every listed constraint v breaks, at the path at.")
 	p.f("func (v *%s) validate(r *constraint.Report, at *constraint.Path) {", st.goName)
 
 	for _, f := range st.fields {
@@ -110,15 +136,17 @@ func (v *validator) emitStruct(p *printer, st *structType) error {
 	return nil
 }
 
-// emitField writes the checks of one member: absence when it is required,
-// then, when it is set, its own constraints and the structs below it.
+// emitField writes the checks of one member: absence when it is listed as
+// required, then, when it is set, its own listed constraints and the structs
+// below it.
 func (v *validator) emitField(p *printer, f *field) error {
 	r := f.pair.p
 	name := lowerFirst(f.member)
 	x := "v." + f.goName
+	required := f.checks&checkRequired != 0
 
 	if r.shape.Document {
-		if f.required {
+		if required {
 			p.f("\tif %s == nil {", x)
 			p.f("\t\tr.Null(at, %q)", name)
 			p.f("\t}")
@@ -135,7 +163,7 @@ func (v *validator) emitField(p *printer, f *field) error {
 
 	inner := &printer{}
 
-	err := v.emitValue(inner, r, val, name)
+	err := v.emitValue(inner, r, f.checks, val, name)
 	if err != nil {
 		return err
 	}
@@ -143,7 +171,7 @@ func (v *validator) emitField(p *printer, f *field) error {
 	v.emitNested(inner, r, x, name)
 
 	switch {
-	case f.required:
+	case required:
 		p.f("\tif %s == nil {", x)
 		p.f("\t\tr.Null(at, %q)", name)
 
@@ -163,29 +191,36 @@ func (v *validator) emitField(p *printer, f *field) error {
 	return nil
 }
 
-// emitValue writes the checks of a set member's own value, val: pattern,
-// length or value bounds, and enum, in that order. AWS reports a pattern
-// failure before a length failure of the same member.
-func (v *validator) emitValue(p *printer, r ref, val, name string) error {
+// emitValue writes the listed checks of a set member's own value, val:
+// pattern, length or value bounds, and enum, in that order. AWS reports a
+// pattern failure before a length failure of the same member.
+func (v *validator) emitValue(p *printer, r ref, checks check, val, name string) error {
 	sh := r.shape
 	report := v.reporter(r, val, name)
 
 	switch sh.Type {
 	case spec.TypeString:
-		v.emitPattern(p, r, val, report)
+		if checks&checkPattern != 0 {
+			err := v.emitPattern(p, r, val, report)
+			if err != nil {
+				return err
+			}
+		}
 
-		err := emitBounds(p, sh, "constraint.Length("+val+")", lengthBounds, report)
+		err := emitBounds(p, sh, checks, "constraint.Length("+val+")", lengthBounds, report)
 		if err != nil {
 			return err
 		}
 
-		v.emitEnum(p, r, val, report)
+		if checks&checkEnum != 0 {
+			v.emitEnum(p, r, val, report)
+		}
 
 		return nil
 	case spec.TypeBlob, spec.TypeList, spec.TypeMap:
-		return emitBounds(p, sh, "len("+val+")", lengthBounds, report)
+		return emitBounds(p, sh, checks, "len("+val+")", lengthBounds, report)
 	case spec.TypeInteger, spec.TypeLong, spec.TypeFloat, spec.TypeDouble:
-		return emitBounds(p, sh, val, valueBounds, report)
+		return emitBounds(p, sh, checks, val, valueBounds, report)
 	default:
 		return nil
 	}
@@ -262,9 +297,11 @@ func isScalar(sh *spec.Shape) bool {
 	}
 }
 
-// emitBounds writes the min and max checks of measure.
-func emitBounds(p *printer, sh *spec.Shape, measure string, b bounds, report func(p *printer, rule string)) error {
-	if sh.Min != "" {
+// emitBounds writes the listed min and max checks of measure.
+func emitBounds(p *printer, sh *spec.Shape, checks check, measure string, b bounds,
+	report func(p *printer, rule string),
+) error {
+	if checks&checkMin != 0 {
 		n, err := sh.Min.Int64()
 		if err != nil && b.length {
 			return fmt.Errorf("min %s is not a whole number", sh.Min)
@@ -277,7 +314,7 @@ func emitBounds(p *printer, sh *spec.Shape, measure string, b bounds, report fun
 		}
 	}
 
-	if sh.Max != "" {
+	if checks&checkMax != 0 {
 		_, err := sh.Max.Int64()
 		if err != nil && b.length {
 			return fmt.Errorf("max %s is not a whole number", sh.Max)
@@ -291,22 +328,20 @@ func emitBounds(p *printer, sh *spec.Shape, measure string, b bounds, report fun
 	return nil
 }
 
-// emitPattern writes the pattern check of a string, which must match whole.
-// A pattern Go's regexp cannot compile, a lookahead for one, is left out and
-// listed, not approximated; a \uXXXX escape is written the way Go writes it.
-func (v *validator) emitPattern(p *printer, r ref, val string, report func(p *printer, rule string)) {
-	pat := r.shape.Pattern
-	if pat == "" {
-		return
-	}
+// goPattern is the expression Go's regexp runs for a model pattern, which
+// must match whole: a \uXXXX escape is written the way Go writes it.
+func goPattern(pat string) string {
+	return "^(?:" + javaUnicode.ReplaceAllString(pat, `\x{$1}`) + ")$"
+}
 
-	expr := "^(?:" + javaUnicode.ReplaceAllString(pat, `\x{$1}`) + ")$"
+// emitPattern writes the pattern check of a string.
+func (v *validator) emitPattern(p *printer, r ref, val string, report func(p *printer, rule string)) error {
+	pat := r.shape.Pattern
+	expr := goPattern(pat)
 
 	_, err := regexp.Compile(expr)
 	if err != nil {
-		v.skip(fmt.Sprintf("%s: pattern %s, which Go's regexp cannot compile", r.name, pat))
-
-		return
+		return fmt.Errorf("pattern %s, which Go's regexp cannot compile: %w", pat, err)
 	}
 
 	varName, ok := v.patterns[expr]
@@ -319,16 +354,14 @@ func (v *validator) emitPattern(p *printer, r ref, val string, report func(p *pr
 	p.f("\t\tif !%s.MatchString(%s) {", varName, val)
 	report(p, rulePattern+pat)
 	p.f("\t\t}")
+
+	return nil
 }
 
 // emitEnum writes the enum check of a string, with the value list the
 // service's Enums option gives in place of the model's.
 func (v *validator) emitEnum(p *printer, r ref, val string, report func(p *printer, rule string)) {
 	values := r.shape.Enum
-	if len(values) == 0 {
-		return
-	}
-
 	text := values
 
 	if o, ok := v.g.opts.Validation.Enums[r.name]; ok {
@@ -350,12 +383,9 @@ func (v *validator) emitEnum(p *printer, r ref, val string, report func(p *print
 	p.f("\t\t}")
 }
 
-// emitNested writes the calls into the structs below a set member: the member
-// itself, the elements of a list, or the values of a map, at the path AWS
-// gives them. The constraints of scalar list elements, of map keys and
-// values, and of anything inside a list or map that is itself inside a list
-// or map are reported by AWS in a form no snapshot pins, so they are listed
-// as unchecked instead.
+// emitNested writes the calls into the structs below a set member that
+// validate: the member itself, the elements of a list, or the values of a
+// map, at the path AWS gives them.
 func (v *validator) emitNested(p *printer, r ref, x, name string) {
 	switch r.shape.Type {
 	case spec.TypeStructure:
@@ -372,15 +402,8 @@ func (v *validator) emitNested(p *printer, r ref, x, name string) {
 			p.f("\t\t\tp := at.Item(%q, i)", name)
 			p.f("\t\t\t%s[i].validate(r, &p)", x)
 			p.f("\t\t}")
-		} else if v.leftUnchecked(elem) {
-			v.skip(fmt.Sprintf("%s: the constraints of its elements, %s", r.name, elem.name))
 		}
 	case spec.TypeMap:
-		key, _ := resolve(v.g.p, r.shape.Key)
-		if ownConstraint(key.shape) {
-			v.skip(fmt.Sprintf("%s: the constraints of its keys, %s", r.name, key.name))
-		}
-
 		elem, _ := resolve(v.g.p, r.shape.Value)
 		if v.structValidates(elem) {
 			p.f("\t\tfor _, k := range constraint.Keys(%s) {", x)
@@ -388,41 +411,9 @@ func (v *validator) emitNested(p *printer, r ref, x, name string) {
 			p.f("\t\t\tp := at.Entry(%q, k)", name)
 			p.f("\t\t\te.validate(r, &p)")
 			p.f("\t\t}")
-		} else if v.leftUnchecked(elem) {
-			v.skip(fmt.Sprintf("%s: the constraints of its values, %s", r.name, elem.name))
 		}
 	default: // a scalar has nothing below it
 	}
-}
-
-// leftUnchecked reports whether a list element or map value that is not a
-// structure with a validate method has a constraint the checks would act on,
-// on itself or anywhere below it: a constrained scalar, or a list or map
-// inside the collection, which no snapshot shows the path form of.
-func (v *validator) leftUnchecked(r ref) bool {
-	if ownConstraint(r.shape) {
-		return true
-	}
-
-	var inner []*spec.Ref
-
-	switch r.shape.Type {
-	case spec.TypeList:
-		inner = []*spec.Ref{r.shape.Member}
-	case spec.TypeMap:
-		inner = []*spec.Ref{r.shape.Key, r.shape.Value}
-	default:
-		return false
-	}
-
-	for _, ir := range inner {
-		e, err := resolve(v.g.p, ir)
-		if err == nil && (v.structValidates(e) || v.leftUnchecked(e)) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // structValidates reports whether r is a structure with a validate method.
@@ -431,56 +422,63 @@ func (v *validator) structValidates(r ref) bool {
 		v.g.structs[v.g.goTypeName(r.name)].validates
 }
 
-// markValidation flags the structs below an operation input that get a
-// validate method: those with a required member, a constrained member, or
-// such a struct below them.
-func (g *generator) markValidation() {
-	if g.opts.Validation == nil {
-		return
+// checkedStructs lists the structure a member's checks call into: the member
+// itself, or the element of a list or the value of a map. A structure inside
+// a list or map that is itself inside a list or map is not followed; no
+// snapshot pins the path AWS gives it.
+func (g *generator) checkedStructs(r ref) []string {
+	if r.shape.Document {
+		return nil
 	}
 
-	memo := map[string]bool{}
+	inner := r
 
-	var needs func(st *structType) bool
-
-	needs = func(st *structType) bool {
-		if res, ok := memo[st.goName]; ok {
-			return res
-		}
-
-		memo[st.goName] = false // a cycle adds nothing by itself
-
-		result := false
-
-		for _, f := range st.fields {
-			r := f.pair.p
-			if f.required || (!r.shape.Document && ownConstraint(r.shape)) {
-				result = true
-			}
-
-			for _, nested := range g.nestedStructs(r) {
-				if needs(g.structs[g.goTypeName(nested)]) {
-					result = true
-				}
-			}
-		}
-
-		memo[st.goName] = result
-
-		return result
+	switch r.shape.Type {
+	case spec.TypeStructure:
+	case spec.TypeList:
+		inner, _ = resolve(g.p, r.shape.Member)
+	case spec.TypeMap:
+		inner, _ = resolve(g.p, r.shape.Value)
+	default:
+		return nil
 	}
+
+	if inner.shape == nil || inner.shape.Type != spec.TypeStructure || inner.shape.Document {
+		return nil
+	}
+
+	return []string{inner.name}
+}
+
+// markValidation sets the checks the service table lists on their fields,
+// and flags the structs below an operation input that get a validate method:
+// those that hold a listed member, on themselves or on a struct below them.
+func (g *generator) markValidation() error {
+	val := g.opts.Validation
+	if val == nil {
+		return nil
+	}
+
+	for _, key := range sortedKeys(val.Checks) {
+		err := g.listCheck(key, val.Checks[key])
+		if err != nil {
+			return fmt.Errorf("Validation.Checks %s: %w", key, err)
+		}
+	}
+
+	reach := g.structsReaching(func(f *field) bool { return f.checks != 0 }, g.checkedStructs)
 
 	var walk func(st *structType)
 
 	walk = func(st *structType) {
-		if st.validates || !needs(st) {
+		if st.validates || !reach[st.goName] {
 			return
 		}
 
 		st.validates = true
 
 		for _, f := range st.fields {
-			for _, nested := range g.nestedStructs(f.pair.p) {
+			for _, nested := range g.checkedStructs(f.pair.p) {
 				walk(g.structs[g.goTypeName(nested)])
 			}
 		}
@@ -489,21 +487,95 @@ func (g *generator) markValidation() {
 	for _, name := range g.opNames {
 		walk(g.ops[name].input)
 	}
+
+	for _, key := range sortedKeys(val.Checks) {
+		shape, _, _ := strings.Cut(key, ".")
+		if !g.structs[g.goTypeName(shape)].validates {
+			return fmt.Errorf("Validation.Checks %s: no operation input reaches it along a path the checks follow", key)
+		}
+	}
+
+	for _, op := range val.HandlerChecks {
+		o, ok := g.ops[op]
+		if !ok {
+			return fmt.Errorf("Validation.HandlerChecks %s: no such operation", op)
+		}
+
+		if !o.input.validates {
+			return fmt.Errorf("Validation.HandlerChecks %s: its input has nothing to check", op)
+		}
+	}
+
+	return nil
 }
 
-// ownConstraint reports whether a member's own value has a trait the checks
-// act on.
-func ownConstraint(sh *spec.Shape) bool {
-	switch sh.Type {
-	case spec.TypeString:
-		return (sh.Min != "" && sh.Min != "0") || sh.Max != "" || sh.Pattern != "" || len(sh.Enum) > 0
-	case spec.TypeBlob, spec.TypeList, spec.TypeMap:
-		return (sh.Min != "" && sh.Min != "0") || sh.Max != ""
-	case spec.TypeInteger, spec.TypeLong, spec.TypeFloat, spec.TypeDouble:
-		return sh.Min != "" || sh.Max != ""
-	default:
-		return false
+// listCheck sets the checks of the member key names, "Shape.Member", after
+// it makes sure the member has every trait they enforce.
+func (g *generator) listCheck(key string, c check) error {
+	shape, member, ok := strings.Cut(key, ".")
+	if !ok || c == 0 {
+		return errors.New("want a Shape.Member key and at least one check")
 	}
+
+	st := g.structs[g.goTypeName(shape)]
+	if st == nil {
+		return fmt.Errorf("no structure %s", shape)
+	}
+
+	i := slices.IndexFunc(st.fields, func(f *field) bool { return f.member == member })
+	if i < 0 {
+		return fmt.Errorf("%s has no member %s", shape, member)
+	}
+
+	f := st.fields[i]
+
+	missing := traitsMissing(f, c)
+	if len(missing) > 0 {
+		return fmt.Errorf("the member has no %s to check", strings.Join(missing, ", "))
+	}
+
+	f.checks = c
+
+	return nil
+}
+
+// traitsMissing names the checks in c the member f has no trait for.
+func traitsMissing(f *field, c check) []string {
+	sh := f.pair.p.shape
+	length := sh.Type == spec.TypeString || sh.Type == spec.TypeBlob || sh.Type == spec.TypeList || sh.Type == spec.TypeMap
+	number := sh.Type == spec.TypeInteger || sh.Type == spec.TypeLong || sh.Type == spec.TypeFloat ||
+		sh.Type == spec.TypeDouble
+
+	_, patternErr := regexp.Compile(goPattern(sh.Pattern))
+
+	has := map[check]bool{
+		checkRequired: f.required,
+		checkPattern:  sh.Type == spec.TypeString && sh.Pattern != "" && patternErr == nil,
+		checkMin:      (number && sh.Min != "") || (length && sh.Min != "" && sh.Min != "0"),
+		checkMax:      (number || length) && sh.Max != "",
+		checkEnum:     sh.Type == spec.TypeString && len(sh.Enum) > 0,
+	}
+
+	names := []struct {
+		c    check
+		name string
+	}{
+		{checkRequired, "required trait"},
+		{checkPattern, "pattern Go's regexp can compile"},
+		{checkMin, "min"},
+		{checkMax, "max"},
+		{checkEnum, "enum"},
+	}
+
+	var missing []string
+
+	for _, n := range names {
+		if c&n.c != 0 && !has[n.c] {
+			missing = append(missing, n.name)
+		}
+	}
+
+	return missing
 }
 
 // lowerFirst writes a member name as AWS's messages do, its first letter in

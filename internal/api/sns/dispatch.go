@@ -9,7 +9,6 @@ import (
 
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
-	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -146,13 +145,6 @@ func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool)
 
 func serveAddPermission(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readAddPermission(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -198,13 +190,6 @@ func writeAddPermission(w http.ResponseWriter, rc *request.Context, out *AddPerm
 
 func serveCheckIfPhoneNumberIsOptedOut(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCheckIfPhoneNumberIsOptedOut(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -250,13 +235,6 @@ func writeCheckIfPhoneNumberIsOptedOut(w http.ResponseWriter, rc *request.Contex
 
 func serveConfirmSubscription(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readConfirmSubscription(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -303,10 +281,8 @@ func writeConfirmSubscription(w http.ResponseWriter, rc *request.Context, out *C
 func serveCreatePlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreatePlatformApplication(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -354,13 +330,6 @@ func writeCreatePlatformApplication(w http.ResponseWriter, rc *request.Context, 
 
 func serveCreatePlatformEndpoint(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreatePlatformEndpoint(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -406,13 +375,6 @@ func writeCreatePlatformEndpoint(w http.ResponseWriter, rc *request.Context, out
 
 func serveCreateSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateSMSSandboxPhoneNumber(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -458,13 +420,6 @@ func writeCreateSMSSandboxPhoneNumber(w http.ResponseWriter, rc *request.Context
 
 func serveCreateTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateTopic(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -510,13 +465,6 @@ func writeCreateTopic(w http.ResponseWriter, rc *request.Context, out *CreateTop
 
 func serveDeleteEndpoint(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteEndpoint(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -562,13 +510,6 @@ func writeDeleteEndpoint(w http.ResponseWriter, rc *request.Context, out *Delete
 
 func serveDeletePlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeletePlatformApplication(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -614,13 +555,6 @@ func writeDeletePlatformApplication(w http.ResponseWriter, rc *request.Context, 
 
 func serveDeleteSMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteSMSSandboxPhoneNumber(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -666,13 +600,6 @@ func writeDeleteSMSSandboxPhoneNumber(w http.ResponseWriter, rc *request.Context
 
 func serveDeleteTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteTopic(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -718,13 +645,6 @@ func writeDeleteTopic(w http.ResponseWriter, rc *request.Context, out *DeleteTop
 
 func serveGetDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetDataProtectionPolicy(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -770,13 +690,6 @@ func writeGetDataProtectionPolicy(w http.ResponseWriter, rc *request.Context, ou
 
 func serveGetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetEndpointAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -822,13 +735,6 @@ func writeGetEndpointAttributes(w http.ResponseWriter, rc *request.Context, out 
 
 func serveGetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetPlatformApplicationAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -964,13 +870,6 @@ func writeGetSMSSandboxAccountStatus(w http.ResponseWriter, rc *request.Context,
 
 func serveGetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetSubscriptionAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1016,13 +915,6 @@ func writeGetSubscriptionAttributes(w http.ResponseWriter, rc *request.Context, 
 
 func serveGetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetTopicAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1068,13 +960,6 @@ func writeGetTopicAttributes(w http.ResponseWriter, rc *request.Context, out *Ge
 
 func serveListEndpointsByPlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListEndpointsByPlatformApplication(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1120,13 +1005,6 @@ func writeListEndpointsByPlatformApplication(w http.ResponseWriter, rc *request.
 
 func serveListOriginationNumbers(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListOriginationNumbers(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1262,13 +1140,6 @@ func writeListPlatformApplications(w http.ResponseWriter, rc *request.Context, o
 
 func serveListSMSSandboxPhoneNumbers(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListSMSSandboxPhoneNumbers(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1359,13 +1230,6 @@ func writeListSubscriptions(w http.ResponseWriter, rc *request.Context, out *Lis
 
 func serveListSubscriptionsByTopic(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListSubscriptionsByTopic(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1411,13 +1275,6 @@ func writeListSubscriptionsByTopic(w http.ResponseWriter, rc *request.Context, o
 
 func serveListTagsForResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListTagsForResource(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1508,13 +1365,6 @@ func writeListTopics(w http.ResponseWriter, rc *request.Context, out *ListTopics
 
 func serveOptInPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readOptInPhoneNumber(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1561,10 +1411,8 @@ func writeOptInPhoneNumber(w http.ResponseWriter, rc *request.Context, out *OptI
 func servePublish(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublish(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1613,10 +1461,8 @@ func writePublish(w http.ResponseWriter, rc *request.Context, out *PublishOutput
 func servePublishBatch(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublishBatch(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1664,13 +1510,6 @@ func writePublishBatch(w http.ResponseWriter, rc *request.Context, out *PublishB
 
 func servePutDataProtectionPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPutDataProtectionPolicy(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1716,13 +1555,6 @@ func writePutDataProtectionPolicy(w http.ResponseWriter, rc *request.Context, ou
 
 func serveRemovePermission(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRemovePermission(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1769,10 +1601,8 @@ func writeRemovePermission(w http.ResponseWriter, rc *request.Context, out *Remo
 func serveSetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetEndpointAttributes(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1820,13 +1650,7 @@ func writeSetEndpointAttributes(w http.ResponseWriter, rc *request.Context, out 
 
 func serveSetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetPlatformApplicationAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
+	// The handler runs in.Validate itself, at the point AWS checks.
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1872,13 +1696,6 @@ func writeSetPlatformApplicationAttributes(w http.ResponseWriter, rc *request.Co
 
 func serveSetSMSAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetSMSAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1924,13 +1741,6 @@ func writeSetSMSAttributes(w http.ResponseWriter, rc *request.Context, out *SetS
 
 func serveSetSubscriptionAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetSubscriptionAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1976,13 +1786,6 @@ func writeSetSubscriptionAttributes(w http.ResponseWriter, rc *request.Context, 
 
 func serveSetTopicAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetTopicAttributes(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2028,13 +1831,6 @@ func writeSetTopicAttributes(w http.ResponseWriter, rc *request.Context, out *Se
 
 func serveSubscribe(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSubscribe(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2080,13 +1876,6 @@ func writeSubscribe(w http.ResponseWriter, rc *request.Context, out *SubscribeOu
 
 func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTagResource(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2132,13 +1921,6 @@ func writeTagResource(w http.ResponseWriter, rc *request.Context, out *TagResour
 
 func serveUnsubscribe(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUnsubscribe(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2184,13 +1966,6 @@ func writeUnsubscribe(w http.ResponseWriter, rc *request.Context, out *Unsubscri
 
 func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUntagResource(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2236,13 +2011,6 @@ func writeUntagResource(w http.ResponseWriter, rc *request.Context, out *UntagRe
 
 func serveVerifySMSSandboxPhoneNumber(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readVerifySMSSandboxPhoneNumber(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return

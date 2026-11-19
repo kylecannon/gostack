@@ -27,6 +27,7 @@ const jsonOneModel = `{"metadata":{"protocol":"json","jsonVersion":"1.1","target
 		"String":{"type":"string"},
 		"Blob":{"type":"blob"},
 		"Boolean":{"type":"boolean"},
+		"Integer":{"type":"integer"},
 		"DoRequest":{"type":"structure","members":{"Value":{"shape":"AttributeValue"},"Choice":{"shape":"Choice"}}},
 		"DoResponse":{"type":"structure","members":{"Value":{"shape":"AttributeValue"}}},
 		"AttributeValue":{"type":"structure","members":{"S":{"shape":"String"},"B":{"shape":"Blob"},
@@ -36,8 +37,9 @@ const jsonOneModel = `{"metadata":{"protocol":"json","jsonVersion":"1.1","target
 		"Choice":{"type":"structure","union":true,"members":{"A":{"shape":"String"},"B":{"shape":"String"}}},
 		"Reasons":{"type":"list","member":{"shape":"String"}},
 		"Failed":{"type":"structure","exception":true,"error":{"httpStatusCode":400,"senderFault":true},
-			"members":{"message":{"shape":"String"},"Item":{"shape":"AttributeMap"}}},
-		"Canceled":{"type":"structure","exception":true,
+			"members":{"message":{"shape":"String"},"Item":{"shape":"AttributeMap"},
+				"Count":{"shape":"Integer"},"Note":{"shape":"String"}}},
+		"Canceled":{"type":"structure","exception":true,"required":["Reasons"],
 			"members":{"Message":{"shape":"String"},"Reasons":{"shape":"Reasons"}}}}}`
 
 // jsonOneTest runs in the generated package of jsonOneModel.
@@ -69,6 +71,14 @@ func (handler) Do(_ context.Context, in *DoInput) (*DoOutput, error) {
 		return nil, (&Canceled{Reasons: []string{"one", "two"}}).Err("it was canceled")
 	case "plain":
 		return nil, NewCanceled("no reasons")
+	case "empty":
+		zero, none := int32(0), ""
+		return nil, (&Failed{Item: map[string]AttributeValue{}, Count: &zero, Note: &none}).Err("all empty")
+	case "set":
+		one, note := int32(1), "n"
+		return nil, (&Failed{Item: map[string]AttributeValue{}, Count: &one, Note: &note}).Err("all set")
+	case "required":
+		return nil, (&Canceled{Reasons: []string{}}).Err("none")
 	}
 
 	return &DoOutput{Value: in.Value}, nil
@@ -121,6 +131,11 @@ func TestErrorMembers(t *testing.T) {
 		{"cancel", map[string]any{"__type": "Canceled", "Message": "it was canceled",
 			"Reasons": []any{"one", "two"}}},
 		{"plain", map[string]any{"__type": "Canceled", "Message": "no reasons"}},
+		// An empty member that is not required is left out, as LocalStack does.
+		{"empty", map[string]any{"__type": "Failed", "message": "all empty"}},
+		{"set", map[string]any{"__type": "Failed", "message": "all set", "Count": 1.0, "Note": "n"}},
+		// A required one is written even when empty.
+		{"required", map[string]any{"__type": "Canceled", "Message": "none", "Reasons": []any{}}},
 	}
 
 	for _, tt := range tests {

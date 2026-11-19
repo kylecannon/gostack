@@ -3,6 +3,184 @@
 package ssm
 
 // missingRequired returns the name of the first required member v lacks, or "".
+func (v *InstancePropertyFilter) missingRequired() string {
+	if v.Key == nil {
+		return "key"
+	}
+	if v.ValueSet == nil {
+		return "valueSet"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InstancePropertyStringFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryAggregator) missingRequired() string {
+	for _, e1 := range v.Aggregators {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	for _, e1 := range v.Groups {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryFilter) missingRequired() string {
+	if v.Key == nil {
+		return "Key"
+	}
+	if v.Values == nil {
+		return "Values"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryGroup) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.Filters == nil {
+		return "Filters"
+	}
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryItem) missingRequired() string {
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	if v.SchemaVersion == nil {
+		return "SchemaVersion"
+	}
+	if v.CaptureTime == nil {
+		return "CaptureTime"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryItemAttribute) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.DataType == nil {
+		return "DataType"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryItemSchema) missingRequired() string {
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	if v.Attributes == nil {
+		return "Attributes"
+	}
+	for _, e1 := range v.Attributes {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryResultEntity) missingRequired() string {
+	for _, e1 := range v.Data {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *InventoryResultItem) missingRequired() string {
+	if v.TypeName == nil {
+		return "TypeName"
+	}
+	if v.SchemaVersion == nil {
+		return "SchemaVersion"
+	}
+	if v.Content == nil {
+		return "Content"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *LabelParameterVersionInput) missingRequired() string {
+	if v.Name == nil {
+		return "Name"
+	}
+	if v.Labels == nil {
+		return "Labels"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListAssociationVersionsInput) missingRequired() string {
+	if v.AssociationId == nil {
+		return "AssociationId"
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListAssociationVersionsOutput) missingRequired() string {
+	for _, e1 := range v.AssociationVersions {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListAssociationsInput) missingRequired() string {
+	for _, e1 := range v.AssociationFilterList {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
+func (v *ListCommandInvocationsInput) missingRequired() string {
+	for _, e1 := range v.Filters {
+		if member := e1.missingRequired(); member != "" {
+			return member
+		}
+	}
+	return ""
+}
+
+// missingRequired returns the name of the first required member v lacks, or "".
 func (v *ListCommandsInput) missingRequired() string {
 	for _, e1 := range v.Filters {
 		if member := e1.missingRequired(); member != "" {

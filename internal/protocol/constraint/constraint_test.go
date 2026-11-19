@@ -1,6 +1,7 @@
 package constraint_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
@@ -32,12 +33,13 @@ func Test_Report_Message(t *testing.T) {
 		"Value at 'plaintext' failed to satisfy constraint: Member must have length less than or equal to 1", r.Message())
 }
 
-func Test_Length_CountsUTF16Units(t *testing.T) {
+func Test_Length_CountsCodePoints(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 3, constraint.Length("abc"))
 	assert.Equal(t, 1, constraint.Length("é"))
-	assert.Equal(t, 2, constraint.Length("😀"))
+	assert.Equal(t, 1, constraint.Length("😀"))
+	assert.Equal(t, 65, constraint.Length(strings.Repeat("😀", 65)))
 }
 
 func Test_Text(t *testing.T) {

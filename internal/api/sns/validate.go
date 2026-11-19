@@ -6,254 +6,344 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 
-// The checks below leave these constraints of the model unchecked; a
-// handler that needs them checks them itself:
-//
-//   - TagKeyList: the constraints of its elements, TagKey
+// Only the members listed in the generator's service table are checked.
 
-// validateUnchecked counts the constraints listed above.
-const validateUnchecked = 1
-
-// The patterns of the string shapes, compiled when first used.
-var (
-	pattern1 = constraint.NewPattern("^(?:^(\\+[0-9]{8,}|[0-9]{0,9})$)$")
-	pattern2 = constraint.NewPattern("^(?:^[0-9]+$)$")
-)
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *AddPermissionInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.Label == nil {
-		r.Null(at, "label")
-	}
-	if v.AWSAccountId == nil {
-		r.Null(at, "aWSAccountId")
-	}
-	if v.ActionName == nil {
-		r.Null(at, "actionName")
-	}
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*AddPermissionInput) Validate() error {
+	return nil
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *CheckIfPhoneNumberIsOptedOutInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PhoneNumber == nil {
-		r.Null(at, "phoneNumber")
-	}
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*CheckIfPhoneNumberIsOptedOutInput) Validate() error {
+	return nil
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ConfirmSubscriptionInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.Token == nil {
-		r.Null(at, "token")
-	}
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ConfirmSubscriptionInput) Validate() error {
+	return nil
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (v *CreatePlatformApplicationInput) Validate() error {
+	var r constraint.Report
+	v.validate(&r, nil)
+	if r.Failed() {
+		return newValidationError(&r)
+	}
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*CreatePlatformEndpointInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*CreateSMSSandboxPhoneNumberInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*CreateTopicInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*DeleteEndpointInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*DeletePlatformApplicationInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*DeleteSMSSandboxPhoneNumberInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*DeleteTopicInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetDataProtectionPolicyInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetEndpointAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetPlatformApplicationAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetSMSAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetSMSSandboxAccountStatusInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetSubscriptionAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*GetTopicAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListEndpointsByPlatformApplicationInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListOriginationNumbersInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListPhoneNumbersOptedOutInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListPlatformApplicationsInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListSMSSandboxPhoneNumbersInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListSubscriptionsByTopicInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListSubscriptionsInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListTagsForResourceInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*ListTopicsInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*OptInPhoneNumberInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (v *PublishBatchInput) Validate() error {
+	var r constraint.Report
+	v.validate(&r, nil)
+	if r.Failed() {
+		return newValidationError(&r)
+	}
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (v *PublishInput) Validate() error {
+	var r constraint.Report
+	v.validate(&r, nil)
+	if r.Failed() {
+		return newValidationError(&r)
+	}
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*PutDataProtectionPolicyInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*RemovePermissionInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (v *SetEndpointAttributesInput) Validate() error {
+	var r constraint.Report
+	v.validate(&r, nil)
+	if r.Failed() {
+		return newValidationError(&r)
+	}
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (v *SetPlatformApplicationAttributesInput) Validate() error {
+	var r constraint.Report
+	v.validate(&r, nil)
+	if r.Failed() {
+		return newValidationError(&r)
+	}
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*SetSMSAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*SetSubscriptionAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*SetTopicAttributesInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*SubscribeInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*TagResourceInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*UnsubscribeInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*UntagResourceInput) Validate() error {
+	return nil
+}
+
+// Validate returns the error for the listed constraints v breaks, or nil.
+// ServeValidated runs it before the handler, except for an operation whose
+// handler runs it itself.
+func (*VerifySMSSandboxPhoneNumberInput) Validate() error {
+	return nil
+}
+
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *CreatePlatformApplicationInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Name == nil {
-		r.Null(at, "name")
-	}
-	if v.Platform == nil {
-		r.Null(at, "platform")
-	}
 	if v.Attributes == nil {
 		r.Null(at, "attributes")
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *CreatePlatformEndpointInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PlatformApplicationArn == nil {
-		r.Null(at, "platformApplicationArn")
-	}
-	if v.Token == nil {
-		r.Null(at, "token")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *CreateSMSSandboxPhoneNumberInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PhoneNumber == nil {
-		r.Null(at, "phoneNumber")
-	} else {
-		if !pattern1.MatchString(*v.PhoneNumber) {
-			r.Hidden(at, "phoneNumber", "Member must satisfy regular expression pattern: ^(\\+[0-9]{8,}|[0-9]{0,9})$")
-		}
-		if constraint.Length(*v.PhoneNumber) > 20 {
-			r.Hidden(at, "phoneNumber", "Member must have length less than or equal to 20")
-		}
-	}
-	if v.LanguageCode != nil {
-		switch *v.LanguageCode {
-		case "en-US", "en-GB", "es-419", "es-ES", "de-DE", "fr-CA", "fr-FR", "it-IT", "ja-JP", "pt-BR", "kr-KR", "zh-CN", "zh-TW":
-		default:
-			r.Value(at, "languageCode", *v.LanguageCode, "Member must satisfy enum value set: [en-US, en-GB, es-419, es-ES, de-DE, fr-CA, fr-FR, it-IT, ja-JP, pt-BR, kr-KR, zh-CN, zh-TW]")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *CreateTopicInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Name == nil {
-		r.Null(at, "name")
-	}
-	if v.Tags != nil {
-		for i := range v.Tags {
-			p := at.Item("tags", i)
-			v.Tags[i].validate(r, &p)
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *DeleteEndpointInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.EndpointArn == nil {
-		r.Null(at, "endpointArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *DeletePlatformApplicationInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PlatformApplicationArn == nil {
-		r.Null(at, "platformApplicationArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *DeleteSMSSandboxPhoneNumberInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PhoneNumber == nil {
-		r.Null(at, "phoneNumber")
-	} else {
-		if !pattern1.MatchString(*v.PhoneNumber) {
-			r.Hidden(at, "phoneNumber", "Member must satisfy regular expression pattern: ^(\\+[0-9]{8,}|[0-9]{0,9})$")
-		}
-		if constraint.Length(*v.PhoneNumber) > 20 {
-			r.Hidden(at, "phoneNumber", "Member must have length less than or equal to 20")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *DeleteTopicInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *GetDataProtectionPolicyInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.ResourceArn == nil {
-		r.Null(at, "resourceArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *GetEndpointAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.EndpointArn == nil {
-		r.Null(at, "endpointArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *GetPlatformApplicationAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PlatformApplicationArn == nil {
-		r.Null(at, "platformApplicationArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *GetSubscriptionAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.SubscriptionArn == nil {
-		r.Null(at, "subscriptionArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *GetTopicAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ListEndpointsByPlatformApplicationInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PlatformApplicationArn == nil {
-		r.Null(at, "platformApplicationArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ListOriginationNumbersInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.MaxResults != nil {
-		if *v.MaxResults < 1 {
-			r.Value(at, "maxResults", constraint.Number(*v.MaxResults), "Member must have value greater than or equal to 1")
-		}
-		if *v.MaxResults > 30 {
-			r.Value(at, "maxResults", constraint.Number(*v.MaxResults), "Member must have value less than or equal to 30")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ListSMSSandboxPhoneNumbersInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.MaxResults != nil {
-		if *v.MaxResults < 1 {
-			r.Value(at, "maxResults", constraint.Number(*v.MaxResults), "Member must have value greater than or equal to 1")
-		}
-		if *v.MaxResults > 100 {
-			r.Value(at, "maxResults", constraint.Number(*v.MaxResults), "Member must have value less than or equal to 100")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ListSubscriptionsByTopicInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *ListTagsForResourceInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.ResourceArn == nil {
-		r.Null(at, "resourceArn")
-	} else {
-		if constraint.Length(*v.ResourceArn) < 1 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length greater than or equal to 1")
-		}
-		if constraint.Length(*v.ResourceArn) > 1011 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length less than or equal to 1011")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *MessageAttributeValue) validate(r *constraint.Report, at *constraint.Path) {
 	if v.DataType == nil {
 		r.Null(at, "dataType")
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *OptInPhoneNumberInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PhoneNumber == nil {
-		r.Null(at, "phoneNumber")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *PublishBatchInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.PublishBatchRequestEntries == nil {
-		r.Null(at, "publishBatchRequestEntries")
-	} else {
+	if v.PublishBatchRequestEntries != nil {
 		for i := range v.PublishBatchRequestEntries {
 			p := at.Item("publishBatchRequestEntries", i)
 			v.PublishBatchRequestEntries[i].validate(r, &p)
@@ -261,14 +351,8 @@ func (v *PublishBatchInput) validate(r *constraint.Report, at *constraint.Path) 
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *PublishBatchRequestEntry) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Id == nil {
-		r.Null(at, "id")
-	}
-	if v.Message == nil {
-		r.Null(at, "message")
-	}
 	if v.MessageAttributes != nil {
 		for _, k := range constraint.Keys(v.MessageAttributes) {
 			e := v.MessageAttributes[k]
@@ -278,11 +362,8 @@ func (v *PublishBatchRequestEntry) validate(r *constraint.Report, at *constraint
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *PublishInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Message == nil {
-		r.Null(at, "message")
-	}
 	if v.MessageAttributes != nil {
 		for _, k := range constraint.Keys(v.MessageAttributes) {
 			e := v.MessageAttributes[k]
@@ -292,173 +373,16 @@ func (v *PublishInput) validate(r *constraint.Report, at *constraint.Path) {
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *PutDataProtectionPolicyInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.ResourceArn == nil {
-		r.Null(at, "resourceArn")
-	}
-	if v.DataProtectionPolicy == nil {
-		r.Null(at, "dataProtectionPolicy")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *RemovePermissionInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.Label == nil {
-		r.Null(at, "label")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *SetEndpointAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.EndpointArn == nil {
-		r.Null(at, "endpointArn")
-	}
 	if v.Attributes == nil {
 		r.Null(at, "attributes")
 	}
 }
 
-// validate records in r every constraint of the model v breaks, at the path at.
+// validate records in r every listed constraint v breaks, at the path at.
 func (v *SetPlatformApplicationAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PlatformApplicationArn == nil {
-		r.Null(at, "platformApplicationArn")
-	}
 	if v.Attributes == nil {
 		r.Null(at, "attributes")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *SetSMSAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Attributes == nil {
-		r.Null(at, "attributes")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *SetSubscriptionAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.SubscriptionArn == nil {
-		r.Null(at, "subscriptionArn")
-	}
-	if v.AttributeName == nil {
-		r.Null(at, "attributeName")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *SetTopicAttributesInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.AttributeName == nil {
-		r.Null(at, "attributeName")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *SubscribeInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.TopicArn == nil {
-		r.Null(at, "topicArn")
-	}
-	if v.Protocol == nil {
-		r.Null(at, "protocol")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *Tag) validate(r *constraint.Report, at *constraint.Path) {
-	if v.Key == nil {
-		r.Null(at, "key")
-	} else {
-		if constraint.Length(*v.Key) < 1 {
-			r.Value(at, "key", *v.Key, "Member must have length greater than or equal to 1")
-		}
-		if constraint.Length(*v.Key) > 128 {
-			r.Value(at, "key", *v.Key, "Member must have length less than or equal to 128")
-		}
-	}
-	if v.Value == nil {
-		r.Null(at, "value")
-	} else {
-		if constraint.Length(*v.Value) > 256 {
-			r.Value(at, "value", *v.Value, "Member must have length less than or equal to 256")
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *TagResourceInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.ResourceArn == nil {
-		r.Null(at, "resourceArn")
-	} else {
-		if constraint.Length(*v.ResourceArn) < 1 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length greater than or equal to 1")
-		}
-		if constraint.Length(*v.ResourceArn) > 1011 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length less than or equal to 1011")
-		}
-	}
-	if v.Tags == nil {
-		r.Null(at, "tags")
-	} else {
-		for i := range v.Tags {
-			p := at.Item("tags", i)
-			v.Tags[i].validate(r, &p)
-		}
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *UnsubscribeInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.SubscriptionArn == nil {
-		r.Null(at, "subscriptionArn")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *UntagResourceInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.ResourceArn == nil {
-		r.Null(at, "resourceArn")
-	} else {
-		if constraint.Length(*v.ResourceArn) < 1 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length greater than or equal to 1")
-		}
-		if constraint.Length(*v.ResourceArn) > 1011 {
-			r.Value(at, "resourceArn", *v.ResourceArn, "Member must have length less than or equal to 1011")
-		}
-	}
-	if v.TagKeys == nil {
-		r.Null(at, "tagKeys")
-	}
-}
-
-// validate records in r every constraint of the model v breaks, at the path at.
-func (v *VerifySMSSandboxPhoneNumberInput) validate(r *constraint.Report, at *constraint.Path) {
-	if v.PhoneNumber == nil {
-		r.Null(at, "phoneNumber")
-	} else {
-		if !pattern1.MatchString(*v.PhoneNumber) {
-			r.Hidden(at, "phoneNumber", "Member must satisfy regular expression pattern: ^(\\+[0-9]{8,}|[0-9]{0,9})$")
-		}
-		if constraint.Length(*v.PhoneNumber) > 20 {
-			r.Hidden(at, "phoneNumber", "Member must have length less than or equal to 20")
-		}
-	}
-	if v.OneTimePassword == nil {
-		r.Null(at, "oneTimePassword")
-	} else {
-		if !pattern2.MatchString(*v.OneTimePassword) {
-			r.Value(at, "oneTimePassword", *v.OneTimePassword, "Member must satisfy regular expression pattern: ^[0-9]+$")
-		}
-		if constraint.Length(*v.OneTimePassword) < 5 {
-			r.Value(at, "oneTimePassword", *v.OneTimePassword, "Member must have length greater than or equal to 5")
-		}
-		if constraint.Length(*v.OneTimePassword) > 8 {
-			r.Value(at, "oneTimePassword", *v.OneTimePassword, "Member must have length less than or equal to 8")
-		}
 	}
 }

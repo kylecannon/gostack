@@ -993,6 +993,16 @@ var errBodyNotUTF8 = &awserr.Error{
 	Fault:      awserr.FaultSender,
 }
 
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *InvalidItemContentException) omitEmpty() *InvalidItemContentException {
+	c := *v
+	if c.TypeName != nil && *c.TypeName == "" {
+		c.TypeName = nil
+	}
+	return &c
+}
+
 // writeError writes err with the members in v.
 func (v *InvalidItemContentException) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 	switch rc.Protocol {
@@ -1001,12 +1011,22 @@ func (v *InvalidItemContentException) writeError(w http.ResponseWriter, rc *requ
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ItemContentMismatchException) omitEmpty() *ItemContentMismatchException {
+	c := *v
+	if c.TypeName != nil && *c.TypeName == "" {
+		c.TypeName = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1017,12 +1037,22 @@ func (v *ItemContentMismatchException) writeError(w http.ResponseWriter, rc *req
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ItemSizeLimitExceededException) omitEmpty() *ItemSizeLimitExceededException {
+	c := *v
+	if c.TypeName != nil && *c.TypeName == "" {
+		c.TypeName = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1033,12 +1063,22 @@ func (v *ItemSizeLimitExceededException) writeError(w http.ResponseWriter, rc *r
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *OpsItemAlreadyExistsException) omitEmpty() *OpsItemAlreadyExistsException {
+	c := *v
+	if c.OpsItemId != nil && *c.OpsItemId == "" {
+		c.OpsItemId = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1049,12 +1089,22 @@ func (v *OpsItemAlreadyExistsException) writeError(w http.ResponseWriter, rc *re
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *OpsItemInvalidParameterException) omitEmpty() *OpsItemInvalidParameterException {
+	c := *v
+	if len(c.ParameterNames) == 0 {
+		c.ParameterNames = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1065,12 +1115,28 @@ func (v *OpsItemInvalidParameterException) writeError(w http.ResponseWriter, rc 
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *OpsItemLimitExceededException) omitEmpty() *OpsItemLimitExceededException {
+	c := *v
+	if len(c.ResourceTypes) == 0 {
+		c.ResourceTypes = nil
+	}
+	if c.Limit != nil && *c.Limit == 0 {
+		c.Limit = nil
+	}
+	if c.LimitType != nil && *c.LimitType == "" {
+		c.LimitType = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1081,12 +1147,25 @@ func (v *OpsItemLimitExceededException) writeError(w http.ResponseWriter, rc *re
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *OpsItemRelatedItemAlreadyExistsException) omitEmpty() *OpsItemRelatedItemAlreadyExistsException {
+	c := *v
+	if c.ResourceUri != nil && *c.ResourceUri == "" {
+		c.ResourceUri = nil
+	}
+	if c.OpsItemId != nil && *c.OpsItemId == "" {
+		c.OpsItemId = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1097,12 +1176,22 @@ func (v *OpsItemRelatedItemAlreadyExistsException) writeError(w http.ResponseWri
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ResourceDataSyncAlreadyExistsException) omitEmpty() *ResourceDataSyncAlreadyExistsException {
+	c := *v
+	if c.SyncName != nil && *c.SyncName == "" {
+		c.SyncName = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1113,12 +1202,25 @@ func (v *ResourceDataSyncAlreadyExistsException) writeError(w http.ResponseWrite
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ResourceDataSyncNotFoundException) omitEmpty() *ResourceDataSyncNotFoundException {
+	c := *v
+	if c.SyncName != nil && *c.SyncName == "" {
+		c.SyncName = nil
+	}
+	if c.SyncType != nil && *c.SyncType == "" {
+		c.SyncType = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1129,12 +1231,22 @@ func (v *ResourceDataSyncNotFoundException) writeError(w http.ResponseWriter, rc
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ResourcePolicyInvalidParameterException) omitEmpty() *ResourcePolicyInvalidParameterException {
+	c := *v
+	if len(c.ParameterNames) == 0 {
+		c.ParameterNames = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1145,12 +1257,25 @@ func (v *ResourcePolicyInvalidParameterException) writeError(w http.ResponseWrit
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ResourcePolicyLimitExceededException) omitEmpty() *ResourcePolicyLimitExceededException {
+	c := *v
+	if c.Limit != nil && *c.Limit == 0 {
+		c.Limit = nil
+	}
+	if c.LimitType != nil && *c.LimitType == "" {
+		c.LimitType = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1161,12 +1286,25 @@ func (v *ResourcePolicyLimitExceededException) writeError(w http.ResponseWriter,
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ServiceQuotaExceededException) omitEmpty() *ServiceQuotaExceededException {
+	c := *v
+	if c.ResourceId != nil && *c.ResourceId == "" {
+		c.ResourceId = nil
+	}
+	if c.ResourceType != nil && *c.ResourceType == "" {
+		c.ResourceType = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1177,12 +1315,25 @@ func (v *ServiceQuotaExceededException) writeError(w http.ResponseWriter, rc *re
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ThrottlingException) omitEmpty() *ThrottlingException {
+	c := *v
+	if c.QuotaCode != nil && *c.QuotaCode == "" {
+		c.QuotaCode = nil
+	}
+	if c.ServiceCode != nil && *c.ServiceCode == "" {
+		c.ServiceCode = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1193,12 +1344,22 @@ func (v *ThrottlingException) writeError(w http.ResponseWriter, rc *request.Cont
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *UnsupportedInventoryItemContextException) omitEmpty() *UnsupportedInventoryItemContextException {
+	c := *v
+	if c.TypeName != nil && *c.TypeName == "" {
+		c.TypeName = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1209,12 +1370,22 @@ func (v *UnsupportedInventoryItemContextException) writeError(w http.ResponseWri
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
 		http.Error(w, err.Message, err.StatusCode)
 	}
+}
+
+// omitEmpty returns v without the members a json error leaves out: one that
+// is empty and not required.
+func (v *ValidationException) omitEmpty() *ValidationException {
+	c := *v
+	if c.ReasonCode != nil && *c.ReasonCode == "" {
+		c.ReasonCode = nil
+	}
+	return &c
 }
 
 // writeError writes err with the members in v.
@@ -1225,7 +1396,7 @@ func (v *ValidationException) writeError(w http.ResponseWriter, rc *request.Cont
 			QueryCompatible: awsQueryCompatible,
 			ContentType:     "application/x-amz-json-" + jsonVersion,
 			MessageName:     messageName(err.Code),
-			Members:         v,
+			Members:         v.omitEmpty(),
 		}
 		awsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)
 	default:
@@ -2841,184 +3012,6 @@ func (v *InstancePatchStateFilter) missingRequired() string {
 	}
 	if v.Type == nil {
 		return "Type"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InstancePropertyFilter) missingRequired() string {
-	if v.Key == nil {
-		return "key"
-	}
-	if v.ValueSet == nil {
-		return "valueSet"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InstancePropertyStringFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryAggregator) missingRequired() string {
-	for _, e1 := range v.Aggregators {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	for _, e1 := range v.Groups {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryFilter) missingRequired() string {
-	if v.Key == nil {
-		return "Key"
-	}
-	if v.Values == nil {
-		return "Values"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryGroup) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.Filters == nil {
-		return "Filters"
-	}
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryItem) missingRequired() string {
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	if v.SchemaVersion == nil {
-		return "SchemaVersion"
-	}
-	if v.CaptureTime == nil {
-		return "CaptureTime"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryItemAttribute) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.DataType == nil {
-		return "DataType"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryItemSchema) missingRequired() string {
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	if v.Attributes == nil {
-		return "Attributes"
-	}
-	for _, e1 := range v.Attributes {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryResultEntity) missingRequired() string {
-	for _, e1 := range v.Data {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *InventoryResultItem) missingRequired() string {
-	if v.TypeName == nil {
-		return "TypeName"
-	}
-	if v.SchemaVersion == nil {
-		return "SchemaVersion"
-	}
-	if v.Content == nil {
-		return "Content"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *LabelParameterVersionInput) missingRequired() string {
-	if v.Name == nil {
-		return "Name"
-	}
-	if v.Labels == nil {
-		return "Labels"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListAssociationVersionsInput) missingRequired() string {
-	if v.AssociationId == nil {
-		return "AssociationId"
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListAssociationVersionsOutput) missingRequired() string {
-	for _, e1 := range v.AssociationVersions {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListAssociationsInput) missingRequired() string {
-	for _, e1 := range v.AssociationFilterList {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
-	}
-	return ""
-}
-
-// missingRequired returns the name of the first required member v lacks, or "".
-func (v *ListCommandInvocationsInput) missingRequired() string {
-	for _, e1 := range v.Filters {
-		if member := e1.missingRequired(); member != "" {
-			return member
-		}
 	}
 	return ""
 }

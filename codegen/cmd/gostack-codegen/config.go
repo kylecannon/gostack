@@ -42,21 +42,44 @@ type serviceOptions struct {
 	// service treats as one, and that get MembersSet as well: DynamoDB's
 	// AttributeValue.
 	UnionShapes []string
-	// Validation makes ServeValidated check the model's required, min, max,
-	// enum and pattern traits, and answer every failure at once in AWS's
-	// "N validation errors detected" message, in place of the first missing
-	// member. A nil value keeps the missing-member check.
+	// Validation makes ServeValidated check the model traits its Checks list,
+	// and answer every failure at once in AWS's "N validation errors
+	// detected" message, in place of the first missing member. A nil value
+	// keeps the missing-member check.
 	Validation *validation
 }
 
-// validation is how a service reports the constraints a request breaks.
+// validation is which constraints a service checks and how it reports the
+// ones a request breaks.
 type validation struct {
 	// Code is the error code, ValidationException when empty.
 	Code string
+	// Checks lists, keyed by "Shape.Member" in the model's names, the traits
+	// of that member the generated checks enforce, each pinned by the
+	// snapshot its comment names. Every other trait goes unchecked: the model
+	// does not show that AWS enforces it, or how AWS answers, and LocalStack
+	// runs no general model validation. An entry the generator cannot check,
+	// or one no operation input reaches, fails generation.
+	Checks map[string]check
+	// HandlerChecks names the operations whose handler runs the checks itself,
+	// by calling the input's Validate method at the point AWS checks them.
+	// ServeValidated does not run them first.
+	HandlerChecks []string
 	// Enums replaces, keyed by enum shape, the value list a failed enum check
 	// prints, where AWS prints another order or set than the model's.
 	Enums map[string]enumText
 }
+
+// check is a set of the traits of one member the generated checks enforce.
+type check uint8
+
+const (
+	checkRequired check = 1 << iota
+	checkPattern
+	checkMin
+	checkMax
+	checkEnum
+)
 
 // enumText is the value list an enum check prints in place of the model's.
 type enumText struct {
@@ -88,13 +111,53 @@ var serviceTable = map[string]serviceOptions{
 		// An AttributeValue sets exactly one of its members, which the model
 		// does not say: DynamoDB answers a ValidationException for none or two.
 		UnionShapes: []string{"AttributeValue"},
-		Validation:  &validation{},
+		Validation: &validation{Checks: map[string]check{
+			// test_dynamodb_execute_statement_empy_parameter, invalid-param-error.
+			"ExecuteStatementInput.Parameters": checkMin,
+			// test_kinesis_streaming_destination_crud, update-bad-precision.
+			"UpdateKinesisStreamingConfiguration.ApproximateCreationDateTimePrecision": checkEnum,
+		}},
 	},
 	"dynamodbstreams": {},
 	// test_sns.py's platform-application and message-attribute snapshots
 	// answer ValidationError, the query form of the code.
-	"sns": {Validation: &validation{Code: "ValidationError"}},
-	"kms": {Validation: &validation{Enums: map[string]enumText{
+	"sns": {Validation: &validation{
+		Code: "ValidationError",
+		Checks: map[string]check{
+			// test_create_platform_application_invalid_attributes[no-args].
+			"CreatePlatformApplicationInput.Attributes": checkRequired,
+			// test_set_platform_application_attributes_non_existing_app[no-args].
+			"SetPlatformApplicationAttributesInput.Attributes": checkRequired,
+			// test_set_platform_endpoint_attributes_invalid_attributes[Empty].
+			"SetEndpointAttributesInput.Attributes": checkRequired,
+			// test_empty_or_wrong_message_attributes, fully_missing_data_type and
+			// batch-fully_missing_data_type.
+			"MessageAttributeValue.DataType": checkRequired,
+		},
+		// test_set_platform_application_attributes_invalid_arn: AWS answers
+		// the ARN's form before the missing Attributes.
+		HandlerChecks: []string{"SetPlatformApplicationAttributes"},
+	}},
+	"kms": {Validation: &validation{Checks: map[string]check{
+		// test_kms.py::TestKMS::test_generate_random_invalid_number_of_bytes[0]
+		// and [1025].
+		"GenerateRandomRequest.NumberOfBytes": checkMin | checkMax,
+		// test_create_key_with_invalid_tag_key[too_long_key] and
+		// test_key_with_long_tag_value_raises_error.
+		"Tag.TagKey":   checkMax,
+		"Tag.TagValue": checkMax,
+		// test_hmac_create_key_invalid_operations, create-hmac-key-invalid-spec
+		// and create-hmac-key-invalid-key-usage.
+		"CreateKeyRequest.KeySpec":  checkEnum,
+		"CreateKeyRequest.KeyUsage": checkEnum,
+		// test_invalid_generate_mac and test_invalid_verify_mac.
+		"GenerateMacRequest.MacAlgorithm": checkEnum,
+		"VerifyMacRequest.MacAlgorithm":   checkEnum,
+		// test_derive_shared_secret, response-invalid-key-agreement-algo.
+		"DeriveSharedSecretRequest.KeyAgreementAlgorithm": checkEnum,
+		// test_plaintext_size_for_encrypt, invalid-plaintext-size-encrypt.
+		"EncryptRequest.Plaintext": checkMax,
+	}, Enums: map[string]enumText{
 		// test_kms.py::TestKMS::test_hmac_create_key_invalid_operations,
 		// create-hmac-key-invalid-key-usage: no KEY_AGREEMENT.
 		"KeyUsageType": {Values: []string{"ENCRYPT_DECRYPT", "SIGN_VERIFY", "GENERATE_VERIFY_MAC"}},

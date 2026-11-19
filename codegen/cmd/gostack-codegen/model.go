@@ -69,10 +69,13 @@ type pair struct {
 
 // field is one member of a generated struct.
 type field struct {
-	member    string
-	goName    string
-	jsonName  string
-	required  bool
+	member   string
+	goName   string
+	jsonName string
+	required bool
+	// checks are the traits the generated checks enforce, from the service
+	// table's Validation.Checks.
+	checks    check
 	typ       string
 	pair      pair
 	hasQuery  bool
@@ -296,7 +299,11 @@ func (g *generator) build() error {
 
 	g.markReachable()
 	g.markChecks()
-	g.markValidation()
+
+	err = g.markValidation()
+	if err != nil {
+		return err
+	}
 
 	return g.markUnions()
 }
@@ -888,39 +895,45 @@ func (g *generator) nestedStructs(r ref) []string {
 // markChecks flags the structs that hold a required member somewhere below
 // them, which are the ones ServeValidated has to look through.
 func (g *generator) markChecks() {
-	memo := map[string]bool{}
+	reach := g.structsReaching(func(f *field) bool { return f.required }, g.nestedStructs)
 
-	var needs func(st *structType) bool
+	for _, st := range g.structs {
+		st.needsCheck = reach[st.goName]
+	}
+}
 
-	needs = func(st *structType) bool {
-		if v, ok := memo[st.goName]; ok {
-			return v
+// structsReaching reports, by Go name, the structs that hold a field own is
+// true of, on themselves or on a struct below them that below finds. It
+// repeats until nothing changes, so a struct met again inside a reference
+// cycle is never settled before the cycle is.
+func (g *generator) structsReaching(own func(f *field) bool, below func(r ref) []string) map[string]bool {
+	reach := map[string]bool{}
+
+	for name, st := range g.structs {
+		if slices.ContainsFunc(st.fields, own) {
+			reach[name] = true
 		}
+	}
 
-		memo[st.goName] = false // a cycle adds nothing by itself
+	for changed := true; changed; {
+		changed = false
 
-		result := false
-
-		for _, f := range st.fields {
-			if f.required {
-				result = true
+		for name, st := range g.structs {
+			if reach[name] {
+				continue
 			}
 
-			for _, nested := range g.nestedStructs(f.pair.p) {
-				if needs(g.structs[g.goTypeName(nested)]) {
-					result = true
+			for _, f := range st.fields {
+				if slices.ContainsFunc(below(f.pair.p), func(n string) bool { return reach[g.goTypeName(n)] }) {
+					reach[name], changed = true, true
+
+					break
 				}
 			}
 		}
-
-		memo[st.goName] = result
-
-		return result
 	}
 
-	for _, st := range g.structs {
-		st.needsCheck = needs(st)
-	}
+	return reach
 }
 
 func (g *generator) sortedStructs() []*structType {

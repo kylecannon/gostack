@@ -124,6 +124,33 @@ func Test_ServeValidated_ValidRequestReachesHandler(t *testing.T) {
 	assert.NotEqual(t, "ValidationException", body["__type"])
 }
 
+// Test_ServeValidated_UnlistedConstraintsReachHandler sends requests that
+// break a model constraint no snapshot pins, or that pass once length counts
+// characters, and LocalStack accepts: the handler answers each one.
+func Test_ServeValidated_UnlistedConstraintsReachHandler(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, op, body string
+	}{
+		// 65 characters, 130 UTF-16 units: within the tag key max of 128.
+		{"a 65-emoji tag key", "CreateKey", `{"Tags":[{"TagKey":"` + strings.Repeat("😀", 65) + `","TagValue":""}]}`},
+		{"a marker outside the model pattern", "ListAliases", `{"Marker":"Ā"}`},
+		{"a grant name outside the model pattern", "CreateGrant",
+			`{"KeyId":"k","GranteePrincipal":"p","Operations":["Decrypt"],"Name":"a b"}`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, body := serveJSON(t, c.op, c.body)
+			assert.Equal(t, http.StatusNotImplemented, code, body)
+			assert.Contains(t, body["message"], "not yet implemented")
+		})
+	}
+}
+
 func serveJSON(t *testing.T, op, payload string) (int, map[string]any) {
 	t.Helper()
 

@@ -12,7 +12,6 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
-	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -161,13 +160,6 @@ func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool)
 
 func serveCancelKeyDeletion(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCancelKeyDeletion(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -207,13 +199,6 @@ func writeCancelKeyDeletion(w http.ResponseWriter, rc *request.Context, out *Can
 
 func serveConnectCustomKeyStore(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readConnectCustomKeyStore(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -253,13 +238,6 @@ func writeConnectCustomKeyStore(w http.ResponseWriter, rc *request.Context, out 
 
 func serveCreateAlias(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateAlias(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -299,13 +277,6 @@ func writeCreateAlias(w http.ResponseWriter, rc *request.Context, out *CreateAli
 
 func serveCreateCustomKeyStore(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateCustomKeyStore(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -345,13 +316,6 @@ func writeCreateCustomKeyStore(w http.ResponseWriter, rc *request.Context, out *
 
 func serveCreateGrant(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateGrant(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -392,10 +356,8 @@ func writeCreateGrant(w http.ResponseWriter, rc *request.Context, out *CreateGra
 func serveCreateKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateKey(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -437,13 +399,6 @@ func writeCreateKey(w http.ResponseWriter, rc *request.Context, out *CreateKeyOu
 
 func serveDecrypt(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDecrypt(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -483,13 +438,6 @@ func writeDecrypt(w http.ResponseWriter, rc *request.Context, out *DecryptOutput
 
 func serveDeleteAlias(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteAlias(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -529,13 +477,6 @@ func writeDeleteAlias(w http.ResponseWriter, rc *request.Context, out *DeleteAli
 
 func serveDeleteCustomKeyStore(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteCustomKeyStore(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -575,13 +516,6 @@ func writeDeleteCustomKeyStore(w http.ResponseWriter, rc *request.Context, out *
 
 func serveDeleteImportedKeyMaterial(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeleteImportedKeyMaterial(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -622,10 +556,8 @@ func writeDeleteImportedKeyMaterial(w http.ResponseWriter, rc *request.Context, 
 func serveDeriveSharedSecret(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeriveSharedSecret(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -667,13 +599,6 @@ func writeDeriveSharedSecret(w http.ResponseWriter, rc *request.Context, out *De
 
 func serveDescribeCustomKeyStores(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeCustomKeyStores(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -713,13 +638,6 @@ func writeDescribeCustomKeyStores(w http.ResponseWriter, rc *request.Context, ou
 
 func serveDescribeKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDescribeKey(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -759,13 +677,6 @@ func writeDescribeKey(w http.ResponseWriter, rc *request.Context, out *DescribeK
 
 func serveDisableKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDisableKey(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -805,13 +716,6 @@ func writeDisableKey(w http.ResponseWriter, rc *request.Context, out *DisableKey
 
 func serveDisableKeyRotation(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDisableKeyRotation(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -851,13 +755,6 @@ func writeDisableKeyRotation(w http.ResponseWriter, rc *request.Context, out *Di
 
 func serveDisconnectCustomKeyStore(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDisconnectCustomKeyStore(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -897,13 +794,6 @@ func writeDisconnectCustomKeyStore(w http.ResponseWriter, rc *request.Context, o
 
 func serveEnableKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readEnableKey(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -943,13 +833,6 @@ func writeEnableKey(w http.ResponseWriter, rc *request.Context, out *EnableKeyOu
 
 func serveEnableKeyRotation(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readEnableKeyRotation(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -990,10 +873,8 @@ func writeEnableKeyRotation(w http.ResponseWriter, rc *request.Context, out *Ena
 func serveEncrypt(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readEncrypt(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1035,13 +916,6 @@ func writeEncrypt(w http.ResponseWriter, rc *request.Context, out *EncryptOutput
 
 func serveGenerateDataKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateDataKey(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1081,13 +955,6 @@ func writeGenerateDataKey(w http.ResponseWriter, rc *request.Context, out *Gener
 
 func serveGenerateDataKeyPair(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateDataKeyPair(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1127,13 +994,6 @@ func writeGenerateDataKeyPair(w http.ResponseWriter, rc *request.Context, out *G
 
 func serveGenerateDataKeyPairWithoutPlaintext(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateDataKeyPairWithoutPlaintext(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1173,13 +1033,6 @@ func writeGenerateDataKeyPairWithoutPlaintext(w http.ResponseWriter, rc *request
 
 func serveGenerateDataKeyWithoutPlaintext(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateDataKeyWithoutPlaintext(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1220,10 +1073,8 @@ func writeGenerateDataKeyWithoutPlaintext(w http.ResponseWriter, rc *request.Con
 func serveGenerateMac(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateMac(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1266,10 +1117,8 @@ func writeGenerateMac(w http.ResponseWriter, rc *request.Context, out *GenerateM
 func serveGenerateRandom(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateRandom(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -1311,13 +1160,6 @@ func writeGenerateRandom(w http.ResponseWriter, rc *request.Context, out *Genera
 
 func serveGetKeyPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetKeyPolicy(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1357,13 +1199,6 @@ func writeGetKeyPolicy(w http.ResponseWriter, rc *request.Context, out *GetKeyPo
 
 func serveGetKeyRotationStatus(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetKeyRotationStatus(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1403,13 +1238,6 @@ func writeGetKeyRotationStatus(w http.ResponseWriter, rc *request.Context, out *
 
 func serveGetParametersForImport(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetParametersForImport(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1449,13 +1277,6 @@ func writeGetParametersForImport(w http.ResponseWriter, rc *request.Context, out
 
 func serveGetPublicKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGetPublicKey(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1495,13 +1316,6 @@ func writeGetPublicKey(w http.ResponseWriter, rc *request.Context, out *GetPubli
 
 func serveImportKeyMaterial(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readImportKeyMaterial(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1541,13 +1355,6 @@ func writeImportKeyMaterial(w http.ResponseWriter, rc *request.Context, out *Imp
 
 func serveListAliases(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListAliases(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1587,13 +1394,6 @@ func writeListAliases(w http.ResponseWriter, rc *request.Context, out *ListAlias
 
 func serveListGrants(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListGrants(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1633,13 +1433,6 @@ func writeListGrants(w http.ResponseWriter, rc *request.Context, out *ListGrants
 
 func serveListKeyPolicies(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListKeyPolicies(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1679,13 +1472,6 @@ func writeListKeyPolicies(w http.ResponseWriter, rc *request.Context, out *ListK
 
 func serveListKeyRotations(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListKeyRotations(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1725,13 +1511,6 @@ func writeListKeyRotations(w http.ResponseWriter, rc *request.Context, out *List
 
 func serveListKeys(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListKeys(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1771,13 +1550,6 @@ func writeListKeys(w http.ResponseWriter, rc *request.Context, out *ListKeysOutp
 
 func serveListResourceTags(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListResourceTags(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1817,13 +1589,6 @@ func writeListResourceTags(w http.ResponseWriter, rc *request.Context, out *List
 
 func serveListRetirableGrants(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readListRetirableGrants(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1863,13 +1628,6 @@ func writeListRetirableGrants(w http.ResponseWriter, rc *request.Context, out *L
 
 func servePutKeyPolicy(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPutKeyPolicy(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1909,13 +1667,6 @@ func writePutKeyPolicy(w http.ResponseWriter, rc *request.Context, out *PutKeyPo
 
 func serveReEncrypt(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readReEncrypt(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1956,10 +1707,8 @@ func writeReEncrypt(w http.ResponseWriter, rc *request.Context, out *ReEncryptOu
 func serveReplicateKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readReplicateKey(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -2001,13 +1750,6 @@ func writeReplicateKey(w http.ResponseWriter, rc *request.Context, out *Replicat
 
 func serveRetireGrant(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRetireGrant(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2047,13 +1789,6 @@ func writeRetireGrant(w http.ResponseWriter, rc *request.Context, out *RetireGra
 
 func serveRevokeGrant(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRevokeGrant(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2093,13 +1828,6 @@ func writeRevokeGrant(w http.ResponseWriter, rc *request.Context, out *RevokeGra
 
 func serveRotateKeyOnDemand(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readRotateKeyOnDemand(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2139,13 +1867,6 @@ func writeRotateKeyOnDemand(w http.ResponseWriter, rc *request.Context, out *Rot
 
 func serveScheduleKeyDeletion(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readScheduleKeyDeletion(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2185,13 +1906,6 @@ func writeScheduleKeyDeletion(w http.ResponseWriter, rc *request.Context, out *S
 
 func serveSign(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSign(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2232,10 +1946,8 @@ func writeSign(w http.ResponseWriter, rc *request.Context, out *SignOutput) {
 func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTagResource(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {
@@ -2277,13 +1989,6 @@ func writeTagResource(w http.ResponseWriter, rc *request.Context, out *TagResour
 
 func serveUntagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUntagResource(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2323,13 +2028,6 @@ func writeUntagResource(w http.ResponseWriter, rc *request.Context, out *UntagRe
 
 func serveUpdateAlias(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateAlias(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2369,13 +2067,6 @@ func writeUpdateAlias(w http.ResponseWriter, rc *request.Context, out *UpdateAli
 
 func serveUpdateCustomKeyStore(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateCustomKeyStore(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2415,13 +2106,6 @@ func writeUpdateCustomKeyStore(w http.ResponseWriter, rc *request.Context, out *
 
 func serveUpdateKeyDescription(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateKeyDescription(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2461,13 +2145,6 @@ func writeUpdateKeyDescription(w http.ResponseWriter, rc *request.Context, out *
 
 func serveUpdatePrimaryRegion(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdatePrimaryRegion(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2507,13 +2184,6 @@ func writeUpdatePrimaryRegion(w http.ResponseWriter, rc *request.Context, out *U
 
 func serveVerify(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readVerify(rc)
-	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2554,10 +2224,8 @@ func writeVerify(w http.ResponseWriter, rc *request.Context, out *VerifyOutput) 
 func serveVerifyMac(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readVerifyMac(rc)
 	if err == nil && validate {
-		var r constraint.Report
-		in.validate(&r, nil)
-		if r.Failed() {
-			err = newValidationError(&r)
+		if verr := in.Validate(); verr != nil {
+			err = asError(verr)
 		}
 	}
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/codegen/spec"
@@ -132,14 +133,16 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 
 	switch {
 	case g.opts.Validation != nil:
-		if in.validates {
+		switch {
+		case slices.Contains(g.opts.Validation.HandlerChecks, op.name):
+			p.f("\t// The handler runs in.Validate itself, at the point AWS checks.")
+		case in.validates:
 			p.f("\tif err == nil && validate {")
-			p.f("\t\tvar r constraint.Report")
-			p.f("\t\tin.validate(&r, nil)")
-			p.f("\t\tif r.Failed() {")
-			p.f("\t\t\terr = newValidationError(&r)")
+			p.f("\t\tif verr := in.Validate(); verr != nil {")
+			p.f("\t\t\terr = asError(verr)")
 			p.f("\t\t}")
 			p.f("\t}")
+		default: // nothing listed below the input
 		}
 	case in.needsCheck:
 		p.f("\tif err == nil && validate {")
@@ -286,13 +289,20 @@ func (g *generator) emitHelpers(p *printer) {
 // awsQuery puts them inside <Error>, and botocore's ignore list skips that
 // case (QueryComplexError), so LocalStack's place stands.
 func (g *generator) emitMembersErrorWriter(p *printer, st *structType) {
+	trim := g.hasProtocol(protoJSON) && emitOmitEmpty(p, st)
+
 	p.f("// writeError writes err with the members in v.")
 	p.f("func (v *%s) writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {", st.goName)
 	p.f("\tswitch rc.Protocol {")
 
 	if g.hasProtocol(protoJSON) {
+		members := "v"
+		if trim {
+			members = "v.omitEmpty()"
+		}
+
 		p.f("\tcase protocol.KindJSON:")
-		p.f("\t\topts := %s", g.jsonErrorOptions("Members: v"))
+		p.f("\t\topts := %s", g.jsonErrorOptions("Members: "+members))
 		p.f("\t\tawsjson.WriteError(w, rc.Request, rc.RequestID, err, opts)")
 	}
 
@@ -307,6 +317,56 @@ func (g *generator) emitMembersErrorWriter(p *printer, st *structType) {
 	p.f("\t}")
 	p.f("}")
 	p.blank()
+}
+
+// emitOmitEmpty writes the omitEmpty method of an error's members, which
+// clears every member a json error leaves out: one that is not required and
+// is empty, a zero number, false, or an empty string, list, map or blob. That
+// is LocalStack's rule (serializer.py, JSONResponseSerializer._serialize_error:
+// "if value or member in shape.required_members"). A structure or timestamp
+// member is left as it is: none of the json services has one. It reports
+// whether it wrote the method, which an error with nothing to clear does not.
+func emitOmitEmpty(p *printer, st *structType) bool {
+	body := &printer{}
+
+	for _, f := range st.fields {
+		if f.required {
+			continue
+		}
+
+		x := "c." + f.goName
+
+		switch f.pair.p.shape.Type {
+		case spec.TypeList, spec.TypeMap, spec.TypeBlob:
+			body.f("\tif len(%s) == 0 {", x)
+		case spec.TypeString:
+			body.f("\tif %s != nil && *%s == \"\" {", x, x)
+		case spec.TypeInteger, spec.TypeLong, spec.TypeFloat, spec.TypeDouble:
+			body.f("\tif %s != nil && *%s == 0 {", x, x)
+		case spec.TypeBoolean:
+			body.f("\tif %s != nil && !*%s {", x, x)
+		default:
+			continue
+		}
+
+		body.f("\t\t%s = nil", x)
+		body.f("\t}")
+	}
+
+	if body.buf.Len() == 0 {
+		return false
+	}
+
+	p.f("// omitEmpty returns v without the members a json error leaves out: one that")
+	p.f("// is empty and not required.")
+	p.f("func (v *%s) omitEmpty() *%s {", st.goName, st.goName)
+	p.f("\tc := *v")
+	p.buf.Write(body.buf.Bytes())
+	p.f("\treturn &c")
+	p.f("}")
+	p.blank()
+
+	return true
 }
 
 // jsonErrorOptions is the awsjson.ErrorOptions literal of a json error, with

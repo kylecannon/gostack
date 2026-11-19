@@ -288,25 +288,35 @@ written by hand.
   `__type`, and the message under the shape's own member name (`Message` or
   `message`). query writes them after `RequestId` as children of
   `ErrorResponse`, where LocalStack writes them and botocore reads them;
-  Smithy's place inside `<Error>` is on botocore's ignore list.
+  Smithy's place inside `<Error>` is on botocore's ignore list. json leaves
+  out a member that is not required and is empty (a zero number, false, an
+  empty string, list, map or blob), as LocalStack's serializer does.
 - **Unions:** `Unions` and `UnionShapes` in `serviceTable` give a structure a
   `MembersSet() int` that counts the members present, for the handler's
   exactly-one check. They are off by default.
-- **Constraint checks:** `Validation` in `serviceTable` gives every struct
-  below an operation input a `validate` method generated from the model's
-  `required`, `min`, `max`, `enum` and `pattern` traits, and makes
-  `ServeValidated` answer every failure at once in AWS's text, `N validation
-  errors detected: Value 'x' at 'tags.1.member.tagKey' failed to satisfy
-  constraint: Member must ...`, joined by `; ` in model order. The code is
-  `ValidationException` unless the option names another; `Enums` replaces
-  an enum's printed value list where AWS prints another one. The message form
-  lives in `internal/protocol/constraint`. Patterns Go's regexp cannot
-  compile, the constraints of scalar list elements and map keys and values,
-  and anything inside a list or map that is itself inside a list or map, are
-  left unchecked and listed at the top of the generated `validate.go`. kms, dynamodb and sns have it on; the table tests beside
-  their packages reproduce every such message in LocalStack's snapshots for
-  them. Without the option, `ServeValidated` keeps the first-missing-member
-  check SQS uses.
+- **Constraint checks:** a model trait does not show that AWS enforces it, or
+  how AWS answers, and LocalStack runs no general model validation. So
+  `Validation` in `serviceTable` checks only the traits its `Checks` list
+  names, keyed by `Shape.Member`, each with the snapshot that pins it in a
+  comment; everything else reaches the handler. A service author adds an
+  entry when a snapshot or an AWS document pins one. An entry the generator
+  cannot check (no such member or trait, a pattern Go's regexp cannot
+  compile, a member below a list or map inside a list or map) or one no
+  operation input reaches fails generation. `ServeValidated` answers every
+  failure at once in AWS's text, `N validation errors detected: Value 'x' at
+  'tags.1.member.tagKey' failed to satisfy constraint: Member must ...`,
+  joined by `; ` in model order. A length counts characters, as LocalStack's
+  own checks do. The code is `ValidationException` unless the option names
+  another; `Enums` replaces an enum's printed value list where AWS prints
+  another one. Every operation input of such a service has `Validate() error`,
+  which `ServeValidated` runs before the handler; for an operation in
+  `HandlerChecks` it does not, and the handler calls `Validate` at the point
+  AWS checks (sns `SetPlatformApplicationAttributes` answers a malformed ARN
+  before the missing `Attributes`). The message form lives in
+  `internal/protocol/constraint`. kms, dynamodb and sns have it on; the table
+  tests beside their packages reproduce every such message in LocalStack's
+  snapshots for them. Without the option, `ServeValidated` keeps the
+  first-missing-member check SQS uses.
 
 #### REST routing and sharding
 

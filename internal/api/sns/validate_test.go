@@ -1,7 +1,9 @@
 package sns_test
 
 import (
+	"context"
 	"encoding/xml"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,13 +39,6 @@ func Test_ServeValidated_SnapshotMessages(t *testing.T) {
 			want: nullAttributes,
 		},
 		{
-			key: "test_set_platform_application_attributes_non_existing_app non_existing-application-arn",
-			op:  "SetPlatformApplicationAttributes",
-			form: "Action=SetPlatformApplicationAttributes" +
-				"&PlatformApplicationArn=arn:aws:sns:us-east-1:000000000000:app/GCM/none",
-			want: nullAttributes,
-		},
-		{
 			key:  "test_set_platform_endpoint_attributes_invalid_attributes[Empty] set-platform-endpoint-invalid-attributes",
 			op:   "SetEndpointAttributes",
 			form: "Action=SetEndpointAttributes&EndpointArn=arn:aws:sns:us-east-1:000000000000:endpoint/GCM/app/e",
@@ -74,27 +69,119 @@ func Test_ServeValidated_SnapshotMessages(t *testing.T) {
 		t.Run(c.key, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(c.form))
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-			rec := httptest.NewRecorder()
-			sns.ServeValidated(&sns.Unimplemented{}, rec, &request.Context{
-				Service: "sns", Protocol: protocol.KindQuery, Operation: c.op, RequestID: "req-1", Request: req,
-			})
-
-			var resp struct {
-				Error struct {
-					Type    string
-					Code    string
-					Message string
-				}
-			}
-
-			require.NoError(t, xml.Unmarshal(rec.Body.Bytes(), &resp), rec.Body.String())
-			assert.Equal(t, http.StatusBadRequest, rec.Code)
-			assert.Equal(t, "Sender", resp.Error.Type)
-			assert.Equal(t, "ValidationError", resp.Error.Code)
-			assert.Equal(t, c.want, resp.Error.Message)
+			code, got := serveQuery(t, &sns.Unimplemented{}, c.op, c.form)
+			assert.Equal(t, http.StatusBadRequest, code)
+			assert.Equal(t, "Sender", got.Type)
+			assert.Equal(t, "ValidationError", got.Code)
+			assert.Equal(t, c.want, got.Message)
 		})
 	}
+}
+
+// arnFirst is a SetPlatformApplicationAttributes handler that checks the
+// ARN's form, then runs the generated checks, as AWS orders them.
+type arnFirst struct{ sns.Unimplemented }
+
+func (arnFirst) SetPlatformApplicationAttributes(
+	_ context.Context, in *sns.SetPlatformApplicationAttributesInput,
+) (*sns.SetPlatformApplicationAttributesOutput, error) {
+	arn := ""
+	if in.PlatformApplicationArn != nil {
+		arn = *in.PlatformApplicationArn
+	}
+
+	if n := len(strings.Split(arn, ":")); n < 6 {
+		return nil, sns.NewInvalidParameterException(fmt.Sprintf(
+			"Invalid parameter: PlatformApplicationArn Reason: An ARN must have at least 6 elements, not %d", n))
+	}
+
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, sns.NewNotFoundException("PlatformApplication does not exist")
+}
+
+// Test_ServeValidated_HandlerRunsChecks sends the two
+// SetPlatformApplicationAttributes snapshots with no Attributes, which
+// ServeValidated leaves to the handler: the ARN's form answers first, then the
+// generated check. botocore sends nothing for Attributes={}.
+func Test_ServeValidated_HandlerRunsChecks(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		key, arn, code, want string
+	}{
+		{
+			key:  "test_set_platform_application_attributes_invalid_arn invalid-application-arn",
+			arn:  "invalid-arn",
+			code: "InvalidParameter",
+			want: "Invalid parameter: PlatformApplicationArn Reason: An ARN must have at least 6 elements, not 1",
+		},
+		{
+			key:  "test_set_platform_application_attributes_non_existing_app[no-args] non_existing-application-arn",
+			arn:  "arn:aws:sns:us-east-1:000000000000:app/ADM/NonExistingApp",
+			code: "ValidationError",
+			want: "1 validation error detected: Value null at 'attributes' failed to satisfy constraint: " +
+				"Member must not be null",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.key, func(t *testing.T) {
+			t.Parallel()
+
+			code, got := serveQuery(t, arnFirst{}, "SetPlatformApplicationAttributes",
+				"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+c.arn)
+			assert.Equal(t, http.StatusBadRequest, code)
+			assert.Equal(t, c.code, got.Code)
+			assert.Equal(t, c.want, got.Message)
+		})
+	}
+
+	// With Attributes set, the checks pass and the handler answers.
+	_, got := serveQuery(t, arnFirst{}, "SetPlatformApplicationAttributes",
+		"Action=SetPlatformApplicationAttributes&PlatformApplicationArn="+cases[1].arn+
+			"&Attributes.entry.1.key=PlatformPrincipal&Attributes.entry.1.value=dummy")
+	assert.Equal(t, "NotFound", got.Code)
+}
+
+// Test_ServeValidated_UnlistedConstraintReachesHandler sends a TagResource
+// with an empty tag key, which breaks the model's min of 1. No snapshot pins
+// that, and LocalStack only checks for duplicate keys, so the handler answers.
+func Test_ServeValidated_UnlistedConstraintReachesHandler(t *testing.T) {
+	t.Parallel()
+
+	_, got := serveQuery(t, &sns.Unimplemented{}, "TagResource",
+		"Action=TagResource&ResourceArn=arn:aws:sns:us-east-1:000000000000:t"+
+			"&Tags.member.1.Key=&Tags.member.1.Value=v")
+	assert.Equal(t, "InternalFailure", got.Code, got.Message)
+	assert.Contains(t, got.Message, "not yet implemented")
+}
+
+type queryError struct {
+	Type    string
+	Code    string
+	Message string
+}
+
+func serveQuery(t *testing.T, h sns.Handler, op, form string) (int, queryError) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	rec := httptest.NewRecorder()
+	sns.ServeValidated(h, rec, &request.Context{
+		Service: "sns", Protocol: protocol.KindQuery, Operation: op, RequestID: "req-1", Request: req,
+	})
+
+	var resp struct {
+		Error queryError
+	}
+
+	require.NoError(t, xml.Unmarshal(rec.Body.Bytes(), &resp), rec.Body.String())
+
+	return rec.Code, resp.Error
 }
