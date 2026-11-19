@@ -1,0 +1,6 @@
+# ssm tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- depends-on:events: ssm -----------------------------------------------
+# Creates an EventBridge rule on SSM parameter changes and reads the event
+# from an SQS queue. All three parametrizations.
+"tests/aws/services/ssm/test_ssm.py::TestSSM::test_trigger_event_on_systems_manager_change": depends-on:events
