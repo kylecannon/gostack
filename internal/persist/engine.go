@@ -177,7 +177,7 @@ func (e *Engine) Register(service string, s Snapshotter) {
 
 // Assets returns the assets of the service named by service, and opens
 // <base>/<service>/assets/.gostack on the first call; later calls return the
-// same Assets, which stay open for the life of the process. It returns nil when
+// same Assets, which stay open until Close. It returns nil when
 // the service's state is not persisted, as Enabled reports, so a nil Assets
 // goes with health's persisted false. The service must be registered, and its
 // Snapshotter must be a [Referencer]. When the directory cannot be opened, for
@@ -342,12 +342,15 @@ func (e *Engine) Load(ctx context.Context) error {
 		e.loadService(root, name, safe[name])
 	}
 
+	e.drainRemovals(safe) //nolint:contextcheck // arms a timer, whose callback has no caller context
+
 	return e.unsafeErr()
 }
 
-// Close flushes every dirty service and stops the timer. A MarkDirty after
-// Close records the change but arms no timer.
-func (e *Engine) Close(ctx context.Context) error {
+// Stop stops the timer and flushes every dirty service. A MarkDirty after Stop
+// records the change but arms no timer. Flush still works after it, and so do
+// the assets, for the last flush of a shutdown; Close releases them.
+func (e *Engine) Stop(ctx context.Context) error {
 	if e.dir == "" {
 		return nil
 	}
@@ -360,6 +363,46 @@ func (e *Engine) Close(ctx context.Context) error {
 	return e.Flush(ctx)
 }
 
+// Close is Stop, and then releases what every service's assets hold open. A
+// sync a save stopped waiting for keeps its descriptor until it returns. The
+// assets fail every call after Close.
+func (e *Engine) Close(ctx context.Context) error {
+	err := e.Stop(ctx)
+
+	e.mu.Lock()
+	open := make([]*Assets, 0, len(e.services))
+
+	for _, t := range e.services {
+		if t.assets != nil {
+			open = append(open, t.assets)
+		}
+	}
+	e.mu.Unlock()
+
+	for _, a := range open {
+		a.close()
+	}
+
+	return err
+}
+
+// drainRemovals marks dirty each loaded service whose assets have removals
+// queued, such as the bodies a Restore replaced: they go only after a save, and
+// nothing else may be about to save. The timer it arms waits for the load.
+func (e *Engine) drainRemovals(loaded map[string]*tracked) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for _, t := range loaded {
+		if t.unsafe == nil && t.assets.queued() {
+			t.dirty = true
+			e.dirtyAgain = true
+		}
+	}
+
+	e.scheduleLocked()
+}
+
 // timedSave is what a caller waiting for sem does to a flush by the timer that
 // runs or waits to run.
 type timedSave int
@@ -369,7 +412,7 @@ const (
 	// state it would write, so finishing it only delays them, and a Load that
 	// waited for it would restore what it wrote rather than the state last saved
 	// before the Load was asked for.
-	preempt timedSave = iota
+	preempt timedSave = iota + 1 // the zero value is no mode, so never the destructive one
 	// lend lets it finish under the caller's deadline: it is cancelled only when
 	// the caller's ctx ends. A Snapshot cannot be cut short, so cancelling a
 	// timed save at once throws away a Snapshot already taken and makes the
@@ -393,9 +436,12 @@ func (e *Engine) acquire(ctx context.Context, mode timedSave) error {
 	}
 	e.mu.Unlock()
 
-	defer func() {
+	// The last waiter to stop waiting arms the timer that waiters hold back (see
+	// scheduleLocked). It may hold sem by then, and the callback waits for it.
+	defer func() { //nolint:contextcheck // arms a timer, whose callback has no caller context
 		e.mu.Lock()
 		e.waiting--
+		e.scheduleLocked()
 		e.mu.Unlock()
 	}()
 
@@ -421,9 +467,12 @@ func (e *Engine) release() {
 // taken, and no flush is armed, running or under way. The timer waits
 // PERSIST_FREQUENCY, and at least until retryAt after a failed flush, so a
 // failing disk is retried with a backoff even when PERSIST_FREQUENCY asks for no
-// wait. A change while the timer is armed leaves it as it is.
+// wait. A change while the timer is armed leaves it as it is. Nothing is armed
+// while a Flush, Load, Close or ResetAssets waits for sem: the callback would
+// give way to it at once and arm again, which with no wait is a spin. The last
+// waiter arms it as it stops waiting.
 func (e *Engine) scheduleLocked() {
-	if !e.dirtyAgain || e.timer != nil || e.running || e.flushing || e.closed {
+	if !e.dirtyAgain || e.timer != nil || e.running || e.flushing || e.closed || e.waiting > 0 {
 		return
 	}
 
@@ -534,7 +583,7 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 		return outcome{}, nil
 	}
 
-	failed, err := e.writeAll(ctx, pending)
+	failed, gaveWay, err := e.writeAll(ctx, pending)
 	if errors.Is(err, context.DeadlineExceeded) {
 		names := make([]string, 0, len(failed))
 		for _, p := range failed {
@@ -545,15 +594,23 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 			"services", names)
 	}
 
-	// A flush that gave way to another, or whose caller went away, did not fail:
-	// its services are dirty again, with no backoff.
-	if errors.Is(ctx.Err(), context.Canceled) {
+	return e.conclude(failed, gaveWay, err), err
+}
+
+// conclude ends a flush by what its services failed with, never by its
+// context: a context can end after every service is saved, or beside a real
+// failure. A flush whose every unsaved service gave way to a cancellation, to
+// another flush or a caller that went away, did not fail: those services are
+// dirty again, with no backoff. Any other unsaved service is a failure, counted
+// with a backoff, and a flush that saved every service ends the run of failures.
+func (e *Engine) conclude(failed []pendingService, gaveWay int, err error) outcome {
+	if len(failed) > 0 && gaveWay == len(failed) {
 		e.redirty(failed)
 
-		return outcome{}, err
+		return outcome{}
 	}
 
-	return e.finish(failed, err), err
+	return e.finish(failed, err)
 }
 
 // redirty ends a flush that was cancelled: the services it did not save are
@@ -651,33 +708,51 @@ func (e *Engine) backoffLocked() time.Duration {
 }
 
 // writeAll saves each pending service. It returns the services to try again,
-// and the errors joined. A service whose file turns out to be a link that
-// leaves the base dir is not tried again: saving is turned off for it.
+// how many of them gave way to a cancellation, and the errors joined.
+// A service whose file turns out to be a link that leaves the base dir is not
+// tried again: saving is turned off for it.
+//
+// Services are saved in two runs, each in name order: first those whose
+// assets have nothing to sync when the flush starts, services with no assets
+// among them, then those with assets to sync. A sync cannot be interrupted and
+// can take the whole of the deadline, so it never runs before a save that needs
+// none. One service's failure does not stop the services after it; only the
+// end of ctx does, since no save can then finish. All services share ctx: two
+// services with assets to sync would share its time in order.
 //
 // The assets a service removed before its snapshot is taken are deleted once
 // that snapshot is on disk, and kept for the next save when it is not.
-func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pendingService, error) {
+func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pendingService, int, error) {
 	err := os.MkdirAll(e.dir, dirMode)
 	if err != nil {
-		return pending, fmt.Errorf("create base dir: %w", err)
+		return pending, 0, fmt.Errorf("create base dir: %w", err)
 	}
 
 	root, err := os.OpenRoot(e.dir)
 	if err != nil {
-		return pending, fmt.Errorf("open base dir: %w", err)
+		return pending, 0, fmt.Errorf("open base dir: %w", err)
 	}
 
 	defer func() { _ = root.Close() }()
 
 	var (
-		failed []pendingService
-		errs   []error
+		failed  []pendingService
+		errs    []error
+		gaveWay int
 	)
+
+	pending = syncLast(pending)
 
 	for i, p := range pending {
 		err = ctx.Err()
 		if err != nil {
-			return append(failed, pending[i:]...), errors.Join(append(errs, err)...)
+			if errors.Is(err, context.Canceled) {
+				gaveWay += len(pending) - i
+			}
+
+			failed = append(failed, pending[i:]...)
+
+			return failed, gaveWay, errors.Join(append(errs, err)...)
 		}
 
 		err = e.saveAssets(ctx, root, p)
@@ -703,9 +778,31 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 		}
 
 		failed = append(failed, p)
+
+		if errors.Is(err, context.Canceled) {
+			gaveWay++
+		}
 	}
 
-	return failed, errors.Join(errs...)
+	return failed, gaveWay, errors.Join(errs...)
+}
+
+// syncLast orders pending, which is in name order, for writeAll: the services
+// whose assets have nothing to sync first, then the others, each run in name
+// order.
+func syncLast(pending []pendingService) []pendingService {
+	ordered := make([]pendingService, 0, len(pending))
+	later := make([]pendingService, 0, len(pending))
+
+	for _, p := range pending {
+		if p.assets.syncDue() {
+			later = append(later, p)
+		} else {
+			ordered = append(ordered, p)
+		}
+	}
+
+	return append(ordered, later...)
 }
 
 // saveAssets saves one service between begin and finish of its assets: the
@@ -799,6 +896,13 @@ func (e *Engine) writeFormats(ctx context.Context, root *os.Root, p pendingServi
 		}
 	}
 
+	// A save that was cancelled, by a Load or ResetAssets that preempted it or a
+	// caller that went away, renames nothing: a Load would restore what it wrote.
+	// One past its deadline still renames what it has finished (US-2 log #49).
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil, fmt.Errorf("save cancelled before its rename: %w", ctx.Err())
+	}
+
 	dirs = []string{p.name}
 
 	for i, w := range writers {
@@ -838,8 +942,11 @@ func snapshot(ctx context.Context, p pendingService, w io.Writer) error {
 type loaded struct {
 	// restored is true when a state file restored.
 	restored bool
-	// setAside is true when a state file failed and was moved aside.
+	// setAside is true when a state file failed.
 	setAside bool
+	// unsafe is true when a state file failed and could not be moved aside,
+	// which turned the service off.
+	unsafe bool
 }
 
 // loadService restores the service from the first state file that loads, then
@@ -876,15 +983,24 @@ func (e *Engine) loadService(root *os.Root, name string, t *tracked) {
 
 	result := e.restore(root, name, t.snap)
 
-	loaded := make(map[string]struct{})
+	onDisk := make(map[string]struct{})
 	for id := range ref.Restored() {
-		loaded[id] = struct{}{}
+		onDisk[id] = struct{}{}
 	}
 
-	e.sweepAssets(root, name, ref, assets, result, loaded)
+	// A service the load turned off is neither restored nor swept: every asset
+	// stays for the restart that loads it again.
+	if result.unsafe {
+		return
+	}
+
+	e.sweepAssets(root, name, ref, assets, result, onDisk)
 }
 
 // restore restores s from the first of the service's state files that loads.
+// A file that fails and cannot be moved aside turns the service off, and no
+// later format is tried: the service starts empty, as an unsafe service does,
+// rather than run a state the engine will not save.
 func (e *Engine) restore(root *os.Root, name string, s Snapshotter) loaded {
 	var result loaded
 
@@ -902,8 +1018,13 @@ func (e *Engine) restore(root *os.Root, name string, s Snapshotter) loaded {
 			return result
 		}
 
-		e.setAside(root, name, file, err)
 		result.setAside = true
+
+		if !e.setAside(root, name, file, err) {
+			result.unsafe = true
+
+			return result
+		}
 	}
 
 	return result
@@ -1069,9 +1190,9 @@ func (e *Engine) refuse(root *os.Root, service, file string, cause error) {
 }
 
 // setAside moves a state file that failed to load out of the way, so a later
-// save cannot replace it. When the file cannot be moved, it turns saving off for
-// the service instead.
-func (e *Engine) setAside(root *os.Root, service, file string, cause error) {
+// save cannot replace it, and reports whether it did. When the file cannot be
+// moved, it turns loading and saving off for the service instead.
+func (e *Engine) setAside(root *os.Root, service, file string, cause error) bool {
 	path := filepath.Join(e.dir, file)
 
 	moved, err := moveAside(root, file, time.Now())
@@ -1079,12 +1200,15 @@ func (e *Engine) setAside(root *os.Root, service, file string, cause error) {
 		e.log.Error("persist: state file failed to load and was moved aside; the service starts without it",
 			"service", service, "file", path, "moved_to", filepath.Join(e.dir, moved), "error", cause)
 
-		return
+		return true
 	}
 
 	e.markUnsafe(service, fmt.Errorf("%s failed to load and could not be moved aside: %w", path, err))
-	e.log.Error("persist: state file failed to load and could not be moved aside, so saving is off for the service",
+	e.log.Error("persist: state file failed to load and could not be moved aside, "+
+		"so the service starts empty and is neither loaded nor saved",
 		"service", service, "file", path, "move_error", err, "error", cause)
+
+	return false
 }
 
 // syncFailed turns the service off after a sync of its assets failed, and logs

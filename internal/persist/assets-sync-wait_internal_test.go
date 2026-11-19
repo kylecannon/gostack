@@ -188,7 +188,7 @@ func Test_Engine_ShutdownPreemptsATimedSave(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		err := f.e.Close(ctx)
+		err := f.e.Stop(ctx) // the first save of a shutdown
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.Equal(t, 300*time.Millisecond, time.Since(start), "the shutdown returns at its own deadline")
 		assert.Equal(t, []string{saved}, f.onDisk(t), "the last state file stays")

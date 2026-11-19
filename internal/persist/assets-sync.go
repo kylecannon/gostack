@@ -87,14 +87,24 @@ func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error
 }
 
 // syncPaths fsyncs paths, syncWorkers at a time, and returns the ones that are
-// there, with the fsync errors joined. A disk commits concurrent fsyncs
-// together. Once ctx ends it hands out no more paths.
+// there, with the errors joined. A disk commits concurrent fsyncs together.
+// Once ctx ends it hands out no more paths.
+//
+// A path that is gone is skipped: an asset Remove or a save deleted after the
+// sync took its id. The sync cannot tell that from an asset something else
+// deleted, and either way no write of gostack's is lost, so it is no failure;
+// a snapshot that names a missing asset fails only that asset, at its read.
+//
+// When an fsync or its close failed, only those errors are returned, so the
+// failure is final however many paths could not be opened beside it. Otherwise
+// the open errors are returned, each wrapping errNotOpened.
 func (a *Assets) syncPaths(ctx context.Context, paths []string) ([]string, error) {
 	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		there = make([]string, 0, len(paths))
-		errs  []error
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		there    = make([]string, 0, len(paths))
+		failed   []error
+		unopened []error
 	)
 
 	next := make(chan string)
@@ -109,8 +119,10 @@ func (a *Assets) syncPaths(ctx context.Context, paths []string) ([]string, error
 				switch {
 				case err == nil:
 					there = append(there, path)
+				case !errors.Is(err, errNotOpened):
+					failed = append(failed, err)
 				case !errors.Is(err, fs.ErrNotExist):
-					errs = append(errs, err)
+					unopened = append(unopened, err)
 				default:
 				}
 
@@ -122,7 +134,11 @@ func (a *Assets) syncPaths(ctx context.Context, paths []string) ([]string, error
 	a.feed(ctx, next, paths)
 	wg.Wait()
 
-	return there, errors.Join(errs...)
+	if len(failed) > 0 {
+		return there, errors.Join(failed...)
+	}
+
+	return there, errors.Join(unopened...)
 }
 
 // feed sends paths to next until ctx ends, then closes it.
@@ -139,11 +155,12 @@ func (*Assets) feed(ctx context.Context, next chan<- string, paths []string) {
 }
 
 // syncPath fsyncs the file or the directory at path in the root, on a
-// descriptor opened for it.
+// descriptor opened for it. An open that fails wraps errNotOpened: only the
+// fsync and the close after it can report a lost write.
 func (a *Assets) syncPath(path string) error {
 	f, err := a.root.Open(path)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return fmt.Errorf("open %s: %w: %w", path, errNotOpened, err)
 	}
 
 	err = a.fsync(f)

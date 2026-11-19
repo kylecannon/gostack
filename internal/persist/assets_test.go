@@ -809,7 +809,7 @@ func Test_Assets_Concurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	require.NoError(t, e.Close(t.Context()))
+	require.NoError(t, e.Stop(t.Context()))
 	flush(t, e)
 
 	kept := s.names()
