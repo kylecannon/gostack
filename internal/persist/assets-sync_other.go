@@ -17,12 +17,22 @@ import (
 const syncWorkers = 8
 
 // defaultSync fsyncs one file or directory. On macOS Go's Sync is F_FULLFSYNC.
+// A file's writeback error is reported once, so a failed fsync is final; see
+// [Assets].
 func defaultSync(f *os.File) error {
 	return f.Sync() //nolint:wrapcheck // syncPath wraps it with the path
 }
 
+// openFSDir returns nil: each fsync opens the file or directory it syncs.
+func openFSDir(*os.Root) (*os.File, error) {
+	return nil, nil //nolint:nilnil // no directory is kept open off Linux
+}
+
 // syncPending fsyncs the assets named ids that are still there, then the
 // directory of each. It starts no fsync once ctx ends; the ones running finish.
+// It returns the fsync errors when there are any, and otherwise ctx's error
+// when ctx ended before every path was synced, so a failed fsync is never
+// taken for a sync cut short.
 func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error {
 	files := make([]string, 0, len(ids))
 
@@ -36,19 +46,26 @@ func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error
 		return err
 	}
 
+	if ctx.Err() != nil {
+		return ctx.Err() //nolint:wrapcheck // sync wraps it
+	}
+
 	dirs := make(map[string]struct{})
 	for _, path := range there {
 		dirs[dirOf(path)] = struct{}{}
 	}
 
 	_, err = a.syncPaths(ctx, slices.Collect(maps.Keys(dirs)))
+	if err != nil {
+		return err
+	}
 
-	return err
+	return ctx.Err() //nolint:wrapcheck // sync wraps it
 }
 
 // syncPaths fsyncs paths, syncWorkers at a time, and returns the ones that are
-// there. A disk commits concurrent fsyncs together. Once ctx ends it hands out
-// no more paths and returns ctx's error.
+// there, with the fsync errors joined. A disk commits concurrent fsyncs
+// together. Once ctx ends it hands out no more paths.
 func (a *Assets) syncPaths(ctx context.Context, paths []string) ([]string, error) {
 	var (
 		wg    sync.WaitGroup
@@ -82,7 +99,7 @@ func (a *Assets) syncPaths(ctx context.Context, paths []string) ([]string, error
 	a.feed(ctx, next, paths)
 	wg.Wait()
 
-	return there, errors.Join(append(errs, ctx.Err())...)
+	return there, errors.Join(errs...)
 }
 
 // feed sends paths to next until ctx ends, then closes it.

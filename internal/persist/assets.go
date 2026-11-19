@@ -87,8 +87,17 @@ type Referencer interface {
 // committed after the last save ended: no snapshot on disk or in flight can
 // name it, so Remove deletes it at once, which lets a full disk free what the
 // saves that cannot run would not. A crash in between leaves an orphan, which
-// the next Load removes whatever a power loss left of it. It is safe for
-// concurrent use.
+// the next Load removes whatever a power loss left of it.
+//
+// A failed sync is final. The kernel reports a lost write once (on Linux,
+// syncfs reports a filesystem's writeback error to each open file once; an
+// fsync of a file, the same), and the pages it failed to write are then clean,
+// so a second sync reports success for bytes that are not on disk. Once a sync
+// has failed, every later save of the service fails before it renames its
+// snapshot, the engine turns the service's saving and loading off, and the
+// state file on disk stays the last one saved, until a restart. On Linux
+// before 5.8, syncfs reports no writeback error at all, so a lost write goes
+// unnoticed there. It is safe for concurrent use.
 type Assets struct {
 	root *os.Root
 	// dir is the directory the root is on, for the log.
@@ -124,12 +133,31 @@ type Assets struct {
 	// stuck is the cause of the last save or deletion error that left removals
 	// queued, or "" when the queue is not stuck. It is logged once per change.
 	stuck string
+	// failed is the error of the first sync that failed, or nil. It is never
+	// cleared: see the type's comment.
+	failed error
+	// lastSync is closed once the newest sync started, and every sync before
+	// it, have returned, or is nil before the first. A sync a save stopped
+	// waiting for goes on alone, and the next save that syncs waits for it.
+	lastSync chan struct{}
+	// onFail is called once, with the cause, when a sync first fails. The engine
+	// sets it to turn the service off.
+	onFail func(error)
 
+	// fsDir is the assets directory, kept open for syncfs on Linux and nil
+	// elsewhere. A file reports a writeback error that happened after it was
+	// opened, so a syncfs on one opened before any asset was written reports
+	// every error, even one another process's syncfs saw first.
+	fsDir *os.File
 	// fsync makes what it is given durable: on Linux the whole filesystem of the
 	// assets directory, with syncfs(2), elsewhere one file or directory. Tests
 	// replace it to record the order of the syncs.
 	fsync func(f *os.File) error
 }
+
+// errSyncFailed is wrapped by the error of every save of a service after a sync
+// of its assets failed.
+var errSyncFailed = errors.New("an asset sync failed")
 
 // AssetWriter writes one asset into a temp file. Exactly one of Commit and
 // Abort ends it. It is not safe for concurrent use.
@@ -170,7 +198,15 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		return nil, err
 	}
 
+	fsDir, err := openFSDir(root)
+	if err != nil {
+		_ = root.Close()
+
+		return nil, err
+	}
+
 	return &Assets{
+		fsDir:     fsDir,
 		root:      root,
 		dir:       filepath.Join(baseDir, dir),
 		log:       log,
@@ -372,48 +408,143 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 // or was synced by an earlier save. An asset deleted since its commit is
 // skipped.
 //
-// It waits for the sync only until ctx ends, and then returns ctx's error. A
-// sync cannot be interrupted, so it goes on alone and its result is dropped;
-// the next save syncs the same ids again. On error the ids are kept for the
-// next save, and the save that called it must not rename its snapshot. It is
-// nil-safe, for a service with no assets.
+// A sync cannot be interrupted. When ctx ends first, sync returns ctx's error
+// and keeps the ids for the next save; the sync goes on alone, and its result
+// still counts. The next sync starts at once and returns only when it and every
+// sync before it have returned, so no save renames its snapshot while an
+// earlier sync may yet report a lost write. Once a sync has failed, every call
+// fails with errSyncFailed. On error the save that called it must not rename
+// its snapshot. A save with no asset pending neither syncs nor waits: every id
+// its snapshot names was synced by a sync that returned. It is nil-safe, for a
+// service with no assets.
 func (a *Assets) sync(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
 
-	a.mu.Lock()
-	ids := a.unsynced
-	a.unsynced = make(map[string]struct{})
-	a.mu.Unlock()
+	err := a.failure()
+	if err != nil {
+		return fmt.Errorf("sync assets: %w", err)
+	}
 
-	if len(ids) == 0 {
+	s := a.startSync()
+	if s == nil {
 		return nil
 	}
 
-	// The goroutine ends when its sync does; the buffer lets it end after sync
-	// has stopped waiting.
-	done := make(chan error, 1)
+	// result is written before done is closed, and read only after.
+	var result error
 
-	go func() { done <- a.syncPending(ctx, ids) }()
+	go func() {
+		result = a.syncPending(ctx, s.ids)
+		a.fail(syncFailure(result))
 
-	var err error
+		if s.prev != nil {
+			<-s.prev
+		}
+
+		close(s.done)
+	}()
 
 	select {
-	case err = <-done:
+	case <-s.done:
 	case <-ctx.Done():
-		err = ctx.Err()
+		a.keepUnsynced(s.ids)
+
+		return fmt.Errorf("sync assets: %w", ctx.Err())
 	}
 
+	err = cmp.Or(a.failure(), result)
 	if err != nil {
-		a.mu.Lock()
-		maps.Copy(a.unsynced, ids)
-		a.mu.Unlock()
+		a.keepUnsynced(s.ids)
 
 		return fmt.Errorf("sync assets: %w", err)
 	}
 
 	return nil
+}
+
+// pendingSync is one sync of assets.
+type pendingSync struct {
+	// ids are the assets it syncs.
+	ids map[string]struct{}
+	// prev is the done of the sync before it, or nil.
+	prev chan struct{}
+	// done is closed once it and every sync before it have returned.
+	done chan struct{}
+}
+
+// startSync takes the pending ids for a sync and makes it the newest. It
+// returns nil when nothing is pending.
+func (a *Assets) startSync() *pendingSync {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(a.unsynced) == 0 {
+		return nil
+	}
+
+	s := &pendingSync{ids: a.unsynced, prev: a.lastSync, done: make(chan struct{})}
+	a.unsynced = make(map[string]struct{})
+	a.lastSync = s.done
+
+	return s
+}
+
+// keepUnsynced puts back ids a sync took, for the next save.
+func (a *Assets) keepUnsynced(ids map[string]struct{}) {
+	a.mu.Lock()
+	maps.Copy(a.unsynced, ids)
+	a.mu.Unlock()
+}
+
+// syncFailure returns err when it is a failed sync: anything but nil or the
+// end of the sync's context, which leaves ids unsynced but loses nothing.
+func syncFailure(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+
+	return err
+}
+
+// fail records cause, when it is not nil, as the store's failure, and tells
+// the engine the first time.
+func (a *Assets) fail(cause error) {
+	if cause == nil {
+		return
+	}
+
+	a.mu.Lock()
+	first := a.failed == nil
+
+	if first {
+		a.failed = cause
+	}
+
+	onFail := a.onFail
+	a.mu.Unlock()
+
+	if first && onFail != nil {
+		onFail(cause)
+	}
+}
+
+// failure returns the errSyncFailed error once a sync has failed, or nil.
+func (a *Assets) failure() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.failed == nil {
+		return nil
+	}
+
+	return a.failedErr()
+}
+
+// failedErr is the error of a sync after one failed. The caller holds mu.
+func (a *Assets) failedErr() error {
+	return fmt.Errorf("%w: %w", errSyncFailed, a.failed)
 }
 
 func (a *Assets) forget(tmp string) {

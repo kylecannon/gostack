@@ -28,9 +28,10 @@ type Snapshotter interface {
 }
 
 // ErrUnsafe is wrapped by the error Flush and Load return for a service whose
-// state file is unsafe to touch: a link that leaves the base dir, or a file that
-// failed to load and could not be moved aside. The service is neither loaded
-// nor saved until gostack restarts.
+// state file is unsafe to touch: a link that leaves the base dir, a file that
+// failed to load and could not be moved aside, or assets that could not be
+// opened or whose sync failed. The service is neither loaded nor saved until
+// gostack restarts.
 var ErrUnsafe = errors.New("saving and loading are off for the service until restart")
 
 // Engine tracks which services changed and writes them to disk. It is safe for
@@ -65,6 +66,13 @@ type Engine struct {
 	// running is true while the timer's callback runs. It is the one goroutine
 	// the engine starts, and no timer is armed while it runs.
 	running bool
+	// cancelTimed cancels the flush the timer's callback runs, or waits to run.
+	// It is nil while the callback does not run.
+	cancelTimed context.CancelFunc
+	// waiting counts the Flush, Load, Close and ResetAssets calls waiting for
+	// sem. While one waits, the timer's flush gives way: it is cancelled, and a
+	// callback that has not started does not.
+	waiting int
 	// flushing is true while a flush, by timer or by hand, holds the services it
 	// took.
 	flushing bool
@@ -352,8 +360,26 @@ func (e *Engine) Close(ctx context.Context) error {
 	return e.Flush(ctx)
 }
 
-// acquire waits for sem until ctx ends.
+// acquire waits for sem until ctx ends. A flush by the timer gives way to it:
+// it is cancelled, so it fails before it renames anything and leaves its
+// services dirty, and the caller, such as a shutdown, saves them within its own
+// deadline. A sync of assets the cancelled flush started still runs, and the
+// caller's own save renames only once it has returned.
 func (e *Engine) acquire(ctx context.Context) error {
+	e.mu.Lock()
+	e.waiting++
+
+	if e.cancelTimed != nil {
+		e.cancelTimed()
+	}
+	e.mu.Unlock()
+
+	defer func() {
+		e.mu.Lock()
+		e.waiting--
+		e.mu.Unlock()
+	}()
+
 	select {
 	case e.sem <- struct{}{}:
 		return nil
@@ -393,8 +419,12 @@ func (e *Engine) disarmLocked() {
 
 // flushOnTimer is the timer's callback. While it runs, from before it waits for
 // sem to after it schedules the next flush, it is the only flush goroutine: a
-// change in the meantime sets dirtyAgain and arms nothing.
+// change in the meantime sets dirtyAgain and arms nothing. Its flush has no
+// deadline, but gives way to any caller waiting for sem (see acquire).
 func (e *Engine) flushOnTimer(gen uint64) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	e.mu.Lock()
 	if gen != e.gen {
 		e.mu.Unlock()
@@ -404,6 +434,11 @@ func (e *Engine) flushOnTimer(gen uint64) {
 
 	e.timer = nil
 	e.running = true
+	e.cancelTimed = cancel
+
+	if e.waiting > 0 {
+		cancel()
+	}
 	e.mu.Unlock()
 
 	var (
@@ -411,16 +446,19 @@ func (e *Engine) flushOnTimer(gen uint64) {
 		err    error
 	)
 
-	e.sem <- struct{}{} // a Load or a Flush by hand may hold it
-	if e.due() {
-		// The timer has no caller to take a context from, and a flush must run to
-		// completion once the state is marked clean.
-		result, err = e.writeDirty(context.Background())
+	select {
+	case e.sem <- struct{}{}: // a Load or a Flush by hand may hold it
+		if e.due() && ctx.Err() == nil {
+			result, err = e.writeDirty(ctx)
+		}
+
+		e.release()
+	case <-ctx.Done():
 	}
-	e.release()
 
 	e.mu.Lock()
 	e.running = false
+	e.cancelTimed = nil
 	e.scheduleLocked()
 	e.mu.Unlock()
 
@@ -480,7 +518,36 @@ func (e *Engine) writeDirty(ctx context.Context) (outcome, error) {
 			"services", names)
 	}
 
+	// A flush that gave way to another, or whose caller went away, did not fail:
+	// its services are dirty again, with no backoff.
+	if errors.Is(ctx.Err(), context.Canceled) {
+		e.redirty(failed)
+
+		return outcome{}, err
+	}
+
 	return e.finish(failed, err), err
+}
+
+// redirty ends a flush that was cancelled: the services it did not save are
+// dirty again, for the next flush.
+func (e *Engine) redirty(failed []pendingService) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.flushing = false
+	e.redirtyLocked(failed)
+}
+
+// redirtyLocked marks the services a flush did not save dirty again.
+func (e *Engine) redirtyLocked(failed []pendingService) {
+	for _, p := range failed {
+		t := e.services[p.name]
+		if t.unsafe == nil {
+			t.dirty = true
+			e.dirtyAgain = true
+		}
+	}
 }
 
 // takeDirty clears the dirty bit of every dirty service and returns the safe
@@ -534,14 +601,7 @@ func (e *Engine) finish(failed []pendingService, err error) outcome {
 	result := outcome{failures: e.failures, changed: text != e.lastFailure}
 	e.lastFailure = text
 	e.retryAt = time.Now().Add(e.backoffLocked())
-
-	for _, p := range failed {
-		t := e.services[p.name]
-		if t.unsafe == nil {
-			t.dirty = true
-			e.dirtyAgain = true
-		}
-	}
+	e.redirtyLocked(failed)
 
 	return result
 }
@@ -606,6 +666,12 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 				"so the service is no longer saved; use a relative link inside the base dir",
 				"service", p.name, "error", err)
 
+			continue
+		}
+
+		// The store has turned the service off and logged why; it is not tried
+		// again.
+		if errors.Is(err, errSyncFailed) {
 			continue
 		}
 
@@ -911,6 +977,8 @@ func (e *Engine) openAssets(service string, t *tracked) (*Assets, error) {
 		return nil, fmt.Errorf("persist %s: %w: %w", service, ErrUnsafe, err)
 	}
 
+	a.onFail = func(cause error) { e.syncFailed(service, a.dir, cause) }
+
 	e.mu.Lock()
 	t.assets = a
 	e.mu.Unlock()
@@ -990,6 +1058,17 @@ func (e *Engine) setAside(root *os.Root, service, file string, cause error) {
 	e.markUnsafe(service, fmt.Errorf("%s failed to load and could not be moved aside: %w", path, err))
 	e.log.Error("persist: state file failed to load and could not be moved aside, so saving is off for the service",
 		"service", service, "file", path, "move_error", err, "error", cause)
+}
+
+// syncFailed turns the service off after a sync of its assets failed, and logs
+// why, once: the kernel reports a lost write once, so no later save may name
+// the assets. The state file on disk stays the last one saved; a restart loads
+// it, and its load sweep removes the assets it does not name.
+func (e *Engine) syncFailed(service, dir string, cause error) {
+	e.markUnsafe(service, fmt.Errorf("%w: %w", errSyncFailed, cause))
+	e.log.Error("persist: an asset sync failed, so saving and loading are off for the service until restart; "+
+		"the state file on disk is the last one saved, and what changed since is lost at restart",
+		"service", service, "dir", dir, "error", cause)
 }
 
 // markUnsafe turns loading and saving off for the service, for reason.

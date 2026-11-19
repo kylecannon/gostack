@@ -12,3 +12,7 @@ import (
 func syncedPaths(_ *Assets, f *os.File) ([]string, error) {
 	return []string{filepath.ToSlash(f.Name())}, nil
 }
+
+// syncRounds is how many sync calls one sync of assets makes in a row: the
+// fsyncs of the files, then the fsyncs of their directories.
+const syncRounds = 2

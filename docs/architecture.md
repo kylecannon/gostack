@@ -663,7 +663,8 @@ cites the lines.
   localstack-persist's non-atomic writes and rustack's save-only-on-shutdown.
 - A load never overlaps a save, so a state file on disk is always a whole old or
   a whole new state. A save, load or shutdown that waits for the other stops
-  waiting when its deadline passes.
+  waiting when its deadline passes, and a timed save gives way to any of them
+  (see the assets section).
 - A failed save is retried until it succeeds. The first retry waits
   max(1 s, `PERSIST_FREQUENCY`) after the failure, and each failure in a row
   doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
@@ -742,16 +743,51 @@ is untouched.
   `blobs/<xx>` directories once. A save with no pending asset syncs nothing. A
   service names an id only after `Commit` returns, and `Commit` records the id
   before it returns, so every asset a snapshot names is on disk before the
-  snapshot is, an asset committed while the snapshot is taken included. A
-  failed sync fails the save and keeps the ids for the next one. The timed
-  save, the shutdown save and `POST /_gostack/state/save` all take this path.
+  snapshot is, an asset committed while the snapshot is taken included. The
+  timed save, the shutdown save and `POST /_gostack/state/save` all take this
+  path.
+- A failed sync is final, the rule Postgres adopted after "fsyncgate". The
+  kernel reports a lost write once: since Linux 5.8, `syncfs` reports a
+  filesystem's writeback error once to each open file, and a file's `fsync`
+  reports its own once; the failed pages are then clean, so a second sync
+  reports success for bytes that are not on disk. So once a sync of a
+  service's assets fails, wherever it ran, the engine turns the service's
+  saving and loading off until restart, as for an unsafe state file: no later
+  save renames a snapshot, the state file on disk stays the last one saved,
+  `/_gostack/health` reports the service `persisted: false`, and one error log
+  line names the cause. The service keeps serving from memory. A restart loads
+  the last saved state and its load sweep removes the bodies that state does
+  not name, so everything changed after the last good save is lost. The
+  `syncfs` runs on one descriptor of `assets/.gostack`, opened with the assets,
+  so an error another process's `syncfs` saw first is still reported to it. A
+  writeback error of any file on that filesystem fails the sync, not only an
+  asset's.
+- Before Linux 5.8, `syncfs` reports no writeback error, so a lost write there
+  goes unnoticed and the save names the body; RHEL 8's 4.18 is such a kernel.
+  gostack does not check the kernel version or fall back to per-file fsyncs:
+  the container runs on the host's kernel, Docker Desktop, OrbStack and the
+  GitHub runners gostack is built and tested on run 6.x, and a per-file
+  fallback on Linux would be a path no test of ours runs.
 - The sync runs to the save's deadline: `Save` for the shutdown save, the
   request's context for `POST /_gostack/state/save`, none for the timed save.
-  When the deadline passes first, the save fails before it renames the
-  snapshot: the old state file stays, the ids stay pending, and the flush logs
-  one warning. A sync cannot be interrupted, so it goes on alone and its result
-  is dropped. A shutdown whose save ran out of time still makes the last flush
-  after `Close`, with what is left of `Close`'s time.
+  When the deadline passes before a pending asset's sync returns, the save
+  fails before it renames the snapshot: the old state file stays, the ids stay
+  pending, and the flush logs one warning. A save with no pending asset does
+  not wait for the sync and may rename after its deadline; its snapshot names
+  only assets an earlier sync made durable. A sync cannot be interrupted, so
+  it goes on alone, and its result still counts: when it fails, the service
+  turns off as above. The next save starts its own sync at once and renames
+  only when its sync and every earlier one have returned without error, so a
+  sync left running delays the next save and never lets it name a body whose
+  write was lost.
+- The timed save gives way. A shutdown, a `Load` (`/_gostack/state/load`), a
+  reset (`/_gostack/state/reset`) or a save by hand that finds it running, or
+  waiting to run, cancels it and runs within its own deadline. The cancelled
+  save fails before it renames anything, its services stay dirty for the next
+  save, and it counts as no failure. Its sync, if one started, goes on as
+  above, alongside the shutdown save's own. A shutdown whose save ran out of
+  time still makes the last flush after `Close`, with what is left of
+  `Close`'s time.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where

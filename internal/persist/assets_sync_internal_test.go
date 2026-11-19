@@ -197,15 +197,15 @@ func assertSyncedFirst(t *testing.T, records []syncRecord, path, id string) {
 	t.Errorf("%s was not fsynced before a snapshot naming %s was on disk; syncs: %v", path, id, records)
 }
 
-// Test_Assets_FailedSyncKeepsTheSnapshotOff checks that a save whose asset
-// fsync fails leaves the state file as it was, and that the next save syncs
-// the asset again.
-func Test_Assets_FailedSyncKeepsTheSnapshotOff(t *testing.T) {
+// Test_Assets_FailedSyncIsFinal checks that once an asset sync fails, no later
+// save renames a snapshot, even when the sync would now report success: the
+// kernel reports a lost write once (SQ-164 F1). The service turns off, so
+// health reports it not persisted, and one error names the cause.
+func Test_Assets_FailedSyncIsFinal(t *testing.T) {
 	dir := t.TempDir()
-	e := New(Config{
-		PersistVarSet: true, BaseDir: dir, Frequency: time.Hour,
-		Logger: slog.New(slog.DiscardHandler),
-	})
+	stateFile := filepath.Join(dir, syncService, FormatJSON.fileName())
+	logs := &warnings{}
+	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
 	n := &namer{}
 	e.Register(syncService, n)
 
@@ -219,30 +219,49 @@ func Test_Assets_FailedSyncKeepsTheSnapshotOff(t *testing.T) {
 
 	e.MarkDirty(syncService)
 	require.ErrorIs(t, e.Flush(t.Context()), fs.ErrPermission)
-	assert.NoFileExists(t, filepath.Join(dir, syncService, FormatJSON.fileName()))
+	assert.NoFileExists(t, stateFile)
 
-	syncs := recordSyncs(a, filepath.Join(dir, syncService, FormatJSON.fileName()))
+	syncs := recordSyncs(a, stateFile)
 
-	require.NoError(t, e.Flush(t.Context()))
+	e.MarkDirty(syncService)
+	err = e.Flush(t.Context())
+	require.ErrorIs(t, err, ErrUnsafe, "a sync that now succeeds does not make the asset durable")
+	assert.NoFileExists(t, stateFile)
+	assert.Empty(t, syncs(), "nothing is synced again")
+	assert.False(t, e.Enabled(syncService), "health reports the service not persisted")
 
-	file, _ := assetPath(id)
-	assertSyncedFirst(t, syncs(), file, id)
+	errs := logs.errors()
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0], fs.ErrPermission.Error())
 }
 
-// warnings is a slog handler that keeps the messages of the warn records.
+// warnings is a slog handler that keeps the warn and error records.
 type warnings struct {
 	mu   sync.Mutex
-	msgs []string
+	msgs map[slog.Level][]string
 }
 
 func (*warnings) Enabled(context.Context, slog.Level) bool { return true }
 
 func (w *warnings) Handle(_ context.Context, r slog.Record) error {
-	if r.Level == slog.LevelWarn {
-		w.mu.Lock()
-		w.msgs = append(w.msgs, r.Message)
-		w.mu.Unlock()
+	if r.Level < slog.LevelWarn {
+		return nil
 	}
+
+	line := r.Message
+	r.Attrs(func(attr slog.Attr) bool {
+		line += " " + attr.String()
+
+		return true
+	})
+
+	w.mu.Lock()
+	if w.msgs == nil {
+		w.msgs = make(map[slog.Level][]string)
+	}
+
+	w.msgs[r.Level] = append(w.msgs[r.Level], line)
+	w.mu.Unlock()
 
 	return nil
 }
@@ -251,11 +270,20 @@ func (w *warnings) WithAttrs([]slog.Attr) slog.Handler { return w }
 
 func (w *warnings) WithGroup(string) slog.Handler { return w }
 
+// all returns the warn records.
 func (w *warnings) all() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	return slices.Clone(w.msgs)
+	return slices.Clone(w.msgs[slog.LevelWarn])
+}
+
+// errors returns the error records, each with its attributes.
+func (w *warnings) errors() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return slices.Clone(w.msgs[slog.LevelError])
 }
 
 // Test_Assets_SaveAbandonedAtItsDeadline checks that a save whose asset sync
