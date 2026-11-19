@@ -294,8 +294,8 @@ func Test_Provider_Publish_slowQueue(t *testing.T) {
 	assert.Equal(t, "m", slow.await(1)[0].Body)
 }
 
-// Test_Provider_Close_waits stops SNS while a delivery is held: Close waits
-// for it, and the message reaches its queue.
+// Test_Provider_Close_waits stops SNS with one delivery held and one queued
+// behind it: Close waits for both, and both messages reach their queue.
 func Test_Provider_Close_waits(t *testing.T) {
 	g := newGate("/q")
 	s := newStack(t, g.wrap)
@@ -304,6 +304,7 @@ func Test_Provider_Close_waits(t *testing.T) {
 	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
 
 	s.publish(paramTopicArn, topic, paramMessage, "m")
+	s.publish(paramTopicArn, topic, paramMessage, "n")
 	g.awaitEntered(t)
 
 	closed := make(chan struct{})
@@ -322,7 +323,9 @@ func Test_Provider_Close_waits(t *testing.T) {
 	close(g.open)
 	<-closed
 
-	assert.Equal(t, "m", q.await(1)[0].Body)
+	msgs := q.await(2)
+	assert.Equal(t, "m", msgs[0].Body)
+	assert.Equal(t, "n", msgs[1].Body)
 	assert.Zero(t, s.sns.Dropped())
 }
 
