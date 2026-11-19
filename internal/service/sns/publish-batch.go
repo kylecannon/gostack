@@ -23,7 +23,9 @@ const (
 //
 // Every delivery is sent as the queue's account, as a single Publish is:
 // LocalStack sends a batch so and a single publish as its default account,
-// but the sender shows only as the SQS SenderId, which no SNS test reads.
+// but the sender shows only as the SQS SenderId, which every SNS snapshot
+// replaces with <sender-id>, and gostack's SQS checks no queue policy
+// against it.
 func (p *Provider) PublishBatch(ctx context.Context, in *api.PublishBatchInput) (*api.PublishBatchOutput, error) {
 	rc, callErr := callOf(ctx)
 	if callErr != nil {

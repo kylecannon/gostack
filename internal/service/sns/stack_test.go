@@ -28,10 +28,13 @@ const (
 	attrFifoQueue = "FifoQueue"
 	attrColor     = "color"
 	valueRed      = "red"
-	typeString    = "String"
-	protocolSQS   = "sqs"
-	codeNotFound  = "NotFound"
-	msgNoTopic    = "Topic does not exist"
+
+	attrEntryName   = "MessageAttributes.entry.1.Name"
+	attrEntryString = "MessageAttributes.entry.1.Value.StringValue"
+	typeString      = "String"
+	protocolSQS     = "sqs"
+	codeNotFound    = "NotFound"
+	msgNoTopic      = "Topic does not exist"
 )
 
 // stack is SNS and SQS behind one gateway, with SNS delivering through it, as

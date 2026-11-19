@@ -241,6 +241,23 @@ func Test_Provider_Publish_fifoDeduplication(t *testing.T) {
 	assert.Equal(t, "three", msgs[1].Body)
 }
 
+// Test_Provider_Publish_fifoEnvelope: a FIFO topic's envelope carries the
+// sequence number and no signature.
+func Test_Provider_Publish_fifoEnvelope(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+	q := s.createQueue(account, region, "q.fifo", map[string]string{attrFifoQueue: textTrue})
+	s.subscribeQueue(topic, q.arn)
+
+	out := s.publish(paramTopicArn, topic, paramMessage, "one", paramGroup, "g", paramDedup, "d")
+
+	msgs := q.await(1)
+	e := parseEnvelope(t, msgs[0].Body)
+	assert.Equal(t, out.SequenceNumber, e.SequenceNumber)
+	assert.Empty(t, e.Signature, "LocalStack signs no FIFO body (create_sns_message_body)")
+	assert.Equal(t, "d", msgs[0].Attributes["MessageDeduplicationId"])
+}
+
 func Test_Provider_Publish_fifoToStandardQueue(t *testing.T) {
 	s := newStack(t, nil)
 	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue,

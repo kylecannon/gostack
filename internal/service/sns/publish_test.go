@@ -28,7 +28,7 @@ func Test_Provider_Publish_validation(t *testing.T) {
 	fifo := c.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
 
 	noType := []string{
-		"MessageAttributes.entry.1.Name", attrColor, "MessageAttributes.entry.1.Value.StringValue", valueRed,
+		attrEntryName, attrColor, attrEntryString, valueRed,
 	}
 
 	tests := []struct {
@@ -61,8 +61,8 @@ func Test_Provider_Publish_validation(t *testing.T) {
 		{
 			name: "attribute of a bad type",
 			params: []string{
-				paramTopicArn, topic, paramMessage, "m", "MessageAttributes.entry.1.Name", "a",
-				"MessageAttributes.entry.1.Value.DataType", "Text", "MessageAttributes.entry.1.Value.StringValue", "v",
+				paramTopicArn, topic, paramMessage, "m", attrEntryName, "a",
+				"MessageAttributes.entry.1.Value.DataType", "Text", attrEntryString, "v",
 			},
 			status: http.StatusBadRequest, code: valueInvalid,
 			message: "The message attribute 'a' has an invalid message attribute type, the set of supported " +
@@ -186,7 +186,7 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 		{
 			name: "attribute without a data type in the second entry",
 			params: batch(topic, entry(1, "1", "m"),
-				entry(2, "2", "m", "MessageAttributes.entry.1.Name", "x", "MessageAttributes.entry.1.Value.StringValue", "v")),
+				entry(2, "2", "m", attrEntryName, "x", attrEntryString, "v")),
 			status: http.StatusBadRequest, code: "ValidationError",
 			message: "1 validation error detected: Value null at " +
 				"'publishBatchRequestEntries.2.member.messageAttributes.x.member.dataType' " +
