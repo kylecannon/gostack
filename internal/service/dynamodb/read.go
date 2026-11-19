@@ -38,6 +38,7 @@ const (
 
 // reader is one Query or Scan, checked: what it reads, and how it pages.
 type reader struct {
+	name     string // the table's, as ConsumedCapacity names it
 	tableKey table.KeySchema
 	index    *table.IndexSpec // nil for the table
 	key      table.KeySchema  // of the table or index read

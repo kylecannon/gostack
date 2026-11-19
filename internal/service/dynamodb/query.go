@@ -72,7 +72,7 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 
 	return &api.QueryOutput{
 		Items: out.Items, Count: out.Count, ScannedCount: out.ScannedCount, LastEvaluatedKey: out.LastEvaluatedKey,
-		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName),
+		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, r.name),
 	}, nil
 }
 
@@ -80,7 +80,7 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 // that come before its expressions, in DynamoDB Local's order, with
 // LocalStack's index checks first.
 func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableEntry, *reader, error) {
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		var notFound *awserr.Error
 		if in.IndexName != nil && errors.As(err, &notFound) && notFound.Code == codeNotFound {
@@ -111,6 +111,8 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 	if err != nil {
 		return nil, nil, err
 	}
+
+	r.name = name
 
 	if in.KeyConditionExpression == nil {
 		return nil, nil, value.Invalid(msgNoKeyCondition)

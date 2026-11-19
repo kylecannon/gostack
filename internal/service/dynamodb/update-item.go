@@ -20,7 +20,7 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, err
 	}
 
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -65,7 +65,7 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 
 	return &api.UpdateItemOutput{
 		Attributes:       expression.ReturnValues(mode, paths, change.Old, change.New),
-		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName),
+		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name),
 	}, nil
 }
 

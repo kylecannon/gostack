@@ -70,14 +70,14 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 
 	return &api.ScanOutput{
 		Items: out.Items, Count: out.Count, ScannedCount: out.ScannedCount, LastEvaluatedKey: out.LastEvaluatedKey,
-		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName),
+		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, r.name),
 	}, nil
 }
 
 // scanTarget finds the table and index a Scan reads and makes the checks that
 // come before its expressions.
 func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEntry, *reader, error) {
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan: %w", err)
 	}
@@ -105,7 +105,7 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, err
 	}
 
-	r.segment, r.segments = segment, segments
+	r.name, r.segment, r.segments = name, segment, segments
 
 	return e, r, nil
 }

@@ -473,17 +473,12 @@ func (c caller) checkTransactWrite(items []api.TransactWriteItem) ([]*txAction, 
 // transactTable resolves an action's TableName, which may be the table's ARN,
 // to the caller's table, the same entry for every action naming it.
 func (c caller) transactTable(name string, tables map[string]*tableEntry) (string, *tableEntry, error) {
-	// LocalStack keeps what follows ":table/", as DynamoDB Local takes no
-	// ARN (transact_write_items in provider.py).
-	if i := strings.LastIndex(name, ":table/"); i >= 0 {
-		name = name[i+len(":table/"):]
-	}
-
+	name = tableName(name)
 	if e := tables[name]; e != nil {
 		return name, e, nil
 	}
 
-	e, err := c.lookup(&name)
+	name, e, err := c.lookup(&name)
 	if err != nil {
 		return "", nil, err
 	}

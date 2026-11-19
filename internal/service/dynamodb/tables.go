@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"context"
 	"slices"
+	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
@@ -25,31 +26,50 @@ const (
 	tableMaxCapacity   = 40000
 )
 
-// lookup returns the caller's table named name, after checking the name.
-func (c caller) lookup(name *string) (*tableEntry, error) {
-	err := checkName(name)
+// lookup returns the caller's table that name stands for, after checking the
+// name, and the table's name. name may be the table's ARN.
+func (c caller) lookup(name *string) (string, *tableEntry, error) {
+	if name == nil {
+		return "", nil, checkName(nil)
+	}
+
+	resolved := tableName(*name)
+
+	err := checkName(&resolved)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
-	e := c.state.table(*name)
+	e := c.state.table(resolved)
 	if e == nil {
-		return nil, api.NewResourceNotFoundException(msgTableNotFound)
+		return "", nil, api.NewResourceNotFoundException(msgTableNotFound)
 	}
 
-	return e, nil
+	return resolved, e, nil
+}
+
+// tableName returns the table name that name stands for: what follows
+// ":table/" in a table ARN, or name itself. DynamoDB and the LocalStack image
+// take an ARN wherever an item or table operation takes a name, whatever
+// account and region it names (verification/SQ-302 q3).
+func tableName(name string) string {
+	if _, after, ok := strings.CutLast(name, ":table/"); ok {
+		return after
+	}
+
+	return name
 }
 
 // DescribeTable describes a table.
 func (p *Provider) DescribeTable(ctx context.Context, in *api.DescribeTableInput) (*api.DescribeTableOutput, error) {
 	c := p.caller(ctx)
 
-	e, err := c.lookup(in.TableName)
+	name, e, err := c.lookup(in.TableName)
 	if err != nil {
 		return nil, err
 	}
 
-	return &api.DescribeTableOutput{Table: e.description(c.tableARN(*in.TableName))}, nil
+	return &api.DescribeTableOutput{Table: e.description(c.tableARN(name))}, nil
 }
 
 // DeleteTable deletes a table. LocalStack checks that it exists first, with a

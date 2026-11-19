@@ -177,6 +177,13 @@ func (f *fingerprinter) request(
 	table *string, item map[string]api.AttributeValue, condition, update *string,
 	names map[string]string, values map[string]api.AttributeValue, onFailure *string,
 ) {
+	// The table is fed as the name it resolves to, so a request naming it by
+	// ARN and then by name replays, as LocalStack strips the ARN before
+	// DynamoDB Local compares the token.
+	if table != nil {
+		table = new(tableName(*table))
+	}
+
 	f.optional(table)
 	f.item(item)
 	f.optional(condition)

@@ -77,6 +77,11 @@ func (p *Provider) BatchGetItem(ctx context.Context, in *api.BatchGetItemInput) 
 			items = append(items, stored)
 		}
 
+		// A table named once by name and once by ARN answers under its name.
+		if earlier, ok := out.Responses[g.name]; ok {
+			items = append(earlier, items...)
+		}
+
 		out.Responses[g.name] = items
 	}
 
@@ -126,6 +131,8 @@ func (c caller) checkBatchGet(requests map[string]api.KeysAndAttributes) ([]batc
 }
 
 func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (batchGet, error) {
+	name = tableName(name)
+
 	err := checkName(&name)
 	if err != nil {
 		return batchGet{}, err
@@ -135,7 +142,7 @@ func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (
 		return batchGet{}, value.Invalid(fmt.Sprintf(msgBatchGetEmpty, name))
 	}
 
-	e, err := c.lookup(&name)
+	_, e, err := c.lookup(&name)
 	if err != nil {
 		return batchGet{}, err
 	}

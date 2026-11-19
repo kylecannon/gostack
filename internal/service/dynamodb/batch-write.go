@@ -114,6 +114,8 @@ func (c caller) checkBatchWrite(requests map[string][]api.WriteRequest) ([]batch
 }
 
 func (c caller) checkBatchTable(name string, requests []api.WriteRequest) (batchTable, error) {
+	name = tableName(name)
+
 	err := checkName(&name)
 	if err != nil {
 		return batchTable{}, err
@@ -123,7 +125,7 @@ func (c caller) checkBatchTable(name string, requests []api.WriteRequest) (batch
 		return batchTable{}, value.Invalid(msgBatchWriteEmpty + name)
 	}
 
-	e, err := c.lookup(&name)
+	_, e, err := c.lookup(&name)
 	if err != nil {
 		return batchTable{}, err
 	}

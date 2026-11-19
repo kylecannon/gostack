@@ -43,7 +43,7 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, err
 	}
 
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -83,7 +83,7 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 	}
 
 	used := writeCapacity(e, change.Old, change.New)
-	out := &api.PutItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName)}
+	out := &api.PutItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
 	if returnOld {
 		out.Attributes = change.Old
@@ -102,7 +102,7 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, err
 	}
 
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -134,7 +134,7 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 
 	used := consumption{table: readUnits(value.ItemSize(stored), in.ConsistentRead)}
 
-	return &api.GetItemOutput{Item: item, ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName)}, nil
+	return &api.GetItemOutput{Item: item, ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}, nil
 }
 
 // DeleteItem removes the item with a key, if there is one, when its
@@ -146,7 +146,7 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 		return nil, err
 	}
 
-	e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.caller(ctx).lookup(in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -179,7 +179,7 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 	}
 
 	used := writeCapacity(e, change.Old, nil)
-	out := &api.DeleteItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, *in.TableName)}
+	out := &api.DeleteItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
 	if returnOld {
 		out.Attributes = change.Old

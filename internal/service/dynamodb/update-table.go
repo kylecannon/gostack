@@ -26,7 +26,7 @@ const (
 func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*api.UpdateTableOutput, error) {
 	c := p.caller(ctx)
 
-	e, err := c.lookup(in.TableName)
+	name, e, err := c.lookup(in.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
-	d := e.description(c.tableARN(*in.TableName))
+	d := e.description(c.tableARN(name))
 
 	for i := range d.GlobalSecondaryIndexes {
 		index := &d.GlobalSecondaryIndexes[i]
