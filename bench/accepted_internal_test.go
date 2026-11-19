@@ -323,6 +323,7 @@ func isolateGit(t *testing.T) {
 
 // gitContains answers from real history, and refuses where history is cut.
 func Test_gitContains(t *testing.T) {
+	// Under the pre-commit hook an inherited GIT_DIR once let this test re-initialise and commit to the live repo.
 	isolateGit(t)
 
 	dir := t.TempDir()
