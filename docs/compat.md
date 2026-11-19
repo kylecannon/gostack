@@ -188,6 +188,20 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
 
+## Secrets Manager
+
+| Behavior | LocalStack | gostack |
+|---|---|---|
+| Secret values on disk | Written in plaintext in the persisted state | The same: `PERSIST_SECRETSMANAGER=1` writes every version's `SecretString` and `SecretBinary` unencrypted, in both `PERSIST_FORMAT` values. Protect the data directory as you would the secrets. |
+| A secret scheduled for deletion | Never removed when the recovery window ends | The same, so no timer runs. `DeletedDate` survives a restart. |
+| `UpdateSecretVersionStage` moving `AWSCURRENT` off a version with no `MoveToVersionId` | Clears the secret's current version, so the next read finds nothing | Keeps the current version; the next `PutSecretValue` becomes current |
+| `RotateSecret` without `ClientRequestToken` on the wire | `400 InvalidRequestException` | `400 InvalidParameterException`, as the `aws.validated` snapshot of `test_no_client_request_token[RotateSecret]` records. The message is the same. |
+| `RotateSecret` that passes its checks | Calls Lambda `GetFunction`, then invokes the function's four rotation steps | Calls `GetFunction` through the in-process client. There is no Lambda yet, so the call answers `400 ResourceNotFoundException`, "Lambda does not exist or could not be accessed", and the secret is unchanged. |
+| `RotateSecret` with `RotateImmediately=false` | Crashes on an unbound variable: 500 | Stores the configuration and returns the current version id |
+| `RotateSecret` while a version holds `AWSPENDING` without `AWSCURRENT` | Stores the new configuration, then answers "Previous rotation request is still in progress." | Answers the same error and leaves the configuration as it was |
+| `PutResourcePolicy` without `ResourcePolicy` | Crashes on the missing key: 500 | `400 ValidationException`, AWS's missing-member text |
+| `ReplicateSecretToRegions`, `RemoveRegionsFromReplication`, `CreateSecret` with `AddReplicaRegions` | Create and remove replica secrets in other regions | `501`. No test pins replication. |
+
 ## Accepted LocalStack-only behavior
 
 gostack copies these although AWS does not have them. Each is a LocalStack switch

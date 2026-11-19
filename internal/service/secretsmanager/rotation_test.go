@@ -48,6 +48,10 @@ func Test_resource_policy(t *testing.T) {
 	requireError(t, h, "PutResourcePolicy", `{"SecretId":"no such","ResourcePolicy":"{}"}`, "ValidationException")
 	requireError(t, h, "GetResourcePolicy", `{"SecretId":"missing"}`, "ResourceNotFoundException")
 
+	requireError(t, h, "StopReplicationToReplica", `{"SecretId":"no such"}`, "ValidationException")
+	status, _ := call(t, h, "StopReplicationToReplica", `{"SecretId":"p"}`)
+	assert.Equal(t, http.StatusNotImplemented, status)
+
 	mustCall(t, h, "DeleteResourcePolicy", `{"SecretId":"p"}`)
 	got = mustCall(t, h, "GetResourcePolicy", `{"SecretId":"p"}`)
 	assert.NotContains(t, got, "ResourcePolicy")

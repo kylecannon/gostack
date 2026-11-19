@@ -77,10 +77,10 @@ func tokenOf(worker int, n int64) string {
 
 // secretsFor creates one secret per worker, each holding value, and returns
 // the handler that serves them.
-func secretsFor(b *testing.B, workers int, value string) http.Handler {
+func secretsFor(b *testing.B, workers int, value string, server func(*testing.B) http.Handler) http.Handler {
 	b.Helper()
 
-	h := handlerFor(b, secretsmanager.New(nil))
+	h := server(b)
 
 	for worker := range workers {
 		status := send(b.Context(), h, "CreateSecret", `{"Name":"bench-`+strconv.Itoa(worker)+`","SecretString":"`+
@@ -89,6 +89,13 @@ func secretsFor(b *testing.B, workers int, value string) http.Handler {
 	}
 
 	return h
+}
+
+// plainHandler is a gateway in front of a Secrets Manager with no persistence.
+func plainHandler(b *testing.B) http.Handler {
+	b.Helper()
+
+	return handlerFor(b, secretsmanager.New(nil))
 }
 
 func benchMatrix(b *testing.B, run func(b *testing.B, value string, workers int)) {
@@ -109,7 +116,7 @@ func benchMatrix(b *testing.B, run func(b *testing.B, value string, workers int)
 
 func BenchmarkGetSecretValue(b *testing.B) {
 	benchMatrix(b, func(b *testing.B, value string, workers int) {
-		h := secretsFor(b, workers, value)
+		h := secretsFor(b, workers, value, plainHandler)
 
 		for b.Loop() {
 			err := fanOut(workers, func(worker int) error {
@@ -125,9 +132,21 @@ func BenchmarkGetSecretValue(b *testing.B) {
 	})
 }
 
+// BenchmarkPutSecretValue runs the matrix with persistence off, and again under
+// a persist=on key with the engine wired as PERSIST_SECRETSMANAGER=1 wires it:
+//
+//	BenchmarkPutSecretValue/persist=on/payload=64KiB/concurrency=16
 func BenchmarkPutSecretValue(b *testing.B) {
+	benchPutSecretValue(b, plainHandler)
+
+	b.Run(persistOn, func(b *testing.B) { benchPutSecretValue(b, persistedHandler) })
+}
+
+func benchPutSecretValue(b *testing.B, server func(*testing.B) http.Handler) {
+	b.Helper()
+
 	benchMatrix(b, func(b *testing.B, value string, workers int) {
-		h := secretsFor(b, workers, value)
+		h := secretsFor(b, workers, value, server)
 
 		var calls atomic.Int64
 
@@ -151,7 +170,7 @@ func BenchmarkPutSecretValue(b *testing.B) {
 func BenchmarkListSecrets(b *testing.B) {
 	for _, count := range []int{10, 10_000} {
 		b.Run("secrets="+strconv.Itoa(count), func(b *testing.B) {
-			h := secretsFor(b, count, "v")
+			h := secretsFor(b, count, "v", plainHandler)
 
 			b.ReportAllocs()
 

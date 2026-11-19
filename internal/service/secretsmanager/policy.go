@@ -52,6 +52,21 @@ func (p *Provider) GetResourcePolicy(
 	return out, err
 }
 
+// StopReplicationToReplica checks the SecretId as LocalStack does and then, as
+// moto has no implementation, answers 501.
+func (p *Provider) StopReplicationToReplica(
+	ctx context.Context, in *api.StopReplicationToReplicaInput,
+) (*api.StopReplicationToReplicaOutput, error) {
+	if in.SecretId != nil {
+		err := checkSecretID(*in.SecretId)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return p.Unimplemented.StopReplicationToReplica(ctx, in)
+}
+
 // DeleteResourcePolicy removes the policy; a secret without one is left as it
 // is.
 func (p *Provider) DeleteResourcePolicy(

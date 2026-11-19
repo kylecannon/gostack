@@ -43,7 +43,7 @@ func newHandler(t *testing.T) http.Handler {
 	t.Helper()
 
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
+		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAddr}} },
 		[]service.Registration{secretsmanager.New(nil).Registration()},
 		nil,
 		nil,
