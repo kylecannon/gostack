@@ -29,9 +29,15 @@ func Test_registrations_bindS3(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
+	var found bool
+
 	for _, reg := range newProviders(cfg, func(string) {}).regs {
 		if reg.Metadata.Name == s3Service {
+			found = true
+
 			assert.NotNil(t, reg.Bind, "S3 delivers its notifications through the gateway")
 		}
 	}
+
+	require.True(t, found, "S3 is registered")
 }
