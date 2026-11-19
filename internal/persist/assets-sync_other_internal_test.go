@@ -2,13 +2,9 @@
 
 package persist
 
-import (
-	"os"
-	"path/filepath"
-)
+import "testing"
 
-// syncedPaths returns what one sync on f makes durable. Off Linux it is an
-// fsync of the one file or directory f is.
-func syncedPaths(_ *Assets, f *os.File) ([]string, error) {
-	return []string{filepath.ToSlash(f.Name())}, nil
+// syncModes forces each sync path the platform has: off Linux only per-file.
+var syncModes = map[string]func(*testing.T, *Assets){
+	syncByFile: forcePerFile,
 }

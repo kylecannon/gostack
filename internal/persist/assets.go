@@ -95,9 +95,10 @@ type Referencer interface {
 // so a second sync reports success for bytes that are not on disk. Once a sync
 // has failed, every later save of the service fails before it renames its
 // snapshot, the engine turns the service's saving and loading off, and the
-// state file on disk stays the last one saved, until a restart. On Linux
-// before 5.8, syncfs reports no writeback error at all, so a lost write goes
-// unnoticed there. It is safe for concurrent use.
+// state file on disk stays the last one saved, until a restart. Syncfs is used
+// only on a filesystem where it is proven to report the error (see chooseSync);
+// on Linux before 5.8 it reports none, so a lost write goes unnoticed there. It
+// is safe for concurrent use.
 type Assets struct {
 	root *os.Root
 	// dir is the directory the root is on, for the log.
@@ -144,14 +145,15 @@ type Assets struct {
 	// sets it to turn the service off.
 	onFail func(error)
 
-	// fsDir is the assets directory, kept open for syncfs on Linux and nil
-	// elsewhere. A file reports a writeback error that happened after it was
-	// opened, so a syncfs on one opened before any asset was written reports
+	// fsDir is the assets directory, kept open for syncfs on a Linux filesystem
+	// where syncfs is proven to report a lost write (see chooseSync), and nil
+	// elsewhere. There a file reports a writeback error that happened after it
+	// was opened, so a syncfs on one opened before any asset was written reports
 	// every error, even one another process's syncfs saw first.
 	fsDir *os.File
-	// fsync makes what it is given durable: on Linux the whole filesystem of the
-	// assets directory, with syncfs(2), elsewhere one file or directory. Tests
-	// replace it to record the order of the syncs.
+	// fsync makes what it is given durable: with fsDir set, the whole filesystem
+	// of the assets directory, with syncfs(2), otherwise one file or directory.
+	// Tests replace it to record the order of the syncs.
 	fsync func(f *os.File) error
 }
 
@@ -198,15 +200,22 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		return nil, err
 	}
 
-	fsDir, err := openFSDir(root)
+	mode, err := chooseSync(root)
 	if err != nil {
 		_ = root.Close()
 
 		return nil, err
 	}
 
+	how := syncByFile
+	if mode.dir != nil {
+		how = syncByFilesystem
+	}
+
+	log.Info("persist: asset sync", "service", service, "fs", mode.fs, "sync", how)
+
 	return &Assets{
-		fsDir:     fsDir,
+		fsDir:     mode.dir,
 		root:      root,
 		dir:       filepath.Join(baseDir, dir),
 		log:       log,
@@ -216,7 +225,7 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		fresh:     make(map[string]struct{}),
 		capturing: make(map[string]struct{}),
 		unsynced:  make(map[string]struct{}),
-		fsync:     defaultSync,
+		fsync:     mode.sync,
 	}, nil
 }
 
@@ -400,8 +409,9 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 }
 
 // sync makes every asset committed and not yet synced durable, with its
-// directory: on Linux with one syncfs of the assets filesystem, elsewhere with
-// an fsync of each asset and then of each of their directories once. A save
+// directory: with one syncfs of the assets filesystem where chooseSync chose
+// it, otherwise with an fsync of each asset and then of each of their
+// directories once. A save
 // calls it after it takes its snapshot and before it renames the snapshot into
 // place: a service names an id only once Commit has returned, and Commit
 // records the id before it returns, so every asset the snapshot names is synced

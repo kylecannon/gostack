@@ -663,7 +663,8 @@ cites the lines.
   localstack-persist's non-atomic writes and rustack's save-only-on-shutdown.
 - A load never overlaps a save, so a state file on disk is always a whole old or
   a whole new state. A save, load or shutdown that waits for the other stops
-  waiting when its deadline passes, and a timed save gives way to any of them
+  waiting when its deadline passes. A timed save finishes under the deadline
+  of a save or shutdown that waits for it, and gives way to a load or reset
   (see the assets section).
 - A failed save is retried until it succeeds. The first retry waits
   max(1 s, `PERSIST_FREQUENCY`) after the failure, and each failure in a row
@@ -736,11 +737,26 @@ is untouched.
   load's sweep that lists the file also knows the id. A commit does not fsync.
 - A save makes the assets durable. After it takes the snapshot and before it
   renames the snapshot into place, it syncs every asset committed since the
-  last save that synced. On Linux that is one `syncfs(2)` on the
-  `assets/.gostack` directory, which flushes the dirty data and metadata of
-  every file on its filesystem, the renames into `blobs/<xx>` included. On
-  other systems it fsyncs each asset, 8 at a time, then each of their
-  `blobs/<xx>` directories once. A save with no pending asset syncs nothing. A
+  last save that synced, by one of two paths:
+  - **syncfs:** one `syncfs(2)` on the `assets/.gostack` directory, which
+    flushes the dirty data and metadata of every file on its filesystem, the
+    renames into `blobs/<xx>` included.
+  - **per-file fsync:** it fsyncs each asset, 8 at a time, on a descriptor
+    opened for it, then each of their `blobs/<xx>` directories once. It costs
+    about 0.4 ms per pending asset on a Linux volume.
+
+  When the assets open, on Linux, gostack reads the type of the assets
+  filesystem with `fstatfs` and takes syncfs only on a filesystem where the
+  foreign-sync tests of `scripts/writeback-fault.sh` proved that syncfs still
+  reports a lost write after another process's `sync` or `syncfs` ran first:
+  ext4, xfs and btrfs, each run on a loop device on kernel 7.2 (ext2 and ext3
+  share ext4's magic number and kernel code). Every other filesystem takes the
+  per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, tmpfs, any other, and
+  one whose type cannot be read. Other
+  systems always take the per-file path. One info line per service at startup
+  names the filesystem and the path, such as
+  `persist: asset sync service=s3 fs=overlay sync="per-file fsync"`. A save
+  with no pending asset syncs nothing. A
   service names an id only after `Commit` returns, and `Commit` records the id
   before it returns, so every asset a snapshot names is on disk before the
   snapshot is, an asset committed while the snapshot is taken included. The
@@ -759,15 +775,18 @@ is untouched.
   the last saved state and its load sweep removes the bodies that state does
   not name, so everything changed after the last good save is lost. The
   `syncfs` runs on one descriptor of `assets/.gostack`, opened with the assets,
-  so an error another process's `syncfs` saw first is still reported to it. A
-  writeback error of any file on that filesystem fails the sync, not only an
-  asset's.
-- Before Linux 5.8, `syncfs` reports no writeback error, so a lost write there
-  goes unnoticed and the save names the body; RHEL 8's 4.18 is such a kernel.
-  gostack does not check the kernel version or fall back to per-file fsyncs:
-  the container runs on the host's kernel, Docker Desktop, OrbStack and the
-  GitHub runners gostack is built and tested on run 6.x, and a per-file
-  fallback on Linux would be a path no test of ours runs.
+  so on ext4 an error another process's `syncfs` saw first is still reported
+  to it. A writeback error of any file on that filesystem fails the sync, not
+  only an asset's. On overlayfs that does not hold: the first `syncfs` or
+  `sync(2)` on the mount after a failed writeback takes the error, whichever
+  process calls it, from any container on the host, and gostack's own
+  `syncfs` then returns success (SQ-175). That is why overlayfs takes the
+  per-file path, whose `fsync` on a fresh descriptor still reports the error.
+- Before Linux 5.8, `syncfs` reports no writeback error, so a lost write on an
+  ext4 assets directory goes unnoticed and the save names the body; RHEL 8's
+  4.18 is such a kernel. gostack does not check the kernel version: the
+  container runs on the host's kernel, and Docker Desktop, OrbStack and the
+  GitHub runners gostack is built and tested on run 6.x.
 - The sync runs to the save's deadline: `Save` for the shutdown save, the
   request's context for `POST /_gostack/state/save`, none for the timed save.
   When the deadline passes before a pending asset's sync returns, the save
@@ -780,14 +799,40 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
-- The timed save gives way. A shutdown, a `Load` (`/_gostack/state/load`), a
-  reset (`/_gostack/state/reset`) or a save by hand that finds it running, or
-  waiting to run, cancels it and runs within its own deadline. The cancelled
-  save fails before it renames anything, its services stay dirty for the next
-  save, and it counts as no failure. Its sync, if one started, goes on as
-  above, alongside the shutdown save's own. A shutdown whose save ran out of
-  time still makes the last flush after `Close`, with what is left of
-  `Close`'s time.
+- A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
+  timed save running lends it its own deadline and waits. A `Snapshot` cannot
+  be cut short, so cancelling the timed save would throw away a snapshot
+  already taken and make the shutdown take a second one. The timed save
+  finishes, or is cancelled when the waiter's deadline passes; of several
+  waiters, the first deadline to pass cancels it. The waiter then saves only
+  what is still dirty, with the time left. A timed save that has not started
+  when a waiter arrives skips its flush.
+- A `Load` (`/_gostack/state/load`) or a reset (`/_gostack/state/reset`)
+  cancels the timed save at once: it replaces or discards the state the timed
+  save would write, and a load that waited would restore what the timed save
+  wrote rather than the state saved before the load was asked for.
+- A cancelled timed save fails before it renames anything, its services stay
+  dirty for the next save, and it counts as no failure. Its sync, if one
+  started, goes on as above, and the next save renames only after it returns.
+  So a timed save stuck in a slow sync holds the shutdown until the
+  shutdown's deadline and no longer: the shutdown returns then with what the
+  timed save held still unsaved. A shutdown whose save ran out of time still
+  makes the last flush after `Close`, with what is left of `Close`'s time.
+- Stated limit: writes acknowledged since the last save are lost at
+  `docker stop` when the shutdown save takes longer than its window, and the
+  last state file on disk is what the next start loads. The window is `Save`
+  minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
+  `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same
+  filesystem left dirty, so another tenant with gigabytes unsynced on the
+  volume makes it slow: measured on an OrbStack btrfs volume with one 1 KiB
+  asset pending, 9 ms with nothing else dirty, 0.35 to 0.38 s with 0.5 to
+  0.85 GB dirty, and 1.40 to 1.50 s with 2 GiB dirty (SQ-175). A larger
+  `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose
+  `stop_grace_period`, default 10 s) raised to match, widens the window; a
+  smaller `PERSIST_FREQUENCY` leaves less unsaved when the stop comes. The
+  loss is logged as an error from the shutdown save, and, when the shutdown's
+  own save ran and was cut short, a warning that it was abandoned at its
+  deadline. A timed save the shutdown cancelled logs nothing of its own.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
@@ -922,7 +967,7 @@ in the product `go.mod`.
 | santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
 | go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
-| golang.org/x/sys | the asset sync on Linux | `unix.Syncfs`: one `syncfs(2)` per save makes every pending S3 asset durable. It was already in the module graph, indirect, so no module was added. |
+| golang.org/x/sys | the asset sync on Linux | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. It was already in the module graph, indirect, so no module was added. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |

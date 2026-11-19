@@ -3,26 +3,51 @@
 package persist
 
 import (
-	"io/fs"
+	"maps"
 	"os"
-	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// syncedPaths returns what one sync on f makes durable. On Linux it is a
-// syncfs of the filesystem, so it covers every file and directory in the
-// assets directory when it runs, and nothing created after it.
-func syncedPaths(a *Assets, _ *os.File) ([]string, error) {
-	var paths []string
+// syncModes forces each sync path Linux has, for tests that run under both.
+var syncModes = map[string]func(*testing.T, *Assets){
+	syncByFile:       forcePerFile,
+	syncByFilesystem: forceSyncfs,
+}
 
-	err := filepath.WalkDir(a.dir, func(path string, _ fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+// Test_Assets_SyncPathOfTheFaultFilesystem checks that the filesystem
+// scripts/writeback-fault.sh made, named in GOSTACK_WRITEBACK_FAULT_FS, takes
+// syncfs only when it is in syncfsProven.
+func Test_Assets_SyncPathOfTheFaultFilesystem(t *testing.T) {
+	if os.Getenv(forceSyncfsEnv) == "1" {
+		t.Skip("the fixture forces syncfs")
+	}
 
-		paths = append(paths, filepath.ToSlash(path))
+	name := os.Getenv("GOSTACK_WRITEBACK_FAULT_FS")
+	if name == "" {
+		t.Skip("GOSTACK_WRITEBACK_FAULT_FS is not set; scripts/writeback-fault.sh runs this test")
+	}
 
-		return nil
-	})
+	f := newFaultFixture(t)
 
-	return paths, err //nolint:wrapcheck // a test helper
+	proven := slices.Contains(slices.Collect(maps.Values(syncfsProven)), name)
+	assert.Equal(t, proven, f.a.fsDir != nil, "%s takes syncfs only when it is proven", name)
+}
+
+// forceSyncfs makes a sync its whole filesystem with syncfs, whatever
+// filesystem it is on.
+func forceSyncfs(t *testing.T, a *Assets) {
+	t.Helper()
+
+	if a.fsDir == nil {
+		dir, err := a.root.Open(".")
+		require.NoError(t, err)
+
+		a.fsDir = dir
+	}
+
+	a.fsync = syncFS
 }

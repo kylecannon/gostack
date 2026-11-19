@@ -80,6 +80,7 @@ func gateFirstSync(a *Assets, result error) (started <-chan struct{}, release fu
 		once  sync.Once
 	)
 
+	realSync := a.fsync
 	a.fsync = func(f *os.File) error {
 		starts <- struct{}{}
 
@@ -89,7 +90,7 @@ func gateFirstSync(a *Assets, result error) (started <-chan struct{}, release fu
 			return result
 		}
 
-		return defaultSync(f)
+		return realSync(f)
 	}
 
 	return starts, func() { once.Do(func() { close(gate) }) }

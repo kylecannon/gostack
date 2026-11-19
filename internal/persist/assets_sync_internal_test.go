@@ -80,6 +80,7 @@ func recordSyncs(a *Assets, stateFile string) func() []syncRecord {
 		records []syncRecord
 	)
 
+	realSync := a.fsync
 	a.fsync = func(f *os.File) error {
 		onDisk, err := os.ReadFile(stateFile)
 		if err != nil && !os.IsNotExist(err) {
@@ -95,7 +96,7 @@ func recordSyncs(a *Assets, stateFile string) func() []syncRecord {
 		records = append(records, syncRecord{paths: paths, onDisk: string(onDisk)})
 		mu.Unlock()
 
-		return defaultSync(f)
+		return realSync(f)
 	}
 
 	return func() []syncRecord {
@@ -126,7 +127,15 @@ func commitAsset(t *testing.T, a *Assets, body string) string {
 // directory, before the snapshot is renamed into place. A commit does not
 // fsync. An asset committed while the snapshot is taken, and named by it, is
 // synced by that same save.
+// It runs once per sync path the platform has, whatever filesystem the test's
+// temp dir is on.
 func Test_Assets_SnapshotNamesOnlySyncedAssets(t *testing.T) {
+	for name, force := range syncModes {
+		t.Run(name, func(t *testing.T) { snapshotNamesOnlySyncedAssets(t, force) })
+	}
+}
+
+func snapshotNamesOnlySyncedAssets(t *testing.T, force func(*testing.T, *Assets)) {
 	dir := t.TempDir()
 	e := New(Config{
 		PersistVarSet: true, BaseDir: dir, Frequency: time.Hour,
@@ -137,6 +146,7 @@ func Test_Assets_SnapshotNamesOnlySyncedAssets(t *testing.T) {
 
 	a, err := e.Assets(syncService)
 	require.NoError(t, err)
+	force(t, a)
 
 	syncs := recordSyncs(a, filepath.Join(dir, syncService, FormatJSON.fileName()))
 
@@ -311,10 +321,11 @@ func Test_Assets_SaveAbandonedAtItsDeadline(t *testing.T) {
 		n.add(late)
 
 		release := make(chan struct{})
+		realSync := a.fsync
 		a.fsync = func(f *os.File) error {
 			<-release
 
-			return defaultSync(f)
+			return realSync(f)
 		}
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
