@@ -4,8 +4,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,6 +18,9 @@ const (
 	opDelete   = "DeleteTable"
 	opList     = "ListTables"
 	opUpdate   = "UpdateTable"
+
+	msgOneUpdate    = "Only one global secondary index update per index is allowed simultaneously."
+	msgNoProjection = "Indexes must have a projection specified"
 
 	codeValidation = "ValidationException"
 	codeNotFound   = "ResourceNotFoundException"
@@ -327,4 +333,97 @@ func Test_emptyRequests(t *testing.T) {
 		got := s.call(t, usEast1, op, describeTab1)
 		require.Equal(t, http.StatusBadRequest, got.status, "%s: %s", op, got.body)
 	}
+}
+
+// gsiUpdates is an UpdateTable body for tab1 that defines attribute q and
+// carries updates.
+func gsiUpdates(updates ...string) string {
+	return body(named(tab1), `"AttributeDefinitions":[{"AttributeName":"q","AttributeType":"S"}]`,
+		`"GlobalSecondaryIndexUpdates":[`+strings.Join(updates, ",")+`]`)
+}
+
+const createQix = `{"Create":{"IndexName":"qix","KeySchema":[{"AttributeName":"q","KeyType":"HASH"}],` +
+	`"Projection":{"ProjectionType":"ALL"}}}`
+
+// Test_updateTable_indexChecks: DynamoDB Local's checks on
+// GlobalSecondaryIndexUpdates, in its order: one index named twice, then more
+// than one index created or deleted, then each update. A refused request
+// changes nothing, and the table answers the next one.
+func Test_updateTable_indexChecks(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, body(named(tab1), idKey, idDefs, `"BillingMode":"PAY_PER_REQUEST"`))
+
+	const (
+		deleteQix = `{"Delete":{"IndexName":"qix"}}`
+		createRix = `{"Create":{"IndexName":"rix","KeySchema":[{"AttributeName":"q","KeyType":"HASH"}],` +
+			`"Projection":{"ProjectionType":"ALL"}}}`
+		noProjection = `{"Create":{"IndexName":"zix","KeySchema":[{"AttributeName":"q","KeyType":"HASH"}]}}`
+	)
+
+	s.fails(t, opUpdate, gsiUpdates(createQix, deleteQix), codeValidation, msgOneUpdate)
+	s.fails(t, opUpdate, gsiUpdates(deleteQix, createQix), codeValidation, msgOneUpdate)
+	s.fails(t, opUpdate, gsiUpdates(createQix, createQix), codeValidation, msgOneUpdate)
+	s.fails(t, opUpdate, gsiUpdates(`{"Delete":{"IndexName":"x"}}`, `{"Delete":{"IndexName":"x"}}`),
+		codeValidation, msgOneUpdate)
+	s.fails(t, opUpdate, gsiUpdates(createQix, createRix), "LimitExceededException",
+		"Subscriber limit exceeded: Only 1 online index can be created or deleted simultaneously per table")
+	s.fails(t, opUpdate, gsiUpdates(noProjection), codeValidation, msgNoProjection)
+	require.NotContains(t, path(t, s.ok(t, opDescribe, describeTab1), keyTable), keyGSIs)
+
+	s.ok(t, opUpdate, gsiUpdates(createQix))
+	s.fails(t, opUpdate, gsiUpdates(createQix), codeValidation, "Attempting to create an index which already exists")
+	require.Len(t, path(t, s.ok(t, opDescribe, describeTab1), keyTable, keyGSIs), 1)
+}
+
+// Test_updateTable_panicReleasesLock: a panic while UpdateTable holds the
+// table's lock answers 500 and leaves the table usable.
+func Test_updateTable_panicReleasesLock(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, body(named(tab1), idKey, idDefs, `"BillingMode":"PAY_PER_REQUEST"`))
+
+	var panicked atomic.Bool
+
+	dynamodb.SetClock(s.provider, func() time.Time {
+		if panicked.CompareAndSwap(false, true) {
+			panic("planted")
+		}
+
+		return time.Now()
+	})
+
+	require.Equal(t, http.StatusInternalServerError, s.call(t, usEast1, opUpdate, gsiUpdates(createQix)).status)
+	require.True(t, panicked.Load())
+
+	done := make(chan reply, 1)
+
+	go func() { done <- s.call(t, usEast1, opUpdate, gsiUpdates(createQix)) }()
+
+	select {
+	case got := <-done:
+		require.Equal(t, http.StatusOK, got.status, got.body)
+	case <-time.After(10 * time.Second):
+		t.Fatal("UpdateTable after a panic did not answer: the table's lock is still held")
+	}
+
+	require.Len(t, path(t, s.ok(t, opDescribe, describeTab1), keyTable, keyGSIs), 1)
+}
+
+// Test_createTable_noProjection: an index without a projection is refused
+// with DynamoDB Local's message, for both kinds of index.
+func Test_createTable_noProjection(t *testing.T) {
+	s := newStack(t)
+	defs := `"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"},` +
+		`{"AttributeName":"r","AttributeType":"S"},{"AttributeName":"q","AttributeType":"S"}]`
+	gsiDefs := `"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"},` +
+		`{"AttributeName":"q","AttributeType":"S"}]`
+
+	s.fails(t, opCreate, body(named(tab1), idKey, gsiDefs, `"BillingMode":"PAY_PER_REQUEST"`,
+		`"GlobalSecondaryIndexes":[{"IndexName":"qix","KeySchema":[{"AttributeName":"q","KeyType":"HASH"}]}]`),
+		codeValidation, msgNoProjection)
+	s.fails(t, opCreate, body(named(tab1),
+		`"KeySchema":[{"AttributeName":"id","KeyType":"HASH"},{"AttributeName":"r","KeyType":"RANGE"}]`,
+		defs, `"BillingMode":"PAY_PER_REQUEST"`,
+		`"LocalSecondaryIndexes":[{"IndexName":"qix","KeySchema":[{"AttributeName":"id","KeyType":"HASH"},`+
+			`{"AttributeName":"q","KeyType":"RANGE"}]}]`),
+		codeValidation, msgNoProjection)
 }

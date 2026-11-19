@@ -26,6 +26,7 @@ const (
 		"WriteCapacityUnits can be specified when BillingMode is PAY_PER_REQUEST"
 	msgNoThroughput      = "No provisioned throughput specified for the table"
 	msgNoIndexThroughput = "No provisioned throughput specified for the global secondary index"
+	msgNoProjection      = "Indexes must have a projection specified"
 	msgNoKeySchema       = "No defined key schema.  A key schema containing at least a hash key must be " +
 		"defined for all tables"
 	msgNoHashKey     = "No Hash Key specified in schema.  All Dynamo DB tables must have exactly one hash key"
@@ -86,15 +87,9 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 
 	entry := &tableEntry{meta: meta, data: meta.newEngine()}
 
-	c.state.mu.Lock()
-	if c.state.tables[meta.Name] != nil {
-		c.state.mu.Unlock()
-
+	if !c.state.add(meta.Name, entry) {
 		return nil, api.NewResourceInUseException(msgTableExists + meta.Name)
 	}
-
-	c.state.tables[meta.Name] = entry
-	c.state.mu.Unlock()
 
 	d := entry.description(c.tableARN(meta.Name))
 	d.WarmThroughput = nil
@@ -404,7 +399,7 @@ func checkIndex(
 	}
 
 	if projection == nil {
-		return value.Invalid("One or more parameter values were invalid: Projection is null for index: " + *name)
+		return value.Invalid(msgNoProjection)
 	}
 
 	return nil

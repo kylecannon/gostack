@@ -157,7 +157,8 @@ func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Ite
 
 // Lock takes the write locks of tables, each once, in one global order, so
 // two writes across overlapping tables cannot deadlock. It returns the
-// function that releases them.
+// function that releases them, which the caller defers so that a panic
+// between the two releases them too.
 func Lock(tables ...*Table) (unlock func()) {
 	ordered := slices.Clone(tables)
 	slices.SortFunc(ordered, func(a, b *Table) int { return compareIDs(a.id, b.id) })
@@ -310,14 +311,7 @@ func visitRange(entries []entry, lo, hi int, forward bool, visit func(value.Item
 // nil. visit is as for Range.
 func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) bool) error {
 	if t.needsSort(indexName) {
-		t.mu.Lock()
-
-		data, _, err := t.source(indexName)
-		if err == nil {
-			data.sortedKeys()
-		}
-
-		t.mu.Unlock()
+		t.sortKeys(indexName)
 	}
 
 	t.mu.RLock()
@@ -374,6 +368,18 @@ func (t *Table) needsSort(indexName string) bool {
 	data, _, err := t.source(indexName)
 
 	return err == nil && data.needsSort()
+}
+
+// sortKeys sorts the partition keys of the table, or of the named index,
+// under the write lock.
+func (t *Table) sortKeys(indexName string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	data, _, err := t.source(indexName)
+	if err == nil {
+		data.sortedKeys()
+	}
 }
 
 // source returns the partitions and key schema of the table, or of the named

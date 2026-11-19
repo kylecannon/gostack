@@ -1,6 +1,7 @@
 package dynamodb
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -54,6 +55,68 @@ func (s *State) table(name string) *tableEntry {
 	defer s.mu.RUnlock()
 
 	return s.tables[name]
+}
+
+// add stores e under name and reports whether it did: false when a table of
+// that name exists.
+func (s *State) add(name string, e *tableEntry) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tables[name] != nil {
+		return false
+	}
+
+	s.tables[name] = e
+
+	return true
+}
+
+// remove deletes the named table and returns it, once check accepts it, with
+// DeleteTable's own message when there is none. check runs under the map's
+// lock, so no other delete can race it.
+func (s *State) remove(name string, check func(*tableEntry) error) (*tableEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	e := s.tables[name]
+	if e == nil {
+		return nil, api.NewResourceNotFoundException(fmt.Sprintf(msgDeleteNotFound, name))
+	}
+
+	err := check(e)
+	if err != nil {
+		return nil, err
+	}
+
+	delete(s.tables, name)
+
+	return e, nil
+}
+
+// protected reports whether the table has deletion protection on.
+func (e *tableEntry) protected() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return e.meta.DeletionProtection
+}
+
+// namesAfter returns the table names that sort after start, or every name
+// when start is nil, in no order.
+func (s *State) namesAfter(start *string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	names := make([]string, 0, len(s.tables))
+
+	for name := range s.tables {
+		if start == nil || name > *start {
+			names = append(names, name)
+		}
+	}
+
+	return names
 }
 
 // tableEntry is one table: its definition and its items.

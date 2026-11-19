@@ -2,7 +2,6 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
 	"slices"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -63,27 +62,16 @@ func (p *Provider) DeleteTable(ctx context.Context, in *api.DeleteTableInput) (*
 		name = *in.TableName
 	}
 
-	c.state.mu.Lock()
-	e := c.state.tables[name]
+	e, err := c.state.remove(name, func(e *tableEntry) error {
+		if e.protected() {
+			return value.Invalid(msgDeleteProtected)
+		}
 
-	if e == nil {
-		c.state.mu.Unlock()
-
-		return nil, api.NewResourceNotFoundException(fmt.Sprintf(msgDeleteNotFound, name))
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	e.mu.RLock()
-	protected := e.meta.DeletionProtection
-	e.mu.RUnlock()
-
-	if protected {
-		c.state.mu.Unlock()
-
-		return nil, value.Invalid(msgDeleteProtected)
-	}
-
-	delete(c.state.tables, name)
-	c.state.mu.Unlock()
 
 	d := e.description(c.tableARN(name))
 	d.TableStatus = new(statusDeleting)
@@ -109,16 +97,7 @@ func (p *Provider) ListTables(ctx context.Context, in *api.ListTablesInput) (*ap
 
 	c := p.caller(ctx)
 
-	c.state.mu.RLock()
-	names := make([]string, 0, len(c.state.tables))
-
-	for name := range c.state.tables {
-		if in.ExclusiveStartTableName == nil || name > *in.ExclusiveStartTableName {
-			names = append(names, name)
-		}
-	}
-	c.state.mu.RUnlock()
-
+	names := c.state.namesAfter(in.ExclusiveStartTableName)
 	slices.Sort(names)
 
 	out := &api.ListTablesOutput{TableNames: names}

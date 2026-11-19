@@ -2,7 +2,6 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"time"
 
@@ -10,9 +9,13 @@ import (
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
+// DynamoDB Local's messages for GlobalSecondaryIndexUpdates.
 const (
-	msgIndexNotFound = "Requested resource not found"
-	msgIndexExists   = "One or more parameter values were invalid: Index with name %s already exists"
+	msgIndexNotFound     = "Requested resource not found"
+	msgIndexExists       = "Attempting to create an index which already exists"
+	msgOneUpdatePerIndex = "Only one global secondary index update per index is allowed simultaneously."
+	msgOneOnlineIndex    = "Subscriber limit exceeded: Only 1 online index can be created or deleted " +
+		"simultaneously per table"
 )
 
 // UpdateTable changes a table's billing mode, throughput, global secondary
@@ -28,10 +31,12 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
-	e.mu.Lock()
-	created, err := e.update(in, c, p.now())
-	e.mu.Unlock()
+	err = checkIndexUpdates(in.GlobalSecondaryIndexUpdates)
+	if err != nil {
+		return nil, err
+	}
 
+	created, err := e.update(in, c, p.now)
 	if err != nil {
 		return nil, err
 	}
@@ -50,10 +55,59 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 	return &api.UpdateTableOutput{TableDescription: d}, nil
 }
 
-// update applies in to the table, whose lock the caller holds, and returns
-// the names of the indexes it created. It checks everything before it changes
-// anything.
-func (e *tableEntry) update(in *api.UpdateTableInput, c caller, now time.Time) ([]string, error) {
+// checkIndexUpdates refuses a request that names one index twice, then one
+// that creates or deletes more than one index, in that order and before any
+// single update is looked at, as DynamoDB Local does.
+func checkIndexUpdates(updates []api.GlobalSecondaryIndexUpdate) error {
+	names := make([]string, 0, len(updates))
+	online := 0
+
+	for i := range updates {
+		name, isOnline := indexUpdateName(&updates[i])
+		if name != nil {
+			if slices.Contains(names, *name) {
+				return value.Invalid(msgOneUpdatePerIndex)
+			}
+
+			names = append(names, *name)
+		}
+
+		if isOnline {
+			online++
+		}
+	}
+
+	if online > 1 {
+		return api.NewLimitExceededException(msgOneOnlineIndex)
+	}
+
+	return nil
+}
+
+// indexUpdateName is the index an update names, and whether it creates or
+// deletes one.
+func indexUpdateName(update *api.GlobalSecondaryIndexUpdate) (*string, bool) {
+	switch {
+	case update.Create != nil:
+		return update.Create.IndexName, true
+	case update.Delete != nil:
+		return update.Delete.IndexName, true
+	case update.Update != nil:
+		return update.Update.IndexName, false
+	default:
+		return nil, false
+	}
+}
+
+// update applies in to the table under its lock, read clock there, and
+// returns the names of the indexes it created. It checks everything before it
+// changes anything, and the lock is released however it ends.
+func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() time.Time) ([]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	now := clock()
+
 	next := e.meta
 	next.Attributes = mergeAttributes(e.meta.Attributes, in.AttributeDefinitions)
 	next.Global = slices.Clone(e.meta.Global)
@@ -63,55 +117,79 @@ func (e *tableEntry) update(in *api.UpdateTableInput, c caller, now time.Time) (
 		return nil, err
 	}
 
-	var created, dropped []string
-
-	for _, update := range in.GlobalSecondaryIndexUpdates {
-		name, isCreate, err := next.updateIndex(&update)
-		if err != nil {
-			return nil, err
-		}
-
-		if isCreate {
-			created = append(created, name)
-		} else if update.Delete != nil {
-			dropped = append(dropped, name)
-		}
+	created, dropped, err := next.updateIndexes(in.GlobalSecondaryIndexUpdates)
+	if err != nil {
+		return nil, err
 	}
 
-	next.setStream(in.StreamSpecification, now)
-
-	if in.SSESpecification != nil {
-		next.SSE = c.sseDescription(in.SSESpecification)
-	}
-
-	if in.TableClass != nil {
-		next.Class = *in.TableClass
-	}
-
-	if in.DeletionProtectionEnabled != nil {
-		next.DeletionProtection = *in.DeletionProtectionEnabled
-	}
-
-	if in.OnDemandThroughput != nil {
-		next.OnDemand = in.OnDemandThroughput
-	}
-
-	if in.WarmThroughput != nil {
-		next.Warm = in.WarmThroughput
-	}
+	next.updateSettings(in, c, now)
 
 	for _, name := range dropped {
 		e.data.DropIndex(name)
 	}
 
-	for _, name := range created {
-		i := slices.IndexFunc(next.Global, func(index indexMeta) bool { return index.Name == name })
-		e.data.AddIndex(next.indexSpec(&next.Global[i], true))
+	names := make([]string, 0, len(created))
+
+	for i := range created {
+		e.data.AddIndex(next.indexSpec(&created[i], true))
+		names = append(names, created[i].Name)
 	}
 
 	e.meta = next
 
-	return created, nil
+	return names, nil
+}
+
+// updateIndexes applies GlobalSecondaryIndexUpdates in order and returns the
+// indexes they created and the names of those they dropped.
+func (m *tableMeta) updateIndexes(updates []api.GlobalSecondaryIndexUpdate) ([]indexMeta, []string, error) {
+	var (
+		created []indexMeta
+		dropped []string
+	)
+
+	for i := range updates {
+		change, err := m.updateIndex(&updates[i])
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if change.created != nil {
+			created = append(created, *change.created)
+		}
+
+		if change.dropped != "" {
+			dropped = append(dropped, change.dropped)
+		}
+	}
+
+	return created, dropped, nil
+}
+
+// updateSettings applies the stream, encryption, class, deletion protection,
+// on-demand and warm throughput members, none of which can be refused.
+func (m *tableMeta) updateSettings(in *api.UpdateTableInput, c caller, now time.Time) {
+	m.setStream(in.StreamSpecification, now)
+
+	if in.SSESpecification != nil {
+		m.SSE = c.sseDescription(in.SSESpecification)
+	}
+
+	if in.TableClass != nil {
+		m.Class = *in.TableClass
+	}
+
+	if in.DeletionProtectionEnabled != nil {
+		m.DeletionProtection = *in.DeletionProtectionEnabled
+	}
+
+	if in.OnDemandThroughput != nil {
+		m.OnDemand = in.OnDemandThroughput
+	}
+
+	if in.WarmThroughput != nil {
+		m.Warm = in.WarmThroughput
+	}
 }
 
 // updateBilling applies BillingMode and ProvisionedThroughput.
@@ -144,25 +222,31 @@ func (m *tableMeta) updateBilling(in *api.UpdateTableInput, now time.Time) error
 	return nil
 }
 
-// updateIndex applies one GlobalSecondaryIndexUpdate and returns the index's
-// name and whether it created it.
-func (m *tableMeta) updateIndex(update *api.GlobalSecondaryIndexUpdate) (string, bool, error) {
+// indexChange is what one GlobalSecondaryIndexUpdate did to the table's
+// indexes: the index it created, or the name of the one it dropped.
+type indexChange struct {
+	created *indexMeta
+	dropped string
+}
+
+// updateIndex applies one GlobalSecondaryIndexUpdate.
+func (m *tableMeta) updateIndex(update *api.GlobalSecondaryIndexUpdate) (indexChange, error) {
 	switch {
 	case update.Create != nil:
 		create := update.Create
 
 		err := checkIndex(create.IndexName, create.KeySchema, create.Projection, m.Attributes)
 		if err != nil {
-			return "", false, err
+			return indexChange{}, err
 		}
 
 		name := *create.IndexName
 		if m.hasIndex(name) {
-			return "", false, value.Invalid(fmt.Sprintf(msgIndexExists, name))
+			return indexChange{}, value.Invalid(msgIndexExists)
 		}
 
 		if !m.PayPerRequest && create.ProvisionedThroughput == nil {
-			return "", false, value.Invalid(msgNoIndexThroughput)
+			return indexChange{}, value.Invalid(msgNoIndexThroughput)
 		}
 
 		index := indexMeta{
@@ -174,21 +258,21 @@ func (m *tableMeta) updateIndex(update *api.GlobalSecondaryIndexUpdate) (string,
 
 		m.Global = append(m.Global, index)
 
-		return name, true, nil
+		return indexChange{created: &index}, nil
 	case update.Delete != nil:
 		i := m.globalIndexAt(update.Delete.IndexName)
 		if i < 0 {
-			return "", false, api.NewResourceNotFoundException(msgIndexNotFound)
+			return indexChange{}, api.NewResourceNotFoundException(msgIndexNotFound)
 		}
 
 		name := m.Global[i].Name
 		m.Global = slices.Delete(m.Global, i, i+1)
 
-		return name, false, nil
+		return indexChange{dropped: name}, nil
 	case update.Update != nil:
 		i := m.globalIndexAt(update.Update.IndexName)
 		if i < 0 {
-			return "", false, api.NewResourceNotFoundException(msgIndexNotFound)
+			return indexChange{}, api.NewResourceNotFoundException(msgIndexNotFound)
 		}
 
 		if update.Update.ProvisionedThroughput != nil {
@@ -199,9 +283,9 @@ func (m *tableMeta) updateIndex(update *api.GlobalSecondaryIndexUpdate) (string,
 			m.Global[i].OnDemand = update.Update.OnDemandThroughput
 		}
 
-		return m.Global[i].Name, false, nil
+		return indexChange{}, nil
 	default:
-		return "", false, nil
+		return indexChange{}, nil
 	}
 }
 

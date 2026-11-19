@@ -2,7 +2,6 @@ package dynamodb_test
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +24,7 @@ const (
 // stack is the DynamoDB provider behind the real gateway, called in process.
 type stack struct {
 	handler  http.Handler
+	provider *dynamodb.Provider
 	settings atomic.Pointer[dynamodb.Settings]
 }
 
@@ -33,10 +33,11 @@ func newStack(tb testing.TB) *stack {
 
 	s := &stack{}
 	s.settings.Store(&dynamodb.Settings{Host: testHost})
+	s.provider = dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() })
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
-		[]service.Registration{dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() }).Registration()},
+		[]service.Registration{s.provider.Registration()},
 		nil,
 		nil,
 	)
@@ -66,14 +67,7 @@ func (s *stack) call(tb testing.TB, region, operation, body string) reply {
 	rec := httptest.NewRecorder()
 	s.handler.ServeHTTP(rec, req)
 
-	resp := rec.Result()
-
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(resp.Body)
-	require.NoError(tb, err)
-
-	return reply{status: resp.StatusCode, body: string(raw)}
+	return reply{status: rec.Code, body: rec.Body.String()}
 }
 
 // ok sends a call that must succeed and returns its decoded body.
