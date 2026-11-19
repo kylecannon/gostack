@@ -16,13 +16,23 @@ const (
 // tagsOf returns the tags map of the resource a request names, moto's
 // _validate_resource_type_and_id. A Parameter is found by the GetParameter
 // rules, selectors included; a type gostack keeps none of is a resource that
-// does not exist. The caller holds the lock.
+// does not exist. A parameter ARN names the parameter it ends in. The caller
+// holds the lock.
 func (s *State) tagsOf(resourceType, id *string) (*map[string]string, error) {
 	var tags *map[string]string
 
 	switch deref(resourceType) {
 	case resourceParameter:
-		v, _ := s.selectVersion(deref(id))
+		name := deref(id)
+		if _, isARN := arnResource(name); isARN {
+			name = normalizeName(name)
+		}
+
+		v, err := s.selectVersion(name)
+		if err != nil {
+			return nil, err
+		}
+
 		if v != nil {
 			tags = &s.lookup(v.Name).tags
 		}
@@ -53,7 +63,7 @@ func (p *Provider) AddTagsToResource(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	tags, err := s.tagsOf(in.ResourceType, in.ResourceId)
@@ -77,7 +87,7 @@ func (p *Provider) RemoveTagsFromResource(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	tags, err := s.tagsOf(in.ResourceType, in.ResourceId)

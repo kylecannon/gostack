@@ -3,7 +3,6 @@ package ssm
 import (
 	"context"
 	"slices"
-	"strconv"
 	"strings"
 
 	ssmapi "github.com/kylecannon/gostack/internal/api/ssm"
@@ -141,11 +140,9 @@ func (s *State) selectVersion(name string) (*version, error) {
 	selector := parts[1]
 
 	if isDigits(selector) {
-		n, err := strconv.ParseInt(selector, 10, 64)
-		if err == nil {
-			if v := param.find(n); v != nil {
-				return v, nil
-			}
+		// moto compares the text of the version, so "01" is not version 1.
+		if v := param.find(selector); v != nil {
+			return v, nil
 		}
 
 		return nil, ssmapi.NewParameterVersionNotFound("Systems Manager could not find version " + selector + " of " +
@@ -181,7 +178,7 @@ func isDigits(s string) bool {
 func (c *call) parameterOf(v *version, withDecryption *bool) ssmapi.Parameter {
 	return ssmapi.Parameter{
 		Name:             new(v.Name),
-		Type:             new(v.Type),
+		Type:             nonEmpty(v.Type),
 		Value:            v.value(withDecryption),
 		Version:          new(v.Version),
 		LastModifiedDate: &protocol.Time{Time: v.Modified},

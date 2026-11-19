@@ -137,13 +137,13 @@ func TestSSMOnlyChangesMarkItDirty(t *testing.T) {
 		{kDescribeParameters, obj{}, false},
 		{kGetParameterHistory, obj{kName: dirtyA}, false},
 		{kLabelParameterVersion, obj{kName: dirtyA, fieldLabels: []string{"l"}}, true},
-		{"UnlabelParameterVersion", obj{kName: dirtyA, fieldVersion: 1, fieldLabels: []string{"l"}}, true},
-		{"AddTagsToResource", with(tags, kTags, []obj{{fieldKey: "k", kValue: "v"}}), true},
+		{kUnlabelParameterVersion, obj{kName: dirtyA, fieldVersion: 1, fieldLabels: []string{"l"}}, true},
+		{kAddTagsToResource, with(tags, kTags, []obj{{fieldKey: "k", kValue: "v"}}), true},
 		{kListTagsForResource, tags, false},
-		{"RemoveTagsFromResource", with(tags, "TagKeys", []string{"k"}), true},
+		{kRemoveTagsFromResource, with(tags, "TagKeys", []string{"k"}), true},
 		{"DescribeMaintenanceWindows", obj{}, false},
-		{"DeleteParameter", obj{kName: dirtyA}, true},
-		{"DeleteParameters", obj{fieldNames: []string{dirtyB}}, true},
+		{kDeleteParameter, obj{kName: dirtyA}, true},
+		{kDeleteParameters, obj{fieldNames: []string{dirtyB}}, true},
 	} {
 		before := m.count()
 		c.ok(step.op, step.body)

@@ -28,7 +28,7 @@ func (p *Provider) PutParameter(ctx context.Context, in *ssmapi.PutParameterInpu
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	v, err := s.put(name, in, p.now())
@@ -41,6 +41,14 @@ func (p *Provider) PutParameter(ctx context.Context, in *ssmapi.PutParameterInpu
 
 // checkPut makes the checks of a put that need no state.
 func checkPut(name string, in *ssmapi.PutParameterInput) error {
+	// "/", "//" and an ARN that ends in "parameter/" clean to the empty name.
+	// LocalStack stores that parameter and then answers 500 to every read of
+	// it and to every listing, so it is refused here as the other names that
+	// cannot be a parameter are.
+	if name == "" {
+		return ssmapi.NewValidationException(invalidNameMessage)
+	}
+
 	if deref(in.Value) == "" {
 		return ssmapi.NewValidationException("1 validation error detected: Value '' at 'value' failed to satisfy " +
 			"constraint: Member must have length greater than or equal to 1.")
@@ -141,10 +149,6 @@ func (p *parameter) inherit(v *version, in *ssmapi.PutParameterInput) error {
 	v.AllowedPattern = cmpOr(v.AllowedPattern, prev.AllowedPattern)
 	v.KeyID = cmpOr(v.KeyID, prev.KeyID)
 	v.Policies = cmpOr(v.Policies, prev.Policies)
-
-	if in.DataType == nil {
-		v.DataType = prev.DataType
-	}
 
 	if in.Tier == nil {
 		v.Tier = prev.Tier

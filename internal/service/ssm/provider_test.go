@@ -161,7 +161,7 @@ func Test_putAndGet_echoesRequestedName(t *testing.T) {
 
 	out := c.ok(kPutParameter, obj{kName: nameRooted, kValue: kLit3, kType: kString, "Description": "test"})
 	require.InDelta(t, 1, out[kVersion], 0)
-	require.Equal(t, "Standard", out["Tier"])
+	require.Equal(t, kStandard, out[kTier])
 
 	got := param(c.ok(kGetParameter, obj{kName: nameX}))
 	require.Equal(t, nameX, got[kName])
@@ -179,7 +179,7 @@ func Test_putAndGet_echoesRequestedName(t *testing.T) {
 	byARN := param(c.ok(kGetParameter, obj{kName: got["ARN"]}))
 	require.Equal(t, nameX, byARN[kName])
 
-	c.ok("DeleteParameter", obj{kName: nameX})
+	c.ok(kDeleteParameter, obj{kName: nameX})
 	c.fails(kGetParameter, obj{kName: nameX}, kParameterNotFound)
 }
 
@@ -222,10 +222,10 @@ func Test_putChecks(t *testing.T) {
 func Test_secureStringIsStoredAsMotoDoes(t *testing.T) {
 	c := newClient(t, ssm.New())
 
-	c.ok(kPutParameter, obj{kName: "s", kValue: "secret", kType: "SecureString"})
+	c.ok(kPutParameter, obj{kName: "s", kValue: "secret", kType: kSecureString})
 
 	require.Equal(t, "kms:alias/aws/ssm:secret", param(c.ok(kGetParameter, obj{kName: "s"}))[kValue])
-	require.Equal(t, "secret", param(c.ok(kGetParameter, obj{kName: "s", "WithDecryption": true}))[kValue])
+	require.Equal(t, "secret", param(c.ok(kGetParameter, obj{kName: "s", kWithDecryption: true}))[kValue])
 
 	described := list(c.ok(kDescribeParameters, obj{}), kParameters)
 	require.Equal(t, "alias/aws/ssm", entry(described, 0)["KeyId"])
@@ -254,7 +254,7 @@ func Test_labelsHistoryAndPath(t *testing.T) {
 	require.Equal(t, kValueX, entry(byLabel, 0)[kValue])
 
 	require.Len(t, list(c.ok(kGetParametersByPath, obj{kPath: prefix}), kParameters), 2)
-	require.Len(t, list(c.ok(kGetParametersByPath, obj{kPath: "/prefix/", "Recursive": true}), kParameters), 3)
+	require.Len(t, list(c.ok(kGetParametersByPath, obj{kPath: "/prefix/", kRecursive: true}), kParameters), 3)
 
 	c.ok(kPutParameter, obj{kName: prefixPath, kValue: "v2", kOverwrite: true})
 	require.Equal(t, kValueX, param(c.ok(kGetParameter, obj{kName: "/prefix/path:latest"}))[kValue])
@@ -270,7 +270,7 @@ func Test_labelsHistoryAndPath(t *testing.T) {
 	c.ok(kLabelParameterVersion, obj{kName: prefixPath, fieldLabels: []string{kLatest}})
 	require.Equal(t, "v2", param(c.ok(kGetParameter, obj{kName: "/prefix/path:latest"}))[kValue])
 
-	un := c.ok("UnlabelParameterVersion", obj{
+	un := c.ok(kUnlabelParameterVersion, obj{
 		kName: prefixPath, fieldVersion: 2,
 		fieldLabels: []string{kLatest, "gone"},
 	})
@@ -288,9 +288,9 @@ func Test_tagsAndFilters(t *testing.T) {
 	c := newClient(t, ssm.New())
 
 	c.ok(kPutParameter, obj{kName: tagA, kValue: "1", kType: kString, kTags: []obj{{fieldKey: kEnv, kValue: "dev"}}})
-	c.ok(kPutParameter, obj{kName: tagB, kValue: "2", kType: "StringList"})
+	c.ok(kPutParameter, obj{kName: tagB, kValue: "2", kType: kStringList})
 
-	c.ok("AddTagsToResource", obj{
+	c.ok(kAddTagsToResource, obj{
 		kResourceType: resourceParameter, kResourceID: tagB,
 		kTags: []obj{{fieldKey: kEnv, kValue: envProd}},
 	})
@@ -304,21 +304,21 @@ func Test_tagsAndFilters(t *testing.T) {
 	require.Len(t, prod, 1)
 	require.Equal(t, tagB, entry(prod, 0)[kName])
 
-	lists := list(c.ok(kDescribeParameters, obj{"Filters": []obj{{fieldKey: kType, kValues: []string{"StringList"}}}}),
+	lists := list(c.ok(kDescribeParameters, obj{kFilters: []obj{{fieldKey: kType, kValues: []string{kStringList}}}}),
 		kParameters)
 	require.Len(t, lists, 1)
 
-	c.ok("RemoveTagsFromResource", obj{kResourceType: resourceParameter, kResourceID: tagB, "TagKeys": []string{kEnv}})
+	c.ok(kRemoveTagsFromResource, obj{kResourceType: resourceParameter, kResourceID: tagB, "TagKeys": []string{kEnv}})
 	require.Empty(t, list(c.ok(kListTagsForResource, obj{kResourceType: resourceParameter, kResourceID: tagB}), kTagList))
 
 	c.fails(kListTagsForResource, obj{kResourceType: resourceParameter, kResourceID: tagNone}, "InvalidResourceId")
 	c.fails(kListTagsForResource, obj{kResourceType: "Nope", kResourceID: "x"}, "InvalidResourceType")
 	c.fails(kDescribeParameters, obj{
-		"Filters":    []obj{{fieldKey: kName, kValues: []string{"x"}}},
+		kFilters:     []obj{{fieldKey: kName, kValues: []string{"x"}}},
 		fieldFilters: []obj{{fieldKey: kName, kValues: []string{"x"}}},
 	}, kValidationException)
 
-	deleted := c.ok("DeleteParameters", obj{fieldNames: []string{tagA, tagNone}})
+	deleted := c.ok(kDeleteParameters, obj{fieldNames: []string{tagA, tagNone}})
 	require.Equal(t, []any{tagA}, list(deleted, "DeletedParameters"))
 	require.Equal(t, []any{tagNone}, list(deleted, kInvalidParameters))
 }
@@ -330,8 +330,8 @@ func Test_maintenanceWindows(t *testing.T) {
 	require.Equal(t, "Maintenance window mw-00000000000000000 does not exist", msg)
 
 	id := text(c.ok(kCreateMaintenanceWindow, obj{
-		kName: "w", "Schedule": "cron(0 0 * * ? *)", "Duration": 2, "Cutoff": 1,
-		"AllowUnassociatedTargets": false,
+		kName: "w", kSchedule: "cron(0 0 * * ? *)", kDuration: 2, kCutoff: 1,
+		kAllowUnassociated: false,
 	})[fieldWindowID])
 	require.True(t, strings.HasPrefix(id, "mw-"))
 	require.Len(t, id, 20)
@@ -353,8 +353,8 @@ func Test_mutating(t *testing.T) {
 	reg := ssm.New().Registration()
 
 	for _, op := range []string{
-		kPutParameter, "DeleteParameter", "DeleteParameters", kLabelParameterVersion,
-		"UnlabelParameterVersion", "AddTagsToResource", "RemoveTagsFromResource", kCreateMaintenanceWindow,
+		kPutParameter, kDeleteParameter, kDeleteParameters, kLabelParameterVersion,
+		kUnlabelParameterVersion, kAddTagsToResource, kRemoveTagsFromResource, kCreateMaintenanceWindow,
 		kDeleteMaintenanceWindow,
 	} {
 		require.True(t, reg.Mutating(op), op)

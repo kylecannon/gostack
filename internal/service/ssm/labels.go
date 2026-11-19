@@ -36,7 +36,7 @@ func (p *Provider) LabelParameterVersion(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	param := s.lookup(*in.Name)
@@ -44,12 +44,13 @@ func (p *Provider) LabelParameterVersion(
 		return nil, parameterNotFound(*in.Name)
 	}
 
+	// moto reads version 0 as no version, and labels the latest.
 	n := param.latest().Version
-	if in.ParameterVersion != nil {
+	if in.ParameterVersion != nil && *in.ParameterVersion != 0 {
 		n = *in.ParameterVersion
 	}
 
-	target := param.find(n)
+	target := param.versionNumbered(n)
 	if target == nil {
 		return nil, versionNotFound(n, *in.Name)
 	}
@@ -76,7 +77,8 @@ func (p *Provider) LabelParameterVersion(
 }
 
 // sortLabels splits the requested labels into the ones that break the naming
-// rules and the valid ones target does not carry yet, in request order.
+// rules and the valid ones target does not carry yet, in request order, one
+// for each time a label is sent.
 func sortLabels(target *version, labels []string) ([]string, []string, error) {
 	invalid := []string{}
 
@@ -96,7 +98,9 @@ func sortLabels(target *version, labels []string) ([]string, []string, error) {
 				"length less than or equal to 100, Member must have length greater than or equal to 1]")
 		}
 
-		if !target.hasLabel(label) && !slices.Contains(adding, label) {
+		// moto adds a label repeated in one request once for each time, and each
+		// counts toward the limit.
+		if !target.hasLabel(label) {
 			adding = append(adding, label)
 		}
 	}
@@ -119,7 +123,7 @@ func (p *Provider) UnlabelParameterVersion(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	param := s.lookup(*in.Name)
@@ -128,10 +132,11 @@ func (p *Provider) UnlabelParameterVersion(
 	}
 
 	if in.ParameterVersion == nil {
-		return nil, missing("parameterVersion")
+		return nil, ssmapi.NewValidationException("1 validation error detected: Value 'null' at 'parameterVersion' " +
+			"failed to satisfy constraint: Member must not be null")
 	}
 
-	target := param.find(*in.ParameterVersion)
+	target := param.versionNumbered(*in.ParameterVersion)
 	if target == nil {
 		return nil, versionNotFound(*in.ParameterVersion, *in.Name)
 	}

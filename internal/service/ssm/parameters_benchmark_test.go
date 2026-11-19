@@ -49,10 +49,12 @@ var (
 		"SignedHeaders=host, Signature=x"
 )
 
-// sink is a ResponseWriter that keeps the status and drops the body.
+// sink is a ResponseWriter that keeps the status and drops the body, unless
+// body is set, which then collects it.
 type sink struct {
 	header http.Header
 	status int
+	body   *bytes.Buffer
 }
 
 func newSink() *sink { return &sink{header: http.Header{}, status: http.StatusOK} }
@@ -61,7 +63,13 @@ func (s *sink) Header() http.Header { return s.header }
 
 func (s *sink) WriteHeader(status int) { s.status = status }
 
-func (*sink) Write(p []byte) (int, error) { return len(p), nil }
+func (s *sink) Write(p []byte) (int, error) {
+	if s.body != nil {
+		s.body.Write(p)
+	}
+
+	return len(p), nil
+}
 
 func (s *sink) reset() {
 	s.status = http.StatusOK
@@ -287,6 +295,114 @@ func BenchmarkRestore(b *testing.B) {
 
 			for b.Loop() {
 				require.NoError(b, target.Restore(bytes.NewReader(raw)))
+			}
+		})
+	}
+}
+
+// nextToken sends one page of op and returns the NextToken it answers, "" at
+// the last page.
+func nextToken(h http.Handler, w *sink, op string, body obj, token string) (string, error) {
+	if token != "" {
+		body = with(body, "NextToken", token)
+	}
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal %s: %w", op, err)
+	}
+
+	w.body.Reset()
+
+	err = send(h, w, op, raw)
+	if err != nil {
+		return "", err
+	}
+
+	var page struct {
+		NextToken string `json:"NextToken"`
+	}
+
+	err = json.Unmarshal(w.body.Bytes(), &page)
+	if err != nil {
+		return "", fmt.Errorf("decode %s: %w", op, err)
+	}
+
+	return page.NextToken, nil
+}
+
+// listAllSizes are the sizes the two benchmarks below run at: reading all of a
+// store a page at a time, and deleting all of it a parameter at a time, must
+// cost in proportion to the store.
+var listAllSizes = []int{10_000, 100_000}
+
+// BenchmarkPageThrough reads every parameter of a store a page at a time, one
+// iteration being the whole walk, through GetParametersByPath and
+// DescribeParameters.
+func BenchmarkPageThrough(b *testing.B) {
+	ops := []struct {
+		op   string
+		body obj
+	}{
+		{kGetParametersByPath, obj{kPath: benchPath}},
+		{kDescribeParameters, obj{}},
+	}
+
+	for _, op := range ops {
+		for _, n := range listAllSizes {
+			b.Run(fmt.Sprintf("op=%s/params=%d", op.op, n), func(b *testing.B) {
+				_, h := filled(b, n)
+				w := newSink()
+				w.body = &bytes.Buffer{}
+
+				b.ReportAllocs()
+
+				for b.Loop() {
+					pages := 0
+
+					for token := ""; ; pages++ {
+						var err error
+
+						token, err = nextToken(h, w, op.op, op.body, token)
+						require.NoError(b, err)
+
+						if token == "" {
+							break
+						}
+					}
+
+					// Every page but the closing empty one holds ten parameters.
+					require.Equal(b, n/10, pages)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkDeleteAll deletes every parameter of a store one call at a time, in
+// the order they were made. Filling the store is outside the timer.
+func BenchmarkDeleteAll(b *testing.B) {
+	for _, n := range listAllSizes {
+		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
+			b.ReportAllocs()
+
+			for b.Loop() {
+				b.StopTimer()
+
+				_, h := filled(b, n)
+				bodies := make([][]byte, n)
+
+				for i := range n {
+					bodies[i] = benchBody(b, obj{kName: paramName(i)})
+				}
+
+				w := newSink()
+
+				b.StartTimer()
+
+				for i := range n {
+					require.NoError(b, send(h, w, kDeleteParameter, bodies[i]))
+				}
 			}
 		})
 	}

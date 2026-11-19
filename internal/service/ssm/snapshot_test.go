@@ -14,12 +14,12 @@ import (
 // maintenance window. It returns the window's id.
 func putSample(c *client) any {
 	c.ok(kPutParameter, obj{
-		kName: appDB, kValue: "one", kType: "SecureString",
+		kName: appDB, kValue: "one", kType: kSecureString,
 		kTags: []obj{{fieldKey: "team", kValue: "core"}},
 	})
 	c.ok(kPutParameter, obj{kName: appDB, kValue: "two", kOverwrite: true})
 	c.ok(kLabelParameterVersion, obj{kName: appDB, fieldVersion: 1, fieldLabels: []string{"first"}})
-	c.ok(kPutParameter, obj{kName: "plain", kValue: "p", kType: kString})
+	c.ok(kPutParameter, obj{kName: namePlain, kValue: "p", kType: kString})
 
 	return c.ok(kCreateMaintenanceWindow, dailyWindow("w"))[fieldWindowID]
 }
@@ -27,7 +27,7 @@ func putSample(c *client) any {
 // dailyWindow is a CreateMaintenanceWindow body for a window named name.
 func dailyWindow(name string) obj {
 	return obj{
-		kName: name, "Schedule": "rate(1 day)", "Duration": 1, "Cutoff": 0, "AllowUnassociatedTargets": true,
+		kName: name, kSchedule: kRateDay, kDuration: 1, kCutoff: 0, kAllowUnassociated: true,
 	}
 }
 
@@ -35,7 +35,7 @@ func dailyWindow(name string) obj {
 func checkSample(t *testing.T, r *client, windowID any) {
 	t.Helper()
 
-	require.Equal(t, "one", param(r.ok(kGetParameter, obj{kName: "/app/db:first", "WithDecryption": true}))[kValue])
+	require.Equal(t, "one", param(r.ok(kGetParameter, obj{kName: "/app/db:first", kWithDecryption: true}))[kValue])
 	require.Equal(t, "kms:alias/aws/ssm:two", param(r.ok(kGetParameter, obj{kName: appDB}))[kValue])
 	require.Len(t, list(r.ok(kGetParameterHistory, obj{kName: appDB}), kParameters), 2)
 	require.Len(t, list(r.ok(kListTagsForResource, obj{kResourceType: resourceParameter, kResourceID: appDB}),

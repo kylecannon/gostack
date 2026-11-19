@@ -83,10 +83,14 @@ func (s *State) save(account, region string) stateData {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	saved := stateData{Account: account, Region: region, Parameters: make([]parameterData, 0, len(s.order))}
+	saved := stateData{Account: account, Region: region, Parameters: make([]parameterData, 0, len(s.params))}
 
-	for _, key := range s.order {
-		param := s.params[key]
+	for _, sl := range s.order {
+		param := sl.p
+		if param == nil {
+			continue
+		}
+
 		versions := make([]*version, len(param.versions))
 
 		for i, v := range param.versions {
@@ -121,8 +125,9 @@ func (p *Provider) Restore(r io.Reader) error {
 
 	for i := range built {
 		s := p.states.Get(built[i].account, built[i].region)
-		s.mu.Lock()
-		s.params, s.order, s.windows, s.windowOrder = built[i].params, built[i].order, built[i].windows, built[i].windowOrder
+		s.lock()
+		s.params, s.order, s.nextSeq, s.gone = built[i].params, built[i].order, built[i].nextSeq, built[i].gone
+		s.windows, s.windowOrder = built[i].windows, built[i].windowOrder
 		s.mu.Unlock()
 	}
 

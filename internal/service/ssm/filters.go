@@ -33,7 +33,10 @@ const (
 )
 
 var (
-	filterKeyPattern  = regexp.MustCompile(`^tag:.+|Name|Type|KeyId|Path|Label|Tier$`)
+	// filterKeyPattern is moto's re.match of the key pattern, which anchors
+	// each of the alternatives at the start, so a key may run on after Name,
+	// Type, KeyId, Path or Label.
+	filterKeyPattern  = regexp.MustCompile(`^(?:tag:.+|Name|Type|KeyId|Path|Label|Tier$)`)
 	filterPathPattern = regexp.MustCompile(`^[a-zA-Z0-9_.\-/]*$`)
 )
 
@@ -105,7 +108,7 @@ func filterLimits(i int, f *ssmapi.ParameterStringFilter) []string {
 		problem("option", "over 10 chars", "Member must have length less than or equal to 10")
 	}
 
-	values := "[" + strings.Join(f.Values, ", ") + "]"
+	values := pyList(f.Values)
 
 	if len(f.Values) > maxFilterValues {
 		problem("values", values, "Member must have length less than or equal to 50")
@@ -132,19 +135,28 @@ func filterRules(f *ssmapi.ParameterStringFilter, byPath bool, seen []string) er
 		return ssmapi.NewInvalidFilterKey("The following filter key is not valid: " + key +
 			". Valid filter keys include: [Type, KeyId].")
 	case (key == keyName || key == keyType || key == keyPath || key == keyTier) && len(f.Values) == 0:
-		return ssmapi.NewInvalidFilterValue("The following filter values are missing : null for filter key " + key + ".")
+		// moto's text names the Name filter whichever key it is about.
+		return ssmapi.NewInvalidFilterValue("The following filter values are missing : null for filter key Name.")
 	case slices.Contains(seen, key):
-		return ssmapi.NewInvalidFilterKey("The following filter is duplicated in the request: " + key +
-			". A request can contain only one occurrence of a specific filter.")
+		return ssmapi.NewInvalidFilterKey("The following filter is duplicated in the request: Name. " +
+			"A request can contain only one occurrence of a specific filter.")
 	}
+
+	var err error
 
 	switch key {
 	case keyPath:
 		return pathFilterRules(f, option)
 	case keyTier:
-		return valuesIn(f.Values, "Standard", "Advanced", "Intelligent-Tiering")
+		err = valuesIn(f.Values, "Standard", "Advanced", "Intelligent-Tiering")
 	case keyType:
-		return valuesIn(f.Values, typeString, typeStringList, typeSecureString)
+		err = valuesIn(f.Values, typeString, typeStringList, typeSecureString)
+	default:
+		// The other keys have no values to check.
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if option == optionEquals || option == optionBeginsWith || (key == keyName && option == optionContains) {
@@ -179,6 +191,52 @@ func pathFilterRules(f *ssmapi.ParameterStringFilter, option string) error {
 	}
 
 	return nil
+}
+
+// pyList is the text of a list of strings in Python, which is how moto writes
+// the values of a filter in a message: ['a', 'b'].
+func pyList(values []string) string {
+	reprs := make([]string, len(values))
+	for i, value := range values {
+		reprs[i] = pyRepr(value)
+	}
+
+	return "[" + strings.Join(reprs, ", ") + "]"
+}
+
+// pyRepr is Python's repr of a str: in single quotes, or in double quotes when
+// the text has a single quote and no double quote.
+func pyRepr(text string) string {
+	quote := '\''
+	if strings.ContainsRune(text, '\'') && !strings.ContainsRune(text, '"') {
+		quote = '"'
+	}
+
+	var b strings.Builder
+
+	b.WriteRune(quote)
+
+	for _, r := range text {
+		switch {
+		case r == quote || r == '\\':
+			b.WriteRune('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < ' ' || r == 0x7f:
+			b.WriteString(`\x` + strconv.FormatInt(int64(r)+0x100, 16)[1:])
+		default:
+			b.WriteRune(r)
+		}
+	}
+
+	b.WriteRune(quote)
+
+	return b.String()
 }
 
 // valuesIn checks that every value is one of allowed.
@@ -232,8 +290,10 @@ func matchFilter(v *version, tags map[string]string, f *ssmapi.ParameterStringFi
 		}
 
 		return len(values) == 0 || matchOne(value, values, option)
+	case key == keyTier:
+		// moto compares nothing here and never matches; the tier is compared.
+		return matchOne(v.Tier, values, option)
 	default:
-		// A Tier filter: moto compares nothing and never matches.
 		return false
 	}
 }

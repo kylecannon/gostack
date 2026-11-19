@@ -190,6 +190,29 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
 
+## SSM Parameter Store
+
+Parameter Store is moto behind LocalStack's provider, so most of these are moto's
+answers. The LocalStack column is what LocalStack 8b9a79f answered to the same
+request (SQ-266). An SSM operation gostack does not build answers
+`501 InternalFailure` and is listed in `/_gostack/services`.
+
+| Behavior | LocalStack | gostack | Why |
+|---|---|---|---|
+| `PutParameter` of a name that cleans to nothing: `/`, `//`, `""`, or an ARN that ends in `parameter/` | `200`, and a parameter named `""` is stored. `GetParameter /` and `GetParametersByPath /` then answer `500 InternalError`, "string index out of range". | `400 ValidationException` with the text a bad name gets: "Parameter name: can't be prefixed with "ssm" (case-insensitive). If formed as a path, it can consist of sub-paths divided by slash symbol; each sub-path can be formed as a mix of letters, numbers and the following 3 symbols .-_" | A crash and a stuck state are not copied. A parameter with no name cannot be restored, and the snapshot that held it was refused whole (SQ-269). |
+| Older `Filters` form of `DescribeParameters` (`Name`, `Type`, `KeyId`) | A parameter is listed once for each filter it passes, so a row that fails another filter comes back, and one row can come back twice. Name `/q` with Type `SecureString` over `/q/sec` (SecureString) and `/q/list` (StringList) lists `[/q/sec, /q/sec, /q/list]`; Type `SecureString` and Type `StringList` together list `[/q/sec, /q/list]`. | A parameter must pass every filter and is listed once: `[/q/sec]` for the first request and `[]` for the second. A filter with any other key passes nothing, as in LocalStack. | LocalStack's answer comes from a loop that appends a parameter for each filter it passes. A parameter that fails a filter is not a match. An application sees the difference. |
+| Entries of `DescribeParameters` | No `ARN` member | `ARN` is there | botocore `ParameterMetadata.ARN`. Seen only by a test that compares the key set. |
+| `DeleteMaintenanceWindow` | `{}` | `{"WindowId":"mw-..."}` | botocore `DeleteMaintenanceWindowResult.WindowId` |
+| `GetMaintenanceWindow` | Leaves out `CreatedDate`, `ModifiedDate` and `AllowUnassociatedTargets` | Returns them | botocore `GetMaintenanceWindowResult` |
+| Maintenance window operations after `CreateMaintenanceWindow` | `RegisterTargetWithMaintenanceWindow`, `DescribeMaintenanceWindowTargets` and `DescribeMaintenanceWindowTasks` answer `200` | They answer `501 InternalFailure`, with every other operation on targets, tasks and executions. `CreateMaintenanceWindow`, `GetMaintenanceWindow`, `DescribeMaintenanceWindows`, `DeleteMaintenanceWindow` and the tag operations on a window are built. | Windows are here so `GetMaintenanceWindow` of an id that does not exist answers `DoesNotExistException`. A window with no targets or tasks is all gostack keeps of one. |
+| The eleventh label on a version | `ParameterVersionLabelLimitExceeded`, "An error occurred (ParameterVersionLabelLimitExceeded) when calling the LabelParameterVersion operation: A parameter version can have maximum 10 labels.Move one or more labels to another version and try again." | The same code and status, and the text "A parameter version can have maximum 10 labels. Move one or more labels to another version and try again." | LocalStack's text is moto's own error wrapped in a second error text, with no space after `labels.`. Only a test that matches the text sees it. |
+| `NextToken` that is not a number (`abc`) or is negative (`-1`) | `abc`: `500 InternalError`, "invalid literal for int() with base 10". `-1`: `200`, from a Python slice that starts at the end of the list, so the last parameter on a short store and an empty page on a long one. | `400 InvalidNextToken`, "The specified token isn't valid." | A crash is not copied, and the answer to `-1` depends on how many parameters there are. |
+| A `Tier` filter in `DescribeParameters` | Matches nothing, whatever the tier (moto compares `None`) | Matches the parameters whose tier is one of the values; `Standard`, `Advanced` and `Intelligent-Tiering` are the values, and `Equals` and `BeginsWith` the options | The documented filter. moto's answer is a defect. |
+| `GetParameters` order | The found parameters come back in the order of a Python set, which varies | The found parameters come back in the order of the request, once each | The echo of the spelling a request used, which `test_put_parameters` expects, needs an order a request can rely on. |
+| `PolicyText` and `PolicyType` in `DescribeParameters` and `GetParameterHistory` | A JSON object: moto passes the parsed policy through | The policy as a JSON string | botocore's shape is a string and the generated types hold one. A client reading the member as an object sees the difference. |
+| `Tags` with an entry that has no `Key` or no `Value`, on `PutParameter` and `AddTagsToResource` | `500 InternalError` ("'Key'") | The tag is stored with an empty key or value | Left as it was. LocalStack's answer is a crash, and no AWS answer is recorded for it. |
+| Public parameters under `/aws/service/` | `GetParameter` answers the AMI, region and service lists moto bundles | `ParameterNotFound` | No test reads one, and the lists are data gostack does not ship. |
+
 ## Accepted LocalStack-only behavior
 
 gostack copies these although AWS does not have them. Each is a LocalStack switch

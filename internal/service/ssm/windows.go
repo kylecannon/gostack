@@ -37,7 +37,7 @@ func (p *Provider) CreateMaintenanceWindow(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	s.windows[w.ID] = w
@@ -127,7 +127,7 @@ func (p *Provider) DeleteMaintenanceWindow(
 	id := deref(in.WindowId)
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	if s.windows[id] == nil {

@@ -21,7 +21,7 @@ func (p *Provider) DeleteParameter(
 	}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	if !s.remove(storeKey(*in.Name)) {
@@ -45,7 +45,7 @@ func (p *Provider) DeleteParameters(
 	deleted := map[string]bool{}
 
 	s := c.state
-	s.mu.Lock()
+	s.lock()
 	defer s.mu.Unlock()
 
 	for _, name := range in.Names {
