@@ -343,7 +343,7 @@ func (g *generator) nameRoots() {
 			switch {
 			case root.ref == nil:
 			case uses[root.ref.Shape] > 1:
-				g.rootNames[root.ref.Shape] = exportName(root.ref.Shape)
+				g.rootNames[root.ref.Shape] = shapeName(root.ref.Shape)
 			default:
 				g.rootNames[root.ref.Shape] = name + root.suffix
 			}
@@ -665,7 +665,7 @@ func (g *generator) goTypeName(shape string) string {
 		return root
 	}
 
-	return exportName(shape)
+	return shapeName(shape)
 }
 
 // goType is the Go type of a shape reference at the given site.

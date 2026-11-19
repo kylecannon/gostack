@@ -194,7 +194,7 @@ func (g *generator) emitFixtureError(p *printer) {
 			p.f("\t\tv := &%s{}", ex.members.goName)
 			p.f("\t\treturn v, v.Err")
 		} else {
-			p.f("\t\treturn nil, func(msg string) error { return New%s(msg) }", exportName(ex.shape))
+			p.f("\t\treturn nil, func(msg string) error { return %s(msg) }", constructorName(ex.shape))
 		}
 	}
 

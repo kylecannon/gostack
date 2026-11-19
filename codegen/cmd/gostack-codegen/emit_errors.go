@@ -66,7 +66,7 @@ func (g *generator) buildExceptions() error {
 // its headers and body, all but its message, which travels as the error's
 // Message. It is nil for an error with no other member.
 func (g *generator) exceptionMembers(name string, shape *spec.Shape) (*structType, error) {
-	goName := exportName(name)
+	goName := shapeName(name)
 	if _, taken := g.structs[goName]; taken {
 		return nil, fmt.Errorf("the Go type %s of its members is another shape's as well", goName)
 	}
@@ -110,8 +110,8 @@ func (g *generator) errorsFile() (string, error) {
 			fault = "awserr.FaultSender"
 		}
 
-		p.f("// New%s returns the %s error with the given message.", exportName(ex.shape), ex.shape)
-		p.f("func New%s(msg string) *awserr.Error {", exportName(ex.shape))
+		p.f("// %s returns the %s error with the given message.", constructorName(ex.shape), ex.shape)
+		p.f("func %s(msg string) *awserr.Error {", constructorName(ex.shape))
 		p.f("\treturn &awserr.Error{")
 		p.f("\t\tCode: %q,", ex.code)
 		p.f("\t\tMessage: msg,")
@@ -129,7 +129,7 @@ func (g *generator) errorsFile() (string, error) {
 		if ex.members != nil {
 			p.f("// Err returns the %s error with the given message, carrying the members in v.", ex.shape)
 			p.f("func (v *%s) Err(msg string) error {", ex.members.goName)
-			p.f("\treturn &modeledError{err: New%s(msg), members: v}", exportName(ex.shape))
+			p.f("\treturn &modeledError{err: %s(msg), members: v}", constructorName(ex.shape))
 			p.f("}")
 			p.blank()
 		}

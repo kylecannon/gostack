@@ -55,6 +55,9 @@ var serviceTable = map[string]serviceOptions{
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},
 	},
 	"sts": {},
+	// apigatewayv2 is not in the Makefile's GEN_SERVICES: it is here to prove
+	// that a model with a Route shape generates a package that builds.
+	"apigatewayv2": {},
 	"s3": {
 		// LocalStack's S3 serializer writes <Error><Code/><Message/><RequestId/>
 		// with the error's own members after them, as AWS does.
