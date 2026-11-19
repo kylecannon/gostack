@@ -25,30 +25,31 @@ const (
 	credentials  = "dummy"
 	appARNPrefix = arnPrefix + "app/" + platformADM + "/"
 
-	paramPlatform      = "Platform"
-	paramAppARN        = "PlatformApplicationArn"
-	paramEndpointAR    = "EndpointArn"
-	paramToken         = "Token"
-	paramTargetARN     = "TargetArn"
-	paramPhone         = "PhoneNumber"
-	valueStructure     = "json"
-	attrEnabled        = "Enabled"
-	textFalse          = "false"
-	token1             = "token_1"
-	pathAWS            = "/_aws"
-	queryEndpointARN   = "endpointArn"
-	attrSMSType        = "DefaultSMSType"
-	queryPhone         = "phoneNumber"
-	keyDataType        = "DataType"
-	platformBad        = "AAA"
-	appName            = "app"
-	pathGostack        = "/_gostack/services"
-	keyStringValue     = "StringValue"
-	senderID           = "DefaultSenderID"
-	attrsKey           = "Attributes"
-	opSetEndpointAttrs = "SetEndpointAttributes"
-	opSetAppAttrs      = "SetPlatformApplicationAttributes"
-	number             = "+33000000000"
+	paramPlatform       = "Platform"
+	paramAppARN         = "PlatformApplicationArn"
+	paramEndpointAR     = "EndpointArn"
+	paramToken          = "Token"
+	paramTargetARN      = "TargetArn"
+	paramPhone          = "PhoneNumber"
+	valueStructure      = "json"
+	protocolApplication = "application"
+	attrEnabled         = "Enabled"
+	textFalse           = "false"
+	token1              = "token_1"
+	pathAWS             = "/_aws"
+	queryEndpointARN    = "endpointArn"
+	attrSMSType         = "DefaultSMSType"
+	queryPhone          = "phoneNumber"
+	keyDataType         = "DataType"
+	platformBad         = "AAA"
+	appName             = "app"
+	pathGostack         = "/_gostack/services"
+	keyStringValue      = "StringValue"
+	senderID            = "DefaultSenderID"
+	attrsKey            = "Attributes"
+	opSetEndpointAttrs  = "SetEndpointAttributes"
+	opSetAppAttrs       = "SetPlatformApplicationAttributes"
+	number              = "+33000000000"
 )
 
 // pairs is the query form of a map member: prefix.entry.N.key and .value.
@@ -429,7 +430,7 @@ func Test_Provider_PlatformEndpoint_publish(t *testing.T) {
 	direct := s.createEndpoint(app, "direct")
 	subscribed := s.createEndpoint(app, "subscribed")
 	topic := s.createTopic(paramName, "devices")
-	s.subscribe(paramTopicArn, topic, paramProtocol, "application", paramEndpoint, subscribed)
+	s.subscribe(paramTopicArn, topic, paramProtocol, protocolApplication, paramEndpoint, subscribed)
 
 	bodies := `{"default":"fallback","ADM":"{\"data\":\"adm\"}"}`
 
@@ -512,7 +513,7 @@ func Test_Provider_PlatformEndpoint_filterPolicy(t *testing.T) {
 	s := newStack(t, nil)
 	endpoint := s.createEndpoint(s.createApp("filtered"), "token")
 	topic := s.createTopic(paramName, "filtered")
-	s.subscribe(join([]string{paramTopicArn, topic, paramProtocol, "application", paramEndpoint, endpoint},
+	s.subscribe(join([]string{paramTopicArn, topic, paramProtocol, protocolApplication, paramEndpoint, endpoint},
 		pairs(attrsKey, attrPolicy, `{"color":["red"]}`))...)
 
 	s.publish(append([]string{paramTopicArn, topic, paramMessage, "blue"}, attr(1, attrColor, "blue")...)...)

@@ -199,7 +199,10 @@ func Test_Provider_Subscribe_refusals(t *testing.T) {
 			"sqs url", 400, invalidParameter, "Invalid parameter: SQS endpoint ARN",
 			sub("sqs", "http://localhost:4566/000000000000/queue"),
 		},
-		{"application", 400, invalidParameter, "Invalid parameter: ApplicationEndpoint ARN", sub("application", "x")},
+		{
+			protocolApplication, 400, invalidParameter, "Invalid parameter: ApplicationEndpoint ARN",
+			sub(protocolApplication, "x"),
+		},
 		{"fifo queue", 400, invalidParameter, "Invalid parameter: Invalid parameter: Endpoint Reason: " +
 			"FIFO SQS Queues can not be subscribed to standard SNS topics", sub("sqs", queueARN+".fifo")},
 		{

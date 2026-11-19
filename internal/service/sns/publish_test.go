@@ -96,12 +96,12 @@ func Test_Provider_Publish_validation(t *testing.T) {
 		},
 		{
 			name:   "json without default",
-			params: []string{paramTopicArn, topic, paramStructure, "json", paramMessage, `{"sqs":"s"}`},
+			params: []string{paramTopicArn, topic, paramStructure, valueStructure, paramMessage, `{"sqs":"s"}`},
 			status: http.StatusBadRequest, code: invalidParameter, message: noDefault,
 		},
 		{
 			name:   "json that does not parse",
-			params: []string{paramTopicArn, topic, paramStructure, "json", paramMessage, `{"default":`},
+			params: []string{paramTopicArn, topic, paramStructure, valueStructure, paramMessage, `{"default":`},
 			status: http.StatusBadRequest, code: invalidParameter,
 			message: "Invalid parameter: Message Structure - JSON message body failed to parse",
 		},
@@ -204,7 +204,7 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 			// test_publish_batch_exceptions: the entry's structure is checked
 			// before the FIFO members.
 			name:   "json without default before the fifo check",
-			params: batch(fifo, entry(1, "1", `{"sqs":"s"}`, paramStructure, "json")),
+			params: batch(fifo, entry(1, "1", `{"sqs":"s"}`, paramStructure, valueStructure)),
 			status: http.StatusBadRequest, code: invalidParameter, message: noDefault,
 		},
 		{

@@ -12,7 +12,6 @@
 "tests/aws/services/sns/test_sns.py::TestSNSSMS::test_is_phone_number_opted_out": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSSMS::test_list_phone_numbers_opted_out": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSSMS::test_opt_in_phone_number": requires_in_process (reads the SNS store through SnsProvider.get_store)
-"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_opt_out_phone_number_via_endpoint": requires_in_process (by its marker alone; it patches nothing and posts to the internal opt-out endpoint from the runner; no kind in parity/bridgeable.yaml covers a marker-only test yet)
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_to_platform_endpoint_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_publish_sms_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store)
 "tests/aws/services/sns/test_sns.py::TestSNSRetrospectionEndpoints::test_subscription_tokens_can_retrospect": requires_in_process (reads the SNS store through SnsProvider.get_store; its HTTPServer alone would be bridgeable)

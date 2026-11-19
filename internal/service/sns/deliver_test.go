@@ -108,7 +108,7 @@ func Test_Provider_Publish_jsonStructure(t *testing.T) {
 	q := s.createQueue(account, region, "q", nil)
 	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
 
-	s.publish(paramTopicArn, topic, "MessageStructure", "json",
+	s.publish(paramTopicArn, topic, "MessageStructure", valueStructure,
 		paramMessage, `{"default":"for all","sqs":"for sqs","http":"for http"}`)
 
 	assert.Equal(t, "for sqs", q.await(1)[0].Body)

@@ -155,6 +155,39 @@ func Test_Provider_subscriptionTokens(t *testing.T) {
 	}
 }
 
+// Test_Provider_developerRoutes_compatPaths: every developer route answers under
+// /_gostack/services whatever the settings say, and under /_aws only while
+// GOSTACK_COMPAT_PATHS has not turned the LocalStack names off.
+func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
+	routes := []struct{ method, path string }{
+		{http.MethodGet, subscriptionTokensPath + "/randomarnhere"},
+		{http.MethodGet, endpointMessagesPath},
+		{http.MethodDelete, endpointMessagesPath},
+		{http.MethodGet, smsMessagesPath},
+		{http.MethodDelete, smsMessagesPath},
+		{http.MethodPost, phoneOptOutsPath},
+	}
+
+	for _, disabled := range []bool{false, true} {
+		p := New(func() Settings { return Settings{DisableCompatPaths: disabled} })
+		r := chi.NewRouter()
+		p.mountDeveloperAPI(r)
+
+		for _, route := range routes {
+			for _, prefix := range []string{developerCanonicalPrefix, developerCompatPrefix} {
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), route.method, prefix+route.path,
+					strings.NewReader("{}")))
+
+				// An unmounted path gets the router's own "404 page not found".
+				unmounted := w.Code == http.StatusNotFound && w.Body.String() == "404 page not found\n"
+				assert.Equal(t, disabled && prefix == developerCompatPrefix, unmounted,
+					"%s %s%s compat paths disabled=%v answered %d", route.method, prefix, route.path, disabled, w.Code)
+			}
+		}
+	}
+}
+
 // Test_Provider_confirmByToken: an HTTP subscription stays pending until the
 // token the developer endpoint returns confirms it through an unsigned
 // ConfirmSubscription, the SubscribeURL of its confirmation message.

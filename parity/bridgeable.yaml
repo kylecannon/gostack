@@ -1,5 +1,5 @@
 # Tests that carry LocalStack's `requires_in_process` marker and still run,
-# because their only in-process need is one the runner can supply. Two kinds:
+# because their only in-process need is one the runner can supply. Three kinds:
 #
 #   config      everything the test patches is `localstack.config`, which the
 #               config bridge (parity/pytest_gostack.py) forwards to the target
@@ -11,10 +11,16 @@
 #               target reaches the server on localhost. The test must touch
 #               nothing else in the server process: no store (`get_store`), no
 #               `config.` read, no monkeypatch.
+#   marker-only the test carries the marker and touches nothing in the server
+#               process: it patches nothing and reads no store. Whatever it
+#               does to the target goes over the network, from the runner
+#               (an operation, or a request to a developer endpoint). Each entry
+#               names the lines of the test read to establish that.
 #
 # Format: "nodeid pattern": <kind note>
 #   config:      the config variables the test patches (a bare list of names)
 #   http-server: `http-server: <what the test serves or checks>`
+#   marker-only: `marker-only: <what it does to the target>; read <file>:<lines>`
 #
 # Patterns match like parity/exclusions/<service>.yaml. The list applies only when the
 # bridge is on (GOSTACK_PARITY_BRIDGE=1). A test that is also in parity/exclusions/
@@ -23,7 +29,8 @@
 # A `requires_in_process` test that needs anything else (a module constant, an
 # object or store inside the server, `SnsProvider.get_store`) belongs in
 # parity/exclusions/, not here. An http-server test is listed only while the
-# LocalStack baseline passes it in this runner; one it fails stays excluded.
+# LocalStack baseline passes it in this runner; one it fails stays excluded. A
+# marker-only test follows the same rule.
 
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
@@ -83,3 +90,9 @@
 # Both parametrizations (empty and a named host) publish to an SQS subscription and
 # read SigningCertURL off the delivered message.
 "tests/aws/services/sns/test_sns.py::TestSNSCertEndpoint::test_cert_endpoint_host": SNS_CERT_URL_HOST
+
+# sns, marker-only kind: checks that a number is not opted out, posts the number to
+# /_aws/sns/phone-opt-outs from the runner, and checks that it is. It patches
+# nothing, starts no server and reads no store; config.external_service_url() only
+# builds the target's URL.
+"tests/aws/services/sns/test_sns.py::TestSNSSMS::test_opt_out_phone_number_via_endpoint": "marker-only: opts a number out through the developer endpoint and reads it back through the API; read tests/aws/services/sns/test_sns.py:4993-5005"
