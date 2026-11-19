@@ -308,6 +308,20 @@ func Test_Load_variableForms(t *testing.T) {
 			},
 		},
 		{
+			name: "SNS settings, the two strings trimmed",
+			give: map[string]string{
+				varSNSCertURLHost:         " sns.us-east-1.amazonaws.com ",
+				varSNSSESSenderAddress:    "sender@example.test\t",
+				varLegacySNSGCMPublishing: "1",
+			},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.Equal(t, "sns.us-east-1.amazonaws.com", got.SNSCertURLHost)
+				require.Equal(t, "sender@example.test", got.SNSSESSenderAddress)
+				require.True(t, got.LegacySNSGCMPublishing)
+			},
+		},
+		{
 			name: "SHUTDOWN_TIMEOUT of the most seconds a Duration holds",
 			give: map[string]string{varShutdownTimeout: "9223372036"},
 			check: func(t *testing.T, got *Settings) {

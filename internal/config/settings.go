@@ -59,6 +59,15 @@ type Settings struct {
 	// SQSDisableMaxNumberOfMessageLimit is SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT:
 	// ReceiveMessage accepts a MaxNumberOfMessages above 10.
 	SQSDisableMaxNumberOfMessageLimit bool
+	// SNSCertURLHost is SNS_CERT_URL_HOST, trimmed: the host of the
+	// SigningCertURL in the messages SNS signs. Empty means LOCALSTACK_HOST.
+	SNSCertURLHost string
+	// SNSSESSenderAddress is SNS_SES_SENDER_ADDRESS, trimmed: the sender of the
+	// email SNS delivers. Empty means the default sender.
+	SNSSESSenderAddress string
+	// LegacySNSGCMPublishing is LEGACY_SNS_GCM_PUBLISHING: SNS publishes to GCM
+	// with the legacy server key instead of FCM's HTTP v1 API.
+	LegacySNSGCMPublishing bool
 	// FailFast is FAIL_FAST: a recovered panic answers 501 instead of 500.
 	FailFast bool
 	// IncludeStackTracesInHTTPResponse is INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE.
@@ -149,6 +158,9 @@ func (s *Settings) values() map[string]any {
 		varSQSEnableMessageRetentionPeriod: s.SQSEnableMessageRetentionPeriod,
 		varSQSDelayPurgeRetry:              s.SQSDelayPurgeRetry,
 		varSQSDisableMaxMessageLimit:       s.SQSDisableMaxNumberOfMessageLimit,
+		varSNSCertURLHost:                  s.SNSCertURLHost,
+		varSNSSESSenderAddress:             s.SNSSESSenderAddress,
+		varLegacySNSGCMPublishing:          s.LegacySNSGCMPublishing,
 		varFailFast:                        s.FailFast,
 		varIncludeStackTraces:              s.IncludeStackTracesInHTTPResponse,
 		varEnableConfigUpdates:             s.EnableConfigUpdates,
@@ -206,6 +218,9 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		SQSEnableMessageRetentionPeriod:   isTrue(get(varSQSEnableMessageRetentionPeriod)),
 		SQSDelayPurgeRetry:                isTrue(get(varSQSDelayPurgeRetry)),
 		SQSDisableMaxNumberOfMessageLimit: isTrue(get(varSQSDisableMaxMessageLimit)),
+		SNSCertURLHost:                    strings.TrimSpace(get(varSNSCertURLHost)),
+		SNSSESSenderAddress:               strings.TrimSpace(get(varSNSSESSenderAddress)),
+		LegacySNSGCMPublishing:            isTrue(get(varLegacySNSGCMPublishing)),
 		FailFast:                          isTrue(get(varFailFast)),
 		IncludeStackTracesInHTTPResponse:  isTrue(get(varIncludeStackTraces)),
 		EnableConfigUpdates:               isTrue(get(varEnableConfigUpdates)),
