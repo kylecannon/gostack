@@ -141,7 +141,7 @@ func BenchmarkCreateTopic(b *testing.B) {
 	cells := []createCell{
 		{name: "topic=standard/create=new"},
 		{name: "topic=standard/create=repeat", repeat: true},
-		{name: "topic=fifo/create=new", suffix: ".fifo", attrs: []string{"FifoTopic", "true"}},
+		{name: "topic=fifo/create=new", suffix: ".fifo", attrs: []string{"FifoTopic", textTrue}},
 	}
 
 	for _, topics := range benchTopics {

@@ -251,7 +251,7 @@ func Test_Provider_CreateTopic(t *testing.T) {
 	attrs := c.attributes(arn)
 	assert.Equal(t, []string{
 		displayName, "EffectiveDeliveryPolicy", "Owner", "Policy",
-		"SubscriptionsConfirmed", "SubscriptionsDeleted", "SubscriptionsPending", "TopicArn",
+		"SubscriptionsConfirmed", "SubscriptionsDeleted", "SubscriptionsPending", paramTopicArn,
 	}, slices.Sorted(maps.Keys(attrs)))
 	assert.Equal(t, account, attrs["Owner"])
 	assert.Equal(t, arn, attrs["TopicArn"])

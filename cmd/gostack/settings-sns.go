@@ -12,5 +12,6 @@ func snsSettings(current *config.Settings) sns.Settings {
 		CertURLHost:         current.SNSCertURLHost,
 		SESSenderAddress:    current.SNSSESSenderAddress,
 		LegacyGCMPublishing: current.LegacySNSGCMPublishing,
+		DisableCompatPaths:  !current.CompatPaths,
 	}
 }

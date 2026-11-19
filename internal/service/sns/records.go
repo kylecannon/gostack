@@ -1,9 +1,31 @@
 package sns
 
+import (
+	"sync"
+
+	"github.com/kylecannon/gostack/internal/service/sns/filter"
+)
+
 // Subscription is one subscription, LocalStack's SnsSubscription: the members
 // ListSubscriptions shows and the attributes GetSubscriptionAttributes adds. An
-// attribute that is not set is empty.
+// attribute that is not set is empty, but for the two a caller can set to the
+// empty string, which are nil until set.
+//
+// Its lock guards the attributes a call can change: PendingConfirmation,
+// ConfirmationWasAuthenticated, the attributes SetSubscriptionAttributes sets
+// and policy. The rest never change.
 type Subscription struct {
+	mu sync.Mutex
+	// seq is the subscription's place in the creation order of its State.
+	seq uint64
+	// policy is FilterPolicy parsed, nil when it is empty. It is rebuilt from
+	// FilterPolicy with filter.ScopeMessageBody on restore (story log entry 3).
+	policy *filter.Policy
+
+	// Token is the confirmation token Subscribe made for the subscription,
+	// which ConfirmSubscription takes and /_aws/sns/subscription-tokens
+	// returns.
+	Token string
 	// TopicARN is the ARN of the subscribed topic.
 	TopicARN string
 	// Endpoint is where the subscription delivers: a queue ARN, a URL, an
@@ -29,10 +51,12 @@ type Subscription struct {
 	// ConfirmationWasAuthenticated is "true" when the confirmation was
 	// authenticated.
 	ConfirmationWasAuthenticated string
-	// SubscriptionRoleARN is the role a Firehose subscription delivers with.
-	SubscriptionRoleARN string
-	// DeliveryPolicy is the subscription's delivery policy.
-	DeliveryPolicy string
+	// SubscriptionRoleARN is the role a Firehose subscription delivers with,
+	// nil when it was never set.
+	SubscriptionRoleARN *string
+	// DeliveryPolicy is the subscription's delivery policy, nil when it was
+	// never set.
+	DeliveryPolicy *string
 	// RedrivePolicy names the subscription's dead-letter queue.
 	RedrivePolicy string
 }

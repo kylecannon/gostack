@@ -29,6 +29,11 @@ type State struct {
 	next uint64
 	// subscriptions are the subscriptions by ARN.
 	subscriptions map[string]*Subscription
+	// subOrder is the subscriptions in creation order, which
+	// ListSubscriptions pages through, sorted by Subscription.seq.
+	subOrder []*Subscription
+	// subNext is the creation sequence number of the next subscription.
+	subNext uint64
 	// tokens maps a confirmation token to the ARN of its subscription.
 	tokens map[string]string
 	// applications are the platform applications by ARN.
@@ -68,6 +73,8 @@ func (s *State) clear() {
 	s.order = nil
 	s.next = 0
 	s.subscriptions = make(map[string]*Subscription)
+	s.subOrder = nil
+	s.subNext = 0
 	s.tokens = make(map[string]string)
 	s.applications = make(map[string]*PlatformApplication)
 	s.endpoints = make(map[string]*PlatformEndpoint)
@@ -135,8 +142,9 @@ func bySeq(t *Topic, seq uint64) int {
 
 // Topic is one topic, LocalStack's Topic.
 //
-// Its lock guards Attributes, DataProtectionPolicy and Subscriptions. Name and
-// ARN never change.
+// Its lock guards Attributes, DataProtectionPolicy, subs and endpoints. Name
+// and ARN never change. subs and endpoints are an index of the State's
+// subscriptions to the topic, rebuilt from them on restore.
 type Topic struct {
 	mu sync.Mutex
 	// seq is the topic's place in the creation order of its State.
@@ -152,9 +160,12 @@ type Topic struct {
 	// DataProtectionPolicy is the topic's data protection policy, nil when none
 	// was ever set.
 	DataProtectionPolicy *string
-	// Subscriptions are the ARNs of the topic's subscriptions, in the order
-	// they were made.
-	Subscriptions []string
+	// subs are the topic's subscriptions in the order they were made, sorted
+	// by Subscription.seq.
+	subs []*Subscription
+	// endpoints are the topic's subscriptions by endpoint: a topic has one
+	// subscription per endpoint.
+	endpoints map[string]*Subscription
 }
 
 // AccountState is what SNS holds for an account across its regions, the

@@ -231,28 +231,38 @@ func (p *Provider) PutDataProtectionPolicy(
 // findTopic is LocalStack's _get_topic: the topic an ARN names, in the ARN's
 // account and region. The region has to be the caller's.
 func (p *Provider) findTopic(ctx context.Context, topicArn *string) (*Topic, error) {
+	_, t, err := p.topicIn(ctx, topicArn)
+
+	return t, err
+}
+
+// topicIn is findTopic with the State that holds the topic, and its
+// subscriptions.
+func (p *Provider) topicIn(ctx context.Context, topicArn *string) (*State, *Topic, error) {
 	rc, err := callOf(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	arn := deref(topicArn)
 
 	parts, perr := parseTopicARN(arn)
 	if perr != nil {
-		return nil, perr
+		return nil, nil, perr
 	}
 
 	if parts.region != rc.Region {
-		return nil, api.NewInvalidParameterException("Invalid parameter: TopicArn")
+		return nil, nil, api.NewInvalidParameterException("Invalid parameter: TopicArn")
 	}
 
-	t, ok := p.stateAt(parts.account, parts.region).topic(arn)
+	st := p.stateAt(parts.account, parts.region)
+
+	t, ok := st.topic(arn)
 	if !ok {
-		return nil, api.NewNotFoundException("Topic does not exist")
+		return nil, nil, api.NewNotFoundException("Topic does not exist")
 	}
 
-	return t, nil
+	return st, t, nil
 }
 
 // sameTopic checks a repeated CreateTopic against the topic it names, as

@@ -94,7 +94,7 @@ func verifyNotification(t *testing.T, cert *x509.Certificate, body []byte) {
 	require.NoError(t, json.Unmarshal(body, &fields))
 
 	var canonical strings.Builder
-	for _, name := range []string{"Message", "MessageId", "Subject", "Timestamp", "TopicArn", "Type"} {
+	for _, name := range []string{"Message", "MessageId", "Subject", "Timestamp", paramTopicArn, "Type"} {
 		if value, ok := fields[name]; ok {
 			canonical.WriteString(name + "\n" + value + "\n")
 		}
