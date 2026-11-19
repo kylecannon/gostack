@@ -1,0 +1,18 @@
+# dynamodb tests the parity runner does not run. Format and reasons: README.md here.
+
+# --- hard-skipped: dynamodb -----------------------------------------------
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_stream_records_with_update_item": hard-skipped (Flaky in CI)
+
+# --- depends-on:kinesis: dynamodb -----------------------------------------
+# The runner's config has DDB_STREAMS_PROVIDER_V2 false (LocalStack's default,
+# DynamoDB Local with Kinesis-backed streams), so the skipif on the three tests
+# below does not fire and each one reads a Kinesis stream.
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_kinesis_streaming_destination_crud": depends-on:kinesis
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_binary_data_with_stream": depends-on:kinesis
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_with_kinesis_stream": depends-on:kinesis
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_stream_destination_records": depends-on:kinesis
+
+# --- depends-on:kms: dynamodb ---------------------------------------------
+# Both call kms.describe_key on the table's KMSMasterKeyArn.
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_create_table_with_partial_sse_specification": depends-on:kms
+"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_update_table_without_sse_specification_change": depends-on:kms

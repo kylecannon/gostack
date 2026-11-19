@@ -1,15 +1,29 @@
 # Tests that carry LocalStack's `requires_in_process` marker and still run,
-# because everything they patch is `localstack.config`, which the config bridge
-# (parity/pytest_gostack.py) forwards to the target through /_localstack/config.
+# because their only in-process need is one the runner can supply. Two kinds:
 #
-# Format: "nodeid pattern": the config variables the test patches
+#   config      everything the test patches is `localstack.config`, which the
+#               config bridge (parity/pytest_gostack.py) forwards to the target
+#               through /_localstack/config.
+#   http-server the test is marked only because it starts pytest's `HTTPServer`
+#               (directly, or through the `sns_create_http_endpoint` fixture)
+#               for the target to deliver to. The runner shares the target's
+#               network namespace (`--network container:<target>`), so the
+#               target reaches the server on localhost. The test must touch
+#               nothing else in the server process: no store (`get_store`), no
+#               `config.` read, no monkeypatch.
+#
+# Format: "nodeid pattern": <kind note>
+#   config:      the config variables the test patches (a bare list of names)
+#   http-server: `http-server: <what the test serves or checks>`
 #
 # Patterns match like parity/exclusions/<service>.yaml. The list applies only when the
 # bridge is on (GOSTACK_PARITY_BRIDGE=1). A test that is also in parity/exclusions/
 # stays excluded.
 #
-# A `requires_in_process` test that patches anything else (a module constant,
-# an object inside the server) belongs in parity/exclusions/, not here.
+# A `requires_in_process` test that needs anything else (a module constant, an
+# object or store inside the server, `SnsProvider.get_store`) belongs in
+# parity/exclusions/, not here. An http-server test is listed only while the
+# LocalStack baseline passes it in this runner; one it fails stays excluded.
 
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
 "tests/aws/services/sqs/test_sqs.py::TestSqsProvider::test_message_retention_fifo": SQS_ENABLE_MESSAGE_RETENTION_PERIOD
@@ -56,3 +70,11 @@
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_malformed_policy": S3_SKIP_SIGNATURE_VALIDATION
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_missing_signature": S3_SKIP_SIGNATURE_VALIDATION
 "tests/aws/services/s3/test_s3.py::TestS3PresignedPost::test_post_request_missing_fields": S3_SKIP_SIGNATURE_VALIDATION
+
+# sns, http-server kind: each starts pytest's HTTPServer as the subscription
+# endpoint the target delivers to.
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_redrive_policy_http_subscription": "http-server: subscription confirmation arrives at the runner's HTTPServer"
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_multiple_subscriptions_http_endpoint": "http-server: four HTTPServer endpoints receive confirmations and retries"
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_subscribe_external_http_endpoint": "http-server: confirmation, notification and unsubscribe payloads at the HTTPServer"
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_dlq_external_http_endpoint": "http-server: failed unsubscribe confirmation to the HTTPServer, DLQ checked"
+"tests/aws/services/sns/test_sns.py::TestSNSSubscriptionHttp::test_subscribe_external_http_endpoint_content_type": "http-server: delivery policy content type seen at the HTTPServer"

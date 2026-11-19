@@ -20,7 +20,7 @@ Reasons in use:
 
 | reason | meaning |
 | --- | --- |
-| `requires_in_process` | Marked so in LocalStack; it patches state inside the server process, which no external container can reach. A test carrying the marker is excluded unless `parity/bridgeable.yaml` lists it, because all it patches is `localstack.config`, which the bridge forwards. |
+| `requires_in_process` | Marked so in LocalStack; it patches state inside the server process, which no external container can reach. A test carrying the marker is excluded unless `parity/bridgeable.yaml` lists it: either all it patches is `localstack.config`, which the bridge forwards, or it is marked only because it starts the runner's `HTTPServer`, which the target reaches through the shared network namespace. |
 | `hard-skipped` | LocalStack's own source skips the test unconditionally. |
 | `depends-on:<service>` | Needs a service outside the current scope. |
 | `engine-deferred` | Needs a real engine (OpenSearch, Transcribe) that gostack defers. |
