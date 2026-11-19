@@ -1,6 +1,7 @@
 package secretsmanager_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,17 +17,9 @@ const (
 	awsCurrent  = "AWSCURRENT"
 )
 
-// fakeLambda answers GetFunction for one function and 404 for any other.
-func fakeLambda() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/functions/"+functionARN) {
-			_, _ = w.Write([]byte(`{}`))
-
-			return
-		}
-
-		w.WriteHeader(http.StatusNotFound)
-	})
+// oneFunction is a function lookup that knows functionARN alone.
+func oneFunction(_ context.Context, _, _, arn string) bool {
+	return arn == functionARN
 }
 
 func Test_resource_policy(t *testing.T) {
@@ -103,7 +96,7 @@ func Test_rotate_secret_checks(t *testing.T) {
 func Test_rotate_secret_with_a_function(t *testing.T) {
 	p := secretsmanager.New(nil)
 	h := handlerFor(t, p)
-	p.Registration().Bind(fakeLambda())
+	secretsmanager.SetFunctionLookup(p, oneFunction)
 
 	mustCall(t, h, "CreateSecret", `{"Name":"r","SecretString":"v","ClientRequestToken":"`+token1+`"}`)
 

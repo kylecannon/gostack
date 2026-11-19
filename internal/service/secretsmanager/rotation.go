@@ -2,12 +2,10 @@ package secretsmanager
 
 import (
 	"context"
-	"net/http"
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/secretsmanager"
 	"github.com/kylecannon/gostack/internal/awserr"
-	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
 )
 
@@ -25,10 +23,6 @@ const (
 	msgRotationPending = "Previous rotation request is still in progress."
 	msgRotateDeleted   = "An error occurred (InvalidRequestException) when calling the RotateSecret operation: " +
 		"You tried to perform the operation on a secret that's currently marked deleted."
-
-	lambdaService = "lambda"
-	// lambdaFunctionPath is the path of Lambda's GetFunction, a rest-json call.
-	lambdaFunctionPath = "/2015-03-31/functions/"
 )
 
 // rotationRequest is what RotateSecret resolved before calling Lambda: the
@@ -148,19 +142,21 @@ func resolveRotation(secret *Secret, in *api.RotateSecretInput) (rotationRequest
 	return req, nil
 }
 
-// checkFunction is LocalStack's GetFunction call: any failure, Lambda not
-// running among them, means the function cannot be used. The secret's lock is
-// not held, so a function that calls back into this service cannot deadlock.
+// checkFunction is LocalStack's GetFunction call: any failure means the
+// function cannot be used. The secret's lock is not held, so a lookup that
+// calls back into this service cannot deadlock.
 func (p *Provider) checkFunction(ctx context.Context, secret *Secret, lambdaARN string) *awserr.Error {
-	resp, err := p.client.Do(ctx, inproc.Call{
-		Account: secret.account, Region: secret.region, Service: lambdaService,
-		Method: http.MethodGet, Path: lambdaFunctionPath + lambdaARN,
-	})
-	if err != nil || !resp.OK() {
+	if !p.functionExists(ctx, secret.account, secret.region, lambdaARN) {
 		return api.NewResourceNotFoundException(msgLambdaMissing)
 	}
 
 	return nil
+}
+
+// noFunction is the function lookup while Lambda is not served: no function
+// exists.
+func noFunction(context.Context, string, string, string) bool {
+	return false
 }
 
 // startRotation stores the rotation configuration and, when the rotation runs

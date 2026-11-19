@@ -12,7 +12,6 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/secretsmanager"
 	"github.com/kylecannon/gostack/internal/awserr"
-	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/store"
@@ -24,9 +23,12 @@ type Provider struct {
 	api.Unimplemented
 
 	states *store.Bundle[State]
-	// client reaches Lambda, which RotateSecret asks whether the rotation
-	// function exists.
-	client *inproc.Client
+	// functionExists answers RotateSecret's question whether the rotation
+	// function exists. Until Lambda is served it is noFunction, which is true:
+	// no function can exist. The Lambda story replaces it with a GetFunction
+	// call through the in-process client, and adds the secretsmanager entry
+	// to DEPENDS_ON in parity/ledger.py with it.
+	functionExists func(ctx context.Context, account, region, functionARN string) bool
 	// changed is told, with the service name, about a change that no mutating
 	// call reports: a read that stamped a new LastAccessedDate. It may be nil.
 	changed func(name string)
@@ -42,10 +44,10 @@ var _ api.Handler = (*Provider)(nil)
 // It may be nil.
 func New(changed func(name string)) *Provider {
 	return &Provider{
-		states:  store.NewBundle(newState, (*State).reset),
-		client:  inproc.New(),
-		changed: changed,
-		now:     time.Now,
+		states:         store.NewBundle(newState, (*State).reset),
+		functionExists: noFunction,
+		changed:        changed,
+		now:            time.Now,
 	}
 }
 
@@ -57,7 +59,6 @@ func (p *Provider) Registration() service.Registration {
 		Mutating: mutating,
 		Persist:  p,
 		Reset:    p.states.Reset,
-		Bind:     p.client.Bind,
 	}
 }
 

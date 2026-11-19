@@ -43,7 +43,7 @@ func startEngine(t *testing.T, dir string, format persist.Format) (*persist.Engi
 	)
 	require.NoError(t, err)
 
-	p.Registration().Bind(fakeLambda())
+	secretsmanager.SetFunctionLookup(p, oneFunction)
 
 	return eng, gw.Handler()
 }
