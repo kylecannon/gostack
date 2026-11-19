@@ -31,8 +31,9 @@ func Serve(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, false)
 }
 
-// ServeValidated is Serve for an endpoint that rejects a request with a required
-// member missing before it reaches h, as SQS's queue-URL paths do.
+// ServeValidated is Serve. The generated checks never reject a request on their
+// own for this service: h calls Validate on the input where LocalStack makes the
+// check, and a required member can reach h as nil.
 func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, true)
 }
@@ -280,11 +281,6 @@ func writeConfirmSubscription(w http.ResponseWriter, rc *request.Context, out *C
 
 func serveCreatePlatformApplication(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreatePlatformApplication(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1410,11 +1406,6 @@ func writeOptInPhoneNumber(w http.ResponseWriter, rc *request.Context, out *OptI
 
 func servePublish(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublish(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1460,11 +1451,6 @@ func writePublish(w http.ResponseWriter, rc *request.Context, out *PublishOutput
 
 func servePublishBatch(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readPublishBatch(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1600,11 +1586,6 @@ func writeRemovePermission(w http.ResponseWriter, rc *request.Context, out *Remo
 
 func serveSetEndpointAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetEndpointAttributes(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1650,7 +1631,6 @@ func writeSetEndpointAttributes(w http.ResponseWriter, rc *request.Context, out 
 
 func serveSetPlatformApplicationAttributes(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readSetPlatformApplicationAttributes(rc)
-	// The handler runs in.Validate itself, at the point AWS checks.
 	if err != nil {
 		writeError(w, rc, err)
 		return

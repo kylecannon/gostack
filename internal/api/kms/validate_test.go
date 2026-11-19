@@ -1,10 +1,12 @@
 package kms_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,10 +17,87 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test_ServeValidated_SnapshotMessages sends the input of each test_kms.py
-// test whose snapshot pins a constraint message, and checks the generated
-// checks answer that message. The key names the snapshot entry.
-func Test_ServeValidated_SnapshotMessages(t *testing.T) {
+// validating stands in for a handler that runs the generated checks first, as a
+// real one does where LocalStack makes them. Nothing else answers: a request
+// that passes reaches Unimplemented.
+type validating struct{ kms.Unimplemented }
+
+func (v validating) CreateKey(ctx context.Context, in *kms.CreateKeyInput) (*kms.CreateKeyOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.CreateKey(ctx, in)
+}
+
+func (v validating) DeriveSharedSecret(
+	ctx context.Context, in *kms.DeriveSharedSecretInput,
+) (*kms.DeriveSharedSecretOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.DeriveSharedSecret(ctx, in)
+}
+
+func (v validating) Encrypt(ctx context.Context, in *kms.EncryptInput) (*kms.EncryptOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.Encrypt(ctx, in)
+}
+
+func (v validating) GenerateMac(ctx context.Context, in *kms.GenerateMacInput) (*kms.GenerateMacOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.GenerateMac(ctx, in)
+}
+
+func (v validating) GenerateRandom(
+	ctx context.Context, in *kms.GenerateRandomInput,
+) (*kms.GenerateRandomOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.GenerateRandom(ctx, in)
+}
+
+func (v validating) VerifyMac(ctx context.Context, in *kms.VerifyMacInput) (*kms.VerifyMacOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.VerifyMac(ctx, in)
+}
+
+// dropsKeyMaterial is the CreateKey handler LocalStack has: it takes the
+// _custom_key_material_ tag out of the request, whatever its value, and checks
+// the tags that are left.
+type dropsKeyMaterial struct{ validating }
+
+func (d dropsKeyMaterial) CreateKey(ctx context.Context, in *kms.CreateKeyInput) (*kms.CreateKeyOutput, error) {
+	in.Tags = slices.DeleteFunc(in.Tags, func(tag kms.Tag) bool {
+		return tag.TagKey != nil && *tag.TagKey == "_custom_key_material_"
+	})
+
+	return d.validating.CreateKey(ctx, in)
+}
+
+// Test_Validate_SnapshotMessages sends the input of each test_kms.py test
+// whose snapshot pins a constraint message through a handler that calls
+// Validate, and checks the generated checks answer that message. The key names
+// the snapshot entry.
+func Test_Validate_SnapshotMessages(t *testing.T) {
 	t.Parallel()
 
 	plaintext := base64.StdEncoding.EncodeToString(make([]byte, 4097))
@@ -106,7 +185,7 @@ func Test_ServeValidated_SnapshotMessages(t *testing.T) {
 		t.Run(c.key, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, c.op, c.body)
+			code, body := serveJSON(t, validating{}, c.op, c.body)
 			assert.Equal(t, http.StatusBadRequest, code)
 			assert.Equal(t, "ValidationException", body["__type"])
 			assert.Equal(t, c.want, body["message"])
@@ -114,20 +193,67 @@ func Test_ServeValidated_SnapshotMessages(t *testing.T) {
 	}
 }
 
-// Test_ServeValidated_ValidRequestReachesHandler checks a request that breaks
-// no constraint passes the checks: Unimplemented answers it, not the checks.
-func Test_ServeValidated_ValidRequestReachesHandler(t *testing.T) {
+// Test_Validate_ValidRequestReachesHandler checks a request that breaks no
+// constraint passes Validate: Unimplemented answers it, not the checks.
+func Test_Validate_ValidRequestReachesHandler(t *testing.T) {
 	t.Parallel()
 
-	_, body := serveJSON(t, "CreateKey", `{"KeySpec":"HMAC_256","KeyUsage":"GENERATE_VERIFY_MAC",`+
+	_, body := serveJSON(t, validating{}, "CreateKey", `{"KeySpec":"HMAC_256","KeyUsage":"GENERATE_VERIFY_MAC",`+
 		`"Tags":[{"TagKey":"k","TagValue":""}]}`)
 	assert.NotEqual(t, "ValidationException", body["__type"])
 }
 
-// Test_ServeValidated_UnlistedConstraintsReachHandler sends requests that
-// break a model constraint no snapshot pins, or that pass once length counts
+// Test_ServeValidated_NeverChecks sends requests that break listed
+// constraints to a handler that does not call Validate: ServeValidated runs no
+// check of its own, so each one reaches the handler.
+func Test_ServeValidated_NeverChecks(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, op, body string
+	}{
+		{"a number of bytes below the minimum", "GenerateRandom", `{"NumberOfBytes":0}`},
+		{"a key usage outside the enum", "CreateKey", `{"KeyUsage":"RANDOM"}`},
+		// The check a real handler makes is LocalStack's, and for ReplicateKey
+		// it makes none: 129 characters pass.
+		{"a 129-character tag key on ReplicateKey", "ReplicateKey",
+			`{"KeyId":"mrk-1","ReplicaRegion":"us-west-2","Tags":[{"TagKey":"` + strings.Repeat("a", 129) + `"}]}`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, body := serveJSON(t, kms.Unimplemented{}, c.op, c.body)
+			assert.Equal(t, http.StatusNotImplemented, code, body)
+			assert.Contains(t, body["message"], "not yet implemented")
+		})
+	}
+}
+
+// Test_Validate_CustomKeyMaterialTag sends a CreateKey whose _custom_key_material_
+// tag holds 1,600 characters, over the tag value max of 256. LocalStack takes
+// that tag out before it checks, so the request is accepted; a handler that
+// calls Validate without taking it out answers the length error.
+func Test_Validate_CustomKeyMaterialTag(t *testing.T) {
+	t.Parallel()
+
+	body := `{"Tags":[{"TagKey":"_custom_key_material_","TagValue":"` + strings.Repeat("Q", 1600) + `"}]}`
+
+	code, got := serveJSON(t, dropsKeyMaterial{}, "CreateKey", body)
+	assert.Equal(t, http.StatusNotImplemented, code, got)
+	assert.Contains(t, got["message"], "not yet implemented")
+
+	code, got = serveJSON(t, validating{}, "CreateKey", body)
+	assert.Equal(t, http.StatusBadRequest, code, got)
+	assert.Contains(t, got["message"], "at 'tags.1.member.tagValue' failed to satisfy constraint: "+
+		"Member must have length less than or equal to 256")
+}
+
+// Test_Validate_UnlistedConstraintsReachHandler sends requests that break a
+// model constraint no snapshot pins, or that pass once length counts
 // characters, and LocalStack accepts: the handler answers each one.
-func Test_ServeValidated_UnlistedConstraintsReachHandler(t *testing.T) {
+func Test_Validate_UnlistedConstraintsReachHandler(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -144,14 +270,14 @@ func Test_ServeValidated_UnlistedConstraintsReachHandler(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			code, body := serveJSON(t, c.op, c.body)
+			code, body := serveJSON(t, validating{}, c.op, c.body)
 			assert.Equal(t, http.StatusNotImplemented, code, body)
 			assert.Contains(t, body["message"], "not yet implemented")
 		})
 	}
 }
 
-func serveJSON(t *testing.T, op, payload string) (int, map[string]any) {
+func serveJSON(t *testing.T, h kms.Handler, op, payload string) (int, map[string]any) {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(payload))
@@ -159,7 +285,7 @@ func serveJSON(t *testing.T, op, payload string) (int, map[string]any) {
 	req.Header.Set("X-Amz-Target", "TrentService."+op)
 
 	rec := httptest.NewRecorder()
-	kms.ServeValidated(&kms.Unimplemented{}, rec, &request.Context{
+	kms.ServeValidated(h, rec, &request.Context{
 		Service: "kms", Operation: op, Protocol: protocol.KindJSON, RequestID: "req-1", Request: req,
 	})
 

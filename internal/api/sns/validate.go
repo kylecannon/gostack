@@ -9,29 +9,29 @@ import (
 // Only the members listed in the generator's service table are checked.
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*AddPermissionInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*CheckIfPhoneNumberIsOptedOutInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ConfirmSubscriptionInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (v *CreatePlatformApplicationInput) Validate() error {
 	var r constraint.Report
 	v.validate(&r, nil)
@@ -42,176 +42,176 @@ func (v *CreatePlatformApplicationInput) Validate() error {
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*CreatePlatformEndpointInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*CreateSMSSandboxPhoneNumberInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*CreateTopicInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*DeleteEndpointInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*DeletePlatformApplicationInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*DeleteSMSSandboxPhoneNumberInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*DeleteTopicInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetDataProtectionPolicyInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetEndpointAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetPlatformApplicationAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetSMSAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetSMSSandboxAccountStatusInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetSubscriptionAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*GetTopicAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListEndpointsByPlatformApplicationInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListOriginationNumbersInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListPhoneNumbersOptedOutInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListPlatformApplicationsInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListSMSSandboxPhoneNumbersInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListSubscriptionsByTopicInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListSubscriptionsInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListTagsForResourceInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*ListTopicsInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*OptInPhoneNumberInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (v *PublishBatchInput) Validate() error {
 	var r constraint.Report
 	v.validate(&r, nil)
@@ -222,8 +222,8 @@ func (v *PublishBatchInput) Validate() error {
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (v *PublishInput) Validate() error {
 	var r constraint.Report
 	v.validate(&r, nil)
@@ -234,22 +234,22 @@ func (v *PublishInput) Validate() error {
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*PutDataProtectionPolicyInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*RemovePermissionInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (v *SetEndpointAttributesInput) Validate() error {
 	var r constraint.Report
 	v.validate(&r, nil)
@@ -260,8 +260,8 @@ func (v *SetEndpointAttributesInput) Validate() error {
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (v *SetPlatformApplicationAttributesInput) Validate() error {
 	var r constraint.Report
 	v.validate(&r, nil)
@@ -272,57 +272,57 @@ func (v *SetPlatformApplicationAttributesInput) Validate() error {
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*SetSMSAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*SetSubscriptionAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*SetTopicAttributesInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*SubscribeInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*TagResourceInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*UnsubscribeInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*UntagResourceInput) Validate() error {
 	return nil
 }
 
 // Validate returns the error for the listed constraints v breaks, or nil.
-// ServeValidated runs it before the handler, except for an operation whose
-// handler runs it itself.
+// The dispatch never calls it: the handler does, where LocalStack makes the
+// check, after its own earlier checks and any filtering of the input.
 func (*VerifySMSSandboxPhoneNumberInput) Validate() error {
 	return nil
 }

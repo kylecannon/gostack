@@ -16,11 +16,71 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test_ServeValidated_SnapshotMessages sends the input of each test_sns.py
-// test whose snapshot pins a constraint message, and checks the generated
-// checks answer that message. The key names the snapshot entry. An empty
-// Attributes map sends no parameter at all, so it reads as absent.
-func Test_ServeValidated_SnapshotMessages(t *testing.T) {
+// validating stands in for a handler that runs the generated checks first, as a
+// real one does where LocalStack makes them. Nothing else answers: a request
+// that passes reaches Unimplemented.
+type validating struct{ sns.Unimplemented }
+
+func (v validating) CreatePlatformApplication(
+	ctx context.Context, in *sns.CreatePlatformApplicationInput,
+) (*sns.CreatePlatformApplicationOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.CreatePlatformApplication(ctx, in)
+}
+
+func (v validating) Publish(ctx context.Context, in *sns.PublishInput) (*sns.PublishOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.Publish(ctx, in)
+}
+
+func (v validating) PublishBatch(
+	ctx context.Context, in *sns.PublishBatchInput,
+) (*sns.PublishBatchOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.PublishBatch(ctx, in)
+}
+
+func (v validating) SetEndpointAttributes(
+	ctx context.Context, in *sns.SetEndpointAttributesInput,
+) (*sns.SetEndpointAttributesOutput, error) {
+	err := in.Validate()
+	if err != nil {
+		return nil, err
+	}
+
+	return v.Unimplemented.SetEndpointAttributes(ctx, in)
+}
+
+// emptyMessageFirst is a Publish handler that answers an empty message before
+// it runs the generated checks, as LocalStack does.
+type emptyMessageFirst struct{ validating }
+
+func (e emptyMessageFirst) Publish(ctx context.Context, in *sns.PublishInput) (*sns.PublishOutput, error) {
+	if in.Message == nil || *in.Message == "" {
+		return nil, sns.NewInvalidParameterException("Invalid parameter: Empty message")
+	}
+
+	return e.validating.Publish(ctx, in)
+}
+
+// Test_Validate_SnapshotMessages sends the input of each test_sns.py test
+// whose snapshot pins a constraint message through a handler that calls
+// Validate, and checks the generated checks answer that message. The key names
+// the snapshot entry. An empty Attributes map sends no parameter at all, so it
+// reads as absent.
+func Test_Validate_SnapshotMessages(t *testing.T) {
 	t.Parallel()
 
 	const nullAttributes = "1 validation error detected: Value null at 'attributes' failed to satisfy constraint: " +
@@ -69,13 +129,46 @@ func Test_ServeValidated_SnapshotMessages(t *testing.T) {
 		t.Run(c.key, func(t *testing.T) {
 			t.Parallel()
 
-			code, got := serveQuery(t, &sns.Unimplemented{}, c.op, c.form)
+			code, got := serveQuery(t, validating{}, c.op, c.form)
 			assert.Equal(t, http.StatusBadRequest, code)
 			assert.Equal(t, "Sender", got.Type)
 			assert.Equal(t, "ValidationError", got.Code)
 			assert.Equal(t, c.want, got.Message)
 		})
 	}
+}
+
+// Test_ServeValidated_NeverChecks sends the CreatePlatformApplication
+// snapshot, with no Attributes, to a handler that does not call Validate:
+// ServeValidated runs no check of its own, so it reaches the handler.
+func Test_ServeValidated_NeverChecks(t *testing.T) {
+	t.Parallel()
+
+	code, got := serveQuery(t, sns.Unimplemented{}, "CreatePlatformApplication",
+		"Action=CreatePlatformApplication&Name=app&Platform=GCM")
+	assert.Equal(t, http.StatusNotImplemented, code)
+	assert.Equal(t, "InternalFailure", got.Code, got.Message)
+	assert.Contains(t, got.Message, "not yet implemented")
+}
+
+// Test_Validate_EmptyMessageFirst sends a Publish with an empty message and a
+// message attribute that has no data type. The handler answers the empty
+// message first, as LocalStack does; one that only calls Validate answers the
+// data type.
+func Test_Validate_EmptyMessageFirst(t *testing.T) {
+	t.Parallel()
+
+	const form = "Action=Publish&TopicArn=arn&Message=" +
+		"&MessageAttributes.entry.1.Name=attr1&MessageAttributes.entry.1.Value.StringValue=value"
+
+	code, got := serveQuery(t, emptyMessageFirst{}, "Publish", form)
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Equal(t, "InvalidParameter", got.Code)
+	assert.Equal(t, "Invalid parameter: Empty message", got.Message)
+
+	_, got = serveQuery(t, validating{}, "Publish", form)
+	assert.Equal(t, "ValidationError", got.Code)
+	assert.Contains(t, got.Message, "messageAttributes.attr1.member.dataType")
 }
 
 // arnFirst is a SetPlatformApplicationAttributes handler that checks the
@@ -103,11 +196,11 @@ func (arnFirst) SetPlatformApplicationAttributes(
 	return nil, sns.NewNotFoundException("PlatformApplication does not exist")
 }
 
-// Test_ServeValidated_HandlerRunsChecks sends the two
-// SetPlatformApplicationAttributes snapshots with no Attributes, which
-// ServeValidated leaves to the handler: the ARN's form answers first, then the
-// generated check. botocore sends nothing for Attributes={}.
-func Test_ServeValidated_HandlerRunsChecks(t *testing.T) {
+// Test_Validate_HandlerRunsChecks sends the two
+// SetPlatformApplicationAttributes snapshots with no Attributes to a handler
+// that checks the ARN's form first and calls Validate after it. botocore sends
+// nothing for Attributes={}.
+func Test_Validate_HandlerRunsChecks(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -147,10 +240,10 @@ func Test_ServeValidated_HandlerRunsChecks(t *testing.T) {
 	assert.Equal(t, "NotFound", got.Code)
 }
 
-// Test_ServeValidated_UnlistedConstraintReachesHandler sends a TagResource
+// Test_Validate_UnlistedConstraintReachesHandler sends a TagResource
 // with an empty tag key, which breaks the model's min of 1. No snapshot pins
 // that, and LocalStack only checks for duplicate keys, so the handler answers.
-func Test_ServeValidated_UnlistedConstraintReachesHandler(t *testing.T) {
+func Test_Validate_UnlistedConstraintReachesHandler(t *testing.T) {
 	t.Parallel()
 
 	_, got := serveQuery(t, &sns.Unimplemented{}, "TagResource",

@@ -34,8 +34,9 @@ func Serve(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, false)
 }
 
-// ServeValidated is Serve for an endpoint that rejects a request with a required
-// member missing before it reaches h, as SQS's queue-URL paths do.
+// ServeValidated is Serve. The generated checks never reject a request on their
+// own for this service: h calls Validate on the input where LocalStack makes the
+// check, and a required member can reach h as nil.
 func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, true)
 }
@@ -355,11 +356,6 @@ func writeCreateGrant(w http.ResponseWriter, rc *request.Context, out *CreateGra
 
 func serveCreateKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readCreateKey(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -555,11 +551,6 @@ func writeDeleteImportedKeyMaterial(w http.ResponseWriter, rc *request.Context, 
 
 func serveDeriveSharedSecret(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readDeriveSharedSecret(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -872,11 +863,6 @@ func writeEnableKeyRotation(w http.ResponseWriter, rc *request.Context, out *Ena
 
 func serveEncrypt(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readEncrypt(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1072,11 +1058,6 @@ func writeGenerateDataKeyWithoutPlaintext(w http.ResponseWriter, rc *request.Con
 
 func serveGenerateMac(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateMac(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1116,11 +1097,6 @@ func writeGenerateMac(w http.ResponseWriter, rc *request.Context, out *GenerateM
 
 func serveGenerateRandom(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readGenerateRandom(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1706,11 +1682,6 @@ func writeReEncrypt(w http.ResponseWriter, rc *request.Context, out *ReEncryptOu
 
 func serveReplicateKey(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readReplicateKey(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -1945,11 +1916,6 @@ func writeSign(w http.ResponseWriter, rc *request.Context, out *SignOutput) {
 
 func serveTagResource(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readTagResource(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2223,11 +2189,6 @@ func writeVerify(w http.ResponseWriter, rc *request.Context, out *VerifyOutput) 
 
 func serveVerifyMac(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readVerifyMac(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return

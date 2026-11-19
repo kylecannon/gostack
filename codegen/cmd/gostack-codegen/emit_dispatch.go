@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/codegen/spec"
@@ -83,8 +82,15 @@ func (g *generator) emitServe(p *printer) {
 	p.f("\tserve(h, w, rc, false)")
 	p.f("}")
 	p.blank()
-	p.f("// ServeValidated is Serve for an endpoint that rejects a request with a required")
-	p.f("// member missing before it reaches h, as SQS's queue-URL paths do.")
+	if g.opts.Validation != nil {
+		p.f("// ServeValidated is Serve. The generated checks never reject a request on their")
+		p.f("// own for this service: h calls Validate on the input where LocalStack makes the")
+		p.f("// check, and a required member can reach h as nil.")
+	} else {
+		p.f("// ServeValidated is Serve for an endpoint that rejects a request with a required")
+		p.f("// member missing before it reaches h, as SQS's queue-URL paths do.")
+	}
+
 	p.f("func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {")
 	p.f("\tserve(h, w, rc, true)")
 	p.f("}")
@@ -131,26 +137,14 @@ func (g *generator) emitServeOperation(p *printer, op *operation) {
 	p.f("func serve%s(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {", op.name)
 	p.f("\tin, err := read%s(rc)", op.name)
 
-	switch {
-	case g.opts.Validation != nil:
-		switch {
-		case slices.Contains(g.opts.Validation.HandlerChecks, op.name):
-			p.f("\t// The handler runs in.Validate itself, at the point AWS checks.")
-		case in.validates:
-			p.f("\tif err == nil && validate {")
-			p.f("\t\tif verr := in.Validate(); verr != nil {")
-			p.f("\t\t\terr = asError(verr)")
-			p.f("\t\t}")
-			p.f("\t}")
-		default: // nothing listed below the input
-		}
-	case in.needsCheck:
+	// A Validation service's handler runs in.Validate itself, where LocalStack
+	// makes the check, so nothing runs here for it.
+	if g.opts.Validation == nil && in.needsCheck {
 		p.f("\tif err == nil && validate {")
 		p.f("\t\tif member := in.missingRequired(); member != \"\" {")
 		p.f("\t\t\terr = newMissingRequired(member)")
 		p.f("\t\t}")
 		p.f("\t}")
-	default: // nothing to check
 	}
 
 	p.f("\tif err != nil {")

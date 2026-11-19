@@ -9,8 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// doRequestID is the table key of validOneModel's required Id.
-const doRequestID = "DoRequest.Id"
+const (
+	// doRequestID is the table key of validOneModel's required Id.
+	doRequestID = "DoRequest.Id"
+	// itemKey is the table key of validOneModel's required Item.Key.
+	itemKey = "Item.Key"
+)
 
 // validOneOptions lists a constraint of every kind the checks act on, with an
 // enum override that narrows the accepted set, which no real service needs
@@ -24,16 +28,15 @@ var validOneOptions = serviceOptions{Validation: &validation{
 		"DoRequest.Mode":     checkEnum,
 		"DoRequest.Count":    checkMin,
 		"DoRequest.Items":    checkMax,
-		"Item.Key":           checkRequired,
+		itemKey:              checkRequired,
 		"LaterRequest.Token": checkRequired,
 	},
-	HandlerChecks: []string{"Later"},
-	Enums:         map[string]enumText{"Mode": {Values: []string{"B", "A"}, Narrow: true}},
+	Enums: map[string]enumText{"Mode": {Values: []string{"B", "A"}, Narrow: true}},
 }}
 
 // validOneModel has a constraint of every kind the checks act on, a pattern
 // Go cannot compile, structures below a list and a map, a structure only
-// below a list inside a map, and an operation whose handler runs the checks.
+// below a list inside a map, and a second operation to call Validate from.
 const validOneModel = `{"metadata":{"protocol":"json","jsonVersion":"1.0","targetPrefix":"ValidOne",
 	"apiVersion":"2020-01-01","endpointPrefix":"validone"},
 	"operations":{"Do":{"name":"Do","input":{"shape":"DoRequest"},"output":{"shape":"DoResponse"}},
@@ -67,6 +70,7 @@ const validOneTest = `package validone
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -75,18 +79,39 @@ import (
 	"github.com/kylecannon/gostack/internal/request"
 )
 
+// handler runs the checks first, as a service's handler does where LocalStack
+// makes them.
 type handler struct{ Unimplemented }
 
-func (handler) Do(context.Context, *DoInput) (*DoOutput, error) {
+func (handler) Do(_ context.Context, in *DoInput) (*DoOutput, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
+
 	return &DoOutput{}, nil
 }
 
-// Later answers without running the checks.
-func (handler) Later(context.Context, *LaterInput) (*LaterOutput, error) {
+func (handler) Later(_ context.Context, in *LaterInput) (*LaterOutput, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
+
 	return &LaterOutput{}, nil
 }
 
-func call(t *testing.T, validated bool, op, body string) (int, map[string]any) {
+// lax answers without running the checks.
+type lax struct{ Unimplemented }
+
+func (lax) Do(context.Context, *DoInput) (*DoOutput, error) {
+	return &DoOutput{}, nil
+}
+
+func (lax) Later(context.Context, *LaterInput) (*LaterOutput, error) {
+	return &LaterOutput{}, nil
+}
+
+func call(t *testing.T, serve func(Handler, http.ResponseWriter, *request.Context), h Handler, op, body string,
+) (int, map[string]any) {
 	t.Helper()
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
@@ -95,11 +120,7 @@ func call(t *testing.T, validated bool, op, body string) (int, map[string]any) {
 	rc := &request.Context{Service: "validone", Protocol: protocol.KindJSON, Operation: op,
 		RequestID: "req-1", Request: req}
 
-	if validated {
-		ServeValidated(handler{}, rec, rc)
-	} else {
-		Serve(handler{}, rec, rc)
-	}
+	serve(h, rec, rc)
 
 	var out map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
@@ -113,7 +134,7 @@ const bad = ` + "`" + `{"Name":"ABCDEF","Secret":"abcd","Mode":"C","Code":"x","C
 	` + "`" + `"Items":[{"Key":"k"},{}],"Entries":{"b":{},"a":{}}}` + "`" + `
 
 func TestEveryFailureInModelOrder(t *testing.T) {
-	code, out := call(t, true, "Do", bad)
+	code, out := call(t, ServeValidated, handler{}, "Do", bad)
 
 	want := "9 validation errors detected: " +
 		"Value null at 'id' failed to satisfy constraint: Member must not be null; " +
@@ -132,7 +153,8 @@ func TestEveryFailureInModelOrder(t *testing.T) {
 }
 
 func TestOneFailureAndAListLength(t *testing.T) {
-	_, out := call(t, true, "Do", ` + "`" + `{"Id":"i","Items":[{"Key":"a"},{"Key":"b"},{"Key":"c"}]}` + "`" + `)
+	_, out := call(t, ServeValidated, handler{}, "Do",
+		` + "`" + `{"Id":"i","Items":[{"Key":"a"},{"Key":"b"},{"Key":"c"}]}` + "`" + `)
 
 	want := "1 validation error detected: Value at 'items' failed to satisfy constraint: " +
 		"Member must have length less than or equal to 2"
@@ -145,21 +167,31 @@ func TestOneFailureAndAListLength(t *testing.T) {
 func TestUnlistedReachesHandler(t *testing.T) {
 	body := ` + "`" + `{"Id":"i","Name":"ab","Note":"NOT-OK","Mode":"A","Code":"x","Count":-5,` + "`" + ` +
 		` + "`" + `"Groups":{"g":[{}]},"Deep":{"d":[{"V":"TOO-LONG"}]}}` + "`" + `
-	if code, out := call(t, true, "Do", body); code != 200 {
+	if code, out := call(t, ServeValidated, handler{}, "Do", body); code != 200 {
 		t.Fatalf("got %d %v", code, out)
 	}
 }
 
-func TestServeDoesNotCheck(t *testing.T) {
-	if code, out := call(t, false, "Do", bad); code != 200 {
-		t.Fatalf("got %d %v", code, out)
+// Neither Serve nor ServeValidated runs the checks: a request that breaks
+// them, and one whose required member is missing, reach the handler.
+func TestDispatchNeverChecks(t *testing.T) {
+	for name, serve := range map[string]func(Handler, http.ResponseWriter, *request.Context){
+		"Serve": Serve, "ServeValidated": ServeValidated,
+	} {
+		if code, out := call(t, serve, lax{}, "Do", bad); code != 200 {
+			t.Fatalf("%s Do: got %d %v", name, code, out)
+		}
+
+		if code, out := call(t, serve, lax{}, "Later", "{}"); code != 200 {
+			t.Fatalf("%s Later: got %d %v", name, code, out)
+		}
 	}
 }
 
-// Later's handler runs the checks itself, so ServeValidated does not, and
-// Validate gives the error it would have answered.
+// Validate gives the error a handler answers where it runs the checks.
 func TestHandlerRunsChecks(t *testing.T) {
-	if code, out := call(t, true, "Later", "{}"); code != 200 {
+	code, out := call(t, ServeValidated, handler{}, "Later", "{}")
+	if code != 400 {
 		t.Fatalf("got %d %v", code, out)
 	}
 
@@ -219,14 +251,67 @@ func Test_newModel_ValidationRefusesBadEntries(t *testing.T) {
 			validation{Checks: map[string]check{"Deep.V": checkMax}},
 			"Deep.V: no operation input reaches it",
 		},
-		{"an unknown handler operation", validation{
-			Checks:        map[string]check{doRequestID: checkRequired},
-			HandlerChecks: []string{"Nope"},
-		}, "HandlerChecks Nope: no such operation"},
-		{"a handler operation with nothing to check", validation{
-			Checks:        map[string]check{doRequestID: checkRequired},
-			HandlerChecks: []string{"Later"},
-		}, "HandlerChecks Later: its input has nothing to check"},
+		{
+			"the Go name of an input, where the model names DoRequest",
+			validation{Checks: map[string]check{"DoInput.Name": checkMax}},
+			"no structure DoInput in the model",
+		},
+		{
+			"a shape in another case",
+			validation{Checks: map[string]check{"item.Key": checkRequired}},
+			"no structure item in the model",
+		},
+		{
+			"a second key for a field, by its Go name",
+			validation{Checks: map[string]check{"DoRequest.Name": checkMax, "DoInput.Name": checkMin}},
+			"DoInput.Name: no structure DoInput in the model",
+		},
+		{
+			"a second key for a field, in another case",
+			validation{Checks: map[string]check{itemKey: checkRequired, "item.Key": checkRequired}},
+			"item.Key: no structure item in the model",
+		},
+		{
+			"a member in another case",
+			validation{Checks: map[string]check{"Item.key": checkRequired}},
+			"Item has no member key",
+		},
+		{
+			"a key with no member",
+			validation{Checks: map[string]check{"Item.": checkRequired}},
+			"Item has no member ",
+		},
+		{
+			"an output shape",
+			validation{Checks: map[string]check{"DoResponse.X": checkRequired}},
+			"DoResponse has no member X",
+		},
+		{
+			"no check at all",
+			validation{Checks: map[string]check{itemKey: 0}},
+			"at least one check",
+		},
+		{
+			"a trait bit the generator does not know",
+			validation{Checks: map[string]check{itemKey: checkRequired | 1<<6}},
+			"check bits 0b1000000 are not ones the generator knows",
+		},
+		{
+			"an enum override for no shape",
+			validation{
+				Checks: map[string]check{"DoRequest.Mode": checkEnum},
+				Enums:  map[string]enumText{"Nope": {Values: []string{"x"}}},
+			},
+			"Validation.Enums Nope: no such shape in the model",
+		},
+		{
+			"an enum override no listed check uses",
+			validation{
+				Checks: map[string]check{doRequestID: checkRequired},
+				Enums:  map[string]enumText{"Mode": {Values: []string{"x"}}},
+			},
+			"Validation.Enums Mode: no listed enum check uses it",
+		},
 	}
 
 	for _, tt := range tests {

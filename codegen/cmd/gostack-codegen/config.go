@@ -42,10 +42,11 @@ type serviceOptions struct {
 	// service treats as one, and that get MembersSet as well: DynamoDB's
 	// AttributeValue.
 	UnionShapes []string
-	// Validation makes ServeValidated check the model traits its Checks list,
-	// and answer every failure at once in AWS's "N validation errors
-	// detected" message, in place of the first missing member. A nil value
-	// keeps the missing-member check.
+	// Validation gives every operation input a Validate method that checks the
+	// model traits its Checks list and answers every failure at once in AWS's
+	// "N validation errors detected" message. The generated dispatch never
+	// calls it: the service's handler does, where LocalStack makes the check.
+	// A nil value keeps the first-missing-member check ServeValidated runs.
 	Validation *validation
 }
 
@@ -54,19 +55,17 @@ type serviceOptions struct {
 type validation struct {
 	// Code is the error code, ValidationException when empty.
 	Code string
-	// Checks lists, keyed by "Shape.Member" in the model's names, the traits
-	// of that member the generated checks enforce, each pinned by the
+	// Checks lists, keyed by "Shape.Member" in the model's own names, the
+	// traits of that member the generated checks enforce, each pinned by the
 	// snapshot its comment names. Every other trait goes unchecked: the model
 	// does not show that AWS enforces it, or how AWS answers, and LocalStack
-	// runs no general model validation. An entry the generator cannot check,
-	// or one no operation input reaches, fails generation.
+	// runs no general model validation. A key that is not a model shape and
+	// member, an unknown trait bit, an entry the generator cannot check, or
+	// one no operation input reaches, fails generation.
 	Checks map[string]check
-	// HandlerChecks names the operations whose handler runs the checks itself,
-	// by calling the input's Validate method at the point AWS checks them.
-	// ServeValidated does not run them first.
-	HandlerChecks []string
 	// Enums replaces, keyed by enum shape, the value list a failed enum check
-	// prints, where AWS prints another order or set than the model's.
+	// prints, where AWS prints another order or set than the model's. A key
+	// that is no shape, or that no listed enum check uses, fails generation.
 	Enums map[string]enumText
 }
 
@@ -79,6 +78,9 @@ const (
 	checkMin
 	checkMax
 	checkEnum
+
+	// checkAll is every trait the generator knows how to check.
+	checkAll = checkRequired | checkPattern | checkMin | checkMax | checkEnum
 )
 
 // enumText is the value list an enum check prints in place of the model's.
@@ -134,9 +136,6 @@ var serviceTable = map[string]serviceOptions{
 			// batch-fully_missing_data_type.
 			"MessageAttributeValue.DataType": checkRequired,
 		},
-		// test_set_platform_application_attributes_invalid_arn: AWS answers
-		// the ARN's form before the missing Attributes.
-		HandlerChecks: []string{"SetPlatformApplicationAttributes"},
 	}},
 	"kms": {Validation: &validation{Checks: map[string]check{
 		// test_kms.py::TestKMS::test_generate_random_invalid_number_of_bytes[0]

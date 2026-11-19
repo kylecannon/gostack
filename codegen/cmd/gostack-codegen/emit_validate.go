@@ -95,8 +95,8 @@ func (g *generator) emitInputValidate(p *printer) {
 
 	for _, in := range inputs {
 		p.f("// Validate returns the error for the listed constraints v breaks, or nil.")
-		p.f("// ServeValidated runs it before the handler, except for an operation whose")
-		p.f("// handler runs it itself.")
+		p.f("// The dispatch never calls it: the handler does, where LocalStack makes the")
+		p.f("// check, after its own earlier checks and any filtering of the input.")
 
 		if !in.validates {
 			p.f("func (*%s) Validate() error {", in.goName)
@@ -459,10 +459,25 @@ func (g *generator) markValidation() error {
 		return nil
 	}
 
+	enumsUsed := map[string]bool{}
+
 	for _, key := range sortedKeys(val.Checks) {
-		err := g.listCheck(key, val.Checks[key])
+		f, err := g.listCheck(key, val.Checks[key])
 		if err != nil {
 			return fmt.Errorf("Validation.Checks %s: %w", key, err)
+		}
+
+		if f.checks&checkEnum != 0 {
+			enumsUsed[f.pair.p.name] = true
+		}
+	}
+
+	for _, name := range sortedKeys(val.Enums) {
+		switch {
+		case g.p.Shapes[name] == nil:
+			return fmt.Errorf("Validation.Enums %s: no such shape in the model", name)
+		case !enumsUsed[name]:
+			return fmt.Errorf("Validation.Enums %s: no listed enum check uses it", name)
 		}
 	}
 
@@ -495,48 +510,50 @@ func (g *generator) markValidation() error {
 		}
 	}
 
-	for _, op := range val.HandlerChecks {
-		o, ok := g.ops[op]
-		if !ok {
-			return fmt.Errorf("Validation.HandlerChecks %s: no such operation", op)
-		}
-
-		if !o.input.validates {
-			return fmt.Errorf("Validation.HandlerChecks %s: its input has nothing to check", op)
-		}
-	}
-
 	return nil
 }
 
-// listCheck sets the checks of the member key names, "Shape.Member", after
-// it makes sure the member has every trait they enforce.
-func (g *generator) listCheck(key string, c check) error {
+// listCheck sets the checks of the member key names, "Shape.Member" in the
+// model's own names, after it makes sure the member has every trait they
+// enforce. A key is exact, never a Go name or a differently cased one, so two
+// keys never reach one field. It returns the member.
+func (g *generator) listCheck(key string, c check) (*field, error) {
 	shape, member, ok := strings.Cut(key, ".")
 	if !ok || c == 0 {
-		return errors.New("want a Shape.Member key and at least one check")
+		return nil, errors.New("want a Shape.Member key and at least one check")
+	}
+
+	if unknown := c &^ checkAll; unknown != 0 {
+		return nil, fmt.Errorf("check bits %#b are not ones the generator knows", unknown)
+	}
+
+	// Only a model shape name is a key: shapeName and goTypeName also accept
+	// a Go name, and a name in another case, for the same structure.
+	sh := g.p.Shapes[shape]
+	if sh == nil || sh.Type != spec.TypeStructure {
+		return nil, fmt.Errorf("no structure %s in the model", shape)
 	}
 
 	st := g.structs[g.goTypeName(shape)]
 	if st == nil {
-		return fmt.Errorf("no structure %s", shape)
+		return nil, fmt.Errorf("no operation uses the structure %s", shape)
 	}
 
 	i := slices.IndexFunc(st.fields, func(f *field) bool { return f.member == member })
 	if i < 0 {
-		return fmt.Errorf("%s has no member %s", shape, member)
+		return nil, fmt.Errorf("%s has no member %s", shape, member)
 	}
 
 	f := st.fields[i]
 
 	missing := traitsMissing(f, c)
 	if len(missing) > 0 {
-		return fmt.Errorf("the member has no %s to check", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("the member has no %s to check", strings.Join(missing, ", "))
 	}
 
 	f.checks = c
 
-	return nil
+	return f, nil
 }
 
 // traitsMissing names the checks in c the member f has no trait for.

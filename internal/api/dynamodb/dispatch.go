@@ -34,8 +34,9 @@ func Serve(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, false)
 }
 
-// ServeValidated is Serve for an endpoint that rejects a request with a required
-// member missing before it reaches h, as SQS's queue-URL paths do.
+// ServeValidated is Serve. The generated checks never reject a request on their
+// own for this service: h calls Validate on the input where LocalStack makes the
+// check, and a required member can reach h as nil.
 func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 	serve(h, w, rc, true)
 }
@@ -1143,11 +1144,6 @@ func writeEnableKinesisStreamingDestination(w http.ResponseWriter, rc *request.C
 
 func serveExecuteStatement(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readExecuteStatement(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
@@ -2240,11 +2236,6 @@ func writeUpdateItem(w http.ResponseWriter, rc *request.Context, out *UpdateItem
 
 func serveUpdateKinesisStreamingDestination(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	in, err := readUpdateKinesisStreamingDestination(rc)
-	if err == nil && validate {
-		if verr := in.Validate(); verr != nil {
-			err = asError(verr)
-		}
-	}
 	if err != nil {
 		writeError(w, rc, err)
 		return
