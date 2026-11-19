@@ -404,9 +404,11 @@ to `<svc>` and its dependents, not to every service. The selection tables in
 `secretsmanager` and `ssm`: their source and API paths follow from the service
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
 `ssm` calls `secretsmanager`, `dynamodb` and `dynamodbstreams` run together, and
-`s3` will call `sns` and `kms`), so no service branch edits a table. A
+`s3` will call `sns` and `kms`), so no service branch edits a table, not even
+for the first commit of a service that calls nothing yet (`DECLARED_AHEAD`
+lists the keys allowed to precede their calls). A
 service is selected for a gostack run only when `internal/service/<svc>/`
-exists: ledger rows alone (a LocalStack baseline) do not count, so an unserved
+holds a non-test `.go` file: ledger rows alone (a LocalStack baseline) do not count, so an unserved
 service is selected by nothing, as a dependent or otherwise. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
 `Preprocess` sees other services' requests, so a change to that service
 selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and

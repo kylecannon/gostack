@@ -146,14 +146,25 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     from the hooks `registrations()` sets, when a package outside
     `internal/service/<svc>/` imports `internal/api/<svc>/`, or when the
     `DEPENDS_ON` keys are not the services whose package imports
-    `internal/inproc` or another service's package. An entry for a service
-    that has a generated `internal/api/<svc>` and no `internal/service/<svc>`
-    yet is allowed, so the tables are seeded before a service is built; an
-    entry for a service with neither fails, as does a registered service,
-    service package or API package with no `TEST_DIRS` entry. Which service an
-    in-process call reaches, the `sts` entry and the `dynamodb` entry (rerun
-    with `dynamodbstreams`) are reviewed by hand.
-    `make test` runs it and needs `python3`.
+    `internal/inproc` or another service's package. Every such service must
+    be a key (a caller with no key is a missed selection). A key that is not a
+    caller only over-selects, so it passes when it is on `DECLARED_AHEAD` in
+    `parity/ledger.py` (`dynamodb`, `dynamodbstreams`, `sns`, `ssm`), and fails
+    otherwise; the first commit of a service, its API package imported and no
+    in-process call yet, needs no table edit, and a key stays on the list once
+    its service calls another. An entry for a service that has a generated
+    `internal/api/<svc>` and no `internal/service/<svc>` yet is allowed, so
+    the tables are seeded before a service is built; an entry for a service
+    with neither fails, as does a registered service, service package or API
+    package with no `TEST_DIRS` entry. Which service an in-process call
+    reaches and the `sts` entry are reviewed by hand. `Test_settingsFiles`
+    holds each `cmd/gostack/settings-<svc>.go` to one declaration, the
+    function `<svc>Settings`, used only on a line of `services.go` that names
+    the `<svc>` package. `make test` runs both and needs `python3`.
+  - `ledger.py check` fails when a ledger holds gostack results for a service
+    with no `internal/service/<svc>/` package, since selection no longer runs
+    its suite: remove the rows or bring the service back. A directory counts as
+    a package only when it holds a non-test `.go` file.
   - On a pull request, the gostack column the run observed for the selected
     services must equal the ledger committed in the merge ref, in either
     direction, or the job fails and names each nodeid. A change commits the

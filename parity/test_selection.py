@@ -568,6 +568,10 @@ class SettingsFileSelectionTest(unittest.TestCase):
         tables = json.loads(out.getvalue())
         self.assertEqual(tables["test_dirs"], sorted(ledger.TEST_DIRS))
         self.assertEqual({svc: tuple(deps) for svc, deps in tables["depends_on"].items()}, ledger.DEPENDS_ON)
+        # The one list of keys declared ahead of the code, which the Go test
+        # reads and which names only keys of DEPENDS_ON.
+        self.assertEqual(tuple(tables["declared_ahead"]), ledger.DECLARED_AHEAD)
+        self.assertLessEqual(set(ledger.DECLARED_AHEAD), set(ledger.DEPENDS_ON))
 
 
 class RealDiffSelectionTest(unittest.TestCase):
@@ -621,6 +625,16 @@ class RealDiffSelectionTest(unittest.TestCase):
     def test_a_change_under_a_service_without_routing_hooks_selects_only_it(self) -> None:
         self.write("internal/service/ssm/keys.go", "package ssm\n")
         self.assertEqual(self.selected(), "ssm")
+
+    def test_a_directory_with_no_non_test_go_file_is_no_service_yet(self) -> None:
+        # The Go test counts a package by its non-test files; so does the
+        # selection. A directory with a test file or a README is not served.
+        self.write("internal/service/sns/sns_test.go", "package sns\n")
+        self.write("internal/service/sns/README.md", "notes\n")
+        with mock.patch.object(ledger, "ROOT", self.repo):
+            self.assertNotIn("sns", ledger.service_dirs())
+            self.write("internal/service/sns/sns.go", "package sns\n")
+            self.assertIn("sns", ledger.service_dirs())
 
     def test_a_service_with_only_a_baseline_is_never_selected(self) -> None:
         # sns has ledger rows and no directory under internal/service/, and

@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -409,6 +410,12 @@ class CheckAgainstBaseTest(unittest.TestCase):
         self.exclusions.mkdir(parents=True)
         (self.exclusions / "sts.yaml").write_text(f'"{STS}::iam": depends-on:iam\n', encoding="utf-8")
         self.demotions = self.repo / "parity" / "demotions.yaml"
+        # check holds a service with gostack results to a package under
+        # internal/service/: its suite is run only while one exists.
+        for served in ("sqs", "sts"):
+            package = self.repo / "internal" / "service" / served
+            package.mkdir(parents=True)
+            (package / f"{served}.go").write_text(f"package {served}\n", encoding="utf-8")
         self.git("init", "-q", "-b", "main")
         self.rows = {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("fail", None, "x")}
 
@@ -465,6 +472,37 @@ class CheckAgainstBaseTest(unittest.TestCase):
         code, out = self.check(base)
         self.assertEqual(code, 1, out)
         self.assertIn(f"localstack: {sns}", out)
+
+    def test_a_service_deleted_while_its_gostack_results_stay_is_refused(self) -> None:
+        # Selection runs a suite only while internal/service/<svc>/ exists, so
+        # the committed passes of a deleted service would stop being run.
+        base = self.split_base()
+        shutil.rmtree(self.repo / "internal" / "service" / "sqs")
+        for target in (base, "HEAD"):
+            code, out = self.check(target)
+            self.assertEqual(code, 1, out)
+            self.assertIn("sqs: 1 gostack result(s) in the ledger and no internal/service/sqs/ package", out)
+            self.assertIn("remove the rows", out)
+            self.assertNotIn("sts: ", out)
+
+    def test_a_service_with_a_baseline_and_no_gostack_result_needs_no_package(self) -> None:
+        sns = "tests/aws/services/sns/test_sns.py::T::t"
+        excluded = "tests/aws/services/sns/test_sns.py::T::u"
+        self.rows[sns] = row("pass", None)
+        self.rows[excluded] = row("excluded", "excluded", "r")
+        base = self.split_base()
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+
+    def test_a_package_holding_only_a_test_file_is_not_a_service(self) -> None:
+        base = self.split_base()
+        package = self.repo / "internal" / "service" / "sqs"
+        for name in list(package.iterdir()):
+            name.unlink()
+        (package / "queue_test.go").write_text("package sqs\n", encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("no internal/service/sqs/ package", out)
 
     def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
         base = self.split_base()
@@ -899,7 +937,9 @@ class DocsTest(unittest.TestCase):
         self.assertIn("| sns | 2 | 0 | 0 | 2 | 0 | not run | n/a |", with_sns)
         total = {text: next(line for line in text.splitlines() if line.startswith("| **total**")) for text in (without, with_sns)}
         self.assertTrue(total[without].endswith("| 3 | 0 | 2 | 66.7% |"), total[without])
-        self.assertTrue(total[with_sns].endswith("| 5 | 0 | 2 | 66.7% |"), total[with_sns])
+        # The LocalStack pass column of the total counts sns's two passes; the
+        # share does not, so the total names what it is of.
+        self.assertTrue(total[with_sns].endswith("| 5 | 0 | 2 | 66.7% (2 of 3) |"), total[with_sns])
 
     def test_a_ledger_whose_docs_were_not_rewritten_is_caught(self) -> None:
         rows = ledger.load_ledger(ledger.LEDGER)
@@ -1069,7 +1109,7 @@ class MergeRefTest(unittest.TestCase):
 
     def test_a_service_file_main_added_after_the_fork_passes(self) -> None:
         def add_sns() -> None:
-            ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", "pass")})
+            ledger.write_ledger(self.dir, {**ledger.load_ledger(self.dir), "tests/aws/services/sns/test_sns.py::T::t": row("pass", None)})
 
         self.on_main(add_sns)
         self.merge_ref()

@@ -225,9 +225,7 @@ PARITY_WORKFLOW = ".github/workflows/parity.yml"
 # rows in the ledger do not count, so a service with only a LocalStack baseline
 # is never run against gostack.
 # The seeded entries are for the services built next, so the branch that builds
-# one edits no table. Test_parityTables accepts an entry whose service has a
-# generated internal/api/<svc> package and no internal/service/<svc> yet, and
-# checks it as it checks the rest once the service exists.
+# one edits no table.
 # - s3 delivers event notifications to sqs in this process, and will call sns
 #   and kms.
 # - sns publishes to sqs in this process.
@@ -239,11 +237,24 @@ PARITY_WORKFLOW = ".github/workflows/parity.yml"
 #   sts.get_caller_identity in every service's test session, so a change to
 #   sts can break any service's tests.
 # Test_parityTables in cmd/gostack checks the keys other than EVERY_SERVICE
-# against the code: they are the services whose package imports
-# internal/inproc or another service's package, and each lists every service
-# whose package it imports. Which service an inproc call reaches, and the
-# EVERY_SERVICE entry, are not in the imports; they stay reviewed by hand.
+# against the code: every service whose package imports internal/inproc or
+# another service's package is a key, and lists every service whose package it
+# imports. Which service an inproc call reaches, and the EVERY_SERVICE entry,
+# are not in the imports; they stay reviewed by hand.
 EVERY_SERVICE = "*"
+# The keys that are not callers yet, declared ahead of the code. A key with no
+# call in its package selects its service when a dependency changes, which can
+# only run a suite that did not need to run, where a caller with no key skips a
+# suite its change broke. So Test_parityTables holds "every caller is a key"
+# strictly and lets a key that is not a caller stand only when it is listed
+# here: the first commit of a service (its API package imported, no in-process
+# call written yet) then passes without an edit to a table.
+# - sns, ssm: the services that will call sqs and secretsmanager.
+# - dynamodb, dynamodbstreams: a pair that depends on each other through the
+#   state they share, which is in no import.
+# A key stays listed after its service becomes a real caller; its dependencies
+# are still held to the services that exist.
+DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "sns", "ssm")
 DEPENDS_ON = {
     "dynamodb": ("dynamodbstreams",),
     "dynamodbstreams": ("dynamodb",),
@@ -653,6 +664,22 @@ def stale_demotions(current: dict[str, dict], demotions: dict[str, str], where: 
     return stale
 
 
+def unserved_results(rows: dict[str, dict], served: set[str]) -> list[str]:
+    """A service with gostack results and no internal/service/<svc>/ package.
+    Selection runs a service's suite only while that package exists, so its
+    committed passes would stop being run and still be believed. A service with
+    only a LocalStack baseline (no gostack result) is not one."""
+    ran: Counter = Counter()
+    for nodeid, entry in rows.items():
+        if entry["gostack"] not in (None, "excluded") and (service := service_of(nodeid)) not in served:
+            ran[service] += 1
+    return [
+        f"  {service}: {count} gostack result(s) in the ledger and no internal/service/{service}/ package, "
+        f"so its suite is no longer run; remove the rows (parity/ledger/{service}.json) or bring the service back"
+        for service, count in sorted(ran.items())
+    ]
+
+
 def compare_rows(base: dict[str, dict], current: dict[str, dict], demotions: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
     """(regressions, warnings, demoted) between the base and the working tree.
     gostack: pass to anything else is a regression unless demotions lists it.
@@ -682,12 +709,12 @@ def check(args: argparse.Namespace) -> None:
     exclusions = load_exclusions(args.exclusions)
     demotions = load_demotions(args.demotions)
     demotions_name = args.demotions.name
-    stale_entries = stale_demotions(current, demotions, demotions_name)
+    stale_entries = stale_demotions(current, demotions, demotions_name) + unserved_results(current, service_dirs())
     commit = resolve_base(args.base)
     committed = committed_ledger(commit, args.ledger) if commit is not None else None
     if committed is None:
         if stale_entries:
-            print("parity-check: stale demotion(s):\n" + "\n".join(stale_entries), file=sys.stderr)
+            print("parity-check: problem(s) in the ledger:\n" + "\n".join(stale_entries), file=sys.stderr)
             raise SystemExit(1)
         where = f"at {args.base}" if commit is not None else f"before the first commit ({args.base})"
         print(
@@ -1121,10 +1148,18 @@ def registration_diff(revisions: str) -> str | None:
 
 
 def service_dirs() -> set[str]:
-    """The services with a directory under internal/service/ in the working
-    tree: the names a registration line can register."""
+    """The services with a Go package under internal/service/ in the working
+    tree: the names a registration line can register. A directory counts only
+    when it holds a non-test .go file, as the Go test counts a package: one
+    holding only a test or a README is no service yet."""
     root = ROOT / SERVICE_DIR
-    return {p.name for p in root.iterdir() if p.is_dir() and p.name in TEST_DIRS} if root.is_dir() else set()
+    if not root.is_dir():
+        return set()
+    return {p.name for p in root.iterdir() if p.is_dir() and p.name in TEST_DIRS and holds_go_package(p)}
+
+
+def holds_go_package(directory: Path) -> bool:
+    return any(f.is_file() and f.suffix == ".go" and not f.name.endswith(GO_TEST_SUFFIX) for f in directory.iterdir())
 
 
 def parity_file_service(path: str) -> str | None:
@@ -1279,6 +1314,7 @@ def tables(args: argparse.Namespace) -> None:
     print(
         json.dumps(
             {
+                "declared_ahead": list(DECLARED_AHEAD),
                 "depends_on": {service: list(dependencies) for service, dependencies in DEPENDS_ON.items()},
                 "every_service": EVERY_SERVICE,
                 "routing_reach": list(ROUTING_REACH),
@@ -1318,7 +1354,7 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         counts["ls_pass_run"] = counts["ls_pass"] if counts["gs_run"] else 0
         totals.update(counts)
         rows.append(format_row(service, counts))
-    rows.append(format_row("**total**", totals))
+    rows.append(format_row("**total**", totals, show_share_of=True))
 
     path.write_text(
         "# Parity\n\n"
@@ -1331,11 +1367,15 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
     )
 
 
-def format_row(label: str, c: Counter) -> str:
+def format_row(label: str, c: Counter, show_share_of: bool = False) -> str:
     if c["gs_run"] == 0:
         parity = "n/a"
     else:
         parity = f"{100 * c['both'] / c['ls_pass_run']:.1f}%" if c["ls_pass_run"] else "n/a"
+        # The LocalStack pass column of the total counts the passes of services
+        # gostack did not run; the share does not, so say what it is of.
+        if show_share_of and c["ls_pass_run"] and c["ls_pass_run"] != c["ls_pass"]:
+            parity += f" ({c['both']} of {c['ls_pass_run']})"
     gostack = str(c["gs_pass"]) if c["gs_run"] else "not run"
     return (
         f"| {label} | {c['tests']} | {c['excluded']} | {c['skipped']} | {c['ls_pass']} "
