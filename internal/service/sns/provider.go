@@ -81,6 +81,7 @@ const (
 func (p *Provider) Registration() service.Registration {
 	return service.Registration{
 		Metadata: api.Metadata,
+		Handler:  p,
 		Serve:    p.serve,
 		Mutating: mutating,
 		Reset:    p.Reset,
