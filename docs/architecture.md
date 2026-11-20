@@ -563,9 +563,11 @@ queue.
   once, as dropped, and logs the per-destination counts and then one line,
   `SNS deliveries dropped`, with `count`, every delivery SNS lost since the
   process started, and `cut_at_close`, the ones Close cut. The hub's
-  `in-process calls cut at shutdown` line counts calls, not deliveries: a
-  lane has one call in the client however many deliveries wait behind it, so
-  the hub's count is the smaller. A slow destination at shutdown is where the
+  `in-process calls cut at shutdown` line counts calls, not deliveries, and
+  the two counts measure different things: a lane has one call in the client
+  however many deliveries wait behind it, and after the cut every refused
+  call counts in the hub's line, a dead-letter attempt included. Either count
+  can be the larger. A slow destination at shutdown is where the
   missing bound shows: what it had not taken by the drain's deadline is cut.
 - **Other transports.** A lane meets its transport in one function,
   `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
