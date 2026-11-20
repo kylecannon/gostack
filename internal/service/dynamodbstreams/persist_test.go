@@ -225,10 +225,26 @@ func Test_persist_streamsOff(t *testing.T) {
 
 	require.Empty(t, after.records(t, after.iterator(t, arn, shard, "TRIM_HORIZON"), 0).Records)
 
+	// The shard's window is empty at its saved next number, so LATEST reads
+	// nothing rather than slicing past records it does not hold (SQ-348).
+	latest := after.iterator(t, arn, shard, "LATEST")
+	require.Empty(t, after.records(t, latest, 0).Records)
+
 	after.ddbOK(t, "PutItem", `{"TableName":"ptab","Item":{"pk":{"S":"new"},"sk":{"N":"1"}}}`)
+	require.Len(t, after.records(t, latest, 0).Records, 1, "LATEST from before the write reads it")
 	got := after.records(t, after.iterator(t, arn, shard, "TRIM_HORIZON"), 0).Records
 	require.Len(t, got, 1)
 	require.True(t, strings.HasSuffix(got[0].Dynamodb.SequenceNumber, "15"), got[0].Dynamodb.SequenceNumber)
+}
+
+// Test_persist_followsDynamoDB checks DynamoDB Streams declares that it
+// follows DynamoDB, which is what makes the engine load it after DynamoDB and
+// save it right after DynamoDB.
+func Test_persist_followsDynamoDB(t *testing.T) {
+	ddb := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)
+	follower, ok := dynamodbstreams.New(ddb).Registration().Persist.(persist.Follower)
+	require.True(t, ok)
+	require.Equal(t, ddb.Registration().Metadata.Name, follower.Follows())
 }
 
 // Test_persist_dynamodbEnablesStreams checks PERSIST_DYNAMODB=1 alone persists

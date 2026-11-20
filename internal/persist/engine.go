@@ -304,6 +304,11 @@ func (e *Engine) Flush(ctx context.Context) error {
 // returns an [ErrUnsafe] error naming it. Otherwise it returns an error only
 // when ctx ends.
 //
+// Services load in name order, except that a [Follower] loads right after the
+// service it follows: dynamodbstreams after dynamodb, whose restored tables
+// its records go back into. A follower whose service failed to load still
+// loads, and finds no table to take its records.
+//
 // Load runs while no flush does, so a flush never sees a service half restored.
 func (e *Engine) Load(ctx context.Context) error {
 	if e.dir == "" {
@@ -339,7 +344,11 @@ func (e *Engine) Load(ctx context.Context) error {
 
 	e.mu.Unlock()
 
-	for _, name := range slices.Sorted(maps.Keys(safe)) {
+	names := afterLeaders(slices.Sorted(maps.Keys(safe)), func(name string) (string, string) {
+		return name, follows(safe[name].snap)
+	})
+
+	for _, name := range names {
 		err = ctx.Err()
 		if err != nil {
 			return fmt.Errorf("load: %w", err)
@@ -830,6 +839,12 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 //     flush of a process with no state to load is in name order;
 //   - name.
 //
+// A [Follower] then moves to right after the service it follows when both are
+// pending, a declared order rather than a name sort: dynamodbstreams is saved
+// straight after dynamodb, so the streams file is never older than the table
+// file whose shards it fills, and a kill between the two loses at most the
+// records written between them.
+//
 // A service whose assets have failed or been released sorts with the pending
 // ones; its save fails in firstPass, which reports why.
 func saveOrder(pending []pendingService) []pendingService {
@@ -840,7 +855,7 @@ func saveOrder(pending []pendingService) []pendingService {
 		due[p.name] = d || err != nil
 	}
 
-	return slices.SortedStableFunc(slices.Values(pending), func(a, b pendingService) int {
+	sorted := slices.SortedStableFunc(slices.Values(pending), func(a, b pendingService) int {
 		if due[a.name] != due[b.name] {
 			if due[b.name] {
 				return -1
@@ -851,6 +866,8 @@ func saveOrder(pending []pendingService) []pendingService {
 
 		return cmp.Or(cmp.Compare(a.took, b.took), strings.Compare(a.name, b.name))
 	})
+
+	return afterLeaders(sorted, func(p pendingService) (string, string) { return p.name, follows(p.snap) })
 }
 
 // flushRun is what the saves of one flush failed with.

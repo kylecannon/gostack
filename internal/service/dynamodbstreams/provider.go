@@ -21,6 +21,7 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodbstreams"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/request"
@@ -83,6 +84,18 @@ func (s snapshotter) Snapshot(w io.Writer) error {
 func (s snapshotter) Restore(r io.Reader) error {
 	return s.streams.RestoreStreams(r) //nolint:wrapcheck // the error names the snapshot
 }
+
+// Follows implements persist.Follower: the records go back into the shards of
+// DynamoDB's restored tables, so DynamoDB loads first, and a flush saves the
+// records right after DynamoDB's file so they are never the older of the two.
+func (snapshotter) Follows() string {
+	return dynamoDBService
+}
+
+// dynamoDBService is the name DynamoDB's state is saved under.
+const dynamoDBService = "dynamodb"
+
+var _ persist.Follower = snapshotter{}
 
 // ListStreams lists the caller's streams, oldest first, as LocalStack lists
 // them, with disabled ones still in the list. Limit and

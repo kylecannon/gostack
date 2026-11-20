@@ -1486,7 +1486,10 @@ Kinesis. The state is two files, LocalStack's split:
   billing and throughput, stream specification and label, time to live,
   deletion protection, point-in-time recovery, Kinesis destinations); its
   latest stream shard's identity and bounds; and every item. Secondary
-  indexes are not stored: Restore rebuilds them from the items. Numbers are
+  indexes are not stored: Restore rebuilds them from the items. An item whose
+  attribute does not fit an index's key (another type, or an empty string or
+  binary) is in the table and not in that index, as UpdateTable's backfill
+  left it, so Restore takes every state the API can leave. Numbers are
   written in their canonical form, so they read back unchanged.
 - `<base>/dynamodbstreams/store.{json,bin}` holds the records of each latest
   shard still inside the 24-hour retention, with their sequence numbers. A
@@ -1495,8 +1498,17 @@ Kinesis. The state is two files, LocalStack's split:
   table's next sequence number, so a kill between the renames of the two files
   never reads across a gap. A position or an iterator issued before a restart
   reads the same records after it, within the iterator's 15 minutes.
-  `PERSIST_DYNAMODBSTREAMS=0` restores the shards empty, their numbering
-  going on from where it was.
+  A shard that takes no records back (`PERSIST_DYNAMODBSTREAMS=0`, or a
+  streams file that is older, refused or moved aside) restores with an empty
+  window at its saved next number: `LATEST` and `TRIM_HORIZON` read from the
+  next record written, and an iterator for an older sequence number answers
+  `TrimmedDataAccessException`.
+- Load order: dynamodb loads before dynamodbstreams, whose Restore puts the
+  records back into the shards of the tables dynamodb restored. The engine
+  takes the order from a declaration, `persist.Follower`, which the
+  dynamodbstreams snapshotter implements, not from the names. A flush that
+  saves both saves dynamodbstreams right after dynamodb, whatever their last
+  durations, so the streams file is not the older of the two.
 - ClientRequestToken windows are not saved. DynamoDB Local keeps them in
   memory, so LocalStack loses them on a restart too.
 - State that changes outside a mutating operation marks the service dirty
@@ -1505,11 +1517,17 @@ Kinesis. The state is two files, LocalStack's split:
   LocalStack path `/_aws/dynamodb/expired`) marks dynamodb. After
   a load the sweep timer is armed only when `DYNAMODB_REMOVE_EXPIRED_ITEMS`
   is set and a table has time to live on.
-- Snapshot holds a table's locks only to encode its definition and copy one
-  reference per item with its partition's key (stored items are immutable).
-  Sorting new partitions and encoding the items happen after the locks are
-  released, with a hand-written item codec rather than json v2's reflection.
-  The bound is about 56 ms of lock per 1,000,000 items (Apple M1 Max).
+- Snapshot takes one consistent cut of the service: every table's lock at
+  once, in the global order TransactWriteItems takes them, held only to
+  encode the definitions and copy one reference per item with its
+  partition's key (stored items are immutable). A save therefore never holds
+  a transaction applied in one table and not in another. Sorting new
+  partitions and encoding the items happen after the locks are released,
+  with a hand-written item codec rather than json v2's reflection. Writers to
+  every table wait for the copy of all tables: `BenchmarkSnapshotCut` at
+  1,000,000 items across four tables measures 125 to 158 ms (Apple M1 Max at
+  load average 249; one table of 1,000,000 items measured about 56 ms on the
+  same machine unloaded).
   Snapshot and restore of one table of 1,000,000 items of about 100 bytes
   (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
   `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
