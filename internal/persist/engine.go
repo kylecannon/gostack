@@ -59,9 +59,11 @@ type Engine struct {
 	mu       sync.Mutex
 	services map[string]*tracked
 	// timer is the armed flush timer, from MarkDirty or the end of a flush, and
-	// timerAt is when it fires.
-	timer   *time.Timer
-	timerAt time.Time
+	// timerAt is when it fires, and backedOff is true when that is later than
+	// PERSIST_FREQUENCY after it was armed, for a service's backoff.
+	timer     *time.Timer
+	timerAt   time.Time
+	backedOff bool
 	// gen identifies the armed timer, so a callback that lost a race with disarm
 	// knows it is stale.
 	gen uint64
@@ -550,6 +552,12 @@ func (e *Engine) scheduleLocked() {
 		return
 	}
 
+	// A timer armed for PERSIST_FREQUENCY after its arming fires no later than
+	// any service's change could ask for, so MarkDirty's hot path stops here.
+	if e.timer != nil && !e.backedOff {
+		return
+	}
+
 	now := time.Now()
 	at := e.nextDueLocked(now)
 
@@ -570,6 +578,7 @@ func (e *Engine) scheduleLocked() {
 	e.gen++
 	gen := e.gen
 	e.timerAt = at
+	e.backedOff = at.After(now.Add(e.freq))
 	e.timer = time.AfterFunc(at.Sub(now), func() { e.flushOnTimer(gen) })
 }
 
