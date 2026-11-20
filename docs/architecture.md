@@ -1197,9 +1197,13 @@ cites the lines.
   same flush. It waits out its leader's backoff and is due no sooner than its
   leader, and its own backoff leaves the leader to be saved alone. A follower
   left unsaved because its leader was not saved is dirty again with no
-  failure counted.
+  failure counted. A follower whose leader is not persisted
+  (`PERSIST_DYNAMODB=0` with dynamodbstreams on) is registered without it and
+  is never saved, by timer or by hand, and `Flush` reports no error for it.
 - Of a service's run of failed saves the log shows the first in full, each one
-  whose error differs from the one before, every tenth with the count, and
+  whose root cause differs from the one before's (the error text holds a temp
+  file's random name, so the text alone would differ at every retry), every
+  tenth with the count, and
   `save recovered after N failures` when a save succeeds, each line with the
   service's name.
 
@@ -1222,6 +1226,15 @@ cites the lines.
   that service: it starts empty, as an unsafe service does, so it never runs a
   state the engine will not save, and its assets are neither swept nor used (S3
   keeps its bodies in memory).
+- A base directory that exists and cannot be opened (`EACCES`, `EIO`, a stale
+  mount) turns saving and loading off for every registered service until the
+  process restarts, with one logged error: the services start empty, and the
+  first save after the fault clears would replace the state files nobody read.
+  A missing base directory is a fresh start.
+- A `Snapshot` that panics is a failed save of its own service: the panic is
+  logged with its stack, the service stays dirty and backs off like any failure,
+  and the other services in the flush still save. A `Flush` by hand returns the
+  failure rather than panicking.
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -1239,8 +1252,9 @@ outside the base directory.
   nor saved, as above. The link and whatever it points at are left alone.
 - A temp file is created with `O_EXCL` under a random name, so a file or link
   planted under a temp name is never opened. Leftover temp files, from a crash
-  or planted, are deleted after the next save; a link among them is removed as a
-  link.
+  or planted, are deleted after the next save, and by Load, which removes the
+  temp files of each service's state files in every format; a link among them is
+  removed as a link.
 - A link whose target fails to load is the one moved aside; its target is
   untouched.
 
@@ -1358,6 +1372,10 @@ is untouched.
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last
   `Snapshot` in this process took less time goes first, then name order. A
+  follower and its leader (see load order) are one unit that goes by the larger
+  of their two times, with the leader first and the follower right after it, so
+  a slow dynamodbstreams does not run before faster services whatever dynamodb's
+  own time. A
   service a `Load` restored has the time its `Restore` took as that figure
   until its next `Snapshot`, so a large S3 goes last from a restart's first
   flush; a service neither restored nor snapshotted counts as zero, so with no
@@ -1609,8 +1627,9 @@ Kinesis. The state is two files, LocalStack's split:
   records back into the shards of the tables dynamodb restored. The engine
   takes the order from a declaration, `persist.Follower`, which the
   dynamodbstreams snapshotter implements, not from the names. A flush saves
-  dynamodbstreams only right after it renamed dynamodb's file, whatever their
-  last durations and whether or not a stream record marked it, so the
+  dynamodbstreams only right after it renamed dynamodb's file, whether or not
+  a stream record marked it, and puts the pair among the other services by
+  the larger of their last durations, so the
   streams file is of the cut the table file holds and never of a later one.
   A kill between the table file's commit and the streams file's commit
   restores the table with fewer stream records: each shard written since the
