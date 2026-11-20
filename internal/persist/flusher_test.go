@@ -337,8 +337,8 @@ func Test_Engine_FailedFlushBackoffIsNotSlidByAnotherServicesSave(t *testing.T) 
 				synctest.Wait()
 				require.Len(t, bad.times(), 3)
 
-				// sns is saved PERSIST_FREQUENCY after its change, before 70 s or
-				// just after, and sqs is still tried at 70 s.
+				// sns is saved PERSIST_FREQUENCY after its change, before 70 s,
+				// and sqs is still tried at 70 s.
 				e.MarkDirty(sns)
 				time.Sleep(100*sec - mark)
 				synctest.Wait()
@@ -347,6 +347,55 @@ func Test_Engine_FailedFlushBackoffIsNotSlidByAnotherServicesSave(t *testing.T) 
 				assert.Equal(t, mark+10*sec, good.times()[0].Sub(began))
 				require.GreaterOrEqual(t, len(bad.times()), 4)
 				assert.Equal(t, 70*sec, bad.times()[3].Sub(began), "sqs is tried at its own time")
+
+				_ = e.Close(t.Context())
+			})
+		})
+	}
+}
+
+// A timed save of another service that is under way when a backed-off service's
+// retry comes due does not move the retry either: the service is tried at 70 s,
+// or the instant the save ends if that is later, not PERSIST_FREQUENCY after.
+func Test_Engine_FailedFlushRetryDueDuringAnotherServicesSave(t *testing.T) {
+	sec := time.Second
+	ms := time.Millisecond
+
+	// sns changes at mark, is saved from mark+10 s, and the save takes took.
+	for _, c := range []struct{ mark, took time.Duration }{
+		{55 * sec, 5 * sec},    // 65 to 70 s: ends as the retry comes due
+		{55 * sec, 6 * sec},    // 65 to 71 s
+		{59900 * ms, 200 * ms}, // 69.9 to 70.1 s
+		{59999 * ms, 2 * ms},   // 69.999 to 70.001 s
+	} {
+		t.Run("sns saves "+(c.mark+10*sec).String()+" for "+c.took.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := baseCfg(t.TempDir())
+				cfg.Frequency = 10 * sec
+
+				e := persist.New(cfg)
+				bad := &attempts{err: errSnapshot}
+				slow := &attempts{state: stateA, took: c.took}
+				e.Register(sqs, bad)
+				e.Register(sns, slow)
+
+				began := time.Now()
+
+				// sqs fails at 10 s, 20 s and 40 s. Its next retry is due at 70 s.
+				e.MarkDirty(sqs)
+				time.Sleep(c.mark)
+				synctest.Wait()
+				require.Len(t, bad.times(), 3)
+
+				e.MarkDirty(sns)
+				time.Sleep(100*sec - c.mark)
+				synctest.Wait()
+
+				require.Len(t, slow.times(), 1)
+				assert.Equal(t, c.mark+10*sec, slow.times()[0].Sub(began))
+				require.GreaterOrEqual(t, len(bad.times()), 4)
+				assert.Equal(t, max(70*sec, c.mark+10*sec+c.took), bad.times()[3].Sub(began),
+					"sqs is tried at its own time, or when the save under way ends")
 
 				_ = e.Close(t.Context())
 			})

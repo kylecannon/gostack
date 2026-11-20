@@ -1103,7 +1103,9 @@ cites the lines.
   `PERSIST_FREQUENCY` after their change has passed, and the timer is armed for
   the earliest of the dirty services' times, so a service that keeps failing
   widens another's loss window by no more than the rest of an attempt already
-  in flight: `PERSIST_FREQUENCY` plus that. A flush by
+  in flight: `PERSIST_FREQUENCY` plus that. A retry that comes due while
+  another save is under way, or while a load or flush by hand holds the timer
+  back, is tried when that ends. A flush by
   hand, which `Stop` and `Close` end with, tries every dirty service whatever
   its wait.
 - Of a service's run of failed saves the log shows the first in full, each one

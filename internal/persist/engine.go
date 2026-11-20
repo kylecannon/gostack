@@ -538,10 +538,11 @@ func (e *Engine) release() {
 
 // scheduleLocked arms the flush timer when a service is dirty that no flush has
 // taken, and no flush is armed, running or under way. The timer waits
-// PERSIST_FREQUENCY, and for a service whose save failed at least until its own
-// retryAt, so a failing disk is retried with a backoff even when
-// PERSIST_FREQUENCY asks for no wait. The timer fires for the earliest such
-// service: a change to one that is due sooner than the armed timer brings the
+// PERSIST_FREQUENCY from now, and for a service whose save failed until its own
+// retryAt instead, so a failing disk is retried with a backoff even when
+// PERSIST_FREQUENCY asks for no wait. That retryAt can come sooner than
+// PERSIST_FREQUENCY from now, and once it has passed the service is due now.
+// The timer fires for the earliest such service: a change to one that is due sooner than the armed timer brings the
 // timer forward, so a service in backoff never delays another. A change that is
 // due no sooner leaves the timer as it is. Nothing is armed while a Flush, Load,
 // Close or ResetAssets waits for sem: the callback would give way to it at once
@@ -552,8 +553,9 @@ func (e *Engine) scheduleLocked() {
 		return
 	}
 
-	// A timer armed for PERSIST_FREQUENCY after its arming fires no later than
-	// any service's change could ask for, so MarkDirty's hot path stops here.
+	// A timer armed for no later than PERSIST_FREQUENCY after its arming, which
+	// a retryAt sooner than that makes it, fires no later than any service's
+	// change could ask for, so MarkDirty's hot path stops here.
 	if e.timer != nil && !e.backedOff {
 		return
 	}
@@ -584,8 +586,9 @@ func (e *Engine) scheduleLocked() {
 
 // nextDueLocked is when the timer should fire: the earliest, over the dirty
 // services, of PERSIST_FREQUENCY from now or, for a service in its backoff, its
-// retryAt. A retryAt still ahead is the service's own time, which another
-// service's save does not move.
+// retryAt. A retryAt is the service's own time, which another service's save
+// does not move. Once it has passed, the service is due now: its timer ran past
+// it while another service's save was under way, or gave way to a waiter.
 func (e *Engine) nextDueLocked(now time.Time) time.Time {
 	var at time.Time
 
@@ -595,8 +598,8 @@ func (e *Engine) nextDueLocked(now time.Time) time.Time {
 		}
 
 		due := now.Add(e.freq)
-		if t.retryAt.After(now) {
-			due = t.retryAt
+		if !t.retryAt.IsZero() {
+			due = later(t.retryAt, now)
 		}
 
 		if at.IsZero() || due.Before(at) {
@@ -605,6 +608,15 @@ func (e *Engine) nextDueLocked(now time.Time) time.Time {
 	}
 
 	return at
+}
+
+// later is the later of two times.
+func later(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+
+	return b
 }
 
 // disarmLocked cancels the armed timer, if any.
