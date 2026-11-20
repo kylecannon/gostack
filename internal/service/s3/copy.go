@@ -116,13 +116,6 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
-	// The copy keeps no lock from its source: it takes the one the request names,
-	// or the bucket's default retention.
-	v.Lock, err = plan.dest.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
-	if err != nil {
-		return nil, err
-	}
-
 	source, body, err := p.openSource(plan, in)
 	if err != nil {
 		return nil, copySourceError(err)
@@ -131,6 +124,11 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	defer func() { _ = body.Close() }()
 
 	err = p.encryptTarget(ctx, v, in, plan.dest)
+	if err != nil {
+		return nil, err
+	}
+
+	err = lockAndACL(v, in, plan.dest)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +188,27 @@ func (p *Provider) encryptTarget(ctx context.Context, v *Version, in *s3api.Copy
 	return nil
 }
 
+// lockAndACL gives the copy v the Lock and ACL the request names, after its
+// encryption, as LocalStack's copy_object resolves them (lock parameters, then
+// the ACL): a bad ACL with another region's aws:kms key answers the key's
+// error, and a missing source answers NoSuchKey whatever the ACL says. The copy
+// keeps no lock or ACL from its source: it takes the lock the request names, or
+// the bucket's default retention, and the ACL the request names.
+func lockAndACL(v *Version, in *s3api.CopyObjectInput, dest *Bucket) error {
+	var err error
+
+	v.Lock, err = dest.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
+	if err != nil {
+		return err
+	}
+
+	v.ACL, err = newResourceACL(in.ACL, grantHeaders{
+		fullControl: in.GrantFullControl, read: in.GrantRead, readACP: in.GrantReadACP, writeACP: in.GrantWriteACP,
+	})
+
+	return err
+}
+
 // checkSource holds the source version to what a copy needs of it: not
 // archived, and its conditions met.
 func checkSource(in *s3api.CopyObjectInput, source *Version) error {
@@ -236,8 +255,8 @@ func changesObject(in *s3api.CopyObjectInput) bool {
 
 // newCopiedVersion returns the version a CopyObject makes with what the request
 // sets, before it takes what it inherits from the source. Directives other than
-// COPY and REPLACE are refused. Its encryption is left to CopyObject, which
-// resolves it once the source has been found.
+// COPY and REPLACE are refused. Its encryption, lock and ACL are left to
+// CopyObject, which resolves them once the source has been found.
 func newCopiedVersion(in *s3api.CopyObjectInput) (*Version, error) {
 	directive := deref(in.MetadataDirective)
 	if directive != "" && directive != directiveCopy && directive != directiveReplace {
@@ -275,14 +294,6 @@ func newCopiedVersion(in *s3api.CopyObjectInput) (*Version, error) {
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// A copy takes the ACL the request names, not the source's.
-	v.ACL, err = newResourceACL(in.ACL, grantHeaders{
-		fullControl: in.GrantFullControl, read: in.GrantRead, readACP: in.GrantReadACP, writeACP: in.GrantWriteACP,
-	})
-	if err != nil {
-		return nil, err
 	}
 
 	if v.StorageClass == "" {

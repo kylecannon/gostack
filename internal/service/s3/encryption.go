@@ -206,7 +206,9 @@ func resolveEncryption(req encryptionRequest, b *Bucket) (objectEncryption, erro
 			enc.algorithm = deref(rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm)
 		}
 
-		if enc.kmsKeyID == "" && rule.ApplyServerSideEncryptionByDefault != nil {
+		// Only aws:kms takes the rule's key, as in LocalStack: an aws:kms:dsse
+		// write keeps no key it did not send, so GetObject has none to check.
+		if enc.kmsKeyID == "" && enc.algorithm == ruleKMS && rule.ApplyServerSideEncryptionByDefault != nil {
 			enc.kmsKeyID = deref(rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID)
 		}
 	}

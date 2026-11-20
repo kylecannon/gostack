@@ -211,13 +211,14 @@ func (p *Provider) checkKMSKey(ctx context.Context, key string, b *Bucket) error
 		return kmsInternal(err.Error())
 	case !resp.OK():
 		code, message := kmsFailure(resp.Body)
-		if code == "" {
-			return kmsInternal("DescribeKey answered status " + strconv.Itoa(resp.Status) + " with no error type")
+		if code == "" || resp.Status >= http.StatusInternalServerError {
+			return kmsInternal("DescribeKey answered status " + strconv.Itoa(resp.Status) + " with " + kmsFailureText(code))
 		}
 
-		// A typed KMS error is KMS.<type> with 400, as AWS S3 prefixes KMS errors.
-		// LocalStack answers any error but NotFoundException with a 500
-		// InternalError (aws/handlers/service.py), which is not copied.
+		// A typed 4xx KMS error is KMS.<type> with 400, as AWS S3 prefixes KMS
+		// errors. LocalStack answers any error but NotFoundException with a 500
+		// InternalError (aws/handlers/service.py), which is copied for a 5xx, typed
+		// or not, and not for a refusal.
 		return kmsError(code, message)
 	}
 
@@ -306,6 +307,15 @@ func keyMetadataOf(body []byte) (keyMetadata, error) {
 	}
 
 	return out.KeyMetadata, nil
+}
+
+// kmsFailureText names the error type of a KMS answer for kmsInternal's detail.
+func kmsFailureText(code string) string {
+	if code == "" {
+		return "no error type"
+	}
+
+	return "error type " + code
 }
 
 // kmsFailure is the code and message of a KMS error answer: its __type, with
