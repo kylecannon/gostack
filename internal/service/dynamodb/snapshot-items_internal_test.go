@@ -78,6 +78,29 @@ func Test_itemCodec_sharedNames(t *testing.T) {
 	require.Len(t, p.names, 1)
 }
 
+// Test_itemCodec_escapedNames checks names whose raw forms are another's
+// decoded form stay apart across the items of one parser, in either order.
+func Test_itemCodec_escapedNames(t *testing.T) {
+	for _, items := range [][]string{
+		{`{"a\\\"b":{"S":"1"}}`, `{"a\"b":{"S":"2"}}`},
+		{`{"a\"b":{"S":"2"}}`, `{"a\\\"b":{"S":"1"}}`},
+		{`{"\"x\"":{"S":"1"}}`, `{"x":{"S":"2"}}`},
+		{`{"x":{"S":"2"}}`, `{"\"x\"":{"S":"1"}}`},
+	} {
+		p := newItemParser()
+
+		for _, text := range items {
+			got, err := p.parse(jsontext.Value(text))
+			require.NoError(t, err, text)
+
+			var want value.Item
+
+			require.NoError(t, json.Unmarshal([]byte(text), &want))
+			require.Equal(t, want, got, text)
+		}
+	}
+}
+
 // Test_itemCodec_deepest checks an item nested as deep as value.Validate
 // allows is written and read back.
 func Test_itemCodec_deepest(t *testing.T) {

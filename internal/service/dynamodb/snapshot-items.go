@@ -284,17 +284,27 @@ func (p *itemParser) object() (value.Item, error) {
 }
 
 // name reads an attribute name, shared with every earlier item that has it.
+// The names map is keyed by the decoded name only: a name without escapes is
+// looked up by its bytes between the quotes, which are the decoded name, and
+// one with escapes is decoded first.
 func (p *itemParser) name() (string, error) {
 	raw, err := p.quoted()
 	if err != nil {
 		return "", err
 	}
 
-	if s, ok := p.names[string(raw)]; ok {
-		return s, nil
+	inner := raw[1 : len(raw)-1]
+	if !slices.Contains(inner, '\\') && utf8.Valid(inner) {
+		if s, ok := p.names[string(inner)]; ok {
+			return s, nil
+		}
 	}
 
 	s := p.unquote(raw)
+	if shared, ok := p.names[s]; ok {
+		return shared, nil
+	}
+
 	if len(p.names) < maxInterned {
 		p.names[s] = s
 	}

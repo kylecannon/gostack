@@ -38,6 +38,10 @@ func FuzzRestore(f *testing.F) {
 	tables, _ := seedSnapshot(f)
 	f.Add(tables)
 	f.Add([]byte(fileWith(`{"meta":` + minimalMeta + `,"items":[{"id":{"S":"a"}}]}`)))
+	f.Add([]byte(fileWith(`{"meta":` + minimalMeta + `,"items":[{"id":{"S":"\"\\é"},` +
+		`"b":{"B":"AQ=="},"e":{"B":""},"l":{"L":[{"M":{}},{"NS":["1.50"]}]}}]}`)))
+	f.Add([]byte(fileWith(`{"meta":` + minimalMeta + `,"items":[{"id":{"S":"a"},"a\\\"b":{"S":"1"},"\"x\"":{"S":"1"}},` +
+		`{"id":{"S":"b"},"a\"b":{"S":"2"},"x":{"S":"2"}}]}`)))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)

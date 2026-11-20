@@ -10,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/gateway"
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,6 +172,93 @@ func Test_snapshot_restoreReplaces(t *testing.T) {
 
 	s.ok(t, opPut, `{"TableName":"tab","Item":{"id":{"S":"b"}}}`)
 	require.Contains(t, s.call(t, usEast1, "DescribeTable", `{"TableName":"tab"}`).body, `"ItemCount":2,`)
+}
+
+// Test_snapshot_deepestItem checks an attribute nested as deep as a put takes
+// (value.MaxDepth levels) is saved and restored as it was.
+func Test_snapshot_deepestItem(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("deep"))
+
+	levels := value.MaxDepth - 1
+	deep := strings.Repeat(`{"M":{"a":`, levels) + `{"S":"x"}` + strings.Repeat(`}}`, levels)
+	s.ok(t, opPut, `{"TableName":"deep","Item":{"id":{"S":"a"},"d":`+deep+`}}`)
+
+	restored := newStack(t)
+	require.NoError(t, restored.provider.Restore(bytes.NewReader(snapshotOf(t, s.provider))))
+	require.JSONEq(t, `{"Item":{"id":{"S":"a"},"d":`+deep+`}}`,
+		restored.call(t, usEast1, opGet, `{"TableName":"deep","Key":{"id":{"S":"a"}}}`).body)
+}
+
+// escapedNames are attribute names whose json forms differ only by escapes
+// and quotes: a\"b and a"b, "x" and x. A decoder that shares names between
+// items must tell each pair apart.
+var escapedNames = []string{`a\"b`, `a"b`, `"x"`, `x`}
+
+// Test_snapshot_escapedNames saves items whose attribute names are
+// escapedNames, one name to an item and all in one, through the persistence
+// engine in each format, and checks every name reads back as it was written.
+func Test_snapshot_escapedNames(t *testing.T) {
+	for _, format := range []persist.Format{persist.FormatJSON, persist.FormatBinary} {
+		t.Run(string(format), func(t *testing.T) {
+			dir := t.TempDir()
+			before, eng := formatStack(t, dir, format)
+			before.ok(t, opCreate, hashTable("names"))
+
+			all := value.Item{}
+			want := map[string]value.Item{}
+
+			for i, name := range escapedNames {
+				v := strconv.Itoa(i)
+				item := value.Item{"id": {S: &v}, name: {N: &v}}
+				all[name] = api.AttributeValue{S: &v}
+				want[v] = item
+			}
+
+			all["id"] = api.AttributeValue{S: new("all")}
+			want["all"] = all
+
+			for _, item := range want {
+				before.ok(t, opPut, `{"TableName":"names","Item":`+mustJSON(t, item)+`}`)
+			}
+
+			require.NoError(t, eng.Flush(t.Context()))
+
+			after, _ := formatStack(t, dir, format)
+
+			for id, item := range want {
+				got := after.call(t, usEast1, opGet, `{"TableName":"names","Key":{"id":{"S":"`+id+`"}}}`).body
+				require.JSONEq(t, `{"Item":`+mustJSON(t, item)+`}`, got, id)
+			}
+		})
+	}
+}
+
+// formatStack is newStack with DynamoDB persisted under dir in format.
+func formatStack(t *testing.T, dir string, format persist.Format) (*stack, *persist.Engine) {
+	t.Helper()
+
+	eng := persist.New(persist.Config{
+		PersistVarSet: true, BaseDir: dir, Formats: []persist.Format{format},
+		MountDetector: func(string) bool { return false },
+	})
+
+	s := &stack{}
+	s.settings.Store(&dynamodb.Settings{Host: testHost})
+	s.provider = dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() }, eng.MarkDirty)
+	reg := s.provider.Registration()
+	eng.Register(ddbName, reg.Persist)
+	require.NoError(t, eng.Load(t.Context()))
+
+	gw, err := gateway.New(
+		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAll}} },
+		[]service.Registration{reg}, nil, eng,
+	)
+	require.NoError(t, err)
+
+	s.handler = gw.Handler()
+
+	return s, eng
 }
 
 // Test_snapshot_deterministic checks one state gives one file, so a restored
