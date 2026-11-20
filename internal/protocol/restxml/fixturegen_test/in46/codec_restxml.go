@@ -45,7 +45,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.StringList = append(v.StringList, e1)
+				v.StringList = restxml.Append(d, v.StringList, e1)
 			}
 		case "stringSet":
 			if v.StringSet == nil {
@@ -59,7 +59,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.StringSet = append(v.StringSet, e1)
+				v.StringSet = restxml.Append(d, v.StringSet, e1)
 			}
 		case "integerList":
 			if v.IntegerList == nil {
@@ -73,7 +73,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.Int32(); x != nil {
 					e1 = *x
 				}
-				v.IntegerList = append(v.IntegerList, e1)
+				v.IntegerList = restxml.Append(d, v.IntegerList, e1)
 			}
 		case "booleanList":
 			if v.BooleanList == nil {
@@ -87,7 +87,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.Bool(); x != nil {
 					e1 = *x
 				}
-				v.BooleanList = append(v.BooleanList, e1)
+				v.BooleanList = restxml.Append(d, v.BooleanList, e1)
 			}
 		case "timestampList":
 			if v.TimestampList == nil {
@@ -99,7 +99,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 *protocol.Time
 				e1 = d.Time("")
-				v.TimestampList = append(v.TimestampList, e1)
+				v.TimestampList = restxml.Append(d, v.TimestampList, e1)
 			}
 		case "enumList":
 			if v.EnumList == nil {
@@ -113,7 +113,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.EnumList = append(v.EnumList, e1)
+				v.EnumList = restxml.Append(d, v.EnumList, e1)
 			}
 		case "intEnumList":
 			if v.IntEnumList == nil {
@@ -127,7 +127,7 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.Int32(); x != nil {
 					e1 = *x
 				}
-				v.IntEnumList = append(v.IntEnumList, e1)
+				v.IntEnumList = restxml.Append(d, v.IntEnumList, e1)
 			}
 		case "nestedStringList":
 			if v.NestedStringList == nil {
@@ -146,9 +146,9 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 					if x := d.String(); x != nil {
 						e2 = *x
 					}
-					e1 = append(e1, e2)
+					e1 = restxml.Append(d, e1, e2)
 				}
-				v.NestedStringList = append(v.NestedStringList, e1)
+				v.NestedStringList = restxml.Append(d, v.NestedStringList, e1)
 			}
 		case "renamed":
 			if v.RenamedListMembers == nil {
@@ -162,32 +162,32 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.RenamedListMembers = append(v.RenamedListMembers, e1)
+				v.RenamedListMembers = restxml.Append(d, v.RenamedListMembers, e1)
 			}
 		case "flattenedList", "item":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.FlattenedList = append(v.FlattenedList, e1)
+			v.FlattenedList = restxml.Append(d, v.FlattenedList, e1)
 		case "customName":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.FlattenedList2 = append(v.FlattenedList2, e1)
+			v.FlattenedList2 = restxml.Append(d, v.FlattenedList2, e1)
 		case "flattenedListWithMemberNamespace":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.FlattenedListWithMemberNamespace = append(v.FlattenedListWithMemberNamespace, e1)
+			v.FlattenedListWithMemberNamespace = restxml.Append(d, v.FlattenedListWithMemberNamespace, e1)
 		case "flattenedListWithNamespace":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.FlattenedListWithNamespace = append(v.FlattenedListWithNamespace, e1)
+			v.FlattenedListWithNamespace = restxml.Append(d, v.FlattenedListWithNamespace, e1)
 		case "myStructureList":
 			if v.StructureList == nil {
 				v.StructureList = []StructureListMember{}
@@ -198,12 +198,12 @@ func (v *XmlListsInput) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 StructureListMember
 				e1.decodeXML(d)
-				v.StructureList = append(v.StructureList, e1)
+				v.StructureList = restxml.Append(d, v.StructureList, e1)
 			}
 		case "flattenedStructureList":
 			var e1 StructureListMember
 			e1.decodeXML(d)
-			v.FlattenedStructureList = append(v.FlattenedStructureList, e1)
+			v.FlattenedStructureList = restxml.Append(d, v.FlattenedStructureList, e1)
 		default:
 			d.Skip()
 		}

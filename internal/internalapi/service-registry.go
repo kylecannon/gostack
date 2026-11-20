@@ -15,6 +15,9 @@ type ServiceCapability struct {
 	Name string
 	// Implemented lists the operations the service implements.
 	Implemented []string
+	// Unknown is set when which operations the service implements cannot be
+	// told. Implemented is then ignored and the API reports null.
+	Unknown bool
 	// Total is the number of operations in the service's API.
 	Total int
 }

@@ -4,6 +4,7 @@ package out40
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // XmlMaps returns awserr.NotImplemented.
 func (Unimplemented) XmlMaps(context.Context, *XmlMapsInput) (*XmlMapsOutput, error) {
 	return nil, awserr.NotImplemented("out40", "XmlMaps")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out40 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "XmlMaps":
+		return t.MethodByName("XmlMaps")
+	default:
+		return reflect.Method{}, false
+	}
 }

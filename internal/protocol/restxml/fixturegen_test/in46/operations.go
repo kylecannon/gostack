@@ -4,6 +4,7 @@ package in46
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // XmlLists returns awserr.NotImplemented.
 func (Unimplemented) XmlLists(context.Context, *XmlListsInput) (*XmlListsOutput, error) {
 	return nil, awserr.NotImplemented("in46", "XmlLists")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in46 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "XmlLists":
+		return t.MethodByName("XmlLists")
+	default:
+		return reflect.Method{}, false
+	}
 }

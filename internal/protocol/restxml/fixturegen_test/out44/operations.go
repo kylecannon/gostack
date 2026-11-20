@@ -4,6 +4,7 @@ package out44
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // XmlTimestamps returns awserr.NotImplemented.
 func (Unimplemented) XmlTimestamps(context.Context, *XmlTimestampsInput) (*XmlTimestampsOutput, error) {
 	return nil, awserr.NotImplemented("out44", "XmlTimestamps")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out44 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "XmlTimestamps":
+		return t.MethodByName("XmlTimestamps")
+	default:
+		return reflect.Method{}, false
+	}
 }

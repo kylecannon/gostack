@@ -4,6 +4,7 @@ package in36
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // PostUnionWithJsonName returns awserr.NotImplemented.
 func (Unimplemented) PostUnionWithJsonName(context.Context, *PostUnionWithJsonNameInput) (*PostUnionWithJsonNameOutput, error) {
 	return nil, awserr.NotImplemented("in36", "PostUnionWithJsonName")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in36 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "PostUnionWithJsonName":
+		return t.MethodByName("PostUnionWithJsonName")
+	default:
+		return reflect.Method{}, false
+	}
 }

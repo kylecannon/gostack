@@ -101,6 +101,16 @@ func (g *Gateway) Handler() http.Handler {
 	return g.handler
 }
 
+// InternalHandler returns the root router for the calls services make to each
+// other: every request it serves is internal (ServedAsInternal), so the gateway
+// serves it while it is stopping, until EndShutdown. Serve never puts it on a
+// listener.
+func (g *Gateway) InternalHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), internalKey{}, true)))
+	})
+}
+
 // BeginShutdown makes the gateway refuse every request except internal calls
 // and the developer paths, and then calls the Shutdown function of each
 // registration that has one, so that work holding a request open, such as an
@@ -223,7 +233,8 @@ func (g *Gateway) Listen(ctx context.Context) ([]net.Listener, error) {
 // Serve serves the listeners until ctx ends or one of them fails, then shuts
 // down: it refuses new work, waits for running requests until the time DrainBy
 // set (defaultDrainTimeout from now when it was never called), and closes what
-// is left. It returns nil after a shutdown that ctx asked for.
+// is left. The gateway still serves internal calls when Serve returns, until
+// EndShutdown. It returns nil after a shutdown that ctx asked for.
 //
 // Each listener takes HTTP/1.1, TLS (with h2) and cleartext HTTP/2 (h2c with
 // prior knowledge) on the same port. Serve uses the certificate that Listen
@@ -283,9 +294,18 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 	shutdownErr := g.shutdown(ctx, server)
 
 	serving.Wait()
-	g.phase.Store(phaseStopped)
 
 	return errors.Join(serveErr, shutdownErr)
+}
+
+// EndShutdown makes the gateway refuse every request, internal calls and the
+// developer paths included, so that a call made while the services close never
+// reaches a closed service. Serve leaves the gateway stopping, still serving
+// internal calls, so that the caller can drain the calls the services queued
+// for each other after the requests from outside have drained (the listeners
+// are closed by then); the caller ends the shutdown with this.
+func (g *Gateway) EndShutdown() {
+	g.phase.Store(phaseStopped)
 }
 
 func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {

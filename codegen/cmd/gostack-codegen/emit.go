@@ -43,6 +43,7 @@ var importPaths = map[string]string{
 	"protocol":   "github.com/kylecannon/gostack/internal/protocol",
 	"query":      "github.com/kylecannon/gostack/internal/protocol/query",
 	"request":    "github.com/kylecannon/gostack/internal/request",
+	"reflect":    "reflect",
 	"rest":       "github.com/kylecannon/gostack/internal/protocol/rest",
 	"restxml":    "github.com/kylecannon/gostack/internal/protocol/restxml",
 	"service":    "github.com/kylecannon/gostack/internal/service",

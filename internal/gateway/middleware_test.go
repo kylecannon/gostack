@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -180,7 +181,7 @@ func Test_Gateway_internalMarking(t *testing.T) {
 
 	g := newGateway(t, newSettings(), []service.Registration{
 		sqsRegistration(func(w http.ResponseWriter, rc *request.Context) {
-			internal = gateway.IsInternal(rc.Request.Context())
+			internal = gateway.ServedAsInternal(rc.Request.Context())
 
 			_, _ = io.WriteString(w, "ok")
 		}),
@@ -393,6 +394,118 @@ func Test_Gateway_panicOutsideAService(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "FAIL_FAST applies to service errors only")
 	assert.JSONEq(t, `{"error":"Unexpected exception","message":"kaboom","type":"string"}`, body)
 	assert.Equal(t, []string{valueTrue}, rawHeader(resp.Header, "x-localstack"))
+}
+
+// Test_Gateway_panicLog checks that every panic is logged once, at error, with
+// the service and the operation when the gateway knows them, and that a
+// handler aborting with http.ErrAbortHandler is logged the same way.
+func Test_Gateway_panicLog(t *testing.T) {
+	const (
+		message = "panic while serving request"
+		boom    = "boom"
+	)
+
+	// attrs are the attributes of a panic's record, but its stack. A service or
+	// an operation the gateway does not know is left out.
+	attrs := func(method, path, svc, operation, panicked string) map[string]string {
+		want := map[string]string{"method": method, "path": path, "panic": panicked}
+
+		if svc != "" {
+			want["service"] = svc
+		}
+
+		if operation != "" {
+			want["operation"] = operation
+		}
+
+		return want
+	}
+
+	withTarget := func(target string) func(*testing.T) *http.Request {
+		return func(t *testing.T) *http.Request {
+			t.Helper()
+
+			r := sendMessage(t)
+			r.Header.Set(headerTarget, target)
+
+			return r
+		}
+	}
+
+	tests := []struct {
+		name        string
+		giveRequest func(*testing.T) *http.Request
+		givePanic   any
+		wantAttrs   map[string]string
+	}{
+		{
+			name: "a panic in a named operation", giveRequest: withTarget(targetSendMessage), givePanic: boom,
+			wantAttrs: attrs(http.MethodPost, "/", nameSQS, opSendMessage, boom),
+		},
+		{
+			name: "a panic with no operation", giveRequest: withTarget(""), givePanic: boom,
+			wantAttrs: attrs(http.MethodPost, "/", nameSQS, "", boom),
+		},
+		{
+			name: "a handler that aborts with http.ErrAbortHandler", giveRequest: withTarget(targetSendMessage),
+			givePanic: http.ErrAbortHandler,
+			wantAttrs: attrs(http.MethodPost, "/", nameSQS, opSendMessage, http.ErrAbortHandler.Error()),
+		},
+		{
+			name: "a panic outside a service",
+			giveRequest: func(t *testing.T) *http.Request {
+				t.Helper()
+
+				return newRequest(t, http.MethodGet, "http://localhost:4566/_localstack/boom", "", nil)
+			},
+			givePanic: boom,
+			wantAttrs: attrs(http.MethodGet, "/_localstack/boom", "", "", boom),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &recordLog{}
+			previous := slog.Default()
+
+			slog.SetDefault(slog.New(log))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			g := newGateway(t, newSettings(),
+				[]service.Registration{sqsRegistration(func(http.ResponseWriter, *request.Context) { panic(tt.givePanic) })},
+				func(r chi.Router) {
+					r.Get("/_localstack/boom", func(http.ResponseWriter, *http.Request) { panic(tt.givePanic) })
+				})
+
+			serveAborting(g.Handler(), tt.giveRequest(t))
+
+			var logged []map[string]string
+
+			log.mu.Lock()
+			for _, record := range log.records {
+				if record.Message != message {
+					continue
+				}
+
+				assert.Equal(t, slog.LevelError, record.Level)
+
+				attrs := map[string]string{}
+
+				record.Attrs(func(attr slog.Attr) bool {
+					if attr.Key != "stack" {
+						attrs[attr.Key] = attr.Value.String()
+					}
+
+					return true
+				})
+
+				logged = append(logged, attrs)
+			}
+			log.mu.Unlock()
+
+			require.Equal(t, []map[string]string{tt.wantAttrs}, logged)
+		})
+	}
 }
 
 // A service that took the connection has sent its response by hand, so a panic

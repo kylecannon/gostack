@@ -31,7 +31,12 @@ const (
 // and hands the call to the service's Registration. A service that claimed the
 // request by its host at root step 3 has been found already.
 func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
-	form := &formReader{r: r}
+	// rc is made first so that parsing a form to route the call charges its
+	// decoding, to the request's protocol.Charge, which recoverPanic gives back
+	// when the call is over.
+	rc := &request.Context{Request: r}
+
+	form := &formReader{r: r, hold: rc}
 
 	var (
 		match route.Match
@@ -57,14 +62,13 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("Authorization", identity.Authorization)
 	}
 
-	rc := &request.Context{
-		Service:   match.Service,
-		Operation: route.Operation(r, match.Protocol, form.values),
-		Protocol:  match.Protocol,
-		AccountID: identity.AccountID,
-		Region:    identity.Region,
-		RequestID: newRequestID(),
-	}
+	rc.Service = match.Service
+	rc.Operation = route.Operation(r, match.Protocol, form.values)
+	rc.Protocol = match.Protocol
+	rc.AccountID = identity.AccountID
+	rc.Region = identity.Region
+	rc.RequestID = newRequestID()
+	rc.DecodeFactor = reg.DecodeFactor
 
 	if s := g.settings(); g.selfManagedCORS(r, s) {
 		rc.CORS = defaultCORS{rules: g.cors, checksDisabled: s.DisableCORSChecks}
@@ -100,9 +104,11 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 // it. One that answers a call with success and leaves rc.Operation empty while
 // it sets Mutating has a bug: its Mutating is never asked and the change is
 // never saved. That is logged once per service, persistence on or off.
-func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, rc *request.Context) {
+//
+// It reports whether it marked the service.
+func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, rc *request.Context) bool {
 	if sw, ok := w.(*statusWriter); ok && !sw.succeeded() {
-		return
+		return false
 	}
 
 	mutating := g.regs[index].Mutating
@@ -115,20 +121,31 @@ func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, r
 					"and persistence does not save the change", "service", rc.Service)
 		}
 
-		return
+		return false
 	}
 
-	if g.eng == nil {
-		return
+	return g.markChanged(index, rc)
+}
+
+// markChanged tells persistence the service changed, when rc names an operation
+// that changes state, whatever the call answered. It reports whether it did.
+func (g *Gateway) markChanged(index int, rc *request.Context) bool {
+	if g.eng == nil || rc.Operation == "" {
+		return false
 	}
 
+	mutating := g.regs[index].Mutating
 	if mutating == nil {
 		mutating = defaultMutating
 	}
 
-	if mutating(rc.Operation) {
-		g.eng.MarkDirty(rc.Service)
+	if !mutating(rc.Operation) {
+		return false
 	}
+
+	g.eng.MarkDirty(rc.Service)
+
+	return true
 }
 
 // defaultMutating is the persistence rule for a service that sets none: every
@@ -197,6 +214,7 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
 // is put back, so the service reads it whole.
 type formReader struct {
 	r    *http.Request
+	hold protocol.DecodeHolder
 	done bool
 	vals url.Values
 }
@@ -206,7 +224,7 @@ func (f *formReader) values() url.Values {
 		f.done = true
 		// A request that cannot be read whole still has the parameters that
 		// read cleanly. The service answers the failure when it reads the form.
-		f.vals, _ = query.RequestForm(f.r)
+		f.vals, _ = query.RequestFormHeld(f.r, f.hold)
 	}
 
 	return f.vals

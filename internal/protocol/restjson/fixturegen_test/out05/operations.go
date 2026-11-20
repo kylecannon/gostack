@@ -4,6 +4,7 @@ package out05
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // FractionalSeconds returns awserr.NotImplemented.
 func (Unimplemented) FractionalSeconds(context.Context, *FractionalSecondsInput) (*FractionalSecondsOutput, error) {
 	return nil, awserr.NotImplemented("out05", "FractionalSeconds")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out05 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "FractionalSeconds":
+		return t.MethodByName("FractionalSeconds")
+	default:
+		return reflect.Method{}, false
+	}
 }

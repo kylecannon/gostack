@@ -4,7 +4,6 @@ package in26
 
 import (
 	"errors"
-	"io"
 	"net/http"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -17,13 +16,14 @@ import (
 
 // Metadata describes the in26 service.
 var Metadata = service.Metadata{
-	Name:           "in26",
-	SigningName:    "in26",
-	TargetPrefix:   "",
-	EndpointPrefix: "in26",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestXML},
-	Operations:     Operations,
+	Name:            "in26",
+	SigningName:     "in26",
+	TargetPrefix:    "",
+	EndpointPrefix:  "in26",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestXML},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.
@@ -87,12 +87,12 @@ func serveNestedXmlMapWithXmlName(h Handler, w http.ResponseWriter, rc *request.
 
 func readNestedXmlMapWithXmlName(rc *request.Context) (*NestedXmlMapWithXmlNameInput, *awserr.Error) {
 	in := &NestedXmlMapWithXmlNameInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
 	if xd.Err() != nil {
-		return nil, errMalformedBody()
+		return nil, errXMLBody(xd.Err())
 	}
 	return in, nil
 }
@@ -142,9 +142,21 @@ func errMalformedBody() *awserr.Error {
 	}
 }
 
+// errXMLBody is the error for an xml request body that failed to decode:
+// throttled when the bodies in flight left it no room, malformed otherwise.
+func errXMLBody(err error) *awserr.Error {
+	if errors.Is(err, protocol.ErrBusy) {
+		return protocol.ThrottledQuery()
+	}
+	return errMalformedBody()
+}
+
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadRequest(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledQuery()
+	}
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}

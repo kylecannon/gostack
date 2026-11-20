@@ -18,13 +18,14 @@ import (
 
 // Metadata describes the out20 service.
 var Metadata = service.Metadata{
-	Name:           "out20",
-	SigningName:    "out20",
-	TargetPrefix:   "",
-	EndpointPrefix: "out20",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestXML},
-	Operations:     Operations,
+	Name:            "out20",
+	SigningName:     "out20",
+	TargetPrefix:    "",
+	EndpointPrefix:  "out20",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestXML},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.
@@ -140,9 +141,21 @@ func errMalformedBody() *awserr.Error {
 	}
 }
 
+// errXMLBody is the error for an xml request body that failed to decode:
+// throttled when the bodies in flight left it no room, malformed otherwise.
+func errXMLBody(err error) *awserr.Error {
+	if errors.Is(err, protocol.ErrBusy) {
+		return protocol.ThrottledQuery()
+	}
+	return errMalformedBody()
+}
+
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadRequest(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledQuery()
+	}
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}

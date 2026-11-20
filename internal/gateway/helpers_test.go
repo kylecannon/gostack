@@ -34,6 +34,7 @@ const (
 
 	targetSendMessage = "AmazonSQS.SendMessage"
 	opSendMessage     = "SendMessage"
+	opPurge           = "Purge"
 
 	contentJSON         = "application/json"
 	contentAmzJSON      = "application/x-amz-json-1.0"

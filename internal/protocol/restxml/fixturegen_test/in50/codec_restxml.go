@@ -28,7 +28,7 @@ func (v *XmlNamespaceNested) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.Values = append(v.Values, e1)
+				v.Values = restxml.Append(d, v.Values, e1)
 			}
 		default:
 			d.Skip()
@@ -45,7 +45,7 @@ func (v *XmlNamespacesInput) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "nested":
-			v.Nested = &XmlNamespaceNested{}
+			v.Nested = restxml.New[XmlNamespaceNested](d)
 			v.Nested.decodeXML(d)
 		default:
 			d.Skip()

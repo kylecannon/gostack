@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/protocol"
 )
@@ -28,8 +29,43 @@ var byteSuffixes = []struct {
 // count with a KiB, MiB or GiB suffix ("16MiB" and "16777216" are the same).
 // Zero means no limit. An empty value is the default.
 func parseMaxRequestBody(value string) (int64, error) {
+	return parseBytes("GOSTACK_MAX_REQUEST_BODY", value, DefaultMaxRequestBody)
+}
+
+// DefaultMaxInFlightBodies is GOSTACK_MAX_IN_FLIGHT_BODIES when it is not set:
+// what the request bodies being buffered at once may hold in all, in bytes.
+const DefaultMaxInFlightBodies = protocol.DefaultInFlight
+
+// parseMaxInFlightBodies reads GOSTACK_MAX_IN_FLIGHT_BODIES as
+// parseMaxRequestBody reads its variable. Zero means no bound.
+func parseMaxInFlightBodies(value string) (int64, error) {
+	return parseBytes("GOSTACK_MAX_IN_FLIGHT_BODIES", value, DefaultMaxInFlightBodies)
+}
+
+// DefaultRequestBodyIdleTimeout is GOSTACK_REQUEST_BODY_IDLE_TIMEOUT when it is
+// not set.
+const DefaultRequestBodyIdleTimeout = protocol.DefaultBodyIdle
+
+// parseRequestBodyIdleTimeout reads GOSTACK_REQUEST_BODY_IDLE_TIMEOUT: a whole
+// number of seconds, as SHUTDOWN_TIMEOUT is. Zero means no limit. An empty
+// value is the default.
+func parseRequestBodyIdleTimeout(value string) (time.Duration, error) {
 	if value == "" {
-		return DefaultMaxRequestBody, nil
+		return DefaultRequestBodyIdleTimeout, nil
+	}
+
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 || seconds > maxShutdownSeconds {
+		return 0, fmt.Errorf("GOSTACK_REQUEST_BODY_IDLE_TIMEOUT: %q is not a number of seconds", value)
+	}
+
+	return time.Duration(seconds) * time.Second, nil
+}
+
+// parseBytes reads a count of bytes named by variable, which is def when empty.
+func parseBytes(variable, value string, def int64) (int64, error) {
+	if value == "" {
+		return def, nil
 	}
 
 	number, unit := value, int64(1)
@@ -46,7 +82,7 @@ func parseMaxRequestBody(value string) (int64, error) {
 	count, err := strconv.ParseInt(number, 10, 64)
 	if err != nil || count < 0 || count > math.MaxInt64/unit {
 		return 0, fmt.Errorf(
-			"GOSTACK_MAX_REQUEST_BODY: %q is not a number of bytes, or a number with a KiB, MiB or GiB suffix", value)
+			"%s: %q is not a number of bytes, or a number with a KiB, MiB or GiB suffix", variable, value)
 	}
 
 	return count * unit, nil

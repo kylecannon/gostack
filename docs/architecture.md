@@ -150,7 +150,7 @@ internal/
   dns/                       DNS server for *.localhost.localstack.cloud (DNS_ADDRESS=0 disables it)
   container/                 Lambda container lifecycle on the moby client
   tlscert/                   self-signed generation, custom cert, opt-in fetch
-  api/<svc>/                 GENERATED: types, operation enum, errors, codec, Handler interface, Unimplemented
+  api/<svc>/                 GENERATED: types, operation enum, errors, codec, Handler interface, Unimplemented, OperationMethod
   service/<svc>/             hand-written providers and state
 tools/                       go.mod and go.sum for golangci-lint, kept out of the product module
 codegen/                     generator (package main under codegen/cmd/gostack-codegen), reads specs/
@@ -259,6 +259,196 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
 - `ReadHeaderTimeout` is set. There is no `WriteTimeout`, because SQS long-polls
   for 20s and responses stream.
 - `DisableGeneralOptionsHandler` is set.
+
+### Request memory
+
+The rule: for a request body that a generated decoder, the query form reader
+or the SQS number echo reads, in every protocol, the heap one request
+allocates is at most four times its decoded size plus a constant
+(`protocol.DecodeSlack`, 16 MiB, and 8 MiB of bookkeeping), for any body up to
+`GOSTACK_MAX_REQUEST_BODY`; and what all requests hold at once is bounded by
+`GOSTACK_MAX_IN_FLIGHT_BODIES`, not by the number of connections. A request
+that would pass a bound is refused with its protocol's own error before the
+allocation. `docs/compat.md` lists the answers.
+
+Open: these paths take client bytes the rule does not yet bound, and stay as
+they are on `main`. Each is filed on its own.
+
+- Policy documents a service parses after decoding: SQS `SetQueueAttributes`
+  `Policy` and `AddPermission`, S3 `PutBucketPolicy`, STS
+  `AssumeRoleWithSAML`. Their nesting is bounded; their width is not.
+- The `x-localstack-data` header, parsed as json in `markInternal`.
+- `POST /_localstack/health`.
+- The part headers of an S3 browser POST upload.
+- SQS `SetQueueAttributes` `RedrivePolicy`, parsed into a generic tree
+  (`sqs/redrive.go`): 16 KB of gzip reaches 665 MiB.
+- SSM `PutParameter` `Policies`, kept and parsed again by every
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
+
+Settings, all read at start-up:
+
+| Variable | Default | Sized for |
+|---|---|---|
+| `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four form bodies at the cap, or one json or xml body at the cap with the 32 MiB of decoding it is admitted with, and room for 48 MiB of decoding at most. A 512 MiB container keeps room for the runtime and the services' state. |
+| `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
+
+How each piece is bounded, and why this way:
+
+- **Decode budget, by cost, per service.** Decoding charges what it allocates
+  against `DecodeBudgetAt(n, factor)` = factor x the bytes read + `DecodeSlack`,
+  factor 2 unless `service.Registration.DecodeFactor` sets one. A count of
+  elements was too coarse: `{}` is 3 bytes and decodes to a 56-byte SQS entry,
+  `<Rule/>` is 7 and decodes to a 104-byte `LifecycleRule`, so the cost is what
+  is charged: a slice element at 5 times its size (append's regrowth), a map
+  entry at its key and value, text at twice its length. A botocore `max` trait
+  would stop only lists that carry one; the SQS batch limit of 10 lives in the
+  handler. json (`awsjson.DecodeWithin`) walks a body whose bound passes the
+  budget with a plan per Go type before unmarshalling; rest-xml charges each
+  token and each append as it decodes, following `InputOffset`; query charges
+  128 bytes (`query.PairCost`) per pair before parsing. A service whose legal
+  requests amplify more declares its own factor when it lands: DynamoDB's
+  `AttributeValue` lists reach about 18 times their size.
+- **Types that decode themselves** are free leaves only when listed
+  (`protocol.Time`, ISO8601, RFC822); any other is planned through its fields
+  or charged as an untyped value. `Test_Plan_EveryUnmarshalerInTheAPIIsKnown`
+  fails on one that is neither.
+- **XML tags.** encoding/xml builds a whole tag before a decoder sees it, so a
+  start or end tag is refused while it is read once it passes 4 KiB
+  (`restxml.MaxTag`; the longest S3 tag is under 100 bytes). encoding/xml reads
+  the body through `restxml`'s `tokenLimit`, which the decoder tells where each
+  token starts at the xml.Decoder's own `InputOffset`; a token is a tag when its
+  first two bytes are `<` and anything but `!` or `?`. No second parser has to
+  agree with encoding/xml on where a comment, CDATA section, processing
+  instruction or DOCTYPE ends. `tokenLimit` buffers the body itself, 4 KiB at a
+  time, so a byte costs one comparison against a precomputed stop index, as a
+  `bufio.Reader` byte would; the buffer's end, a tag's limit and a token's
+  first two bytes when they are not yet buffered take the slow path.
+- **Copies.** `protocol.ReadBody` sizes its buffers by what arrives, not by a
+  stated Content-Length: each next buffer holds as many bytes as have arrived,
+  and a body that fills more than the first is copied once, at its end, so a
+  body allocates about twice its length, as `io.ReadAll` does. A query form
+  reads its body with `protocol.ReadBodyText`, whose last copy builds the
+  string itself, and parses its pairs out of that string, so the form's text
+  costs no third copy. That copy was a whole body the form's plan does not
+  charge. With it, a 1 MiB SendMessageBatch decode allocated three bodies
+  against the runtime's 4 MiB minimum heap goal, and its freed pages were
+  returned to the OS and faulted back every cycle: without it the decode
+  takes 4 to 5 times fewer page faults. The SQS number echo (`sqs/sent-number.go`) reads the
+  one member from the body's tokens instead of a second parse into `any`.
+- **The charge seam** (`protocol/charge.go`). The gateway's recovery
+  middleware, root step 8 and inside every mounted route, puts one
+  `protocol.Charge` on each request's context before any handler runs, meters
+  the body there (after gzip decoding) and calls `Charge.Release` when the
+  handler returns. Readers find it through the context: `protocol.ReadRequest`
+  and `rest.CapBody` arm the body meter, and `request.Context.HoldDecode` and
+  `query.RequestForm` charge decoding to it. So a service that wraps the body
+  (S3's `trackedBody`, the raw-header reader) or builds its own
+  `request.Context` (SQS at a queue URL, the developer API) charges the same
+  `Charge`, and the gateway gives all of it back whatever the handler built.
+  An SQS long poll gives its charge back before it waits
+  (`protocol.ReleaseBody`). Calls one service makes to another through
+  `inproc` carry `request.MarkInternal`, which no header or listener sets, and
+  are not charged, since the outside request that caused them was.
+  `gateway.ServedAsInternal` is a different test: it also accepts the
+  `x-localstack-data` header, which any client can send, so it only decides
+  what a stopping gateway still serves.
+- **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
+  The gateway meters a body from a listener that states more than
+  `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
+  no atomic. The meter charges only once a buffering reader arms it, so an S3
+  object stream is never charged. Decoding past `protocol.FreeDecode` (1 MiB)
+  charges the same pool, capped per request at the bound less one body's
+  share, so a request alone always fits: json and query charge their whole
+  cost at once, known before they build anything; rest-xml grows in 1 MiB
+  steps as it decodes. A body that states its length is charged all of it, up
+  to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), together with the
+  room its decoding is planned to hold, the first time it reads past
+  `FreeBody`: all or nothing, in order behind other new bodies, so a body
+  that waits holds nothing while it waits, and an admitted body never waits
+  on the pool while it holds part of it, for its bytes or for decoding them.
+  The plan follows the reader that arms the meter: json and xml plan twice
+  the body (`protocol.TextDecode`: json decodes twice, xml charges its text
+  twice) plus `FreeBody` for structure; a query form plans nothing, since its
+  pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
+  dense with elements, charges the rest in steps as it decodes. A body of
+  unknown length (chunked or gzip) is charged in doubling steps of what has
+  arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
+  ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  or until the request's context ends, then answered with the protocol's
+  throttling error. net/http notices a client that went away only once the
+  body has been read, so a waiter whose client left keeps its place, holding
+  nothing, until the wait ends. `SetInFlight` raises a bound below twice one
+  byte over `GOSTACK_MAX_REQUEST_BODY` to that, so decoding room is never zero.
+- **Idle bodies.** An armed meter sets the connection's read deadline
+  `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` ahead before each read and clears it at
+  the end of the body and when the charge is given back, so a request held open
+  after its body, and the connection's next request, never meet it. When the
+  deadline passes, the meter gives back its charge and leaves the deadline in
+  the past: net/http reads what is left of a short body before it writes an
+  answer, and with the deadline past that read fails at once, so the answer is
+  sent and the connection closed after it.
+- **`GOMEMLIMIT`** is honored by the Go runtime as it is. Deriving a default
+  from the container's memory limit is a separate decision with its own
+  trade-off (garbage collection under pressure), so nothing here sets one.
+
+Headroom: what decoding the largest legal request of each shape charges
+against `DecodeBudget` at the default factor of 2. json charges both passes;
+query charges `PairCost` per pair. Measured on the generated decoders with a
+hold that records each charge.
+
+| Request | Body | Charged | Charged / budget |
+|---|---|---|---|
+| S3 `CompleteMultipartUpload`, 10,000 parts, every checksum on every part | 3.37 MiB | 17.5 MiB (5.2x) | 0.77 |
+| S3 `CompleteMultipartUpload`, 10,000 parts, SHA-256 only (what an SDK sends) | 1.58 MiB | 9.9 MiB (6.2x) | 0.52 |
+| S3 `PutBucketLifecycleConfiguration`, 1,000 rules with filter, tags, expiration, transition | 294 KiB | 3.1 MiB (10.9x) | 0.19 |
+| S3 `DeleteObjects`, 1,000 keys of 1,024 bytes | 1.03 MiB | 2.5 MiB (2.5x) | 0.14 |
+| SQS json `SendMessageBatch`, ten 256 KiB messages | 2.50 MiB | 5.0 MiB (2.0x) | 0.24 |
+| SQS json `SendMessageBatch`, 10 entries x 20 attributes x 20 list values | 44 KiB | 931 KiB (21.1x) | 0.06 |
+| SQS query `SendMessageBatch`, 4,853 pairs | 374 KiB | 607 KiB | 0.04 |
+| STS query `AssumeRole`, every member at its limit (180 pairs) | under 100 KiB | 23 KiB | under 0.01 |
+
+The tightest is `CompleteMultipartUpload` with all five checksums on each of
+10,000 parts, which no SDK sends (an upload uses one algorithm): it decodes
+with 23% of its budget to spare. It needs the factor: on `DecodeSlack` alone
+it would be refused (1.09 of 16 MiB).
+
+Residuals, accepted: a bounded pool trades availability under abuse for
+memory.
+
+- Each connection may hold its free allowances (64 KiB of body, 1 MiB of
+  decoding) outside the pool.
+- A client that states `GOSTACK_MAX_REQUEST_BODY` and sends just over 64 KiB
+  holds a whole body's share, with its planned decoding, until the idle
+  timeout; one that then trickles a byte per idle period keeps it. With the
+  defaults, one such json or xml client holds 48 MiB of the pool's 64, so every
+  other json body over about 5 MiB is throttled while it does; four such query
+  clients hold the whole pool. A client that states 16 MiB and sends one byte
+  holds nothing.
+- Bodies of unknown length grow in doubling steps, and decoding past its plan
+  (rest-xml as it decodes, a dense json body once) in 1 MiB steps, so many of
+  them at once can each hold part of the pool and wait to grow until the
+  oldest waiters give up at 5 s, which answers them in waves of the wait.
+  Bodies that state their length and decode within their plan do not: 128
+  legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
+  served, and so are as many as fill the pool when they all decode at the same
+  moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
+  room, so 21 such bodies held unfinished fill it; a 22nd that waits more than
+  5 s for one of them to end is throttled. 64 bodies of 16 MiB sent at once
+  with a Content-Length are admitted one at a time: on a non-race build all 64
+  are answered (400 `SerializationException`, their nesting) within 0.9 to
+  1.0 s, and the process peaks at 105 MiB RSS.
+
+`Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
+`Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
+`Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies`,
+`Test_BodyMeter_StatedLengthAtOnce`, `Test_BodyMeter_DecodeRoomByReader`,
+`Test_BodyMeter_UnknownLengthKeepsWhatItRead`,
+`Test_BodyMeter_IdleDeadlineStaysPast`, `Test_DecodeCost_TextFitsTheAdmittedRoom`
+and `Test_Decoder_TagLimit` pin these on generated stubs;
+`cmd/gostack/wide-body_test.go` pins the charge seam on the real S3, SQS and
+STS providers, at `/` and at a queue URL, and the cold burst and the bodies
+that decode together on the real SQS provider.
 
 ### Protocol details with explicit tests
 
@@ -499,6 +689,25 @@ notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
 the lane of the queue's ARN, so the events for one queue arrive in the order
 they were raised and a slow queue holds up no other.
 
+`cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
+the calls through the gateway's `InternalHandler`: the root router with each
+request marked internal, never put on a listener. A request from outside is
+marked internal too when it carries an `X-Localstack-Data` header holding a
+json object, as LocalStack marks it, so while the gateway is stopping and its
+listeners are still open (the hooks and the drain of requests), such a
+request is served like a service's call; once the listeners close, nothing
+from outside reaches the gateway. `Hub.Drain` is the shutdown's in-process
+phase. The hub keeps one count of the calls its clients have queued and not
+yet done with: a call is counted before a worker can see it and let go of
+after its `done` returns, so a call queued by a call being served, on any
+client, keeps the count above zero. `Drain` waits for that count to reach
+zero, or for its deadline. Then it shuts every queue: calls still queued are
+dropped without their `done` being called, as `Client.Close` drops them,
+calls running are cancelled, and `Enqueue` refuses every later call. It waits
+20 ms for the cancelled calls to return and logs `Hub.Cut` once: the calls
+dropped, refused, or cancelled and not answered with a 2xx. A cancelled call
+whose handler still answers it with a 2xx was served and is not counted.
+
 ### Body store (`internal/blob`)
 
 S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,
@@ -533,11 +742,47 @@ follows add, migrate, delete.
 | `GET /_gostack/info` | version, uptime, config summary | `/_localstack/info` |
 | `GET /_gostack/init` | hook status per stage | `/_localstack/init[/<stage>]` |
 | `GET/PATCH /_gostack/config` | runtime config updates; only when `GOSTACK_ENABLE_CONFIG_UPDATES` (or `ENABLE_CONFIG_UPDATES`) is set | `/_localstack/config` (GET/POST) |
-| `GET /_gostack/services` | Capabilities per service: the operations implemented and the total, so coverage is stated honestly | none |
+| `GET /_gostack/services` | Capabilities per service, so coverage is stated honestly: `{services: {name: {state, implemented, total, operations}}}`, `operations` being the implemented ones, sorted. An operation is implemented when the provider declares its method instead of reaching the embedded generated `Unimplemented`; a reflection check at the first request finds which (see `service.Implemented`), looking each method up through the generated `OperationMethod` that `Metadata` carries. A service author sets `Handler` to the provider in `Registration()`; without it `implemented` and `operations` are null | none |
 | `POST /_gostack/state/reset[?service=&account=&region=]` | Wipes in-memory state without a restart, so an agent can start each run from a clean slate. `region=` matches the region a state is stored under, so a global service such as STS, stored under `global`, is cleared only by a reset with no `region` or with `region=global` | none |
 | `POST /_gostack/state/save`, `/_gostack/state/load` | Manual persistence triggers | none |
 | `/_gostack/services/<svc>/...` | Developer endpoints, listed below | `/_aws/<svc>/...` |
 | `/_gostack/debug/pprof/*` | Profiling; only when `DEBUG=1` | none |
+
+What `/_gostack/services` counts, and what it costs:
+
+- "Implemented" means the provider declares the operation's method, as
+  `service.Implemented` reads the compiled method sets. A method that forwards
+  by hand to a generated `Unimplemented` held in a named field, or that is
+  declared only to return the 501, counts as implemented though the call
+  answers 501; this is accepted. Where an operation is reached through several
+  embedded fields, the field at the shallowest depth decides, as Go does.
+  A handler the check cannot read (one that embeds the generated `Handler`
+  interface, or a missing `Handler`, which is an untyped nil) reports
+  `implemented` and `operations` as null for that service and never fails the
+  request. A typed nil such as `(*T)(nil)` is not missing: the check reads
+  method sets and never calls the handler, so it reports what `T` declares.
+  A struct that embeds itself, or two that embed each other, is walked once
+  round, never forever.
+- The lookup costs a fixed amount plus about 179 bytes per API operation (not
+  per provider method): the generated `OperationMethod` is one switch arm for
+  every operation of the API whether or not a provider serves it. Measured as
+  the difference in loaded sections (`size -m`, not file size, which moves in
+  16 KB pages and includes DWARF) between builds of `main` (7109a08) and of
+  the branch at 68256cf, macOS arm64, `-ldflags "-X main.version=x"`: 52,588
+  bytes for sts, sqs and s3 together, which is 146 operations. Of that,
+  11,557 bytes are `Implemented` and the endpoint, whatever the services; the
+  rest, 41,031 bytes, is the `OperationMethod` switches, and a fit over
+  builds that keep them for 11, 34, 112 and 146 operations gives 179 bytes
+  each plus 14,980 bytes the first one pulls in (reflection's method lookup),
+  so the fixed cost is about 26.5 KB. The nine APIs generated today (471
+  operations) project to about 111 KB.
+  That is proportional and small beside the dispatch code already generated
+  per operation, and a committed table kept true by a second generator pass
+  over service code is more machinery than the bytes are worth. The decision is
+  revisited if the total passes 1 MB.
+- `Test_gostack_binaryPrunesMethods` in `cmd/gostack` enforces the reflection
+  rule this depends on (`docs/standards.md`): it reads the symbols of the built
+  binary and fails when the linker has stopped pruning methods.
 
 The developer endpoints mirror LocalStack's `openapi.yaml` and source, with the
 same suffix under both prefixes:
@@ -669,20 +914,38 @@ Tests split along the same line:
   overrun. `T` is `SHUTDOWN_TIMEOUT`, which the supervisor counts from the
   SIGTERM it sends. The child counts from the moment it sees the signal, which
   is microseconds later, and reads `T` once at start, so an update through
-  `/_localstack/config` does not move the deadline. The budget is one, with
-  four slots one after the other: the hooks, the drain, the save and the
-  services' `Close`. `lifecycle.PlanShutdown` plans it once, from the moment
-  the shutdown starts: the signal, or the failure of a listener, which starts
-  the shutdown inside the gateway. The gateway drains only to the time the plan
-  gave it, and a zero time is the plan's "no limit". A shutdown that nothing
-  planned, with no `DrainBy` call and no `PlanDrain`, drains for 5 s.
+  `/_localstack/config` does not move the deadline. The budget is one: the
+  hooks and the drain share the time to `Work`, the save's reserve follows to
+  `Save`, and the services' `Close` has the time after it. The reserve holds
+  the first save, the drain of the in-process calls and a second save.
+  `lifecycle.PlanShutdown` plans it once,
+  from the moment the shutdown starts: the signal, or the failure of a
+  listener, which starts the shutdown inside the gateway. The gateway drains
+  only to the times the plan gave it, and a zero time is the plan's "no
+  limit". A shutdown that nothing planned, with no `DrainBy` call and no
+  `PlanDrain`, gives the drain 5 s.
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
-     wakes its long polls there.
+     wakes its long polls there. The calls services make to each other are
+     still served, as internal calls (see the in-process client).
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
-     connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then every
+     connections that are left. Its listeners are closed from here on.
+  4. The persisted state is saved, with a deadline of `Save`: the save gostack
+     always made, so a slow drain of in-process calls never costs what was
+     acknowledged before the shutdown. The first save is
+     `persist.Engine.Stop`, which stops the timer.
+  5. `Hub.Drain` waits for the calls the services queued for each other, such
+     as S3's event notifications to SQS, until none is left or `Calls`. They
+     have been served all along; this waits for the ones the last requests
+     queued, which is why it follows the drain of requests. At `Calls` the hub
+     cuts what is left and logs the count. From here on the gateway answers
+     every request 503, internal ones too, so a call made while the services
+     close never reaches a closed service.
+  6. A second save, `Engine.Flush`, writes what changed since the first,
+     such as the events the drain delivered, until `Save`. When it cannot
+     finish, the first save's files stand, and what the drain delivered is
+     lost as it would be had the drain not run. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
      tasks, S3's hijacked responses), all at once, each given a context that
      ends at `Close`, so a slow one takes no time from another. A `Close` that
@@ -691,29 +954,41 @@ Tests split along the same line:
      returned at the deadline is not abandoned. When every `Close` returned
      and `Close` has time left, a last save writes whatever they or a request
      cut at `Work` changed; when one was abandoned or the time is out,
-     what the others changed in their `Close` stays unsaved and the save of
-     step 4 is the last.
-     The first save is `persist.Engine.Stop`, which stops the timer; the last
-     is `Engine.Close`, which then releases the descriptors the assets hold
-     (the root on `assets/.gostack` and, with syncfs, the directory kept open
-     for it) once every sync started has returned.
+     what the others changed in their `Close` stays unsaved and the second
+     save is the last. The last save is `Engine.Close`, which then releases
+     the descriptors the assets hold (the root on `assets/.gostack` and, with
+     syncfs, the directory kept open for it) once every sync started has
+     returned.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
   | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | `Calls` | 3.9375 s | `Save` minus half the reserve |
   | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
   | `Close` | 4.9 s | `T` minus 100 ms: the time between `Save` and here is `Close`'s |
   | SIGKILL | 5 s | the supervisor, unchanged |
 
+  The first save starts when the requests have drained, at `Work` at the
+  latest, and may run to `Save`; the calls drain gets what is left of the time
+  to `Calls`, nothing when the first save runs past it; the second save has at
+  least the time from `Calls` to `Save`. For `T` of 1, 5, 10 and 60 s: hooks
+  and requests until 0.25, 3.375, 7.125 and 44.625 s; first save and calls
+  drain until 0.375, 3.9375, 8.3125 and 52.0625 s; second save at least 125 ms,
+  0.5625, 1.1875 and 7.4375 s, to 0.5, 4.5, 9.5 and 59.5 s; `Close` 400 ms.
+
   The hooks, the drain and the service `Shutdown` functions share the time up
   to `Work`, and a slow one cannot take the save's reserve: a service function
   that never returns is left behind at `Work`, the hooks that follow it are
-  skipped, and the drain and the save go on without it. A request still running
+  skipped, and the drain and the save go on without it. When time runs out,
+  the hooks and the requests are cut first, at `Work`, then the queued
+  in-process calls, at `Calls`; neither takes from the first save or `Close`. A request still running
   when the save starts can have its effect saved or not, and the file is whole
   either way, since the snapshot takes the service locks. For a `T` too short
   to leave room, `Close` falls together with `Save`. `SHUTDOWN_TIMEOUT=0` has
-  no deadline at all: the hooks, the drain, the save and `Close` take what they
-  need. With the supervisor's timer off nothing kills the child, so a stuck
+  no deadline at all: the hooks, the drain, the saves and `Close` take what
+  they need. The calls drain is skipped, and the calls still queued after the
+  first save are cut at once, since nothing would end a call that queues
+  itself again. With the supervisor's timer off nothing kills the child, so a stuck
   hook is the user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at
@@ -794,7 +1069,16 @@ cites the lines.
 **Behavior:**
 
 - After any successful request whose operation does not start with Get, Head,
-  Query, List or Describe, the service is marked dirty.
+  Query, List, Describe or Receive, the service is marked dirty. A service may
+  set its own rule (`Registration.Mutating`). A request with such an operation
+  whose handler does not return, because it panics or calls `runtime.Goexit`,
+  is marked too, whatever status it wrote, since the handler may have made its
+  change first. This includes a route a service mounts, such as an SQS queue
+  URL, which names its call with `gateway.Record`. On a call the gateway
+  routes itself, one answered with a 4xx or 5xx whose handler returns is not
+  marked. A mounted route marks its own call once its handler returns, by its
+  own rule: the SQS queue URL marks a write it served whatever the status, so a
+  SendMessage it answers with a 400 is marked.
 - A flush timer is armed only when a service is dirty. At most one flush runs
   or waits at a time: a change made during a flush is saved by the flush that
   one schedules when it ends.

@@ -59,7 +59,7 @@ func (v *NestedXmlMapsInput) decodeXML(d *restxml.Decoder) {
 								}
 							}
 							if k2 != nil {
-								e1[*k2] = e2
+								restxml.Put(d, e1, *k2, e2)
 							}
 						}
 					default:
@@ -67,7 +67,7 @@ func (v *NestedXmlMapsInput) decodeXML(d *restxml.Decoder) {
 					}
 				}
 				if k1 != nil {
-					v.NestedMap[*k1] = e1
+					restxml.Put(d, v.NestedMap, *k1, e1)
 				}
 			}
 		case "flatNestedMap":
@@ -111,7 +111,7 @@ func (v *NestedXmlMapsInput) decodeXML(d *restxml.Decoder) {
 							}
 						}
 						if k2 != nil {
-							e1[*k2] = e2
+							restxml.Put(d, e1, *k2, e2)
 						}
 					}
 				default:
@@ -119,7 +119,7 @@ func (v *NestedXmlMapsInput) decodeXML(d *restxml.Decoder) {
 				}
 			}
 			if k1 != nil {
-				v.FlatNestedMap[*k1] = e1
+				restxml.Put(d, v.FlatNestedMap, *k1, e1)
 			}
 		default:
 			d.Skip()

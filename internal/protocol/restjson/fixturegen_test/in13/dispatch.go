@@ -18,13 +18,14 @@ import (
 
 // Metadata describes the in13 service.
 var Metadata = service.Metadata{
-	Name:           "in13",
-	SigningName:    "in13",
-	TargetPrefix:   "",
-	EndpointPrefix: "in13",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestJSON},
-	Operations:     Operations,
+	Name:            "in13",
+	SigningName:     "in13",
+	TargetPrefix:    "",
+	EndpointPrefix:  "in13",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.
@@ -93,7 +94,7 @@ func readHttpPayloadWithStructure(rc *request.Context) (*HttpPayloadWithStructur
 		return nil, err
 	}
 	if len(body) > 0 {
-		in.Nested, err = awsjson.Decode[NestedPayload](body)
+		in.Nested, err = decodeJSONBody[NestedPayload](rc, body)
 		if err != nil {
 			return nil, err
 		}
@@ -156,9 +157,22 @@ func errMalformedBody() *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadRequest(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledJSON()
+	}
 	if err != nil || protocol.OverBody(len(body)) {
 		return nil, errMalformedBody()
 	}
 	return body, nil
+}
+
+// decodeJSONBody reads a json request body into a T, refusing one that would
+// decode into more than the call's budget as a body over protocol.MaxBody.
+func decodeJSONBody[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
+	in, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
+	if err == awsjson.ErrTooLarge {
+		return nil, errMalformedBody()
+	}
+	return in, err
 }

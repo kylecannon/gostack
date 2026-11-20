@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/request"
 )
 
 const (
@@ -47,6 +49,11 @@ var (
 	// ErrAborted is the error of a call whose handler panicked, which is how the
 	// gateway aborts a response it has already started.
 	ErrAborted = errors.New("inproc: the handler aborted the response")
+
+	// errExited is the error of a call whose handler called runtime.Goexit. That
+	// ends the goroutine the handler runs on, as a panic would, but no recover
+	// sees it: the call is answered from a deferred function instead.
+	errExited = fmt.Errorf("%w: the handler called runtime.Goexit", ErrAborted)
 )
 
 // Call is one request to a service of the same process. Its zero values make
@@ -132,9 +139,20 @@ func New() *Client {
 	return &Client{queue: queue{ctx: ctx, cancel: cancel}}
 }
 
-// Bind sets the handler calls are served through, normally gateway.Handler().
+// Bind sets the handler calls are served through, normally the gateway's
+// InternalHandler, through a Hub. When h is a Hub, the client joins it, so the
+// hub's Drain covers its queue.
 func (c *Client) Bind(h http.Handler) {
 	c.handler.Store(&h)
+
+	hub, _ := h.(*Hub)
+	if hub != nil {
+		hub.add(c)
+	}
+
+	c.queue.mu.Lock()
+	c.queue.hub = hub
+	c.queue.mu.Unlock()
 }
 
 // Bound reports whether Bind has been called.
@@ -212,7 +230,10 @@ func newRequest(ctx context.Context, call Call, body io.Reader, size int64) (*ht
 		target.Path = "/"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, methodOf(call), target.String(), body)
+	// The mark tells the gateway the call is internal: its body is not charged
+	// against the in-flight bound, having been charged when the request that
+	// caused it came in.
+	req, err := http.NewRequestWithContext(request.MarkInternal(ctx), methodOf(call), target.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("inproc: build request: %w", err)
 	}

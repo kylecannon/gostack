@@ -16,13 +16,14 @@ import (
 
 // Metadata describes the sts service.
 var Metadata = service.Metadata{
-	Name:           "sts",
-	SigningName:    "sts",
-	TargetPrefix:   "",
-	EndpointPrefix: "sts",
-	APIVersion:     "2011-06-15",
-	Protocols:      []protocol.Kind{protocol.KindQuery},
-	Operations:     Operations,
+	Name:            "sts",
+	SigningName:     "sts",
+	TargetPrefix:    "",
+	EndpointPrefix:  "sts",
+	APIVersion:      "2011-06-15",
+	Protocols:       []protocol.Kind{protocol.KindQuery},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the
@@ -654,7 +655,10 @@ func writeError(w http.ResponseWriter, rc *request.Context, err *awserr.Error) {
 // readForm gives the parameters of a query call as LocalStack reads them: the URL's
 // before the body's, with no ";" separator and a malformed escape kept as typed.
 func readForm(rc *request.Context) (url.Values, *awserr.Error) {
-	vals, err := query.RequestForm(rc.Request)
+	vals, err := query.RequestFormHeld(rc.Request, rc)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledQuery()
+	}
 	if err != nil {
 		return nil, query.MalformedQueryString()
 	}

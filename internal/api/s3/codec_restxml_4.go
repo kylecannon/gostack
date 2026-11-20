@@ -99,13 +99,13 @@ func (v *WebsiteConfiguration) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "ErrorDocument":
-			v.ErrorDocument = &ErrorDocument{}
+			v.ErrorDocument = restxml.New[ErrorDocument](d)
 			v.ErrorDocument.decodeXML(d)
 		case "IndexDocument":
-			v.IndexDocument = &IndexDocument{}
+			v.IndexDocument = restxml.New[IndexDocument](d)
 			v.IndexDocument.decodeXML(d)
 		case "RedirectAllRequestsTo":
-			v.RedirectAllRequestsTo = &RedirectAllRequestsTo{}
+			v.RedirectAllRequestsTo = restxml.New[RedirectAllRequestsTo](d)
 			v.RedirectAllRequestsTo.decodeXML(d)
 		case "RoutingRules":
 			if v.RoutingRules == nil {
@@ -117,7 +117,7 @@ func (v *WebsiteConfiguration) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 RoutingRule
 				e1.decodeXML(d)
-				v.RoutingRules = append(v.RoutingRules, e1)
+				v.RoutingRules = restxml.Append(d, v.RoutingRules, e1)
 			}
 		default:
 			d.Skip()

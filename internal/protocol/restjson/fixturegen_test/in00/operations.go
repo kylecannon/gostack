@@ -4,6 +4,7 @@ package in00
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // AllQueryStringTypes returns awserr.NotImplemented.
 func (Unimplemented) AllQueryStringTypes(context.Context, *AllQueryStringTypesInput) (*AllQueryStringTypesOutput, error) {
 	return nil, awserr.NotImplemented("in00", "AllQueryStringTypes")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in00 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "AllQueryStringTypes":
+		return t.MethodByName("AllQueryStringTypes")
+	default:
+		return reflect.Method{}, false
+	}
 }
