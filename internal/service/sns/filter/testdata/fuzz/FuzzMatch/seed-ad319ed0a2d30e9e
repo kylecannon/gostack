@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key1\": [\"v1\"], \"key2\": [\"v2\"], \"key3\": [\"v3\"], \"key4\": [\"v4\"], \"key5\": [\"v5\"], \"key6\": [\"v6\"]}")
+bool(false)
+string("{}")

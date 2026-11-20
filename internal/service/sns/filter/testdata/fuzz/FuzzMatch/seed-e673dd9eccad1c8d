@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": [{\"cidr\": \"::/64\"}]}")
+bool(true)
+string("{\"a\": 18446744073709551615}")

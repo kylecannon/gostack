@@ -1,0 +1,5 @@
+go test fuzz v1
+string("DefaultSenderID")
+string("12345")
+string("DefaultSMSType")
+string("Transactional")

@@ -32,7 +32,8 @@ const anyLoopbackPort = "127.0.0.1:0"
 func Test_serve_savesBeforeTheKill(t *testing.T) {
 	const (
 		timeout = 3 * time.Second
-		// The plan for 3 seconds: work ends at 1.875s, the save at 2.5s.
+		// The plan for 3 seconds: work ends at 1.875s, the in-process calls at
+		// 2.1875s, the save at 2.5s.
 		saveBy = timeout - lifecycle.KillMargin
 		// The drain keeps waiting, the stuck request in flight, until Work.
 		drainFloor = 1500 * time.Millisecond
@@ -105,10 +106,10 @@ func Test_serve_savesBeforeTheKill(t *testing.T) {
 			done := make(chan error, 1)
 
 			go func() {
-				done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx, _ context.Context) {
+				done <- serve(ctx, gw, listeners, proc, timeout, nil, restOnly(func(saveCtx, _ context.Context) {
 					deadline, hasLimit := saveCtx.Deadline()
 					saves <- saved{at: time.Now(), deadline: deadline, hasLimit: hasLimit}
-				})
+				}))
 			}()
 
 			go func() {
@@ -187,11 +188,11 @@ func Test_serve_withoutATimeoutHasNoDeadline(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- serve(ctx, gw, listeners, proc, 0, func(saveCtx, closeCtx context.Context) {
+		done <- serve(ctx, gw, listeners, proc, 0, nil, restOnly(func(saveCtx, closeCtx context.Context) {
 			_, saveLimit := saveCtx.Deadline()
 			_, closeLimit := closeCtx.Deadline()
 			limits <- saveLimit || closeLimit
-		})
+		}))
 	}()
 
 	stop()
@@ -278,7 +279,8 @@ func callHangingService(t *testing.T, addr string) <-chan string {
 func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 	const (
 		timeout = 2 * time.Second
-		// The plan for 2 seconds: work ends at 1s, the save at 1.5s, Close at 1.9s.
+		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
+		// the save at 1.5s, Close at 1.9s.
 		workAt  = time.Second
 		saveBy  = timeout - lifecycle.KillMargin
 		closeBy = timeout - lifecycle.CloseMargin
@@ -305,12 +307,12 @@ func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- serve(ctx, gw, listeners, proc, timeout, func(saveCtx, closeCtx context.Context) {
+		done <- serve(ctx, gw, listeners, proc, timeout, nil, restOnly(func(saveCtx, closeCtx context.Context) {
 			saveDeadline, hasLimit := saveCtx.Deadline()
 			closeDeadline, _ := closeCtx.Deadline()
 
 			saves <- saved{at: time.Now(), saveBy: saveDeadline, closeBy: closeDeadline, hasSaveLimit: hasLimit}
-		})
+		}))
 	}()
 
 	call := callHangingService(t, listeners[0].Addr().String())
@@ -383,12 +385,12 @@ func Test_serve_withoutATimeoutWaitsForEverything(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- serve(ctx, gw, listeners, proc, 0, func(saveCtx, closeCtx context.Context) {
+		done <- serve(ctx, gw, listeners, proc, 0, nil, restOnly(func(saveCtx, closeCtx context.Context) {
 			_, saveLimit := saveCtx.Deadline()
 			_, closeLimit := closeCtx.Deadline()
 
 			saves <- saved{at: time.Now(), limits: saveLimit || closeLimit}
-		})
+		}))
 	}()
 
 	call := callHangingService(t, listeners[0].Addr().String())

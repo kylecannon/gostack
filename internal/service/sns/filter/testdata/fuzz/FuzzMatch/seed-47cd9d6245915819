@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"store\": [{\"exists\": false}]}")
+bool(false)
+string("{\"def\": {\"DataType\": \"Number\", \"StringValue\": \"99\"}}")
