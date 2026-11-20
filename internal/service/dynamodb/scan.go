@@ -23,9 +23,9 @@ const (
 const maxSegments = 1000000
 
 // Scan reads every item of a table or index, or of one segment of it, a page
-// at a time, projected by its ProjectionExpression or the legacy
-// AttributesToGet. The legacy ScanFilter and ConditionalOperator
-// answer 501.
+// at a time, filtered by its FilterExpression or the legacy ScanFilter and
+// ConditionalOperator, and projected by its ProjectionExpression or the legacy
+// AttributesToGet.
 func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput, error) {
 	e, r, err := p.scanTarget(ctx, in)
 	if err != nil {
@@ -40,9 +40,13 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 		return nil, fmt.Errorf("scan: %w", err)
 	}
 
-	r.filter, err = x.condition(expression.FilterExpression, in.FilterExpression)
+	filter, err := x.condition(expression.FilterExpression, in.FilterExpression)
 	if err == nil {
 		r.projection, err = x.projection(in.ProjectionExpression)
+	}
+
+	if filter != nil {
+		r.filter = filter
 	}
 
 	if err == nil && in.AttributesToGet != nil {
@@ -87,17 +91,11 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, fmt.Errorf("scan: %w", err)
 	}
 
-	if in.ScanFilter != nil || in.ConditionalOperator != nil {
-		return nil, nil, notImplemented("Scan")
-	}
-
-	err = checkMixed(in.AttributesToGet,
-		namedExpr{paramProjection, in.ProjectionExpression}, namedExpr{paramFilter, in.FilterExpression})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	segment, segments, err := segmentsOf(in.Segment, in.TotalSegments)
+	err = checkMixedParams([]param{
+		{paramAttributesToGet, len(in.AttributesToGet) > 0},
+		{paramScanFilter, len(in.ScanFilter) > 0},
+		{paramConditionalOp, in.ConditionalOperator != nil},
+	}, []param{{paramProjection, in.ProjectionExpression != nil}, {paramFilter, in.FilterExpression != nil}})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -111,13 +109,25 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		}
 	}
 
+	// DynamoDB Local checks the legacy filter after the index and before the
+	// segments, Limit, Select and the rest.
+	legacy, err := legacyFilter(in.ScanFilter, in.ConditionalOperator)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	segment, segments, err := segmentsOf(in.Segment, in.TotalSegments)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	r, err := newReader(e, spec, in.Limit, in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet),
 		in.ConsistentRead)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	r.name, r.segment, r.segments = name, segment, segments
+	r.name, r.segment, r.segments, r.filter = name, segment, segments, legacy
 
 	return e, r, nil
 }

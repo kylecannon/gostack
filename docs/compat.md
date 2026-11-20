@@ -152,6 +152,12 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | DynamoDB `ListGlobalTables` | Every record, in creation order, ignoring `Limit`, `RegionName` and `ExclusiveStartGlobalTableName` | Sorted by name, filtered by `RegionName`, paged by `Limit` | The API reference |
 | DynamoDB `ReplicaUpdates` that create a replica in the owning region or in a region holding a table of that name | Records it, and `DescribeTable` then lists the owning region twice | `400 ValidationException` "Failed to create a the new replica ... already existed as tables." | The message names the condition |
 | DynamoDB `UpdateTable` called in a replica region | `TableArn` names the owning region | `TableArn` names the caller's region, as `DescribeTable` does there | |
+| DynamoDB PartiQL `INSERT` of a key that exists, through `ExecuteStatement` | `400`, `__type` `DuplicateItem` | `400 DuplicateItemException`, same message | botocore's `ExecuteStatement` error shape is `DuplicateItemException` |
+| DynamoDB `ExecuteStatement` `ConsumedCapacity` and `LastEvaluatedKey` | Never answered | Answered: `ConsumedCapacity` when `ReturnConsumedCapacity` asks, `LastEvaluatedKey` beside a `NextToken` | The `ExecuteStatement` API reference lists both response members |
+| DynamoDB `ExecuteTransaction` `ConsumedCapacity` | Never answered | Answered when `ReturnConsumedCapacity` asks | The `ExecuteTransaction` API reference lists it |
+| DynamoDB PartiQL `SELECT` with `WHERE <hash key> IN [...]` | One Query per value, in DynamoDB Local's order | One Scan with the `IN` as its filter: the same items, possibly in another order | Unverified; only the order differs |
+| DynamoDB PartiQL `SELECT ... ORDER BY <range key> DESC` with `Limit` | Reads the first `Limit` items in ascending order and returns them reversed | Reads from the highest range key down, as a Query with `ScanIndexForward` false | The PartiQL `SELECT` reference: `DESC` orders the result descending |
+| DynamoDB `ExecuteStatement` with no `Statement` | `500 InternalError` | `400 ValidationException` "The statement was empty." | A crash is not copied; the message is the one an empty batch gets |
 | DynamoDB `DescribeEndpoints` | `400 UnknownOperationException`, from DynamoDB Local | `200` with one endpoint: `Address` is `LOCALSTACK_HOST`, `CachePeriodInMinutes` 1440 | `DescribeEndpoints` API reference: the response is a list of `Endpoint` with `Address` and `CachePeriodInMinutes` |
 
 ### S3 versioning and Object Lock
@@ -259,6 +265,28 @@ caller's account and region, as LocalStack does.
 - A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
   is not `ALL`: LocalStack's message names the index `id-index` whatever it is
   called; gostack names the index of the request. No snapshot pins the text.
+- The legacy `KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected` and
+  `ConditionalOperator` translate to the same key condition and condition
+  evaluator as the expressions. `UpdateItem` with `AttributeUpdates` still
+  answers `501`; LocalStack serves it.
+- A legacy filter or `Expected` with two or more invalid conditions: gostack
+  names the first in attribute-name order, the image the first in the request's
+  JSON order, which the decoded map does not keep. With one invalid condition
+  the answers are the same.
+- `ConditionalOperator` of a value other than `AND` or `OR`: LocalStack
+  answers `500 InternalFailure`; gostack answers the model's enum
+  `ValidationException`, as botocore defines the shape. The same goes for a
+  `KeyConditions` range key condition with `NE`: `500` there, `400` "Query key
+  condition not supported" here, the message the hash key gets.
+- A `Scan` or `Query` of a local secondary index that asks for an attribute the
+  index does not project (`AttributesToGet`, `ProjectionExpression`, or
+  `Select` `ALL_ATTRIBUTES`) with `ReturnConsumedCapacity` `INDEXES` reports
+  the fetched table items' read units under `Table`, plus the index's own.
+  LocalStack reports `Table` 0 and the index's units alone while returning the
+  same attributes. The developer guide's local secondary indexes page says "in
+  addition to the reads from the local secondary index ... you are charged for
+  read capacity units for every base table item fetched", so the document
+  wins.
 
 ## DynamoDB batches and transactions
 

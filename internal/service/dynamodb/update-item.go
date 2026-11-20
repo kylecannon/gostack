@@ -11,9 +11,9 @@ import (
 )
 
 // UpdateItem applies an UpdateExpression to the item with a key, creating it
-// from the key when there is none, when its ConditionExpression holds. With no
-// UpdateExpression it stores the key alone if nothing is there. The legacy
-// AttributeUpdates, Expected and ConditionalOperator answer 501.
+// from the key when there is none, when its ConditionExpression, or the legacy
+// Expected and ConditionalOperator, hold. With no UpdateExpression it stores
+// the key alone if nothing is there. The legacy AttributeUpdates answer 501.
 func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*api.UpdateItemOutput, error) {
 	returnOnFailure, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
 	if err != nil {
@@ -25,7 +25,7 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	if in.AttributeUpdates != nil || in.Expected != nil || in.ConditionalOperator != nil {
+	if in.AttributeUpdates != nil {
 		return nil, notImplemented("UpdateItem")
 	}
 
@@ -75,6 +75,12 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 //
 //nolint:ireturn // the parsed condition is the expression package's interface
 func updateExpressions(in *api.UpdateItemInput) (*expression.UpdateExpr, expression.Condition, error) {
+	legacy, err := legacyWrite(in.Expected, in.ConditionalOperator,
+		namedExpr{paramUpdate, in.UpdateExpression}, namedExpr{paramCondition, in.ConditionExpression})
+	if err != nil {
+		return nil, nil, err
+	}
+
 	hasExpr := in.UpdateExpression != nil || in.ConditionExpression != nil
 
 	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, hasExpr,
@@ -95,6 +101,10 @@ func updateExpressions(in *api.UpdateItemInput) (*expression.UpdateExpr, express
 
 	if err != nil {
 		return nil, nil, fmt.Errorf("update: %w", err)
+	}
+
+	if legacy != nil {
+		cond = legacy
 	}
 
 	return update, cond, nil

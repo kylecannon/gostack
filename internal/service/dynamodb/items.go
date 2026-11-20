@@ -35,8 +35,7 @@ const (
 )
 
 // PutItem stores an item, replacing the one with its key, when its
-// ConditionExpression holds. The legacy Expected and ConditionalOperator
-// answer 501.
+// ConditionExpression, or the legacy Expected and ConditionalOperator, hold.
 func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutItemOutput, error) {
 	returnOnFailure, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
 	if err != nil {
@@ -46,10 +45,6 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
-	}
-
-	if in.Expected != nil || in.ConditionalOperator != nil {
-		return nil, notImplemented("PutItem")
 	}
 
 	returnOld, err := returnValues(in.ReturnValues)
@@ -70,9 +65,18 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
+	legacy, err := legacyWrite(in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
+	if err != nil {
+		return nil, err
+	}
+
 	cond, err := writeCondition(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
 	if err != nil {
 		return nil, err
+	}
+
+	if legacy != nil {
+		cond = legacy
 	}
 
 	change, err := e.data.Write(in.Item, func(old value.Item) (value.Item, error) {
@@ -148,8 +152,7 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 }
 
 // DeleteItem removes the item with a key, if there is one, when its
-// ConditionExpression holds. The legacy Expected and ConditionalOperator
-// answer 501.
+// ConditionExpression, or the legacy Expected and ConditionalOperator, hold.
 func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*api.DeleteItemOutput, error) {
 	returnOnFailure, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
 	if err != nil {
@@ -161,11 +164,13 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	if in.Expected != nil || in.ConditionalOperator != nil {
-		return nil, notImplemented("DeleteItem")
+	returnOld, err := returnValues(in.ReturnValues)
+	if err != nil {
+		return nil, err
 	}
 
-	returnOld, err := returnValues(in.ReturnValues)
+	// DynamoDB Local checks the legacy condition before the key.
+	legacy, err := legacyWrite(in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +183,10 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 	cond, err := writeCondition(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
 	if err != nil {
 		return nil, err
+	}
+
+	if legacy != nil {
+		cond = legacy
 	}
 
 	change, err := e.data.Write(in.Key, func(old value.Item) (value.Item, error) {
@@ -242,7 +251,9 @@ func checkCondition(cond expression.Condition, old value.Item, returnOld bool) e
 	}
 
 	if returnOld && old != nil {
-		return (&api.ConditionalCheckFailedException{Item: old}).Err(msgConditionFailed)
+		err := (&api.ConditionalCheckFailedException{Item: old}).Err(msgConditionFailed)
+
+		return &conditionFailedError{item: old, err: err}
 	}
 
 	return api.NewConditionalCheckFailedException(msgConditionFailed)

@@ -69,9 +69,10 @@ type Provider struct {
 	// replicated is set once any table gets a 2019 replica, so the item
 	// operations skip the replica directory until then.
 	replicated atomic.Bool
-	// changed is told, with the service name, about a change that no mutating
-	// call reports: a time to live removal, and a stream record, which the
-	// dynamodbstreams snapshot holds. It is nil when nothing listens.
+	// changed is told, with the service name, about a change that no call to
+	// the gateway reports, so persistence can save it: a call that wrote and
+	// then failed, a time to live removal, and a stream record, which the
+	// dynamodbstreams snapshot holds. It may be nil.
 	changed func(name string)
 }
 
@@ -81,12 +82,14 @@ var _ api.Handler = (*Provider)(nil)
 const streamsService = "dynamodbstreams"
 
 // New returns the provider. settings is asked on every call, so an update
-// through /_localstack/config takes effect at once. changed is called with a
-// service name when state changes outside a mutating call; it may be nil.
+// through /_localstack/config takes effect at once. changed is called with
+// "dynamodb" after a change the gateway does not see: a call that wrote and
+// then failed, or a time to live removal; and with "dynamodbstreams" for each
+// stream record. It may be nil.
 func New(settings func() Settings, changed func(name string)) *Provider {
 	return &Provider{
-		changed:  changed,
 		settings: settings,
+		changed:  changed,
 		states:   store.NewBundle(func(string, string) *State { return newState() }, (*State).reset),
 		accounts: store.NewBundle(func(string, string) *accountState { return newAccountState() }, (*accountState).reset),
 		now:      time.Now,
@@ -104,14 +107,6 @@ func (p *Provider) Registration() service.Registration {
 		Mount:    p.mountExpired,
 		Close:    p.close,
 		Persist:  p,
-	}
-}
-
-// notifyChanged tells persistence that DynamoDB's state changed outside a
-// mutating call.
-func (p *Provider) notifyChanged() {
-	if p.changed != nil {
-		p.changed(api.Metadata.Name)
 	}
 }
 
