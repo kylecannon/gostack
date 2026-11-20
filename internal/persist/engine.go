@@ -710,7 +710,11 @@ func (e *Engine) redirtyLocked(failed []pendingService) {
 }
 
 // takeDirty clears the dirty bit of every dirty service and returns the safe
-// ones in name order; writeAll puts them in saveOrder. It also cancels the
+// ones in name order; writeAll puts them in saveOrder. A follower of a dirty
+// service is taken with it, dirty or not, so a flush that saves the leader
+// saves the follower right after it and the two files are of one moment:
+// DynamoDB Streams writes the records up to the cut DynamoDB's save took, and
+// a streams file left behind that cut would restore none. It also cancels the
 // armed timer, because the services it was armed for are now in the caller's
 // hands.
 func (e *Engine) takeDirty() []pendingService {
@@ -722,9 +726,14 @@ func (e *Engine) takeDirty() []pendingService {
 
 	var pending []pendingService
 
+	saved := make(map[string]bool, len(e.services))
+	for name, t := range e.services {
+		saved[name] = t.dirty && t.unsafe == nil
+	}
+
 	for _, name := range slices.Sorted(maps.Keys(e.services)) {
 		t := e.services[name]
-		if !t.dirty {
+		if !t.dirty && !saved[follows(t.snap)] {
 			continue
 		}
 
@@ -841,9 +850,9 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]pend
 //
 // A [Follower] then moves to right after the service it follows when both are
 // pending, a declared order rather than a name sort: dynamodbstreams is saved
-// straight after dynamodb, so the streams file is never older than the table
-// file whose shards it fills, and a kill between the two loses at most the
-// records written between them.
+// straight after dynamodb (takeDirty takes it whenever dynamodb is taken), so
+// the streams file holds the records of the cut the table file holds, and
+// only a kill between the two leaves it the older one.
 //
 // A service whose assets have failed or been released sorts with the pending
 // ones; its save fails in firstPass, which reports why.

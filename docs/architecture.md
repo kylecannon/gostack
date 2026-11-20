@@ -1513,8 +1513,9 @@ Kinesis. The state is two files, LocalStack's split:
   records back into the shards of the tables dynamodb restored. The engine
   takes the order from a declaration, `persist.Follower`, which the
   dynamodbstreams snapshotter implements, not from the names. A flush that
-  saves both saves dynamodbstreams right after dynamodb, whatever their last
-  durations, so the streams file is not the older of the two.
+  saves dynamodb saves dynamodbstreams right after it, whatever their last
+  durations and whether or not a stream record marked it, so the streams file
+  is of the cut the table file holds and not the older of the two.
 - ClientRequestToken windows are not saved. DynamoDB Local keeps them in
   memory, so LocalStack loses them on a restart too.
 - State that changes outside a mutating operation marks the service dirty

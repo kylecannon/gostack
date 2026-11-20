@@ -61,7 +61,9 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 
 	runCutTransactions(t, s, "cut-a", "cut-b")
 
-	check := func(t *testing.T, i int, tables, streams []byte) {
+	// check restores tables and streams and checks the counters against the
+	// records. It returns the restored provider's streams snapshot.
+	check := func(t *testing.T, i int, tables, streams []byte) []byte {
 		t.Helper()
 
 		restored := newStack(t)
@@ -85,6 +87,11 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 		}
 
 		require.Equal(t, updates[0], updates[1], "snapshot %d: the two shards disagree", i)
+
+		var again bytes.Buffer
+		require.NoError(t, restored.provider.SnapshotStreams(&again))
+
+		return again.Bytes()
 	}
 
 	streamsOf := func(t *testing.T) []byte {
@@ -99,14 +106,16 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 	t.Run("one flush", func(t *testing.T) {
 		deadline := time.Now().Add(time.Second)
 		for i := 0; i < 3 || time.Now().Before(deadline); i++ {
-			tables := snapshotOf(t, s.provider)
-			check(t, i, tables, streamsOf(t))
+			tables, streams := snapshotOf(t, s.provider), streamsOf(t)
+			require.Equal(t, string(streams), string(check(t, i, tables, streams)),
+				"a restored provider's streams snapshot, before any table snapshot, is the one it loaded")
 		}
 	})
 
 	t.Run("streams of a later cut", func(t *testing.T) {
 		for i := range 3 {
 			tables := snapshotOf(t, s.provider)
+			s.ok(t, opTransactWrite, cutTxn("cut-a", "cut-b")) // the later cut holds at least one more
 			snapshotOf(t, s.provider)
 			check(t, i, tables, streamsOf(t))
 		}
@@ -140,11 +149,7 @@ const maxCutTransactions = 8_000
 func runCutTransactions(t *testing.T, s *stack, a, b string) {
 	t.Helper()
 
-	const add = `{"Update":{"TableName":"%s","Key":{"id":{"S":"ctr"}},"UpdateExpression":"ADD c :one",` +
-		`"ExpressionAttributeValues":{":one":{"N":"1"}}}}`
-
-	txn := `{"TransactItems":[` + strings.ReplaceAll(add, "%s", a) + `,` + strings.ReplaceAll(add, "%s", b) + `]}`
-
+	txn := cutTxn(a, b)
 	stop := make(chan struct{})
 
 	var (
@@ -170,6 +175,15 @@ func runCutTransactions(t *testing.T, s *stack, a, b string) {
 		close(stop)
 		wg.Wait()
 	})
+}
+
+// cutTxn is a transaction that adds one to the counter item ctr of tables a
+// and b.
+func cutTxn(a, b string) string {
+	const add = `{"Update":{"TableName":"%s","Key":{"id":{"S":"ctr"}},"UpdateExpression":"ADD c :one",` +
+		`"ExpressionAttributeValues":{":one":{"N":"1"}}}}`
+
+	return `{"TransactItems":[` + strings.ReplaceAll(add, "%s", a) + `,` + strings.ReplaceAll(add, "%s", b) + `]}`
 }
 
 // isCounter reports whether r is a record of the counter item ctr.

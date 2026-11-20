@@ -3,9 +3,10 @@ package persist
 // Follower is a Snapshotter whose Restore reads the state another service's
 // Restore put back, as DynamoDB Streams' records go back into the shards of
 // DynamoDB's restored tables. Load restores the followed service first, and a
-// flush that saves both saves the follower right after it, so the two files
-// are taken as close together as the engine can take them and the
-// follower's is never the older of the two.
+// flush that saves the followed service saves the follower right after it,
+// whether or not the follower changed, so the two files are taken as close
+// together as the engine can take them and the follower's is never the older
+// of the two.
 type Follower interface {
 	// Follows names the service this one follows.
 	Follows() string

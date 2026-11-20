@@ -113,3 +113,24 @@ func Test_Engine_Load_RestoresALeaderBeforeItsFollower(t *testing.T) {
 	require.NoError(t, loaded.Load(t.Context()))
 	require.Equal(t, []string{other, leader, follower}, log.seen)
 }
+
+// Test_Engine_Flush_SavesAFollowerWithItsLeader: a flush that saves the
+// leader saves its follower right after it although only the leader is
+// dirty, as DynamoDB Streams' file must be of the cut DynamoDB's save took. A
+// flush of the follower alone saves the follower alone.
+func Test_Engine_Flush_SavesAFollowerWithItsLeader(t *testing.T) {
+	log := &orderLog{}
+	e := New(quietConfig(t.TempDir(), time.Hour))
+	e.Register(follower, leading{logged{name: follower, leader: leader, log: log}})
+	e.Register(other, logged{name: other, log: log})
+	e.Register(leader, logged{name: leader, log: log})
+
+	e.MarkDirty(leader)
+	require.NoError(t, e.Flush(t.Context()))
+	require.Equal(t, []string{leader, follower}, log.seen)
+
+	log.seen = nil
+	e.MarkDirty(follower)
+	require.NoError(t, e.Flush(t.Context()))
+	require.Equal(t, []string{follower}, log.seen)
+}
