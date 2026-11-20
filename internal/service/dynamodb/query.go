@@ -81,7 +81,7 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 // that come before its expressions, in DynamoDB Local's order, with
 // LocalStack's index checks first.
 func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableEntry, *reader, error) {
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		var notFound *awserr.Error
 		if in.IndexName != nil && errors.As(err, &notFound) && notFound.Code == codeNotFound {

@@ -168,7 +168,12 @@ type tableMeta struct {
 	DeletionProtection bool
 	Warm               *api.WarmThroughput
 	OnDemand           *api.OnDemandThroughput
-	Tags               []api.Tag
+	// TTL is the time to live setting as UpdateTimeToLive gave it.
+	TTL *api.TimeToLiveSpecification
+	// PITR is the point-in-time recovery setting.
+	PITR pitr
+	// Destinations are the Kinesis streaming destinations, stored only.
+	Destinations []api.KinesisDataStreamDestination
 }
 
 // indexMeta is a secondary index's definition.

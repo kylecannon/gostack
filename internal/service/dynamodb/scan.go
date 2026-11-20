@@ -82,7 +82,7 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 // scanTarget finds the table and index a Scan reads and makes the checks that
 // come before its expressions.
 func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEntry, *reader, error) {
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scan: %w", err)
 	}

@@ -38,4 +38,5 @@ const (
 	varDynamoDBReadErrorProbability    = "DYNAMODB_READ_ERROR_PROBABILITY"
 	varDynamoDBWriteErrorProbability   = "DYNAMODB_WRITE_ERROR_PROBABILITY"
 	varDynamoDBShareDB                 = "DYNAMODB_SHARE_DB"
+	varDynamoDBRemoveExpiredItems      = "DYNAMODB_REMOVE_EXPIRED_ITEMS"
 )

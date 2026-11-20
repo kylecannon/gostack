@@ -43,7 +43,7 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, err
 	}
 
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -112,7 +112,7 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, err
 	}
 
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
@@ -156,7 +156,7 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 		return nil, err
 	}
 
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}

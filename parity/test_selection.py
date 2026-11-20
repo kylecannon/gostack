@@ -167,7 +167,8 @@ class AffectedServicesTest(ServedTestCase):
                 "internal/api/sns/types.go": {"sns", "s3"},
                 "internal/service/secretsmanager/secrets.go": {"secretsmanager", "ssm"},
                 "internal/service/ssm/parameters.go": {"ssm"},
-                "internal/service/dynamodb/tables.go": {"dynamodb", "dynamodbstreams"},
+                # dynamodb mounts its expired-items route, so it reaches every service.
+                "internal/service/dynamodb/tables.go": known,
                 "internal/service/dynamodbstreams/streams.go": {"dynamodb", "dynamodbstreams"},
                 "internal/service/sqs/queue.go": known,
             }
@@ -182,8 +183,9 @@ class AffectedServicesTest(ServedTestCase):
 
     def test_a_change_to_a_service_with_routing_hooks_selects_every_service(self) -> None:
         # SQ-199 item2: s3's Fallback, Preprocess and ClaimHost and sqs's
-        # queue-URL mount see requests meant for any service.
-        self.assertEqual(set(ledger.ROUTING_REACH), {"s3", "sqs"})
+        # queue-URL mount see requests meant for any service. SQ-230: dynamodb
+        # mounts DELETE /_aws/dynamodb/expired.
+        self.assertEqual(set(ledger.ROUTING_REACH), {"dynamodb", "s3", "sqs"})
         for path in ("internal/service/s3/object.go", "internal/service/sqs/routes.go", "internal/api/s3/types.go", "internal/api/sqs/types.go"):
             with self.subTest(path=path):
                 self.assertEqual(ledger.affected_services([path], KNOWN), KNOWN | {"s3"})

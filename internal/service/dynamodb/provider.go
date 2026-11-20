@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -36,6 +37,13 @@ type Settings struct {
 	ShareDB bool
 	// Host is LOCALSTACK_HOST, the address DescribeEndpoints hands out.
 	Host string
+	// RemoveExpiredItems is DYNAMODB_REMOVE_EXPIRED_ITEMS: an hourly sweep
+	// removes the expired items of tables with time to live on.
+	RemoveExpiredItems bool
+	// DisableCompatPaths leaves LocalStack's /_aws/dynamodb/expired unmounted;
+	// /_gostack/services/dynamodb/expired is always there. It is read once,
+	// when the router is built.
+	DisableCompatPaths bool
 }
 
 // The namespace every caller shares under ShareDB, DynamoDB Local's own.
@@ -54,8 +62,13 @@ type Provider struct {
 
 	settings func() Settings
 	states   *store.Bundle[State]
+	accounts *store.Bundle[accountState]
 	now      func() time.Time
 	random   func() float64
+	expiry   expiry
+	// replicated is set once any table gets a 2019 replica, so the item
+	// operations skip the replica directory until then.
+	replicated atomic.Bool
 }
 
 var _ api.Handler = (*Provider)(nil)
@@ -66,6 +79,7 @@ func New(settings func() Settings) *Provider {
 	return &Provider{
 		settings: settings,
 		states:   store.NewBundle(func(string, string) *State { return newState() }, (*State).reset),
+		accounts: store.NewBundle(func(string, string) *accountState { return newAccountState() }, (*accountState).reset),
 		now:      time.Now,
 		random:   rand.Float64,
 	}
@@ -77,8 +91,22 @@ func (p *Provider) Registration() service.Registration {
 		Metadata: api.Metadata,
 		Serve:    p.serve,
 		Mutating: mutating,
-		Reset:    p.states.Reset,
+		Reset:    p.reset,
+		Mount:    p.mountExpired,
+		Close:    p.close,
 	}
+}
+
+// reset empties the states of account and region. The account-wide state,
+// which LocalStack keeps across regions, is emptied with every region of an
+// account; the sweep timer stops when no table has time to live left.
+func (p *Provider) reset(account, region string) {
+	p.states.Reset(account, region)
+	if region == "" {
+		p.accounts.Reset(account, "")
+	}
+
+	p.settleExpiry()
 }
 
 // readOperations change nothing although their names do not say so.
@@ -149,6 +177,8 @@ type caller struct {
 	account string
 	region  string
 	state   *State
+	// shared is DYNAMODB_SHARE_DB, as the call read it.
+	shared bool
 }
 
 // caller returns the caller of the request in ctx.
@@ -158,8 +188,8 @@ func (p *Provider) caller(ctx context.Context) caller {
 		rc = &request.Context{AccountID: sharedAccount, Region: usEast1}
 	}
 
-	c := caller{account: rc.AccountID, region: regionName(rc.Region)}
-	if p.settings().ShareDB {
+	c := caller{account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB}
+	if c.shared {
 		c.state = p.states.Get(sharedAccount, sharedRegion)
 	} else {
 		c.state = p.states.Get(c.account, c.region)

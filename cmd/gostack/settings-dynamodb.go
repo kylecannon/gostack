@@ -14,5 +14,7 @@ func dynamodbSettings(current *config.Settings) dynamodb.Settings {
 		WriteErrorProbability: current.DynamoDBWriteErrorProbability,
 		ShareDB:               current.DynamoDBShareDB != 0,
 		Host:                  current.LocalstackHost.String(),
+		RemoveExpiredItems:    current.DynamoDBRemoveExpiredItems,
+		DisableCompatPaths:    !current.CompatPaths,
 	}
 }

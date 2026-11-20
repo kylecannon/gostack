@@ -314,9 +314,11 @@ func Test_Load_variableForms(t *testing.T) {
 				varDynamoDBReadErrorProbability:  "1",
 				varDynamoDBWriteErrorProbability: " 0.25 ",
 				varDynamoDBShareDB:               "2",
+				varDynamoDBRemoveExpiredItems:    "1",
 			},
 			check: func(t *testing.T, got *Settings) {
 				t.Helper()
+				require.True(t, got.DynamoDBRemoveExpiredItems)
 				require.InDelta(t, 0.5, got.DynamoDBErrorProbability, 0)
 				require.InDelta(t, 1.0, got.DynamoDBReadErrorProbability, 0)
 				require.InDelta(t, 0.25, got.DynamoDBWriteErrorProbability, 0)

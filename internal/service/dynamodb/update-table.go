@@ -26,9 +26,18 @@ const (
 func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*api.UpdateTableOutput, error) {
 	c := p.caller(ctx)
 
-	name, e, err := c.lookup(in.TableName)
+	name, e, err := p.lookupHome(c, in.TableName)
 	if err != nil {
 		return nil, err
+	}
+
+	if onlyReplicaUpdates(in) {
+		_, owner := p.home(c, name)
+
+		err = p.updateReplicas(c, owner, name, in.ReplicaUpdates)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	err = checkIndexUpdates(in.GlobalSecondaryIndexUpdates)
@@ -56,6 +65,8 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 			index.IndexSizeBytes, index.ItemCount = nil, nil
 		}
 	}
+
+	d.Replicas = p.replicas(c, name)
 
 	return &api.UpdateTableOutput{TableDescription: d}, nil
 }

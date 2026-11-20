@@ -69,8 +69,10 @@ func checkName(name *string) error {
 // Local's answer: TableId, SSEDescription, TableClassSummary and the GSI fields.
 func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*api.CreateTableOutput, error) {
 	c := p.caller(ctx)
-	if in.TableName != nil && c.state.table(*in.TableName) != nil {
-		return nil, api.NewResourceInUseException(msgTableExists + *in.TableName)
+	if in.TableName != nil {
+		if home, _ := p.home(c, *in.TableName); home.table(*in.TableName) != nil {
+			return nil, api.NewResourceInUseException(msgTableExists + *in.TableName)
+		}
 	}
 
 	if isPayPerRequest(in.BillingMode) && in.ProvisionedThroughput != nil {
@@ -99,6 +101,8 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 	if !c.state.add(meta.Name, entry) {
 		return nil, api.NewResourceInUseException(msgTableExists + meta.Name)
 	}
+
+	p.account(c).setTags(c.tableARN(meta.Name), in.Tags)
 
 	d := entry.description(c.tableARN(meta.Name))
 	d.WarmThroughput = nil
@@ -140,7 +144,6 @@ func newMeta(in *api.CreateTableInput, now time.Time) tableMeta {
 		DeletionProtection: in.DeletionProtectionEnabled != nil && *in.DeletionProtectionEnabled,
 		Warm:               in.WarmThroughput,
 		OnDemand:           in.OnDemandThroughput,
-		Tags:               in.Tags,
 	}
 
 	if payPerRequest {

@@ -78,6 +78,7 @@ var variables = []variable{
 	{name: varDynamoDBReadErrorProbability},
 	{name: varDynamoDBWriteErrorProbability},
 	{name: varDynamoDBShareDB},
+	{name: varDynamoDBRemoveExpiredItems},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
