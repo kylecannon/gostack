@@ -1182,7 +1182,6 @@ func (e *Engine) writeAll(ctx context.Context, run *flushRun, pending []pendingS
 	run.root = root
 	deferred := run.firstPass(ctx, saveOrder(pending))
 	run.secondPass(ctx, deferred)
-	run.unfollow()
 
 	return errors.Join(run.errs...)
 }
@@ -1275,26 +1274,26 @@ type flushRun struct {
 	// results is what each save that has ended did to its service's run of
 	// failures, and holding the services taken whose save has not ended.
 	results []outcome
-	holding map[string]bool
+	holding map[string]pendingService
 	// ended is true once the end of ctx is in errs.
 	ended bool
 	// committed are the services whose snapshot this flush renamed into place,
 	// and deferred the ones it deferred to the second pass.
 	committed, deferred map[string]bool
 	// followed are the [Leader]s this flush told a follower is saved after
-	// them, told otherwise once it ends.
-	followed []Leader
+	// them, by name, told otherwise once the saves of both have ended.
+	followed map[string]Leader
 }
 
 // newFlushRun returns the run of a flush that took pending.
 func newFlushRun(e *Engine, pending []pendingService) *flushRun {
 	r := &flushRun{
 		e: e, committed: map[string]bool{}, deferred: map[string]bool{},
-		holding: make(map[string]bool, len(pending)),
+		holding: make(map[string]pendingService, len(pending)), followed: map[string]Leader{},
 	}
 
 	for _, p := range pending {
-		r.holding[p.name] = true
+		r.holding[p.name] = p
 	}
 
 	return r
@@ -1303,14 +1302,17 @@ func newFlushRun(e *Engine, pending []pendingService) *flushRun {
 // settle ends the service's part in the flush, with u what its save failed
 // with, or nil, and frees it for another flush (see settleLocked).
 func (r *flushRun) settle(name string, u *unsaved) {
+	p, ok := r.holding[name]
+	if !ok {
+		return
+	}
+
+	r.unfollowUnit(p)
+
 	e := r.e
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-
-	if !r.holding[name] {
-		return
-	}
 
 	delete(r.holding, name)
 
@@ -1326,8 +1328,11 @@ func (r *flushRun) lose(u unsaved) {
 }
 
 // close ends the flush. A service still held, which only a panic through the
-// flush leaves, is freed with its dirty bit cleared, as the panic found it.
+// flush leaves, is freed with its dirty bit cleared, as the panic found it,
+// and its leader is told no follower is saved.
 func (r *flushRun) close() {
+	r.unfollow()
+
 	e := r.e
 
 	e.mu.Lock()
@@ -1389,7 +1394,7 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 			l.Followed(followed[p.name])
 
 			if followed[p.name] {
-				r.followed = append(r.followed, l)
+				r.followed[p.name] = l
 			}
 		}
 
@@ -1476,11 +1481,39 @@ func (r *flushRun) giveWay(p pendingService) {
 	r.lose(unsaved{pendingService: p, err: errLeaderUnsaved, gaveWay: true})
 }
 
-// unfollow ends the flush for each [Leader] it told a follower is saved after
-// it: whatever happened to either save, nothing it kept for that follower is
-// needed past the flush.
+// unfollowUnit tells the [Leader] of p's unit, when this flush told it a
+// follower is saved after it, that none is, once p is the last of the unit
+// this flush holds: whatever happened to either save, nothing it kept for that
+// follower is needed past them. It is told before the last hold is freed, so a
+// flush beside this one that takes the pair next is never told false between
+// its leader's Snapshot and its follower's.
+func (r *flushRun) unfollowUnit(p pendingService) {
+	head := p.name
+	if leader := follows(p.snap); leader != "" {
+		head = leader
+	}
+
+	l, ok := r.followed[head]
+	if !ok {
+		return
+	}
+
+	for name, other := range r.holding {
+		if name != p.name && (name == head || follows(other.snap) == head) {
+			return
+		}
+	}
+
+	delete(r.followed, head)
+	l.Followed(false)
+}
+
+// unfollow tells each [Leader] still told a follower is saved after it that
+// none is, at the end of the flush. Every save that ends tells its unit's
+// leader already (see unfollowUnit); this is for a flush a panic cut short.
 func (r *flushRun) unfollow() {
-	for _, l := range r.followed {
+	for head, l := range r.followed {
+		delete(r.followed, head)
 		l.Followed(false)
 	}
 }

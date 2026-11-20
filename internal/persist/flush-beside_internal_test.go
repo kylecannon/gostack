@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -177,6 +178,90 @@ func Test_Engine_FlushBesideKeepsALeaderWithItsHeldFollower(t *testing.T) {
 
 		assert.Equal(t, "table v2", file(ddb))
 		assert.Equal(t, "streams v2", file(ddbStream))
+	})
+}
+
+// recLeader is a stateSnap Leader that logs its Snapshots and Followed calls.
+type recLeader struct {
+	*stateSnap
+
+	log *orderLog
+}
+
+func (l recLeader) Snapshot(w io.Writer) error {
+	l.log.add(ddb)
+
+	return l.stateSnap.Snapshot(w)
+}
+
+func (l recLeader) Followed(saved bool) { l.log.add(fmt.Sprintf("followed %t", saved)) }
+
+// recFollower is a stateSnap that follows dynamodb and logs each Snapshot as
+// it returns.
+type recFollower struct {
+	*stateSnap
+
+	log *orderLog
+}
+
+func (recFollower) Follows() string { return ddb }
+
+func (f recFollower) Snapshot(w io.Writer) error {
+	err := f.stateSnap.Snapshot(w)
+	f.log.add(ddbStream)
+
+	return err
+}
+
+// Test_Engine_FlushBesideIsNotUnfollowedByTheTimedFlushEnding checks that the
+// timed flush tells its leader Followed(false) when the pair's saves end, not
+// when the whole flush does. The timed flush saved the pair and is stuck in
+// the s3 sync; a Flush beside it then saves the pair again. The timed flush
+// ends between that Flush's table and streams snapshots, and a Followed(false)
+// from it then would drop the cut the streams snapshot is to write.
+func Test_Engine_FlushBesideIsNotUnfollowedByTheTimedFlushEnding(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newSyncFixture(t, 10*time.Millisecond)
+		log := &orderLog{}
+		table := &stateSnap{state: "table v1"}
+		streams := &stateSnap{state: "streams v1"}
+		f.e.Register(ddb, recLeader{stateSnap: table, log: log})
+		f.e.Register(ddbStream, recFollower{stateSnap: streams, log: log})
+
+		started, release := gateFirstSync(f.a, nil)
+		defer release()
+
+		f.commit(t, "body")
+		f.e.MarkDirty(ddb)
+		<-started // the timed flush saved the pair and is stuck in the s3 sync
+
+		gate := make(chan struct{})
+
+		streams.mu.Lock()
+		streams.gate, streams.entered = gate, make(chan struct{})
+		streams.mu.Unlock()
+
+		log.mu.Lock()
+		log.seen = nil
+		log.mu.Unlock()
+
+		table.set("table v2")
+		f.e.MarkDirty(ddb)
+
+		flushed := make(chan error)
+
+		go func() { flushed <- f.e.Flush(t.Context()) }()
+
+		<-streams.entered // the Flush beside saved the table and is in the streams Snapshot
+
+		release()
+		synctest.Wait() // the timed flush has ended
+
+		close(gate)
+		require.NoError(t, <-flushed)
+
+		assert.Equal(t, []string{"followed true", ddb, ddbStream, "followed false"}, log.seen,
+			"the leader is told false only after its follower's snapshot")
 	})
 }
 

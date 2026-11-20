@@ -1410,7 +1410,10 @@ is untouched.
   holds: dynamodb renamed but dynamodbstreams not yet snapshotted is one unit,
   so no save beside it puts a newer table on disk ahead of a streams file cut
   from the older one, and a follower is still saved only right after its
-  leader's rename in the same save. Two saves never hold one service, so
+  leader's rename in the same save. The timed save tells dynamodb
+  `Followed(false)` when the pair's saves end, before it frees them, so its
+  end never drops the cut of a save beside it that took the pair next. Two
+  saves never hold one service, so
   each state file still has one writer. The timed save holds the save guard
   shared: a load or reset waits for both, and the last of them to end frees
   it. A `Snapshot` or sync cannot be cut short, so this is what keeps a
@@ -1618,10 +1621,11 @@ Kinesis. The state is two files, LocalStack's split:
   whether a dynamodbstreams save follows it in the flush (`persist.Leader`):
   with `PERSIST_DYNAMODBSTREAMS=0`, or dynamodbstreams in its own backoff,
   the cut copies no records. The copy is dropped once the streams snapshot
-  has written it, and at the end of every flush that copied it whatever
-  happened (the engine tells dynamodb `Followed(false)`: a failed table save,
-  a streams save that failed before its snapshot, a flush cancelled between
-  the two saves, Stop's flush), or at the next cut, so it lives for one flush
+  has written it, and once both saves of the pair have ended in every flush
+  that copied it whatever happened (the engine tells dynamodb
+  `Followed(false)` before it frees the pair for another flush: a failed
+  table save, a streams save that failed before its snapshot, a flush
+  cancelled between the two saves, Stop's flush), or at the next cut, so it lives for one flush
   and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
   the item images are shared with the shard. A shard at its bound holds at
   most `MaxBytes / RecordOverhead`, about 1,048,576 records, so the copy is
