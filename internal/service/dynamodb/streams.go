@@ -169,6 +169,11 @@ func keysOf(item value.Item, key table.KeySchema) value.Item {
 	return keys
 }
 
+// AttributeValue is DynamoDB's attribute value, the type of a stream record's
+// images. The dynamodbstreams service names it here: only this package
+// imports DynamoDB's generated API.
+type AttributeValue = api.AttributeValue
+
 // StreamInfo is one table's latest stream, as the dynamodbstreams service
 // describes it.
 type StreamInfo struct {

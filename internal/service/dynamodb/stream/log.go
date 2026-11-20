@@ -22,11 +22,18 @@ const (
 // Retention is how long a record is kept: 24 hours, as DynamoDB keeps them.
 const Retention = 24 * time.Hour
 
-// MaxBytes bounds the records one shard keeps, summed by their SizeBytes: once
-// a write would pass it, the oldest records are trimmed first, as retention
-// trims them. A shard therefore holds at most 256 MiB of record images plus
-// one small struct per record, however fast the table is written.
+// MaxBytes bounds the records one shard keeps, each charged its SizeBytes plus
+// RecordOverhead: once a write would pass it, the oldest records are trimmed
+// first, as retention trims them. A shard therefore holds at most 256 MiB of
+// record images, Record structs and key maps together, however fast the table
+// is written and however small its records are.
 const MaxBytes = 256 << 20
+
+// RecordOverhead is what a record is charged beyond its SizeBytes: the Record
+// struct, its slot in the shard and its keys map, which SizeBytes does not
+// count. A KEYS_ONLY record's SizeBytes is a few bytes, so without it the
+// bound would let a shard hold tens of millions of records.
+const RecordOverhead = 256
 
 // ErrTrimmed is returned for a position whose record retention or the byte
 // bound has trimmed.
@@ -153,7 +160,7 @@ func (l *Log) Append(r Record) {
 	r.Seq = l.next
 	l.next++
 	l.records = append(l.records, r)
-	l.bytes += r.SizeBytes
+	l.bytes += r.SizeBytes + RecordOverhead
 
 	for l.bytes > l.maxBytes && len(l.records) > 1 {
 		l.dropOldest()
@@ -266,7 +273,7 @@ func (l *Log) checkPosition(pos int) (int, error) {
 
 // dropOldest trims the oldest record. The caller holds mu.
 func (l *Log) dropOldest() {
-	l.bytes -= l.records[0].SizeBytes
+	l.bytes -= l.records[0].SizeBytes + RecordOverhead
 	l.records[0] = Record{}
 	l.records = l.records[1:]
 	l.low++
