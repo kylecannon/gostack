@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,6 +402,27 @@ func (s acceptedSet) judge(ctx context.Context, base, head string, matches func(
 	return verdict{note: strings.Join(notes, "; ")}
 }
 
+// unused names the entries of gate that match none of the regressions a gate
+// run judged: an entry with a glob or a stray space, a benchmark that no longer
+// exists, or a regression that has gone. It matches nothing, and says nothing
+// until reported. matchers holds one per regression.
+func (s acceptedSet) unused(gate string, matchers []func(*acceptedEntry) bool) []string {
+	var names []string
+
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.Gate != gate {
+			continue
+		}
+
+		if !slices.ContainsFunc(matchers, func(matches func(*acceptedEntry) bool) bool { return matches(e) }) {
+			names = append(names, e.subject())
+		}
+	}
+
+	return names
+}
+
 // outOfScope returns "" when the entry applies to a comparison of base and head,
 // and otherwise why it does not.
 func (s acceptedSet) outOfScope(ctx context.Context, e *acceptedEntry, base, head string) string {
@@ -490,15 +512,21 @@ type measured struct {
 }
 
 // within returns "" when the change is inside the limit, and otherwise says how
-// it is not.
+// it is not. A percent limit and the cap that holds an absolute one both read
+// the change as worsening reads it.
 func (m measured) within(l limit) string {
+	worse := m.worsening()
+
 	switch {
-	case l.percent > 0 && m.worsening() <= l.percent:
+	case l.percent > 0 && worse <= l.percent:
 		return ""
 	case l.percent > 0:
 		return fmt.Sprintf("the change is past the accepted %s", l)
 	case l.unit != m.unit:
 		return fmt.Sprintf("the accepted %s is not in %s, the metric's unit", l, m.unit)
+	case worse > maxPercent:
+		return fmt.Sprintf("the accepted %s allows a change of %s, past the %d%% cap on a percent bound", l,
+			describePercent(worse), maxPercent)
 	case m.headWithin(l.absolute):
 		return ""
 	default:
@@ -506,14 +534,33 @@ func (m measured) within(l limit) string {
 	}
 }
 
-// worsening is how much worse the change is, in percent: a rise for a cost, a
-// fall for a throughput.
+// worsening is how much worse the change is, as the rise in percent in what the
+// work costs. A cost is its own change. A throughput that falls d percent takes
+// 100/(100-d) times as long for the same work, a rise of 100d/(100-d) percent,
+// so "+100%" lets a latency double and a throughput halve. A throughput that
+// falls to nothing is a rise without end.
 func (m measured) worsening() float64 {
 	if m.lowerIsBetter {
 		return m.change
 	}
 
-	return -m.change
+	const whole = 100.0
+
+	if m.change <= -whole {
+		return math.Inf(1)
+	}
+
+	return -whole * m.change / (whole + m.change)
+}
+
+// describePercent writes a percent for a message, and "without end" for the
+// rise of a throughput that fell to nothing.
+func describePercent(pct float64) string {
+	if math.IsInf(pct, 1) {
+		return "without end"
+	}
+
+	return fmt.Sprintf("+%.0f%%", pct)
 }
 
 // headWithin reports whether the head is no worse than an absolute limit.

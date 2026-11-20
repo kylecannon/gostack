@@ -211,6 +211,7 @@ type comparison struct {
 	metrics      int
 	regressions  []metric
 	accepted     []metric
+	unused       []string
 	noise        []metric
 	improvements []metric
 	missing      []string
@@ -220,9 +221,13 @@ type comparison struct {
 // settle moves each regression the accepted list holds for base..head out of
 // the regressions, and notes on the rest why a listed entry did not hold them.
 func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, head string) {
-	var still []metric
+	var (
+		still    []metric
+		matchers = make([]func(*acceptedEntry) bool, 0, len(cmp.regressions))
+	)
 
 	for _, m := range cmp.regressions {
+		matchers = append(matchers, m.matches)
 		v := accepted.judge(ctx, base, head, m.matches, m.within)
 		if v.entry != nil {
 			m.accepted = v.entry
@@ -236,6 +241,7 @@ func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, h
 	}
 
 	cmp.regressions = still
+	cmp.unused = accepted.unused(gateSystem, matchers)
 }
 
 // runsNote says which side of a cell completed fewer runs than its result asked
@@ -386,6 +392,7 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	table(&b, "Regressions", cmp.regressions)
 	notes(&b, cmp.regressions)
 	acceptedTable(&b, cmp.accepted)
+	unusedList(&b, cmp.unused)
 	table(&b, "Changes past the limit with overlapping ranges (noise, not failing)", cmp.noise)
 	table(&b, "Improvements", cmp.improvements)
 	problemTable(&b, cmp.problems)
@@ -477,6 +484,22 @@ func notes(b *strings.Builder, regressions []metric) {
 	if listed {
 		b.WriteString("\n")
 	}
+}
+
+// unusedList names the entries of the accepted list that matched no regression.
+// It says nothing when every entry matched one.
+func unusedList(b *strings.Builder, unused []string) {
+	if len(unused) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "### Unused accepted entries (%d)\n\nEach matched no regression:\n\n", len(unused))
+
+	for _, name := range unused {
+		fmt.Fprintf(b, "- %s\n", name)
+	}
+
+	b.WriteString("\n")
 }
 
 // acceptedTable lists the regressions the accepted list holds, with its reason,

@@ -136,9 +136,13 @@ func gateMain(ctx context.Context, args []string, in io.Reader, out io.Writer, c
 // reportGate splits the regressed rows into those the list accepts and the
 // rest, writes both, and fails on the rest.
 func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base, head string, out io.Writer) error {
-	var held, failed []string
+	var (
+		held, failed []string
+		matchers     = make([]func(*acceptedEntry) bool, 0, len(rows))
+	)
 
 	for _, row := range rows {
+		matchers = append(matchers, row.matches)
 		v := accepted.judge(ctx, base, head, row.matches, measured{
 			change: row.delta, unit: row.unit, lowerIsBetter: row.lowerIsBetter(),
 		}.within)
@@ -157,6 +161,12 @@ func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base
 
 	if len(held) > 0 {
 		fmt.Fprintf(&b, "Accepted (%d):\n  %s\n", len(held), strings.Join(held, "\n  "))
+	}
+
+	// An unused entry is shown and never fails the gate: it holds nothing now.
+	if unused := accepted.unused(gateBenchstat, matchers); len(unused) > 0 {
+		fmt.Fprintf(&b, "Unused accepted entries (%d), each matched no regression:\n  %s\n", len(unused),
+			strings.Join(unused, "\n  "))
 	}
 
 	if len(failed) == 0 {

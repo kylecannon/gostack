@@ -371,14 +371,23 @@ under "Accepted". A listed metric past its bound, and every unlisted one, still
 fails. A bound is a finite number above zero with at most one leading `+`, as
 `+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`).
 A percent is at most 1000%. An absolute value is at most 65536 `MiB`, 3600000
-`ms`, 3600 `s` or 10000000 `cycles/s`. An infinite, negative, zero,
+`ms`, 3600 `s` or 10000000 `cycles/s`. A percent bound reads as a rise in what
+the work costs, so a throughput (a `/s` unit, `cycles/s`) that falls d percent
+counts as a rise of 100d/(100-d) percent: `+100%` lets a latency double and a
+throughput halve, `+1000%` stops at a drop to an eleventh, and a throughput that
+falls to nothing is past every bound. An absolute bound is the worst head
+value, a ceiling for a cost and a floor for a throughput, and is held to the
+same 1000% cap: a pair whose change the bound allows past 1000% fails, so
+`65536 MiB` accepts no more than `1000%` does. An infinite, negative, zero,
 repeated-sign or over-cap bound is a load error, as is a second YAML document
 and a second entry that can match the same row as another: one metric, or a
 benchmark `X` with `X-<digits>` (`RouteDetect/host` and `RouteDetect/host-2`
 both match the row `RouteDetect/host-2`). A benchmark whose own name ends in
 `-<digits>` is listed alone without trouble. A list with no entries is valid.
 An entry's `package` is the full import path or the path below the module
-(`internal/route`).
+(`internal/route`). Names compare exactly, so a glob or a trailing space in an
+entry matches nothing: both gates print the entries that matched no regression
+under "Unused accepted entries" and do not fail on them.
 
 An entry applies only while the head holds its commit and the base does not, so
 it expires once main holds the commit. The pull request lands with a merge

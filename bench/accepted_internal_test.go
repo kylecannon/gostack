@@ -23,6 +23,10 @@ const (
 	routePkg  = "internal/route"
 	unitSecOp = "sec/op"
 	unitMiB   = "MiB"
+
+	unitCyclesPerSec = "cycles/s"
+	bound1000        = "+1000%"
+	bound100         = "+100%"
 )
 
 // errNoObject stands in for git failing to find a commit.
@@ -336,7 +340,7 @@ func Test_parseAccepted_bounds(t *testing.T) {
 		"60%": {percent: 60}, "+60%": {percent: 60}, "0.5%": {percent: 0.5}, " +60% ": {percent: 60},
 		"6 MiB": {absolute: 6, unit: unitMiB}, "+6.5 MiB": {absolute: 6.5, unit: unitMiB},
 		"20 ms": {absolute: 20, unit: "ms"}, "2 s": {absolute: 2, unit: "s"},
-		"900 cycles/s": {absolute: 900, unit: "cycles/s"},
+		"900 cycles/s": {absolute: 900, unit: unitCyclesPerSec},
 	}
 
 	for bound, want := range accepted {
@@ -645,7 +649,7 @@ func Test_parseAccepted_caps(t *testing.T) {
 		return err
 	}
 
-	for _, bound := range []string{"1000%", "+1000%", "1000.0%", "999.99%"} {
+	for _, bound := range []string{"1000%", bound1000, "1000.0%", "999.99%"} {
 		require.NoError(t, loadBenchstat(bound), bound)
 		require.NoError(t, loadSystem(bound), bound)
 	}
@@ -658,7 +662,7 @@ func Test_parseAccepted_caps(t *testing.T) {
 	}
 
 	caps := map[string]string{
-		"MiB": "65536", "ms": "3600000", "s": "3600", "cycles/s": "10000000",
+		"MiB": "65536", "ms": "3600000", "s": "3600", unitCyclesPerSec: "10000000",
 	}
 
 	for unit, value := range caps {
@@ -801,4 +805,141 @@ func Test_gitContains(t *testing.T) {
 
 	_, err = gitContains(t.Context(), second, second)
 	require.ErrorContains(t, err, "shallow")
+}
+
+// benchstatThroughput is a benchstat output with one throughput row; its delta
+// is the one %s.
+const benchstatThroughput = `goos: linux
+goarch: amd64
+pkg: github.com/kylecannon/gostack/internal/route
+cpu: AMD EPYC 7763 64-Core Processor
+                    │   base.txt    │               head.txt               │
+                    │      B/s      │      B/s       vs base               │
+RouteDetect/host-2   94.42Mi ± 1%   0.09Mi ± 1%   %s% (p=0.000 n=10)
+`
+
+// A throughput that falls d percent costs 100d/(100-d) percent more for the
+// same work, and a percent bound reads as that rise: the bound100 that lets a
+// latency double lets a throughput halve, and no more.
+func Test_gate_accepted_throughput_bound(t *testing.T) {
+	commits := commitFlags(baseCommit, headCommit)
+
+	tests := []struct {
+		name  string
+		delta string
+		max   string
+		fail  bool
+	}{
+		{name: "a halving is a doubling", delta: "-50.00", max: bound100},
+		{name: "a drop past a doubling fails", delta: "-50.01", max: bound100, fail: true},
+		{name: "a 99.90% drop under +100% fails", delta: "-99.90", max: bound100, fail: true},
+		{name: "a 99.90% drop under +50% fails", delta: "-99.90", max: "+50%", fail: true},
+		{name: "a drop to an eleventh fits the cap", delta: "-90.90", max: bound1000},
+		{name: "a drop past the cap fails", delta: "-90.92", max: bound1000, fail: true},
+		{name: "a total loss fails whatever the bound", delta: "-100.00", max: bound1000, fail: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			list := benchstatEntry(routePkg, "RouteDetect/host", "B/s", tt.max)
+			give := strings.Replace(benchstatThroughput, "%s%", tt.delta+"%", 1)
+
+			out, err := runGateOn(t, give, list, history(false), commits...)
+			if !tt.fail {
+				require.NoError(t, err)
+				assert.Contains(t, out, "Accepted (1)")
+
+				return
+			}
+
+			require.ErrorIs(t, err, errRegression)
+			assert.NotContains(t, out, "Accepted (")
+			assert.Contains(t, out, "past the accepted")
+		})
+	}
+}
+
+// An absolute bound is held to the percent cap too: the change a head allows
+// is the head against the base, whichever way the bound is written.
+func Test_compare_accepted_absolute_bound_cap(t *testing.T) {
+	base, head := idleReports()
+	head.Targets[0].Idle.Healthcheck.RSSBytes = around(60000 * bytesPerMiB)
+
+	for name, bound := range map[string]string{
+		"an absolute bound that allows 1.8 million percent": "65536 MiB",
+		"the same pair under 1000%":                         "1000%",
+	} {
+		t.Run(name+" fails", func(t *testing.T) {
+			accepted := systemList(t, bound)
+			accepted.contains = history(false)
+
+			var out bytes.Buffer
+
+			err := compareReports(t.Context(), base, head, accepted, &out)
+			require.ErrorIs(t, err, errRegression)
+			assert.Contains(t, out.String(), "### Accepted (0)")
+			assert.Contains(t, out.String(), "accepted list: ")
+		})
+	}
+
+	t.Run("an absolute bound inside the cap still holds", func(t *testing.T) {
+		_, near := idleReports()
+		near.Targets[0].Idle.Healthcheck.RSSBytes = around(30 * bytesPerMiB)
+
+		accepted := systemList(t, "40 MiB")
+		accepted.contains = history(false)
+
+		var out bytes.Buffer
+
+		require.NoError(t, compareReports(t.Context(), base, near, accepted, &out))
+		assert.Contains(t, out.String(), "### Accepted (1)")
+	})
+}
+
+// A bound reads in the direction of the metric: a throughput's head must stay
+// above it, and a drop the percent cap refuses is refused whatever the bound.
+func Test_measured_absolute_bound_direction(t *testing.T) {
+	// 27000 to 0.027 cycles/s: a floor of 0.000001 cycles/s holds the head, and
+	// the drop is far past the cap.
+	drop := measured{change: -99.9999, head: 0.027, unit: unitCyclesPerSec}
+	assert.NotEmpty(t, drop.within(limit{absolute: 0.000001, unit: unitCyclesPerSec}))
+	assert.NotEmpty(t, drop.within(limit{absolute: 0.03, unit: unitCyclesPerSec}), "a head under the floor fails")
+
+	kept := measured{change: -50, head: 13500, unit: unitCyclesPerSec}
+	assert.Empty(t, kept.within(limit{absolute: 10000, unit: unitCyclesPerSec}))
+	assert.NotEmpty(t, kept.within(limit{absolute: 14000, unit: unitCyclesPerSec}))
+}
+
+func Test_unused_accepted_entries_are_reported(t *testing.T) {
+	commits := commitFlags(baseCommit, headCommit)
+	list := benchstatEntry(routePkg, "RouteDetect/host", unitSecOp, "+60%") +
+		benchstatEntry(routePkg, "RouteDetect/*", unitSecOp, "+60%") +
+		benchstatEntry(routePkg, `"RouteDetect/signing_name_and_target "`, unitSecOp, "+60%") +
+		benchstatEntry(routePkg, "RouteDetect/gone", unitSecOp, "+60%")
+
+	out, err := runGate(t, list, history(false), commits...)
+	require.NoError(t, err, "an unused entry does not fail the gate")
+	assert.Contains(t, out, "Accepted (1)")
+	assert.Contains(t, out, "Unused accepted entries (3), each matched no regression:")
+	assert.Contains(t, out, "benchstat internal/route RouteDetect/* sec/op")
+	assert.Contains(t, out, "benchstat internal/route RouteDetect/signing_name_and_target  sec/op")
+	assert.Contains(t, out, "benchstat internal/route RouteDetect/gone sec/op")
+	assert.NotContains(t, out, "RouteDetect/host sec/op\n")
+
+	out, err = runGate(t, benchstatEntry(routePkg, "RouteDetect/host", unitSecOp, "+60%"), history(false), commits...)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "Unused", "a list whose entries all match says nothing")
+
+	base, head := idleReports()
+	accepted := systemList(t, idleMax)
+	accepted.contains = history(false)
+	accepted.entries = append(accepted.entries, accepted.entries[0])
+	accepted.entries[1].Cell = "gone"
+
+	var cmp bytes.Buffer
+
+	require.NoError(t, compareReports(t.Context(), base, head, accepted, &cmp))
+	assert.Contains(t, cmp.String(), "### Accepted (1)")
+	assert.Contains(t, cmp.String(), "### Unused accepted entries (1)")
+	assert.Contains(t, cmp.String(), "- system gostack gone idle RSS")
 }
