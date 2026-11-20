@@ -16,6 +16,7 @@ import (
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/secretsmanager"
+	"github.com/kylecannon/gostack/internal/service/sns"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/ssm"
 	"github.com/kylecannon/gostack/internal/service/sts"
@@ -33,13 +34,20 @@ type providers struct {
 	// s3 takes the persistence engine's assets as its body store once its state
 	// has loaded (useAssets).
 	s3 *s3.Provider
+	// sns signs the messages it delivers with its one Signer and serves that
+	// Signer's certificate, a protocol path the gateway mounts without it
+	// (MountProtocol), so it is built once and shared.
+	sns *sns.Provider
 }
 
 // newProviders builds the services. changed is how a service reports a change
 // the gateway does not see, by its botocore name.
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
-	p := &providers{s3: s3.New(liveSettings(cfg, s3Settings), blob.NewEphemeral(blob.DefaultSpillDir))}
-	p.regs = registrations(cfg, changed, p.s3)
+	p := &providers{
+		s3:  s3.New(liveSettings(cfg, s3Settings), blob.NewEphemeral(blob.DefaultSpillDir)),
+		sns: sns.New(liveSettings(cfg, snsSettings)),
+	}
+	p.regs = registrations(cfg, changed, p.s3, p.sns)
 
 	return p
 }
@@ -53,11 +61,14 @@ func newProviders(cfg *config.Config, changed func(name string)) *providers {
 // reads a change to settings-<svc>.go as a change to that service alone. Keep one
 // service to a line: parity selection reads a changed line of this file as a
 // change to the services it names.
-func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
+func registrations(
+	cfg *config.Config, changed func(name string), s3Provider *s3.Provider, snsProvider *sns.Provider,
+) []service.Registration {
 	return []service.Registration{
 		sqs.New(liveSettings(cfg, sqsSettings), changed).Registration(),
 		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
+		snsProvider.Registration(),
 		secretsmanager.New(changed).Registration(),
 		ssm.New().Registration(),
 	}

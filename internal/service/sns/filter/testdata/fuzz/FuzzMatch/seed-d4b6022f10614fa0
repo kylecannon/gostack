@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"store\": [{\"exists\": false}]}")
+bool(false)
+string("{\"k\": {\"DataType\": \"String\", \"StringValue\": \"10.0.0.255\"}}")

@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"store\": [\"value1\"]}")
+bool(false)
+string("{\"store\": {\"DataType\": \"String.Array\", \"StringValue\": \"5\"}}")

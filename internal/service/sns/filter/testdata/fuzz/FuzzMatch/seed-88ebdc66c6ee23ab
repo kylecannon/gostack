@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": {\"b\": [{\"exists\": false}]}}")
+bool(true)
+string("{\"detail\": {\"sourceIPAddressV6\": \"2001:0db8:123f:1a01:0000:0000:0000:0000\"}}")

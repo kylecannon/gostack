@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"k\": [{\"numeric\": [\">=\", 10]}]}")
+bool(false)
+string("{\"k\": {\"DataType\": \"String.Array\", \"StringValue\": \"[\\\"abc\\\", 12, \\\"10.0.0.1\\\"]\"}}")

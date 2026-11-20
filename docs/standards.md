@@ -189,15 +189,19 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   - A test whose result changes from run to run is excluded with a reason
     and demoted in the same change, never left to flap.
   - A test carrying LocalStack's `requires_in_process` marker is excluded,
-    unless `parity/bridgeable.yaml` lists it, which is allowed for two kinds
+    unless `parity/bridgeable.yaml` lists it, which is allowed for three kinds
     only. A `config` test patches nothing but `localstack.config`, which the
     config bridge forwards to the target. An `http-server` test is marked only
     because it starts pytest's `HTTPServer` for the target to deliver to; the
     runner shares the target's network namespace, so the target reaches it on
     localhost. An `http-server` test touches nothing else in the server process
     (no store, no `config.` read, no monkeypatch), and is listed only while the
-    LocalStack baseline passes it in the runner. Its note starts with
-    `http-server:`; a config note is the variable names.
+    LocalStack baseline passes it in the runner. A `marker-only` test carries
+    the marker and touches nothing in the server process: it patches nothing,
+    starts no server and reads no store, and what it does to the target goes
+    over the network from the runner. It follows the same baseline rule, and its
+    entry names the lines of the test read to establish that. Its note starts
+    with `http-server:` or `marker-only:`; a config note is the variable names.
 - **Parity ratchet** (`make parity-check`, in `parity.yml` and in `ci.yml`'s
   `parity-ledger` job, which compare the same merge ref with the same
   `HEAD^1`): a test that is `pass` in the gostack column of the

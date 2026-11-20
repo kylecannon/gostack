@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"$or\": [{\"metricName\": [\"a\", \"b\", \"c\"]}, {\"namespace\": [\"d\", \"e\"]}], \"detail\": {\"scope\": [\"s\", \"t\"], \"$or\": [{\"source\": [\"x\"]}, {\"type\": [\"p\", \"q\", \"r\"]}]}}")
+bool(true)
+string("{}")
