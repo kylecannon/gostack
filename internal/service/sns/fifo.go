@@ -20,7 +20,7 @@ const dedupWindow = 5 * time.Minute
 type fifoTopic struct {
 	// mu is held from a publish's deduplication check to the queueing of its
 	// deliveries in their lanes, so the deliveries to one queue keep publish
-	// order. Nothing is sent and nothing waits for room under it.
+	// order. Nothing is sent under it.
 	mu sync.Mutex
 	// seen are the ids published in the window, by deduplication id.
 	seen map[string]published

@@ -18,6 +18,11 @@ import (
 // queueURLKey is SQS's QueueUrl member.
 const queueURLKey = "QueueUrl"
 
+// pastOldBound is more deliveries to one destination than the withdrawn
+// bound held, 256 admitted and 256 more waiting, so a lane that still had a
+// bound would make a publish wait or a delivery drop.
+const pastOldBound = 600
+
 // tenEntries are the ten entries of a PublishBatch, tagged so that every
 // message of a test is its own.
 func tenEntries(tag string) [][]string {
@@ -42,23 +47,28 @@ func (s *stack) depth(q *queue) int {
 	return n
 }
 
-// publishAsync publishes on a goroutine of its own and hands back the reply.
-func (s *stack) publishAsync(params ...string) <-chan reply {
-	out := make(chan reply, 1)
+// opener closes g.open once, from the test or its cleanup, whichever is
+// first.
+func opener(t *testing.T, g *gate) func() {
+	t.Helper()
 
-	go func() { out <- s.call("Publish", params...) }()
+	var once sync.Once
 
-	return out
+	open := func() { once.Do(func() { close(g.open) }) }
+	t.Cleanup(open)
+
+	return open
 }
 
 // burst publishes publishers x batches PublishBatch calls of ten at once to a
-// standard topic with subscribers healthy raw queues, and returns how many
-// messages reached the queues and how many deliveries were owed.
-func burst(t *testing.T, s *stack, subscribers, publishers, batches int) (delivered, owed int) {
+// standard topic with subscribers healthy raw queues named b0, b1 and on, and
+// returns once every publish has answered, with the queues and how many
+// deliveries were owed.
+func burst(t *testing.T, s *stack, subscribers, publishers, batches int) (queues []*queue, owed int) {
 	t.Helper()
 
 	topic := s.createTopic(paramName, "burst")
-	queues := make([]*queue, subscribers)
+	queues = make([]*queue, subscribers)
 
 	for i := range queues {
 		queues[i] = s.createQueue(account, region, "b"+strconv.Itoa(i), nil)
@@ -78,126 +88,125 @@ func burst(t *testing.T, s *stack, subscribers, publishers, batches int) (delive
 
 	wg.Wait()
 
+	return queues, subscribers * publishers * batches * 10
+}
+
+// delivered waits for the lanes to empty and returns how many messages the
+// queues hold.
+func (s *stack) delivered(t *testing.T, queues []*queue) int {
+	t.Helper()
+
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 
 	s.sns.AwaitDeliveries(ctx)
+	require.NoError(t, ctx.Err(), "the lanes never emptied")
 
+	n := 0
 	for _, q := range queues {
-		delivered += s.depth(q)
+		n += s.depth(q)
 	}
 
-	return delivered, subscribers * publishers * batches * 10
+	return n
 }
 
 // Test_Provider_Publish_burst is the load that lost 49,466 of 160,000
-// deliveries to one shared queue: 16 publishers, 10 batches of 10 each, 100
-// healthy queues. Every delivery arrives; publishers wait for room instead.
+// deliveries: 16 publishers, 10 batches of 10 each, 100 healthy queues. One
+// queue's first delivery is held until every publish has answered, so its
+// lane takes all 1,600 of its deliveries while it is stalled: no publish
+// waits for a delivery, none is dropped, and every delivery arrives.
 func Test_Provider_Publish_burst(t *testing.T) {
-	s := newStack(t, nil)
+	g := newGate(`/b0"`)
+	s := newStack(t, g.wrap)
+	open := opener(t, g)
 
-	delivered, owed := burst(t, s, 100, 16, 10)
+	queues, owed := burst(t, s, 100, 16, 10)
+
+	g.awaitEntered(t)
+	assert.Zero(t, s.depth(queues[0]), "a delivery to the held queue arrived before every publish answered")
+	assert.Zero(t, s.sns.Dropped(), "a delivery was dropped while running")
+
+	open()
 
 	assert.Equal(t, 160_000, owed)
-	assert.Equal(t, owed, delivered)
+	assert.Equal(t, owed, s.delivered(t, queues))
 	assert.Zero(t, s.sns.Dropped())
 }
 
-// Test_Provider_Publish_stuckQueue holds every delivery to one queue and
-// fills its lane, with one more publish waiting for room: a publish to another
-// topic delivers all of its messages, since its queue's lane is its own. The
-// waiting publish answers 200 at its deadline and its delivery is dropped.
-func Test_Provider_Publish_stuckQueue(t *testing.T) {
-	const depth, healthy = 4, 200
+// Test_Provider_Publish_stalledDestination holds every delivery to one queue
+// and publishes more to it than the withdrawn bound held: every publish
+// answers while none of its deliveries is made, and a publish to another
+// topic delivers all of its messages meanwhile, since its queue's lane is its
+// own. Once the queue answers, every delivery arrives in publish order and
+// none was dropped. The same holds for a FIFO topic and queue.
+func Test_Provider_Publish_stalledDestination(t *testing.T) {
+	const healthy = 200
 
-	g := newGate("/stuck")
-	s := newStack(t, g.wrap)
-	t.Cleanup(func() { close(g.open) })
-	s.sns.SetLanes(depth, 500*time.Millisecond)
+	for _, fifo := range []bool{false, true} {
+		t.Run("fifo="+strconv.FormatBool(fifo), func(t *testing.T) {
+			g := newGate("/stalled")
+			s := newStack(t, g.wrap)
+			open := opener(t, g)
 
-	stuckTopic := s.createTopic(paramName, "stuck-topic")
-	stuck := s.createQueue(account, region, "stuck", nil)
-	s.subscribeQueue(stuckTopic, stuck.arn, attrRaw, textTrue)
+			stalledTopic := s.createTopic(paramName, "stalled-topic")
+			stalled := s.createQueue(account, region, "stalled", nil)
 
-	for i := range depth {
-		s.publish(paramTopicArn, stuckTopic, paramMessage, strconv.Itoa(i))
+			if fifo {
+				stalledTopic = s.createTopic(paramName, "stalled-topic.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+				stalled = s.createQueue(account, region, "stalled.fifo", map[string]string{attrFifoQueue: textTrue})
+			}
+
+			s.subscribeQueue(stalledTopic, stalled.arn, attrRaw, textTrue)
+
+			want := make([]string, pastOldBound)
+
+			for i := range pastOldBound {
+				want[i] = strconv.Itoa(i)
+
+				params := []string{paramTopicArn, stalledTopic, paramMessage, want[i]}
+				if fifo {
+					params = append(params, paramGroup, "g", paramDedup, want[i])
+				}
+
+				s.publish(params...)
+			}
+
+			g.awaitEntered(t)
+
+			topic := s.createTopic(paramName, "healthy-topic")
+			q := s.createQueue(account, region, "healthy", nil)
+			s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
+
+			for i := range healthy {
+				s.publish(paramTopicArn, topic, paramMessage, strconv.Itoa(i))
+			}
+
+			assert.Len(t, q.await(healthy), healthy)
+			assert.Zero(t, s.depth(stalled), "a delivery to the stalled queue arrived before it was let go")
+			assert.Zero(t, s.sns.Dropped(), "a delivery was dropped while running")
+
+			open()
+
+			got := make([]string, 0, pastOldBound)
+			for _, m := range stalled.await(pastOldBound) {
+				got = append(got, m.Body)
+			}
+
+			assert.Equal(t, want, got)
+			assert.Zero(t, s.sns.Dropped())
+		})
 	}
-
-	g.awaitEntered(t)
-
-	waiting := s.publishAsync(paramTopicArn, stuckTopic, paramMessage, "waits")
-
-	topic := s.createTopic(paramName, "healthy-topic")
-	q := s.createQueue(account, region, "healthy", nil)
-	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
-
-	for i := range healthy {
-		s.publish(paramTopicArn, topic, paramMessage, strconv.Itoa(i))
-	}
-
-	assert.Len(t, q.await(healthy), healthy)
-	assert.Equal(t, http.StatusOK, (<-waiting).status)
-	s.awaitDropped(1)
-}
-
-// Test_Provider_Publish_deadLetterNeverAnswers: a FIFO topic's two queues are
-// stuck with full lanes, and their dead-letter queues never answer. A publish
-// waits its deadline, hands its deliveries to the dead-letter lanes without
-// waiting, and answers 200; a second publisher, sent while the first waits,
-// waits its own deadline, not the first's and then its own.
-func Test_Provider_Publish_deadLetterNeverAnswers(t *testing.T) {
-	const wait = time.Second
-
-	g := newGate("stuck-")
-	s := newStack(t, g.wrap)
-	t.Cleanup(func() { close(g.open) })
-	s.sns.SetLanes(1, wait)
-
-	fifo := map[string]string{attrFifoQueue: textTrue}
-	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
-
-	for i := range 2 {
-		n := strconv.Itoa(i)
-		q := s.createQueue(account, region, "stuck-q"+n+".fifo", fifo)
-		dlq := s.createQueue(account, region, "stuck-d"+n+".fifo", fifo)
-		s.subscribeQueue(topic, q.arn, attrRaw, textTrue, attrRedrive, `{"deadLetterTargetArn":"`+dlq.arn+`"}`)
-	}
-
-	s.publish(paramTopicArn, topic, paramMessage, "fills", paramGroup, "g", paramDedup, "fills")
-	g.awaitEntered(t)
-
-	start := time.Now()
-	second := make(chan time.Duration, 1)
-
-	go func() {
-		time.Sleep(wait / 10)
-
-		at := time.Now()
-		r := s.call(opPublish, paramTopicArn, topic, paramMessage, "second", paramGroup, "g", paramDedup, "second")
-		assert.Equal(t, http.StatusOK, r.status, r.body)
-
-		second <- time.Since(at)
-	}()
-
-	s.publish(paramTopicArn, topic, paramMessage, "first", paramGroup, "g", paramDedup, "first")
-
-	first := time.Since(start)
-	limit := wait + wait/2
-
-	assert.Less(t, first, limit, "the first publish waits its deadline and no dead-letter send")
-	assert.Less(t, <-second, limit, "the second publish waits its own deadline, not the first's too")
 }
 
 // Test_Provider_Publish_deadLetterSubscribed: a dead-letter queue is also a
 // subscriber of its topic, so it gets each message twice, once dead-lettered.
-// Then two missing queues are each other's dead-letter queue, with lanes of
-// one: every delivery is dropped once, nothing is left in a lane, and nothing
-// deadlocks.
+// Then two missing queues are each other's dead-letter queue: every delivery
+// is dropped once, its dead letter refused too, nothing is left in a lane, and
+// nothing deadlocks.
 func Test_Provider_Publish_deadLetterSubscribed(t *testing.T) {
 	const n = 200
 
 	s := newStack(t, nil)
-	s.sns.SetLanes(2, 100*time.Millisecond)
 
 	topic := s.createTopic(paramName, "t")
 	dlq := s.createQueue(account, region, "dlq", nil)
@@ -252,8 +261,8 @@ func Test_Provider_goroutines(t *testing.T) {
 	s.sns.AwaitDeliveries(t.Context())
 	settledGoroutines(t, s, before)
 
-	delivered, owed := burst(t, s, 20, 8, 5)
-	assert.Equal(t, owed, delivered)
+	queues, owed := burst(t, s, 20, 8, 5)
+	assert.Equal(t, owed, s.delivered(t, queues))
 	settledGoroutines(t, s, before)
 }
 
@@ -293,11 +302,12 @@ func goroutines() int {
 }
 
 // Test_Provider_Close_cut: the in-process client is stopped with calls of
-// SNS's queued in it, as a shutdown's drain stops it at its deadline: those
-// are never answered, and Close counts them at once instead of waiting for
-// its context.
+// SNS's queued in it, as a shutdown's drain stops it at its deadline, and
+// more deliveries than the withdrawn bound held waiting behind each: the
+// calls are never answered, and Close counts every delivery at once instead
+// of waiting for its context.
 func Test_Provider_Close_cut(t *testing.T) {
-	const queues = 20
+	const queues, messages = 20, pastOldBound
 
 	g := newGate("/cut")
 	s := newStack(t, g.wrap)
@@ -308,7 +318,10 @@ func Test_Provider_Close_cut(t *testing.T) {
 		s.subscribeQueue(topic, "arn:aws:sqs:"+region+":"+account+":cut"+strconv.Itoa(i))
 	}
 
-	s.publish(paramTopicArn, topic, paramMessage, "m")
+	for i := range messages {
+		s.publish(paramTopicArn, topic, paramMessage, strconv.Itoa(i))
+	}
+
 	g.awaitEntered(t)
 
 	s.sns.CutCalls()
@@ -319,44 +332,5 @@ func Test_Provider_Close_cut(t *testing.T) {
 	s.sns.Close(ctx)
 
 	require.NoError(t, ctx.Err(), "Close waited for its context")
-	assert.Equal(t, int64(queues), s.sns.Dropped())
-}
-
-// Test_Provider_Shutdown_releases: a publish waiting for room is let go when
-// the shutdown begins, and its delivery is made.
-func Test_Provider_Shutdown_releases(t *testing.T) {
-	g := newGate("/held")
-	s := newStack(t, g.wrap)
-	s.sns.SetLanes(1, time.Hour)
-
-	topic := s.createTopic(paramName, "t")
-	q := s.createQueue(account, region, "held", nil)
-	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
-
-	s.publish(paramTopicArn, topic, paramMessage, "one")
-	g.awaitEntered(t)
-
-	waiting := s.publishAsync(paramTopicArn, topic, paramMessage, "two")
-
-	select {
-	case <-waiting:
-		t.Fatal("the publish did not wait for room")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	s.sns.BeginShutdown()
-
-	select {
-	case r := <-waiting:
-		assert.Equal(t, http.StatusOK, r.status)
-	case <-time.After(waitFor):
-		t.Fatal("the shutdown did not let the waiting publish go")
-	}
-
-	close(g.open)
-
-	msgs := q.await(2)
-	assert.Equal(t, "one", msgs[0].Body)
-	assert.Equal(t, "two", msgs[1].Body)
-	assert.Zero(t, s.sns.Dropped())
+	assert.Equal(t, int64(queues*messages), s.sns.Dropped())
 }

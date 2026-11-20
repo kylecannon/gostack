@@ -64,13 +64,12 @@ func Test_lanes_drainSeesQueuedDeliveries(t *testing.T) {
 	assert.Zero(t, p.Dropped())
 }
 
-// Test_lanes_drainWaitsForHeldLanes: two lanes whose every send fails, each
+// Test_lanes_drainWaitsForDeadLetters: two lanes whose every send fails, each
 // the other's dead-letter queue (the review's driver, SQ-304). Hub.Drain
 // returns once both lanes are empty, before its deadline, and not while they
 // still hold deliveries.
-func Test_lanes_drainWaitsForHeldLanes(t *testing.T) {
+func Test_lanes_drainWaitsForDeadLetters(t *testing.T) {
 	p := New(nil)
-	p.lanes.depth, p.lanes.wait = 2, 2*time.Second
 
 	hub := inproc.NewHub(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -115,67 +114,88 @@ func Test_lanes_drainWaitsForHeldLanes(t *testing.T) {
 	assert.Equal(t, int64(12), p.Dropped(), "every delivery and its dead letter failed")
 }
 
-// Test_lanes_closeForgetsHeldLanes: a lane waits for room in a full
-// dead-letter queue's lane, behind a publisher's delivery, when Close cuts
-// both. No lane is left behind, whichever lane Close passes first.
-func Test_lanes_closeForgetsHeldLanes(t *testing.T) {
-	for iter := range 20 {
-		p := New(nil)
-		p.lanes.depth, p.lanes.wait = 2, time.Hour
+// Test_lanes_oneLaneHoldsAny: 10,000 deliveries to one destination whose
+// first send is held. Every one is added to the lane, dispatch returns
+// without waiting, and the lane has one call in the client. Once the
+// destination answers, the deliveries are sent one at a time, in the order
+// they were added, and none is dropped.
+func Test_lanes_oneLaneHoldsAny(t *testing.T) {
+	const n = 10_000
 
-		p.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			body, _ := io.ReadAll(r.Body)
-			if bytes.Equal(body, []byte("fail")) {
-				w.WriteHeader(http.StatusInternalServerError)
+	p := New(nil)
+	t.Cleanup(func() { p.Close(t.Context()) })
 
-				return
-			}
+	release := make(chan struct{})
 
-			<-r.Context().Done()
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}))
+	var (
+		mu               sync.Mutex
+		got              []string
+		running, mostRan int
+	)
 
-		sub := &Subscription{Endpoint: "e"}
-		topic := &Topic{ARN: "t", endpoints: map[string]*Subscription{"e": sub}}
-		dlq := laneCall("dlq", "dead")
-		fill := []delivery{
-			{sub: sub, call: laneCall("dlq", "fill")},
-			{sub: sub, call: laneCall("dlq", "fill")},
-			{sub: sub, call: laneCall("dlq", "fill")},
-		}
+	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		running++
+		mostRan = max(mostRan, running)
+		mu.Unlock()
 
-		var waiting sync.WaitGroup
+		<-release
 
-		// The third waits for room until Close.
-		waiting.Go(func() { p.lanes.dispatch(p.queue(topic, fill)) })
+		body, _ := io.ReadAll(r.Body)
 
-		require.Eventually(t, func() bool {
-			p.lanes.mu.Lock()
-			defer p.lanes.mu.Unlock()
+		mu.Lock()
+		got = append(got, string(body))
+		running--
+		mu.Unlock()
 
-			return p.lanes.queued == 3
-		}, 10*time.Second, time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
 
-		p.lanes.dispatch(p.queue(topic, []delivery{{sub: sub, call: laneCall("origin", "fail"), dlq: &dlq}}))
+	topic, deliveries := laneFixture(n, 1)
+	want := make([]string, n)
 
-		require.Eventually(t, func() bool {
-			p.lanes.mu.Lock()
-			defer p.lanes.mu.Unlock()
-
-			origin := p.lanes.byKey["origin"]
-
-			return origin != nil && origin.held != nil
-		}, 10*time.Second, time.Millisecond, "the origin lane never waited for the dead-letter queue")
-
-		p.Close(t.Context())
-		waiting.Wait()
-
-		p.lanes.mu.Lock()
-		assert.Empty(t, p.lanes.byKey, "iteration %d", iter)
-		assert.Zero(t, p.lanes.queued)
-		p.lanes.mu.Unlock()
-		assert.Equal(t, int64(4), p.Dropped())
+	for i := range deliveries {
+		want[i] = strconv.Itoa(i)
+		deliveries[i].call.Body = []byte(want[i])
 	}
+
+	dispatched := make(chan struct{})
+
+	go func() {
+		defer close(dispatched)
+
+		p.lanes.dispatch(p.queue(topic, deliveries))
+	}()
+
+	select {
+	case <-dispatched:
+	case <-time.After(10 * time.Second):
+		close(release)
+		t.Fatal("dispatch waited for the destination")
+	}
+
+	p.lanes.mu.Lock()
+	queued, inflight := p.lanes.queued, p.lanes.inflight
+	p.lanes.mu.Unlock()
+
+	assert.Equal(t, n, queued, "deliveries in the lane")
+	assert.Equal(t, 1, inflight, "calls in the client")
+	assert.Zero(t, p.Dropped(), "a delivery was dropped while running")
+
+	close(release)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+
+	p.lanes.awaitIdle(ctx)
+	require.NoError(t, ctx.Err())
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.Equal(t, want, got)
+	assert.Equal(t, 1, mostRan, "sends to the destination at once")
+	assert.Zero(t, p.Dropped())
 }
 
 // Test_lanes_parkedLanesTakeTheirTurn: 5,000 destinations of five deliveries

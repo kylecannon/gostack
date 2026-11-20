@@ -522,49 +522,40 @@ whose handler still answers it with a 2xx was served and is not counted.
 
 SNS delivers through lanes of its own, one per destination: a subscribed
 queue, or a dead-letter queue. A destination's deliveries are sent one at a
-time, in the order they entered its lane.
+time, in the order they entered its lane, for a standard queue as for a FIFO
+queue.
 
 - **Order.** A publish adds its deliveries to their lanes under the topic's
   lock, and a FIFO topic's under its FIFO lock as well, so the deliveries to
-  one queue keep publish order. Nothing is sent and nothing waits under either
-  lock.
-- **Bound.** A lane admits 256 deliveries (`laneDepth`), the one being sent
-  included. A publish whose lane is full adds its delivery behind them, in
-  order, and waits, with no lock held, until the delivery is admitted. One
-  deadline of 10 s (`roomWait`) covers all of a publish's deliveries. A
-  delivery still waiting then fails: it goes to its subscription's dead-letter
-  queue if that queue's lane has room, or is dropped and counted in
-  `Dropped`. A dead-letter lane with nothing waiting in it takes such a
-  hand-off past its depth, up to twice the depth (512), since the delivery
-  held its memory while it waited. A delivery to a FIFO queue keeps its place
-  instead, up to twice the depth, and goes to the dead-letter queue when it
-  reaches the head, so a message group reaches the dead-letter queue in
-  order. Publish answers 200 with its MessageId either way, since a 5xx would
-  make an SDK retry and duplicate the message for every other subscriber.
-  The choice to wait rather than drop is `mayWait`, one function.
-- **Failure.** A delivery SQS refuses goes to its dead-letter queue through
-  that queue's lane, or is dropped. When the dead-letter lane is full, the
-  failed delivery's own lane is held: it sends nothing until the dead-letter
-  delivery is admitted, up to the same deadline, and that delivery waits
-  ahead of the publishers' deliveries in the dead-letter lane. A dead-letter
-  delivery never waits for a lane that is held itself, so two queues that are
-  each other's dead-letter queue cannot hold each other up: the delivery is
-  admitted past the depth, up to twice the depth, or dropped. A dead-letter
-  delivery that fails is dropped, never sent to another dead-letter queue.
-  Failed deliveries are logged once per destination every 5 s, with counts.
+  one queue keep publish order. Nothing is sent under either lock: the
+  publish starts its lanes once it has let go of both.
+- **No bound.** A lane holds any number of deliveries, as LocalStack's
+  executor queue does. A publish adds its deliveries and answers without
+  waiting for any of them, and no delivery is refused or dropped for lack of
+  room while the server runs. The cost is memory: every delivery waiting for
+  a slow or stuck destination stays in its lane, body included, until the
+  destination answers, and nothing caps that. Publish answers 200 with its
+  MessageId whatever happens to the deliveries.
+- **Failure.** A delivery the destination refuses (the queue is gone, or the
+  send fails) goes to the tail of its subscription's dead-letter queue's lane,
+  or is dropped and counted in `Dropped` when it has none. A dead-letter
+  delivery that fails is dropped, never sent to another dead-letter queue, so
+  two queues that are each other's dead-letter queue end with one drop per
+  delivery. A FIFO group's failures reach the dead-letter queue in the order
+  they failed, which is publish order. Failed deliveries are logged once per
+  destination every 5 s, with counts.
 - **No idle work.** A lane has no goroutine. Its head is a `SendMessage`
   queued on the in-process client, and the answer sends the next; an empty
   lane is gone. A lane with work does not always have a call in the client: a
-  held lane waits for its dead-letter delivery, and a parked lane waits for
-  room in the client's queue, which the next answer gives to the parked lanes
-  in the order they were parked before its own lane sends again. A stuck
-  destination holds one client worker; the others serve every other lane.
-- **Shutdown.** The gateway's `Shutdown` call lifts the bound: every waiting
-  delivery is admitted and none waits from then on, so the publishes still in
-  flight are answered and their deliveries are made in the drain. While any
-  delivery is in a lane, the lanes hold one count in the hub's pending count
-  (`inproc.Client.Hold`), so `Hub.Drain` waits for a held or parked lane as
-  for a queued call, until the lanes are empty or the drain's deadline. A
+  parked lane waits for room in the client's queue (`inproc.MaxQueued`
+  calls), which the next answer gives to the parked lanes in the order they
+  were parked before its own lane sends again. A stuck destination holds one
+  client worker; the others serve every other lane.
+- **Shutdown.** SNS has no `Shutdown` function: nothing waits for room, so
+  nothing needs letting go. While any delivery is in a lane, the lanes hold
+  one count in the hub's pending count (`inproc.Client.Hold`), so `Hub.Drain`
+  waits for a parked lane, or deliveries queued behind a head, as for a
+  queued call, until the lanes are empty or the drain's deadline. A
   dead-letter delivery never fails over to another, so the chain of calls a
   lane queues is finite. Once the drain cuts the client, a refused head parks
   or is cut and queues nothing more. `Close` does not wait: it refuses every
@@ -574,14 +565,14 @@ time, in the order they entered its lane.
   process started, and `cut_at_close`, the ones Close cut. The hub's
   `in-process calls cut at shutdown` line counts calls, not deliveries: a
   lane has one call in the client however many deliveries wait behind it, so
-  the hub's count is the smaller.
+  the hub's count is the smaller. A slow destination at shutdown is where the
+  missing bound shows: what it had not taken by the drain's deadline is cut.
 - **Other transports.** A lane meets its transport in one function,
   `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
   destination's head would be sent on a goroutine that lives for that send,
-  with its own timeout and retries, and answer the same way. The bound, the
-  order and the deadline stay as they are. `inflight` must go on counting
-  only the in-process client's calls, since a refused head parks or is cut
-  by it.
+  with its own timeout and retries, and answer the same way. The order and
+  the absent bound stay as they are. `inflight` must go on counting only the
+  in-process client's calls, since a refused head parks or is cut by it.
 
 ### Body store (`internal/blob`)
 

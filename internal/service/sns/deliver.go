@@ -277,7 +277,7 @@ func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string)
 
 // queue adds each delivery whose subscription is still t's to the lane of its
 // queue, under t's lock, which fixes the deliveries' order in each lane. It
-// sends nothing and waits for nothing: lanes.dispatch does both, with no lock
+// sends nothing and waits for nothing: lanes.dispatch sends, with no lock
 // held.
 func (p *Provider) queue(t *Topic, deliveries []delivery) []*job {
 	ls := &p.lanes

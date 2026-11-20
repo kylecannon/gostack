@@ -62,7 +62,7 @@ func New(settings func() Settings) *Provider {
 		now:      time.Now,
 	}
 
-	p.lanes.client, p.lanes.depth, p.lanes.wait = p.client, laneDepth, roomWait
+	p.lanes.client = p.client
 
 	// LocalStack starts its sequence at (now + 100) << 33, a 20-digit number
 	// that grows with the clock, so a restart never hands one out twice.
@@ -84,7 +84,6 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mutating: mutating,
 		Reset:    p.Reset,
-		Shutdown: p.shutdown,
 		Close:    p.Close,
 		Bind:     p.Bind,
 	}

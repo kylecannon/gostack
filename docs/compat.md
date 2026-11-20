@@ -244,7 +244,7 @@ number out.
 
 | Behavior | LocalStack | gostack | Source |
 |---|---|---|---|
-| Deliveries waiting to be sent | Queued without bound on its executor: a publish never waits, and memory grows while a destination is slow | Each destination (a queue, or a dead-letter queue) holds up to 256 deliveries. A publish whose destination is full waits for room, up to 10 s for all of its deliveries; one still waiting then goes to its subscription's dead-letter queue if that queue's lane has room, or is dropped and counted, and the publish still answers 200. A lane with nothing waiting in it takes such a hand-off past 256, up to 512 | SQ-288 ruling: a delivery to a healthy destination is never dropped, and memory stays bounded. Model in `architecture.md`, "SNS delivery". |
+| Deliveries waiting to be sent | Queued without bound on its executor: a publish never waits, and memory grows while a destination is slow | The same as LocalStack: each destination (a queue, or a dead-letter queue) has a lane that holds any number of deliveries, a publish never waits for them, and none is dropped for lack of room while gostack runs. Memory grows with the deliveries waiting for a slow destination; those still waiting at the end of a shutdown's drain are cut and counted | User ruling of 2026-11-20, which replaced SQ-288's bounded lanes. Model in `architecture.md`, "SNS delivery". |
 
 ## Secrets Manager
 
