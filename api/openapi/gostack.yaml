@@ -346,6 +346,29 @@ paths:
     post:
       <<: *listSqsQueueMessages
       operationId: listSqsQueueMessagesByPost
+  /_gostack/services/dynamodb/expired:
+    delete:
+      operationId: deleteExpiredDynamoDBItems
+      summary: Remove the expired items of every DynamoDB table with time to live on.
+      description: >-
+        Removes, in every account and region, the items whose time to live
+        attribute is a number at or before the current time, and answers with
+        how many it removed. An item written since it was found is kept.
+        LocalStack serves the same call at /_aws/dynamodb/expired, unless
+        GOSTACK_COMPAT_PATHS=0. Only DELETE is served; there is no listing.
+      tags: [gostack]
+      responses:
+        '200':
+          description: The number of items removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ExpiredItems]
+                properties:
+                  ExpiredItems:
+                    type: integer
+                    description: How many expired items the call removed.
 components:
   parameters:
     SqsQueueUrl:
