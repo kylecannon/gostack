@@ -276,6 +276,23 @@ SQ-302 (`verification/SQ-293`, `verification/SQ-302`).
 | One batch naming a table by name and by ARN | No recorded answer | `BatchGetItem` returns the item once but reports capacity twice; `BatchWriteItem` reports one write's capacity for two puts | Both entries are one table: `BatchGetItem` returns the item once per entry, and capacity sums both |
 | A reused `ClientRequestToken` on a different request that also fails validation | No recorded answer | Checks the values and expression syntax of every action, then the token (`IdempotentParameterMismatchException`), then table names, lookup, keys and duplicates | Checks each action in order, names, lookup and keys included, before the token, so a missing table or a bad key answers its own error first. Matching needs the validation split in two passes (SQ-302 ruling). |
 | Order of `ConsumedCapacity` and of the first error across tables in a batch | No recorded answer | Java hash order of the table names; two names in one hash bucket keep the request's order | Java hash order; two names in one bucket go in sorted order, because `RequestItems` decodes into a Go map that keeps no request order |
+
+## DynamoDB Streams
+
+LocalStack backs streams with Kinesis; gostack keeps them natively, one shard
+per stream (`internal/service/dynamodb/stream`). The LocalStack column is the
+8b9a79f image, probed in SQ-231 (`verification/SQ-231/probe1-3.jsonl`).
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| A put that leaves the item's values unchanged but spells a number differently, `{"N": "1.0"}` over `{"N": "1"}` | A `MODIFY` record | No record: values are compared canonically | The data types page: leading and trailing zeroes are trimmed, so the item is unchanged |
+| `SizeBytes` of a record | The size of DynamoDB Local's JSON record | The item size of `Keys` plus the images the view type includes | The aws.validated snapshots of `test_batch_write_items_streaming` and `test_transact_write_items_streaming`: 12, 16, 26, 38, 43, 46 |
+| `UpdateTable` enabling a stream on a table whose stream was disabled | `500 InternalError`: the Kinesis stream already exists | A new `LatestStreamLabel` and a new shard; the old stream's records are no longer readable | The `StreamSpecification` reference: enabling assigns a new label |
+| A bogus shard id, an unparsable iterator, `AT_SEQUENCE_NUMBER` without `SequenceNumber`, `Limit` 0 | `500 InternalError` from the Kinesis call behind it | `ResourceNotFoundException` for the shard; `ValidationException` for the rest, `Limit` with the model's constraint message | The DynamoDB Streams API reference's errors and the model's `min` |
+| `DescribeStream` with no `StreamArn` | `400 ResourceNotFoundException` "Requested resource not found: Stream: None not found" | `400 ValidationException` "Value null at 'streamArn' failed to satisfy constraint: Member must not be null" | The model marks `StreamArn` required |
+| `ListStreams` with `Limit` | Ignores it | Pages by it, with `LastEvaluatedStreamArn` | The `ListStreams` reference |
+| `ListStreams` with no `TableName` in a region a table is replicated to | Leaves the replica's stream out | Lists it, with the caller's region in the ARN | AWS gives every replica its own stream |
+
 ## Secrets Manager
 
 | Behavior | LocalStack | gostack |

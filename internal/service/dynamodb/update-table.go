@@ -45,6 +45,11 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
+	err = checkStream(in.StreamSpecification)
+	if err != nil {
+		return nil, err
+	}
+
 	created, err := e.update(in, c, p.now)
 	if err != nil {
 		return nil, err
@@ -133,7 +138,12 @@ func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() tim
 		return nil, err
 	}
 
-	next.updateSettings(in, c, now)
+	streamChanged, err := next.setStream(in.StreamSpecification, now, true)
+	if err != nil {
+		return nil, err
+	}
+
+	next.updateSettings(in, c)
 
 	for _, name := range dropped {
 		e.data.DropIndex(name)
@@ -147,6 +157,10 @@ func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() tim
 	}
 
 	e.meta = next
+
+	if streamChanged {
+		e.applyStream(now, clock, c.region)
+	}
 
 	return names, nil
 }
@@ -177,11 +191,9 @@ func (m *tableMeta) updateIndexes(updates []api.GlobalSecondaryIndexUpdate) ([]i
 	return created, dropped, nil
 }
 
-// updateSettings applies the stream, encryption, class, deletion protection,
+// updateSettings applies the encryption, class, deletion protection,
 // on-demand and warm throughput members, none of which can be refused.
-func (m *tableMeta) updateSettings(in *api.UpdateTableInput, c caller, now time.Time) {
-	m.setStream(in.StreamSpecification, now)
-
+func (m *tableMeta) updateSettings(in *api.UpdateTableInput, c caller) {
 	if in.SSESpecification != nil {
 		m.SSE = c.sseDescription(in.SSESpecification)
 	}

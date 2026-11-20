@@ -182,7 +182,7 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 // whether it did. It is the one place a time to live removal reaches the
 // engine's write path, so the stream record of a removal hangs off it.
 func (e *tableEntry) expire(key value.Item, attribute string, threshold *api.AttributeValue) bool {
-	change, err := e.data.Write(key, func(old value.Item) (value.Item, error) {
+	change, err := e.data.Expire(key, func(old value.Item) (value.Item, error) {
 		if old == nil || !expired(old, attribute, threshold) {
 			return old, errNotExpired
 		}

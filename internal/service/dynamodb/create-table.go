@@ -84,10 +84,19 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 		return nil, err
 	}
 
-	meta := newMeta(in, p.now())
+	err = checkStream(in.StreamSpecification)
+	if err != nil {
+		return nil, err
+	}
+
+	now := p.now()
+	meta := newMeta(in, now)
 	meta.SSE = c.sseDescription(in.SSESpecification)
 
 	entry := &tableEntry{meta: meta, data: meta.newEngine()}
+	if meta.Stream != nil {
+		entry.applyStream(now, p.now, c.region)
+	}
 
 	if !c.state.add(meta.Name, entry) {
 		return nil, api.NewResourceInUseException(msgTableExists + meta.Name)
@@ -153,7 +162,8 @@ func newMeta(in *api.CreateTableInput, now time.Time) tableMeta {
 		meta.Global = append(meta.Global, meta.globalIndex(&index))
 	}
 
-	meta.setStream(in.StreamSpecification, now)
+	// A new table has no stream to refuse enabling or disabling against.
+	_, _ = meta.setStream(in.StreamSpecification, now, false)
 
 	if in.TableClass != nil {
 		meta.Class = *in.TableClass
@@ -188,25 +198,6 @@ func capacity(throughput *api.ProvisionedThroughput) (read, write int64) {
 	}
 
 	return read, write
-}
-
-// setStream stores a stream specification and labels a newly enabled stream.
-func (m *tableMeta) setStream(spec *api.StreamSpecification, now time.Time) {
-	if spec == nil {
-		return
-	}
-
-	enabled := spec.StreamEnabled != nil && *spec.StreamEnabled
-
-	switch {
-	case !enabled:
-		m.Stream, m.StreamLabel = nil, ""
-	case m.StreamLabel == "":
-		m.Stream = spec
-		m.StreamLabel = now.UTC().Format("2006-01-02T15:04:05.000")
-	default:
-		m.Stream = spec
-	}
 }
 
 // sseDescription is LocalStack's SSEUtils.get_sse_description. A specification

@@ -98,6 +98,8 @@ func (p *Provider) DeleteTable(ctx context.Context, in *api.DeleteTableInput) (*
 		return nil, err
 	}
 
+	e.stopStream()
+
 	a := p.account(c)
 	a.dropTags(c.tableARN(name), caller{account: c.account, region: region, shared: c.shared}.tableARN(name))
 	a.dropReplicas(name)

@@ -1,0 +1,167 @@
+package dynamodb_test
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"testing"
+
+	"github.com/kylecannon/gostack/internal/request"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
+	"github.com/stretchr/testify/require"
+)
+
+const streamTable = `{"TableName":"streamed","KeySchema":[{"AttributeName":"id","KeyType":"HASH"}],` +
+	`"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"}],"BillingMode":"PAY_PER_REQUEST",` +
+	`"StreamSpecification":{"StreamEnabled":true,"StreamViewType":"%s"}}`
+
+// streamCtx is the context the dynamodbstreams service would call with.
+func streamCtx(tb testing.TB) context.Context {
+	tb.Helper()
+
+	return request.With(tb.Context(), &request.Context{AccountID: accountID, Region: usEast1})
+}
+
+// records reads every record of the table's stream.
+func (s *stack) records(tb testing.TB, table string) []stream.Record {
+	tb.Helper()
+
+	arn := s.latestStreamARN(tb, table)
+
+	info, ok := s.provider.StreamByARN(streamCtx(tb), arn)
+	require.True(tb, ok, arn)
+
+	page, err := info.Shard.Read(0, 1000, 1<<20)
+	require.NoError(tb, err)
+
+	return page.Records
+}
+
+// latestStreamARN is the table's LatestStreamArn.
+func (s *stack) latestStreamARN(tb testing.TB, table string) string {
+	tb.Helper()
+
+	out := s.ok(tb, "DescribeTable", `{"TableName":"`+table+`"}`)
+	described, ok := out["Table"].(map[string]any)
+	require.True(tb, ok)
+
+	arn, ok := described["LatestStreamArn"].(string)
+	require.True(tb, ok, described)
+
+	return arn
+}
+
+// Test_stream_records: every write path leaves one record per change, with the
+// images the view type asks for and AWS's SizeBytes (the validated snapshots'
+// 12, 16, 46: keys plus images, by item size); an unchanged put, an update
+// that sets the same value and a delete of no item leave none.
+func Test_stream_records(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, "CreateTable", fmt.Sprintf(streamTable, "NEW_AND_OLD_IMAGES"))
+
+	s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"Fred"}}}`)
+	s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"Fred"}}}`)
+	s.ok(t, "TransactWriteItems", `{"TransactItems":[{"Put":{"TableName":"streamed","Item":{"id":{"S":"Fred"}}}},`+
+		`{"Put":{"TableName":"streamed","Item":{"id":{"S":"NewKey"}}}}]}`)
+	s.ok(t, "UpdateItem", `{"TableName":"streamed","Key":{"id":{"S":"NewKey"}},`+
+		`"UpdateExpression":"SET attr1 = :a, attr2 = :b",`+
+		`"ExpressionAttributeValues":{":a":{"S":"value1"},":b":{"S":"value2"}}}`)
+	s.ok(t, "UpdateItem", `{"TableName":"streamed","Key":{"id":{"S":"NewKey"}},"UpdateExpression":"SET attr1 = :a",`+
+		`"ExpressionAttributeValues":{":a":{"S":"value1"}}}`)
+	s.ok(t, "DeleteItem", `{"TableName":"streamed","Key":{"id":{"S":"nobody"}}}`)
+	s.ok(t, "BatchWriteItem", `{"RequestItems":{"streamed":[{"DeleteRequest":{"Key":{"id":{"S":"NewKey"}}}},`+
+		`{"PutRequest":{"Item":{"id":{"S":"Fred"},"name":{"S":"Fred"}}}}]}}`)
+
+	got := s.records(t, "streamed")
+
+	type row struct {
+		event string
+		size  int64
+		seq   int
+	}
+
+	rows := make([]row, len(got))
+	for i, r := range got {
+		rows[i] = row{r.Event, r.SizeBytes, r.Seq}
+	}
+
+	require.Equal(t, []row{
+		{stream.Insert, 12, 1},
+		{stream.Insert, 16, 2},
+		{stream.Modify, 46, 3},
+		{stream.Remove, 38, 4},
+		{stream.Modify, 26, 5},
+	}, rows)
+	require.Nil(t, got[0].Old)
+	require.Nil(t, got[3].New)
+	require.Equal(t, "Fred", *got[4].Old["id"].S)
+}
+
+// Test_stream_viewTypes: KEYS_ONLY keeps neither image, NEW_IMAGE the new one,
+// OLD_IMAGE the old one.
+func Test_stream_viewTypes(t *testing.T) {
+	for _, tc := range []struct {
+		view     string
+		new, old bool
+		size     int64
+	}{
+		{"KEYS_ONLY", false, false, 6}, {"NEW_IMAGE", true, false, 15}, {"OLD_IMAGE", false, true, 12},
+	} {
+		t.Run(tc.view, func(t *testing.T) {
+			s := newStack(t)
+			s.ok(t, "CreateTable", fmt.Sprintf(streamTable, tc.view))
+			s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"Fred"}}}`)
+			s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"Fred"},"n":{"N":"1"}}}`)
+
+			got := s.records(t, "streamed")
+			require.Len(t, got, 2)
+			require.Equal(t, tc.new, got[1].New != nil)
+			require.Equal(t, tc.old, got[1].Old != nil)
+			require.Equal(t, tc.size, got[1].SizeBytes)
+			require.Equal(t, "Fred", *got[1].Keys["id"].S)
+		})
+	}
+}
+
+// Test_stream_specification: the image's messages for a StreamSpecification
+// it refuses, and a disabled stream keeping LatestStreamArn while it stops
+// taking records.
+func Test_stream_specification(t *testing.T) {
+	s := newStack(t)
+
+	for body, msg := range map[string]string{
+		`{"StreamViewType":"NEW_IMAGE"}`:                       "Stream StreamEnabled was null",
+		`{"StreamEnabled":true}`:                               "Invalid StreamViewType: Stream ViewType must not be null",
+		`{"StreamEnabled":false,"StreamViewType":"NEW_IMAGE"}`: "Stream StreamEnabled was false but a StreamViewType",
+	} {
+		got := s.call(t, usEast1, "CreateTable", `{"TableName":"bad","KeySchema":[{"AttributeName":"id","KeyType":"HASH"}],`+
+			`"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"}],"BillingMode":"PAY_PER_REQUEST",`+
+			`"StreamSpecification":`+body+`}`)
+		require.Equal(t, http.StatusBadRequest, got.status)
+		require.Contains(t, got.body, msg)
+	}
+
+	s.ok(t, "CreateTable", fmt.Sprintf(streamTable, "NEW_IMAGE"))
+	got := s.call(t, usEast1, "UpdateTable",
+		`{"TableName":"streamed","StreamSpecification":{"StreamEnabled":true,"StreamViewType":"KEYS_ONLY"}}`)
+	require.Contains(t, got.body, "Table already has an enabled stream")
+
+	s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"a"}}}`)
+	s.ok(t, "UpdateTable", `{"TableName":"streamed","StreamSpecification":{"StreamEnabled":false}}`)
+	s.ok(t, "PutItem", `{"TableName":"streamed","Item":{"id":{"S":"b"}}}`)
+
+	got = s.call(t, usEast1, "UpdateTable", `{"TableName":"streamed","StreamSpecification":{"StreamEnabled":false}}`)
+	require.Contains(t, got.body, "Table has no stream to disable")
+
+	arn := s.latestStreamARN(t, "streamed")
+	require.NotContains(t, s.ok(t, "DescribeTable", `{"TableName":"streamed"}`)["Table"], "StreamSpecification")
+	require.Len(t, s.records(t, "streamed"), 1)
+
+	info, ok := s.provider.StreamByARN(streamCtx(t), arn)
+	require.True(t, ok)
+	require.Equal(t, "DISABLED", info.Status)
+	require.Len(t, s.provider.StreamList(streamCtx(t)), 1)
+
+	s.ok(t, "DeleteTable", `{"TableName":"streamed"}`)
+	require.Empty(t, s.provider.StreamList(streamCtx(t)))
+}
