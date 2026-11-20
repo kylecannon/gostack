@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
@@ -236,6 +237,65 @@ func TestManagedKMSKey(t *testing.T) {
 		assert.Len(t, k.kms.descriptions(), 1, "one key for the account and region")
 	})
 
+	t.Run("a POST upload and a presigned PUT get it too", func(t *testing.T) {
+		t.Parallel()
+
+		k := newKMSStack(t)
+		k.bucket("bucket")
+
+		arn := k.put("/bucket/a", map[string]string{headerSSE: sseKMS}).header.Get(headerSSEKMSKey)
+
+		posted := postForm(t, k.server, localstackHost, "/bucket", [][2]string{
+			{fieldKey, "posted"}, {"x-amz-server-side-encryption", sseKMS},
+		}, []byte("body"))
+		require.Equal(t, http.StatusNoContent, posted.status, string(posted.body))
+		assert.Equal(t, arn, posted.header.Get(headerSSEKMSKey), "POST")
+
+		presigned := k.do(call{
+			method: http.MethodPut, target: "/bucket/presigned?" +
+				signV4(http.MethodPut, localstackHost, "/bucket/presigned", time.Now()),
+			body: []byte("body"), header: map[string]string{headerSSE: sseKMS},
+		})
+		require.Equal(t, http.StatusOK, presigned.status, string(presigned.body))
+		assert.Equal(t, arn, presigned.header.Get(headerSSEKMSKey), "presigned PUT")
+	})
+
+	t.Run("a gateway that serves no KMS checks nothing and derives the key", func(t *testing.T) {
+		t.Parallel()
+
+		provider := s3.New(func() s3.Settings {
+			return s3.Settings{LocalstackHost: localstackHost, ValidateKMSKeys: true}
+		}, blob.NewEphemeral(t.TempDir()))
+		t.Cleanup(func() { provider.Close(t.Context()) })
+
+		gw, err := gateway.New(
+			func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },
+			[]service.Registration{provider.Registration()},
+			nil,
+			nil,
+		)
+		require.NoError(t, err)
+
+		provider.Bind(gw.Handler())
+
+		srv := httptest.NewServer(gw.Handler())
+		t.Cleanup(srv.Close)
+
+		k := &kmsStack{server: &server{t: t, url: srv.URL}, s3: provider}
+		k.bucket("bucket")
+
+		managed := k.put("/bucket/a", map[string]string{headerSSE: sseKMS})
+		require.Equal(t, http.StatusOK, managed.status, string(managed.body))
+		assert.True(t, strings.HasPrefix(managed.header.Get(headerSSEKMSKey), managedARNPrefix))
+		assert.Equal(t, managed.header.Get(headerSSEKMSKey),
+			k.put("/bucket/b", map[string]string{headerSSE: sseKMS}).header.Get(headerSSEKMSKey))
+
+		named := k.put("/bucket/c", map[string]string{headerSSE: sseKMS, headerSSEKMSKey: fakeKeyID})
+		require.Equal(t, http.StatusOK, named.status, string(named.body))
+		assert.Equal(t, managedARNPrefix+fakeKeyID, named.header.Get(headerSSEKMSKey))
+		assert.Equal(t, http.StatusOK, get(k.server, http.MethodGet, "/bucket/c", nil).status)
+	})
+
 	t.Run("aws:kms:dsse gets no managed key, as in LocalStack", func(t *testing.T) {
 		t.Parallel()
 
@@ -362,6 +422,13 @@ func TestKMSKeyValidation(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, got.status, name)
 			assert.Equal(t, notFound, codeAndMessage(t, got), name)
 		}
+
+		posted := postForm(t, k.server, localstackHost, "/bucket", [][2]string{
+			{fieldKey, "posted"},
+			{"x-amz-server-side-encryption", sseKMS},
+			{"x-amz-server-side-encryption-aws-kms-key-id", fakeKeyID},
+		}, []byte("body"))
+		assert.Equal(t, http.StatusNoContent, posted.status, "a POST's key is not checked, as in LocalStack")
 
 		ok := k.put("/bucket/a", map[string]string{headerSSE: sseKMS, headerSSEKMSKey: bareID})
 		require.Equal(t, http.StatusOK, ok.status, string(ok.body))
