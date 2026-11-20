@@ -192,8 +192,8 @@ func mentions(n *partiql.Node, names ...string) bool {
 	return false
 }
 
-// keyAttributes are the attributes of key, hash first.
-func keyAttributes(key table.KeySchema) []table.KeyAttribute {
+// keyParts are the attributes of key, hash first.
+func keyParts(key table.KeySchema) []table.KeyAttribute {
 	if key.HasRange() {
 		return []table.KeyAttribute{key.Hash, key.Range}
 	}
@@ -204,7 +204,7 @@ func keyAttributes(key table.KeySchema) []table.KeyAttribute {
 // singleItem splits a WHERE clause into the item key its equalities name, all
 // of key's attributes, and the conditions left over.
 func singleItem(where *partiql.Node, key table.KeySchema, r *render) (value.Item, []*partiql.Node, error) {
-	attrs := keyAttributes(key)
+	attrs := keyParts(key)
 	found := make([]*partiql.Node, len(attrs))
 
 	var rest []*partiql.Node
@@ -254,7 +254,7 @@ next:
 //
 //nolint:revive // flag-parameter: an INSERT's item must hold the key, a WHERE's already does
 func checkKeyTypes(item value.Item, key table.KeySchema, present bool) error {
-	for _, a := range keyAttributes(key) {
+	for _, a := range keyParts(key) {
 		v, ok := item[a.Name]
 		if !ok && present {
 			return value.Invalid(msgKeyAbsent + a.Name)

@@ -198,7 +198,7 @@ func (w *writeStatement) compileInsert(stmt *partiql.Statement, key table.KeySch
 	}
 
 	w.key = value.Item{}
-	for _, a := range keyAttributes(key) {
+	for _, a := range keyParts(key) {
 		w.key[a.Name] = item.M[a.Name]
 	}
 
