@@ -64,12 +64,15 @@ func tableName(name string) string {
 func (p *Provider) DescribeTable(ctx context.Context, in *api.DescribeTableInput) (*api.DescribeTableOutput, error) {
 	c := p.caller(ctx)
 
-	name, e, err := c.lookup(in.TableName)
+	name, e, err := p.lookupHome(c, in.TableName)
 	if err != nil {
 		return nil, err
 	}
 
-	return &api.DescribeTableOutput{Table: e.description(c.tableARN(name))}, nil
+	d := e.description(c.tableARN(name))
+	d.Replicas = p.replicas(c, name)
+
+	return &api.DescribeTableOutput{Table: d}, nil
 }
 
 // DeleteTable deletes a table. LocalStack checks that it exists first, with a
@@ -82,7 +85,9 @@ func (p *Provider) DeleteTable(ctx context.Context, in *api.DeleteTableInput) (*
 		name = *in.TableName
 	}
 
-	e, err := c.state.remove(name, func(e *tableEntry) error {
+	home, region := p.home(c, name)
+
+	e, err := home.remove(name, func(e *tableEntry) error {
 		if e.protected() {
 			return value.Invalid(msgDeleteProtected)
 		}
@@ -92,6 +97,11 @@ func (p *Provider) DeleteTable(ctx context.Context, in *api.DeleteTableInput) (*
 	if err != nil {
 		return nil, err
 	}
+
+	a := p.account(c)
+	a.dropTags(c.tableARN(name), caller{account: c.account, region: region, shared: c.shared}.tableARN(name))
+	a.dropReplicas(name)
+	p.settleExpiry()
 
 	d := e.description(c.tableARN(name))
 	d.TableStatus = new(statusDeleting)
@@ -118,7 +128,14 @@ func (p *Provider) ListTables(ctx context.Context, in *api.ListTablesInput) (*ap
 	c := p.caller(ctx)
 
 	names := c.state.namesAfter(in.ExclusiveStartTableName)
+	for _, name := range p.account(c).replicaNames(c.region) {
+		if in.ExclusiveStartTableName == nil || name > *in.ExclusiveStartTableName {
+			names = append(names, name)
+		}
+	}
+
 	slices.Sort(names)
+	names = slices.Compact(names)
 
 	out := &api.ListTablesOutput{TableNames: names}
 	if len(names) > limit {
