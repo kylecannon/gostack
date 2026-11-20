@@ -379,7 +379,10 @@ func (ls *lanes) send(l *lane) bool {
 
 // answered is the transport's answer to l's head, on the client's worker. It
 // takes the head out of the lane, fails it when it was not delivered, and
-// sends the next.
+// sends the next. The lane goes on, and the head is counted out, even when
+// failing the head panics: the panic is not recovered here, so the worker's
+// recover logs it once, but the lane's other deliveries are not left behind,
+// and the hub's drain is not held to its deadline by their hold.
 func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -397,6 +400,7 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 	ls.remove(j)
 
 	defer ls.settle()
+	defer ls.proceed(l) // before settle, as it was when it ended answered
 
 	switch {
 	case err == nil && resp.OK():
@@ -414,16 +418,19 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 
 		ls.fail(j, l, reason)
 	}
+}
 
+// proceed is what follows an answer to l's head: l is forgotten when the
+// shutdown has begun, and goes on otherwise, after the parked lanes. They go
+// first, so a lane with more to send does not take the room its answer freed
+// from them again and again; it is parked behind them when none is left.
+func (ls *lanes) proceed(l *lane) {
 	if ls.closed {
 		ls.tidy(l)
 
 		return
 	}
 
-	// The parked lanes go first, so a lane with more to send does not take
-	// the room its answer freed from them again and again; it is parked
-	// behind them when none is left.
 	ls.unpark()
 	ls.start(l)
 }

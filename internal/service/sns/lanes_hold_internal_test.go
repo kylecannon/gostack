@@ -239,3 +239,87 @@ func Test_lanes_parkedLanesTakeTheirTurn(t *testing.T) {
 	assert.LessOrEqual(t, lastFirst, int64(2*destinations),
 		"the last lane's first delivery waited behind the busy lanes")
 }
+
+// panicError is an error whose message cannot be read: answered reads it when
+// the transport's answer is an error, so the answer panics.
+type panicError struct{}
+
+func (panicError) Error() string { panic("answered: injected panic") }
+
+// Test_lanes_answeredPanicKeepsLaneGoing: a panic in answered, on the client's
+// worker, for one delivery. The panic still reaches the worker (which logs it
+// and keeps serving), but the lane serves its next deliveries, nothing is
+// dropped, every delivery is made once, and Hub.Drain returns before its
+// deadline instead of waiting for deliveries stuck behind a lane that never
+// went on.
+func Test_lanes_answeredPanicKeepsLaneGoing(t *testing.T) {
+	const n = 3
+
+	p := New(nil)
+
+	var served atomic.Int64
+
+	hub := inproc.NewHub(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	p.Bind(hub)
+	t.Cleanup(func() { p.Close(t.Context()) })
+
+	topic, deliveries := laneFixture(n, 1)
+	jobs := p.queue(topic, deliveries)
+
+	// The lane's first answer is replaced by one whose error panics, the way
+	// the client's worker meets a panicking done. The test stands in for the
+	// worker's recover and keeps what it recovered.
+	recovered := make(chan any, 1)
+
+	p.lanes.mu.Lock()
+
+	answer := jobs[0].lane.done
+	first := true
+
+	jobs[0].lane.done = func(resp inproc.Response, err error) {
+		p.lanes.mu.Lock()
+		panicking := first
+		first = false
+		p.lanes.mu.Unlock()
+
+		if !panicking {
+			answer(resp, err)
+
+			return
+		}
+
+		defer func() { recovered <- recover() }()
+
+		answer(resp, panicError{})
+	}
+
+	p.lanes.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	drained := make(chan struct{})
+
+	go func() {
+		defer close(drained)
+
+		hub.Drain(ctx)
+	}()
+
+	p.lanes.dispatch(jobs)
+	<-drained
+
+	require.NoError(t, ctx.Err(), "Drain waited for its deadline: the lane stalled after the panic")
+	assert.Equal(t, int64(n), served.Load(), "the lane served every delivery")
+	assert.Equal(t, "answered: injected panic", <-recovered, "the panic reached the worker")
+	assert.Zero(t, p.Dropped())
+
+	p.lanes.mu.Lock()
+	defer p.lanes.mu.Unlock()
+
+	assert.Zero(t, p.lanes.queued, "deliveries left in the lanes")
+	assert.Empty(t, p.lanes.byKey, "the lane was not forgotten")
+}
