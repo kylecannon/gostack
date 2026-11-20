@@ -273,8 +273,9 @@ bench-ab:
 		round=$$((round + 1)); \
 	done
 
-# Builds the test binary of every package of the current tree that holds a
-# Benchmark function into BENCH_BIN (an absolute path) and lists each as
+# Builds the test binary of every package of the current tree with a
+# "func Benchmark" line in a _test.go file (a grep, so a fixture string counts
+# too: `bench select` drops a package whose binary lists no benchmark) into BENCH_BIN (an absolute path) and lists each as
 # "<binary> <package dir> <bench regex> <import path>" in BENCH_BIN/manifest.
 # bench-ab and bench-select run it in each tree with -C, so that tree's go.mod
 # sets GOTOOLCHAIN. BENCH_LAYOUT, when set to a nonzero number, links with

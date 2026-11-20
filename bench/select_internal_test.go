@@ -359,6 +359,73 @@ func Test_selectMain(t *testing.T) {
 	})
 }
 
+// The Makefile picks the packages to build with a grep for "func Benchmark",
+// which a fixture string in a _test.go file satisfies. The test binary's list is
+// the authority: a package that lists no benchmark is dropped, printed as
+// "no benchmark", and selects nothing, whichever trees hold it. A binary whose
+// list fails still fails selection.
+func Test_selectMain_drops_a_package_whose_binary_lists_no_benchmark(t *testing.T) {
+	// "n" has no entry in the runner's benches: its binary lists nothing.
+	t.Run("a package only the head holds", func(t *testing.T) {
+		f := &fakeRunner{}
+
+		out, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "1", "n": "3"})
+		require.NoError(t, err)
+
+		assert.Empty(t, m.Include)
+		assert.Contains(t, out, "no benchmark     n\n")
+		assert.NotContains(t, out, "head only")
+		assert.Equal(t, []string{"n -test.list ^Benchmark"}, f.calls, "only the list runs, no benchmark does")
+	})
+
+	t.Run("a changed package", func(t *testing.T) {
+		f := &fakeRunner{}
+
+		out, m, err := runSelect(t, f, map[string]string{"n": "1"}, map[string]string{"n": "2"})
+		require.NoError(t, err)
+
+		assert.Empty(t, m.Include)
+		assert.Contains(t, out, "no benchmark     n\n")
+		assert.NotContains(t, out, "changed  ")
+		assert.Equal(t, []string{"n -test.list ^Benchmark"}, f.calls)
+	})
+
+	t.Run("a package only the base holds", func(t *testing.T) {
+		f := &fakeRunner{}
+
+		out, m, err := runSelect(t, f, map[string]string{"x": "1", "n": "3"}, map[string]string{"x": "1"})
+		require.NoError(t, err)
+
+		assert.Empty(t, m.Include)
+		assert.Contains(t, out, "no benchmark     n\n")
+		assert.NotContains(t, out, "base only")
+	})
+
+	t.Run("a package that lists benchmarks beside it still runs", func(t *testing.T) {
+		f := &fakeRunner{benches: map[string]map[string]time.Duration{"x": {benchA: time.Second}}}
+
+		out, m, err := runSelect(t, f, map[string]string{"x": "1", "n": "3"}, map[string]string{"x": "2", "n": "3"})
+		require.NoError(t, err)
+
+		require.Len(t, m.Include, 1)
+		assert.Equal(t, "x .\n", m.Include[0].Plan)
+		assert.NotContains(t, out, "no benchmark", "an unchanged package is not listed")
+	})
+
+	t.Run("a binary that cannot list its benchmarks fails selection", func(t *testing.T) {
+		for name, trees := range map[string][2]map[string]string{
+			"head only": {{"x": "1"}, {"x": "1", "n": "3"}},
+			"changed":   {{"n": "1"}, {"n": "2"}},
+			"base only": {{"x": "1", "n": "3"}, {"x": "1"}},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, _, err := runSelect(t, &fakeRunner{broken: "n"}, trees[0], trees[1])
+				require.ErrorIs(t, err, errBrokenBenchmark)
+			})
+		}
+	})
+}
+
 // A benchmark only the head holds has no base rows, and a shard that held it
 // would fail the join, so no shard plans it. It is still run once at the gate's
 // benchtime, as main runs it, and held to the shard job's limit: one that breaks

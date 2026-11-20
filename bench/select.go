@@ -53,6 +53,11 @@ const (
 	verdictUnreproducible buildVerdict = "not reproducible"
 	verdictHeadOnly       buildVerdict = "head only"
 	verdictBaseOnly       buildVerdict = "base only"
+	// verdictNoBenchmark is a package whose test binary lists no benchmark,
+	// whatever a source file says: only the binary's list decides what a
+	// package holds. It is dropped from selection, as a package only the base
+	// holds is.
+	verdictNoBenchmark buildVerdict = "no benchmark"
 )
 
 // errSelect is returned when selection cannot decide what to run.
@@ -514,19 +519,41 @@ func readManifest(dir string) ([]benchBin, error) {
 
 // measure times what selection picked from the head's build: every top-level
 // benchmark of a package only the head holds or of a package that runs, once at
-// benchtime. A failing run fails selection.
+// benchtime. A failing run, or a failing list of a binary's benchmarks, fails
+// selection. A package whose binary lists no benchmark gets the verdict
+// verdictNoBenchmark and is neither timed nor compared.
 func measure(
 	ctx context.Context, headDir, baseDir string, benchtime time.Duration, pkgs []*selected, run runBin,
 ) error {
 	for _, s := range pkgs {
+		var err error
+
 		switch s.verdict {
 		case verdictHeadOnly, verdictChanged, verdictUnreproducible:
-			err := measurePackage(ctx, headDir, baseDir, benchtime, s, run)
-			if err != nil {
-				return err
-			}
-		default: // unchanged, or only in the base: nothing to run
+			err = measurePackage(ctx, headDir, baseDir, benchtime, s, run)
+		case verdictBaseOnly:
+			err = dropEmpty(ctx, baseDir, s, run)
+		default: // unchanged: nothing to run
 		}
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// dropEmpty gives a package only the base holds the verdict verdictNoBenchmark
+// when its binary lists no benchmark. The package is dropped either way.
+func dropEmpty(ctx context.Context, binDir string, s *selected, run runBin) error {
+	names, err := listBenchmarks(ctx, binDir, s.bin, run)
+	if err != nil {
+		return err
+	}
+
+	if len(names) == 0 {
+		s.verdict = verdictNoBenchmark
 	}
 
 	return nil
@@ -546,7 +573,11 @@ func measurePackage(
 	}
 
 	if len(head) == 0 {
-		return fmt.Errorf("%w: %s lists no benchmark", errSelect, s.bin.pkg)
+		// The Makefile finds benchmark packages with a grep that a fixture string
+		// satisfies too, so the binary's list has the last word.
+		s.verdict = verdictNoBenchmark
+
+		return nil
 	}
 
 	var inBase []string

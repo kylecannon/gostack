@@ -320,6 +320,12 @@ side by side.
     later comparison, so one that breaks late or runs over the limit below
     fails selection, and none is compared;
   - a package only the base holds is dropped;
+  - a package whose test binary lists no benchmark (`-test.list '^Benchmark'`
+    prints none) is not a benchmark package, whether the head only, both trees
+    or the base only hold it: the grep that picks packages to build also matches
+    a `func Benchmark` inside a string literal, so the binary's list decides.
+    It is dropped and the summary prints it as `no benchmark`. A list that
+    fails (non-zero exit, a crash) fails selection;
   - a top-level benchmark only the head holds, in a package that runs, is
     treated the same way: it runs once at the gate's benchtime and is held to
     the limit below, but is not planned and not compared, so a shard never holds
