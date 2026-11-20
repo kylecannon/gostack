@@ -97,7 +97,7 @@ func checkCopyKeys(in *s3api.UploadPartCopyInput, upload *MultipartUpload, sourc
 func copyPartOutput(
 	part *Part, upload *MultipartUpload, source *copySource, customer customerKey,
 ) *s3api.UploadPartCopyOutput {
-	result := &s3api.CopyPartResult{ETag: new(quoted(part.ETag)), LastModified: timeOf(part.LastModified)}
+	result := &s3api.CopyPartResult{ETag: new(quoted(part.ETag)), LastModified: timeOf(part.LastModified.Time)}
 	c := partChecksums(part)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	result.ChecksumSHA1, result.ChecksumSHA256 = c.sha1, c.sha256
