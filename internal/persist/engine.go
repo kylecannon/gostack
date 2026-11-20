@@ -59,6 +59,10 @@ type Engine struct {
 	// caller alone. The last of them to leave releases sem, or keeps it when it
 	// goes on to flush alone.
 	sharers int
+	// preempting counts the Load and ResetAssets calls waiting for sem. A Flush
+	// that comes while one waits does not join the flushes sharing sem, so it
+	// writes nothing ahead of it (see acquire).
+	preempting int
 
 	// openMu is held while a service's assets are opened, so they are opened
 	// once. It is taken before mu.
@@ -151,6 +155,9 @@ type pendingService struct {
 	assets *Assets
 	// took is the service's tracked took when the flush took it.
 	took time.Duration
+	// moved is true when the flush took the service from a flush by the timer
+	// that held it (see takeDirty).
+	moved bool
 }
 
 // unsaved is a service a flush did not save, and what it failed with.
@@ -468,8 +475,14 @@ func (e *Engine) Stop(ctx context.Context) error {
 // sync a save stopped waiting for keeps its descriptor until it returns. The
 // assets fail every call after Close.
 func (e *Engine) Close(ctx context.Context) error {
-	err := e.Stop(ctx)
+	// A panic through Stop, from a [Committer] or a [Leader], still releases them.
+	defer e.closeAssets()
 
+	return e.Stop(ctx)
+}
+
+// closeAssets releases what every service's assets hold open.
+func (e *Engine) closeAssets() {
 	e.mu.Lock()
 	open := make([]*Assets, 0, len(e.services))
 
@@ -483,8 +496,6 @@ func (e *Engine) Close(ctx context.Context) error {
 	for _, a := range open {
 		a.close()
 	}
-
-	return err
 }
 
 // openFailed ends a Load that could not open the base dir. A missing base dir
@@ -541,9 +552,35 @@ func (e *Engine) flushShared(ctx context.Context) ([]outcome, error) {
 		return results, errors.Join(err, fmt.Errorf("flush: %w", waitErr))
 	}
 
+	// Out of time, a second pass would take every dirty service only to abandon it
+	// at once, and count it failed for a deadline it never had a chance at.
+	if ctx.Err() != nil {
+		e.release()
+
+		if err == nil && e.anyDirty() {
+			err = fmt.Errorf("flush: %w", ctx.Err())
+		}
+
+		return results, err
+	}
+
 	more, moreErr := e.flushByHand(ctx)
 
 	return append(results, more...), errors.Join(err, moreErr)
+}
+
+// anyDirty reports whether a service is dirty that a flush may save.
+func (e *Engine) anyDirty() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	for _, t := range e.services {
+		if t.dirty && t.unsafe == nil {
+			return true
+		}
+	}
+
+	return false
 }
 
 // armTimer arms the flush timer for what is dirty.
@@ -645,10 +682,12 @@ func preempted(ctx context.Context) bool {
 // once and reports shared: it may then save the services whose save no other
 // flush has begun (see takeDirty), and leaves with unshare. The join and a
 // timed flush's start are decided under mu, so a Flush either joins or is a
-// waiter the timed flush gives way to.
+// waiter the timed flush gives way to. It does not join while a Load or
+// ResetAssets waits: it waits behind them, so a Load restores what was on disk
+// when it was called, not what a Flush wrote after.
 func (e *Engine) acquire(ctx context.Context, mode timedSave) (shared bool, err error) {
 	e.mu.Lock()
-	if mode == lend && e.sharers > 0 {
+	if mode == lend && e.sharers > 0 && e.preempting == 0 {
 		e.sharers++
 		e.mu.Unlock()
 
@@ -657,12 +696,24 @@ func (e *Engine) acquire(ctx context.Context, mode timedSave) (shared bool, err 
 
 	e.waiting++
 
-	if mode == preempt && e.timed != nil {
-		e.timed.preempt(errPreempted)
+	if mode == preempt {
+		e.preempting++
+
+		if e.timed != nil {
+			e.timed.preempt(errPreempted)
+		}
 	}
 	e.mu.Unlock()
 
-	return false, e.wait(ctx)
+	err = e.wait(ctx)
+
+	if mode == preempt {
+		e.mu.Lock()
+		e.preempting--
+		e.mu.Unlock()
+	}
+
+	return false, err
 }
 
 // wait waits for sem until ctx ends, for a caller already counted in waiting,
@@ -1006,12 +1057,13 @@ func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) 
 
 	ended := false
 
+	// close runs after interrupt, and whether or not interrupt itself panics.
+	defer run.close()
+
 	defer func() {
 		if !ended {
 			run.interrupt()
 		}
-
-		run.close()
 	}()
 
 	err := e.writeAll(ctx, run, pending)
@@ -1121,10 +1173,11 @@ func (e *Engine) redirtyLocked(u unsaved) {
 // follower's snapshot in that flush. The exception, for a flush by hand, is a
 // service whose save in a flush by the timer beside it has not begun, such as
 // one queued behind another service's slow Snapshot: it is moved to run,
-// which saves it instead, and the timed flush skips it (see flushRun.own). A [Leader] and its follower
-// move together, or not at all: a follower moves only with its leader, and a
-// leader whose follower may not move stays. Each service it takes is held, by
-// run, until its save ends.
+// which saves it instead, and the timed flush skips it (see flushRun.own). It
+// never goes back, and one run does not reach before its deadline gave way (see
+// flushRun.abandon). A [Leader] and its follower move together, or not at all:
+// a follower moves only with its leader, and a leader whose follower may not
+// move stays. Each service it takes is held, by run, until its save ends.
 func (e *Engine) takeDirty(by flushBy, run *flushRun) []pendingService {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1171,7 +1224,9 @@ func (e *Engine) takeDirty(by flushBy, run *flushRun) []pendingService {
 			from[name] = t.owner
 			t.dirty, t.owner, t.started = false, run, false
 			taken[name] = true
-			run.holding[name] = pendingService{name: name, snap: t.snap, assets: t.assets, took: t.took}
+			run.holding[name] = pendingService{
+				name: name, snap: t.snap, assets: t.assets, took: t.took, moved: from[name] != nil,
+			}
 			pending = append(pending, run.holding[name])
 		}
 	}
@@ -1340,6 +1395,9 @@ func (r *flushRun) failAll(pending []pendingService, err error) error {
 //     nothing pending, whose Snapshot grows with its objects, does not cost SQS
 //     and STS their save; a service with neither counts as zero, so the first
 //     flush of a process with no state to load is in name order;
+//   - whether the service is one the flush took from a timed flush: those go
+//     first among equals, so a service moved to save it is not queued behind
+//     one of the flush's own whose Snapshot was never measured;
 //   - name.
 //
 // A [Follower] and the service it follows, when both are pending, are one
@@ -1373,12 +1431,18 @@ func saveOrder(pending []pendingService) []pendingService {
 
 	due := make(map[string]bool, len(pending))
 	took := make(map[string]time.Duration, len(pending))
+	// own is 1 for a unit with a service the flush did not take from a timed flush.
+	own := make(map[string]int, len(pending))
 
 	for _, p := range pending {
 		d, err := p.assets.syncDue()
 		h := head(p)
 		due[h] = due[h] || d || err != nil
 		took[h] = max(took[h], p.took)
+
+		if !p.moved {
+			own[h] = 1
+		}
 	}
 
 	sorted := slices.SortedStableFunc(slices.Values(pending), func(a, b pendingService) int {
@@ -1392,7 +1456,9 @@ func saveOrder(pending []pendingService) []pendingService {
 			return 1
 		}
 
-		return cmp.Or(cmp.Compare(took[ha], took[hb]), strings.Compare(ha, hb), strings.Compare(a.name, b.name))
+		return cmp.Or(
+			cmp.Compare(took[ha], took[hb]), cmp.Compare(own[ha], own[hb]),
+			strings.Compare(ha, hb), strings.Compare(a.name, b.name))
 	})
 
 	return afterLeaders(sorted, func(p pendingService) (string, string) { return p.name, follows(p.snap) })
@@ -1423,6 +1489,8 @@ type flushRun struct {
 	// save or leader call is under way: what a panic leaves to interrupt.
 	begun   []*staged
 	current string
+	// interrupting is true once a panic ended the flush (see interrupt).
+	interrupting bool
 }
 
 // newFlushRun returns the run of a flush by by, which takeDirty fills.
@@ -1554,6 +1622,8 @@ var errPanicked = errors.New("a panic passed through its flush")
 // the timer spin; the rest were taken and not written, so they gave way and are
 // dirty again at once. It runs with the panic.
 func (r *flushRun) interrupt() {
+	r.interrupting = true
+
 	for _, s := range r.begun {
 		finishSave(s, errPanicked)
 	}
@@ -1729,7 +1799,7 @@ func (r *flushRun) unfollowUnit(p pendingService) {
 	}
 
 	delete(r.followed, head)
-	l.Followed(false)
+	r.tellUnfollowed(head, l)
 }
 
 // unfollow tells each [Leader] still told a follower is saved after it that
@@ -1738,8 +1808,38 @@ func (r *flushRun) unfollowUnit(p pendingService) {
 func (r *flushRun) unfollow() {
 	for head, l := range r.followed {
 		delete(r.followed, head)
-		l.Followed(false)
+		r.tellUnfollowed(head, l)
 	}
+}
+
+// tellUnfollowed calls Followed(false) of the leader called head. A leader
+// whose Snapshot panicked is turned off, and the engine never calls it again:
+// the panic may have left its lock held, and the call would wait for it. In a
+// flush a panic is ending, a panic of the call is logged and not passed on,
+// since it would stop the rest of the flush's cleanup: the services it still
+// holds, the guard and the count of flushes.
+func (r *flushRun) tellUnfollowed(head string, l Leader) {
+	e := r.e
+
+	e.mu.Lock()
+	off := e.services[head] != nil && errors.Is(e.services[head].unsafe, errSnapshotPanicked)
+	e.mu.Unlock()
+
+	if off {
+		return
+	}
+
+	if r.interrupting {
+		defer func() {
+			p := recover()
+			if p != nil {
+				e.log.Error("persist: Followed(false) of a leader panicked in a flush a panic ended; the leader is not told again",
+					"service", head, "panic", p, "stack", string(debug.Stack()))
+			}
+		}()
+	}
+
+	l.Followed(false)
 }
 
 // end ends one service's save with err and records what it failed with. A
@@ -1792,17 +1892,30 @@ func (r *flushRun) end(s *staged, err error) {
 // abandon records the services the end of ctx stopped before they were saved,
 // and the end of ctx in errs, once: not when a flush beside this one moved
 // every one of them away, since this flush then lost nothing to it.
+//
+// A service this flush took from a flush by the timer and did not reach gave
+// way: it was never tried, so it is dirty again with no failure and no backoff,
+// as one a cancellation stopped is. The flush by the timer it came from cannot
+// take it back: ownership moves from the timer to a flush by hand and never
+// back, and a Flush that ends at its deadline lends that deadline to the timed
+// flush (see unshare), which stops at the same moment.
 func (r *flushRun) abandon(ctx context.Context, ps []pendingService) {
 	lost := false
 
 	for _, p := range ps {
-		lost = r.lose(unsaved{pendingService: p, err: ctx.Err(), gaveWay: errors.Is(ctx.Err(), context.Canceled)}) || lost
+		gaveWay := errors.Is(ctx.Err(), context.Canceled) || p.moved && !r.reached(p.name)
+		lost = r.lose(unsaved{pendingService: p, err: ctx.Err(), gaveWay: gaveWay}) || lost
 	}
 
 	if lost && !r.ended {
 		r.ended = true
 		r.errs = append(r.errs, ctx.Err())
 	}
+}
+
+// reached reports whether the flush has begun the service's save.
+func (r *flushRun) reached(name string) bool {
+	return slices.ContainsFunc(r.begun, func(s *staged) bool { return s.p.name == name })
 }
 
 // finishSave ends the save of s: a failed one removes its temp files, and the

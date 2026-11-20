@@ -1310,9 +1310,10 @@ cites the lines.
   and loading off for that service until the process restarts, as a failed
   sync does: the panic may have left a lock of the service held, and a retry
   or the `Restore` of a later `Load` would wait for it inside the guard, so
-  the engine never calls the service again. It is logged once, with the stack,
-  `/_gostack/health` reports `persisted: false` for the service, and the other
-  services in the flush, and every flush after, still save.
+  the engine never calls the service again, its `Followed(false)` included. It
+  is logged once, with the stack, `/_gostack/health` reports `persisted: false`
+  for the service, and the other services in the flush, and every flush after,
+  still save.
 - A panic in a `Committer` or a `Leader`, which is not in a `Snapshot`, ends
   the flush it passes through before it goes on: each service the flush took
   and did not save is dirty again, each leader told its follower is saved is
@@ -1322,6 +1323,11 @@ cites the lines.
   caller, such as the HTTP server's recovery of the `POST /_gostack/state/save`
   handler, so `Flush` is not free of panics. The service that was under way
   fails with a backoff, so a panic at every flush does not make the timer spin.
+  A leader's `Followed(false)` that panics while the flush ends is logged with
+  its stack and does not stop the rest of the cleanup. At shutdown, `cmd/gostack`
+  recovers a panic from the engine's `Stop`, `Flush` or `Close`, logs it with
+  its stack, and still runs the saves and the `Close` after it; `Close` releases
+  the assets even when its own `Stop` panicked.
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -1503,7 +1509,14 @@ is untouched.
   another service's slow `Snapshot` or sync. A queued one moves to the save
   beside it, and the timed save skips it when it gets there. A service moves
   only from the timed save to a save by hand, never back, so the timed save
-  never takes what a save that joined it took first. Once the timed save has
+  never takes what a save that joined it took first. The save by hand puts a
+  service it moved ahead of its own of the same measured time, so one with no
+  measured `Snapshot` yet, however slow, never queues it behind itself. A
+  moved service the save by hand does not reach before its deadline was never
+  tried: it is dirty again, counted as no failure and with no backoff. A save
+  by hand that comes while a `Load` or reset waits does not join the timed
+  save: it waits behind them, as it did before SQ-384, so the load restores
+  what was on disk when it was called. Once the timed save has
   begun a service's save, it holds the service until that save ends, renamed
   or not, so a service it has already renamed is free again while it is still
   in a slow `Snapshot` or sync of another. It also holds the leader of a
@@ -1524,7 +1537,10 @@ is untouched.
   or the one it took with dynamodb and had not reached. So a timed save stuck
   in a slow sync holds the shutdown until the shutdown's deadline and no
   longer: the shutdown returns then with every other service saved and only
-  the service whose save the timed save had begun still unsaved.
+  the service whose save the timed save had begun still unsaved, and the
+  follower pinned with it: dynamodbstreams stays unsaved alongside dynamodb
+  while dynamodb's save had begun, since it is saved only right after
+  dynamodb's rename.
   Only then does the waiter turn to what the timed save holds: it lends the
   timed save its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot

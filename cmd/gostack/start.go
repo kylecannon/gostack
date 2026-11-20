@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -379,8 +380,24 @@ func (s *saver) logSave(err error) {
 // saves that follow. A write cut short keeps the old file.
 func (s *saver) saveFirst(ctx context.Context) {
 	s.first.Do(func() {
-		s.logSave(s.eng.Stop(ctx))
+		s.step("stop", func() error { return s.eng.Stop(ctx) })
 	})
+}
+
+// step runs one of the shutdown's calls into the engine and logs its error. A
+// panic of it, from a service's Committer or Leader, passes through the engine
+// to here: it is logged with its stack, and the steps after it still run, so
+// the services behind it are saved and the assets released.
+func (s *saver) step(name string, call func() error) {
+	defer func() {
+		r := recover()
+		if r != nil {
+			slog.Error("persisting state panicked; the steps after it still run",
+				"step", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+
+	s.logSave(call())
 }
 
 // save makes saveFirst when it has not run, and then writes what changed since,
@@ -407,7 +424,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 		// A first save that ran out of time has said so; this one would only
 		// fail the same way.
 		if saveCtx.Err() == nil {
-			s.logSave(s.eng.Flush(saveCtx))
+			s.step("flush", func() error { return s.eng.Flush(saveCtx) })
 		}
 
 		// closeServices reports false only once closeCtx has ended, and a flush
@@ -419,7 +436,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 			return
 		}
 
-		s.logSave(s.eng.Close(closeCtx))
+		s.step("close", func() error { return s.eng.Close(closeCtx) })
 	})
 }
 
