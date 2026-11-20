@@ -35,9 +35,10 @@ const (
 	// one of them moves the slope half as far as it would between neighbours.
 	scaleTailSlope = 1.35
 	// scaleCeiling is the CPU time of the whole test process one decode may take
-	// before the test gives up on it, so a quadratic decode fails in seconds and
-	// not in minutes. A healthy decode of the largest size takes under 0.2 s
-	// under the race detector.
+	// before the test gives up on it, so a quadratic decode fails after seconds of
+	// CPU and not the minutes it would take to finish. A healthy decode of the
+	// largest size takes under 0.2 s under the race detector. A machine under
+	// load stretches the wall time to the ceiling, never the CPU time.
 	scaleCeiling = 4 * time.Second
 	// scalePoll is how often the ceiling is checked.
 	scalePoll = 10 * time.Millisecond
@@ -188,13 +189,26 @@ func growthExponent(sizes []int, costs []time.Duration) float64 {
 // of them, which catches a quadratic step; and the slope from 4,000 to 16,000
 // entries, which catches one whose constant is small enough for the linear cost
 // to hide it until the size is large. A quadratic step comes out near 2 on
-// both, a decode over a sorted index near 1.1. It replaced one ratio of two
-// wall-clock figures (1,000 and 16,000 entries, limit 40), which failed on a
-// loaded machine (CI run 44592554988 measured 40.4; a busy host measured 55.6
-// and 69.5; alone it measures 21 to 25) because a busy scheduler disturbs the
-// one long run the ratio rests on. The fit does not rest on one figure, and its
-// runs are short. The race detector slows every size alike, so the test needs
-// no skip under it.
+// both, a decode over a sorted index near 1.1.
+//
+// The cost is CPU time, not wall-clock time: time spent waiting for a CPU was
+// the noise that failed the wall-clock versions of this test on a loaded
+// machine (a ratio limit of 40 failed at 40.4 and 41.4 in CI), and a version
+// that added rounds until the figures passed let a borderline quadratic pass
+// on a lucky round. This one decides once.
+//
+// What it is proven to catch, with a full scan of the form planted in hasBelow
+// on 1 lookup in N, 10 runs each under -race at load average 191 to 387 on 10
+// cores: every lookup, 1 in 16, 64, 256, 1,024, 1,280 and 1,536 fail 10 of 10
+// (smallest tail slope at 1 in 1,536: 1.43), as does a scan on 1 lookup in
+// 1,024 that starts only above 12,000 entries. 1 in 2,048 failed 10 of 10 with
+// its smallest tail at 1.357, on the limit, and 1 in 3,072 failed 3 of 10. So
+// the smallest defect it catches with room to spare is a scan on 1 lookup in
+// 1,536; from 1 in 2,048 down it may pass. A healthy decode measured an exponent of
+// 1.10 to 1.17 and a tail slope of 1.02 to 1.24 over 300 runs at load average
+// 218 to 408 beside two `go test -race ./...` loops, and passed every one, as it did 50
+// times under GOMAXPROCS=1. The race detector slows every size alike, so the
+// test needs no skip under it.
 func Test_Decoder_BatchScalesWithEntries(t *testing.T) {
 	costs := bestDecodes(t)
 
