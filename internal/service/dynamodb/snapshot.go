@@ -222,27 +222,15 @@ type stateImage struct {
 // table and not in another. It takes each table's entry lock, for its
 // definition, then every table's engine lock at once with table.ReadLock, in
 // the one global order TransactWriteItems takes them in, and copies one
-// reference per item of each (table.ImageHeld) and each shard's bounds. The
-// locks are released before the items are put in order or encoded, so
-// writers wait for the reference copies of all tables and no longer. Entry
-// locks before engine locks is the documented order, and no lock holder
-// takes a second entry's lock, so holding all of them cannot deadlock.
+// reference per item of each (table.ImageHeld) and each shard's bounds. It
+// keeps each shard with its next number in streamCut, the records the
+// dynamodbstreams snapshot taken after it writes. The locks are released
+// before the items are put in order or encoded, so writers wait for the
+// reference copies of all tables and no longer. Entry locks before engine
+// locks is the documented order, and no lock holder takes a second entry's
+// lock, so holding all of them cannot deadlock.
 func (p *Provider) cut() ([]stateImage, error) {
-	placed := sortedStates(p)
-	states := make([]stateImage, len(placed))
-
-	var entries []*tableEntry
-
-	for i, s := range placed {
-		s.state.mu.RLock()
-		names := slices.Sorted(maps.Keys(s.state.tables))
-		states[i] = stateImage{place: s.place, tables: make([]tableImage, len(names))}
-
-		for _, name := range names {
-			entries = append(entries, s.state.tables[name])
-		}
-		s.state.mu.RUnlock()
-	}
+	states, entries, places := cutTables(sortedStates(p))
 
 	// A table shared between regions is locked once: a second read lock
 	// taken behind a waiting writer would never be granted.
@@ -274,12 +262,20 @@ func (p *Provider) cut() ([]stateImage, error) {
 		images[i].meta, engines[i] = meta, e.data
 	}
 
+	var shards []shardCut
+
 	unlock := table.ReadLock(engines...)
 	for i, e := range entries {
 		images[i].items = e.data.ImageHeld()
 		images[i].shard = e.shardImage()
+
+		if images[i].shard != nil {
+			shards = append(shards, shardCut{places[i], e.meta.Name, e.shard, images[i].shard.Next})
+		}
 	}
 	unlock()
+
+	p.streamCut.Store(&shards)
 
 	for i := range states {
 		n := copy(states[i].tables, images)
@@ -287,6 +283,31 @@ func (p *Provider) cut() ([]stateImage, error) {
 	}
 
 	return states, nil
+}
+
+// cutTables returns an image per state with room for its tables, and the
+// tables of all of them, by account, region and name, each with its place.
+func cutTables(placed []placedState) ([]stateImage, []*tableEntry, []place) {
+	states := make([]stateImage, len(placed))
+
+	var (
+		entries []*tableEntry
+		places  []place
+	)
+
+	for i, s := range placed {
+		s.state.mu.RLock()
+		names := slices.Sorted(maps.Keys(s.state.tables))
+		states[i] = stateImage{place: s.place, tables: make([]tableImage, len(names))}
+
+		for _, name := range names {
+			entries = append(entries, s.state.tables[name])
+			places = append(places, s.place)
+		}
+		s.state.mu.RUnlock()
+	}
+
+	return states, entries, places
 }
 
 // shardImage is the identity and bounds of the table's latest shard, nil
@@ -442,6 +463,7 @@ type restored struct {
 func (p *Provider) Restore(r io.Reader) error {
 	got, err := p.readSnapshot(jsontext.NewDecoder(r, snapshotOptions))
 
+	p.streamCut.Store(nil)
 	p.states.Reset("", "")
 	p.accounts.Reset("", "")
 
@@ -458,8 +480,23 @@ func (p *Provider) Restore(r io.Reader) error {
 }
 
 // publish puts a restored state in place, and sets what depends on it: the
-// replica directory flag and the time to live sweep.
+// replica directory flag, the time to live sweep, and the stream cut, which
+// is the snapshot's own: a dynamodbstreams snapshot taken before the next
+// table snapshot writes the records the restore put back.
 func (p *Provider) publish(got *restored) {
+	var shards []shardCut
+
+	for at, tables := range got.states {
+		for name, e := range tables {
+			if e.shard != nil {
+				_, next, _ := e.shard.Bounds()
+				shards = append(shards, shardCut{at, name, e.shard, next})
+			}
+		}
+	}
+
+	p.streamCut.Store(&shards)
+
 	replicated := false
 
 	for account, a := range got.accounts {

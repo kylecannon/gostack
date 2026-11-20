@@ -26,10 +26,15 @@ func seedSnapshot(tb testing.TB) (tables, streams []byte) {
 	s.ok(tb, opPut, `{"TableName":"seed","Item":{"pk":{"S":"a"},"sk":{"N":"2"}}}`)
 	s.ok(tb, "UpdateTimeToLive", `{"TableName":"seed","TimeToLiveSpecification":{"Enabled":true,"AttributeName":"x"}}`)
 
+	// The streams snapshot writes the records of the table snapshot's cut, so
+	// it is taken second, as a flush takes it.
+	tables = snapshotOf(tb, s.provider)
+
 	var buf bytes.Buffer
 	require.NoError(tb, s.provider.SnapshotStreams(&buf))
+	require.Contains(tb, buf.String(), `"seq":2`, "the seed holds the stream's records")
 
-	return snapshotOf(tb, s.provider), buf.Bytes()
+	return tables, buf.Bytes()
 }
 
 // FuzzRestore feeds Restore any bytes. It must not panic, and a file it takes

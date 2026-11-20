@@ -1492,11 +1492,17 @@ Kinesis. The state is two files, LocalStack's split:
   left it, so Restore takes every state the API can leave. Numbers are
   written in their canonical form, so they read back unchanged.
 - `<base>/dynamodbstreams/store.{json,bin}` holds the records of each latest
-  shard still inside the 24-hour retention, with their sequence numbers. A
-  shard takes its records back only when its identity (creation time to the
-  nanosecond) matches the table file's and they leave no gap below the
+  shard still inside the 24-hour retention, with their sequence numbers, of
+  exactly the writes the latest table snapshot holds: the table snapshot's
+  cut keeps each shard's next sequence number under the locks it already
+  holds, and the streams snapshot writes each shard's records below it and
+  none written since. Before any table snapshot or load it writes no shard.
+  A shard takes its records back only when its identity (creation time to
+  the nanosecond) matches the table file's and they leave no gap below the
   table's next sequence number, so a kill between the renames of the two files
-  never reads across a gap. A position or an iterator issued before a restart
+  never reads across a gap. Records at or past that number, from a streams
+  file of a later cut than the table file, are dropped on load, so a stream
+  never holds a change its restored table does not. A position or an iterator issued before a restart
   reads the same records after it, within the iterator's 15 minutes.
   A shard that takes no records back (`PERSIST_DYNAMODBSTREAMS=0`, or a
   streams file that is older, refused or moved aside) restores with an empty

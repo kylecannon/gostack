@@ -13,8 +13,8 @@ import (
 // Test_close_stopsShardTimers closes the provider while a stream shard holds
 // a record and its retention timer is armed: Close disarms it, no timer
 // trims the record after Close, a record written after Close arms none, and
-// the streams snapshot, which the last save takes after Close, still holds
-// the records.
+// the streams snapshot, which the last save takes after Close and after the
+// table snapshot, still holds the records.
 func Test_close_stopsShardTimers(t *testing.T) {
 	const retention = 30 * time.Millisecond
 
@@ -37,6 +37,9 @@ func Test_close_stopsShardTimers(t *testing.T) {
 
 	require.Never(t, func() bool { return len(shard.Records()) < 2 }, 10*retention, retention/3,
 		"no timer trims a record after Close")
+
+	// The last save takes the table snapshot, then the streams one.
+	snapshotOf(t, s.provider)
 
 	var buf bytes.Buffer
 	require.NoError(t, s.provider.SnapshotStreams(&buf))

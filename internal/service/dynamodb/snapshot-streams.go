@@ -1,11 +1,11 @@
 package dynamodb
 
 import (
+	"cmp"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"time"
 
@@ -21,10 +21,14 @@ import (
 //
 // It is LocalStack's split: the dynamodbstreams store and Kinesis's data hold
 // the records, DynamoDB's own store the table. The DynamoDB snapshot keeps
-// each shard's identity (its creation time, to the nanosecond) and its bounds;
-// RestoreStreams gives a shard back its records only when the identity
-// matches, and stream.Log.Attach refuses records that would leave a gap, so a
-// kill between the renames of the two files never reads across one. The
+// each shard's identity (its creation time, to the nanosecond) and its bounds.
+// The table snapshot's cut also keeps each shard's next number (streamCut),
+// and the streams snapshot writes the records below it: the records of
+// exactly the writes the table file holds. RestoreStreams gives a shard back
+// its records only when the identity matches; stream.Log.Attach refuses
+// records that would leave a gap, so a kill between the renames of the two
+// files never reads across one, and drops records past the table's next
+// number, from a streams file of a later cut than the table file. The
 // sequence numbers are the ones the records had, so a position read before a
 // restart, and an iterator issued for it within its 15 minutes, read the same
 // records after it.
@@ -63,8 +67,22 @@ type recordSaved struct {
 	Expired   bool       `json:"expired,omitzero"`
 }
 
-// SnapshotStreams writes the records of every table's latest shard to w. Each
-// shard's records are copied under its own lock and encoded after it.
+// shardCut is a stream shard as a table snapshot left it: the table it
+// belongs to and the number its next record had.
+type shardCut struct {
+	place
+
+	table string
+	shard *stream.Log
+	next  int
+}
+
+// SnapshotStreams writes to w the records of the shards the latest table
+// snapshot's cut holds, each below the number its next record had at the cut:
+// the records of exactly the writes that snapshot holds, however long it took
+// to encode and whatever was written since. Before any table snapshot or
+// restore it writes no shard. Each shard's records are copied under its own
+// lock and encoded after it.
 func (p *Provider) SnapshotStreams(w io.Writer) error {
 	enc := jsontext.NewEncoder(w, snapshotOptions)
 
@@ -83,46 +101,36 @@ func (p *Provider) writeStreams(enc *jsontext.Encoder) error {
 		return err
 	}
 
-	for _, s := range sortedStates(p) {
-		s.state.mu.RLock()
-		names := slices.Sorted(maps.Keys(s.state.tables))
-		entries := make([]*tableEntry, len(names))
+	var shards []shardCut
+	if cut := p.streamCut.Load(); cut != nil {
+		shards = slices.Clone(*cut)
+	}
 
-		for i, name := range names {
-			entries[i] = s.state.tables[name]
+	slices.SortStableFunc(shards, func(a, b shardCut) int {
+		return cmp.Or(cmp.Compare(a.account, b.account), cmp.Compare(a.region, b.region), cmp.Compare(a.table, b.table))
+	})
+
+	for _, c := range shards {
+		records := c.shard.RecordsBefore(c.next)
+		if len(records) == 0 {
+			continue
 		}
-		s.state.mu.RUnlock()
 
-		for _, e := range entries {
-			e.mu.RLock()
-			shard, name := e.shard, e.meta.Name
-			e.mu.RUnlock()
+		saved := shardSaved{
+			Account: c.account, Region: c.region, Table: c.table, Created: c.shard.Created(),
+			Records: make([]recordSaved, len(records)),
+		}
 
-			if shard == nil {
-				continue
+		for i, r := range records {
+			saved.Records[i] = recordSaved{
+				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
+				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
 			}
+		}
 
-			records := shard.Records()
-			if len(records) == 0 {
-				continue
-			}
-
-			saved := shardSaved{
-				Account: s.account, Region: s.region, Table: name, Created: shard.Created(),
-				Records: make([]recordSaved, len(records)),
-			}
-
-			for i, r := range records {
-				saved.Records[i] = recordSaved{
-					Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
-					SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
-				}
-			}
-
-			err = json.MarshalEncode(enc, &saved, snapshotOptions)
-			if err != nil {
-				return err //nolint:wrapcheck // SnapshotStreams wraps it
-			}
+		err = json.MarshalEncode(enc, &saved, snapshotOptions)
+		if err != nil {
+			return err //nolint:wrapcheck // SnapshotStreams wraps it
 		}
 	}
 
