@@ -208,7 +208,7 @@ func fieldsOf(v *Version, rng *byteRange, part *int32, checksumMode *string) obj
 	f := objectFields{
 		contentLength:      new(v.Size),
 		etag:               new(quoted(v.ETag)),
-		lastModified:       &protocol.Time{Time: v.LastModified},
+		lastModified:       &protocol.Time{Time: v.LastModified.Time},
 		metadata:           encodeUserMetadata(v.Metadata),
 		contentType:        nonEmpty(v.ContentType),
 		cacheControl:       nonEmpty(v.CacheControl),
@@ -604,7 +604,7 @@ func (p *Provider) writeBody(v *Version, body io.Reader, wantChecksum, contentMD
 		return fmt.Errorf("store object: %w", err)
 	}
 
-	v.LastModified = time.Now().UTC()
+	v.LastModified = protocol.SnapshotTime{Time: time.Now().UTC()}
 
 	return nil
 }

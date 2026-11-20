@@ -99,7 +99,7 @@ func (b *Bucket) reindex() {
 // compareUploads is the order ListMultipartUploads lists uploads in: by key,
 // then by start time. The id settles a tie, so the order is total.
 func compareUploads(a, b *MultipartUpload) int {
-	return cmp.Or(strings.Compare(a.Key, b.Key), a.Initiated.Compare(b.Initiated), strings.Compare(a.ID, b.ID))
+	return cmp.Or(strings.Compare(a.Key, b.Key), a.Initiated.Compare(b.Initiated.Time), strings.Compare(a.ID, b.ID))
 }
 
 // keySource is the keys a listing walks, in byte order, and what lies at each
