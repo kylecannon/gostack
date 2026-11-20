@@ -31,7 +31,8 @@ const (
 	// for every protocol together (publisher.py PublishDispatcher, num_thread).
 	maxPosts = 64
 	// buildShare is the part of the processors, 1 in buildShare, that build
-	// dead-letter calls at once (poster.building); BenchmarkBurst measures it.
+	// dead-letter calls of failed HTTP deliveries at once (poster.building);
+	// BenchmarkBurst measures it.
 	buildShare = 4
 	// maxAnswer is the most of an endpoint's answer read. The rest is not
 	// read, and the connection is not reused.
@@ -123,8 +124,9 @@ type poster struct {
 	// running counts the goroutines of deliveries in flight, which Close
 	// waits for.
 	running sync.WaitGroup
-	// building holds a place for each dead-letter call being built (see
-	// lanes.deadLetterOf): 1 in buildShare of the processors, at least one.
+	// building holds a place for each dead-letter call of a failed HTTP
+	// delivery being built (see lanes.postDeadLetter): 1 in buildShare of the
+	// processors, at least one.
 	building chan struct{}
 }
 
@@ -224,10 +226,32 @@ func (ls *lanes) runPost(l *lane, j *job) {
 	// A poster that was cut is Close's, which drops what it cuts.
 	var dead *inproc.Call
 	if err != nil && ls.poster.ctx.Err() == nil {
-		dead = ls.deadLetterOf(j)
+		dead = ls.postDeadLetter(j)
 	}
 
 	ls.posted(l, err, dead)
+}
+
+// postDeadLetter is deadLetterOf for a failed HTTP delivery, holding one of
+// poster.building places while it builds: a burst of failures would build as
+// many calls as there are deliveries in flight, and builders on every
+// processor leave the goroutines that wait for the lanes lock, the publishes
+// among them, waiting for a processor instead (BenchmarkBurst measures it).
+// The delivery waits for a place holding its maxPosts slot and nothing else
+// shared. It is nil too when the poster was cut, as Close drops what it cuts.
+func (ls *lanes) postDeadLetter(j *job) *inproc.Call {
+	if j.dlq == nil || j.dead {
+		return nil
+	}
+
+	select {
+	case ls.poster.building <- struct{}{}:
+		defer func() { <-ls.poster.building }()
+	case <-ls.poster.ctx.Done():
+		return nil
+	}
+
+	return deadLetterOf(j)
 }
 
 // sendRecovered is send, with a panic made its error.
