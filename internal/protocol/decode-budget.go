@@ -12,16 +12,18 @@ package protocol
 // query) and as soon as it passes the budget where it decodes as it reads
 // (rest-xml).
 //
-// 16 MiB lets every request the specs allow through whatever its shape, and
-// the densest request a test pins: an SQS SendMessageBatch of 65,536 entries
+// With DecodeFactor, 16 MiB lets every request the specs allow through (the
+// tightest, a CompleteMultipartUpload of 10,000 parts with every checksum,
+// needs both terms), and the densest request a test pins: an SQS SendMessageBatch of 65,536 entries
 // sent as a form, 131,075 pairs that SQS must answer with the count it was
 // sent (TooManyEntriesInBatchRequest), as LocalStack and AWS do.
 const DecodeSlack = 16 << 20
 
 // DecodeFactor is how many bytes of decoded values each byte of a body may
 // cost, for a service that does not declare its own
-// (service.Registration.DecodeFactor). The legal requests of S3, SQS and STS
-// stay far below it; docs/architecture.md lists their worst ratios.
+// (service.Registration.DecodeFactor). Every legal request of S3, SQS and STS
+// decodes within the budget it gives; docs/architecture.md lists how close
+// each comes.
 const DecodeFactor = 2
 
 // DecodeBudget is the most bytes decoding a body of n bytes may hold, at

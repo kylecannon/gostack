@@ -332,6 +332,27 @@ How each piece is bounded, and why this way:
   from the container's memory limit is a separate decision with its own
   trade-off (garbage collection under pressure), so nothing here sets one.
 
+Headroom: what decoding the largest legal request of each shape charges
+against `DecodeBudget` at the default factor of 2. json charges both passes;
+query charges `PairCost` per pair. Measured on the generated decoders with a
+hold that records each charge.
+
+| Request | Body | Charged | Charged / budget |
+|---|---|---|---|
+| S3 `CompleteMultipartUpload`, 10,000 parts, every checksum on every part | 3.37 MiB | 17.5 MiB (5.2x) | 0.77 |
+| S3 `CompleteMultipartUpload`, 10,000 parts, SHA-256 only (what an SDK sends) | 1.58 MiB | 9.9 MiB (6.2x) | 0.52 |
+| S3 `PutBucketLifecycleConfiguration`, 1,000 rules with filter, tags, expiration, transition | 294 KiB | 3.1 MiB (10.9x) | 0.19 |
+| S3 `DeleteObjects`, 1,000 keys of 1,024 bytes | 1.03 MiB | 2.5 MiB (2.5x) | 0.14 |
+| SQS json `SendMessageBatch`, ten 256 KiB messages | 2.50 MiB | 5.0 MiB (2.0x) | 0.24 |
+| SQS json `SendMessageBatch`, 10 entries x 20 attributes x 20 list values | 44 KiB | 931 KiB (21.1x) | 0.06 |
+| SQS query `SendMessageBatch`, 4,853 pairs | 374 KiB | 607 KiB | 0.04 |
+| STS query `AssumeRole`, every member at its limit (180 pairs) | under 100 KiB | 23 KiB | under 0.01 |
+
+The tightest is `CompleteMultipartUpload` with all five checksums on each of
+10,000 parts, which no SDK sends (an upload uses one algorithm): it decodes
+with 23% of its budget to spare. It needs the factor: on `DecodeSlack` alone
+it would be refused (1.09 of 16 MiB).
+
 Residuals: each connection may hold its free allowances (64 KiB of body, 1 MiB
 of decoding) outside the pool, and a client that trickles one byte per idle
 period keeps its charge.
