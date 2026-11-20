@@ -78,9 +78,15 @@ func Test_Provider_Publish_mutualDeadLetter(t *testing.T) {
 // Test_Provider_Publish_deadLetterAtDeadline: a stuck queue's lane is full and
 // its subscription has a healthy, empty dead-letter queue. The deliveries that
 // wait for room past the publish's deadline are handed to the dead-letter
-// queue, past its lane's depth, and none is dropped.
+// queue, past its lane's depth, up to twice the depth. Every hand-off is
+// delivered or dropped, never lost silently. When twice the depth holds them
+// all, none is dropped; at depth 256 the 600 hand-offs can reach the dead-letter
+// lane faster than it sends, so some may be dropped there.
 func Test_Provider_Publish_deadLetterAtDeadline(t *testing.T) {
-	for _, c := range []struct{ depth, publishers int }{{8, 1}, {256, 60}} {
+	for _, c := range []struct {
+		depth, publishers int
+		noDrops           bool
+	}{{8, 1, true}, {300, 60, true}, {256, 60, false}} {
 		t.Run(strconv.Itoa(c.depth), func(t *testing.T) {
 			g := newGate("/stuck")
 			s := newStack(t, g.wrap)
@@ -111,9 +117,27 @@ func Test_Provider_Publish_deadLetterAtDeadline(t *testing.T) {
 
 			late := c.publishers * 10
 
-			require.Eventually(t, func() bool { return s.depth(d) == late }, waitFor, 5*time.Millisecond,
-				"the dead-letter queue holds %d of %d, dropped %d", s.depth(d), late, s.sns.Dropped())
-			assert.Zero(t, s.sns.Dropped())
+			var held, dropped int
+
+			accounted := func() bool {
+				held, dropped = s.depth(d), int(s.sns.Dropped())
+
+				return held+dropped == late
+			}
+
+			if !assert.Eventually(t, accounted, waitFor, 5*time.Millisecond) {
+				t.Fatalf("the dead-letter queue holds %d of %d, dropped %d: %d unaccounted", held, late, dropped,
+					late-held-dropped)
+			}
+
+			// Once quiet, nothing more arrives or is dropped.
+			time.Sleep(50 * time.Millisecond)
+			require.True(t, accounted(), "once quiet: held %d, dropped %d of %d", held, dropped, late)
+			t.Logf("the dead-letter queue holds %d of %d, dropped %d", held, late, dropped)
+
+			if c.noDrops {
+				assert.Zero(t, dropped)
+			}
 		})
 	}
 }
