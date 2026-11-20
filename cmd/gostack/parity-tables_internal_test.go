@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -380,10 +381,21 @@ func reachesOtherServices(reg *service.Registration, namespaces []string) bool {
 }
 
 // mountConfined reports whether every route mount adds is under one of
-// namespaces. A mount that adds no route is confined.
+// namespaces and it sets neither the NotFound nor the MethodNotAllowed
+// handler: Mount gets the gateway's own router, so either would see every
+// request no route takes, whatever service it is for. A mount that adds no
+// route and sets neither is confined.
 func mountConfined(mount func(chi.Router), namespaces []string) bool {
 	router := chi.NewRouter()
+	notFound := func(http.ResponseWriter, *http.Request) {}
+	notAllowed := func(http.ResponseWriter, *http.Request) {}
+	router.NotFound(notFound)
+	router.MethodNotAllowed(notAllowed)
 	mount(router)
+
+	if !sameFunc(router.NotFoundHandler(), notFound) || !sameFunc(router.MethodNotAllowedHandler(), notAllowed) {
+		return false
+	}
 
 	confined := true
 
@@ -399,6 +411,36 @@ func mountConfined(mount func(chi.Router), namespaces []string) bool {
 	}
 
 	return confined
+}
+
+// Test_mountConfined: a Mount is confined only when its routes are all under
+// the gateway's namespaces and it leaves the router's NotFound and
+// MethodNotAllowed handlers alone (SQ-363 finding 6).
+func Test_mountConfined(t *testing.T) {
+	ns := []string{"/_aws/", "/_gostack/", "/_localstack/"}
+	h := func(http.ResponseWriter, *http.Request) {}
+
+	for name, tt := range map[string]struct {
+		mount func(chi.Router)
+		want  bool
+	}{
+		"no route":                  {func(chi.Router) {}, true},
+		"a namespaced route":        {func(r chi.Router) { r.Get("/_gostack/x", h) }, true},
+		"a catch-all route":         {func(r chi.Router) { r.Handle("/*", http.HandlerFunc(h)) }, false},
+		"NotFound only":             {func(r chi.Router) { r.NotFound(h) }, false},
+		"MethodNotAllowed only":     {func(r chi.Router) { r.MethodNotAllowed(h) }, false},
+		"NotFound in a group":       {func(r chi.Router) { r.Group(func(g chi.Router) { g.NotFound(h) }) }, false},
+		"namespaced, plus NotFound": {func(r chi.Router) { r.Get("/_aws/x", h); r.NotFound(h) }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tt.want, mountConfined(tt.mount, ns))
+		})
+	}
+}
+
+// sameFunc reports whether h is the handler function want, unwrapped.
+func sameFunc(h http.HandlerFunc, want func(http.ResponseWriter, *http.Request)) bool {
+	return reflect.ValueOf(h).Pointer() == reflect.ValueOf(want).Pointer()
 }
 
 // strayAPIImports lists every import of internal/api/<svc> by a package
