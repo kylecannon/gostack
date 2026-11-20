@@ -70,6 +70,13 @@ type Registration struct {
 	// stop the service and does not drop its state. It is nil when there is
 	// nothing to do.
 	Shutdown func()
+	// DecodeFactor is how many bytes of decoded values each byte of a request
+	// body may cost before the request is refused as too large
+	// (protocol.DecodeBudgetAt). Zero is protocol.DecodeFactor, which every
+	// legal S3, SQS and STS request stays far below. A service whose legal
+	// requests decode into more, such as DynamoDB's lists of small
+	// AttributeValues at about 18 times their bytes, sets its own.
+	DecodeFactor int
 
 	// ClaimHost reports whether a request to host is the service's, before any
 	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a

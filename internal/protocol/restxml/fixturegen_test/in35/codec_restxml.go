@@ -15,7 +15,7 @@ func (v *RecursiveShapesInput) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "nested":
-			v.Nested = &RecursiveShapesInputOutputNested1{}
+			v.Nested = restxml.New[RecursiveShapesInputOutputNested1](d)
 			v.Nested.decodeXML(d)
 		default:
 			d.Skip()
@@ -34,7 +34,7 @@ func (v *RecursiveShapesInputOutputNested1) decodeXML(d *restxml.Decoder) {
 		case "foo":
 			v.Foo = d.String()
 		case "nested":
-			v.Nested = &RecursiveShapesInputOutputNested2{}
+			v.Nested = restxml.New[RecursiveShapesInputOutputNested2](d)
 			v.Nested.decodeXML(d)
 		default:
 			d.Skip()
@@ -53,7 +53,7 @@ func (v *RecursiveShapesInputOutputNested2) decodeXML(d *restxml.Decoder) {
 		case "bar":
 			v.Bar = d.String()
 		case "recursiveMember":
-			v.RecursiveMember = &RecursiveShapesInputOutputNested1{}
+			v.RecursiveMember = restxml.New[RecursiveShapesInputOutputNested1](d)
 			v.RecursiveMember.decodeXML(d)
 		default:
 			d.Skip()
