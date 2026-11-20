@@ -8,6 +8,7 @@ package dynamodbstreams
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -50,13 +51,35 @@ func New(streams dynamodb.Streams) *Provider {
 
 // Registration returns DynamoDB Streams for the gateway. It signs as dynamodb,
 // and the gateway tells the two apart by X-Amz-Target. No operation changes
-// state, so none marks it dirty, and it has nothing to persist or reset.
+// state, so none marks it dirty: DynamoDB marks it for each record a write
+// leaves. It persists the records of DynamoDB's streams when DynamoDB can
+// save them (dynamodb.StreamSnapshotter), and has nothing to reset: a reset
+// of DynamoDB drops its tables and their shards.
 func (p *Provider) Registration() service.Registration {
-	return service.Registration{
+	reg := service.Registration{
 		Metadata: api.Metadata,
 		Serve:    func(w http.ResponseWriter, rc *request.Context) { api.Serve(p, w, rc) },
 		Mutating: func(string) bool { return false },
 	}
+
+	if saver, ok := p.streams.(dynamodb.StreamSnapshotter); ok {
+		reg.Persist = snapshotter{saver}
+	}
+
+	return reg
+}
+
+// snapshotter saves the stream records under DynamoDB Streams' own name.
+type snapshotter struct{ streams dynamodb.StreamSnapshotter }
+
+// Snapshot implements persist.Snapshotter.
+func (s snapshotter) Snapshot(w io.Writer) error {
+	return s.streams.SnapshotStreams(w) //nolint:wrapcheck // the error names the snapshot
+}
+
+// Restore implements persist.Snapshotter.
+func (s snapshotter) Restore(r io.Reader) error {
+	return s.streams.RestoreStreams(r) //nolint:wrapcheck // the error names the snapshot
 }
 
 // ListStreams lists the caller's streams, oldest first, as LocalStack lists

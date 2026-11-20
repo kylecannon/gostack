@@ -33,7 +33,7 @@ func newStack(tb testing.TB) *stack {
 
 	s := &stack{}
 	s.settings.Store(&dynamodb.Settings{Host: testHost})
-	s.provider = dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() })
+	s.provider = dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() }, nil)
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },

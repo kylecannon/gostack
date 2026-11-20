@@ -113,8 +113,19 @@ func (p *Provider) serveExpired(w http.ResponseWriter, _ *http.Request) {
 }
 
 // removeExpired removes the expired items of every table with time to live on,
-// in every account and region, and returns how many it removed.
+// in every account and region, and returns how many it removed. A removal
+// marks the service changed, since neither the sweep nor the developer
+// endpoint is a mutating call the gateway sees.
 func (p *Provider) removeExpired() int {
+	removed := p.removeExpiredItems()
+	if removed > 0 {
+		p.notifyChanged()
+	}
+
+	return removed
+}
+
+func (p *Provider) removeExpiredItems() int {
 	threshold := api.AttributeValue{N: new(strconv.FormatInt(p.now().Unix(), 10))}
 	removed := 0
 

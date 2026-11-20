@@ -141,6 +141,9 @@ type tableEntry struct {
 	shard        *stream.Log
 	viewType     string
 	streamRegion string
+
+	// notify is told of every stream record the table's writes leave.
+	notify func()
 }
 
 // tableMeta is a table's definition, as CreateTable and UpdateTable set it.

@@ -25,6 +25,7 @@ const (
 
 // Stream view types.
 const (
+	viewKeysOnly    = "KEYS_ONLY"
 	viewNewImage    = "NEW_IMAGE"
 	viewOldImage    = "OLD_IMAGE"
 	viewNewAndOld   = "NEW_AND_OLD_IMAGES"
@@ -104,7 +105,7 @@ func (e *tableEntry) applyStream(now time.Time, clock func() time.Time, region s
 	e.shard = stream.New(now, clock)
 	e.streamRegion = region
 	e.viewType = *e.meta.Stream.StreamViewType
-	e.data.Observe(recorder(e.shard, e.viewType, e.meta.keySchema(e.meta.Key), clock))
+	e.data.Observe(recorder(e.shard, e.viewType, e.meta.keySchema(e.meta.Key), clock, e.notify))
 }
 
 // stopStream stops the shard's timer, for a table that is gone.
@@ -121,8 +122,12 @@ func (e *tableEntry) stopStream() {
 // stream record. The engine calls it under the table's write lock, so the
 // shard numbers records in the order the writes applied. A write that leaves
 // the item as it was never reaches it (table.Change.Changed), which is how a
-// put of an unchanged item emits nothing.
-func recorder(shard *stream.Log, viewType string, key table.KeySchema, clock func() time.Time) table.Observer {
+// put of an unchanged item emits nothing. notify, when not nil, is told of
+// each record, so persistence saves the dynamodbstreams snapshot that holds
+// it; it takes only the engine's own lock.
+func recorder(
+	shard *stream.Log, viewType string, key table.KeySchema, clock func() time.Time, notify func(),
+) table.Observer {
 	newImage := viewType == viewNewImage || viewType == viewNewAndOld
 	oldImage := viewType == viewOldImage || viewType == viewNewAndOld
 
@@ -151,6 +156,10 @@ func recorder(shard *stream.Log, viewType string, key table.KeySchema, clock fun
 
 		r.SizeBytes = int64(value.ItemSize(r.Keys) + value.ItemSize(r.New) + value.ItemSize(r.Old))
 		shard.Append(r)
+
+		if notify != nil {
+			notify()
+		}
 	}
 }
 

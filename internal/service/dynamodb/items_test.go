@@ -153,7 +153,7 @@ func Test_shareDB(t *testing.T) {
 
 // Test_mutating: reads do not mark the service dirty.
 func Test_mutating(t *testing.T) {
-	mutating := dynamodb.New(nil).Registration().Mutating
+	mutating := dynamodb.New(nil, nil).Registration().Mutating
 
 	for _, op := range []string{opGet, "Query", "Scan", "BatchGetItem", "TransactGetItems", opDescribe, opList} {
 		require.False(t, mutating(op), op)

@@ -93,7 +93,7 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 	meta := newMeta(in, now)
 	meta.SSE = c.sseDescription(in.SSESpecification)
 
-	entry := &tableEntry{meta: meta, data: meta.newEngine()}
+	entry := &tableEntry{meta: meta, data: meta.newEngine(), notify: p.streamsChanged}
 	if meta.Stream != nil {
 		entry.applyStream(now, p.now, c.region)
 	}
