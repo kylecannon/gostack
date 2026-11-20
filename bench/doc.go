@@ -9,7 +9,7 @@
 // for "tests and bench only". Nothing in the product imports this package, so
 // the SDK stays out of the gostack binary.
 //
-// Four subcommands share the one binary:
+// Five subcommands share the one binary:
 //
 //	bench run       the orchestrator, on the host. `make bench-system` and
 //	                `make bench-system-quick` run it.
@@ -23,6 +23,9 @@
 //	bench gate      reads benchstat output on stdin and fails on a regression
 //	                over 10% with p<0.001 that the accepted list does not
 //	                hold. The bench workflow runs it.
+//	bench select    picks the micro benchmark packages whose test binary differs
+//	                between the base and the head and packs them into the
+//	                bench workflow's shards. `make bench-select` runs it.
 //
 // # Workloads and cells
 //

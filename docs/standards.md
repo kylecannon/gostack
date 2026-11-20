@@ -221,7 +221,9 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
-  at p<0.001.
+  at p<0.001. It compares only the packages whose test binary changed, in
+  shards of one job each, and passes without comparing when none did
+  (Benchmarks, "Micro benchmarks").
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
   manual run against the previous passing run on main with the same profile
@@ -304,6 +306,34 @@ side by side.
   round), because a change elsewhere in the binary can move where a benchmark's
   functions land, and one fixed layout per tree would read that as a regression
   in code that did not change.
+- The gate compares only what can differ. `make bench-select` builds each
+  benchmark package's test binary for the base and the head with the gate's
+  flags at one layout (no `-randlayout`), plus `-trimpath`, which keeps the
+  checkout's path out of the binary, and builds the head a second time with an
+  empty build cache:
+  - a package whose head binary matches its base binary byte for byte cannot
+    regress and is not run;
+  - a package whose two head builds differ is not reproducible, and runs;
+  - a package only the head holds has nothing to compare against. It runs once
+    at `-benchtime 1x`, so a broken benchmark still fails the job, and is not
+    compared;
+  - a package only the base holds is dropped.
+
+  The base is the target branch's tip, so a branch behind main also selects the
+  packages main changed since it branched.
+- A benchmark reads no file at run time. What it needs is built in code or
+  embedded, because selection looks at the test binary alone.
+- Selection times one run of each top-level benchmark of a selected package at
+  the gate's benchtime and packs the packages into the fewest shards of about
+  40 minutes (`BENCH_SHARD_BUDGET`). A shard's estimate is 5 minutes of setup
+  plus ten rounds, each running its benchmarks once per tree and relinking each
+  of its packages (1.5 s a package). A package that would overrun a shard on
+  its own is split by top-level benchmark (`-test.bench '^(A|B)$'`). Each shard
+  is a job on its own runner that runs `make bench-ab` with `BENCH_PLAN` naming
+  its share, so base and head are always measured on one machine; the
+  `benchstat` job joins the shards' output, runs benchstat once and then
+  `bench gate`, and fails when selection or any shard did not succeed.
+- `make bench-ab` without `BENCH_PLAN` still runs every benchmark of both trees.
 
 ### System bench (`bench/`)
 

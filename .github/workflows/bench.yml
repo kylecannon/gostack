@@ -1,9 +1,11 @@
 name: bench
 
-# Runs every benchmark in the repo on the base and the head of a pull request,
-# interleaved (`make bench-ab`), compares them with benchstat, and fails on a
-# regression over 10% at p<0.001 that bench/accepted.yaml does not hold
-# (docs/standards.md, "Benchmarks"). The comparison is `go run ./bench gate`.
+# Compares the micro benchmarks of the base and the head of a pull request and
+# fails on a regression over 10% at p<0.001 that bench/accepted.yaml does not
+# hold (docs/standards.md, "Benchmarks"). `select` keeps the packages whose test
+# binary differs between the trees (`make bench-select`) and packs them into
+# shards; each shard measures its share of both trees interleaved on one runner
+# (`make bench-ab`); `benchstat` joins the shards and runs `go run ./bench gate`.
 
 on:
   pull_request:
@@ -18,19 +20,19 @@ defaults:
     shell: bash
 
 jobs:
-  benchstat:
+  select:
     runs-on: ubuntu-latest
-    # The measuring step ran 46 minutes before the per-round relink, which adds
-    # about three. 60 left too little room for a slow runner.
-    timeout-minutes: 80
+    # Three builds, one of them from an empty cache, then one timed run of each
+    # selected benchmark: about 12 minutes when everything is selected.
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      shards: ${{ steps.select.outputs.shards }}
     steps:
-      # The gate asks git whether the base and the head hold an accepted
-      # entry's commit, which takes the head checkout's full history.
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: head
-          fetch-depth: 0
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -42,19 +44,118 @@ jobs:
           cache-dependency-path: |
             head/go.sum
             base/go.sum
-      - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
+      - name: Select the packages whose test binary changed
+        id: select
+        working-directory: head
+        run: |
+          make bench-select BASE=../base HEAD=. BENCH_MATRIX="$RUNNER_TEMP/matrix.json" | tee "$RUNNER_TEMP/select.txt"
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/select.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "matrix=$(cat "$RUNNER_TEMP/matrix.json")" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq '.include | length' "$RUNNER_TEMP/matrix.json")" >> "$GITHUB_OUTPUT"
+
+  shard:
+    needs: select
+    if: needs.select.outputs.shards != '0'
+    runs-on: ubuntu-latest
+    # Selection packs a shard to about 40 minutes; a slow runner gets the rest.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    name: shard ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: head/go.mod
+          cache: true
+          cache-dependency-path: |
+            head/go.sum
+            base/go.sum
       # The head's Makefile measures both trees in alternating rounds, so drift
       # in the runner's speed over the job hits base and head alike, and a base
       # that predates `make bench-ab` is still measured. Before each round it
       # links both trees again with a new function layout, so where the linker
       # happened to put a benchmark's code is not read as a regression.
-      - name: Benchmark the base and the head, interleaved
+      - name: Benchmark the shard's share of the base and the head, interleaved
         working-directory: head
-        run: make bench-ab BASE=../base HEAD=. BENCH_BASE_OUT="$GITHUB_WORKSPACE/base.txt" BENCH_HEAD_OUT="$GITHUB_WORKSPACE/head.txt"
+        run: |
+          printf '%s' "$PLAN" > "$RUNNER_TEMP/plan"
+          cat "$RUNNER_TEMP/plan"
+          make bench-ab BASE=../base HEAD=. BENCH_PLAN="$RUNNER_TEMP/plan" \
+            BENCH_BASE_OUT="$RUNNER_TEMP/out/base.txt" BENCH_HEAD_OUT="$RUNNER_TEMP/out/head.txt"
+        env:
+          PLAN: ${{ matrix.plan }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-shard-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/out/
+          if-no-files-found: error
+          retention-days: 7
+
+  # The required check. It runs whatever happened to select and the shards, and
+  # fails when either did not succeed, so a cancelled or failed shard never
+  # reads as a pass. A change whose test binaries are all unchanged compares
+  # nothing and passes.
+  benchstat:
+    needs: [select, shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check that selection and every shard succeeded
+        run: |
+          echo "select: $SELECT, shards: $SHARD"
+          [ "$SELECT" = success ] || exit 1
+          [ "$SHARD" = success ] || [ "$SHARD" = skipped ] || exit 1
+        env:
+          SELECT: ${{ needs.select.result }}
+          SHARD: ${{ needs.shard.result }}
+      - name: Nothing to compare
+        if: needs.select.outputs.shards == '0'
+        run: echo "No benchmark package's test binary changed, so nothing is compared." | tee -a "$GITHUB_STEP_SUMMARY"
+      # The gate asks git whether the base and the head hold an accepted
+      # entry's commit, which takes the head checkout's full history.
+      - uses: actions/checkout@v7
+        if: needs.select.outputs.shards != '0'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        if: needs.select.outputs.shards != '0'
+        with:
+          go-version-file: head/go.mod
+          cache: true
+          cache-dependency-path: head/go.sum
+      - name: Install benchstat
+        if: needs.select.outputs.shards != '0'
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
+      - uses: actions/download-artifact@v4
+        if: needs.select.outputs.shards != '0'
+        with:
+          pattern: bench-shard-*
+          path: shards
+      # Each shard ran on its own runner, so its output carries that runner's
+      # cpu line and benchstat compares it in a table of its own: base and head
+      # are only ever compared from the same machine.
       - name: Compare
+        if: needs.select.outputs.shards != '0'
         id: compare
         run: |
+          cat shards/*/base.txt > base.txt
+          cat shards/*/head.txt > head.txt
           if ! grep -q '^Benchmark' base.txt; then
             echo "The base has no benchmarks, so there is nothing to compare against." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
