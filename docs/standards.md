@@ -375,7 +375,13 @@ A percent is at most 1000%. An absolute value is at most 65536 `MiB`, 3600000
 the work costs, so a throughput (a `/s` unit, `cycles/s`) that falls d percent
 counts as a rise of 100d/(100-d) percent: `+100%` lets a latency double and a
 throughput halve, `+1000%` stops at a drop to an eleventh, and a throughput that
-falls to nothing is past every bound. An absolute bound is the worst head
+falls to nothing, or a cost that rises from a base of zero, is past every
+bound. Neither prints a percent, so each gate finds them another way: `bench
+gate` reads benchstat's `?` change of a zero base, and a throughput's head of
+zero that benchstat sets in a table of its own (its unit becomes `MB/s`); the
+system compare counts a zero throughput median against a measured base. Both
+fail with no entry at all. A refusal states the rise it computed (an 18% fall
+under `+20%` reads "a rise of +22.0% in cost"). An absolute bound is the worst head
 value, a ceiling for a cost and a floor for a throughput, and is held to the
 same 1000% cap: a pair whose change the bound allows past 1000% fails, so
 `65536 MiB` accepts no more than `1000%` does. An infinite, negative, zero,
@@ -386,8 +392,13 @@ both match the row `RouteDetect/host-2`). A benchmark whose own name ends in
 `-<digits>` is listed alone without trouble. A list with no entries is valid.
 An entry's `package` is the full import path or the path below the module
 (`internal/route`). Names compare exactly, so a glob or a trailing space in an
-entry matches nothing: both gates print the entries that matched no regression
-under "Unused accepted entries" and do not fail on them.
+entry matches nothing. A bound at or under what the gate flags holds nothing
+either: a benchstat cost is flagged past a rise of 10%, so `+10%` holds none, and
+a throughput past a fall of 10% (a rise of 11.11% in cost), so `+11.11%` holds
+none; the system gate flags a metric past its own limit (its output lists them).
+Both gates print such an entry, and an entry that matched no regression, quoted
+and with the reason, under "Unused accepted entries", even when nothing
+compares, and do not fail on them.
 
 An entry applies only while the head holds its commit and the base does not, so
 it expires once main holds the commit. The pull request lands with a merge

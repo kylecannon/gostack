@@ -54,6 +54,9 @@ const (
 	limitStartup = 0.25
 
 	maxListed = 25
+
+	// metricStartup names the startup metric, and the cell it is held under.
+	metricStartup = "startup"
 )
 
 // gated are the targets whose cells gate. LocalStack is reference only.
@@ -122,9 +125,16 @@ func (m metric) change() float64 {
 	return (m.head.Median - m.base.Median) / m.base.Median
 }
 
+// comparable reports whether both sides measured the metric. A throughput whose
+// head is zero was measured: the cell completed no cycle, and that is the
+// largest fall there is. A zero cost, or a zero base, was not measured.
+func (m metric) comparable() bool {
+	return !m.base.zero() && (!m.head.zero() || !m.lowerIsBetter)
+}
+
 // judge applies the two rules to a metric.
 func (m metric) judge() outcome {
-	if m.base.Median == 0 || m.head.Median == 0 {
+	if m.base.Median == 0 || (m.head.Median == 0 && m.lowerIsBetter) {
 		return steady
 	}
 
@@ -178,14 +188,13 @@ func cellMetrics(target string, base, head cellResult) []metric {
 	var out []metric
 
 	add := func(name string, b, h spread, lower bool, limit, floor, scale float64, unit string) {
-		if b.zero() || h.zero() {
-			return
-		}
-
-		out = append(out, metric{
+		m := metric{
 			target: target, cell: base.ID, name: name, base: b, head: h,
 			lowerIsBetter: lower, limit: limit, floor: floor, scale: scale, unit: unit,
-		})
+		}
+		if m.comparable() {
+			out = append(out, m)
+		}
 	}
 
 	// Every operation the base timed, whatever the service: the cell names them.
@@ -296,7 +305,7 @@ func compareTargets(base, head report) comparison {
 // addTarget holds one gated target of the head against the base's.
 func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want expectation) {
 	startup := metric{
-		target: bt.Name, cell: "startup", name: "startup", base: bt.Startup.MS, head: ht.Startup.MS,
+		target: bt.Name, cell: metricStartup, name: metricStartup, base: bt.Startup.MS, head: ht.Startup.MS,
 		lowerIsBetter: true, limit: limitStartup, scale: msPerSecond, unit: "s",
 	}
 	idle := metric{
@@ -338,7 +347,7 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 	}
 
 	for _, m := range all {
-		if m.base.zero() || m.head.zero() {
+		if !m.comparable() {
 			continue
 		}
 
@@ -378,6 +387,11 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 
 	if cmp.metrics == 0 && len(cmp.problems) == 0 {
 		b.WriteString("Nothing to compare: the two results hold no gostack or gostack-slim cell in common.\n")
+
+		if len(cmp.unused) > 0 {
+			b.WriteString("\n")
+			unusedList(&b, cmp.unused)
+		}
 
 		return write(out, b.String())
 	}
@@ -486,14 +500,14 @@ func notes(b *strings.Builder, regressions []metric) {
 	}
 }
 
-// unusedList names the entries of the accepted list that matched no regression.
-// It says nothing when every entry matched one.
+// unusedList names the entries of the accepted list that hold nothing, with why.
+// It says nothing when every entry holds a regression it can.
 func unusedList(b *strings.Builder, unused []string) {
 	if len(unused) == 0 {
 		return
 	}
 
-	fmt.Fprintf(b, "### Unused accepted entries (%d)\n\nEach matched no regression:\n\n", len(unused))
+	fmt.Fprintf(b, "### Unused accepted entries (%d)\n\n", len(unused))
 
 	for _, name := range unused {
 		fmt.Fprintf(b, "- %s\n", name)

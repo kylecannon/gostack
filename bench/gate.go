@@ -8,9 +8,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -41,6 +43,8 @@ const (
 	geomeanRow      = "geomean"
 	pkgPrefix       = "pkg: "
 	unitColumn      = 1 // the text between the first two separators of a header row
+	minRateFields   = 2 // a benchmark's name and its value
+	wholePercent    = 100.0
 )
 
 // errRegression is returned when a benchmark got slower, or hungrier, than the
@@ -56,6 +60,11 @@ var errEmptyInput = errors.New("gate: benchstat output is empty, so nothing was 
 // "~" and does not match.
 var comparisonRow = regexp.MustCompile(`^(\S+)\s.*?([+-]\d+(?:\.\d+)?)%\s+\(p=(\d+(?:\.\d+)?)\s+n=`)
 
+// fromZeroRow matches a row whose change is "?" because the base is zero: name,
+// the base value, the head value and the p-value.
+var fromZeroRow = regexp.MustCompile(
+	`^(\S+)\s+(\S+)(?:\s+±\s+\S+)?\s+(\S+)(?:\s+±\s+\S+)?\s+\?\s+\(p=(\d+(?:\.\d+)?)\s+n=`)
+
 // procsSuffix is the -GOMAXPROCS suffix benchstat keeps on a benchmark name.
 var procsSuffix = regexp.MustCompile(`^-\d+$`)
 
@@ -64,10 +73,20 @@ type benchRow struct {
 	pkg, name, unit string
 	delta           float64
 	pValue          string
+	// shape says a change no percent describes, such as a cost that rose from
+	// zero, in place of the percent.
+	shape string
 }
 
 func (r benchRow) String() string {
-	return fmt.Sprintf("%s %s %+.2f%% (p=%s)", r.name, r.unit, r.delta, r.pValue)
+	switch {
+	case r.shape != "" && r.pValue == "":
+		return fmt.Sprintf("%s %s %s", r.name, r.unit, r.shape)
+	case r.shape != "":
+		return fmt.Sprintf("%s %s %s (p=%s)", r.name, r.unit, r.shape, r.pValue)
+	default:
+		return fmt.Sprintf("%s %s %+.2f%% (p=%s)", r.name, r.unit, r.delta, r.pValue)
+	}
 }
 
 func (r benchRow) lowerIsBetter() bool {
@@ -165,8 +184,7 @@ func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base
 
 	// An unused entry is shown and never fails the gate: it holds nothing now.
 	if unused := accepted.unused(gateBenchstat, matchers); len(unused) > 0 {
-		fmt.Fprintf(&b, "Unused accepted entries (%d), each matched no regression:\n  %s\n", len(unused),
-			strings.Join(unused, "\n  "))
+		fmt.Fprintf(&b, "Unused accepted entries (%d):\n  %s\n", len(unused), strings.Join(unused, "\n  "))
 	}
 
 	if len(failed) == 0 {
@@ -187,46 +205,18 @@ func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base
 
 // findRegressions returns each regressed benchmark and unit. Units that end in
 // "/s" are throughputs, where a drop is the regression; every other unit
-// (sec/op, B/op, allocs/op) is a cost, where a rise is.
+// (sec/op, B/op, allocs/op) is a cost, where a rise is. Two rows carry no
+// percent and are regressions all the same: a cost whose base is zero prints
+// "?" for its change, and a throughput that falls to zero moves to a table of
+// its own, because benchstat names the unit of a zero MB/s differently.
 func findRegressions(in io.Reader) ([]benchRow, error) {
-	var (
-		found     []benchRow
-		pkg, unit string
-	)
+	var scan benchScan
 
 	scanner := bufio.NewScanner(in)
 	for scanner.Scan() {
-		line := scanner.Text()
-
-		if p, ok := strings.CutPrefix(line, pkgPrefix); ok {
-			pkg = strings.TrimSpace(p)
-
-			continue
-		}
-
-		if strings.Contains(line, baseMarker) && strings.Contains(line, columnSeparator) {
-			unit = unitOf(line)
-
-			continue
-		}
-
-		match := comparisonRow.FindStringSubmatch(line)
-		if match == nil || match[1] == geomeanRow {
-			continue
-		}
-
-		delta, err := strconv.ParseFloat(match[2], 64)
+		err := scan.line(scanner.Text())
 		if err != nil {
-			return nil, fmt.Errorf("parse delta %q: %w", match[2], err)
-		}
-
-		pValue, err := strconv.ParseFloat(match[3], 64)
-		if err != nil {
-			return nil, fmt.Errorf("parse p-value %q: %w", match[3], err)
-		}
-
-		if worse := regressed(unit, delta); worse && pValue < significance {
-			found = append(found, benchRow{pkg: pkg, name: match[1], unit: unit, delta: delta, pValue: match[3]})
+			return nil, err
 		}
 	}
 
@@ -235,7 +225,178 @@ func findRegressions(in io.Reader) ([]benchRow, error) {
 		return nil, fmt.Errorf("read benchstat output: %w", err)
 	}
 
-	return found, nil
+	return append(scan.found, scan.fellToZero()...), nil
+}
+
+// benchScan reads benchstat's text a line at a time.
+type benchScan struct {
+	pkg, unit string
+	// header counts the header lines of the table being read: file labels, then
+	// units.
+	header int
+	labels []string
+	// baseLabel is the label of the base file, and single the label of the file a
+	// table with one file column holds, or "" outside such a table.
+	baseLabel, single string
+	found             []benchRow
+	// baseRates and headRates are the throughput rows of the tables with one file
+	// column, by package and benchmark.
+	baseRates, headRates []rateRow
+}
+
+// rateRow is a throughput row of a table that compares nothing.
+type rateRow struct {
+	pkg, name, unit string
+	zero            bool
+}
+
+func (s *benchScan) line(line string) error {
+	trimmed := strings.TrimSpace(line)
+
+	switch {
+	case trimmed == "":
+		s.header, s.single = 0, ""
+	case strings.HasPrefix(line, pkgPrefix):
+		s.pkg = strings.TrimSpace(strings.TrimPrefix(line, pkgPrefix))
+	case strings.HasPrefix(trimmed, columnSeparator):
+		s.headerLine(line)
+	case s.single != "":
+		s.rateRow(line)
+	default:
+		return s.comparisonRow(line)
+	}
+
+	return nil
+}
+
+// headerLine reads a header row of a table: the labels of its files, then the
+// units. A table of one file holds benchmarks the other file has no row for.
+func (s *benchScan) headerLine(line string) {
+	s.header++
+	cells := columnsOf(line)
+
+	switch {
+	case strings.Contains(line, baseMarker):
+		s.unit, s.single = unitOf(line), ""
+		if len(s.labels) > 1 && s.baseLabel == "" {
+			s.baseLabel = s.labels[0]
+		}
+	case s.header == 1:
+		s.labels = cells
+	case len(s.labels) == 1 && len(cells) == 1:
+		s.unit, s.single = cells[0], s.labels[0]
+		if s.baseLabel == "" {
+			s.baseLabel = s.single
+		}
+	default:
+	}
+}
+
+// rateRow keeps a throughput row of a table of one file.
+func (s *benchScan) rateRow(line string) {
+	fields := strings.Fields(line)
+	if len(fields) < minRateFields || fields[0] == geomeanRow || !strings.HasSuffix(s.unit, "/s") {
+		return
+	}
+
+	row := rateRow{pkg: s.pkg, name: fields[0], unit: s.unit, zero: isZero(fields[1])}
+	if s.single == s.baseLabel {
+		s.baseRates = append(s.baseRates, row)
+	} else {
+		s.headRates = append(s.headRates, row)
+	}
+}
+
+// comparisonRow reads a row with a change: a percent, or the "?" of a base that
+// is zero.
+func (s *benchScan) comparisonRow(line string) error {
+	if match := fromZeroRow.FindStringSubmatch(line); match != nil {
+		return s.fromZero(match)
+	}
+
+	match := comparisonRow.FindStringSubmatch(line)
+	if match == nil || match[1] == geomeanRow {
+		return nil
+	}
+
+	delta, err := strconv.ParseFloat(match[2], 64)
+	if err != nil {
+		return fmt.Errorf("parse delta %q: %w", match[2], err)
+	}
+
+	pValue, err := strconv.ParseFloat(match[3], 64)
+	if err != nil {
+		return fmt.Errorf("parse p-value %q: %w", match[3], err)
+	}
+
+	if worse := regressed(s.unit, delta); worse && pValue < significance {
+		s.found = append(s.found, benchRow{pkg: s.pkg, name: match[1], unit: s.unit, delta: delta, pValue: match[3]})
+	}
+
+	return nil
+}
+
+// fromZero judges a row whose change benchstat prints as "?": the base is zero,
+// so no percent exists. A cost that rises from zero regresses by more than any
+// bound allows; a throughput that rises from zero improved.
+func (s *benchScan) fromZero(match []string) error {
+	pValue, err := strconv.ParseFloat(match[4], 64)
+	if err != nil {
+		return fmt.Errorf("parse p-value %q: %w", match[4], err)
+	}
+
+	if !isZero(match[2]) || isZero(match[3]) || pValue >= significance || strings.HasSuffix(s.unit, "/s") {
+		return nil
+	}
+
+	s.found = append(s.found, benchRow{
+		pkg: s.pkg, name: match[1], unit: s.unit, delta: math.Inf(1), pValue: match[4], shape: "rose from zero",
+	})
+
+	return nil
+}
+
+// fellToZero returns the throughputs whose head is zero where the base was not.
+// benchstat does not compare them: a zero MB/s is a different unit from the
+// base's B/s, so each file gets a table with one column.
+func (s *benchScan) fellToZero() []benchRow {
+	var rows []benchRow
+
+	for _, head := range s.headRates {
+		if !head.zero {
+			continue
+		}
+
+		for _, base := range s.baseRates {
+			if base.pkg == head.pkg && base.name == head.name && !base.zero {
+				rows = append(rows, benchRow{
+					pkg: base.pkg, name: base.name, unit: base.unit, delta: -wholePercent, shape: "fell to zero",
+				})
+			}
+		}
+	}
+
+	return rows
+}
+
+// isZero reports whether a benchstat value, such as "0.000" or "0.00Mi", is zero.
+func isZero(value string) bool {
+	number, err := strconv.ParseFloat(strings.TrimRightFunc(value, unicode.IsLetter), 64)
+
+	return err == nil && number == 0
+}
+
+// columnsOf is the text of each column of a header row.
+func columnsOf(header string) []string {
+	var cells []string
+
+	for part := range strings.SplitSeq(header, columnSeparator) {
+		if text := strings.TrimSpace(part); text != "" {
+			cells = append(cells, text)
+		}
+	}
+
+	return cells
 }
 
 // unitOf reads the unit from a header row such as "│ sec/op │ sec/op vs base │".

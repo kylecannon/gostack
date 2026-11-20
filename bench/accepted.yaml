@@ -18,6 +18,11 @@
 # match the row "RouteDetect/host-2", so listing both is a load error. The file
 # holds no entries when nothing is accepted.
 #
+# An entry that matched no regression (a glob, a stray space, a benchmark that
+# is gone), or whose bound is at or under what the gate flags so that it can
+# hold none, is printed by both gates under "Unused accepted entries" and does
+# not fail them.
+#
 # Fields:
 #   gate:      benchstat, or system for `bench compare`.
 #   benchstat: package (its import path, or its path below the module, such as
@@ -25,12 +30,19 @@
 #              unit, as benchstat prints it.
 #   system:    target, cell and metric, as `bench compare` prints them.
 #   max:       the largest accepted change, a finite number above zero with at
-#              most one leading +: "+50%" (the size counts, the sign does not),
-#              or for a system metric the worst accepted head median in the
-#              metric's unit (MiB, ms, s or cycles/s), such as "6 MiB". A
-#              percent is at most 1000%. An absolute value is at most 65536
-#              MiB, 3600000 ms, 3600 s or 10000000 cycles/s; a larger one is a
-#              load error.
-#   reason:    one line.
+#              most one leading +: "+50%" (the sign is not read), or for a
+#              system metric the worst accepted head median in the metric's
+#              unit (MiB, ms, s or cycles/s), such as "6 MiB". A percent is a
+#              rise in what the work costs: for a latency, memory or startup
+#              the rise itself, and for a throughput (a unit ending in /s,
+#              cycles/s) the rise a fall of d percent costs, 100d/(100-d), so
+#              "+100%" lets a throughput halve and "+50%" a third of it go.
+#              A percent is at most 1000%. An absolute value is at most 65536
+#              MiB, 3600000 ms, 3600 s or 10000000 cycles/s, a larger one is a
+#              load error; it is a ceiling for a cost and a floor for a
+#              throughput, and a pair whose change it allows past the 1000%
+#              cap fails like a percent past it. A throughput that falls to
+#              zero and a cost that rises from zero are past every bound.
+#   reason:   one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
