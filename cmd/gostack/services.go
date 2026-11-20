@@ -15,6 +15,7 @@ import (
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
+	"github.com/kylecannon/gostack/internal/service/secretsmanager"
 	"github.com/kylecannon/gostack/internal/service/sns"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/kylecannon/gostack/internal/service/ssm"
@@ -68,6 +69,7 @@ func registrations(
 		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
 		snsProvider.Registration(),
+		secretsmanager.New(changed).Registration(),
 		ssm.New().Registration(),
 	}
 }

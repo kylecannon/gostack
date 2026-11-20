@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:secretsmanager:us-east-1:000000000000:secret:s1")
