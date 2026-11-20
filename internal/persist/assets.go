@@ -752,7 +752,7 @@ func (a *Assets) trackQueue(err error) {
 
 	queued, was, now := len(a.removed), a.stuck, ""
 	if err != nil && queued > 0 {
-		now = rootCause(err).Error()
+		now = failureKey(err)
 	}
 
 	a.stuck = now
@@ -765,20 +765,6 @@ func (a *Assets) trackQueue(err error) {
 	case now == "" && was != "":
 		a.log.Info("persist: asset removals are going through again", "dir", a.dir, "queued", queued)
 	default:
-	}
-}
-
-// rootCause is the innermost error of err's chain. A state file's temp name is
-// random and is part of the error text, so only the cause, such as "no space
-// left on device", says whether the error is the same one again.
-func rootCause(err error) error {
-	for {
-		inner := errors.Unwrap(err)
-		if inner == nil {
-			return err
-		}
-
-		err = inner
 	}
 }
 

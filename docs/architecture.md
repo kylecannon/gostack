@@ -1213,11 +1213,15 @@ cites the lines.
   (`PERSIST_DYNAMODB=0` with dynamodbstreams on) is registered without it and
   is never saved, by timer or by hand, and `Flush` reports no error for it.
 - Of a service's run of failed saves the log shows the first in full, each one
-  whose root cause differs from the one before's (the error text holds a temp
-  file's random name, so the text alone would differ at every retry), every
-  tenth with the count, and
+  whose failure differs from the one before's, every tenth with the count, and
   `save recovered after N failures` when a save succeeds, each line with the
-  service's name.
+  service's name. A failure is the set of the leaf errors of the save's error,
+  each with the text of the wraps around it and with random temp names
+  replaced (the error text holds a temp file's random name, so the text alone
+  would differ at every retry). The innermost cause alone would hide a new
+  failure behind an old one with the same errno, `EACCES` creating a temp file
+  and then `EACCES` opening the base directory, and the order of the errors in
+  a join is not a change.
 
 **Loading and unloadable files:**
 
@@ -1239,14 +1243,30 @@ cites the lines.
   state the engine will not save, and its assets are neither swept nor used (S3
   keeps its bodies in memory).
 - A base directory that exists and cannot be opened (`EACCES`, `EIO`, a stale
-  mount) turns saving and loading off for every registered service until the
-  process restarts, with one logged error: the services start empty, and the
-  first save after the fault clears would replace the state files nobody read.
-  A missing base directory is a fresh start.
-- A `Snapshot` that panics is a failed save of its own service: the panic is
-  logged with its stack, the service stays dirty and backs off like any failure,
-  and the other services in the flush still save. A `Flush` by hand returns the
-  failure rather than panicking.
+  mount) at the startup `Load`, the first one of the process, turns saving and
+  loading off for every registered service until the process restarts, with one
+  logged error: the services start empty, and the first save after the fault
+  clears would replace the state files nobody read. S3 keeps its bodies in
+  memory then, and writes no asset. A missing base directory is a fresh start.
+  A later `Load` (`POST /_gostack/state/load`) that cannot open the base
+  directory answers 500 with that error and changes nothing: the services hold
+  the state they had, keep saving, and `/_gostack/health` reports them as it did.
+- A `Snapshot` that panics fails the save of its own service and turns saving
+  and loading off for that service until the process restarts, as a failed
+  sync does: the panic may have left a lock of the service held, and a retry
+  or the `Restore` of a later `Load` would wait for it inside the guard, so
+  the engine never calls the service again. It is logged once, with the stack,
+  `/_gostack/health` reports `persisted: false` for the service, and the other
+  services in the flush, and every flush after, still save.
+- A panic in a `Committer` or a `Leader`, which is not in a `Snapshot`, ends
+  the flush it passes through before it goes on: each service the flush took
+  and did not save is dirty again, each leader told its follower is saved is
+  told the flush is over, the guard is released and the timer is armed. On the
+  timer's flush it is logged with its stack and the process goes on; a `Flush`
+  by hand, which the shutdown's `Stop` and `Close` end with, lets it pass to its
+  caller, such as the HTTP server's recovery of the `POST /_gostack/state/save`
+  handler, so `Flush` is not free of panics. The service that was under way
+  fails with a backoff, so a panic at every flush does not make the timer spin.
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -1265,8 +1285,10 @@ outside the base directory.
 - A temp file is created with `O_EXCL` under a random name, so a file or link
   planted under a temp name is never opened. Leftover temp files, from a crash
   or planted, are deleted after the next save, and by Load, which removes the
-  temp files of each service's state files in every format; a link among them is
-  removed as a link.
+  temp files of each service's state files in every format, beside the file
+  and, for a state file that is a link, beside the file the links lead to,
+  where a save puts its temp file; only temp names of the state file's own name
+  go. A link among them is removed as a link.
 - A link whose target fails to load is the one moved aside; its target is
   untouched.
 
@@ -1395,8 +1417,14 @@ is untouched.
   `Snapshot` first. A `Snapshot`, like a sync,
   cannot be interrupted, and S3's grows with its objects (about 3 µs each), so
   without the measured order a large S3 with nothing pending would take a
-  short shutdown save's whole deadline before SQS or STS is written. The
-  first pass takes
+  short shutdown save's whole deadline before SQS or STS is written. When the
+  budget is too small for every dirty service, the order does not save them
+  all: the write of the service ordered last is lost, either way. A pair
+  that goes by the larger of its two times takes the sum of them, so a faster
+  service behind it can lose its write to a pair that is slower than it was
+  ordered for, and a fast leader behind a service faster than its slow
+  follower waits for that service. The order is a heuristic for the usual
+  budget, not a guarantee under a short one. The first pass takes
   every service's snapshot into temp files and renames at once each one whose
   assets have nothing to sync, and no earlier sync to wait for, when its
   `Snapshot` returns: services with no assets among them. It defers the

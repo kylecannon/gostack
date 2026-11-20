@@ -229,9 +229,9 @@ func Test_Engine_Load_RemovesTheTempFilesOfKilledSaves(t *testing.T) {
 
 // Test_Engine_Flush_PanickingSnapshotIsLoggedAndTheOthersSave: a Snapshot that
 // panics inside a Flush by hand, such as POST /_gostack/state/save, fails its
-// own service only. It stays dirty, the panic is logged with its stack, the
-// other services in the flush save, and the guard is free for the next flush
-// (SQ-295 D).
+// own service only. The panic is logged with its stack, the service is off
+// until restart, the other services in the flush save, and the guard is free
+// for the next flush (SQ-295 D, SQ-388 item 3).
 func Test_Engine_Flush_PanickingSnapshotIsLoggedAndTheOthersSave(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
@@ -257,17 +257,18 @@ func Test_Engine_Flush_PanickingSnapshotIsLoggedAndTheOthersSave(t *testing.T) {
 		assert.Contains(t, lines[0], "a service bug")
 		assert.Contains(t, lines[0], "a-bad")
 
-		e.mu.Lock()
-		dirty := e.services["a-bad"].dirty
-		e.mu.Unlock()
-
-		assert.True(t, dirty, "the panicking service stays dirty")
+		assert.False(t, e.Enabled("a-bad"), "the panicking service is off until restart (SQ-388 item 3)")
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 
-		require.NoError(t, e.Flush(ctx), "the guard is free, and the Snapshot works the second time")
-		assert.Equal(t, "bad v1", readState(t, filepath.Join(dir, "a-bad", FormatJSON.fileName())))
+		good.set("good v2")
+		e.MarkDirty("b-good")
+
+		err = e.Flush(ctx)
+		require.ErrorIs(t, err, ErrUnsafe, "the guard is free, and the service that panicked is not called again")
+		assert.Equal(t, "good v2", readState(t, filepath.Join(dir, "b-good", FormatJSON.fileName())))
+		assert.NoFileExists(t, filepath.Join(dir, "a-bad", FormatJSON.fileName()))
 	})
 }
 

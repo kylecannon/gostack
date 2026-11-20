@@ -30,8 +30,9 @@ type Snapshotter interface {
 // ErrUnsafe is wrapped by the error Flush and Load return for a service whose
 // state file is unsafe to touch: a link that leaves the base dir, a file that
 // failed to load and could not be moved aside, assets that could not be
-// opened or whose sync failed, or a base dir that exists and could not be
-// opened. The service is neither loaded nor saved until gostack restarts.
+// opened or whose sync failed, a Snapshot that panicked, or a base dir that
+// exists and could not be opened at startup. The service is neither loaded nor
+// saved until gostack restarts.
 var ErrUnsafe = errors.New("saving and loading are off for the service until restart")
 
 // Engine tracks which services changed and writes them to disk. It is safe for
@@ -86,6 +87,9 @@ type Engine struct {
 	// after.
 	dirtyAgain bool
 	closed     bool
+	// loaded is true once a Load has opened the base dir, or found it missing: a
+	// later Load is not the startup one.
+	loaded bool
 }
 
 // outcome is what one flush did to one service's run of failed saves.
@@ -111,7 +115,7 @@ type tracked struct {
 	// alone, so a failing one never holds back another's save.
 	retryAt time.Time
 	// failures counts the service's saves that failed in a row, and lastFailure
-	// is the root cause of the last one's error, so a failing disk is logged when
+	// is the failureKey of the last one's error, so a failing disk is logged when
 	// something changes rather than at every retry.
 	failures    int
 	lastFailure string
@@ -316,6 +320,12 @@ func (e *Engine) MarkDirty(service string) {
 // takeDirty), and returns the errors joined, with an [ErrUnsafe] error for
 // each service it does not save. It waits for a running flush or load only
 // until ctx ends.
+//
+// A panic of a service's Snapshot is recovered: the save fails, and saving is
+// off for the service until restart. A panic of its [Committer] or [Leader]
+// passes through Flush to its caller, after the flush ended: the services it
+// took and did not save are dirty again, each leader is told the flush is over,
+// and the timer is armed.
 func (e *Engine) Flush(ctx context.Context) error {
 	if e.dir == "" {
 		return nil
@@ -326,18 +336,7 @@ func (e *Engine) Flush(ctx context.Context) error {
 		return fmt.Errorf("flush: %w", err)
 	}
 
-	// The guard is released by defer: a panic that passes through the flush, such
-	// as one in a [Committer], would otherwise hold it for ever, and no later
-	// flush or load, shutdown's included, could run.
-	results, err := func() ([]outcome, error) {
-		defer e.release()
-
-		return e.writeDirty(ctx, byHand)
-	}()
-
-	e.mu.Lock()
-	e.scheduleLocked() //nolint:contextcheck // arms a timer, whose callback has no caller context
-	e.mu.Unlock()
+	results, err := e.flushByHand(ctx)
 
 	// A failure is the caller's to report; the end of a run of them is logged here,
 	// since the timer that logged the run will not see it.
@@ -358,8 +357,10 @@ func (e *Engine) Flush(ctx context.Context) error {
 // cannot be moved aside, or any of the service's state files is a link that
 // leaves the base dir, the service is neither loaded nor saved, and Load
 // returns an [ErrUnsafe] error naming it; so is every service when the base
-// dir exists and cannot be opened, while a missing one is a fresh start.
-// Otherwise it returns an error only when ctx ends. Load also removes the temp
+// dir exists and cannot be opened at the startup Load, the first one in this
+// process to find it, while a missing one is a fresh start. A later Load that
+// cannot open the base dir returns that error and changes nothing. Otherwise it
+// returns an error only when ctx ends. Load also removes the temp
 // files of a service's state files that a save a crash cut short left behind.
 //
 // Services load in name order, except that a [Follower] loads right after the
@@ -382,18 +383,13 @@ func (e *Engine) Load(ctx context.Context) error {
 
 	root, err := os.OpenRoot(e.dir)
 	if err != nil {
-		// A missing base dir is a fresh start. One that exists and cannot be opened
-		// holds state this load did not read, and a save would replace it.
-		if !errors.Is(err, fs.ErrNotExist) {
-			e.refuseAll(err)
-		}
-
-		return e.unsafeErr()
+		return e.openFailed(err)
 	}
 
 	defer func() { _ = root.Close() }()
 
 	e.mu.Lock()
+	e.loaded = true
 	safe := make(map[string]*tracked, len(e.services))
 
 	for name, t := range e.services {
@@ -459,6 +455,53 @@ func (e *Engine) Close(ctx context.Context) error {
 	}
 
 	return err
+}
+
+// openFailed ends a Load that could not open the base dir. A missing base dir
+// is a fresh start: the load has succeeded, with nothing to restore. One that
+// exists and cannot be opened holds state this load did not read, and a save
+// would replace it: at the startup Load, before any Load has succeeded in this
+// process, that turns saving and loading off for every service. A later Load
+// restored state this process holds in memory and saved, so a base dir that
+// cannot be opened now is a fault that may pass: it returns its error and
+// changes nothing.
+func (e *Engine) openFailed(err error) error {
+	e.mu.Lock()
+	startup := !e.loaded
+	e.loaded = e.loaded || errors.Is(err, fs.ErrNotExist)
+	e.mu.Unlock()
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return e.unsafeErr()
+	case startup:
+		e.refuseAll(err)
+
+		return e.unsafeErr()
+	default:
+		return fmt.Errorf("load: open the base dir, so nothing was loaded: %w", err)
+	}
+}
+
+// flushByHand writes the dirty services of a flush by hand, which holds sem.
+// The guard is released, and the timer armed for what is left dirty, by defer: a
+// panic that passes through the flush, such as one in a [Committer], would
+// otherwise hold the guard for ever, and no later flush or load, shutdown's
+// included, could run. writeDirty has made the services the flush took dirty
+// again by then.
+func (e *Engine) flushByHand(ctx context.Context) ([]outcome, error) {
+	defer e.armTimer() //nolint:contextcheck // arms a timer, whose callback has no caller context
+	defer e.release()
+
+	return e.writeDirty(ctx, byHand)
+}
+
+// armTimer arms the flush timer for what is dirty.
+func (e *Engine) armTimer() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.scheduleLocked()
 }
 
 // drainRemovals marks dirty each loaded service whose assets have removals
@@ -727,11 +770,7 @@ func (e *Engine) flushOnTimer(gen uint64) {
 
 	select {
 	case e.sem <- struct{}{}: // a Load or a Flush by hand may hold it
-		if e.open() && ctx.Err() == nil {
-			results, _ = e.writeDirty(ctx, byTimer)
-		}
-
-		e.release()
+		results = e.writeTimed(ctx)
 	case <-ctx.Done():
 	}
 
@@ -742,6 +781,29 @@ func (e *Engine) flushOnTimer(gen uint64) {
 	e.mu.Unlock()
 
 	e.logOutcomes(results)
+}
+
+// writeTimed is the flush of the timer's callback, which holds sem. A panic
+// that passes through it, from a [Committer] or a [Leader] (a Snapshot's is
+// recovered where it is called), would end the process, since this goroutine
+// is gostack's own: it is logged with its stack instead. writeDirty has made
+// the services the flush took dirty again, and the callback arms the next flush.
+func (e *Engine) writeTimed(ctx context.Context) (results []outcome) {
+	defer e.release()
+
+	defer func() {
+		r := recover()
+		if r != nil {
+			e.log.Error("persist: a flush panicked outside any Snapshot; the services it took not yet saved are dirty again",
+				"panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+
+	if e.open() && ctx.Err() == nil {
+		results, _ = e.writeDirty(ctx, byTimer)
+	}
+
+	return results
 }
 
 // logOutcomes logs a flush by the timer, for each service it did not save or
@@ -873,11 +935,11 @@ func (e *Engine) conclude(pending []pendingService, failed []unsaved) []outcome 
 
 // failLocked counts a failed save of t's service: the service is dirty again,
 // and the timer waits for the backoff before it tries it. A failure is the same
-// as the last when its root cause is: the error text holds a temp file's random
+// as the last when its failureKey is: the error text holds a temp file's random
 // name, so comparing the text would log every retry of one failing disk.
 func (e *Engine) failLocked(t *tracked, u unsaved) outcome {
 	t.failures++
-	text := rootCause(u.err).Error()
+	text := failureKey(u.err)
 	result := outcome{
 		service: u.name, err: u.err, failures: t.failures, changed: text != t.lastFailure,
 	}
@@ -1021,6 +1083,9 @@ func (e *Engine) backoff(failures int) time.Duration {
 //
 // The assets a service removed before its snapshot is taken are deleted once
 // that snapshot is on disk, and kept for the next save when it is not.
+//
+// A panic that passes through it, from a [Committer] or a [Leader], is not
+// stopped here, but the flush is ended first: see flushRun.interrupted.
 func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]unsaved, error) {
 	err := os.MkdirAll(e.dir, dirMode)
 	if err != nil {
@@ -1034,10 +1099,23 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]unsa
 
 	defer func() { _ = root.Close() }()
 
-	run := flushRun{e: e, root: root, committed: map[string]bool{}, deferred: map[string]bool{}}
+	run := &flushRun{e: e, root: root, committed: map[string]bool{}, deferred: map[string]bool{}}
+	ended := false
+
+	// The defers run in turn when a panic passes through, and neither recovers
+	// it: the stack of the panic stays whole for whoever does.
+	defer func() {
+		if !ended {
+			e.conclude(pending, run.interrupted(pending))
+		}
+	}()
+
+	defer run.unfollow()
+
 	deferred := run.firstPass(ctx, saveOrder(pending))
 	run.secondPass(ctx, deferred)
-	run.unfollow()
+
+	ended = true
 
 	return run.failed, errors.Join(run.errs...)
 }
@@ -1136,6 +1214,10 @@ type flushRun struct {
 	// followed are the [Leader]s this flush told a follower is saved after
 	// them, told otherwise once it ends.
 	followed []Leader
+	// begun are the saves the flush began, and current is the service whose
+	// save or leader call is under way: what a panic leaves to interrupted.
+	begun   []*staged
+	current string
 }
 
 // staged is one service's save between its snapshot and its rename.
@@ -1148,6 +1230,52 @@ type staged struct {
 	// late is a follower whose leader was deferred: the second pass takes its
 	// snapshot once the leader's is renamed.
 	late bool
+	// finished is true once finishSave has ended the save.
+	finished bool
+}
+
+// begin starts the save of p, and records it for interrupted.
+func (r *flushRun) begin(p pendingService, late bool) *staged {
+	s := &staged{p: p, removed: p.assets.begin(), late: late}
+	r.begun = append(r.begun, s)
+
+	return s
+}
+
+// errPanicked is why a service the engine was saving when a panic passed
+// through its flush is not saved.
+var errPanicked = errors.New("a panic passed through its flush")
+
+// interrupted ends a flush a panic passes through, from a [Committer] or a
+// [Leader], which no recover here stops: the saves it began are finished, their
+// temp files removed and their removals queued again, and it returns the
+// services to conclude as unsaved. A service whose snapshot was renamed is
+// saved. The one under way when the panic began fails, with a backoff, so a
+// panic every flush does not make the timer spin; the rest were taken and not
+// written, so they gave way and are dirty again at once. It runs with the
+// panic, and unfollow, which also runs with it, tells each leader the flush has
+// ended.
+func (r *flushRun) interrupted(pending []pendingService) []unsaved {
+	for _, s := range r.begun {
+		finishSave(s, errPanicked)
+	}
+
+	failed := r.failed
+	lost := make(map[string]bool, len(failed))
+
+	for _, u := range failed {
+		lost[u.name] = true
+	}
+
+	for _, p := range pending {
+		if r.committed[p.name] || lost[p.name] {
+			continue
+		}
+
+		failed = append(failed, unsaved{pendingService: p, err: errPanicked, gaveWay: p.name != r.current})
+	}
+
+	return failed
 }
 
 // errLeaderUnsaved is why a [Follower] is not saved: its leader's save in the
@@ -1171,10 +1299,12 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 			break
 		}
 
+		r.current = p.name
+
 		if leader := follows(p.snap); leader != "" && !r.committed[leader] {
 			if r.deferred[leader] {
 				r.deferred[p.name] = true
-				deferred = append(deferred, &staged{p: p, removed: p.assets.begin(), late: true})
+				deferred = append(deferred, r.begin(p, true))
 			} else {
 				r.giveWay(p)
 			}
@@ -1183,14 +1313,16 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 		}
 
 		if l, ok := p.snap.(Leader); ok {
-			l.Followed(followed[p.name])
-
+			// Listed first: a Followed that panics has been told, and unfollow tells
+			// it the flush has ended.
 			if followed[p.name] {
 				r.followed = append(r.followed, l)
 			}
+
+			l.Followed(followed[p.name])
 		}
 
-		s := &staged{p: p, removed: p.assets.begin()}
+		s := r.begin(p, false)
 
 		err := r.e.snapshot(r.root, s)
 		if err == nil {
@@ -1243,6 +1375,8 @@ func (r *flushRun) secondPass(ctx context.Context, deferred []*staged) {
 		}
 
 		var err error
+
+		r.current = s.p.name
 
 		if s.late {
 			if !r.committed[follows(s.p.snap)] {
@@ -1310,9 +1444,9 @@ func (r *flushRun) end(s *staged, err error) {
 		return
 	}
 
-	// The store has turned the service off and logged why; it is not tried
-	// again.
-	if errors.Is(err, errSyncFailed) {
+	// The store, or callSnapshot, has turned the service off and logged why; it
+	// is not tried again.
+	if errors.Is(err, errSyncFailed) || errors.Is(err, errSnapshotPanicked) {
 		return
 	}
 
@@ -1340,8 +1474,14 @@ func (r *flushRun) abandon(ctx context.Context, ps []pendingService) {
 
 // finishSave ends the save of s: a failed one removes its temp files, and the
 // assets delete the removals of the batch once the snapshot is on disk, or
-// queue them again when it is not.
+// queue them again when it is not. A save ends once: a second call does nothing.
 func finishSave(s *staged, err error) {
+	if s.finished {
+		return
+	}
+
+	s.finished = true
+
 	if err != nil {
 		for _, w := range s.writers {
 			w.discard()
@@ -1397,18 +1537,27 @@ func (e *Engine) snapshot(root *os.Root, s *staged) error {
 	return nil
 }
 
-// callSnapshot runs the Snapshot of p. A panic in it is a failed save like any
-// other, logged with its stack: the service stays dirty, the temp files are
-// removed, and the services after it still save, so one service's bug neither
-// takes the process down nor wedges the guard.
+// errSnapshotPanicked is the error of a save whose Snapshot panicked, which
+// turned saving off for its service.
+var errSnapshotPanicked = errors.New("its Snapshot panicked")
+
+// callSnapshot runs the Snapshot of p. A panic in it fails the save, which
+// removes the temp files, and turns saving and loading off for the service for
+// good: the panic may have left a lock of the service held, and a retry, or a
+// Restore at a later Load, would wait for it inside the guard, so the engine
+// never calls the service again. The panic is logged, with its stack, once.
+// The services after it still save, so one service's bug neither takes the
+// process down nor wedges the guard.
 func (e *Engine) callSnapshot(p pendingService, w io.Writer) (err error) {
 	defer func() {
 		r := recover()
 		if r != nil {
-			e.log.Error("persist: a Snapshot panicked; the service is not saved and stays dirty",
-				"service", p.name, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("%w: %v", errSnapshotPanicked, r)
 
-			err = fmt.Errorf("panic: %v", r)
+			e.markUnsafe(p.name, err)
+			e.log.Error("persist: a Snapshot panicked, so saving and loading are off for the service until restart; "+
+				"the state file on disk is the last one saved, and what changed since is lost at restart",
+				"service", p.name, "panic", r, "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -1545,14 +1694,28 @@ func (e *Engine) loadService(root *os.Root, name string, t *tracked) {
 
 // removeStateTemps deletes the temp files of the service's state files, in
 // every format: a save killed between creating one and renaming it leaves it,
-// and a later save removes only the temp files of the file it renamed. The load
-// holds the guard a save holds, so no writer owns one. A failure is logged and
-// does not stop the load.
+// and a later save removes only the temp files of the file it renamed. A state
+// file that is a link is swept in two places: a save puts its temp file beside
+// the file the links lead to (see target), and a build before that put it beside
+// the link. Only temp names of the file's own name go, in either directory. The
+// load holds the guard a save holds, so no writer owns one. A failure is logged
+// and does not stop the load.
 func (e *Engine) removeStateTemps(root *os.Root, name string) {
 	for _, f := range e.loadFormats {
-		err := removeTemps(root, name, f.fileName())
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			e.log.Error("persist: remove state temp files", "service", name, "format", f.fileName(), "error", err)
+		file := name + "/" + f.fileName()
+		files := []string{file}
+
+		// A link that leaves the base dir has refused the service before this runs.
+		path, err := target(root, file)
+		if err == nil && path != file {
+			files = append(files, path)
+		}
+
+		for _, swept := range files {
+			err = removeTemps(root, dirOf(swept), baseOf(swept))
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				e.log.Error("persist: remove state temp files", "service", name, "format", f.fileName(), "error", err)
+			}
 		}
 	}
 }
@@ -1779,20 +1942,29 @@ func (e *Engine) setAside(root *os.Root, service, file string, cause error) bool
 }
 
 // refuseAll turns loading and saving off for every registered service, whose
-// state files a base dir that exists and cannot be opened hides from the load,
-// and logs why once.
+// state files a base dir that exists and cannot be opened hides from the startup
+// load, and logs why once: a load that follows while the base dir still cannot
+// be opened refuses no service that is not refused already, and logs nothing.
 func (e *Engine) refuseAll(cause error) {
 	e.mu.Lock()
 	names := slices.Sorted(maps.Keys(e.services))
 	e.mu.Unlock()
 
+	var refused []string
+
 	for _, name := range names {
-		e.markUnsafe(name, fmt.Errorf("the base dir could not be opened: %w", cause))
+		if e.markUnsafe(name, fmt.Errorf("the base dir could not be opened at startup: %w", cause)) {
+			refused = append(refused, name)
+		}
 	}
 
-	e.log.Error("persist: the base dir exists and could not be opened, so no service is loaded or saved "+
+	if len(refused) == 0 {
+		return
+	}
+
+	e.log.Error("persist: the base dir exists and could not be opened at startup, so no service is loaded or saved "+
 		"until restart; saving would replace state that was not loaded",
-		"dir", e.dir, "services", names, "error", cause)
+		"dir", e.dir, "services", refused, "error", cause)
 }
 
 // syncFailed turns the service off after a sync of its assets failed, and logs
@@ -1806,16 +1978,21 @@ func (e *Engine) syncFailed(service, dir string, cause error) {
 		"service", service, "dir", dir, "error", cause)
 }
 
-// markUnsafe turns loading and saving off for the service, for reason.
-func (e *Engine) markUnsafe(service string, reason error) {
+// markUnsafe turns loading and saving off for the service, for reason, and
+// reports whether it did: a service already off keeps its first reason.
+func (e *Engine) markUnsafe(service string, reason error) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	t, registered := e.services[service]
-	if registered && t.unsafe == nil {
-		t.unsafe = reason
-		t.dirty = false
+	if !registered || t.unsafe != nil {
+		return false
 	}
+
+	t.unsafe = reason
+	t.dirty = false
+
+	return true
 }
 
 // unsafeErr returns an [ErrUnsafe] error for each service that is neither
