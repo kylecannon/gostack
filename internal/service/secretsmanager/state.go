@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/account"
 )
 
 const (
@@ -41,9 +43,9 @@ type State struct {
 	order []*Secret
 }
 
-func newState(account, region string) *State {
+func newState(accountID, region string) *State {
 	return &State{
-		account: account,
+		account: accountID,
 		region:  region,
 		byName:  map[string]*Secret{},
 		byARN:   map[string]*Secret{},
@@ -374,21 +376,9 @@ func (s *Secret) touch(now time.Time) {
 }
 
 // arnOf is the ARN of a new secret: its name and six random letters.
-func arnOf(region, account, name string) string {
-	return "arn:" + partition(region) + ":secretsmanager:" + region + ":" + account + ":secret:" + name + "-" +
+func arnOf(region, accountID, name string) string {
+	return "arn:" + account.Partition(region) + ":secretsmanager:" + region + ":" + accountID + ":secret:" + name + "-" +
 		randomString(letters, arnSuffixLength)
-}
-
-// partition is the ARN partition of a region.
-func partition(region string) string {
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		return "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		return "aws-us-gov"
-	default:
-		return "aws"
-	}
 }
 
 const (
