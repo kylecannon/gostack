@@ -1,0 +1,2 @@
+go test fuzz v1
+string("select * from t where begins_with(a, 'x') and contains(l, 1) and attribute_type(m, 'M') and size(l) > 2")
