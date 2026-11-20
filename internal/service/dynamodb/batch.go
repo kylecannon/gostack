@@ -4,10 +4,9 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
-	"unicode/utf16"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -21,52 +20,10 @@ const (
 	maxClientTokenRunes = 36
 )
 
-// javaHashOrder returns names in the order a java.util.HashMap holding them
-// iterates, which is the order DynamoDB Local walks a request's tables in: by
-// bucket of the spread String.hashCode in a table of the default size, doubled
-// while the map fills it past three quarters. Names in one bucket keep their
-// insertion order in Java, which the request does not carry, so they are
-// sorted by text. The expression package keeps its own copy for its
-// placeholder messages.
-func javaHashOrder(names []string) []string {
-	const (
-		initialBuckets = 16
-		loadNum        = 3
-		loadDen        = 4
-	)
-
-	buckets := initialBuckets
-	for len(names)*loadDen > buckets*loadNum {
-		buckets *= 2
-	}
-
-	bucket := func(s string) int {
-		var h int32
-		for _, r := range utf16.Encode([]rune(s)) {
-			h = h*31 + int32(r) //nolint:mnd // Java's String.hashCode multiplier over a rune
-		}
-
-		spread := uint32(h) ^ uint32(h)>>16 //nolint:mnd // HashMap.hash folds the high half down
-
-		return int(spread) & (buckets - 1)
-	}
-
-	sorted := slices.Clone(names)
-	slices.SortFunc(sorted, func(a, b string) int {
-		if c := bucket(a) - bucket(b); c != 0 {
-			return c
-		}
-
-		return strings.Compare(a, b)
-	})
-
-	return sorted
-}
-
 // requestTables returns the table names of a batch request's map in the order
 // DynamoDB Local reads them.
 func requestTables[V any](m map[string]V) []string {
-	return javaHashOrder(slices.Collect(maps.Keys(m)))
+	return expression.JavaHashOrder(slices.Collect(maps.Keys(m)))
 }
 
 // itemKey is the identity of an item within one table: its key values, in the

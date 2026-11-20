@@ -46,11 +46,17 @@ const (
 	duplicatePrefix = invalidPrefix + "Input collection "
 )
 
-// MaxDepth is the most levels a value may nest, the value itself and every
-// map or list around a value inside it counted: DynamoDB refuses a value whose
-// innermost member sits 33 levels down. Validate refuses deeper values before
-// walking them, so every later walk of a validated value is bounded.
-const MaxDepth = 32
+// MaxDepth is the most levels an attribute of an item may nest, the attribute
+// itself and every map or list around a value inside it counted: DynamoDB
+// refuses an attribute whose innermost member sits 33 levels down. The item
+// is a level of its own, so a value outside an item, one in an
+// ExpressionAttributeValues, may nest one level more: MaxValueDepth.
+// ValidateItem and Validate refuse deeper values before walking them, so
+// every later walk of a validated value is bounded.
+const (
+	MaxDepth      = 32
+	MaxValueDepth = MaxDepth + 1
+)
 
 // MaxItemSize is the largest item DynamoDB stores, in the bytes ItemSize
 // counts.
@@ -119,10 +125,37 @@ func checkItem(item Item, depth int) error {
 
 // Validate checks v as DynamoDB does: exactly one member, a NULL that is true,
 // numbers DynamoDB can hold, sets that are not empty and hold no duplicate, and
-// the same of every value inside a map or list, nested no deeper than MaxDepth.
-// It rewrites every number in v to its canonical form.
+// the same of every value inside a map or list, nested no deeper than
+// MaxValueDepth. It rewrites every number in v to its canonical form.
 func Validate(v *api.AttributeValue) error {
-	return checkValue(v, 1)
+	return checkValue(v, 0)
+}
+
+// TooDeep reports whether v, an attribute of an item, nests deeper than
+// MaxDepth. It stops descending at the limit, so its cost and stack are
+// bounded however deep v is.
+func TooDeep(v *api.AttributeValue) bool {
+	return deeper(v, 1)
+}
+
+func deeper(v *api.AttributeValue, depth int) bool {
+	if depth > MaxDepth {
+		return true
+	}
+
+	for _, m := range v.M {
+		if deeper(&m, depth+1) {
+			return true
+		}
+	}
+
+	for i := range v.L {
+		if deeper(&v.L[i], depth+1) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func checkValue(v *api.AttributeValue, depth int) error {

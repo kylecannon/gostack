@@ -104,6 +104,18 @@ func Test_writes_limits(t *testing.T) {
 		`"ExpressionAttributeValues":{":v":`+nested(40)+`}}`, codeValidation,
 		"ExpressionAttributeValues contains invalid value: "+tooDeep+" for key :v")
 
+	// An ExpressionAttributeValues value nests one level more than an item's
+	// attribute: 33 levels pass a filter, 34 do not, and a SET of 33 levels is
+	// refused once it sits in the item, with no key in the message (SQ-280).
+	s.ok(t, opScan, `{"TableName":"tab1","FilterExpression":"d = :v","ExpressionAttributeValues":{":v":`+nested(32)+`}}`)
+	s.fails(t, opScan, `{"TableName":"tab1","FilterExpression":"d = :v","ExpressionAttributeValues":{":v":`+
+		nested(33)+`}}`, codeValidation, "ExpressionAttributeValues contains invalid value: "+tooDeep+" for key :v")
+	s.ok(t, opUpdateItem, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"UpdateExpression":"SET q = :v",`+
+		`"ExpressionAttributeValues":{":v":`+nested(31)+`}}`)
+	s.fails(t, opUpdateItem, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"UpdateExpression":"SET q = :v",`+
+		`"ExpressionAttributeValues":{":v":`+nested(32)+`}}`, codeValidation,
+		"Nesting Levels have exceeded supported limits")
+
 	// 4,900 levels, about the deepest the shared JSON decoder passes on (it
 	// refuses a 10,000-level item itself, past encoding/json's 10,000 nesting
 	// limit): refused by the 32-level check before anything in the DynamoDB

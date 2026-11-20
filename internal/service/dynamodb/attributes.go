@@ -165,5 +165,7 @@ func (r *reader) checkIndexProjects(names []string) error {
 		return nil
 	}
 
-	return value.Invalid(fmt.Sprintf(msgIndexNotProjected, r.index.Name, strings.Join(javaHashOrder(missing), ", ")))
+	ordered := strings.Join(expression.JavaHashOrder(missing), ", ")
+
+	return value.Invalid(fmt.Sprintf(msgIndexNotProjected, r.index.Name, ordered))
 }

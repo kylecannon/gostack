@@ -118,9 +118,8 @@ func (t *Table) checkKeyValues(item value.Item) error {
 			return value.Invalid(msgKeyTypeMismatch)
 		}
 
-		if empty := emptyKind(&v); empty != "" {
-			return value.Invalid(msgEmptyKeyPrefix + "The AttributeValue for a key attribute cannot contain an empty " +
-				empty + " value. Key: " + attr.Name)
+		if msg := EmptyKeyMessage(nil, attr.Name, &v); msg != "" {
+			return value.Invalid(msg)
 		}
 
 		limit := maxHashKeyBytes
@@ -149,14 +148,33 @@ func checkIndexKey(spec *IndexSpec, item value.Item) error {
 			return value.Invalid(msgIndexKeyMismatch)
 		}
 
-		if empty := emptyKind(&v); empty != "" {
-			return value.Invalid(msgEmptyKeyPrefix + msgEmptyIndexKey +
-				"The AttributeValue for a key attribute cannot contain an empty " + empty +
-				" value. IndexName: " + spec.Name + ", IndexKey: " + attr.Name)
+		if msg := EmptyKeyMessage(spec, attr.Name, &v); msg != "" {
+			return value.Invalid(msg)
 		}
 	}
 
 	return nil
+}
+
+// EmptyKeyMessage is DynamoDB Local's message for v, the value of key
+// attribute attr, when it is an empty string or binary: for an attribute of
+// the table (spec nil), or of the index spec. It returns "" for any other
+// value. A write, a key condition and an exclusive start key all refuse an
+// empty key value with it.
+func EmptyKeyMessage(spec *IndexSpec, attr string, v *api.AttributeValue) string {
+	empty := emptyKind(v)
+	if empty == "" {
+		return ""
+	}
+
+	const refused = "The AttributeValue for a key attribute cannot contain an empty "
+
+	if spec == nil {
+		return msgEmptyKeyPrefix + refused + empty + " value. Key: " + attr
+	}
+
+	return msgEmptyKeyPrefix + msgEmptyIndexKey + refused + empty + " value. IndexName: " + spec.Name +
+		", IndexKey: " + attr
 }
 
 // emptyKind names the kind of an empty string or binary key value, or returns

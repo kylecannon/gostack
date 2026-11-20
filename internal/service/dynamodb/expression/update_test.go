@@ -95,6 +95,8 @@ func requireUpdateError(t *testing.T, err error, msg string) {
 // Every message below was observed from DynamoDB Local in the LocalStack image
 // (gostack-parity-localstack:8b9a79f) for the same expression; rows that hold
 // two problems pin which one DynamoDB reports first.
+//
+//nolint:lll // each row holds the exact text the LocalStack image answered
 func Test_ParseUpdate_Errors(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +117,11 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 		delType  = operand + "operator: DELETE, operand type: "
 		emptyL   = `{":v":{"L":[]}}`
 		parens   = bad + "The expression has redundant parentheses;"
+		// listAndN is :v, an empty list, and :n, the number 1.
+		listAndN  = `{":v":{"L":[]},":n":{"N":"1"}}`
+		notHere   = bad + "The function is not allowed to be used this way in an expression; function: list_append"
+		sameFirst = bad + "The first operand must be distinct from the remaining operands for this operator or " +
+			"function; operator: if_not_exists, first operand: "
 	)
 
 	tests := []struct {
@@ -185,6 +192,40 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 			overlap + "path one: [a], path two: [a, b]",
 		},
 		{"undefined value", "SET a = :nope", "", updateX, noValue + ":nope"},
+		// Probed on the LocalStack image (SQ-280): list_append is the whole
+		// value of an action or nothing, and if_not_exists names two paths.
+		{"list_append in if_not_exists", "SET a = if_not_exists(b, list_append(c, :v))", "", emptyL, notHere},
+		{"list_append in list_append", "SET a = list_append(b, list_append(c, :v))", "", emptyL, notHere},
+		{"list_append first in list_append", "SET a = list_append(list_append(c, :v), b)", "", emptyL, notHere},
+		{"list_append in parens in if_not_exists", "SET a = if_not_exists(b, (list_append(c, :v)))", "", emptyL, notHere},
+		{"list_append in if_not_exists in list_append", "SET a = list_append(if_not_exists(b, list_append(c, :v)), c)", "", emptyL, notHere},
+		{"list_append beside a sum", "SET a = list_append(c, :v) + :n", "", listAndN, notHere},
+		{"list_append on the right of a sum", "SET a = :n + list_append(c, :v)", "", listAndN, notHere},
+		{"list_append minus", "SET a = list_append(c, :v) - :n", "", listAndN, notHere},
+		{"list_append in a sum in parens", "SET a = (list_append(c, :v) + :n)", "", listAndN, notHere},
+		{"list_append in parens beside a sum", "SET a = (list_append(c, :v)) + :n", "", listAndN, notHere},
+		{"list_append in the second action", "SET b = :n, a = if_not_exists(c, list_append(d, :v))", "", listAndN, notHere},
+		{"list_append before a repeated clause", "SET a = if_not_exists(b, list_append(c, :v)) SET d = :n", "", listAndN, notHere},
+		{"list_append after a repeated clause", "SET d = :n SET a = if_not_exists(b, list_append(c, :v))", "", listAndN, notHere},
+		{"list_append before an undefined name", "SET a = if_not_exists(b, list_append(c, :v)), #nope = :n", "", listAndN, notHere},
+		{"list_append before overlap", "SET a = if_not_exists(b, list_append(c, :v)), a.b = :n", "", listAndN, notHere},
+		{"list_append before an undefined value", "SET a = if_not_exists(b, list_append(c, :v)), d = :nope", "", listAndN, notHere},
+		{"list_append before arity", "SET a = if_not_exists(b, list_append(c))", "", "", notHere},
+		{"list_append before operand type", "SET a = list_append(c, :v) + :v", "", emptyL, notHere},
+		{"reserved name before list_append", "SET values = :n, a = if_not_exists(b, list_append(c, :v))", "", listAndN, reserved + "values"},
+		{"if_not_exists one path", "SET a = if_not_exists(b, b)", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path, absent from the item", "SET a = if_not_exists(nope, nope)", "", "", sameFirst + "[nope]"},
+		{"if_not_exists one nested path", "SET a = if_not_exists(m.b, m.b)", "", "", sameFirst + "[m, b]"},
+		{"if_not_exists one index path", "SET a = if_not_exists(l[0], l[0])", "", "", sameFirst + "[l, [0]]"},
+		{"if_not_exists one path through a name", "SET a = if_not_exists(#x, b)", `{"#x":"b"}`, "", sameFirst + "[b]"},
+		{"if_not_exists one path through two names", "SET a = if_not_exists(#x, #y)", `{"#x":"b","#y":"b"}`, "", sameFirst + "[b]"},
+		{"if_not_exists one path in parens", "SET a = if_not_exists(b, (b))", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path in a sum", "SET a = if_not_exists(b, b) + :n", "", listAndN, sameFirst + "[b]"},
+		{"if_not_exists one path in list_append", "SET a = list_append(if_not_exists(b, b), c)", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path inside if_not_exists", "SET a = if_not_exists(c, if_not_exists(b, b))", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path before an undefined value", "SET a = if_not_exists(b, b) + :nope", "", listAndN, sameFirst + "[b]"},
+		{"undefined value before if_not_exists one path", "SET a = :nope + if_not_exists(b, b)", "", listAndN, noValue + ":nope"},
+		{"if_not_exists one path before overlap", "SET a = if_not_exists(b, b), a.c = :n", "", listAndN, overlap + "path one: [a], path two: [a, c]"},
 		{
 			"path required", "SET a = if_not_exists(:v, :v)", "", updateX,
 			bad + "Operator or function requires a document path; operator or function: if_not_exists",
@@ -265,6 +306,28 @@ func Test_ParseUpdate_Accepted(t *testing.T) {
 			t.Parallel()
 
 			_, err := expression.ParseUpdate(expr, updateSubs(t, "", updateN), nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// The function uses the image accepts (SQ-280): list_append as a whole value,
+// parenthesized or with if_not_exists inside it, if_not_exists in a sum or
+// naming two different paths, one a prefix of the other or two list indexes.
+func Test_ParseUpdate_AcceptedFunctions(t *testing.T) {
+	t.Parallel()
+
+	for _, expr := range []string{
+		"SET a = list_append(b, :l )", "SET a = (list_append(b, :l))", "SET a = list_append((b), :l)",
+		"SET a = list_append(if_not_exists(b, :l), :l)", "SET a = list_append(b, if_not_exists(c, :l))",
+		"SET a = if_not_exists(b, :n) + :n", "SET a = :n + if_not_exists(b, :n)", "SET a = if_not_exists(b, c)",
+		"SET a = if_not_exists(m.b, m)", "SET a = if_not_exists(m, m.b)", "SET a = if_not_exists(l[0], l[1])",
+		"SET a = if_not_exists(b, if_not_exists(c, :n))", "SET a = if_not_exists(m.b, m.B)",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(expr, autoSubs(expr), nil)
 			require.NoError(t, err)
 		})
 	}

@@ -37,11 +37,6 @@ const (
 // PutItem stores an item, replacing the one with its key, when its
 // ConditionExpression, or the legacy Expected and ConditionalOperator, hold.
 func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutItemOutput, error) {
-	returnOnFailure, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
-	if err != nil {
-		return nil, err
-	}
-
 	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -65,22 +60,13 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	legacy, err := legacyWrite(in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
+	guard, err := putGuard(in)
 	if err != nil {
 		return nil, err
-	}
-
-	cond, err := writeCondition(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
-	if err != nil {
-		return nil, err
-	}
-
-	if legacy != nil {
-		cond = legacy
 	}
 
 	change, err := e.data.Write(in.Item, func(old value.Item) (value.Item, error) {
-		return in.Item, checkCondition(cond, old, returnOnFailure)
+		return in.Item, guard.check(old)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -154,44 +140,19 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 // DeleteItem removes the item with a key, if there is one, when its
 // ConditionExpression, or the legacy Expected and ConditionalOperator, hold.
 func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*api.DeleteItemOutput, error) {
-	returnOnFailure, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
-	if err != nil {
-		return nil, err
-	}
-
 	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	returnOld, err := returnValues(in.ReturnValues)
+	guard, returnOld, err := deleteGuard(e, in)
 	if err != nil {
 		return nil, err
-	}
-
-	// DynamoDB Local checks the legacy condition before the key.
-	legacy, err := legacyWrite(in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
-	if err != nil {
-		return nil, err
-	}
-
-	err = checkKey(e, in.Key)
-	if err != nil {
-		return nil, fmt.Errorf("item: %w", err)
-	}
-
-	cond, err := writeCondition(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
-	if err != nil {
-		return nil, err
-	}
-
-	if legacy != nil {
-		cond = legacy
 	}
 
 	change, err := e.data.Write(in.Key, func(old value.Item) (value.Item, error) {
 		// nil deletes, as Write takes it.
-		return nil, checkCondition(cond, old, returnOnFailure)
+		return nil, guard.check(old)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -207,6 +168,118 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 	return out, nil
 }
 
+// writeGuard is what may stop a PutItem or DeleteItem: its condition, nil for
+// none, and whether a failed one reports the item stored.
+type writeGuard struct {
+	cond      expression.Condition
+	returnOld bool
+}
+
+// check evaluates the condition on old, the item stored.
+func (g *writeGuard) check(old value.Item) error {
+	return checkCondition(g.cond, old, g.returnOld)
+}
+
+// putGuard checks the condition parameters of a PutItem, in the order DynamoDB
+// Local does: the mix of Expected with expressions, placeholders no expression
+// uses, the entries of Expected, the enum of ReturnValuesOnConditionCheckFailure,
+// and then the ConditionalOperator and the ConditionExpression.
+func putGuard(in *api.PutItemInput) (*writeGuard, error) {
+	err := checkWriteMixed(0, in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
+	if err == nil {
+		err = checkConditionUsable(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	tests, err := expectedTests(in.Expected)
+	if err != nil {
+		return nil, err
+	}
+
+	g := &writeGuard{}
+
+	g.returnOld, err = returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
+	if err != nil {
+		return nil, err
+	}
+
+	return g, g.condition(tests, in.ConditionalOperator, in.ConditionExpression,
+		in.ExpressionAttributeNames, in.ExpressionAttributeValues)
+}
+
+// deleteGuard checks the condition parameters of a DeleteItem, in the order
+// DynamoDB Local does: the entries of Expected, ReturnValues, the mix with
+// expressions, placeholders no expression uses, the enum of
+// ReturnValuesOnConditionCheckFailure, the key, and then the
+// ConditionalOperator and the ConditionExpression. It reports whether
+// ReturnValues asks for the item deleted.
+func deleteGuard(e *tableEntry, in *api.DeleteItemInput) (*writeGuard, bool, error) {
+	tests, err := expectedTests(in.Expected)
+	if err != nil {
+		return nil, false, err
+	}
+
+	returnOld, err := returnValues(in.ReturnValues)
+	if err != nil {
+		return nil, false, err
+	}
+
+	err = checkWriteMixed(0, in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
+	if err == nil {
+		err = checkConditionUsable(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
+	}
+
+	if err != nil {
+		return nil, false, err
+	}
+
+	g := &writeGuard{}
+
+	g.returnOld, err = returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
+	if err != nil {
+		return nil, false, err
+	}
+
+	err = checkKey(e, in.Key)
+	if err != nil {
+		return nil, false, fmt.Errorf("item: %w", err)
+	}
+
+	err = g.condition(tests, in.ConditionalOperator, in.ConditionExpression,
+		in.ExpressionAttributeNames, in.ExpressionAttributeValues)
+
+	return g, returnOld, err
+}
+
+// condition sets the guard's condition: the legacy one made of the tests of
+// Expected and the ConditionalOperator, or else the ConditionExpression.
+func (g *writeGuard) condition(
+	tests []expression.LegacyTest, op, src *string, names map[string]string, values map[string]api.AttributeValue,
+) error {
+	legacy, err := expectedCondition(tests, op)
+	if err != nil {
+		return err
+	}
+
+	g.cond, err = writeCondition(src, names, values)
+	if legacy != nil {
+		g.cond = legacy
+	}
+
+	return err
+}
+
+const msgConditionNull = "ConditionExpression is null"
+
+// checkConditionUsable refuses the placeholders of a PutItem or DeleteItem
+// that gives no ConditionExpression to use them.
+func checkConditionUsable(src *string, names map[string]string, values map[string]api.AttributeValue) error {
+	return checkUsable(names, values, src != nil, src != nil, msgConditionNull)
+}
+
 // writeCondition parses the ConditionExpression of a PutItem or DeleteItem
 // and checks its placeholders; nil means no condition.
 //
@@ -214,7 +287,7 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 func writeCondition(
 	src *string, names map[string]string, values map[string]api.AttributeValue,
 ) (expression.Condition, error) {
-	x, err := newExprs(names, values, src != nil, src != nil, "ConditionExpression is null")
+	x, err := newExprs(names, values, src != nil, src != nil, msgConditionNull)
 	if err != nil {
 		return nil, err
 	}

@@ -94,7 +94,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // canonical returns a validated copy of v with its numbers in canonical form,
 // leaving v as the request sent it.
 func canonical(key string, v *api.AttributeValue) (*api.AttributeValue, error) {
-	c := deepCopy(v)
+	c := deepCopy(v, 1)
 
 	err := value.Validate(&c)
 	if err != nil {
@@ -110,7 +110,15 @@ func canonical(key string, v *api.AttributeValue) (*api.AttributeValue, error) {
 	return &c, nil
 }
 
-func deepCopy(v *api.AttributeValue) api.AttributeValue {
+// deepCopy copies v, the value at level of its nesting, down to the level
+// value.Validate refuses: a value one level past MaxValueDepth is left
+// empty, which Validate refuses all the same, so no copy or walk of a value
+// recurses further than the limit.
+func deepCopy(v *api.AttributeValue, level int) api.AttributeValue {
+	if level > value.MaxValueDepth+1 {
+		return api.AttributeValue{}
+	}
+
 	c := *v
 
 	if v.N != nil {
@@ -125,14 +133,14 @@ func deepCopy(v *api.AttributeValue) api.AttributeValue {
 	if v.M != nil {
 		c.M = make(map[string]api.AttributeValue, len(v.M))
 		for k, e := range v.M {
-			c.M[k] = deepCopy(&e)
+			c.M[k] = deepCopy(&e, level+1)
 		}
 	}
 
 	if v.L != nil {
 		c.L = make([]api.AttributeValue, len(v.L))
 		for i := range v.L {
-			c.L[i] = deepCopy(&v.L[i])
+			c.L[i] = deepCopy(&v.L[i], level+1)
 		}
 	}
 
@@ -381,6 +389,24 @@ func (r *resolver) distinct(name string, ops []*operand) error {
 	}
 
 	return nil
+}
+
+// comparePaths reports whether a and b agree on every step they share, one
+// being the other or leading into it, and whether they part at a step where
+// one names a map key and the other a list index.
+func comparePaths(a, b Path) (bool, bool) {
+	for k := range min(len(a), len(b)) {
+		x, y := a[k], b[k]
+		if (x.Name == "") != (y.Name == "") {
+			return false, true
+		}
+
+		if x != y {
+			return false, false
+		}
+	}
+
+	return true, false
 }
 
 func samePath(a, b Path) bool {

@@ -64,6 +64,7 @@ const (
 type updateOperand struct {
 	kind   updateOperandKind
 	parens bool // written in parentheses
+	whole  bool // the whole right-hand side of a SET action, not a part of one
 	path   *updatePathExpr
 	tok    token // the placeholder of a value, or the name of a function
 	val    api.AttributeValue
@@ -82,7 +83,7 @@ type updateAction struct {
 // expression. It shares the condition parser's tokens, path parser, syntax
 // error and nesting bound, and records, in the order they appear, what the
 // checks after a successful parse need: the clauses, every path, every
-// attribute name and "#name" written in a path, and every function name.
+// attribute name and "#name" written in a path, and every function call.
 type updateParser struct {
 	*parser
 
@@ -90,7 +91,7 @@ type updateParser struct {
 	clauses   []updateClause
 	paths     []*updatePathExpr
 	pathNames []token
-	funcs     []token
+	calls     []*updateOperand
 	index     error // the first list index out of range, reported after the parse
 }
 
@@ -158,6 +159,10 @@ func (p *updateParser) action(clause updateClause) error {
 
 	if err != nil {
 		return err
+	}
+
+	if act.rhs != nil {
+		act.rhs.whole = true
 	}
 
 	p.actions = append(p.actions, act)
@@ -266,7 +271,7 @@ func (p *updateParser) parenthesized(sum bool) (*updateOperand, error) {
 // call reads a function name and its parenthesized, comma-separated operands.
 func (p *updateParser) call() (*updateOperand, error) {
 	op := &updateOperand{kind: updateOpCall, tok: p.next()}
-	p.funcs = append(p.funcs, op.tok)
+	p.calls = append(p.calls, op)
 	p.next()
 
 	for {

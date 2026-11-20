@@ -31,17 +31,12 @@ type exprs struct {
 // gives any expression; valuesUsable whether it gives one that can name a
 // :value, and nullMembers the members DynamoDB Local's message names when it
 // does not.
-//
-//nolint:revive // flag-parameter: two facts about the request, not modes
 func newExprs(
 	names map[string]string, values map[string]api.AttributeValue, hasExpr, valuesUsable bool, nullMembers string,
 ) (*exprs, error) {
-	if names != nil && !hasExpr {
-		return nil, value.Invalid(msgNamesUnusable)
-	}
-
-	if values != nil && !valuesUsable {
-		return nil, value.Invalid(msgValuesUnusable + nullMembers)
+	err := checkUsable(names, values, hasExpr, valuesUsable, nullMembers)
+	if err != nil {
+		return nil, err
 	}
 
 	x := &exprs{
@@ -49,12 +44,31 @@ func newExprs(
 		used: make(map[string]struct{}, len(names)+len(values)),
 	}
 
-	err := expression.CheckSubstitutions(x.subs)
+	err = expression.CheckSubstitutions(x.subs)
 	if err != nil {
 		return nil, fmt.Errorf("placeholders: %w", err)
 	}
 
 	return x, nil
+}
+
+// checkUsable refuses names, and values, in a request that gives no expression
+// that can use them. A write checks it before the rest of its legacy
+// parameters, where DynamoDB Local does.
+//
+//nolint:revive // flag-parameter: two facts about the request, not modes
+func checkUsable(
+	names map[string]string, values map[string]api.AttributeValue, hasExpr, valuesUsable bool, nullMembers string,
+) error {
+	if names != nil && !hasExpr {
+		return value.Invalid(msgNamesUnusable)
+	}
+
+	if values != nil && !valuesUsable {
+		return value.Invalid(msgValuesUnusable + nullMembers)
+	}
+
+	return nil
 }
 
 // condition parses a ConditionExpression or FilterExpression, or returns nil

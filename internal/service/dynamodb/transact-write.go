@@ -581,7 +581,7 @@ func (a *txAction) parse(r *txRequest) error {
 	update, cond, err := updateExpressions(&api.UpdateItemInput{
 		UpdateExpression: r.update, ConditionExpression: r.condition,
 		ExpressionAttributeNames: r.names, ExpressionAttributeValues: r.values,
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}
