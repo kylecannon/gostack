@@ -40,7 +40,7 @@ type stack struct {
 func newStack(tb testing.TB) *stack {
 	tb.Helper()
 
-	s := &stack{ddb: dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }), region: usEast1}
+	s := &stack{ddb: dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil), region: usEast1}
 	s.provider = dynamodbstreams.New(s.ddb)
 
 	gw, err := gateway.New(

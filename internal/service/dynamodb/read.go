@@ -55,6 +55,10 @@ type reader struct {
 
 	// segment and segments split a parallel Scan; segments is 0 otherwise.
 	segment, segments uint32
+
+	// legacy is a Query's checked KeyConditions and QueryFilter, nil for one
+	// that gives a KeyConditionExpression.
+	legacy *legacyKey
 }
 
 // page is what a reader read.

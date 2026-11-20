@@ -29,9 +29,10 @@ const (
 )
 
 // Query reads the items of one partition of a table or index, in range key
-// order, a page at a time. AttributesToGet is refused with
-// KeyConditionExpression. The legacy KeyConditions, QueryFilter
-// and ConditionalOperator answer 501.
+// order, a page at a time, by its KeyConditionExpression or by the legacy
+// KeyConditions, QueryFilter and ConditionalOperator, which translate to the
+// same key condition and filter. AttributesToGet goes only with the legacy
+// parameters.
 func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOutput, error) {
 	e, r, err := p.queryTarget(ctx, in)
 	if err != nil {
@@ -104,15 +105,23 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		}
 	}
 
-	if in.KeyConditions != nil || in.QueryFilter != nil || in.ConditionalOperator != nil {
-		return nil, nil, notImplemented("Query")
+	err = checkMixedParams([]param{
+		{paramAttributesToGet, len(in.AttributesToGet) > 0},
+		{paramQueryFilter, len(in.QueryFilter) > 0},
+		{paramConditionalOp, in.ConditionalOperator != nil},
+		// KeyConditions go with a FilterExpression or ProjectionExpression
+		// (probed); only the KeyConditionExpression refuses them.
+		{paramKeyConditions, in.KeyConditions != nil && in.KeyConditionExpression != nil},
+	}, []param{
+		{paramProjection, in.ProjectionExpression != nil},
+		{paramFilter, in.FilterExpression != nil},
+		{paramKeyCondition, in.KeyConditionExpression != nil},
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// AttributesToGet goes only with the legacy KeyConditions, which answer
-	// 501 above; with KeyConditionExpression it is refused.
-	err = checkMixed(in.AttributesToGet, namedExpr{paramProjection, in.ProjectionExpression},
-		namedExpr{paramFilter, in.FilterExpression},
-		namedExpr{paramKeyCondition, in.KeyConditionExpression})
+	legacy, err := queryLegacy(in, e, spec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -123,13 +132,40 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		return nil, nil, err
 	}
 
-	r.name = name
+	r.name, r.legacy = name, legacy
 
-	if in.KeyConditionExpression == nil {
+	if in.KeyConditionExpression == nil && legacy == nil {
 		return nil, nil, value.Invalid(msgNoKeyCondition)
 	}
 
 	return e, r, nil
+}
+
+// queryLegacy checks a Query's legacy KeyConditions, QueryFilter and
+// ConditionalOperator, which DynamoDB Local does after Limit and before
+// Select, and returns them translated; nil when the Query has no
+// KeyConditions, which then needs a KeyConditionExpression.
+func queryLegacy(in *api.QueryInput, e *tableEntry, spec *table.IndexSpec) (*legacyKey, error) {
+	if in.KeyConditions == nil {
+		return nil, nil //nolint:nilnil // not a legacy query
+	}
+
+	_, err := limitOf(in.Limit)
+	if err != nil {
+		return nil, err
+	}
+
+	schema := e.data.Key()
+	if spec != nil {
+		schema = spec.Key
+	}
+
+	legacy, err := legacyQuery(in, schema)
+	if err != nil {
+		return nil, err
+	}
+
+	return legacy, nil
 }
 
 // newReader makes the checks Query and Scan share before their expressions:
@@ -161,11 +197,20 @@ func newReader(
 
 // queryExpressions parses a Query's expressions in DynamoDB Local's order,
 // FilterExpression, ProjectionExpression, then KeyConditionExpression, checks
-// their placeholders, and refuses a filter on a key attribute.
+// their placeholders, and refuses a filter on a key attribute. A legacy Query
+// has its key condition and QueryFilter already; it may still give a
+// FilterExpression and a ProjectionExpression, and its AttributesToGet are
+// checked here.
 //
 //nolint:ireturn // the parsed form is the expression package's interface
 func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, error) {
-	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, true, true, "")
+	hasExpr, valuesUsable := true, true
+	if r.legacy != nil {
+		hasExpr = in.FilterExpression != nil || in.ProjectionExpression != nil
+		valuesUsable = in.FilterExpression != nil
+	}
+
+	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, valuesUsable, msgNullExprs)
 	if err != nil {
 		return nil, err
 	}
@@ -180,9 +225,23 @@ func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, 
 		return nil, err
 	}
 
+	var kc expression.KeyCondition
+
 	key := r.key
 
-	kc, err := x.keyCondition(*in.KeyConditionExpression, key)
+	if r.legacy != nil {
+		kc = r.legacy.key
+		if r.filter == nil {
+			r.filter = r.legacy.filter
+		}
+
+		if len(in.AttributesToGet) > 0 {
+			err = r.attributesToGet(in.AttributesToGet)
+		}
+	} else {
+		kc, err = x.keyCondition(*in.KeyConditionExpression, key)
+	}
+
 	if err == nil {
 		err = x.done()
 	}

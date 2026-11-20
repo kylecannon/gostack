@@ -13,7 +13,7 @@ import (
 // refuses, as the LocalStack image returns them (verification/SQ-302 q1, q4).
 const (
 	msgMixedParams = "Can not use both expression and non-expression parameters in the same request: " +
-		"Non-expression parameters: {AttributesToGet} Expression parameters: {%s}"
+		"Non-expression parameters: {%s} Expression parameters: {%s}"
 	msgAttrEmpty         = "Empty attribute name"
 	msgAttrTwice         = "Cannot have two attributes with the same name"
 	msgBatchAttrTwice    = "One or more parameter values were invalid: Duplicate value in attribute name: "
@@ -35,26 +35,46 @@ type namedExpr struct {
 	src  *string
 }
 
+// param is a request parameter and whether the request sets it.
+type param struct {
+	name string
+	set  bool
+}
+
 // checkMixed refuses AttributesToGet in a request that sets any of exprs, which
 // are listed in DynamoDB Local's order. An empty AttributesToGet is not set.
 func checkMixed(names []string, exprs ...namedExpr) error {
-	if len(names) == 0 {
+	params := make([]param, 0, len(exprs))
+	for _, e := range exprs {
+		params = append(params, param{e.name, e.src != nil})
+	}
+
+	return checkMixedParams([]param{{paramAttributesToGet, len(names) > 0}}, params)
+}
+
+// checkMixedParams refuses a request that sets a legacy, non-expression
+// parameter and an expression parameter. Each list is in the order DynamoDB
+// Local names its parameters.
+func checkMixedParams(legacy, exprs []param) error {
+	nonExpr, expr := setNames(legacy), setNames(exprs)
+	if len(nonExpr) == 0 || len(expr) == 0 {
 		return nil
 	}
 
-	var set []string
+	return value.Invalid(fmt.Sprintf(msgMixedParams, strings.Join(nonExpr, ", "), strings.Join(expr, ", ")))
+}
 
-	for _, e := range exprs {
-		if e.src != nil {
-			set = append(set, e.name)
+// setNames are the names of the params the request sets.
+func setNames(params []param) []string {
+	var names []string
+
+	for _, p := range params {
+		if p.set {
+			names = append(names, p.name)
 		}
 	}
 
-	if len(set) == 0 {
-		return nil
-	}
-
-	return value.Invalid(fmt.Sprintf(msgMixedParams, strings.Join(set, ", ")))
+	return names
 }
 
 // attributesToGet checks the legacy AttributesToGet's names in turn, none

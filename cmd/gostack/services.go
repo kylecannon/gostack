@@ -57,7 +57,7 @@ func newProviders(cfg *config.Config, changed func(name string)) *providers {
 // change to the services it names.
 func registrations(cfg *config.Config, changed func(name string), s3Provider *s3.Provider) []service.Registration {
 	// DynamoDB Streams reads the streams of this DynamoDB provider.
-	ddb := dynamodb.New(liveSettings(cfg, dynamodbSettings))
+	ddb := dynamodb.New(liveSettings(cfg, dynamodbSettings), changed)
 
 	return []service.Registration{
 		sqs.New(liveSettings(cfg, sqsSettings), changed).Registration(),
