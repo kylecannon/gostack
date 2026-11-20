@@ -328,10 +328,14 @@ func stall(t *testing.T, server *httptest.Server, method, path string, headers m
 // fast passes this test, and Test_Gateway_StalledBodies in internal/gateway is
 // what fails it. A wedge costs the test its waits before it fails, so the wait
 // is sized to keep every iteration of `go test -count=3` inside go test's
-// 10-minute default: with the pool's release planted to never grant, each
-// iteration failed after 60 to 90 s (the json subtest waits once or twice, the
-// query subtest once), and three iterations after 244.7 s in all, at load
-// average 8 to 13.
+// 10-minute default: with the pool's release planted to never grant, a run of
+// the whole package at `-count=3` failed by assertion after 479.3 s of the 600 s,
+// at load average 50 falling to 5 (SQ-373). In each iteration the test failed
+// after 91 to 121 s: the json subtest waited two or three times (60.6 s, 90.4 s
+// and 60.5 s) and the query subtest once (30.3 s). Run alone, three iterations
+// took 244.7 s at load average 8 to 13 (SQ-372), so the package figure is the one
+// to size by. What bounds the json waits is not known: three in every iteration
+// is about 540 s, and a fourth would pass the 600 s.
 func Test_wideBody_aColdBurstIsServed(t *testing.T) {
 	const (
 		calls = 128

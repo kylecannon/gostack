@@ -86,16 +86,33 @@ func (memAddr) String() string  { return "mem" }
 // It runs on synctest's clock, over an in-memory listener, so the instant is
 // exact and load cannot move it. Test_Gateway_drainBy runs the same cut on a
 // real socket, where only its lower bound can be asserted.
+//
+// A DrainBy taken as no limit fails by assertion too, at a guard on the fake
+// clock: Serve then drains for ever, and the shutdown's own polling keeps the
+// fake clock moving, so without the guard the test would run to go test's
+// timeout and take the results of the rest of the package with it.
 func Test_Gateway_drainByIsTheDrainsDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		// Far from the default drain, so a DrainBy that is ignored cannot land on it.
-		const drainWait = 150 * time.Millisecond
+		const (
+			// Far from the default drain, so a DrainBy that is ignored cannot land on it.
+			drainWait = 150 * time.Millisecond
+			// guard is past the default drain, so a DrainBy that is ignored still ends
+			// the drain and fails on the instant, not on the guard.
+			guard = time.Minute
+		)
 
 		started := make(chan struct{})
+		release := make(chan struct{})
 
+		// The request ends when the drain cuts it, or when the test lets it go after a
+		// drain that never ended, so that the bubble can end with the failure.
 		hang := func(_ http.ResponseWriter, rc *request.Context) {
 			close(started)
-			<-rc.Request.Context().Done()
+
+			select {
+			case <-rc.Request.Context().Done():
+			case <-release:
+			}
 		}
 
 		g := newGateway(t, newSettings(), []service.Registration{sqsRegistration(hang)})
@@ -121,7 +138,19 @@ func Test_Gateway_drainByIsTheDrainsDeadline(t *testing.T) {
 		g.DrainBy(begin.Add(drainWait))
 		cancel()
 
-		require.NoError(t, <-done, "cutting a request at the deadline is not an error")
+		select {
+		case err := <-done:
+			require.NoError(t, err, "cutting a request at the deadline is not an error")
+		case <-time.After(guard):
+			// Serve ends once the request has, and the bubble must not end before it.
+			close(release)
+			err := <-done
+
+			require.FailNow(t, "the drain did not end",
+				"still draining %s after DrainBy named %s (Serve returned %v once the request was released)",
+				guard, drainWait, err)
+		}
+
 		assert.Equal(t, drainWait, time.Since(begin), "the drain ended at DrainBy")
 		require.Error(t, <-failed, "the request in flight was cut")
 	})

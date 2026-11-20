@@ -34,7 +34,10 @@ import (
 //
 // A healthy path measured an exponent of 1.054 to 1.078 and a tail slope of 1.043
 // to 1.095 over 20 runs of 15 rounds, and passed all of them, at load average 7
-// to 16 on 10 cores, darwin/arm64 under -race. Like the decoder's, the test does
+// to 16 on 10 cores, darwin/arm64 under -race. Under load, at average 18 to 49 on
+// the same 10 cores, 20 further runs passed all of them, at an exponent of 1.054
+// to 1.073 and a tail slope of 1.048 to 1.086: a false-failure rate under 14% at
+// 95% confidence (SQ-373). Like the decoder's, the test does
 // not call t.Parallel(): its ceiling counts the CPU time of the whole process.
 func Test_Gateway_BatchScalesWithEntries(t *testing.T) {
 	const (
@@ -79,19 +82,26 @@ func Test_Gateway_BatchScalesWithEntries(t *testing.T) {
 // bounds what the same bodies allocate and that none of them waits; neither sees
 // a decoder that re-reads the nesting it has passed, which is this test.
 //
-// The smallest defect it is proven to catch is a busy loop of 31 s on the first
-// body over 8 MiB, which the ceiling ends after 6 s of CPU (SQ-372, darwin/arm64
-// under -race): it failed the one run it was run in, in all three shapes, since
-// the abandoned loop goes on charging the process. A cost that grows by less
-// than the ceiling at the cap was not tried and may pass. A wait is not CPU: a
-// body that sleeps is seen by the fake clock of Test_Gateway_DeeplyNestedBodies.
+// The smallest defect it is proven to catch is a busy loop that spends 1 s of CPU
+// on every body over 8 MiB, a sixth of the ceiling: planted so, it failed a whole
+// run of this package, in all three shapes, on the growth figures (json objects
+// 1.13 s at the cap against 62 ms at 4 MiB, a tail slope of 2.10; rest-xml
+// elements an exponent of 3.69; query keys failed too), and no call reached the
+// ceiling (SQ-373, darwin/arm64 under -race). A busy loop of 31 s on the first
+// body over 8 MiB only is not the proof: it fails this test run alone, and passes
+// a run of the package, because an earlier test sends the first such body and
+// spends the 31 s unasserted. A cost that grows by less than the 1 s at the cap
+// was not tried and may pass. A wait is not CPU: a body that sleeps is seen by
+// the fake clock of Test_Gateway_DeeplyNestedBodies.
 //
 // A healthy gateway measured, over 20 runs of 15 rounds that all passed, at load
 // average 7 to 16 on 10 cores, darwin/arm64 under -race: json objects, an
 // exponent of 0.56 to 0.57 and a tail slope of 0.71 to 0.74 (the body is refused
 // at 10,000 levels however long it is); rest-xml, 0.02 to 0.07 and 0.02 to 0.15
 // (refused at restxml.MaxDepth, in under a millisecond at every size); query,
-// 1.00 to 1.02 and 1.01 to 1.03.
+// 1.00 to 1.02 and 1.01 to 1.03. Under load, at average 18 to 49 on the same 10
+// cores, 20 further runs passed all of them: a false-failure rate under 14% at 95%
+// confidence, and the worst figure was 0.23 under its limit (SQ-373).
 func Test_Gateway_NestedBodiesScaleWithDepth(t *testing.T) {
 	const wrap = 200
 
