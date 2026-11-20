@@ -67,6 +67,7 @@ change applies from the next one.
 | `DYNAMODB_ERROR_PROBABILITY` | A number from 0 to 1: the chance that an item read or write (`GetItem`, `Query`, `Scan`, `BatchGetItem`, `TransactGetItems`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `TransactWriteItems`) answers `400 ProvisionedThroughputExceededException`. One draw per request, except `BatchWriteItem`, which draws once per write request and returns each throttled one in `UnprocessedItems`; LocalStack draws the same way. |
 | `DYNAMODB_READ_ERROR_PROBABILITY`, `DYNAMODB_WRITE_ERROR_PROBABILITY` | The same for the reads alone or the writes alone, tested before the general one. |
 | `DYNAMODB_SHARE_DB` | An integer; any but `0` puts every account's and region's tables in one namespace, as DynamoDB Local's shared database does. ARNs still carry the caller's account and region. |
+| `DYNAMODB_REMOVE_EXPIRED_ITEMS` | Removes expired items every hour from tables with time to live on. Off, they are removed only by `DELETE /_aws/dynamodb/expired` (canonical `/_gostack/services/dynamodb/expired`). The sweep's timer exists only while the setting is on and a table has time to live on; LocalStack reads the setting at start only, gostack when a table turns time to live on and at each sweep. |
 
 A probability or `DYNAMODB_SHARE_DB` that does not parse as a number refuses
 start, as LocalStack's `config.py` does. DynamoDB Local's own JVM settings

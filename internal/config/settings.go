@@ -116,6 +116,9 @@ type Settings struct {
 	// DynamoDBShareDB is DYNAMODB_SHARE_DB, an integer: every account and region
 	// shares one set of tables when it is not 0.
 	DynamoDBShareDB int
+	// DynamoDBRemoveExpiredItems is DYNAMODB_REMOVE_EXPIRED_ITEMS: an hourly
+	// sweep removes the expired items of tables with time to live on.
+	DynamoDBRemoveExpiredItems bool
 	// ExtraCORSAllowedHeaders is EXTRA_CORS_ALLOWED_HEADERS, split on commas.
 	ExtraCORSAllowedHeaders []string
 	// ExtraCORSExposeHeaders is EXTRA_CORS_EXPOSE_HEADERS, split on commas.
@@ -183,6 +186,7 @@ func (s *Settings) values() map[string]any {
 		varDynamoDBReadErrorProbability:    s.DynamoDBReadErrorProbability,
 		varDynamoDBWriteErrorProbability:   s.DynamoDBWriteErrorProbability,
 		varDynamoDBShareDB:                 s.DynamoDBShareDB,
+		varDynamoDBRemoveExpiredItems:      s.DynamoDBRemoveExpiredItems,
 	}
 }
 
@@ -248,6 +252,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DynamoDBReadErrorProbability:      dynamo.readErrorProbability,
 		DynamoDBWriteErrorProbability:     dynamo.writeErrorProbability,
 		DynamoDBShareDB:                   dynamo.shareDB,
+		DynamoDBRemoveExpiredItems:        isTrue(get(varDynamoDBRemoveExpiredItems)),
 	}, nil
 }
 

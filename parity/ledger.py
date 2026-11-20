@@ -212,7 +212,8 @@ GO_TEST_SUFFIX = "_test.go"
 #   preprocesses every request.
 # - sqs mounts its queue-URL paths, /<account>/<queue>, which a path-style
 #   call to another service can match.
-ROUTING_REACH = ("s3", "sqs")
+# - dynamodb mounts DELETE /_aws/dynamodb/expired and its /_gostack name.
+ROUTING_REACH = ("dynamodb", "s3", "sqs")
 # Every workflow but this one: they run checks, they do not build the image
 # parity runs against.
 WORKFLOWS = ".github/workflows/"

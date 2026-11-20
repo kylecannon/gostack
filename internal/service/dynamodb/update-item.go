@@ -20,7 +20,7 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, err
 	}
 
-	name, e, err := p.caller(ctx).lookup(in.TableName)
+	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
