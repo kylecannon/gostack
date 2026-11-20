@@ -102,7 +102,7 @@ func (g *Gateway) Handler() http.Handler {
 }
 
 // InternalHandler returns the root router for the calls services make to each
-// other: every request it serves is internal (IsInternal), so the gateway
+// other: every request it serves is internal (ServedAsInternal), so the gateway
 // serves it while it is stopping, until EndShutdown. Serve never puts it on a
 // listener.
 func (g *Gateway) InternalHandler() http.Handler {

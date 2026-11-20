@@ -17,6 +17,14 @@ func FuzzDecode(f *testing.F) {
 	f.Add(`<a><b></a></b>`)
 	f.Add(strings.Repeat("<a>", restxml.MaxDepth+2))
 	f.Add(strings.Repeat("<a>", restxml.MaxDepth+1) + strings.Repeat("</a>", restxml.MaxDepth+1))
+	// Wide shapes: empty elements, many attributes, and a tag behind each
+	// construct that holds a stray >.
+	f.Add("<R>" + strings.Repeat("<Rule/>", 64) + "</R>")
+	f.Add("<R" + strings.Repeat(` a=""`, 64) + "/>")
+	f.Add(`<R><!-- > <a " --><Rule x="" y=">" z="v"/></R>`)
+	f.Add(`<R><![CDATA[ > <a " ]]><Rule x="" y=">" z="v"/></R>`)
+	f.Add(`<?pi > <a " ?><R><Rule x="" y=">" z="v"/></R>`)
+	f.Add(`<!DOCTYPE x '> <a "' ><R><Rule x="" y=">" z="v"/></R>`)
 
 	f.Fuzz(func(t *testing.T, body string) {
 		d := restxml.NewDecoder(strings.NewReader(body))

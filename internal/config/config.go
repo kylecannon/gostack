@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -79,6 +80,8 @@ var variables = []variable{
 	{name: varDynamoDBWriteErrorProbability},
 	{name: varDynamoDBShareDB},
 	{name: varDynamoDBRemoveExpiredItems},
+	{name: varMaxInFlightBodies, gostackOnly: true},
+	{name: varRequestBodyIdleTimeout, gostackOnly: true},
 }
 
 // envNames lists the environment variables that feed the setting, in lookup
@@ -117,6 +120,12 @@ type baseline struct {
 	// maxRequestBody is GOSTACK_MAX_REQUEST_BODY, which is read at start-up
 	// only: the body readers take their limit once, from protocol.SetMaxBody.
 	maxRequestBody int64
+	// maxInFlightBodies is GOSTACK_MAX_IN_FLIGHT_BODIES, read at start-up only,
+	// as maxRequestBody is.
+	maxInFlightBodies int64
+	// requestBodyIdleTimeout is GOSTACK_REQUEST_BODY_IDLE_TIMEOUT, read at
+	// start-up only, as maxRequestBody is.
+	requestBodyIdleTimeout time.Duration
 }
 
 // Load reads the settings from the environment. It first exports every
@@ -153,9 +162,22 @@ func newConfig(environ []string, probe dockerProbe) (*Config, error) {
 
 		maxRequestBody = DefaultMaxRequestBody
 	}
+	maxInFlightBodies, err := parseMaxInFlightBodies(newViper("", nil).GetString(varMaxInFlightBodies))
+	if err != nil {
+		slog.Warn(err.Error() + "; keeping the default")
+
+		maxInFlightBodies = DefaultMaxInFlightBodies
+	}
+	requestBodyIdleTimeout, err := parseRequestBodyIdleTimeout(newViper("", nil).GetString(varRequestBodyIdleTimeout))
+	if err != nil {
+		slog.Warn(err.Error() + "; keeping the default")
+
+		requestBodyIdleTimeout = DefaultRequestBodyIdleTimeout
+	}
 	cfg := &Config{
 		base: baseline{
 			listenHost: listenHost, inDocker: inDocker, persist: persist, maxRequestBody: maxRequestBody,
+			maxInFlightBodies: maxInFlightBodies, requestBodyIdleTimeout: requestBodyIdleTimeout,
 		},
 		overrides: map[string]any{},
 	}

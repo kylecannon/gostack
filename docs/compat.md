@@ -27,6 +27,8 @@ change applies from the next one.
 | `ENABLE_CONFIG_UPDATES` | Mounts `GET` and `POST /_localstack/config`. |
 | `GOSTACK_COMPAT_PATHS` | `0` turns off the `/_localstack` and `/_aws` developer aliases. Only the `GOSTACK_` form exists. |
 | `GOSTACK_MAX_REQUEST_BODY` | The most bytes of a request body that is not streamed gostack reads: a form, a json body, an XML document. A number of bytes, or a number with a `KiB`, `MiB` or `GiB` suffix (`16MiB` and `16777216` are equal). Defaults to 16 MiB; `0` means no limit, which is LocalStack's behavior. A value that does not parse logs a warning and keeps the default. Read at start-up only: `POST /_localstack/config` does not change it. A streamed payload (an S3 object body) is never limited. Over the limit, S3 answers `400 MaxMessageLengthExceeded`, SQS and STS answer `400 MalformedQueryString`. Only the `GOSTACK_` form exists. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | The most bytes the request bodies being read at once, and what decoding them holds past 1 MiB each, may take in all. Same units as `GOSTACK_MAX_REQUEST_BODY`. Defaults to 64 MiB. A value below twice one byte over `GOSTACK_MAX_REQUEST_BODY` is raised to that, so a body at the cap always fits with as much room again for decoding it; `0` means no bound. A request that finds no room waits in order for up to 5 s, then gets its protocol's throttling answer (see [Request memory limits](#request-memory-limits)). Read at start-up only. Only the `GOSTACK_` form exists. |
+| `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | Whole seconds a request body over 64 KiB that gostack buffers may send nothing before its request is answered and what it holds of `GOSTACK_MAX_IN_FLIGHT_BODIES` is given back. Defaults to 20; `0` means no limit. A streamed S3 object body is never timed this way. Read at start-up only. Only the `GOSTACK_` form exists. |
 | `INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE` | Accepted and reported by the config endpoint. gostack sends no stack traces, so it changes nothing. |
 | `SERVICES`, `EAGER_SERVICE_LOADING`, `LS_LOG`, `LOG` | Parsed and reported by the config endpoint. Nothing else reads them yet. |
 | `PARITY_AWS_ACCESS_KEY_ID` | Only for the parity harness: `AKIA` and `ASIA` access keys decode to an account, as in LocalStack's IAM patch. |
@@ -199,13 +201,35 @@ under 0.5 s on every protocol, and the process keeps serving.
 | json 1.0, json 1.1, rest-json | 10,000 levels of arrays and objects: the limit of Go's `encoding/json/v2`, which every json body meets in `awsjson.Decode`. A recursive member (DynamoDB's `AttributeValue`) counts two levels per `M` or `L`. | `400 SerializationException` | `500`, "An unknown error occurred when trying to parse the request" |
 | rest-xml (S3) | 64 elements, `restxml.MaxDepth` | `400 MalformedXML`. The decoder stops at the 65th open element without reading the rest, so a client still sending the body may see the connection close instead of the answer. | `500 InternalError` |
 | query (SQS, STS, SNS) | The input shape. Generated decoding walks the operation's input shape and looks up the keys it expects, so a key nested deeper than the shape is ignored. No query input holds itself, and the generator refuses one that does, since its decoding would recurse once per level of a key. | Ignored | `500 InternalError` |
-| Documents a service parses: S3 bucket and POST policies, SQS `Policy` and `RedrivePolicy`, STS SAML assertions | 10,000 levels, the limit of `encoding/json` and of `encoding/xml`'s `Unmarshal`. An S3 POST policy is also held to the 20 KiB of form fields before the file. | `PutBucketPolicy`: `400 MalformedPolicy`. `RedrivePolicy`: `400 InvalidParameterValue`. SAML: `400 InvalidIdentityToken`. A `Policy` is stored as sent, and a later `AddPermission` on that queue answers `500 InternalError`. | Not measured |
+| Documents a service parses: S3 bucket and POST policies, SQS `Policy` and `RedrivePolicy`, STS SAML assertions | 10,000 levels, the limit of `encoding/json` and of `encoding/xml`'s `Unmarshal`. An S3 POST policy is also held to the 20 KiB of form fields before the file. | `PutBucketPolicy`: `400 MalformedPolicy`. `RedrivePolicy`: `400 InvalidParameterValue`. SAML: `400 InvalidIdentityToken`. Any SQS `Policy` that is not a json object is stored with 200, and a later `AddPermission` on that queue answers `500 InternalError`, as LocalStack does. | Not measured |
 
 `Test_Gateway_DeeplyNestedBodies`, `Test_Decode_NestingBound`,
 `Test_Decoder_NestedToTheBodyCap` and `Test_queryFile_RecursiveInput` pin these.
 DynamoDB's own limit, 32 levels of `M` or `L` in an item or an expression
 value, is its handler's (`value.MaxDepth`), answered as DynamoDB Local's
 `ValidationException`.
+
+## Request memory limits
+
+LocalStack reads every request body whole and decodes all of it, so a 16 KB
+gzipped body of empty batch entries costs it as much as the decoded 16 MiB
+would. gostack bounds what one request may decode and what all requests may
+hold at once (`docs/architecture.md`, "Request memory"). None of these limits
+refuses a request a real SDK sends: the largest legal request of each kind
+below decodes.
+
+| Limit | What is refused | Answer |
+|---|---|---|
+| Decode budget: what decoding a body may hold, twice the decoded body plus 16 MiB | A body that decodes into more than that: `"Entries":[{},{},...]`, a lifecycle configuration of empty `<Rule/>`, `DeleteObjects` of empty `<Object/>`, `CompleteMultipartUpload` of empty `<Part/>` | json: `400 MalformedQueryString` for SQS, the over-cap answer of each service. S3: `400 MaxMessageLengthExceeded`. Refused while decoding, before the values are built. |
+| Query pairs: 128 bytes charged per `name=value` pair against the same budget | A form of millions of short keys | `400 MalformedQueryString`, before the keys are parsed |
+| XML tag length: 4 KiB from `<` to `>` | A start or end tag holding thousands of attributes or a very long name | `400 MalformedXML`, before the tag is built |
+| In-flight bound (`GOSTACK_MAX_IN_FLIGHT_BODIES`) | A body over 64 KiB, or the decoding of any body past 1 MiB, that finds no room within 5 s. A body that states its length waits for all of it at once, with the room a json or xml body plans for decoding (twice its length), and holds nothing while it waits. | json: `400 ThrottlingException`. Query: `400 Throttling`. S3: `503 SlowDown`. SDKs retry all three. |
+| Idle body (`GOSTACK_REQUEST_BODY_IDLE_TIMEOUT`) | A body over 64 KiB that stops arriving for 20 s | S3: `400 RequestTimeout`, "Your socket connection to the server was not read from or written to within the timeout period. Idle connections will be closed." json and query: the answer each gives a body it cannot read. The answer is sent and the connection closed after it. |
+
+The largest legal requests that still decode, pinned by `Test_Gateway_WideBodies`:
+an SQS `SendMessageBatch` of ten 256 KiB messages (json and query), a lifecycle
+configuration of 1,000 rules, a `DeleteObjects` of 1,000 keys and a
+`CompleteMultipartUpload` of 10,000 parts carrying every checksum.
 
 ## S3 limits
 

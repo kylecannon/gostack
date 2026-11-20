@@ -40,6 +40,22 @@ func nestTo(size int, open, mid, closing string) string {
 	return strings.Repeat(open, n) + mid + strings.Repeat(closing, n)
 }
 
+const (
+	// jsonNesting is how deeply a json body may nest, counting its own object:
+	// encoding/json/v2's limit, which holds inside a member the type does not
+	// have as well.
+	jsonNesting = 10000
+
+	sqsHead = `{"QueueUrl":"q","MessageBody":"b",`
+	kmsHead = `{"KeyId":"k","Plaintext":"cA==",`
+)
+
+// inUnknown is head, then a member the input does not have whose arrays nest
+// until the body is depth levels deep, counting the body's own object.
+func inUnknown(head string, depth int) string {
+	return head + `"Unknown":` + strings.Repeat("[", depth-1) + strings.Repeat("]", depth-1) + "}"
+}
+
 // generatedRegistration serves name's generated API with its Unimplemented
 // handler: a body that decodes reaches the handler and is answered 501, and one
 // the decoder refuses is answered with the protocol's malformed-body error.
@@ -92,6 +108,7 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 	)
 
 	sqsJSON := jsonCall(nameSQS, targetSendMessage, "1.0")
+	kmsJSON := jsonCall("kms", "TrentService.Encrypt", "1.1")
 	s3Call := map[string]string{headerAuth: signed("test", usEast1, nameS3)}
 	form := func(svc string) map[string]string {
 		return map[string]string{headerAuth: signed("test", usEast1, svc), headerType: formType}
@@ -108,8 +125,13 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 		wantBody                   string
 	}{
 		{
-			name: "json 1.0 arrays", method: http.MethodPost, target: localhost,
-			body: nestTo(bodyCap, "[", "", "]"), headers: sqsJSON,
+			name: "json 1.0 arrays in an unknown member to the bound decode", method: http.MethodPost,
+			target: localhost, body: inUnknown(sqsHead, jsonNesting), headers: sqsJSON,
+			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
+		{
+			name: "json 1.0 arrays in an unknown member one level past the bound", method: http.MethodPost,
+			target: localhost, body: inUnknown(sqsHead, jsonNesting+1), headers: sqsJSON,
 			wantStatus: http.StatusBadRequest, wantBody: malformed,
 		},
 		{
@@ -118,13 +140,18 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantBody: malformed,
 		},
 		{
-			name: "json 1.0 arrays inside a member", method: http.MethodPost, target: localhost,
-			body:    `{"QueueUrl":"q","MessageBody":"b","MessageAttributes":` + nestTo(bodyCap-wrap, "[", "", "]") + "}",
+			name: "json 1.0 arrays in an unknown member to the cap", method: http.MethodPost, target: localhost,
+			body:    inUnknown(sqsHead, (bodyCap-wrap)/2),
 			headers: sqsJSON, wantStatus: http.StatusBadRequest, wantBody: malformed,
 		},
 		{
-			name: "json 1.1 arrays", method: http.MethodPost, target: localhost,
-			body: nestTo(bodyCap, "[", "", "]"), headers: jsonCall("kms", "TrentService.Encrypt", "1.1"),
+			name: "json 1.1 arrays in an unknown member to the bound decode", method: http.MethodPost,
+			target: localhost, body: inUnknown(kmsHead, jsonNesting), headers: kmsJSON,
+			wantStatus: http.StatusNotImplemented, wantBody: notImplemented,
+		},
+		{
+			name: "json 1.1 arrays in an unknown member one level past the bound", method: http.MethodPost,
+			target: localhost, body: inUnknown(kmsHead, jsonNesting+1), headers: kmsJSON,
 			wantStatus: http.StatusBadRequest, wantBody: malformed,
 		},
 		{

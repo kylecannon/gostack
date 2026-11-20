@@ -33,7 +33,7 @@ func serveGetBucketReplication(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readGetBucketReplication(rc *request.Context) (*GetBucketReplicationInput, *awserr.Error) {
 	in := &GetBucketReplicationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -82,7 +82,7 @@ func serveGetBucketRequestPayment(h Handler, w http.ResponseWriter, rc *request.
 
 func readGetBucketRequestPayment(rc *request.Context) (*GetBucketRequestPaymentInput, *awserr.Error) {
 	in := &GetBucketRequestPaymentInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -127,7 +127,7 @@ func serveGetBucketTagging(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readGetBucketTagging(rc *request.Context) (*GetBucketTaggingInput, *awserr.Error) {
 	in := &GetBucketTaggingInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -172,7 +172,7 @@ func serveGetBucketVersioning(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readGetBucketVersioning(rc *request.Context) (*GetBucketVersioningInput, *awserr.Error) {
 	in := &GetBucketVersioningInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -217,7 +217,7 @@ func serveGetBucketWebsite(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readGetBucketWebsite(rc *request.Context) (*GetBucketWebsiteInput, *awserr.Error) {
 	in := &GetBucketWebsiteInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -262,7 +262,7 @@ func serveGetObject(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readGetObject(rc *request.Context) (*GetObjectInput, *awserr.Error) {
 	in := &GetObjectInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -308,7 +308,7 @@ func serveGetObjectAcl(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readGetObjectAcl(rc *request.Context) (*GetObjectAclInput, *awserr.Error) {
 	in := &GetObjectAclInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -354,7 +354,7 @@ func serveGetObjectAttributes(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readGetObjectAttributes(rc *request.Context) (*GetObjectAttributesInput, *awserr.Error) {
 	in := &GetObjectAttributesInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -400,7 +400,7 @@ func serveGetObjectLegalHold(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readGetObjectLegalHold(rc *request.Context) (*GetObjectLegalHoldInput, *awserr.Error) {
 	in := &GetObjectLegalHoldInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -449,7 +449,7 @@ func serveGetObjectLockConfiguration(h Handler, w http.ResponseWriter, rc *reque
 
 func readGetObjectLockConfiguration(rc *request.Context) (*GetObjectLockConfigurationInput, *awserr.Error) {
 	in := &GetObjectLockConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -498,7 +498,7 @@ func serveGetObjectRetention(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readGetObjectRetention(rc *request.Context) (*GetObjectRetentionInput, *awserr.Error) {
 	in := &GetObjectRetentionInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -547,7 +547,7 @@ func serveGetObjectTagging(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readGetObjectTagging(rc *request.Context) (*GetObjectTaggingInput, *awserr.Error) {
 	in := &GetObjectTaggingInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -593,7 +593,7 @@ func serveGetObjectTorrent(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readGetObjectTorrent(rc *request.Context) (*GetObjectTorrentInput, *awserr.Error) {
 	in := &GetObjectTorrentInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -639,7 +639,7 @@ func serveGetPublicAccessBlock(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readGetPublicAccessBlock(rc *request.Context) (*GetPublicAccessBlockInput, *awserr.Error) {
 	in := &GetPublicAccessBlockInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -688,7 +688,7 @@ func serveHeadBucket(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readHeadBucket(rc *request.Context) (*HeadBucketInput, *awserr.Error) {
 	in := &HeadBucketInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -729,7 +729,7 @@ func serveHeadObject(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readHeadObject(rc *request.Context) (*HeadObjectInput, *awserr.Error) {
 	in := &HeadObjectInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -770,7 +770,7 @@ func serveListBucketAnalyticsConfigurations(h Handler, w http.ResponseWriter, rc
 
 func readListBucketAnalyticsConfigurations(rc *request.Context) (*ListBucketAnalyticsConfigurationsInput, *awserr.Error) {
 	in := &ListBucketAnalyticsConfigurationsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -815,7 +815,7 @@ func serveListBucketIntelligentTieringConfigurations(h Handler, w http.ResponseW
 
 func readListBucketIntelligentTieringConfigurations(rc *request.Context) (*ListBucketIntelligentTieringConfigurationsInput, *awserr.Error) {
 	in := &ListBucketIntelligentTieringConfigurationsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -860,7 +860,7 @@ func serveListBucketInventoryConfigurations(h Handler, w http.ResponseWriter, rc
 
 func readListBucketInventoryConfigurations(rc *request.Context) (*ListBucketInventoryConfigurationsInput, *awserr.Error) {
 	in := &ListBucketInventoryConfigurationsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -905,7 +905,7 @@ func serveListBucketMetricsConfigurations(h Handler, w http.ResponseWriter, rc *
 
 func readListBucketMetricsConfigurations(rc *request.Context) (*ListBucketMetricsConfigurationsInput, *awserr.Error) {
 	in := &ListBucketMetricsConfigurationsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -950,7 +950,7 @@ func serveListBuckets(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readListBuckets(rc *request.Context) (*ListBucketsInput, *awserr.Error) {
 	in := &ListBucketsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -994,7 +994,7 @@ func serveListDirectoryBuckets(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readListDirectoryBuckets(rc *request.Context) (*ListDirectoryBucketsInput, *awserr.Error) {
 	in := &ListDirectoryBucketsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1038,7 +1038,7 @@ func serveListMultipartUploads(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readListMultipartUploads(rc *request.Context) (*ListMultipartUploadsInput, *awserr.Error) {
 	in := &ListMultipartUploadsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1084,7 +1084,7 @@ func serveListObjectVersions(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readListObjectVersions(rc *request.Context) (*ListObjectVersionsInput, *awserr.Error) {
 	in := &ListObjectVersionsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1130,7 +1130,7 @@ func serveListObjects(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readListObjects(rc *request.Context) (*ListObjectsInput, *awserr.Error) {
 	in := &ListObjectsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1176,7 +1176,7 @@ func serveListObjectsV2(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readListObjectsV2(rc *request.Context) (*ListObjectsV2Input, *awserr.Error) {
 	in := &ListObjectsV2Input{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1222,7 +1222,7 @@ func serveListParts(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readListParts(rc *request.Context) (*ListPartsInput, *awserr.Error) {
 	in := &ListPartsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -1308,7 +1308,7 @@ func servePutBucketAbac(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readPutBucketAbac(rc *request.Context) (*PutBucketAbacInput, *awserr.Error) {
 	in := &PutBucketAbacInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.AbacStatus = &AbacStatus{}
 		in.AbacStatus.decodeXML(xd)
@@ -1349,7 +1349,7 @@ func servePutBucketAccelerateConfiguration(h Handler, w http.ResponseWriter, rc 
 
 func readPutBucketAccelerateConfiguration(rc *request.Context) (*PutBucketAccelerateConfigurationInput, *awserr.Error) {
 	in := &PutBucketAccelerateConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.AccelerateConfiguration = &AccelerateConfiguration{}
 		in.AccelerateConfiguration.decodeXML(xd)
@@ -1390,7 +1390,7 @@ func servePutBucketAcl(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readPutBucketAcl(rc *request.Context) (*PutBucketAclInput, *awserr.Error) {
 	in := &PutBucketAclInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.AccessControlPolicy = &AccessControlPolicy{}
 		in.AccessControlPolicy.decodeXML(xd)
@@ -1431,7 +1431,7 @@ func servePutBucketAnalyticsConfiguration(h Handler, w http.ResponseWriter, rc *
 
 func readPutBucketAnalyticsConfiguration(rc *request.Context) (*PutBucketAnalyticsConfigurationInput, *awserr.Error) {
 	in := &PutBucketAnalyticsConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.AnalyticsConfiguration = &AnalyticsConfiguration{}
 		in.AnalyticsConfiguration.decodeXML(xd)
@@ -1472,7 +1472,7 @@ func servePutBucketCors(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readPutBucketCors(rc *request.Context) (*PutBucketCorsInput, *awserr.Error) {
 	in := &PutBucketCorsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.CORSConfiguration = &CORSConfiguration{}
 		in.CORSConfiguration.decodeXML(xd)
@@ -1513,7 +1513,7 @@ func servePutBucketEncryption(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readPutBucketEncryption(rc *request.Context) (*PutBucketEncryptionInput, *awserr.Error) {
 	in := &PutBucketEncryptionInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.ServerSideEncryptionConfiguration = &ServerSideEncryptionConfiguration{}
 		in.ServerSideEncryptionConfiguration.decodeXML(xd)
@@ -1554,7 +1554,7 @@ func servePutBucketIntelligentTieringConfiguration(h Handler, w http.ResponseWri
 
 func readPutBucketIntelligentTieringConfiguration(rc *request.Context) (*PutBucketIntelligentTieringConfigurationInput, *awserr.Error) {
 	in := &PutBucketIntelligentTieringConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.IntelligentTieringConfiguration = &IntelligentTieringConfiguration{}
 		in.IntelligentTieringConfiguration.decodeXML(xd)
@@ -1595,7 +1595,7 @@ func servePutBucketInventoryConfiguration(h Handler, w http.ResponseWriter, rc *
 
 func readPutBucketInventoryConfiguration(rc *request.Context) (*PutBucketInventoryConfigurationInput, *awserr.Error) {
 	in := &PutBucketInventoryConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.InventoryConfiguration = &InventoryConfiguration{}
 		in.InventoryConfiguration.decodeXML(xd)
@@ -1636,7 +1636,7 @@ func servePutBucketLifecycle(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readPutBucketLifecycle(rc *request.Context) (*PutBucketLifecycleInput, *awserr.Error) {
 	in := &PutBucketLifecycleInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.LifecycleConfiguration = &LifecycleConfiguration{}
 		in.LifecycleConfiguration.decodeXML(xd)
@@ -1677,7 +1677,7 @@ func servePutBucketLifecycleConfiguration(h Handler, w http.ResponseWriter, rc *
 
 func readPutBucketLifecycleConfiguration(rc *request.Context) (*PutBucketLifecycleConfigurationInput, *awserr.Error) {
 	in := &PutBucketLifecycleConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.LifecycleConfiguration = &BucketLifecycleConfiguration{}
 		in.LifecycleConfiguration.decodeXML(xd)
@@ -1719,7 +1719,7 @@ func servePutBucketLogging(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readPutBucketLogging(rc *request.Context) (*PutBucketLoggingInput, *awserr.Error) {
 	in := &PutBucketLoggingInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.BucketLoggingStatus = &BucketLoggingStatus{}
 		in.BucketLoggingStatus.decodeXML(xd)
@@ -1760,7 +1760,7 @@ func servePutBucketMetricsConfiguration(h Handler, w http.ResponseWriter, rc *re
 
 func readPutBucketMetricsConfiguration(rc *request.Context) (*PutBucketMetricsConfigurationInput, *awserr.Error) {
 	in := &PutBucketMetricsConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.MetricsConfiguration = &MetricsConfiguration{}
 		in.MetricsConfiguration.decodeXML(xd)
@@ -1801,7 +1801,7 @@ func servePutBucketNotification(h Handler, w http.ResponseWriter, rc *request.Co
 
 func readPutBucketNotification(rc *request.Context) (*PutBucketNotificationInput, *awserr.Error) {
 	in := &PutBucketNotificationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.NotificationConfiguration = &GetBucketNotificationOutput{}
 		in.NotificationConfiguration.decodeXML(xd)
@@ -1842,7 +1842,7 @@ func servePutBucketNotificationConfiguration(h Handler, w http.ResponseWriter, r
 
 func readPutBucketNotificationConfiguration(rc *request.Context) (*PutBucketNotificationConfigurationInput, *awserr.Error) {
 	in := &PutBucketNotificationConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.NotificationConfiguration = &GetBucketNotificationConfigurationOutput{}
 		in.NotificationConfiguration.decodeXML(xd)
@@ -1883,7 +1883,7 @@ func servePutBucketOwnershipControls(h Handler, w http.ResponseWriter, rc *reque
 
 func readPutBucketOwnershipControls(rc *request.Context) (*PutBucketOwnershipControlsInput, *awserr.Error) {
 	in := &PutBucketOwnershipControlsInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.OwnershipControls = &OwnershipControls{}
 		in.OwnershipControls.decodeXML(xd)
@@ -1964,7 +1964,7 @@ func servePutBucketReplication(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readPutBucketReplication(rc *request.Context) (*PutBucketReplicationInput, *awserr.Error) {
 	in := &PutBucketReplicationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.ReplicationConfiguration = &ReplicationConfiguration{}
 		in.ReplicationConfiguration.decodeXML(xd)
@@ -2005,7 +2005,7 @@ func servePutBucketRequestPayment(h Handler, w http.ResponseWriter, rc *request.
 
 func readPutBucketRequestPayment(rc *request.Context) (*PutBucketRequestPaymentInput, *awserr.Error) {
 	in := &PutBucketRequestPaymentInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.RequestPaymentConfiguration = &RequestPaymentConfiguration{}
 		in.RequestPaymentConfiguration.decodeXML(xd)
@@ -2046,7 +2046,7 @@ func servePutBucketTagging(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readPutBucketTagging(rc *request.Context) (*PutBucketTaggingInput, *awserr.Error) {
 	in := &PutBucketTaggingInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Tagging = &Tagging{}
 		in.Tagging.decodeXML(xd)
@@ -2087,7 +2087,7 @@ func servePutBucketVersioning(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readPutBucketVersioning(rc *request.Context) (*PutBucketVersioningInput, *awserr.Error) {
 	in := &PutBucketVersioningInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.VersioningConfiguration = &VersioningConfiguration{}
 		in.VersioningConfiguration.decodeXML(xd)
@@ -2128,7 +2128,7 @@ func servePutBucketWebsite(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readPutBucketWebsite(rc *request.Context) (*PutBucketWebsiteInput, *awserr.Error) {
 	in := &PutBucketWebsiteInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.WebsiteConfiguration = &WebsiteConfiguration{}
 		in.WebsiteConfiguration.decodeXML(xd)
@@ -2204,7 +2204,7 @@ func servePutObjectAcl(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readPutObjectAcl(rc *request.Context) (*PutObjectAclInput, *awserr.Error) {
 	in := &PutObjectAclInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.AccessControlPolicy = &AccessControlPolicy{}
 		in.AccessControlPolicy.decodeXML(xd)
@@ -2246,7 +2246,7 @@ func servePutObjectLegalHold(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readPutObjectLegalHold(rc *request.Context) (*PutObjectLegalHoldInput, *awserr.Error) {
 	in := &PutObjectLegalHoldInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.LegalHold = &ObjectLockLegalHold{}
 		in.LegalHold.decodeXML(xd)
@@ -2288,7 +2288,7 @@ func servePutObjectLockConfiguration(h Handler, w http.ResponseWriter, rc *reque
 
 func readPutObjectLockConfiguration(rc *request.Context) (*PutObjectLockConfigurationInput, *awserr.Error) {
 	in := &PutObjectLockConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.ObjectLockConfiguration = &ObjectLockConfiguration{}
 		in.ObjectLockConfiguration.decodeXML(xd)
@@ -2330,7 +2330,7 @@ func servePutObjectRetention(h Handler, w http.ResponseWriter, rc *request.Conte
 
 func readPutObjectRetention(rc *request.Context) (*PutObjectRetentionInput, *awserr.Error) {
 	in := &PutObjectRetentionInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Retention = &ObjectLockRetention{}
 		in.Retention.decodeXML(xd)
@@ -2372,7 +2372,7 @@ func servePutObjectTagging(h Handler, w http.ResponseWriter, rc *request.Context
 
 func readPutObjectTagging(rc *request.Context) (*PutObjectTaggingInput, *awserr.Error) {
 	in := &PutObjectTaggingInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.Tagging = &Tagging{}
 		in.Tagging.decodeXML(xd)
@@ -2414,7 +2414,7 @@ func servePutPublicAccessBlock(h Handler, w http.ResponseWriter, rc *request.Con
 
 func readPutPublicAccessBlock(rc *request.Context) (*PutPublicAccessBlockInput, *awserr.Error) {
 	in := &PutPublicAccessBlockInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.PublicAccessBlockConfiguration = &PublicAccessBlockConfiguration{}
 		in.PublicAccessBlockConfiguration.decodeXML(xd)
@@ -2455,7 +2455,7 @@ func serveRenameObject(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readRenameObject(rc *request.Context) (*RenameObjectInput, *awserr.Error) {
 	in := &RenameObjectInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -2495,7 +2495,7 @@ func serveRestoreObject(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func readRestoreObject(rc *request.Context) (*RestoreObjectInput, *awserr.Error) {
 	in := &RestoreObjectInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.RestoreRequest = &RestoreRequest{}
 		in.RestoreRequest.decodeXML(xd)
@@ -2537,7 +2537,7 @@ func serveSelectObjectContent(h Handler, w http.ResponseWriter, rc *request.Cont
 
 func readSelectObjectContent(rc *request.Context) (*SelectObjectContentInput, *awserr.Error) {
 	in := &SelectObjectContentInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -2586,7 +2586,7 @@ func serveUpdateBucketMetadataInventoryTableConfiguration(h Handler, w http.Resp
 
 func readUpdateBucketMetadataInventoryTableConfiguration(rc *request.Context) (*UpdateBucketMetadataInventoryTableConfigurationInput, *awserr.Error) {
 	in := &UpdateBucketMetadataInventoryTableConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.InventoryTableConfiguration = &InventoryTableConfigurationUpdates{}
 		in.InventoryTableConfiguration.decodeXML(xd)
@@ -2627,7 +2627,7 @@ func serveUpdateBucketMetadataJournalTableConfiguration(h Handler, w http.Respon
 
 func readUpdateBucketMetadataJournalTableConfiguration(rc *request.Context) (*UpdateBucketMetadataJournalTableConfigurationInput, *awserr.Error) {
 	in := &UpdateBucketMetadataJournalTableConfigurationInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.JournalTableConfiguration = &JournalTableConfigurationUpdates{}
 		in.JournalTableConfiguration.decodeXML(xd)
@@ -2668,7 +2668,7 @@ func serveUpdateObjectEncryption(h Handler, w http.ResponseWriter, rc *request.C
 
 func readUpdateObjectEncryption(rc *request.Context) (*UpdateObjectEncryptionInput, *awserr.Error) {
 	in := &UpdateObjectEncryptionInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.ObjectEncryption = &ObjectEncryption{}
 		in.ObjectEncryption.decodeXML(xd)
@@ -2745,7 +2745,7 @@ func serveUploadPartCopy(h Handler, w http.ResponseWriter, rc *request.Context) 
 
 func readUploadPartCopy(rc *request.Context) (*UploadPartCopyInput, *awserr.Error) {
 	in := &UploadPartCopyInput{}
-	xd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -2865,8 +2865,16 @@ func errBodyTooLarge() *awserr.Error {
 }
 
 // errXMLBody is the error for an xml request body that failed to decode: too
-// large when the read hit protocol.MaxBody, malformed otherwise.
+// large when the read hit protocol.MaxBody, SlowDown when the bodies in flight
+// left it no room, RequestTimeout when the client stopped sending it,
+// malformed otherwise.
 func errXMLBody(err error) *awserr.Error {
+	if errors.Is(err, protocol.ErrBusy) {
+		return protocol.SlowDown()
+	}
+	if errors.Is(err, protocol.ErrBodyIdle) {
+		return protocol.RequestTimeout()
+	}
 	if errors.Is(err, rest.ErrBodyTooLarge) {
 		return errBodyTooLarge()
 	}
@@ -2875,7 +2883,13 @@ func errXMLBody(err error) *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadRequest(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.SlowDown()
+	}
+	if errors.Is(err, protocol.ErrBodyIdle) {
+		return nil, protocol.RequestTimeout()
+	}
 	if protocol.OverBody(len(body)) {
 		return nil, errBodyTooLarge()
 	}

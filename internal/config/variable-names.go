@@ -39,4 +39,6 @@ const (
 	varDynamoDBWriteErrorProbability   = "DYNAMODB_WRITE_ERROR_PROBABILITY"
 	varDynamoDBShareDB                 = "DYNAMODB_SHARE_DB"
 	varDynamoDBRemoveExpiredItems      = "DYNAMODB_REMOVE_EXPIRED_ITEMS"
+	varMaxInFlightBodies               = "MAX_IN_FLIGHT_BODIES"
+	varRequestBodyIdleTimeout          = "REQUEST_BODY_IDLE_TIMEOUT"
 )
