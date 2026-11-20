@@ -1192,6 +1192,12 @@ cites the lines.
   back, is tried when that ends. A flush by
   hand, which `Stop` and `Close` end with, tries every dirty service whatever
   its wait.
+- A service that follows another (`persist.Follower`, dynamodbstreams after
+  dynamodb) is saved only right after its leader's file is renamed in the
+  same flush. It waits out its leader's backoff and is due no sooner than its
+  leader, and its own backoff leaves the leader to be saved alone. A follower
+  left unsaved because its leader was not saved is dirty again with no
+  failure counted.
 - Of a service's run of failed saves the log shows the first in full, each one
   whose error differs from the one before, every tenth with the count, and
   `save recovered after N failures` when a save succeeds, each line with the
@@ -1562,17 +1568,21 @@ Kinesis. The state is two files, LocalStack's split:
   written in their canonical form, so they read back unchanged.
 - `<base>/dynamodbstreams/store.{json,bin}` holds the records of each latest
   shard still inside the 24-hour retention, with their sequence numbers, of
-  exactly the writes the latest table snapshot holds: the table snapshot's
-  cut keeps each shard's next sequence number under the locks it already
-  holds, and the streams snapshot writes each shard's records below it and
-  none written since. Before any table snapshot or load it writes no shard.
-  A shard takes its records back only when its identity (creation time to
-  the nanosecond) matches the table file's and they leave no gap below the
-  table's next sequence number, so a kill between the renames of the two files
-  never reads across a gap. Records at or past that number, from a streams
-  file of a later cut than the table file, are dropped on load, so a stream
-  never holds a change its restored table does not. A position or an iterator issued before a restart
-  reads the same records after it, within the iterator's 15 minutes.
+  exactly the writes the table file on disk holds: the table snapshot's cut
+  copies each shard's records below its next sequence number, under the
+  table locks that keep a DeleteTable, a stream enabled again or a reset
+  from dropping them first, and once the engine reports that table file
+  renamed (`persist.Committer`) the streams snapshot writes that copy, so a
+  shard stopped between the two saves of a flush still has its records
+  saved. Before a committed table save, and after a load until the next, it
+  writes no shard. A shard takes its records back only when its identity
+  (creation time to the nanosecond) matches the table file's and they leave
+  no gap below the table's next sequence number, so a streams file older
+  than the table file never reads across a gap. Records at or past that
+  number, from a streams file of a later cut (one written before SQ-365),
+  are dropped on load, so a stream never holds a change its restored table
+  does not. A position or an iterator issued before a restart reads the same
+  records after it, within the iterator's 15 minutes.
   A shard that takes no records back (`PERSIST_DYNAMODBSTREAMS=0`, or a
   streams file that is older, refused or moved aside) restores with an empty
   window at its saved next number: `LATEST` and `TRIM_HORIZON` read from the
@@ -1581,10 +1591,18 @@ Kinesis. The state is two files, LocalStack's split:
 - Load order: dynamodb loads before dynamodbstreams, whose Restore puts the
   records back into the shards of the tables dynamodb restored. The engine
   takes the order from a declaration, `persist.Follower`, which the
-  dynamodbstreams snapshotter implements, not from the names. A flush that
-  saves dynamodb saves dynamodbstreams right after it, whatever their last
-  durations and whether or not a stream record marked it, so the streams file
-  is of the cut the table file holds and not the older of the two.
+  dynamodbstreams snapshotter implements, not from the names. A flush saves
+  dynamodbstreams only right after it renamed dynamodb's file, whatever their
+  last durations and whether or not a stream record marked it, so the
+  streams file is of the cut the table file holds and never of a later one.
+  When dynamodb is not saved (its backoff, a failed save, or
+  `PERSIST_DYNAMODB=0`), dynamodbstreams is not saved either and stays dirty,
+  and the pair on disk stays the last one saved. When dynamodbstreams is in
+  its own backoff, dynamodb is saved alone: the streams file falls behind the
+  table file until the two are saved again, and a load in that span restores
+  each shard whose records would leave a gap with none, by the no-gap rule
+  above. A dirty dynamodbstreams that is due takes dynamodb into the flush
+  with it, so it is saved again after a failure even when no table changes.
 - ClientRequestToken windows are not saved. DynamoDB Local keeps them in
   memory, so LocalStack loses them on a restart too.
 - State that changes outside a mutating operation marks the service dirty

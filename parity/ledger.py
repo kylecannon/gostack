@@ -214,7 +214,7 @@ GO_TEST_SUFFIX = "_test.go"
 #   call to another service can match.
 # A Mount whose every route is under GATEWAY_NAMESPACES is not a hook of this
 # kind, since no AWS call is made to those paths: dynamodb mounts DELETE
-# /_gostack/dynamodb/expired and its /_aws name, and is not in the list.
+# /_gostack/services/dynamodb/expired and its /_aws name, and is not in the list.
 ROUTING_REACH = ("s3", "sqs")
 # The path prefixes the gateway keeps for its own endpoints: /_gostack, and the
 # /_localstack and /_aws names it also answers. Test_parityTables reads them

@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,7 @@ func Test_parseDynamoDB_probability(t *testing.T) {
 		{name: "white space alone strips to empty, so 0.0", give: " \t ", want: 0},
 		{name: "plain number", give: "0.75", want: 0.75},
 		{name: "surrounding white space", give: " 0.25 ", want: 0.25},
+		{name: "information separators, which str.strip() strips", give: "\x1c\x1f0.5\x1d\x1e", want: 0.5},
 		{name: "underscores between digits", give: "1_0", want: 10},
 		{name: "underscores in the fraction and exponent", give: "0.2_5e-1_0", want: 0.25e-10},
 		{name: "leading dot", give: ".5", want: 0.5},
@@ -123,4 +125,30 @@ func Test_parseDynamoDB_shareDB(t *testing.T) {
 			require.Equal(t, tt.want, got.DynamoDBShareDB)
 		})
 	}
+}
+
+// Test_newConfig_dynamoDBValuesAsSet: the binary reads the DYNAMODB_* values
+// through Config.build, whose lookup trims every other variable. They reach
+// parseDynamoDB as set: DYNAMODB_SHARE_DB of white space alone refuses to
+// start, as int("  ") does, and a probability wrapped in U+001C..U+001F reads
+// as str.strip() leaves it (SQ-363 findings 4 and 5).
+func Test_newConfig_dynamoDBValuesAsSet(t *testing.T) {
+	start := func(t *testing.T, name, value string) (*Config, error) {
+		t.Helper()
+		isolate(t)
+		t.Setenv(name, value)
+
+		return newConfig(nil, dockerProbe{fsys: fstest.MapFS{}})
+	}
+
+	_, err := start(t, varDynamoDBShareDB, "  ")
+	require.ErrorContains(t, err, varDynamoDBShareDB)
+
+	cfg, err := start(t, varDynamoDBShareDB, " 1 ")
+	require.NoError(t, err)
+	require.Equal(t, 1, cfg.Settings().DynamoDBShareDB)
+
+	cfg, err = start(t, varDynamoDBErrorProbability, "\x1c0.5\x1c")
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, cfg.Settings().DynamoDBErrorProbability, 0)
 }
