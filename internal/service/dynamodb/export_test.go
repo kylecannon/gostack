@@ -4,6 +4,7 @@ import (
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -32,4 +33,23 @@ func Expire(p *Provider, account, region, table, id, attribute, threshold string
 	e := p.states.Get(account, region).table(table)
 
 	return e.expire(value.Item{"id": {S: &id}}, attribute, &api.AttributeValue{N: &threshold})
+}
+
+// Cut takes the snapshot's one consistent copy of every table, the span its
+// locks are held for, and drops it.
+func Cut(p *Provider) error {
+	_, err := p.cut()
+
+	return err
+}
+
+// Shard returns the latest stream shard of the test account's table in
+// region, nil when it never had a stream.
+func Shard(p *Provider, region, table string) *stream.Log {
+	e := p.states.Get("000000000000", region).table(table)
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return e.shard
 }

@@ -213,6 +213,21 @@ func (l *Log) Stop() {
 	l.records, l.bytes, l.low = nil, 0, l.next
 }
 
+// Halt stops the retention timer for good and keeps the records, for a
+// service that is shutting down: the last save still holds them, and no timer
+// fires after it. A record appended later arms none.
+func (l *Log) Halt() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.stopped = true
+
+	if l.timer != nil {
+		l.timer.Stop()
+		l.timer = nil
+	}
+}
+
 // Bounds returns the number of the oldest record kept, that of the next one
 // to be written, and whether the shard is closed.
 func (l *Log) Bounds() (low, next int, closed bool) {

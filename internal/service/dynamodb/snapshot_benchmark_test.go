@@ -224,3 +224,41 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 
 	return len(p), nil
 }
+
+// BenchmarkSnapshotCut is the span a snapshot holds its locks for: one copy
+// of every table at one moment, four tables of the item count between them.
+// A write to any table waits for it at most. docs/architecture.md
+// (Persistence, "DynamoDB") quotes the million-item row.
+func BenchmarkSnapshotCut(b *testing.B) {
+	counts := []int{10_000}
+	if os.Getenv(largeEnv) == "1" {
+		counts = append(counts, 1_000_000)
+	}
+
+	const tables = 4
+
+	for _, count := range counts {
+		b.Run(fmt.Sprintf("items=%d/tables=%d", count, tables), func(b *testing.B) {
+			p := restoredProvider(b, generatedTables(tables, count/tables, itemPayloads[0].size))
+
+			for b.Loop() {
+				require.NoError(b, dynamodb.Cut(p))
+			}
+		})
+	}
+}
+
+// generatedTables is generated's snapshot with n tables of count items
+// each, named bench-0 on.
+func generatedTables(n, count, size int) []byte {
+	one := string(generated(count, size))
+	start := strings.Index(one, `{"meta":`)
+	table := one[start : len(one)-len(`]}]}`)]
+
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = strings.Replace(table, `"Name":"bench"`, fmt.Sprintf(`"Name":"bench-%d"`, i), 1)
+	}
+
+	return []byte(one[:start] + strings.Join(parts, ",") + `]}]}`)
+}

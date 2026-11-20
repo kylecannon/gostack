@@ -3,7 +3,9 @@ package dynamodb
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -289,14 +291,32 @@ func (p *Provider) anyTTL() bool {
 	return found
 }
 
-// close stops the sweep timer for good.
+// close stops the sweep timer and every stream shard's retention timer for
+// good. The shards keep their records, so a save after close still holds
+// them.
 func (p *Provider) close(context.Context) {
 	p.expiry.mu.Lock()
-	defer p.expiry.mu.Unlock()
-
 	p.expiry.closed = true
+
 	if p.expiry.timer != nil {
 		p.expiry.timer.Stop()
 		p.expiry.timer = nil
 	}
+	p.expiry.mu.Unlock()
+
+	p.states.Range(func(_, _ string, s *State) bool {
+		s.mu.RLock()
+		entries := slices.Collect(maps.Values(s.tables))
+		s.mu.RUnlock()
+
+		for _, e := range entries {
+			e.mu.RLock()
+			if e.shard != nil {
+				e.shard.Halt()
+			}
+			e.mu.RUnlock()
+		}
+
+		return true
+	})
 }

@@ -32,11 +32,13 @@ import (
 // not stored either: DynamoDB Local keeps them in memory, so LocalStack loses
 // them on a restart too.
 //
-// Snapshot holds each table's locks only while it copies the table: its meta,
-// encoded under the lock, and one reference per item with its partition's
-// key, stored items being immutable (table.ImageHeld). The partitions are put
-// in order and the items encoded after the locks are released, so the
-// snapshot holds the state once and a large table blocks its writers for one
+// Snapshot takes one cut of every table at once (cut): every table's locks,
+// in the order TransactWriteItems takes them, held while it copies each
+// table's meta, encoded, and one reference per item with its partition's
+// key, stored items being immutable (table.ImageHeld). A snapshot therefore
+// never holds a transaction applied in one table and not in another. The
+// partitions are put in order and the items encoded after the locks are
+// released, so the snapshot holds the state once and its writers wait for one
 // pointer copy per item, never for a sort or the encode. Items are written by
 // hand (snapshot-items.go), not through json v2's reflection.
 
@@ -153,17 +155,24 @@ func (p *Provider) writeSnapshot(out *snapshotWriter) error {
 		return err
 	}
 
+	states, err := p.cut()
+	if err != nil {
+		return err
+	}
+
 	out.text(`,"states":[`)
 
-	for i, s := range sortedStates(p) {
+	for i := range states {
 		if i > 0 {
 			out.text(",")
 		}
 
-		err = writeState(out, s.place, s.state)
+		err = writeState(out, &states[i])
 		if err != nil {
 			return err
 		}
+
+		states[i] = stateImage{} // let the tables written go before the encode ends
 	}
 
 	out.text("]}")
@@ -200,28 +209,115 @@ func sortedStates(p *Provider) []placedState {
 	return out
 }
 
-func writeState(out *snapshotWriter, at place, s *State) error {
-	s.mu.RLock()
-	names := slices.Sorted(maps.Keys(s.tables))
-	entries := make([]*tableEntry, len(names))
+// stateImage is one account and region's tables as the cut left them, by
+// name.
+type stateImage struct {
+	place
 
-	for i, name := range names {
-		entries[i] = s.tables[name]
+	tables []tableImage
+}
+
+// cut copies every table of every account and region as one moment left
+// them all, so a snapshot never holds a TransactWriteItems applied in one
+// table and not in another. It takes each table's entry lock, for its
+// definition, then every table's engine lock at once with table.ReadLock, in
+// the one global order TransactWriteItems takes them in, and copies one
+// reference per item of each (table.ImageHeld) and each shard's bounds. The
+// locks are released before the items are put in order or encoded, so
+// writers wait for the reference copies of all tables and no longer. Entry
+// locks before engine locks is the documented order, and no lock holder
+// takes a second entry's lock, so holding all of them cannot deadlock.
+func (p *Provider) cut() ([]stateImage, error) {
+	placed := sortedStates(p)
+	states := make([]stateImage, len(placed))
+
+	var entries []*tableEntry
+
+	for i, s := range placed {
+		s.state.mu.RLock()
+		names := slices.Sorted(maps.Keys(s.state.tables))
+		states[i] = stateImage{place: s.place, tables: make([]tableImage, len(names))}
+
+		for _, name := range names {
+			entries = append(entries, s.state.tables[name])
+		}
+		s.state.mu.RUnlock()
 	}
-	s.mu.RUnlock()
 
-	out.text(`{"account":`)
-	out.string(at.account)
-	out.text(`,"region":`)
-	out.string(at.region)
-	out.text(`,"tables":[`)
+	// A table shared between regions is locked once: a second read lock
+	// taken behind a waiting writer would never be granted.
+	locked := make(map[*tableEntry]bool, len(entries))
+
+	for _, e := range entries {
+		if !locked[e] {
+			locked[e] = true
+
+			e.mu.RLock()
+		}
+	}
+
+	defer func() {
+		for e := range locked {
+			e.mu.RUnlock()
+		}
+	}()
+
+	images := make([]tableImage, len(entries))
+	engines := make([]*table.Table, len(entries))
 
 	for i, e := range entries {
+		meta, err := json.Marshal(&e.meta, snapshotOptions)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // Snapshot wraps it
+		}
+
+		images[i].meta, engines[i] = meta, e.data
+	}
+
+	unlock := table.ReadLock(engines...)
+	for i, e := range entries {
+		images[i].items = e.data.ImageHeld()
+		images[i].shard = e.shardImage()
+	}
+	unlock()
+
+	for i := range states {
+		n := copy(states[i].tables, images)
+		images = images[n:]
+	}
+
+	return states, nil
+}
+
+// shardImage is the identity and bounds of the table's latest shard, nil
+// when it never had one. The caller holds e.mu and the engine's lock, under
+// which the shard takes its records.
+func (e *tableEntry) shardImage() *shardData {
+	if e.shard == nil {
+		return nil
+	}
+
+	low, next, closed := e.shard.Bounds()
+
+	return &shardData{
+		Created: e.shard.Created(), Low: low, Next: next, Closed: closed,
+		ViewType: e.viewType, Region: e.streamRegion,
+	}
+}
+
+func writeState(out *snapshotWriter, s *stateImage) error {
+	out.text(`{"account":`)
+	out.string(s.account)
+	out.text(`,"region":`)
+	out.string(s.region)
+	out.text(`,"tables":[`)
+
+	for i := range s.tables {
 		if i > 0 {
 			out.text(",")
 		}
 
-		err := writeTable(out, e)
+		err := writeTable(out, &s.tables[i])
 		if err != nil {
 			return err
 		}
@@ -232,20 +328,15 @@ func writeState(out *snapshotWriter, at place, s *State) error {
 	return nil
 }
 
-// writeTable copies the table under its locks and encodes the copy.
-func writeTable(out *snapshotWriter, e *tableEntry) error {
-	img, err := e.image()
-	if err != nil {
-		return err
-	}
-
+// writeTable encodes a table the cut copied.
+func writeTable(out *snapshotWriter, img *tableImage) error {
 	out.text(`{"meta":`)
 	out.buf = append(out.buf, img.meta...)
 
 	if img.shard != nil {
 		out.text(`,"shard":`)
 
-		err = out.json(img.shard)
+		err := out.json(img.shard)
 		if err != nil {
 			return err
 		}
@@ -263,7 +354,7 @@ func writeTable(out *snapshotWriter, e *tableEntry) error {
 		out.buf, out.names = appendItem(out.buf, items[i], out.names)
 		items[i] = nil // let a table dropped meanwhile go before the encode ends
 
-		err = out.flushFull()
+		err := out.flushFull()
 		if err != nil {
 			return err
 		}
@@ -274,35 +365,8 @@ func writeTable(out *snapshotWriter, e *tableEntry) error {
 	return nil
 }
 
-// image is the table as one moment left it: its meta encoded, its shard's
-// identity and a reference to each item. It holds e.mu and then the engine's
-// read lock, the documented order, for no longer than the copy.
-func (e *tableEntry) image() (tableImage, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	meta, err := json.Marshal(&e.meta, snapshotOptions)
-	if err != nil {
-		return tableImage{}, err //nolint:wrapcheck // Snapshot wraps it
-	}
-
-	unlock := table.ReadLock(e.data)
-	defer unlock()
-
-	var shard *shardData
-
-	if e.shard != nil {
-		low, next, closed := e.shard.Bounds()
-		shard = &shardData{
-			Created: e.shard.Created(), Low: low, Next: next, Closed: closed,
-			ViewType: e.viewType, Region: e.streamRegion,
-		}
-	}
-
-	return tableImage{meta: meta, shard: shard, items: e.data.ImageHeld()}, nil
-}
-
-// tableImage is what image copies of a table.
+// tableImage is what the cut copies of a table: its meta encoded, its
+// shard's identity and a reference to each item.
 type tableImage struct {
 	meta  jsontext.Value
 	shard *shardData
