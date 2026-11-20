@@ -4,6 +4,7 @@ package in51
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // UnitInputAndOutput returns awserr.NotImplemented.
 func (Unimplemented) UnitInputAndOutput(context.Context, *UnitInputAndOutputInput) (*UnitInputAndOutputOutput, error) {
 	return nil, awserr.NotImplemented("in51", "UnitInputAndOutput")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in51 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "UnitInputAndOutput":
+		return t.MethodByName("UnitInputAndOutput")
+	default:
+		return reflect.Method{}, false
+	}
 }

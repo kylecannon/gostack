@@ -58,6 +58,13 @@ specific to gostack.
 - **Hot paths do not use reflection**, and request and response bodies are
   streamed. Never buffer a whole S3 object. Spill to disk above 512 KB, as
   LocalStack's `SpooledTemporaryFile` does.
+- **Reflection names a method with a constant.** `reflect.Type.MethodByName`
+  takes a string literal; `Type.Method(i)`, `Value.Method` and `MethodByName`
+  with a variable make the linker keep every exported method in the binary,
+  which cost `bin/gostack` 2.75 MB. Look an operation's method up through the
+  generated `OperationMethod`. A lint cannot see a dependency that does it, so
+  `Test_gostack_binaryPrunesMethods` in `cmd/gostack` reads the symbols of the
+  built binary and fails when methods nothing calls are kept.
 
 ## Tests, cheapest first
 

@@ -4,6 +4,7 @@ package dynamodb
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -421,4 +422,128 @@ func (Unimplemented) UpdateTableReplicaAutoScaling(context.Context, *UpdateTable
 // UpdateTimeToLive returns awserr.NotImplemented.
 func (Unimplemented) UpdateTimeToLive(context.Context, *UpdateTimeToLiveInput) (*UpdateTimeToLiveOutput, error) {
 	return nil, awserr.NotImplemented("dynamodb", "UpdateTimeToLive")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the dynamodb API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "BatchExecuteStatement":
+		return t.MethodByName("BatchExecuteStatement")
+	case "BatchGetItem":
+		return t.MethodByName("BatchGetItem")
+	case "BatchWriteItem":
+		return t.MethodByName("BatchWriteItem")
+	case "CreateBackup":
+		return t.MethodByName("CreateBackup")
+	case "CreateGlobalTable":
+		return t.MethodByName("CreateGlobalTable")
+	case "CreateTable":
+		return t.MethodByName("CreateTable")
+	case "DeleteBackup":
+		return t.MethodByName("DeleteBackup")
+	case "DeleteItem":
+		return t.MethodByName("DeleteItem")
+	case "DeleteResourcePolicy":
+		return t.MethodByName("DeleteResourcePolicy")
+	case "DeleteTable":
+		return t.MethodByName("DeleteTable")
+	case "DescribeBackup":
+		return t.MethodByName("DescribeBackup")
+	case "DescribeContinuousBackups":
+		return t.MethodByName("DescribeContinuousBackups")
+	case "DescribeContributorInsights":
+		return t.MethodByName("DescribeContributorInsights")
+	case "DescribeEndpoints":
+		return t.MethodByName("DescribeEndpoints")
+	case "DescribeExport":
+		return t.MethodByName("DescribeExport")
+	case "DescribeGlobalTable":
+		return t.MethodByName("DescribeGlobalTable")
+	case "DescribeGlobalTableSettings":
+		return t.MethodByName("DescribeGlobalTableSettings")
+	case "DescribeImport":
+		return t.MethodByName("DescribeImport")
+	case "DescribeKinesisStreamingDestination":
+		return t.MethodByName("DescribeKinesisStreamingDestination")
+	case "DescribeLimits":
+		return t.MethodByName("DescribeLimits")
+	case "DescribeTable":
+		return t.MethodByName("DescribeTable")
+	case "DescribeTableReplicaAutoScaling":
+		return t.MethodByName("DescribeTableReplicaAutoScaling")
+	case "DescribeTimeToLive":
+		return t.MethodByName("DescribeTimeToLive")
+	case "DisableKinesisStreamingDestination":
+		return t.MethodByName("DisableKinesisStreamingDestination")
+	case "EnableKinesisStreamingDestination":
+		return t.MethodByName("EnableKinesisStreamingDestination")
+	case "ExecuteStatement":
+		return t.MethodByName("ExecuteStatement")
+	case "ExecuteTransaction":
+		return t.MethodByName("ExecuteTransaction")
+	case "ExportTableToPointInTime":
+		return t.MethodByName("ExportTableToPointInTime")
+	case "GetItem":
+		return t.MethodByName("GetItem")
+	case "GetResourcePolicy":
+		return t.MethodByName("GetResourcePolicy")
+	case "ImportTable":
+		return t.MethodByName("ImportTable")
+	case "ListBackups":
+		return t.MethodByName("ListBackups")
+	case "ListContributorInsights":
+		return t.MethodByName("ListContributorInsights")
+	case "ListExports":
+		return t.MethodByName("ListExports")
+	case "ListGlobalTables":
+		return t.MethodByName("ListGlobalTables")
+	case "ListImports":
+		return t.MethodByName("ListImports")
+	case "ListTables":
+		return t.MethodByName("ListTables")
+	case "ListTagsOfResource":
+		return t.MethodByName("ListTagsOfResource")
+	case "PutItem":
+		return t.MethodByName("PutItem")
+	case "PutResourcePolicy":
+		return t.MethodByName("PutResourcePolicy")
+	case "Query":
+		return t.MethodByName("Query")
+	case "RestoreTableFromBackup":
+		return t.MethodByName("RestoreTableFromBackup")
+	case "RestoreTableToPointInTime":
+		return t.MethodByName("RestoreTableToPointInTime")
+	case "Scan":
+		return t.MethodByName("Scan")
+	case "TagResource":
+		return t.MethodByName("TagResource")
+	case "TransactGetItems":
+		return t.MethodByName("TransactGetItems")
+	case "TransactWriteItems":
+		return t.MethodByName("TransactWriteItems")
+	case "UntagResource":
+		return t.MethodByName("UntagResource")
+	case "UpdateContinuousBackups":
+		return t.MethodByName("UpdateContinuousBackups")
+	case "UpdateContributorInsights":
+		return t.MethodByName("UpdateContributorInsights")
+	case "UpdateGlobalTable":
+		return t.MethodByName("UpdateGlobalTable")
+	case "UpdateGlobalTableSettings":
+		return t.MethodByName("UpdateGlobalTableSettings")
+	case "UpdateItem":
+		return t.MethodByName("UpdateItem")
+	case "UpdateKinesisStreamingDestination":
+		return t.MethodByName("UpdateKinesisStreamingDestination")
+	case "UpdateTable":
+		return t.MethodByName("UpdateTable")
+	case "UpdateTableReplicaAutoScaling":
+		return t.MethodByName("UpdateTableReplicaAutoScaling")
+	case "UpdateTimeToLive":
+		return t.MethodByName("UpdateTimeToLive")
+	default:
+		return reflect.Method{}, false
+	}
 }

@@ -4,6 +4,7 @@ package sns
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -316,4 +317,98 @@ func (Unimplemented) UntagResource(context.Context, *UntagResourceInput) (*Untag
 // VerifySMSSandboxPhoneNumber returns awserr.NotImplemented.
 func (Unimplemented) VerifySMSSandboxPhoneNumber(context.Context, *VerifySMSSandboxPhoneNumberInput) (*VerifySMSSandboxPhoneNumberOutput, error) {
 	return nil, awserr.NotImplemented("sns", "VerifySMSSandboxPhoneNumber")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the sns API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "AddPermission":
+		return t.MethodByName("AddPermission")
+	case "CheckIfPhoneNumberIsOptedOut":
+		return t.MethodByName("CheckIfPhoneNumberIsOptedOut")
+	case "ConfirmSubscription":
+		return t.MethodByName("ConfirmSubscription")
+	case "CreatePlatformApplication":
+		return t.MethodByName("CreatePlatformApplication")
+	case "CreatePlatformEndpoint":
+		return t.MethodByName("CreatePlatformEndpoint")
+	case "CreateSMSSandboxPhoneNumber":
+		return t.MethodByName("CreateSMSSandboxPhoneNumber")
+	case "CreateTopic":
+		return t.MethodByName("CreateTopic")
+	case "DeleteEndpoint":
+		return t.MethodByName("DeleteEndpoint")
+	case "DeletePlatformApplication":
+		return t.MethodByName("DeletePlatformApplication")
+	case "DeleteSMSSandboxPhoneNumber":
+		return t.MethodByName("DeleteSMSSandboxPhoneNumber")
+	case "DeleteTopic":
+		return t.MethodByName("DeleteTopic")
+	case "GetDataProtectionPolicy":
+		return t.MethodByName("GetDataProtectionPolicy")
+	case "GetEndpointAttributes":
+		return t.MethodByName("GetEndpointAttributes")
+	case "GetPlatformApplicationAttributes":
+		return t.MethodByName("GetPlatformApplicationAttributes")
+	case "GetSMSAttributes":
+		return t.MethodByName("GetSMSAttributes")
+	case "GetSMSSandboxAccountStatus":
+		return t.MethodByName("GetSMSSandboxAccountStatus")
+	case "GetSubscriptionAttributes":
+		return t.MethodByName("GetSubscriptionAttributes")
+	case "GetTopicAttributes":
+		return t.MethodByName("GetTopicAttributes")
+	case "ListEndpointsByPlatformApplication":
+		return t.MethodByName("ListEndpointsByPlatformApplication")
+	case "ListOriginationNumbers":
+		return t.MethodByName("ListOriginationNumbers")
+	case "ListPhoneNumbersOptedOut":
+		return t.MethodByName("ListPhoneNumbersOptedOut")
+	case "ListPlatformApplications":
+		return t.MethodByName("ListPlatformApplications")
+	case "ListSMSSandboxPhoneNumbers":
+		return t.MethodByName("ListSMSSandboxPhoneNumbers")
+	case "ListSubscriptions":
+		return t.MethodByName("ListSubscriptions")
+	case "ListSubscriptionsByTopic":
+		return t.MethodByName("ListSubscriptionsByTopic")
+	case "ListTagsForResource":
+		return t.MethodByName("ListTagsForResource")
+	case "ListTopics":
+		return t.MethodByName("ListTopics")
+	case "OptInPhoneNumber":
+		return t.MethodByName("OptInPhoneNumber")
+	case "Publish":
+		return t.MethodByName("Publish")
+	case "PublishBatch":
+		return t.MethodByName("PublishBatch")
+	case "PutDataProtectionPolicy":
+		return t.MethodByName("PutDataProtectionPolicy")
+	case "RemovePermission":
+		return t.MethodByName("RemovePermission")
+	case "SetEndpointAttributes":
+		return t.MethodByName("SetEndpointAttributes")
+	case "SetPlatformApplicationAttributes":
+		return t.MethodByName("SetPlatformApplicationAttributes")
+	case "SetSMSAttributes":
+		return t.MethodByName("SetSMSAttributes")
+	case "SetSubscriptionAttributes":
+		return t.MethodByName("SetSubscriptionAttributes")
+	case "SetTopicAttributes":
+		return t.MethodByName("SetTopicAttributes")
+	case "Subscribe":
+		return t.MethodByName("Subscribe")
+	case "TagResource":
+		return t.MethodByName("TagResource")
+	case "Unsubscribe":
+		return t.MethodByName("Unsubscribe")
+	case "UntagResource":
+		return t.MethodByName("UntagResource")
+	case "VerifySMSSandboxPhoneNumber":
+		return t.MethodByName("VerifySMSSandboxPhoneNumber")
+	default:
+		return reflect.Method{}, false
+	}
 }

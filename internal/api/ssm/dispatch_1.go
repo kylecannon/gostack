@@ -14,13 +14,14 @@ import (
 
 // Metadata describes the ssm service.
 var Metadata = service.Metadata{
-	Name:           "ssm",
-	SigningName:    "ssm",
-	TargetPrefix:   "AmazonSSM",
-	EndpointPrefix: "ssm",
-	APIVersion:     "2014-11-06",
-	Protocols:      []protocol.Kind{protocol.KindJSON},
-	Operations:     Operations,
+	Name:            "ssm",
+	SigningName:     "ssm",
+	TargetPrefix:    "AmazonSSM",
+	EndpointPrefix:  "ssm",
+	APIVersion:      "2014-11-06",
+	Protocols:       []protocol.Kind{protocol.KindJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

@@ -4,6 +4,7 @@ package in10
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // HttpChecksumRequired returns awserr.NotImplemented.
 func (Unimplemented) HttpChecksumRequired(context.Context, *HttpChecksumRequiredInput) (*HttpChecksumRequiredOutput, error) {
 	return nil, awserr.NotImplemented("in10", "HttpChecksumRequired")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in10 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "HttpChecksumRequired":
+		return t.MethodByName("HttpChecksumRequired")
+	default:
+		return reflect.Method{}, false
+	}
 }

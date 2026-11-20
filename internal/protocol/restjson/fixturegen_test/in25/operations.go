@@ -4,6 +4,7 @@ package in25
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // JsonIntEnums returns awserr.NotImplemented.
 func (Unimplemented) JsonIntEnums(context.Context, *JsonIntEnumsInput) (*JsonIntEnumsOutput, error) {
 	return nil, awserr.NotImplemented("in25", "JsonIntEnums")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in25 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "JsonIntEnums":
+		return t.MethodByName("JsonIntEnums")
+	default:
+		return reflect.Method{}, false
+	}
 }
