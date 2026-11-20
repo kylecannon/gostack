@@ -15,14 +15,21 @@ const versionNull = "null"
 // State is the S3 state of one account, held in a store.Bundle under the
 // account and an empty region: buckets are global to their account and carry
 // their own region, as LocalStack's CrossRegionAttribute buckets are. The lock
-// covers the map only; a bucket has its own.
+// covers the maps only; a bucket has its own.
 type State struct {
 	mu      sync.RWMutex
 	buckets map[string]*Bucket
+	// managedKeys maps a region to the ARN of the account's AWS managed KMS
+	// key there, once an aws:kms write has had KMS make it (managedKMSKey).
+	managedKeys map[string]string
+
+	// kmsCreate is held by the one write that has KMS make a region's managed
+	// key, over the call. It is taken before mu, never under it.
+	kmsCreate sync.Mutex
 }
 
 func newState(string, string) *State {
-	return &State{buckets: make(map[string]*Bucket)}
+	return &State{buckets: make(map[string]*Bucket), managedKeys: make(map[string]string)}
 }
 
 // emptyState is the Bundle's emptyFn. The provider's Reset releases the blobs
@@ -31,6 +38,22 @@ func newState(string, string) *State {
 func emptyState(s *State) {
 	s.mu.Lock()
 	clear(s.buckets)
+	clear(s.managedKeys)
+	s.mu.Unlock()
+}
+
+// managedKey is the ARN of the account's AWS managed KMS key in region, "" when
+// KMS has not made it yet.
+func (s *State) managedKey(region string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.managedKeys[region]
+}
+
+func (s *State) setManagedKey(region, arn string) {
+	s.mu.Lock()
+	s.managedKeys[region] = arn
 	s.mu.Unlock()
 }
 
@@ -68,10 +91,16 @@ func (s *State) sorted() []*Bucket {
 }
 
 // take removes the buckets of region, or every bucket when region is empty, and
-// returns them.
+// returns them. The region's managed KMS key goes with them.
 func (s *State) take(region string) []*Bucket {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if region == "" {
+		clear(s.managedKeys)
+	} else {
+		delete(s.managedKeys, region)
+	}
 
 	var taken []*Bucket
 

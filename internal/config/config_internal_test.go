@@ -60,6 +60,7 @@ func Test_Load_defaults(t *testing.T) {
 	require.True(t, got.CompatPaths)
 	require.True(t, got.ResponseHeaderEnabled)
 	require.True(t, got.S3SkipSignatureValidation)
+	require.True(t, got.S3SkipKMSKeyValidation)
 	require.False(t, got.Debug)
 	require.False(t, got.FailFast)
 	require.False(t, got.EnableConfigUpdates)
@@ -251,6 +252,14 @@ func Test_Load_variableForms(t *testing.T) {
 			check: func(t *testing.T, got *Settings) {
 				t.Helper()
 				require.False(t, got.S3SkipSignatureValidation)
+			},
+		},
+		{
+			name: "S3 KMS key checks are skipped unless the value is false",
+			give: map[string]string{varS3SkipKMSKeyValidation: "false"},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.False(t, got.S3SkipKMSKeyValidation)
 			},
 		},
 		{

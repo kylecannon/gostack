@@ -26,9 +26,10 @@ type copyPlan struct {
 	src             copySourceName
 }
 
-// planCopy validates the request's headers and finds both buckets, so that
-// nothing is read or written for a request that cannot succeed.
-func (p *Provider) planCopy(rc *request.Context, in *s3api.CopyObjectInput) (copyPlan, error) {
+// planCopy validates the request's headers, finds both buckets and checks the
+// KMS key the request names (checkKMSKey), so that nothing is read or written
+// for a request that cannot succeed.
+func (p *Provider) planCopy(ctx context.Context, rc *request.Context, in *s3api.CopyObjectInput) (copyPlan, error) {
 	plan := copyPlan{destKey: deref(in.Key)}
 
 	var err error
@@ -54,8 +55,11 @@ func (p *Provider) planCopy(rc *request.Context, in *s3api.CopyObjectInput) (cop
 	}
 
 	plan.srcBucket, err = p.bucket(rc.AccountID, plan.src.bucket)
+	if err != nil {
+		return plan, err
+	}
 
-	return plan, err
+	return plan, p.checkKMSKey(ctx, deref(in.SSEKMSKeyId), plan.dest)
 }
 
 // openSource reads the source, checks it and opens its body in one hold of the
@@ -102,12 +106,12 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
-	plan, err := p.planCopy(rc, in)
+	plan, err := p.planCopy(ctx, rc, in)
 	if err != nil {
 		return nil, err
 	}
 
-	v, err := newCopiedVersion(in, plan.dest)
+	v, err := p.newCopiedVersion(ctx, in, plan.dest)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +209,9 @@ func changesObject(in *s3api.CopyObjectInput) bool {
 
 // newCopiedVersion returns the version a CopyObject makes with what the request
 // sets, before it takes what it inherits from the source. Directives other than
-// COPY and REPLACE are refused.
-func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error) {
+// COPY and REPLACE are refused. An aws:kms copy that names no key gets the
+// account's AWS managed key.
+func (p *Provider) newCopiedVersion(ctx context.Context, in *s3api.CopyObjectInput, dest *Bucket) (*Version, error) {
 	directive := deref(in.MetadataDirective)
 	if directive != "" && directive != directiveCopy && directive != directiveReplace {
 		return nil, invalidArgument("Unknown metadata directive.", "x-amz-metadata-directive", &directive)
@@ -241,7 +246,12 @@ func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error)
 	// The target takes the encryption the request names or the bucket's
 	// default, never the source's. The request's SSE-C parameters are checked
 	// with the source's (checkSource), once the source has been found.
-	v.setEncryption(resolveEncryption(copyEncryption(in), dest))
+	enc, err := p.encryptionFor(ctx, copyEncryption(in), dest)
+	if err != nil {
+		return nil, err
+	}
+
+	v.setEncryption(enc)
 
 	if in.Tagging != nil {
 		v.Tags, err = parseTaggingHeader(*in.Tagging)

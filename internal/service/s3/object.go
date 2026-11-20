@@ -36,6 +36,16 @@ const (
 // so does a conditional write whose condition fails: that is decided once more
 // under the bucket's lock, so of two concurrent If-None-Match writes one wins.
 func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3api.PutObjectOutput, error) {
+	return p.storeObject(ctx, in, in.SSEKMSKeyId)
+}
+
+// storeObject stores the object a PutObject or a POST upload sends. kmsKey is
+// the KMS key checkKMSKey checks: a PutObject's SSEKMSKeyId, and nil for a
+// POST, whose key is not checked (LocalStack's post_object never calls
+// validate_kms_key_id).
+func (p *Provider) storeObject(
+	ctx context.Context, in *s3api.PutObjectInput, kmsKey *string,
+) (*s3api.PutObjectOutput, error) {
 	rc, err := callOf(ctx)
 	if err != nil {
 		return nil, err
@@ -48,12 +58,22 @@ func (p *Provider) PutObject(ctx context.Context, in *s3api.PutObjectInput) (*s3
 
 	key := deref(in.Key)
 
+	err = p.checkClassAndKMSKey(ctx, in.StorageClass, kmsKey, b)
+	if err != nil {
+		return nil, err
+	}
+
 	req, err := checkPut(in)
 	if err != nil {
 		return nil, err
 	}
 
 	v, body, err := newPutVersion(rc.Request.Header, in, b, req.algorithm)
+	if err != nil {
+		return nil, err
+	}
+
+	v.SSEKMSKeyID, err = p.kmsKeyFor(ctx, b, v.ServerSideEncryption, v.SSEKMSKeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -150,17 +170,13 @@ type putRequest struct {
 	algorithm, wantChecksum string
 }
 
-// checkPut validates the request's own fields: storage class, key, conditional
-// headers, Content-MD5 and the single checksum header it may carry.
+// checkPut validates the request's own fields after its storage class and KMS
+// key: key, conditional headers, Content-MD5 and the single checksum header it
+// may carry.
 func checkPut(in *s3api.PutObjectInput) (putRequest, error) {
 	var req putRequest
 
-	err := checkStorageClass(in.StorageClass)
-	if err != nil {
-		return req, err
-	}
-
-	err = checkKey(deref(in.Key))
+	err := checkKey(deref(in.Key))
 	if err != nil {
 		return req, err
 	}
@@ -291,6 +307,11 @@ func (p *Provider) GetObject(ctx context.Context, in *s3api.GetObjectInput) (*s3
 		body io.ReadCloser
 		rng  *byteRange
 	)
+
+	keyErr := p.checkObjectKMSKey(ctx, in)
+	if keyErr != nil {
+		return nil, keyErr
+	}
 
 	v, err := p.readable(ctx, in.Bucket, in.Key, in.VersionId, func(v *Version) error {
 		var err error
@@ -795,7 +816,12 @@ func newVersion(in *s3api.PutObjectInput, b *Bucket) (*Version, error) {
 		return nil, err
 	}
 
-	v.setEncryption(resolveEncryption(request, b))
+	enc, err := resolveEncryption(request, b)
+	if err != nil {
+		return nil, err
+	}
+
+	v.setEncryption(enc)
 
 	err = checkWebsiteRedirect(v.WebsiteRedirectLocation)
 	if err != nil {

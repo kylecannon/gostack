@@ -77,6 +77,7 @@ var variables = []variable{
 	{name: varDisableCustomCORSS3},
 	{name: varDisableCustomCORSAPIGateway},
 	{name: varS3SkipSignatureValidation},
+	{name: varS3SkipKMSKeyValidation},
 	{name: varMaxRequestBody, gostackOnly: true},
 	{name: varMaxInFlightBodies, gostackOnly: true},
 	{name: varRequestBodyIdleTimeout, gostackOnly: true},
