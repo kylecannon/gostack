@@ -1102,7 +1102,8 @@ cites the lines.
   is left dirty by the timer's flush, which saves the others when
   `PERSIST_FREQUENCY` after their change has passed, and the timer is armed for
   the earliest of the dirty services' times, so a service that keeps failing
-  does not widen another's loss window beyond `PERSIST_FREQUENCY`. A flush by
+  widens another's loss window by no more than the rest of an attempt already
+  in flight: `PERSIST_FREQUENCY` plus that. A flush by
   hand, which `Stop` and `Close` end with, tries every dirty service whatever
   its wait.
 - Of a service's run of failed saves the log shows the first in full, each one
@@ -1229,7 +1230,7 @@ is untouched.
   per-file path, an asset or a directory that cannot be opened (`EACCES`,
   `EMFILE`, `ENFILE`, `EINTR`) fails that save before its rename and keeps its
   ids pending for the next one; nothing was written back, so nothing was lost.
-  The flush counts as failed and is retried with the backoff. A path that is
+  That service's save counts as failed and is retried with the backoff. A path that is
   gone (`ENOENT`) is skipped: it is an asset `Remove` or a save deleted after
   the sync took its id, which the sync cannot tell from one something else
   deleted, and no write of gostack's is lost either way. A snapshot that names

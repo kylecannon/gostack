@@ -312,6 +312,48 @@ func Test_Engine_FailedFlushBackoffIsPerService(t *testing.T) {
 	})
 }
 
+// A timed save of another service that ends before a backed-off service's retry
+// does not move that retry: the service is tried at its own time.
+func Test_Engine_FailedFlushBackoffIsNotSlidByAnotherServicesSave(t *testing.T) {
+	sec := time.Second
+
+	for _, mark := range []time.Duration{52 * sec, 59900 * time.Millisecond} {
+		t.Run("sns changes at "+mark.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := baseCfg(t.TempDir())
+				cfg.Frequency = 10 * sec
+
+				e := persist.New(cfg)
+				bad := &attempts{err: errSnapshot}
+				good := &attempts{state: stateA}
+				e.Register(sqs, bad)
+				e.Register(sns, good)
+
+				began := time.Now()
+
+				// sqs fails at 10 s, 20 s and 40 s. Its next retry is due at 70 s.
+				e.MarkDirty(sqs)
+				time.Sleep(mark)
+				synctest.Wait()
+				require.Len(t, bad.times(), 3)
+
+				// sns is saved PERSIST_FREQUENCY after its change, before 70 s or
+				// just after, and sqs is still tried at 70 s.
+				e.MarkDirty(sns)
+				time.Sleep(100*sec - mark)
+				synctest.Wait()
+
+				require.Len(t, good.times(), 1)
+				assert.Equal(t, mark+10*sec, good.times()[0].Sub(began))
+				require.GreaterOrEqual(t, len(bad.times()), 4)
+				assert.Equal(t, 70*sec, bad.times()[3].Sub(began), "sqs is tried at its own time")
+
+				_ = e.Close(t.Context())
+			})
+		})
+	}
+}
+
 func Test_Engine_FailedFlushLogging(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var logs syncBuffer

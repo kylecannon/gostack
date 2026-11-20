@@ -583,8 +583,9 @@ func (e *Engine) scheduleLocked() {
 }
 
 // nextDueLocked is when the timer should fire: the earliest, over the dirty
-// services, of PERSIST_FREQUENCY from now or the service's retryAt, whichever
-// is later.
+// services, of PERSIST_FREQUENCY from now or, for a service in its backoff, its
+// retryAt. A retryAt still ahead is the service's own time, which another
+// service's save does not move.
 func (e *Engine) nextDueLocked(now time.Time) time.Time {
 	var at time.Time
 
@@ -594,7 +595,7 @@ func (e *Engine) nextDueLocked(now time.Time) time.Time {
 		}
 
 		due := now.Add(e.freq)
-		if t.retryAt.After(due) {
+		if t.retryAt.After(now) {
 			due = t.retryAt
 		}
 
