@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
@@ -123,13 +124,13 @@ func (p *Provider) streamsChanged() {
 	}
 }
 
-// reset empties the states of account and region. The account-wide state,
+// reset empties the states of accountID and region. The account-wide state,
 // which LocalStack keeps across regions, is emptied with every region of an
 // account; the sweep timer stops when no table has time to live left.
-func (p *Provider) reset(account, region string) {
-	p.states.Reset(account, region)
+func (p *Provider) reset(accountID, region string) {
+	p.states.Reset(accountID, region)
 	if region == "" {
-		p.accounts.Reset(account, "")
+		p.accounts.Reset(accountID, "")
 	}
 
 	p.settleExpiry()
@@ -236,19 +237,7 @@ func regionName(region string) string {
 
 // tableARN is the ARN of the caller's table name.
 func (c caller) tableARN(name string) string {
-	return "arn:" + partition(c.region) + ":dynamodb:" + c.region + ":" + c.account + ":table/" + name
-}
-
-// partition is the ARN partition of region.
-func partition(region string) string {
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		return "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		return "aws-us-gov"
-	default:
-		return "aws"
-	}
+	return "arn:" + account.Partition(c.region) + ":dynamodb:" + c.region + ":" + c.account + ":table/" + name
 }
 
 // notImplemented answers a part of an operation a later change brings.

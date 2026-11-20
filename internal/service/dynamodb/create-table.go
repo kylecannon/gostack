@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
@@ -228,7 +229,7 @@ func (c caller) kmsKeyARN(key string) string {
 		return key
 	}
 
-	return "arn:" + partition(c.region) + ":kms:" + c.region + ":" + c.account + ":key/" + key
+	return "arn:" + account.Partition(c.region) + ":kms:" + c.region + ":" + c.account + ":key/" + key
 }
 
 // The version and variant bits of a random UUID.
