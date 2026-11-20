@@ -77,6 +77,8 @@ S3 writes acknowledged since the last save are lost at `docker stop` when the sh
 
 SSM persists every parameter with all its versions, labels and tags, and its maintenance windows. A `SecureString` is written as it is stored, `kms:<key id>:<plaintext>` with `alias/aws/ssm` as the default key id, so its plaintext is on disk in the clear. No KMS call encrypts it, as in LocalStack.
 
+KMS persists every key with its metadata, state, deletion date, policy, tags, rotation setting and replica links, its aliases and grants, and the import tokens `GetParametersForImport` handed out with their wrapping keys, as LocalStack's `KmsStore` holds them. Key material is written in plaintext, as LocalStack pickles it: the current material, every material a rotated key still decrypts with, imported material and material pending rotation, and the private key of every RSA and elliptic-curve key, in `<PERSIST_BASE_DIR>/kms/store.json` (or `store.bin` with `PERSIST_FORMAT=binary`). Anyone who can read that file can decrypt and sign as every key, so treat the persistence directory as holding secrets. gostack creates the file readable by its owner only (mode 0600). A file whose key material does not match the digest saved beside it is refused and moved aside, so a damaged file never restores a key that decrypts nothing it encrypted. A deletion date, rotation date or import expiry is only reported after a restart, as before it: nothing in gostack or LocalStack deletes or rotates a key when its date comes.
+
 ## Image and init
 
 | Variable | Effect |

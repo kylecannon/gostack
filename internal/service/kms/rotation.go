@@ -68,6 +68,12 @@ func (k *Key) materials() keyMaterial {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
+	return k.materialsLocked()
+}
+
+// materialsLocked is materials with k.mu held, for a reader that takes other
+// fields in the same hold, as a snapshot does.
+func (k *Key) materialsLocked() keyMaterial {
 	return keyMaterial{
 		current: k.Material, previous: k.previous, id: k.MaterialID, pending: k.pending,
 		private: k.PrivateKey, public: k.PublicKey,

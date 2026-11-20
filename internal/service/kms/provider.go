@@ -48,6 +48,7 @@ func (p *Provider) Registration() service.Registration {
 		Metadata: api.Metadata,
 		Serve:    p.serve,
 		Mutating: mutating,
+		Persist:  p,
 		Reset:    p.states.Reset,
 	}
 }

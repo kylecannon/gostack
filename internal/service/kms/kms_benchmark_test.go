@@ -37,8 +37,9 @@ func (s *sink) Write(p []byte) (int, error) {
 }
 
 // bench is KMS behind the real gateway for a benchmark. KMS speaks one wire
-// protocol, json 1.1, so every cell is proto=json. Its state is not persisted
-// yet, so there is no persist=on cell.
+// protocol, json 1.1, so every cell is proto=json. CreateKey has persist=on
+// cells (newPersistedBench); the data operations change nothing, so
+// persistence never saves for them and they have none.
 type bench struct {
 	b       *testing.B
 	handler http.Handler
@@ -133,9 +134,13 @@ func BenchmarkCreateKey(b *testing.B) {
 		{"ECC_NIST_P256", usageSignVerify},
 		{rsa2048, usageEncryptDecrypt},
 	} {
+		body := `{"KeySpec":"` + spec.spec + `","KeyUsage":"` + spec.usage + `"}`
+
 		b.Run("proto=json/spec="+spec.spec, func(b *testing.B) {
-			body := `{"KeySpec":"` + spec.spec + `","KeyUsage":"` + spec.usage + `"}`
 			newBench(b).loop("CreateKey", body)
+		})
+		b.Run("persist=on/proto=json/spec="+spec.spec, func(b *testing.B) {
+			newPersistedBench(b).loop("CreateKey", body)
 		})
 	}
 }
