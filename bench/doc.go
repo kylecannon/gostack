@@ -90,6 +90,28 @@
 // agentic workload is 200 cycles of create bucket, put 10 objects, list them,
 // delete them, delete the bucket, at concurrency 16.
 //
+// # The KMS matrix
+//
+// kms.go speaks json 1.1 over plain HTTP, as s3.go speaks S3, with a SigV4
+// header nobody checks. Each cell makes its key before the clock starts. It has
+// three workloads:
+//
+//	kms/crypt    Encrypt, then Decrypt of the blob it answered, at 32 B and
+//	             4 KiB, under a SYMMETRIC_DEFAULT key, at concurrency 1, 16, 64
+//	kms/datakey  GenerateDataKey of an AES_256 key, at concurrency 1, 16, 64
+//	kms/sign     Sign, then Verify, of a 32 B message under an RSA_2048 key
+//	             (RSASSA_PSS_SHA_256) or an ECC_NIST_P256 key (ECDSA_SHA_256), at
+//	             concurrency 1, 16, 64
+//
+// Every cell also runs with PERSIST_KMS=1 and a tmpfs at /persisted-data. None
+// of these calls changes KMS's state, so those cells measure what persistence
+// costs a service that is only read. LocalStack runs no persistence cell.
+//
+// -profile full runs 30 cells per image that persists, 15 on LocalStack.
+// -profile quick runs 6: crypt at 32 B and 4 KiB, datakey, and sign with each
+// spec, all at concurrency 16, and crypt at 32 B with persistence on. KMS has
+// no agentic workload.
+//
 // # What else is measured
 //
 // For each target, in a container of its own:

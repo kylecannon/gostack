@@ -6,6 +6,7 @@ import (
 	api "github.com/kylecannon/gostack/internal/api/kms"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
+	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,6 +24,29 @@ func Test_mutating(t *testing.T) {
 	for _, op := range readOnly {
 		require.False(t, mutating(op), op)
 	}
+}
+
+// Test_implemented holds what GET /_gostack/services reports for KMS: the 45
+// operations the provider declares, and the eight that answer 501 through the
+// generated Unimplemented (docs/compat.md, "KMS operations").
+func Test_implemented(t *testing.T) {
+	reg := New(nil).Registration()
+
+	implemented, ok := service.Implemented(reg.Handler, api.Operations, api.OperationMethod)
+	require.True(t, ok, "the registration must hand GET /_gostack/services its handler")
+	require.Len(t, api.Operations, 53)
+	require.Len(t, implemented, 45)
+
+	unimplemented := []string{
+		"ConnectCustomKeyStore", "CreateCustomKeyStore", "DeleteCustomKeyStore", "DescribeCustomKeyStores",
+		"DisconnectCustomKeyStore", "UpdateCustomKeyStore", "ListKeyRotations", "UpdatePrimaryRegion",
+	}
+	for _, op := range unimplemented {
+		require.Contains(t, api.Operations, op)
+		require.NotContains(t, implemented, op)
+	}
+
+	require.Subset(t, implemented, []string{"CreateKey", "Encrypt", "Sign", "DeriveSharedSecret", "ImportKeyMaterial"})
 }
 
 // sampleKeyID is a key id of the UUID form.

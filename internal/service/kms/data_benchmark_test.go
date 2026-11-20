@@ -158,13 +158,14 @@ func BenchmarkReEncrypt(b *testing.B) {
 	}
 }
 
-// BenchmarkGenerateDataKeyPair makes a key pair of an RSA and an ECC spec, with
-// and without the private key in the clear, with that many calls at once. The
-// pair is the work: an RSA key pair costs orders of magnitude more than an
-// elliptic one.
+// BenchmarkGenerateDataKeyPair makes an ECC key pair, with and without the
+// private key in the clear, with that many calls at once. The pair is the work.
+// RSA has no row: an RSA_2048 pair took 54 ms a call at concurrency 1 and
+// 630 ms at 64, with a spread from the prime search of 16 to 64% (SQ-243's
+// -count 6 run), more than the gate can judge.
 func BenchmarkGenerateDataKeyPair(b *testing.B) {
 	for _, operation := range []string{opGenerateDataKeyPair, "GenerateDataKeyPairWithoutPlaintext"} {
-		for _, spec := range []string{"RSA_2048", eccP256} {
+		for _, spec := range []string{eccP256} {
 			for _, workers := range dataConcurrency {
 				name := "proto=json/op=" + operation + "/keypairspec=" + spec + "/concurrency=" + strconv.Itoa(workers)
 

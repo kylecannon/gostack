@@ -68,6 +68,7 @@ func newPersistedBench(b *testing.B) *bench {
 
 	c := newBench(b)
 	c.handler = g.Handler()
+	c.reset = p.Registration().Reset
 
 	return c
 }

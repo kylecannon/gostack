@@ -161,6 +161,31 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 
 ### KMS
 
+LocalStack's KMS provider (`services/kms/provider.py` at 8b9a79f) answers 45 of
+the 53 operations in the model, and gostack builds the same 45. The other eight
+answer `501 InternalFailure`, "API action '`<operation>`' for service 'kms' not
+yet implemented", on both, and `/_gostack/services` reports 45 of 53:
+`ConnectCustomKeyStore`, `CreateCustomKeyStore`, `DeleteCustomKeyStore`,
+`DescribeCustomKeyStores`, `DisconnectCustomKeyStore`, `UpdateCustomKeyStore`,
+`ListKeyRotations` and `UpdatePrimaryRegion`. `DeriveSharedSecret` with a
+`Recipient` answers `501` too (its row below). All 151 KMS rows of LocalStack's
+suite pass, with no exclusions (`parity/ledger/kms.json`).
+
+Kept from LocalStack because its tests build and read them, though AWS differs:
+
+- The symmetric ciphertext is LocalStack's byte layout (`docs/architecture.md`,
+  "KMS"). The tests import `HEADER_LEN`, `IV_LEN` and
+  `_serialize_ciphertext_blob` and build blobs with them. AWS documents no blob
+  format.
+- `Encrypt` with an RSA key seals the symmetric blob under the key's symmetric
+  material; `EncryptionAlgorithm` only sets the plaintext size limit and is
+  echoed. AWS encrypts with the RSA public key.
+- `Decrypt` of an RSA blob made offline uses OAEP with SHA-256 whatever
+  `EncryptionAlgorithm` names, so `RSAES_OAEP_SHA_1` data does not decrypt.
+- Key material is in plaintext in the persisted state, as LocalStack pickles it
+  (Persistence, above).
+- Grants and key policies are stored and never evaluated (the row below).
+
 | Behavior | LocalStack | gostack | AWS source |
 |---|---|---|---|
 | `EnableKey`, `DisableKey` and `CancelKeyDeletion` on a key made with `Origin=EXTERNAL`, which has no material until `ImportKeyMaterial` | Answer 200 and leave the key `Enabled` or `Disabled` with no material (`_get_kms_key` looks at Disabled, PendingDeletion and Enabled only). The parity suite pins no such call: its `EXTERNAL` keys are only imported, rotated, described and scheduled for deletion (SQ-267 read `tests/aws/services/kms/test_kms.py`, and `s3`, `secretsmanager` and `ssm` for an `EXTERNAL` key that is enabled or disabled; none). | `400 KMSInvalidStateException`, "`<key ARN>` is pending import." The key stays `PendingImport`. `ScheduleKeyDeletion`, `UpdateKeyDescription`, `TagResource`, `UntagResource`, `PutKeyPolicy`, `CreateAlias` and `UpdateAlias` still pass, as the table has them. A key that `ScheduleKeyDeletion` and then `CancelKeyDeletion` made `Disabled` can be enabled with no material: `CancelKeyDeletion` leaves a key `Disabled` whatever it was, and the import calls are the place to decide more. | "Key states of AWS KMS keys", Pending import column: `EnableKey`, `DisableKey` fail ([5]), `CancelKeyDeletion` fails ([4]); the rows above pass. `CancelKeyDeletion` API reference: "the key state of the KMS key is `Disabled`." |

@@ -44,14 +44,18 @@ type bench struct {
 	b       *testing.B
 	handler http.Handler
 	auth    string
+	// reset empties the states of the provider behind handler.
+	reset func(account, region string)
 }
 
 func newBench(b *testing.B) *bench {
 	b.Helper()
 
+	reg := kms.New(func(string) {}).Registration()
+
 	g, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },
-		[]service.Registration{kms.New(func(string) {}).Registration()}, nil, nil,
+		[]service.Registration{reg}, nil, nil,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -59,6 +63,7 @@ func newBench(b *testing.B) *bench {
 
 	return &bench{
 		b:       b,
+		reset:   reg.Reset,
 		handler: g.Handler(),
 		auth: "AWS4-HMAC-SHA256 Credential=test/20130524/" + usEast1 +
 			"/kms/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc",
@@ -125,23 +130,63 @@ func (c *bench) loop(operation, body string) {
 	}
 }
 
+// keyReset is how many keys a CreateKey row makes before its state is emptied
+// with the timer stopped. KMS has no call that removes a key, so without it the
+// state, and the snapshot a persist=on row saves every persistFrequency, would
+// grow with b.N.
+const keyReset = 64
+
 // BenchmarkCreateKey makes a key of each spec family: the key material is the
-// work, from 32 random bytes to an RSA key pair.
+// work, from 32 random bytes to an elliptic-curve key pair. RSA has no row:
+// generating an RSA key takes tens of milliseconds and its spread, from the
+// prime search, is wider than the gate's 10% can judge (SQ-243).
 func BenchmarkCreateKey(b *testing.B) {
 	for _, spec := range []struct{ spec, usage string }{
 		{symmetricDefault, usageEncryptDecrypt},
 		{hmac256, usageGenerateMAC},
-		{"ECC_NIST_P256", usageSignVerify},
-		{rsa2048, usageEncryptDecrypt},
+		{eccP256, usageSignVerify},
 	} {
 		body := `{"KeySpec":"` + spec.spec + `","KeyUsage":"` + spec.usage + `"}`
 
 		b.Run("proto=json/spec="+spec.spec, func(b *testing.B) {
-			newBench(b).loop("CreateKey", body)
+			newBench(b).createKeys(body, spec.spec, spec.usage)
 		})
 		b.Run("persist=on/proto=json/spec="+spec.spec, func(b *testing.B) {
-			newPersistedBench(b).loop("CreateKey", body)
+			newPersistedBench(b).createKeys(body, spec.spec, spec.usage)
 		})
+	}
+}
+
+// createKeys times CreateKey with body after checking, off the clock, that the
+// body makes a key of spec and usage, so a row measures the key its name says.
+// Every keyReset keys the state is emptied off the clock.
+func (c *bench) createKeys(body, spec, usage string) {
+	c.b.Helper()
+
+	meta, ok := c.setup("CreateKey", decode(c, body))["KeyMetadata"].(map[string]any)
+	if !ok || meta[fieldKeySpec] != spec || meta[fieldKeyUsage] != usage {
+		c.b.Fatalf("CreateKey %s made %v, want %s %s", body, meta, spec, usage)
+	}
+
+	w := &sink{header: http.Header{}}
+
+	c.b.ReportAllocs()
+
+	for i := 1; c.b.Loop(); i++ {
+		clear(w.header)
+		w.status, w.size = 0, 0
+
+		c.handler.ServeHTTP(w, c.request("CreateKey", body))
+
+		if w.status != http.StatusOK {
+			c.b.Fatalf("CreateKey answered %d", w.status)
+		}
+
+		if i%keyReset == 0 {
+			c.b.StopTimer()
+			c.reset("", "")
+			c.b.StartTimer()
+		}
 	}
 }
 
