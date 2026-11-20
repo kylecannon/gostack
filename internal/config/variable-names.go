@@ -37,4 +37,6 @@ const (
 	varDisableCustomCORSAPIGateway     = "DISABLE_CUSTOM_CORS_APIGATEWAY"
 	varS3SkipSignatureValidation       = "S3_SKIP_SIGNATURE_VALIDATION"
 	varMaxRequestBody                  = "MAX_REQUEST_BODY"
+	varMaxInFlightBodies               = "MAX_IN_FLIGHT_BODIES"
+	varRequestBodyIdleTimeout          = "REQUEST_BODY_IDLE_TIMEOUT"
 )

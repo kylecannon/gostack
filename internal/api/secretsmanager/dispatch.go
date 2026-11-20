@@ -1164,7 +1164,10 @@ func messageName(code string) string {
 }
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))
+	body, err := protocol.ReadRequest(rc.Request)
+	if errors.Is(err, protocol.ErrBusy) {
+		return nil, protocol.ThrottledJSON()
+	}
 	if err != nil {
 		return nil, &awserr.Error{
 			Code:       "SerializationException",
@@ -1185,9 +1188,13 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 // decodeJSON reads the json body of a call into a T. A body that only the lenient
 // reading takes stays on the request: only that reading clamps an integer past the
 // int32 range, and a handler that refuses one echoes the text sent, which only the
-// body holds. Any other body is dropped once decoded.
+// body holds. Any other body is dropped once decoded. A body that would decode into
+// more than the call's budget is answered as a body over protocol.MaxBody.
 func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
-	in, lenient, err := awsjson.DecodeLenient[T](body)
+	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
+	if err == awsjson.ErrTooLarge {
+		return nil, query.MalformedQueryString()
+	}
 	if lenient {
 		rc.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}

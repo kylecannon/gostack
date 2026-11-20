@@ -39,8 +39,7 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// GOSTACK_MAX_REQUEST_BODY is read once, before anything serves.
-	protocol.SetMaxBody(cfg.Settings().MaxRequestBody)
+	setRequestLimits(cfg.Settings())
 
 	// The services report changes to the engine, and the engine is configured
 	// from the services' names. Nothing reports a change before the engine is
@@ -108,6 +107,16 @@ func start(ctx context.Context, cfg *config.Config, stdout io.Writer) error {
 
 	return serve(ctx, gw, listeners, proc, cfg.Settings().ShutdownTimeout, hub,
 		shutdownSave{first: saver.saveFirst, rest: saver.save})
+}
+
+// setRequestLimits sets the request body bounds once, before anything serves:
+// GOSTACK_MAX_REQUEST_BODY, then GOSTACK_MAX_IN_FLIGHT_BODIES, which is raised
+// to fit that limit, then GOSTACK_REQUEST_BODY_IDLE_TIMEOUT, how long those
+// bodies may stall.
+func setRequestLimits(s *config.Settings) {
+	protocol.SetMaxBody(s.MaxRequestBody)
+	protocol.SetInFlight(s.MaxInFlightBodies)
+	protocol.SetBodyIdle(s.RequestBodyIdleTimeout)
 }
 
 // loadState hands eng the persisted services and loads their state. A service

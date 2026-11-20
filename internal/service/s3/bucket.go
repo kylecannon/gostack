@@ -431,5 +431,5 @@ func validBucketName(name string) bool {
 
 // bucketARN is the bucket's ARN in the partition of its region.
 func bucketARN(name, region string) string {
-	return "arn:" + partitionOf(region) + ":s3:::" + name
+	return "arn:" + account.Partition(region) + ":s3:::" + name
 }

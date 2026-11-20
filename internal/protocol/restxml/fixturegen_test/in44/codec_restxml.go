@@ -32,7 +32,7 @@ func (v *XmlEnumsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.FooEnumList = append(v.FooEnumList, e1)
+				v.FooEnumList = restxml.Append(d, v.FooEnumList, e1)
 			}
 		case "fooEnumSet":
 			if v.FooEnumSet == nil {
@@ -46,7 +46,7 @@ func (v *XmlEnumsInput) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.FooEnumSet = append(v.FooEnumSet, e1)
+				v.FooEnumSet = restxml.Append(d, v.FooEnumSet, e1)
 			}
 		case "fooEnumMap":
 			if v.FooEnumMap == nil {
@@ -75,7 +75,7 @@ func (v *XmlEnumsInput) decodeXML(d *restxml.Decoder) {
 					}
 				}
 				if k1 != nil {
-					v.FooEnumMap[*k1] = e1
+					restxml.Put(d, v.FooEnumMap, *k1, e1)
 				}
 			}
 		default:

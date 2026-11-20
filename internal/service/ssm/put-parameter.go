@@ -65,7 +65,12 @@ func checkPut(name string, in *ssmapi.PutParameterInput) error {
 			"AddTagsToResource or RemoveTagsFromResource.")
 	}
 
-	return reservedNameError(name)
+	err = reservedNameError(name)
+	if err != nil {
+		return err
+	}
+
+	return checkPolicies(in.Policies)
 }
 
 // put stores the version a put makes and returns it. The caller holds the lock

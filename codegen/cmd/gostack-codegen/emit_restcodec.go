@@ -421,7 +421,7 @@ func (x *xmlEmitter) decodeMember(f *field, seen map[string]bool) error {
 
 	switch {
 	case r.shape.Type == spec.TypeStructure:
-		p.f("\t\t\t%s = &%s{}", target, x.g.goTypeName(r.name))
+		p.f("\t\t\t%s = restxml.New[%s](d)", target, x.g.goTypeName(r.name))
 		p.f("\t\t\t%s.decodeXML(d)", target)
 
 		return nil
@@ -436,7 +436,7 @@ func (x *xmlEmitter) decodeMember(f *field, seen map[string]bool) error {
 		p.f("\t\t\tvar e1 %s", et)
 
 		err = x.decodeInto(elem, "e1", elemDepth)
-		p.f("\t\t\t%s = append(%s, e1)", target, target)
+		p.f("\t\t\t%s = restxml.Append(d, %s, e1)", target, target)
 
 		return err
 	case r.flat && r.shape.Type == spec.TypeMap:
@@ -571,7 +571,7 @@ func (x *xmlEmitter) decodeList(r ref, target string, depth int) error {
 		return err
 	}
 
-	p.f("%s = append(%s, e%d)", target, target, depth)
+	p.f("%s = restxml.Append(d, %s, e%d)", target, target, depth)
 	p.f("}")
 
 	return nil
@@ -619,7 +619,7 @@ func (x *xmlEmitter) entry(r ref, target string, depth int) error {
 	p.f("}")
 	p.f("}")
 	p.f("if k%d != nil {", depth)
-	p.f("%s[*k%d] = e%d", target, depth, depth)
+	p.f("restxml.Put(d, %s, *k%d, e%d)", target, depth, depth)
 	p.f("}")
 
 	return nil

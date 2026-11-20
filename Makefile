@@ -76,7 +76,18 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            before each round, so a layout shift is not read as a regression.
 #                            Writes BENCH_BASE_OUT
 #                            and BENCH_HEAD_OUT for benchstat. Each tree builds with its own pinned
-#                            toolchain.
+#                            toolchain. With no BENCH_PLAN it runs every benchmark; BENCH_PLAN names
+#                            a file of "<import path> <bench regex>" lines, one CI shard's share, and
+#                            the target fails when the plan is missing, empty or malformed, or names
+#                            a package a tree holds no benchmark of. A regex that matches no
+#                            benchmark of its package does not fail it: `bench join` does.
+#   make bench-select BASE=<dir> HEAD=<dir>
+#                            what CI compares: builds both trees' benchmark binaries at one layout,
+#                            keeps the packages whose binary differs, and packs them into shards of
+#                            about BENCH_SHARD_BUDGET, a unit past that into a shard of its own, and
+#                            fails a unit past BENCH_SHARD_LIMIT, what a shard job holds (go run
+#                            ./bench select). Writes the shards to BENCH_MATRIX and prints the
+#                            selection.
 #   make bench-system      the system bench, full profile: builds the images, measures gostack,
 #                            gostack-slim and the LocalStack image the parity harness built (make
 #                            parity-baseline), writes bench/results/<date>-<sha>.json and .md, then
@@ -93,6 +104,13 @@ BENCH_OUT ?= bin/bench.txt
 BENCH_AB_DIR ?= bin/bench-ab
 BENCH_BASE_OUT ?= $(BENCH_AB_DIR)/base.txt
 BENCH_HEAD_OUT ?= $(BENCH_AB_DIR)/head.txt
+BENCH_PLAN ?=
+BENCH_BUILD_FLAGS ?=
+BENCH_SELECT_DIR ?= bin/bench-select
+BENCH_MATRIX ?= $(BENCH_SELECT_DIR)/matrix.json
+BENCH_SHARD_BUDGET ?= 40m
+# The shard job's timeout-minutes in .github/workflows/bench.yml.
+BENCH_SHARD_LIMIT ?= 60m
 # bench-ab runs this Makefile in each tree, so that tree's go.mod pins the toolchain.
 BENCH_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BENCH_SYSTEM_ARGS ?=
@@ -103,7 +121,7 @@ BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image 
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-system bench-system-quick
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-select bench-system bench-system-quick
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -224,7 +242,11 @@ bench:
 # run. The binaries run with -vet=off for the reason given above bench. A round
 # runs every benchmark of one tree once (-test.count=1); the rounds go base
 # head, head base, ..., so a steady drift cancels. A failing link or round
-# prints what went wrong and fails.
+# prints what went wrong and fails. BENCH_PLAN, a file of "<import path>
+# <bench regex>" lines that `make bench-select` writes for each CI shard, limits
+# both trees to the packages it names and each package to the benchmarks its
+# regex matches; without it every benchmark runs. A plan that is missing, empty
+# or names a package a tree holds no benchmark of fails the build (bench-build).
 bench-ab:
 	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-ab BASE=<dir> HEAD=<dir>' >&2; exit 2; }
 	@mkdir -p $(dir $(BENCH_BASE_OUT)) $(dir $(BENCH_HEAD_OUT))
@@ -232,16 +254,18 @@ bench-ab:
 	@round=1; while [ $$round -le $(BENCH_COUNT) ]; do \
 		start=$$(date +%s); \
 		$(MAKE) -s --no-print-directory -C $(BASE) -f $(BENCH_MAKEFILE) bench-build \
-			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/base BENCH_LAYOUT=$$((2 * round - 1)) || exit 1; \
+			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/base BENCH_LAYOUT=$$((2 * round - 1)) \
+			BENCH_PLAN=$(if $(BENCH_PLAN),$(abspath $(BENCH_PLAN))) || exit 1; \
 		$(MAKE) -s --no-print-directory -C $(HEAD) -f $(BENCH_MAKEFILE) bench-build \
-			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/head BENCH_LAYOUT=$$((2 * round)) || exit 1; \
+			BENCH_BIN=$(abspath $(BENCH_AB_DIR))/head BENCH_LAYOUT=$$((2 * round)) \
+			BENCH_PLAN=$(if $(BENCH_PLAN),$(abspath $(BENCH_PLAN))) || exit 1; \
 		echo "round $$round/$(BENCH_COUNT) link: $$(($$(date +%s) - start))s"; \
 		if [ $$((round % 2)) -eq 1 ]; then order='base head'; else order='head base'; fi; \
 		for side in $$order; do \
 			if [ $$side = base ]; then out=$(BENCH_BASE_OUT); else out=$(BENCH_HEAD_OUT); fi; \
 			start=$$(date +%s); \
-			while read -r bin dir; do \
-				(cd "$$dir" && "$(abspath $(BENCH_AB_DIR))/$$side/$$bin" -test.run '^$$' -test.bench . -test.benchmem \
+			while read -r bin dir bench pkg; do \
+				(cd "$$dir" && "$(abspath $(BENCH_AB_DIR))/$$side/$$bin" -test.run '^$$' -test.bench "$$bench" -test.benchmem \
 					-test.benchtime=$(BENCH_TIME) -test.count=1 -test.timeout=30m </dev/null) >>"$$out" || { cat "$$out"; exit 1; }; \
 			done <$(abspath $(BENCH_AB_DIR))/$$side/manifest; \
 			echo "round $$round/$(BENCH_COUNT) $$side: $$(($$(date +%s) - start))s"; \
@@ -249,21 +273,65 @@ bench-ab:
 		round=$$((round + 1)); \
 	done
 
-# Builds the test binary of every package of the current tree that holds a
-# Benchmark function into BENCH_BIN (an absolute path) and lists each as
-# "<binary> <package dir>" in BENCH_BIN/manifest. bench-ab runs it in each tree
-# with -C, so that tree's go.mod sets GOTOOLCHAIN. BENCH_LAYOUT, when set to a
-# nonzero number, links with -randlayout=BENCH_LAYOUT, which shuffles the order
-# of the functions in the binary with that seed.
+# Builds the test binary of every package of the current tree with a
+# "func Benchmark" line in a _test.go file (a grep, so a fixture string counts
+# too: `bench select` drops a package whose binary lists no benchmark) into BENCH_BIN (an absolute path) and lists each as
+# "<binary> <package dir> <bench regex> <import path>" in BENCH_BIN/manifest.
+# bench-ab and bench-select run it in each tree with -C, so that tree's go.mod
+# sets GOTOOLCHAIN. BENCH_LAYOUT, when set to a nonzero number, links with
+# -randlayout=BENCH_LAYOUT, which shuffles the order of the functions in the
+# binary with that seed. BENCH_PLAN (an absolute path) builds only the packages
+# it names, with its regex; otherwise every package gets ".". The build fails
+# when the plan is missing or empty, has a line that is not "<import path> <bench
+# regex>" or names a package twice, or names a package this tree holds no
+# benchmark of: a plan that built nothing would measure nothing and pass.
+# BENCH_BUILD_FLAGS adds flags to go test -c. A binary's name is its import path
+# with each _ written _u and each / written _s, so no two paths share one.
 bench-build:
 	@rm -rf $(BENCH_BIN) && mkdir -p $(BENCH_BIN) && : >$(BENCH_BIN)/manifest
+	@if [ -n "$(BENCH_PLAN)" ]; then \
+		test -s "$(BENCH_PLAN)" || { echo 'bench-build: BENCH_PLAN $(BENCH_PLAN) is missing or empty' >&2; exit 1; }; \
+		awk 'NF == 0 { next } { n++ } NF != 2 || seen[$$1]++ { bad = 1; print "bench-build: BENCH_PLAN line is not a new <import path> <bench regex>: " $$0 > "/dev/stderr" } END { if (n == 0) { print "bench-build: BENCH_PLAN names no package" > "/dev/stderr"; bad = 1 } exit bad }' "$(BENCH_PLAN)" || exit 1; \
+	fi
 	@go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' $(BENCH_PKGS) >$(BENCH_BIN)/packages
 	@while read -r pkg dir; do \
 		test -n "$$pkg" && grep -qs '^func Benchmark' "$$dir"/*_test.go || continue; \
-		bin="$$(echo "$$pkg" | tr / _).test"; \
-		go test -c -vet=off $(if $(BENCH_LAYOUT),-ldflags=-randlayout=$(BENCH_LAYOUT)) -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
-		echo "$$bin $$dir" >>$(BENCH_BIN)/manifest; \
+		bench=.; \
+		if [ -n "$(BENCH_PLAN)" ]; then \
+			bench="$$(awk -v pkg="$$pkg" '$$1 == pkg { print $$2 }' "$(BENCH_PLAN)")"; \
+			test -n "$$bench" || continue; \
+		fi; \
+		bin="$$(echo "$$pkg" | sed 's/_/_u/g; s|/|_s|g').test"; \
+		go test -c -vet=off $(BENCH_BUILD_FLAGS) $(if $(BENCH_LAYOUT),-ldflags=-randlayout=$(BENCH_LAYOUT)) -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
+		echo "$$bin $$dir $$bench $$pkg" >>$(BENCH_BIN)/manifest; \
 	done <$(BENCH_BIN)/packages
+	@if [ -n "$(BENCH_PLAN)" ]; then \
+		awk 'FILENAME == ARGV[1] { built[$$4] = 1; next } NF && !built[$$1] { print "bench-build: BENCH_PLAN names " $$1 ", which holds no benchmark here" > "/dev/stderr"; bad = 1 } END { exit bad }' $(BENCH_BIN)/manifest "$(BENCH_PLAN)" || exit 1; \
+	fi
+
+# bench-select decides what CI's bench-ab shards compare (docs/standards.md,
+# "Benchmarks"). It builds the benchmark binaries of BASE and of HEAD with no
+# random layout and -trimpath, which keeps the checkout's path out of the
+# binary, and HEAD's again with an empty build cache, to show the build is
+# reproducible; then `bench select` keeps the packages whose binaries differ,
+# times their benchmarks once, and those only the head holds, and packs the
+# compared ones into shards of about BENCH_SHARD_BUDGET, written to
+# BENCH_MATRIX.
+bench-select:
+	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-select BASE=<dir> HEAD=<dir>' >&2; exit 2; }
+	@rm -rf $(abspath $(BENCH_SELECT_DIR)) && mkdir -p $(abspath $(BENCH_SELECT_DIR)) $(dir $(abspath $(BENCH_MATRIX)))
+	@for side in base head again; do \
+		start=$$(date +%s); \
+		if [ $$side = base ]; then tree=$(BASE); else tree=$(HEAD); fi; \
+		if [ $$side = again ]; then cache=$(abspath $(BENCH_SELECT_DIR))/cache; else cache=$$(go env GOCACHE); fi; \
+		GOCACHE=$$cache $(MAKE) -s --no-print-directory -C $$tree -f $(BENCH_MAKEFILE) bench-build \
+			BENCH_BIN=$(abspath $(BENCH_SELECT_DIR))/$$side BENCH_BUILD_FLAGS=-trimpath BENCH_LAYOUT= BENCH_PLAN= || exit 1; \
+		echo "build $$side: $$(($$(date +%s) - start))s"; \
+	done
+	@rm -rf $(abspath $(BENCH_SELECT_DIR))/cache
+	go run ./bench select -base $(abspath $(BENCH_SELECT_DIR))/base -head $(abspath $(BENCH_SELECT_DIR))/head \
+		-again $(abspath $(BENCH_SELECT_DIR))/again -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) \
+		-budget $(BENCH_SHARD_BUDGET) -limit $(BENCH_SHARD_LIMIT) -matrix $(abspath $(BENCH_MATRIX))
 
 bench-system: image image-slim
 	go run ./bench run -profile full $(BENCH_RUN)

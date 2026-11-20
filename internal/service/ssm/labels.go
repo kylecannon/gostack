@@ -163,9 +163,10 @@ func versionNotFound(n int64, name string) error {
 
 // policiesOf is moto's reading of a parameter's Policies: a JSON list, each
 // entry listed as its own text, type and a Finished status. Anything else
-// lists nothing.
+// lists nothing, and so does a document past what a put takes, so the cost of
+// a listing does not grow with the size of a stored one.
 func policiesOf(policies *string) []ssmapi.ParameterInlinePolicy {
-	if policies == nil || *policies == "" {
+	if policies == nil || *policies == "" || len(*policies) > policiesMaxBytes {
 		return nil
 	}
 

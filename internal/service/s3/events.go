@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
@@ -337,7 +338,7 @@ func (ev *event) record(configID string) eventRecord {
 			Bucket: eventBucket{
 				Name:          ev.bucket,
 				OwnerIdentity: principal{PrincipalID: recordOwnerPrincipal},
-				ARN:           "arn:" + partitionOf(ev.region) + ":s3:::" + ev.bucket,
+				ARN:           "arn:" + account.Partition(ev.region) + ":s3:::" + ev.bucket,
 			},
 			Object: eventObject{Key: ev.key, Sequencer: recordSequencer},
 		},
@@ -390,24 +391,6 @@ func (ev *event) glacierData() *glacierEvent {
 		LifecycleRestorationExpiryTime: expires.Format(eventTimeFormat),
 		LifecycleRestoreStorageClass:   ev.storageClass,
 	}}
-}
-
-// partitionOf is the AWS partition of a region.
-func partitionOf(region string) string {
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		return "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		return "aws-us-gov"
-	case strings.HasPrefix(region, "us-isob-"):
-		return "aws-iso-b"
-	case strings.HasPrefix(region, "us-iso-"):
-		return "aws-iso"
-	case strings.HasPrefix(region, "eusc-"):
-		return "aws-eusc"
-	default:
-		return "aws"
-	}
 }
 
 // encodeJSON is json.dumps for a value that needs no HTML escaping.

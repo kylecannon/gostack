@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	"github.com/kylecannon/gostack/internal/awserr"
 )
 
@@ -122,7 +123,8 @@ type Queue struct {
 // newQueue makes a queue after checking its name and attributes. A caller holds
 // the lock of the State the queue goes into, so seq is unique.
 func newQueue(
-	name, account, region string, attrs, tags map[string]string, seq uint64, now time.Time, contents func(*Queue) Contents,
+	name, accountID, region string, attrs, tags map[string]string, seq uint64, now time.Time,
+	contents func(*Queue) Contents,
 ) (*Queue, *awserr.Error) {
 	kind := kindStandard
 	if strings.EqualFold(attrs[attrFifoQueue], attrValueTrue) {
@@ -153,9 +155,9 @@ func newQueue(
 
 	q := &Queue{
 		name:    name,
-		account: account,
+		account: accountID,
 		region:  region,
-		arn:     queueARN(account, region, name),
+		arn:     queueARN(accountID, region, name),
 		kind:    kind,
 		seq:     seq,
 		tags:    maps.Clone(tags),
@@ -191,23 +193,6 @@ func validateQueueName(name string, kind queueKind) *awserr.Error {
 }
 
 // queueARN is the ARN of a queue.
-func queueARN(account, region, name string) string {
-	return "arn:" + partition(region) + ":sqs:" + region + ":" + account + ":" + name
-}
-
-// partition is the ARN partition of a region.
-func partition(region string) string {
-	for _, p := range [...]struct{ prefix, name string }{
-		{"cn-", "aws-cn"},
-		{"us-gov-", "aws-us-gov"},
-		{"us-iso-", "aws-iso"},
-		{"us-isob-", "aws-iso-b"},
-		{"eusc-", "aws-eusc"},
-	} {
-		if strings.HasPrefix(region, p.prefix) {
-			return p.name
-		}
-	}
-
-	return "aws"
+func queueARN(accountID, region, name string) string {
+	return "arn:" + account.Partition(region) + ":sqs:" + region + ":" + accountID + ":" + name
 }

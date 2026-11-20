@@ -61,10 +61,10 @@ func (v *XmlUnionShape) decodeXML(d *restxml.Decoder) {
 		case "doubleValue":
 			v.DoubleValue = d.Float64()
 		case "unionValue":
-			v.UnionValue = &XmlUnionShape{}
+			v.UnionValue = restxml.New[XmlUnionShape](d)
 			v.UnionValue.decodeXML(d)
 		case "structValue":
-			v.StructValue = &XmlNestedUnionStruct{}
+			v.StructValue = restxml.New[XmlNestedUnionStruct](d)
 			v.StructValue.decodeXML(d)
 		default:
 			d.Skip()
@@ -81,7 +81,7 @@ func (v *XmlUnionsInput) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "unionValue":
-			v.UnionValue = &XmlUnionShape{}
+			v.UnionValue = restxml.New[XmlUnionShape](d)
 			v.UnionValue.decodeXML(d)
 		default:
 			d.Skip()
