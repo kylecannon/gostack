@@ -54,7 +54,7 @@ func getAction(tableName, id string) api.TransactGetItem {
 func Test_transact_oppositeOrder(t *testing.T) {
 	const rounds = 1000
 
-	p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} })
+	p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)
 	directTable(t, p, "tabA")
 	directTable(t, p, "tabB")
 
@@ -148,7 +148,7 @@ func Test_transact_oppositeOrder(t *testing.T) {
 // token is free again.
 func Test_transact_tokenWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} })
+		p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)
 		directTable(t, p, "tab1")
 
 		write := func(ctx context.Context, v string) error {

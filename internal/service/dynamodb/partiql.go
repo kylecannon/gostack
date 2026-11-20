@@ -214,7 +214,7 @@ func (p *Provider) runSelect(
 		return &selectPage{items: out.Items, last: out.LastEvaluatedKey, used: out.ConsumedCapacity}, nil
 	}
 
-	start, ok := startFrom(q.start, key.Hash.Name, plan.hash)
+	start, ok := startFrom(q, plan, key, r)
 	if !ok {
 		return &selectPage{items: []map[string]api.AttributeValue{}}, nil
 	}
@@ -292,37 +292,67 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 		return nil, err
 	}
 
-	plan := &queryPlan{keyCond: keyCond, filter: filter}
-	if hv, ok := r.values[v]; ok {
-		plan.hash = &hv
-	}
-
-	return plan, nil
+	return &queryPlan{keyCond: keyCond, filter: filter}, nil
 }
 
 // queryPlan is the expressions of the Query a SELECT runs as.
 type queryPlan struct {
 	keyCond string
 	filter  *string
-	hash    *api.AttributeValue
 }
 
-// startFrom is where a Query that pins hash starts after start, a NextToken
+// startFrom is where the Query of plan starts after q.start, a NextToken that
 // another statement may have given. DynamoDB Local orders the start key with
-// the whole table's keys: from a lower hash key the Query reads all of its
-// own items, from a higher one none (verification/SQ-229 probe6). ok is false
-// for none.
-func startFrom(start value.Item, hashName string, hash *api.AttributeValue) (value.Item, bool) {
-	sv, has := start[hashName]
-	if start == nil || hash == nil || !has || value.Equal(&sv, hash) {
-		return start, true
-	}
-
-	if value.Compare(hash, &sv) > 0 {
+// the whole table's keys and reads what follows it that meets the key
+// condition (verification/SQ-229 probe6): from a lower hash key the Query
+// reads all of its own items, from a higher one none, and a start key on
+// either side of the range condition starts at the beginning or reads
+// nothing. ok is false for nothing. A start key the key condition cannot
+// judge is left to the Query to refuse.
+func startFrom(q *selectQuery, plan *queryPlan, key table.KeySchema, r *render) (value.Item, bool) {
+	if q.start == nil {
 		return nil, true
 	}
 
-	return nil, false
+	kc, err := expression.ParseKeyCondition(plan.keyCond, key,
+		expression.Substitutions{Names: r.attributeNames(), Values: r.attributeValues()}, map[string]struct{}{})
+	if err != nil {
+		return q.start, true
+	}
+
+	hashName, hash := kc.Hash()
+
+	sv, has := q.start[hashName]
+	if !has {
+		return q.start, true
+	}
+
+	if !value.Equal(&sv, &hash) {
+		return nil, value.Compare(&hash, &sv) > 0
+	}
+
+	rangeName, cond, ok := kc.Range()
+
+	rv, has := q.start[rangeName]
+	if !ok || !has || cond.Meets(&rv) {
+		return q.start, true
+	}
+
+	return nil, startBelow(&rv, cond) == q.forward
+}
+
+// startBelow reports whether v, which does not meet cond, sorts before the
+// range key values that do. Those form one run of the sort order, so v is
+// before or after all of them.
+func startBelow(v *api.AttributeValue, cond table.SortCondition) bool {
+	switch cond.Op {
+	case table.SortLT, table.SortLE:
+		return false
+	case table.SortGT, table.SortGE:
+		return true
+	default: // SortEQ, SortBetween, SortBeginsWith: the first value is the low end
+		return value.Compare(v, &cond.Values[0]) < 0
+	}
 }
 
 // isRangeCond reports whether c is a condition on the range attribute name a

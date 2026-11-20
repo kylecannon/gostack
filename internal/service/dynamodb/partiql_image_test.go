@@ -47,6 +47,7 @@ func Test_partiql_batchDuplicateRuns(t *testing.T) {
 	}})
 	got := s.ok(t, opGet, `{"TableName":"pdup","Key":{"id":{"S":"a"}}}`)
 	require.Equal(t, "3", path(t, got, "Item", "x", "N"), "the repeating statement ran")
+	require.Equal(t, int64(1), s.changed.Load(), "a refused batch that wrote reports its change for persistence")
 	require.False(t, s.present(t, "pdup", "d"), "the statement after the repeat did not run")
 
 	run(t, s, []step{{
@@ -66,6 +67,20 @@ func Test_partiql_batchDuplicateRuns(t *testing.T) {
 			`{"Item":{"id":{"S":"g"}}}`,
 		},
 	})
+
+	before := s.changed.Load()
+
+	run(t, s, []step{
+		{
+			"repeated read", opBatchStmt, batch("SELECT * FROM pdup WHERE id = `a`", "SELECT * FROM pdup WHERE id = `a`"),
+			http.StatusBadRequest, dup,
+		},
+		{
+			"repeated failed write", opBatchStmt, batch("UPDATE pdup SET x = 1 WHERE id = `nope`",
+				"UPDATE pdup SET x = 2 WHERE id = `nope`"), http.StatusBadRequest, dup,
+		},
+	})
+	require.Equal(t, before, s.changed.Load(), "a refused batch that wrote nothing reports no change")
 }
 
 // Test_partiql_imageMessages: the messages the LocalStack image answers for a
@@ -178,4 +193,15 @@ func Test_partiql_tokenOtherHash(t *testing.T) {
 
 	lower := s.ok(t, opStatement, stmt("SELECT * FROM ptok WHERE id = `g` ORDER BY sk DESC", `,"NextToken":"`+token+`"`))
 	require.Empty(t, lower["Items"], "a lower hash key reads none, in either direction")
+
+	// The token's start key, sk 0, is below the range condition sk > 1: an
+	// ascending read starts at the condition's first item, a descending one
+	// reads nothing (verification/SQ-229 probe6, "tq6 up -> h range").
+	above := s.ok(t, opStatement, stmt("SELECT * FROM ptok WHERE id = `h` AND sk > `1`", `,"NextToken":"`+token+`"`))
+	require.Len(t, above["Items"], 1, "%v", above)
+	require.Equal(t, "2", path(t, above, "Items", 0, "sk", "S"))
+
+	down := s.ok(t, opStatement, stmt("SELECT * FROM ptok WHERE id = `h` AND sk > `1` ORDER BY sk DESC",
+		`,"NextToken":"`+token+`"`))
+	require.Empty(t, down["Items"], "a descending read from below the condition reads none")
 }

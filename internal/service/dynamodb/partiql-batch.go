@@ -114,10 +114,13 @@ func (p *Provider) BatchExecuteStatement(
 	c := p.caller(ctx)
 	out := &api.BatchExecuteStatementOutput{Responses: make([]api.BatchStatementResponse, len(stmts))}
 	seen := map[string]struct{}{}
+	wrote := false
 
 	// DynamoDB Local runs the statements in order and refuses the batch at
 	// the first that names an item an earlier one named, after running that
 	// one too: what ran before stays written (verification/SQ-229 probe5).
+	// The gateway saves nothing after a refused call, so the batch reports
+	// those writes itself.
 	for i, stmt := range stmts {
 		b := batchStatement{err: stmt.err}
 
@@ -133,8 +136,13 @@ func (p *Provider) BatchExecuteStatement(
 		}
 
 		out.Responses[i] = p.runBatch(ctx, &b)
+		wrote = wrote || (b.write != nil && out.Responses[i].Error == nil)
 
 		if dup {
+			if wrote {
+				p.notifyChanged()
+			}
+
 			return nil, value.Invalid(msgBatchDuplicates)
 		}
 	}
@@ -283,4 +291,11 @@ func batchError(err error, table string) api.BatchStatementResponse {
 	}
 
 	return out
+}
+
+// notifyChanged tells persistence about a change the gateway does not see.
+func (p *Provider) notifyChanged() {
+	if p.changed != nil {
+		p.changed(api.Metadata.Name)
+	}
 }

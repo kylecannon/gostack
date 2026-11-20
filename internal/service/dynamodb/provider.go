@@ -69,15 +69,21 @@ type Provider struct {
 	// replicated is set once any table gets a 2019 replica, so the item
 	// operations skip the replica directory until then.
 	replicated atomic.Bool
+	// changed is told, with the service name, about a change that no call to
+	// the gateway reports, so persistence can save it. It may be nil.
+	changed func(name string)
 }
 
 var _ api.Handler = (*Provider)(nil)
 
 // New returns the provider. settings is asked on every call, so an update
-// through /_localstack/config takes effect at once.
-func New(settings func() Settings) *Provider {
+// through /_localstack/config takes effect at once. changed is called with
+// "dynamodb" after a change the gateway does not see: a call that wrote and
+// then failed. It may be nil.
+func New(settings func() Settings, changed func(name string)) *Provider {
 	return &Provider{
 		settings: settings,
+		changed:  changed,
 		states:   store.NewBundle(func(string, string) *State { return newState() }, (*State).reset),
 		accounts: store.NewBundle(func(string, string) *accountState { return newAccountState() }, (*accountState).reset),
 		now:      time.Now,

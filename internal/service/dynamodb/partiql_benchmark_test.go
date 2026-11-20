@@ -13,7 +13,8 @@ import (
 
 // BenchmarkPartiQLSelect is ExecuteStatement's SELECT against the call it
 // compiles to: by key against a Query for that one item, and with no WHERE
-// against a Scan, on the readTable holding n items of each payload size, on each
+// against a Scan, and by key through BatchExecuteStatement and ExecuteTransaction,
+// on the readTable holding n items of each payload size, on each
 // of concurrency simultaneous callers. One op reads the whole result,
 // following NextToken or LastEvaluatedKey. Names carry the axes, for example
 //
@@ -37,6 +38,12 @@ func BenchmarkPartiQLSelect(b *testing.B) {
 	}
 }
 
+// The read and via axis values the cells share.
+const (
+	readByKey = "key"
+	viaBatch  = "batch"
+)
+
 // selectCell is one read of the matrix: the request and the items it reads.
 type selectCell struct {
 	read, via, op, body string
@@ -49,11 +56,13 @@ func selectCells(b *testing.B, s *stack, n, size int) {
 	b.Helper()
 
 	cells := []selectCell{
-		{"key", "statement", opStatement, stmt("SELECT * FROM bench WHERE pk = `a` AND sk = 0"), 1},
-		{"key", "call", opQuery, `{"TableName":"bench","KeyConditionExpression":"pk = :h AND sk = :s",` +
+		{readByKey, "statement", opStatement, stmt("SELECT * FROM bench WHERE pk = `a` AND sk = 0"), 1},
+		{readByKey, "call", opQuery, `{"TableName":"bench","KeyConditionExpression":"pk = :h AND sk = :s",` +
 			`"ExpressionAttributeValues":{":h":{"S":"a"},":s":{"N":"0"}}`, 1},
 		{"unkeyed", "statement", opStatement, stmt("SELECT * FROM bench"), n},
 		{"unkeyed", "call", opScan, `{"TableName":"bench"`, n},
+		{readByKey, viaBatch, opBatchStmt, batch("SELECT * FROM bench WHERE pk = `a` AND sk = 0"), 1},
+		{readByKey, "transaction", opTransaction, transaction("SELECT * FROM bench WHERE pk = `a` AND sk = 0"), 1},
 	}
 
 	for _, cell := range cells {
@@ -75,7 +84,11 @@ func selectCells(b *testing.B, s *stack, n, size int) {
 func (s *stack) selectAll(b *testing.B, cell selectCell) error {
 	b.Helper()
 
-	if cell.op != opStatement {
+	switch cell.op {
+	case opStatement:
+	case opBatchStmt, opTransaction:
+		return s.readResponses(b, cell)
+	default:
 		return s.readAll(b, cell.op, cell.body, cell.items)
 	}
 
@@ -110,6 +123,45 @@ func (s *stack) selectAll(b *testing.B, cell selectCell) error {
 
 	if count != cell.items {
 		return fmt.Errorf("statement read %d items, want %d", count, cell.items)
+	}
+
+	return nil
+}
+
+// statementItem is one response of a BatchExecuteStatement or ExecuteTransaction.
+type statementItem struct {
+	Item json.RawMessage `json:"Item"`
+}
+
+// readResponses runs a BatchExecuteStatement or ExecuteTransaction cell and
+// checks each of its statements read an item.
+func (s *stack) readResponses(b *testing.B, cell selectCell) error {
+	b.Helper()
+
+	got := s.call(b, usEast1, cell.op, cell.body)
+	if got.status != 200 {
+		return fmt.Errorf("%s answered %d: %s", cell.op, got.status, got.body)
+	}
+
+	var out struct {
+		Responses []statementItem `json:"Responses"`
+	}
+
+	err := json.Unmarshal([]byte(got.body), &out)
+	if err != nil {
+		return fmt.Errorf("%s response: %w", cell.op, err)
+	}
+
+	read := 0
+
+	for _, r := range out.Responses {
+		if r.Item != nil {
+			read++
+		}
+	}
+
+	if read != cell.items {
+		return fmt.Errorf("%s read %d items, want %d", cell.op, read, cell.items)
 	}
 
 	return nil

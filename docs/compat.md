@@ -158,7 +158,6 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | DynamoDB PartiQL `SELECT` with `WHERE <hash key> IN [...]` | One Query per value, in DynamoDB Local's order | One Scan with the `IN` as its filter: the same items, possibly in another order | Unverified; only the order differs |
 | DynamoDB PartiQL `SELECT ... ORDER BY <range key> DESC` with `Limit` | Reads the first `Limit` items in ascending order and returns them reversed | Reads from the highest range key down, as a Query with `ScanIndexForward` false | The PartiQL `SELECT` reference: `DESC` orders the result descending |
 | DynamoDB `ExecuteStatement` with no `Statement` | `500 InternalError` | `400 ValidationException` "The statement was empty." | A crash is not copied; the message is the one an empty batch gets |
-| DynamoDB `ExecuteStatement` `NextToken` whose start key falls outside the statement's range key condition | Reads the items after the start key that meet the condition | `400 ValidationException` "The provided starting key does not match the range key predicate", as `Query` answers | Unverified; reached only by reusing a token with a changed statement |
 | DynamoDB `DescribeEndpoints` | `400 UnknownOperationException`, from DynamoDB Local | `200` with one endpoint: `Address` is `LOCALSTACK_HOST`, `CachePeriodInMinutes` 1440 | `DescribeEndpoints` API reference: the response is a list of `Endpoint` with `Address` and `CachePeriodInMinutes` |
 
 ### S3 versioning and Object Lock
