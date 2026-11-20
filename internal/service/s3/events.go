@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -402,7 +403,7 @@ func encodeJSON(v any) ([]byte, error) {
 
 	err := enc.Encode(v)
 	if err != nil {
-		return nil, err //nolint:wrapcheck // the callers only log it.
+		return nil, fmt.Errorf("encode JSON: %w", err)
 	}
 
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
