@@ -158,17 +158,16 @@ func (p *Provider) newKey(account, region string, req keyRequest) (*Key, error) 
 		return nil, err
 	}
 
-	// A key that may have no material yet, such as an external one, shows no
-	// material id.
+	// Every key has an internal id, since rotation names its new material with
+	// it; a key that may have no material yet, such as an external one, shows
+	// no material id.
+	_, err = io.ReadFull(p.random, k.internalID[:])
+	if err != nil {
+		return nil, fmt.Errorf("read internal key id: %w", err)
+	}
+
 	if req.material != nil || (req.origin == originAWS && req.spec == specSymmetric) {
-		var internal [16]byte
-
-		_, err = io.ReadFull(p.random, internal[:])
-		if err != nil {
-			return nil, fmt.Errorf("read internal key id: %w", err)
-		}
-
-		k.MaterialID = materialID(internal, k.Material)
+		k.MaterialID = materialID(k.internalID, k.Material)
 	}
 
 	return k, nil

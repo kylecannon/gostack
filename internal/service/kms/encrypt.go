@@ -190,11 +190,12 @@ func (p *Provider) encryptWith(k *Key, plaintext []byte, encryptionContext map[s
 // asymmetric key is, makes LocalStack answer 500; it is KMSInvalidStateException
 // here.
 func (p *Provider) seal(k *Key, plaintext []byte, encryptionContext map[string]string) ([]byte, error) {
-	if !aesKey(k.Material) {
+	material := k.materials().current
+	if !aesKey(material) {
 		return nil, api.NewKMSInvalidStateException(k.ARN + " has no symmetric key material to encrypt with.")
 	}
 
-	blob, err := ciphertext.Seal(k.Material, k.ID, plaintext, ciphertext.Context(encryptionContext), p.random)
+	blob, err := ciphertext.Seal(material, k.ID, plaintext, ciphertext.Context(encryptionContext), p.random)
 	if err != nil {
 		return nil, api.NewKMSInternalException("The ciphertext could not be made: " + err.Error())
 	}
@@ -296,13 +297,16 @@ func open(k *Key, blob *ciphertext.Blob, data []byte, encryptionContext map[stri
 
 	aad := ciphertext.Context(encryptionContext)
 
-	for _, material := range k.decryptionMaterials() {
-		if !aesKey(material) {
-			continue
-		}
+	// LocalStack's order: the current material, then those rotation replaced,
+	// oldest first. The blob does not say which one sealed it.
+	m := k.materials()
 
-		plaintext, err := ciphertext.Open(material, blob, aad)
-		if err == nil {
+	if plaintext, ok := openWith(m.current, blob, aad); ok {
+		return plaintext, nil
+	}
+
+	for _, material := range m.previous {
+		if plaintext, ok := openWith(material, blob, aad); ok {
 			return plaintext, nil
 		}
 	}
@@ -310,11 +314,16 @@ func open(k *Key, blob *ciphertext.Blob, data []byte, encryptionContext map[stri
 	return nil, api.NewInvalidCiphertextException("")
 }
 
-// decryptionMaterials are the materials Decrypt tries, in LocalStack's order:
-// the current one, then those rotation replaced (previous_keys), which no
-// operation makes yet.
-func (k *Key) decryptionMaterials() [][]byte {
-	return [][]byte{k.Material}
+// openWith opens blob under one material, skipping material that is not an
+// AES key.
+func openWith(material []byte, blob *ciphertext.Blob, aad []byte) ([]byte, bool) {
+	if !aesKey(material) {
+		return nil, false
+	}
+
+	plaintext, err := ciphertext.Open(material, blob, aad)
+
+	return plaintext, err == nil
 }
 
 // decryptRSA is KmsKey.decrypt_rsa: OAEP with SHA-256 whatever algorithm the

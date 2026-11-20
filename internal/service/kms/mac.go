@@ -41,7 +41,7 @@ func (p *Provider) GenerateMac(ctx context.Context, in *api.GenerateMacInput) (*
 	}
 
 	return &api.GenerateMacOutput{
-		Mac:          computeMAC(k.Material, algorithm, in.Message),
+		Mac:          computeMAC(k.materials().current, algorithm, in.Message),
 		MacAlgorithm: in.MacAlgorithm,
 		KeyId:        new(k.ARN),
 	}, nil
@@ -70,7 +70,7 @@ func (p *Provider) VerifyMac(ctx context.Context, in *api.VerifyMacInput) (*api.
 		return nil, validation(r.Message())
 	}
 
-	if !hmac.Equal(in.Mac, computeMAC(k.Material, algorithm, in.Message)) {
+	if !hmac.Equal(in.Mac, computeMAC(k.materials().current, algorithm, in.Message)) {
 		return nil, api.NewKMSInvalidMacException("")
 	}
 

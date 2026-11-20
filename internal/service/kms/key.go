@@ -59,17 +59,31 @@ type Key struct {
 	Origin      string
 	MultiRegion bool
 
-	// Material is the symmetric key, and for HMAC keys the MAC key. LocalStack
-	// makes one for every spec.
-	Material []byte
 	// PrivateKey is the PKCS #8 DER of an asymmetric key's private key, and
-	// PublicKey the DER SubjectPublicKeyInfo of its public key.
+	// PublicKey the DER SubjectPublicKeyInfo of its public key. Rotation never
+	// changes them: only a SYMMETRIC_DEFAULT key rotates.
 	PrivateKey []byte
 	PublicKey  []byte
-	// MaterialID is CurrentKeyMaterialId, empty for a key that shows none.
-	MaterialID string
 
-	mu           sync.Mutex
+	// internalID is LocalStack's _internal_key_id, from which a material's id
+	// is made; a replica keeps its primary's.
+	internalID [16]byte
+	// primary is the key a multi-Region replica copies, nil for any other key.
+	primary *regionKey
+
+	mu sync.Mutex
+
+	// Material is the symmetric key, and for HMAC keys the MAC key. LocalStack
+	// makes one for every spec. MaterialID is CurrentKeyMaterialId, empty for a
+	// key that shows none. previous holds the materials rotation replaced,
+	// oldest first (previous_keys), and pending imported material that waits
+	// for RotateKeyOnDemand. Rotation writes the four together under mu, never
+	// into a slice a reader holds; read them through materials.
+	Material   []byte
+	MaterialID string
+	previous   [][]byte
+	pending    []byte
+
 	description  string
 	state        string
 	enabled      bool
@@ -77,6 +91,12 @@ type Key struct {
 	deletionDate time.Time
 	policy       string
 	tags         []tag
+
+	rotation rotation
+	// replicas are the replicas of a multi-Region key, as LocalStack lists
+	// them: a primary's every replica, a replica's those made before it and
+	// itself.
+	replicas []regionKey
 }
 
 // tag is one tag of a key.
@@ -118,14 +138,7 @@ func (k *Key) metadata() *api.KeyMetadata {
 		m.CurrentKeyMaterialId = new(k.MaterialID)
 	}
 
-	if k.MultiRegion {
-		m.MultiRegionConfiguration = &api.MultiRegionConfiguration{
-			MultiRegionKeyType: new("PRIMARY"),
-			PrimaryKey:         &api.MultiRegionKey{Arn: new(k.ARN), Region: new(k.Region)},
-			// An empty list, not none: LocalStack and AWS both send [].
-			ReplicaKeys: []api.MultiRegionKey{},
-		}
-	}
+	m.MultiRegionConfiguration = k.multiRegionLocked()
 
 	return m
 }
