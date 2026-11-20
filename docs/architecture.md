@@ -260,6 +260,87 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
   for 20s and responses stream.
 - `DisableGeneralOptionsHandler` is set.
 
+### Request memory
+
+The rule: for every protocol and every path a client body takes, the heap one
+request allocates is at most four times its decoded size plus a constant
+(`protocol.DecodeSlack`, 16 MiB, and 8 MiB of bookkeeping), for any body up to
+`GOSTACK_MAX_REQUEST_BODY`; and what all requests hold at once is bounded by
+`GOSTACK_MAX_IN_FLIGHT_BODIES`, not by the number of connections. A request
+that would pass a bound is refused with its protocol's own error before the
+allocation. `docs/compat.md` lists the answers.
+
+Settings, all read at start-up:
+
+| Variable | Default | Sized for |
+|---|---|---|
+| `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances. Four bodies at the cap, each decoding to its budget, hold about 4 x (16 + 48) MiB, which a 512 MiB container survives beside the runtime and the services' state. |
+| `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
+
+How each piece is bounded, and why this way:
+
+- **Decode budget, by cost, per service.** Decoding charges what it allocates
+  against `DecodeBudgetAt(n, factor)` = factor x the bytes read + `DecodeSlack`,
+  factor 2 unless `service.Registration.DecodeFactor` sets one. A count of
+  elements was too coarse: `{}` is 3 bytes and decodes to a 56-byte SQS entry,
+  `<Rule/>` is 7 and decodes to a 104-byte `LifecycleRule`, so the cost is what
+  is charged: a slice element at 5 times its size (append's regrowth), a map
+  entry at its key and value, text at twice its length. A botocore `max` trait
+  would stop only lists that carry one; the SQS batch limit of 10 lives in the
+  handler. json (`awsjson.DecodeWithin`) walks a body whose bound passes the
+  budget with a plan per Go type before unmarshalling; rest-xml charges each
+  token and each append as it decodes, following `InputOffset`; query charges
+  128 bytes (`query.PairCost`) per pair before parsing. A service whose legal
+  requests amplify more declares its own factor when it lands: DynamoDB's
+  `AttributeValue` lists reach about 18 times their size.
+- **Types that decode themselves** are free leaves only when listed
+  (`protocol.Time`, ISO8601, RFC822); any other is planned through its fields
+  or charged as an untyped value. `Test_Plan_EveryUnmarshalerInTheAPIIsKnown`
+  fails on one that is neither.
+- **XML tags.** encoding/xml builds a whole tag before a decoder sees it, so a
+  start or end tag is refused while it is read once it passes 4 KiB
+  (`restxml.MaxTag`; the longest S3 tag is under 100 bytes). encoding/xml reads
+  the body through `restxml`'s `tokenLimit`, which the decoder tells where each
+  token starts at the xml.Decoder's own `InputOffset`; a token is a tag when its
+  first two bytes are `<` and anything but `!` or `?`. No second parser has to
+  agree with encoding/xml on where a comment, CDATA section, processing
+  instruction or DOCTYPE ends.
+- **Copies.** `protocol.ReadBody` sizes its buffer by what arrives, not by a
+  stated Content-Length. The SQS number echo (`sqs/sent-number.go`) reads the
+  one member from the body's tokens instead of a second parse into `any`.
+- **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
+  The gateway meters a body from a listener that states more than
+  `protocol.FreeBody` (64 KiB) or no length, after gzip decoding, so a
+  compressed body is charged at its decoded size. A smaller body takes no lock
+  and no atomic. The meter charges only once a buffering reader arms it
+  (`ReadBody`, `LimitBody`, `rest.CapBody`), by bytes read in doubling steps,
+  so an S3 object stream is never charged and a client that states 16 MiB and
+  sends one byte holds one step. Decoding past `protocol.FreeDecode` (1 MiB)
+  charges the same pool in 1 MiB steps, capped per request at the bound less
+  one body at the cap, so a request alone always fits. Waiters are served in
+  order, holders growing ahead of new bodies, for up to 5 s, then answered with
+  the protocol's throttling error. Charges are given back when the handler
+  returns; an SQS long poll gives its back before it waits. Calls one service
+  makes to another through `inproc` carry `request.MarkInternal` and are not
+  charged, since the outside request that caused them was.
+- **Idle bodies.** An armed meter sets the connection's read deadline
+  `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` ahead before each read and clears it at
+  the end of the body and when the charge is given back, so a request held open
+  after its body, and the connection's next request, never meet it.
+- **`GOMEMLIMIT`** is honored by the Go runtime as it is. Deriving a default
+  from the container's memory limit is a separate decision with its own
+  trade-off (garbage collection under pressure), so nothing here sets one.
+
+Residuals: each connection may hold its free allowances (64 KiB of body, 1 MiB
+of decoding) outside the pool, and a client that trickles one byte per idle
+period keeps its charge.
+
+`Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
+`Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
+`Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies` and
+`Test_Decoder_TagLimit` pin these.
+
 ### Protocol details with explicit tests
 
 - `Expect: 100-continue` with an empty body.
