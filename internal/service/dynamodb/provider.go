@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -65,6 +66,9 @@ type Provider struct {
 	now      func() time.Time
 	random   func() float64
 	expiry   expiry
+	// replicated is set once any table gets a 2019 replica, so the item
+	// operations skip the replica directory until then.
+	replicated atomic.Bool
 }
 
 var _ api.Handler = (*Provider)(nil)
@@ -173,6 +177,8 @@ type caller struct {
 	account string
 	region  string
 	state   *State
+	// shared is DYNAMODB_SHARE_DB, as the call read it.
+	shared bool
 }
 
 // caller returns the caller of the request in ctx.
@@ -182,8 +188,8 @@ func (p *Provider) caller(ctx context.Context) caller {
 		rc = &request.Context{AccountID: sharedAccount, Region: usEast1}
 	}
 
-	c := caller{account: rc.AccountID, region: regionName(rc.Region)}
-	if p.settings().ShareDB {
+	c := caller{account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB}
+	if c.shared {
 		c.state = p.states.Get(sharedAccount, sharedRegion)
 	} else {
 		c.state = p.states.Get(c.account, c.region)

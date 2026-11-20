@@ -344,4 +344,12 @@ func Test_removeExpired_counts(t *testing.T) {
 
 	require.Equal(t, 5, dynamodb.RemoveExpired(s.provider))
 	require.Equal(t, 0, dynamodb.RemoveExpired(s.provider))
+
+	// expire checks the stored item again: one rewritten with a later time
+	// to live since the sweep read it is kept.
+	s.putTTL(t, "counted", "rewritten", `{"N":"500"}`)
+	require.False(t, dynamodb.Expire(s.provider, accountID, usEast1, "counted", "rewritten", "ttl", "499"))
+	require.True(t, s.present(t, "counted", "rewritten"))
+	require.True(t, dynamodb.Expire(s.provider, accountID, usEast1, "counted", "rewritten", "ttl", "500"))
+	require.False(t, s.present(t, "counted", "rewritten"))
 }

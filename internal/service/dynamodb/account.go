@@ -92,7 +92,7 @@ func (s replicaSet) replicatedTo(region string) bool {
 
 // account returns the caller's account-wide state.
 func (p *Provider) account(c caller) *accountState {
-	if p.settings().ShareDB {
+	if c.shared {
 		return p.accounts.Get(sharedAccount, "")
 	}
 
@@ -103,7 +103,7 @@ func (p *Provider) account(c caller) *accountState {
 // the owning region's when the table is replicated to the caller's region, as
 // LocalStack's get_global_table_region forwards it, else the caller's own.
 func (p *Provider) home(c caller, name string) (*State, string) {
-	if p.settings().ShareDB {
+	if c.shared || !p.replicated.Load() {
 		return c.state, c.region
 	}
 
@@ -125,7 +125,7 @@ func (p *Provider) lookupHome(c caller, name *string) (string, *tableEntry, erro
 
 	state, _ := p.home(c, tableName(*name))
 
-	return caller{account: c.account, region: c.region, state: state}.lookup(name)
+	return caller{account: c.account, region: c.region, state: state, shared: c.shared}.lookup(name)
 }
 
 // replicaNames are the names of the tables replicated to region.
@@ -149,7 +149,7 @@ func (a *accountState) replicaNames(region string) []string {
 // replicas are the Replicas a table description answers in the caller's
 // region, or nil when the table has none.
 func (p *Provider) replicas(c caller, name string) []api.ReplicaDescription {
-	if p.settings().ShareDB {
+	if c.shared || !p.replicated.Load() {
 		return nil
 	}
 

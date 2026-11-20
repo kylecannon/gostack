@@ -233,6 +233,10 @@ func (p *Provider) updateReplicas(c caller, owner, name string, updates []api.Re
 	set.Replicas = replicas
 	a.setReplicas(name, set)
 
+	if len(replicas) > 0 {
+		p.replicated.Store(true)
+	}
+
 	return nil
 }
 
