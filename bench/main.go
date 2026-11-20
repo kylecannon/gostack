@@ -11,7 +11,7 @@ import (
 
 const (
 	cmdRun = "run"
-	usage1 = "usage: bench run|compare|loadgen|gate [flags]"
+	usage1 = "usage: bench run|compare|loadgen|gate|select|join [flags]"
 )
 
 func main() {
@@ -41,6 +41,10 @@ func dispatch(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return loadgenMain(ctx, args[1:], stdout)
 	case "gate":
 		return gateMain(ctx, args[1:], stdin, stdout, nil)
+	case "select":
+		return selectMain(ctx, args[1:], stdout, execBin)
+	case "join":
+		return joinMain(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q: %s", args[0], usage1)
 	}

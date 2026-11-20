@@ -197,6 +197,28 @@ func Test_serviceTable_Capabilities_registered(t *testing.T) {
 	}
 }
 
+// Test_serviceTable_Capabilities_everyService fails for a registered service
+// that GET /_gostack/services reports with unknown operations, which is a
+// registration with no Handler, or with none implemented. It runs over the
+// registration list the binary serves, so a service added to registrations()
+// without its Handler fails here by name.
+func Test_serviceTable_Capabilities_everyService(t *testing.T) {
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	table := &serviceTable{regs: newProviders(cfg, func(string) {}).regs, eng: persist.New(persist.Config{})}
+	capabilities := table.Capabilities()
+	require.Len(t, capabilities, len(table.regs))
+
+	for _, capability := range capabilities {
+		t.Run(capability.Name, func(t *testing.T) {
+			require.False(t, capability.Unknown,
+				"%s reports its implemented operations as unknown: its Registration sets no Handler", capability.Name)
+			require.NotEmpty(t, capability.Implemented, "%s implements no operation", capability.Name)
+		})
+	}
+}
+
 // BenchmarkServiceTable_Capabilities measures the first GET /_gostack/services
 // of a process: the check over every registered service, which the startup
 // itself does not run.

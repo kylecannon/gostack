@@ -51,9 +51,12 @@ func fillInFlight(t *testing.T, wait time.Duration) {
 
 // Test_InFlight_InternalCallsAreNotCharged: with the in-flight bound full, an
 // S3 put whose notification sends to SQS in process, and an SQS SendMessage
-// made in process with a body well past protocol.FreeBody, are both served at
-// once, and neither charges the bound. The gateway knows them by
-// request.MarkInternal, which inproc sets and no header or listener can.
+// made in process with a body well past protocol.FreeBody, are both served
+// while the bound stays full, and neither charges it. The notification is
+// queued after the put answers, so it may reach the queue late; the test waits
+// up to 10 s for it, and a dropped or refused one still fails. The gateway knows
+// both calls by request.MarkInternal, which inproc sets and no header or
+// listener can.
 func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
 	s := newStack(t)
 
@@ -84,12 +87,27 @@ func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
 		Body: []byte(big),
 	})
 
-	received := s.do(t, inproc.Call{
-		Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
-		Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
-			`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":2}`),
-	})
-	assert.Contains(t, string(received.Body), "ObjectCreated:Put", "the put's notification reached the queue")
+	// S3 queues the notification and answers the put without waiting for it,
+	// so it can reach the queue after the SendMessage, and a receive can
+	// answer with the test event and the big message alone. Receive until it
+	// is there: a received message stays hidden, so each receive returns only
+	// what came after.
+	var received strings.Builder
+
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		resp := s.do(t, inproc.Call{
+			Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
+			Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
+				`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":1}`),
+		})
+		received.Write(resp.Body)
+
+		if strings.Contains(received.String(), "ObjectCreated:Put") {
+			break
+		}
+	}
+
+	assert.Contains(t, received.String(), "ObjectCreated:Put", "the put's notification reached the queue")
 
 	_, after := protocol.InFlight()
 	assert.Equal(t, held, after, "internal calls charge nothing")
