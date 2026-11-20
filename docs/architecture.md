@@ -286,7 +286,7 @@ Settings, all read at start-up:
 | Variable | Default | Sized for |
 |---|---|---|
 | `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
-| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances. Four bodies at the cap, each decoding to its budget, hold about 4 x (16 + 48) MiB, which a 512 MiB container survives beside the runtime and the services' state. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four bodies at the cap, or one at the cap with 48 MiB of decoding. 64 cap-sized bodies sent at once peak at 178 MiB RSS, which leaves a 512 MiB container room for the services' state. |
 | `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
 
 How each piece is bounded, and why this way:
@@ -405,12 +405,20 @@ memory.
   byte per idle period keeps it. With the defaults, four such clients hold the
   whole pool, and every other body over 64 KiB is throttled while they do. A
   client that states 16 MiB and sends one byte holds nothing.
-- Many bodies at the cap at once are answered in waves of the 5 s wait.
+- Bodies of unknown length grow in doubling steps, and rest-xml decoding in
+  1 MiB steps, so many of them at once can each hold part of the pool and wait
+  to grow until the oldest waiters give up at 5 s, which answers them in waves
+  of the wait. Bodies that state their length do not: 64 bodies of 16 MiB sent
+  at once with a Content-Length are all answered within 754 ms, at a peak RSS
+  of 178 MiB.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
-`Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies` and
-`Test_Decoder_TagLimit` pin these.
+`Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies`,
+`Test_BodyMeter_StatedLengthAtOnce`, `Test_BodyMeter_IdleDeadlineStaysPast`
+and `Test_Decoder_TagLimit` pin these on generated stubs;
+`cmd/gostack/wide-body_test.go` pins the charge seam on the real S3, SQS and
+STS providers, at `/` and at a queue URL.
 
 ### Protocol details with explicit tests
 
