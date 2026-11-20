@@ -473,8 +473,10 @@ func (s *stalledLoad) Restore(r io.Reader) error {
 	return s.fake.Restore(r)
 }
 
-// Test_Engine_WaitingForALoadHonorsTheDeadline runs in real time: on a sync.Mutex
-// the wait would stop synctest's clock.
+// Test_Engine_WaitingForALoadHonorsTheDeadline runs on synctest's clock. The
+// wait for the load is a channel receive, which the bubble sees as blocked, so
+// the call that stops at its deadline does so at exactly the deadline, and one
+// that waited out the two-second load would show it.
 func Test_Engine_WaitingForALoadHonorsTheDeadline(t *testing.T) {
 	tests := []struct {
 		name string
@@ -486,33 +488,35 @@ func Test_Engine_WaitingForALoadHonorsTheDeadline(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := t.TempDir()
-			require.NoError(t, os.MkdirAll(filepath.Join(base, sqs), 0o750))
-			require.NoError(t, os.WriteFile(filepath.Join(base, sqs, jsonFile), []byte(stateA), 0o600))
+			synctest.Test(t, func(t *testing.T) {
+				base := t.TempDir()
+				require.NoError(t, os.MkdirAll(filepath.Join(base, sqs), 0o750))
+				require.NoError(t, os.WriteFile(filepath.Join(base, sqs, jsonFile), []byte(stateA), 0o600))
 
-			e := persist.New(baseCfg(base))
-			s := &stalledLoad{started: make(chan struct{}), release: make(chan struct{})}
-			e.Register(sqs, s)
+				e := persist.New(baseCfg(base))
+				s := &stalledLoad{started: make(chan struct{}), release: make(chan struct{})}
+				e.Register(sqs, s)
 
-			loaded := make(chan error, 1)
+				loaded := make(chan error, 1)
 
-			go func() { loaded <- e.Load(t.Context()) }()
+				go func() { loaded <- e.Load(t.Context()) }()
 
-			<-s.started
+				<-s.started
 
-			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-			defer cancel()
+				ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+				defer cancel()
 
-			began := time.Now()
-			err := tt.call(e, ctx)
-			waited := time.Since(began)
+				began := time.Now()
+				err := tt.call(e, ctx)
+				waited := time.Since(began)
 
-			close(s.release)
-			require.NoError(t, <-loaded)
-			assert.Equal(t, stateA, s.get())
+				close(s.release)
+				require.NoError(t, <-loaded)
+				assert.Equal(t, stateA, s.get())
 
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			assert.Less(t, waited, 300*time.Millisecond)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Equal(t, 200*time.Millisecond, waited, "the call stopped at its deadline, not when the load ended")
+			})
 		})
 	}
 }

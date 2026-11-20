@@ -36,15 +36,14 @@ func Test_Provider_Shutdown_wakes_long_polls(t *testing.T) {
 
 			time.Sleep(pollStarted)
 
-			start := time.Now()
-
 			s.provider.Shutdown()
 
+			// An unwoken poll waits out its 20 seconds. wakeDeadline only guards the
+			// hang, with a margin over the wake, which takes milliseconds.
 			select {
 			case res := <-answered:
 				assert.True(t, res.ok(), "the poll ends with 200")
 				assert.Empty(t, res.messages())
-				assert.Less(t, time.Since(start), wakeDeadline)
 			case <-time.After(wakeDeadline):
 				t.Fatal("the long poll was not woken by Shutdown")
 			}

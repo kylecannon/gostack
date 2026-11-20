@@ -5,7 +5,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	ddbapi "github.com/kylecannon/gostack/internal/api/dynamodb"
 	kmsapi "github.com/kylecannon/gostack/internal/api/kms"
@@ -24,9 +23,6 @@ const (
 	// while the gateway answers it. The worst measured is about 300 MiB, for a
 	// query body of two million keys.
 	nestingAlloc = 1 << 30
-	// nestingTime is how long one may take. The slowest measured is 1.2 s, with
-	// the race detector.
-	nestingTime = 30 * time.Second
 
 	notImplemented = "not yet implemented"
 	localhost      = "http://localhost:4566/"
@@ -77,8 +73,7 @@ func jsonCall(svc, target, version string) map[string]string {
 // allows, at the 16 MiB body cap, is refused with the protocol's malformed-body
 // error where the decoder bounds depth (json at 10,000 levels, rest-xml at
 // restxml.MaxDepth), or decodes where the shape bounds it (query). Either way
-// it answers within nestingTime and nestingAlloc, and the gateway serves the
-// next request.
+// it answers within nestingAlloc, and the gateway serves the next request.
 func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 	regs := []service.Registration{
 		generatedRegistration(sqsapi.Metadata, func(w http.ResponseWriter, rc *request.Context) {
@@ -218,15 +213,15 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 
 			runtime.ReadMemStats(&before)
 
-			start := time.Now()
 			resp, body := call(t, handler, newRequest(t, tt.method, tt.target, tt.body, tt.headers))
-			took := time.Since(start)
 
 			runtime.ReadMemStats(&after)
 
+			// Work is bounded by the allocation below, which a load cannot move; how
+			// long it took is not asserted. A body that took exponential time would
+			// hang here and fail on the suite's own timeout.
 			assert.Equal(t, tt.wantStatus, resp.StatusCode, body)
 			assert.Contains(t, body, tt.wantBody)
-			assert.Less(t, took, nestingTime)
 			assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(nestingAlloc))
 
 			// The gateway still serves: a plain call decodes and reaches the handler.

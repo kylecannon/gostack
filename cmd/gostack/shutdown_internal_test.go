@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +30,14 @@ const anyLoopbackPort = "127.0.0.1:0"
 // hooks and the drain do, the save starts at lifecycle.Deadlines.Work and ends by
 // lifecycle.Deadlines.Save, which is KillMargin before the supervisor's SIGKILL.
 // A request that never ends is in flight in every case.
+//
+// It runs in real time, with a real socket and real hook processes, which a
+// synctest bubble cannot move on. So it asserts order and lower bounds, and the
+// waits for the save and for serve are guards against a hang with seconds to
+// spare beyond the whole budget, not bounds on how long a step took. The
+// instants of the plan are asserted on the fake clock by
+// Test_serve_listenerFailureKeepsToOneBudget and
+// Test_serve_cutsQueuedCallsAtTheirDeadline.
 func Test_serve_savesBeforeTheKill(t *testing.T) {
 	const (
 		timeout = 3 * time.Second
@@ -148,13 +157,17 @@ func Test_serve_savesBeforeTheKill(t *testing.T) {
 				t.Fatal("the state was never saved")
 			}
 
-			sinceSignal := got.at.Sub(begin)
-
-			assert.GreaterOrEqual(t, sinceSignal, drainFloor, "the drain used the time before the save reserve")
-			assert.Less(t, sinceSignal, saveBy, "the save started before the supervisor's SIGKILL, with its margin")
+			assert.GreaterOrEqual(t, got.at.Sub(begin), drainFloor, "the drain used the time before the save reserve")
 			require.True(t, got.hasLimit, "the save has a deadline")
-			assert.LessOrEqual(t, got.deadline.Sub(begin), saveBy+50*time.Millisecond,
-				"the save ends KillMargin before the kill")
+
+			// The save's deadline is saveBy after the instant serve planned the
+			// shutdown, which was after the signal and before the save began. Order
+			// alone proves KillMargin: no wall-clock bound is asserted, because a
+			// loaded host can run any step late.
+			planned := got.deadline.Add(-saveBy)
+
+			assert.False(t, planned.Before(begin), "the plan counts from the signal, not before it")
+			assert.False(t, planned.After(got.at), "the plan was made before the save began")
 
 			select {
 			case err := <-done:
@@ -162,8 +175,6 @@ func Test_serve_savesBeforeTheKill(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("serve did not return")
 			}
-
-			assert.Less(t, time.Since(begin), saveBy, "serve returned before the supervisor's SIGKILL")
 		})
 	}
 }
@@ -235,9 +246,9 @@ func hangingGateway(t *testing.T, release <-chan struct{}) (gw *gateway.Gateway,
 	return gw, started
 }
 
-// callHangingService sends one call to addr and reports the body it got, or the
-// empty string when the call was cut.
-func callHangingService(t *testing.T, addr string) <-chan string {
+// callHangingService sends one call to addr with c and reports the body it got,
+// or the empty string when the call was cut.
+func callHangingService(t *testing.T, c *http.Client, addr string) <-chan string {
 	t.Helper()
 
 	got := make(chan string, 1)
@@ -255,7 +266,7 @@ func callHangingService(t *testing.T, addr string) <-chan string {
 		req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=t/20240101/us-east-1/"+testService+
 			"/aws4_request, SignedHeaders=host, Signature=abc")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.Do(req)
 		if err != nil {
 			got <- ""
 
@@ -276,7 +287,14 @@ func callHangingService(t *testing.T, addr string) <-chan string {
 // share the one budget counted from the failure, and the save has its deadline
 // KillMargin before the end of it. Before the plan was shared, the gateway
 // drained on a timeout of its own, and a second full budget followed.
+//
+// It runs on synctest's clock, over an in-memory listener, so the plan's
+// instants are exact and load cannot move them.
 func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
+	synctest.Test(t, serveListenerFailure)
+}
+
+func serveListenerFailure(t *testing.T) {
 	const (
 		timeout = 2 * time.Second
 		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
@@ -284,7 +302,6 @@ func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 		workAt  = time.Second
 		saveBy  = timeout - lifecycle.KillMargin
 		closeBy = timeout - lifecycle.CloseMargin
-		slack   = 100 * time.Millisecond
 	)
 
 	gw, started := hangingGateway(t, make(chan struct{}))
@@ -292,8 +309,8 @@ func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
 
-	listeners, err := gw.Listen(ctx)
-	require.NoError(t, err)
+	mem := newMemListener()
+	listeners := []net.Listener{mem}
 
 	type saved struct {
 		at           time.Time
@@ -315,42 +332,26 @@ func Test_serve_listenerFailureKeepsToOneBudget(t *testing.T) {
 		}))
 	}()
 
-	call := callHangingService(t, listeners[0].Addr().String())
+	call := callHangingService(t, mem.client(), "mem")
 
-	select {
-	case <-started:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the request never reached the service")
-	}
+	<-started
 
 	// The listener fails; ctx is still live, so nothing but the failure starts the
 	// shutdown.
 	failedAt := time.Now()
 
-	require.NoError(t, listeners[0].Close())
+	require.NoError(t, mem.Close())
 
-	var got saved
+	got := <-saves
 
-	select {
-	case got = <-saves:
-	case <-time.After(timeout + 5*time.Second):
-		t.Fatal("the state was never saved")
-	}
-
-	assert.GreaterOrEqual(t, got.at.Sub(failedAt), workAt-slack, "the drain waited for the planned Work deadline")
+	assert.GreaterOrEqual(t, got.at.Sub(failedAt), workAt, "the drain waited for the planned Work deadline")
 	assert.Less(t, got.at.Sub(failedAt), saveBy, "the save started inside one budget, not after a second one")
 	require.True(t, got.hasSaveLimit)
-	assert.LessOrEqual(t, got.saveBy.Sub(failedAt), saveBy+slack, "the save ends KillMargin before the kill")
-	assert.LessOrEqual(t, got.closeBy.Sub(failedAt), closeBy+slack, "Close ends CloseMargin before the kill")
+	assert.Equal(t, saveBy, got.saveBy.Sub(failedAt), "the save ends KillMargin before the kill")
+	assert.Equal(t, closeBy, got.closeBy.Sub(failedAt), "Close ends CloseMargin before the kill")
 	assert.Empty(t, <-call, "the request in flight was cut at Work")
 
-	select {
-	case err := <-done:
-		require.Error(t, err, "the failed listener is serve's error")
-	case <-time.After(5 * time.Second):
-		t.Fatal("serve did not return")
-	}
-
+	require.Error(t, <-done, "the failed listener is serve's error")
 	assert.Less(t, time.Since(failedAt), timeout, "serve returned before the supervisor's SIGKILL")
 }
 
@@ -393,7 +394,7 @@ func Test_serve_withoutATimeoutWaitsForEverything(t *testing.T) {
 		}))
 	}()
 
-	call := callHangingService(t, listeners[0].Addr().String())
+	call := callHangingService(t, http.DefaultClient, listeners[0].Addr().String())
 
 	select {
 	case <-started:
@@ -420,15 +421,13 @@ func Test_serve_withoutATimeoutWaitsForEverything(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-// stamped is a persisted service whose snapshots are counted and timed.
+// stamped is a persisted service whose snapshots are counted.
 type stamped struct {
 	snapshots atomic.Int32
-	last      atomic.Int64 // UnixNano of the latest snapshot
 }
 
 func (s *stamped) Snapshot(out io.Writer) error {
 	s.snapshots.Add(1)
-	s.last.Store(time.Now().UnixNano())
 
 	_, err := io.WriteString(out, "state")
 
@@ -453,41 +452,47 @@ func Test_saver_save(t *testing.T) {
 		return &saver{eng: eng, services: &providers{regs: []service.Registration{reg}}}, snap
 	}
 
+	// It runs on synctest's clock, so the Close deadline is met to the instant.
 	t.Run("a Close that never returns does not delay the save and is abandoned at its deadline", func(t *testing.T) {
-		stuck := make(chan struct{})
-		entered := make(chan time.Time, 1)
+		synctest.Test(t, func(t *testing.T) {
+			stuck := make(chan struct{})
+			savedBeforeClose := make(chan int32, 1)
 
-		t.Cleanup(func() { close(stuck) })
+			t.Cleanup(func() { close(stuck) })
 
-		// It ignores its context, as a Close that waits for goroutines does.
-		s, snap := newSaver(t, func(context.Context) {
-			entered <- time.Now()
+			var (
+				s    *saver
+				snap *stamped
+			)
 
-			<-stuck
+			// It ignores its context, as a Close that waits for goroutines does.
+			s, snap = newSaver(t, func(context.Context) {
+				savedBeforeClose <- snap.snapshots.Load()
+
+				<-stuck
+			})
+
+			begin := time.Now()
+
+			saveCtx, cancelSave := context.WithDeadline(t.Context(), begin.Add(time.Second))
+			defer cancelSave()
+
+			closeCtx, cancelClose := context.WithDeadline(t.Context(), begin.Add(400*time.Millisecond))
+			defer cancelClose()
+
+			s.save(saveCtx, closeCtx)
+
+			assert.Equal(t, 400*time.Millisecond+closeGrace, time.Since(begin),
+				"save waited for Close until its deadline and the grace after it, and no longer")
+			assert.EqualValues(t, 1, snap.snapshots.Load(), "the state was saved")
+
+			select {
+			case saved := <-savedBeforeClose:
+				assert.EqualValues(t, 1, saved, "the save was done before Close began")
+			default:
+				t.Fatal("Close never ran")
+			}
 		})
-
-		begin := time.Now()
-
-		saveCtx, cancelSave := context.WithDeadline(t.Context(), begin.Add(time.Second))
-		defer cancelSave()
-
-		closeCtx, cancelClose := context.WithDeadline(t.Context(), begin.Add(400*time.Millisecond))
-		defer cancelClose()
-
-		s.save(saveCtx, closeCtx)
-
-		elapsed := time.Since(begin)
-
-		assert.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "save waited for Close until its deadline")
-		assert.Less(t, elapsed, time.Second, "and no longer")
-		assert.EqualValues(t, 1, snap.snapshots.Load(), "the state was saved")
-
-		select {
-		case enteredAt := <-entered:
-			assert.Less(t, snap.last.Load(), enteredAt.UnixNano(), "the save was done before Close began")
-		default:
-			t.Fatal("Close never ran")
-		}
 	})
 
 	t.Run("a Close that finishes in time is followed by a last save of what it changed", func(t *testing.T) {

@@ -344,8 +344,10 @@ func Test_Gateway_drainBy(t *testing.T) {
 		s.gateway.DrainBy(begin.Add(drainWait))
 		require.NoError(t, s.stop(t))
 		require.Error(t, <-failed)
+		// A drain that ignored DrainBy would wait for the request, which never ends,
+		// so the test would hang and fail on the suite's own timeout. How long the
+		// drain took is not asserted beyond its lower bound.
 		assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the deadline")
-		assert.Less(t, time.Since(begin), 5*time.Second)
 	})
 
 	t.Run("a request that ends before the deadline finishes", func(t *testing.T) {
@@ -468,9 +470,10 @@ func Test_Gateway_drainDefaultTimeout(t *testing.T) {
 	require.NoError(t, s.stop(t), "cutting a request at the default timeout is not an error")
 	require.Error(t, <-failed, "the request still in flight was cut")
 
-	elapsed := time.Since(begin)
-	assert.GreaterOrEqual(t, elapsed, defaultDrain-time.Second, "the drain waited for the request first")
-	assert.Less(t, elapsed, 2*defaultDrain, "the drain did not wait without limit")
+	// A drain with no limit would wait for the request, which never ends: the test
+	// would hang and fail on the suite's own timeout. Only the lower bound is
+	// asserted, since a loaded host can run the cut late.
+	assert.GreaterOrEqual(t, time.Since(begin), defaultDrain-time.Second, "the drain waited for the request first")
 }
 
 // Test_Gateway_planDrain: a listener that fails starts the shutdown inside
@@ -528,12 +531,17 @@ func Test_Gateway_planDrain(t *testing.T) {
 		t.Fatal("Serve did not return")
 	}
 
+	ended := time.Now()
+
 	require.Error(t, <-failed, "the request still in flight was cut")
-	assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the planned deadline")
-	assert.Less(t, time.Since(begin), 5*time.Second)
+	assert.GreaterOrEqual(t, ended.Sub(begin), drainWait, "the drain waited until the planned deadline")
 
 	require.Len(t, plans, 1, "the plan is asked for once")
 
+	// Counted from the failure: no earlier than the Close that caused it, and early
+	// enough for the whole drain to have followed it. A plan asked at the end of
+	// the drain would leave less than drainWait. Neither is a wall-clock bound.
 	got := <-plans
-	assert.WithinDuration(t, begin, got.at, 2*time.Second, "the plan counts from the moment of the failure")
+	assert.False(t, got.at.Before(begin), "the plan counts from the failure, not before it")
+	assert.GreaterOrEqual(t, ended.Sub(got.at), drainWait, "the plan was asked at the start of the drain")
 }

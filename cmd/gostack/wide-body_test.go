@@ -308,13 +308,28 @@ func stall(t *testing.T, server *httptest.Server, method, path string, headers m
 
 // Test_wideBody_aColdBurstIsServed: a burst of legal 1 MiB SendMessage calls,
 // each on a fresh connection and stating its length, is the first traffic a
-// server sees, at the default bounds and wait. Every call is served: a body is
-// admitted together with the room its decoding is planned to hold, so no
-// admitted body waits on the bound while it holds part of it, which used to
-// leave the whole pool held by bodies waiting for decode room until their wait
-// ran out.
+// server sees, at the default bound. Every call is served: a body is admitted
+// together with the room its decoding is planned to hold, so no admitted body
+// waits on the bound while it holds part of it, which used to leave the whole
+// pool held by bodies waiting for decode room until their wait ran out.
+//
+// The wait is not the default 5 s. The pool holds a fraction of the 128 MiB
+// the burst sends, so the calls are served in turns and the last of them queues
+// for every turn before it; on a loaded host the turns take longer, and a call
+// still queued at 5 s is throttled although the pool is working (SQ-361: 400
+// ThrottlingException on 128 busy loops, none on an idle host). So the wait is
+// two minutes, far past the burst's few seconds at any load, and it is the
+// deadline of a wedged pool: bodies that hold the pool while they wait for
+// decode room never give it back, so they all run out their wait and are
+// throttled, as the fix this test guards against once did. A wedge costs the
+// test those two minutes before it fails.
 func Test_wideBody_aColdBurstIsServed(t *testing.T) {
-	const calls = 128
+	const (
+		calls = 128
+		// wedgeWait is the body wait, the deadline of a wedge and no bound on a
+		// healthy burst, which takes seconds.
+		wedgeWait = 2 * time.Minute
+	)
 
 	queueURL := "http://localhost/" + wideAccount + "/" + wideQueue
 	message := strings.Repeat("m", 1<<20-64)
@@ -341,7 +356,7 @@ func Test_wideBody_aColdBurstIsServed(t *testing.T) {
 	for _, burst := range bursts {
 		t.Run(burst.name, func(t *testing.T) {
 			server := providersServer(t, protocol.DefaultMaxBody, protocol.DefaultInFlight,
-				protocol.DefaultBodyWait, protocol.DefaultBodyIdle)
+				wedgeWait, protocol.DefaultBodyIdle)
 			client := freshConnections(server)
 
 			start := make(chan struct{})

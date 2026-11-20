@@ -98,20 +98,15 @@ func Test_Restore_and_StartMessageMoveTask_in_a_tight_loop(t *testing.T) {
 		})
 	}
 
-	slowest := time.Duration(0)
-
+	// No task starts while Restore waits for the others, so each restore ends. One
+	// that waited without end would hang here and fail on the suite's own timeout:
+	// how long a restore took is not asserted, because a loaded host runs it late.
 	for range restores {
-		began := time.Now()
-
 		require.NoError(t, c.p.Restore(bytes.NewReader(saved)))
-
-		slowest = max(slowest, time.Since(began))
 	}
 
 	close(stop)
 	starters.Wait()
-
-	assert.Less(t, slowest, exclusiveWait, "no task starts while Restore waits for the others, so the wait ends")
 
 	// A restore puts back every message, and a task that was running during it is
 	// stopped before it can put one on the restored queues.

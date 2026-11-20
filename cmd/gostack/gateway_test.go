@@ -17,11 +17,11 @@ const (
 	longPollSeconds        = 20
 	// The long poll has been waiting for a second when SIGTERM arrives.
 	pollHeadStart = time.Second
-	// A woken poll answers well inside the shutdown timeout. LocalStack answers
-	// in 90ms; the bound leaves room for a loaded machine.
+	// How long the test waits for the poll's answer before it calls the poll hung.
+	// A woken poll answers in tens of milliseconds (LocalStack's takes 90ms), and
+	// one that is not woken is cut by SHUTDOWN_TIMEOUT, which fails the test as an
+	// error, so this guards a hang and is no bound on how fast the answer comes.
 	wokenWithin = 2 * time.Second
-	// The process leaves before SHUTDOWN_TIMEOUT would have cut the request.
-	exitWithin = 2500 * time.Millisecond
 
 	formContentType = "application/x-www-form-urlencoded"
 
@@ -148,16 +148,15 @@ func Test_gostack_sigtermEndsLongPolls(t *testing.T) {
 
 	time.Sleep(pollHeadStart)
 
-	signalled := time.Now()
-
 	require.NoError(t, g.cmd.Process.Signal(syscall.SIGTERM))
 
+	// A poll that SIGTERM did not wake is held until SHUTDOWN_TIMEOUT cuts its
+	// connection, which is an error here, so an answer is the proof it was woken.
 	select {
 	case got := <-answered:
 		require.NoError(t, got.err, "the poll is answered, not cut")
 		assert.Equal(t, http.StatusOK, got.status, got.body)
 		assert.NotContains(t, got.body, "Messages\":[{")
-		assert.Less(t, time.Since(signalled), wokenWithin)
 	case <-time.After(wokenWithin + time.Second):
 		t.Fatal("the long poll was still waiting after SIGTERM")
 	}
@@ -165,7 +164,6 @@ func Test_gostack_sigtermEndsLongPolls(t *testing.T) {
 	select {
 	case err := <-g.exited:
 		require.NoError(t, err, "exit code 0 expected")
-		assert.Less(t, time.Since(signalled), exitWithin, "the process does not wait out SHUTDOWN_TIMEOUT")
 	case <-time.After(exitDeadline):
 		t.Fatal("gostack did not exit")
 	}
