@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws-us-gov:kms:us-gov-west-1:111111111111:alias/aws/s3")

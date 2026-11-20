@@ -1528,6 +1528,87 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
   Python objects.
 - The promise covers the compose file. It does not cover the data directory.
 
+## Services
+
+### KMS (`internal/service/kms`)
+
+KMS follows LocalStack's own provider (`services/kms/provider.py`,
+`models.py`, `utils.py`), which uses no moto. It reads no settings. What it
+answers differently from LocalStack, and the eight operations at 501, are in
+`docs/compat.md`, "KMS".
+
+**Key model.** A key lives in the `State` of its account and region, in a
+`store.Bundle`. Any of its ids reaches it through one resolver: the key id, the
+key ARN, an alias name or an alias ARN. The reserved aliases (`alias/aws/s3`
+and the like) make their key on first use, so a read can change state; it
+reports that through the provider's `changed` function, since a read is not in
+the mutating list. A grant lives in the caller's account and region, not the
+key's, as in LocalStack. Grants and policies are stored and nothing evaluates
+them. A multi-Region replica is a copy of its primary at `ReplicateKey` time and
+rotates apart from it.
+
+A data operation reaches its key in LocalStack's order: `dataKey` resolves the
+id, taking the account and region from a key ARN, and refuses a disabled key
+or one pending deletion; the operation's own input checks come next; then
+`Key.usable` refuses another usage, then a key still pending import.
+
+**Material and its lock.** A key's material is held in `Key` under `k.mu`:
+the current symmetric material (every spec has one, as in LocalStack; for an
+HMAC key it is the MAC key), its `MaterialID`, the materials rotation replaced
+(oldest first, LocalStack's `previous_keys`), imported material pending
+`RotateKeyOnDemand`, and an asymmetric key's private key (PKCS #8 DER) and
+public key (SubjectPublicKeyInfo DER). `Key.materials()` is the one read path:
+it copies all of them under one hold of `k.mu`. A writer (rotation, import,
+`DeleteImportedKeyMaterial`) holds `k.mu` and replaces a slice, never writes
+into one a reader may hold. Decrypt tries the current material, then each
+previous one. Sign, Verify and DeriveSharedSecret parse the DER on every call.
+
+**Ciphertext.** The symmetric blob is LocalStack's, which its tests build and
+take apart (`internal/service/kms/ciphertext`):
+
+| Bytes | Field |
+|---|---|
+| 0-35 | key id, padded with NUL bytes |
+| 36-51 | IV, 16 bytes |
+| 52-67 | GCM tag, 16 bytes |
+| 68- | AES-256-GCM ciphertext of the PKCS #7 padded plaintext |
+
+GCM runs with the 16-byte nonce (`cipher.NewGCMWithNonceSize`). The additional
+data is the encryption context, its keys sorted and each key and value
+concatenated with nothing between. `Encrypt` with an RSA key makes this same
+blob under the key's symmetric material, and an RSA blob made offline under
+the public key is opened with OAEP and SHA-256, as LocalStack does.
+
+**Persistence.** `snapshot.go` writes `{"v":1,"data":{"states":[...]}}`, as
+Secrets Manager does: every key with its metadata, state, policy, tags,
+rotation setting, replica links and all of its material; aliases; grants; and
+the import tokens `GetParametersForImport` handed out, with their RSA wrapping
+keys (PKCS #8), since LocalStack's `KmsStore.imports` is part of its pickled
+store. Each key is copied in one hold of `k.mu` and carries a SHA-256 digest of
+its internal id, material id, and current, pending, private, public and
+previous material. `Restore` refuses a key whose material does not match its
+digest; the engine moves the file aside and KMS starts empty. A new field of
+`Key`, `State`, `Alias`, a grant, an import or rotation fails
+`snapshot-fields_internal_test.go` until it is saved or skipped with a reason.
+All of this material is plaintext on disk, as LocalStack pickles it; the file
+is written mode 0600. No timer runs: nothing acts on a deletion date, a
+rotation date or an import expiry, here or in LocalStack.
+
+The calls that change nothing (`Encrypt`, `Decrypt`, `ReEncrypt`, `Sign`,
+`Verify`, `GenerateRandom`, `GenerateMac`, `VerifyMac`, the `GenerateDataKey*`
+calls) are left out of the mutating list, so they never mark KMS dirty; a test
+holds every operation of the model to one list or the other.
+
+**Cryptography.** Everything is the standard library (AES-GCM, RSA, ECDSA and
+ECDH on the NIST curves, HMAC) except `ECC_SECG_P256K1`, from
+`decred/dcrd/dcrec/secp256k1` (Dependencies, below). Only the KMS package may
+import it, which `Test_secp256k1_importedOnlyHere` holds by reading every Go
+file of the module. `secp256k1.go` writes and reads that curve's PKCS #8, SEC 1
+and SubjectPublicKeyInfo DER, which `crypto/x509` cannot. RFC 5649 key wrap
+(`keywrap.go`, for `ImportKeyMaterial`) and LocalStack's CMS envelope for a
+`Recipient` (`envelope.go`) are written in the package against published test
+vectors.
+
 ## Dependencies
 
 A dependency enters `go.mod` with the code that uses it. Nothing else without a
@@ -1549,3 +1630,4 @@ in the product `go.mod`.
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |
+| decred/dcrd/dcrec/secp256k1/v4 v4.4.1 | KMS asymmetric keys | The `ECC_SECG_P256K1` curve, which the standard library does not have: key generation, ECDSA signing (RFC 6979 nonces) and verification, and ECDH for `DeriveSharedSecret`. The user approved it on 2026-11-19 for KMS alone. ISC licence, pure Go with no cgo, no network use. Its `go.mod` lists `decred/dcrd/crypto/blake256`, which only its `schnorr` package imports; gostack never imports `schnorr`. Only `internal/service/kms` may import it, which `Test_secp256k1_importedOnlyHere` holds. The DER of a secp256k1 key (PKCS #8, SEC 1, SubjectPublicKeyInfo), which `crypto/x509` cannot read or write, is in `internal/service/kms/secp256k1.go`. |

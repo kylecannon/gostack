@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:sqs:us-east-1:111111111111:queue")
