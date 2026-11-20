@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -172,6 +173,26 @@ func TestRequestFormFollowsSetMaxBody(t *testing.T) {
 	got, err = query.RequestForm(formRequest(t, "", "a="+strings.Repeat("x", int(protocol.DefaultMaxBody)+1)))
 	require.NoError(t, err)
 	assert.Len(t, got.Get("a"), int(protocol.DefaultMaxBody)+1)
+}
+
+// Test_RequestForm_copiesTheBodyOnce: the form's values are parsed out of the
+// text the body is read into, so a form allocates about twice its body, as
+// ReadBody does, and never a third copy for its text. It does not run in
+// parallel, since it reads the process's allocation count.
+func Test_RequestForm_copiesTheBodyOnce(t *testing.T) { //nolint:paralleltest // reads runtime.MemStats
+	body := "Action=SendMessage&MessageBody=" + strings.Repeat("x", 3<<20)
+	r := formRequest(t, "", body)
+
+	var before, after runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	got, err := query.RequestForm(r)
+
+	runtime.ReadMemStats(&after)
+	require.NoError(t, err)
+	require.Len(t, got.Get("MessageBody"), 3<<20)
+	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(2*len(body)+2*protocol.FreeBody))
 }
 
 func Test_RequestForm_keepsAForm(t *testing.T) {

@@ -181,7 +181,7 @@ func Test_Gateway_internalMarking(t *testing.T) {
 
 	g := newGateway(t, newSettings(), []service.Registration{
 		sqsRegistration(func(w http.ResponseWriter, rc *request.Context) {
-			internal = gateway.IsInternal(rc.Request.Context())
+			internal = gateway.ServedAsInternal(rc.Request.Context())
 
 			_, _ = io.WriteString(w, "ok")
 		}),
