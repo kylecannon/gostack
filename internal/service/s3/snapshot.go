@@ -151,6 +151,17 @@ type snapshotFile struct {
 // account. The bodies are not in it; their blob ids are.
 type snapshotData struct {
 	Buckets []bucketData `json:"buckets"`
+	// ManagedKMSKeys is each account's AWS managed KMS key in each region where
+	// KMS made one, as LocalStack pickles S3Store.aws_managed_kms_key_id. A
+	// snapshot without it has none.
+	ManagedKMSKeys []managedKeyData `json:"managedKMSKeys,omitzero"`
+}
+
+// managedKeyData is one account's AWS managed KMS key in one region.
+type managedKeyData struct {
+	Account string
+	Region  string
+	ARN     string
 }
 
 // bucketData is a Bucket: every exported field of it, with the objects and the
@@ -216,6 +227,10 @@ func (p *Provider) Snapshot(w io.Writer) error {
 		file.Data.Buckets[i].sort()
 	}
 
+	slices.SortFunc(file.Data.ManagedKMSKeys, func(a, b managedKeyData) int {
+		return cmp.Or(strings.Compare(a.Account, b.Account), strings.Compare(a.Region, b.Region))
+	})
+
 	err := json.MarshalEncode(jsontext.NewEncoder(w, snapshotOptions), &file, snapshotOptions)
 	if err != nil {
 		return fmt.Errorf("write s3 snapshot: %w", err)
@@ -224,19 +239,26 @@ func (p *Provider) Snapshot(w io.Writer) error {
 	return nil
 }
 
-// capture copies every bucket of every account.
+// capture copies every bucket and managed KMS key of every account.
 func (p *Provider) capture() snapshotFile {
 	file := snapshotFile{Version: snapshotVersion, Data: snapshotData{Buckets: []bucketData{}}}
 
 	p.transfer.Lock()
 	defer p.transfer.Unlock()
 
-	p.states.Range(func(_, _ string, s *State) bool {
+	p.states.Range(func(owner, _ string, s *State) bool {
 		for _, b := range s.sorted() {
 			if saved, ok := b.save(); ok {
 				file.Data.Buckets = append(file.Data.Buckets, saved)
 			}
 		}
+
+		s.mu.RLock()
+		for region, arn := range s.managedKeys {
+			file.Data.ManagedKMSKeys = append(file.Data.ManagedKMSKeys,
+				managedKeyData{Account: owner, Region: region, ARN: arn})
+		}
+		s.mu.RUnlock()
 
 		return true
 	})
@@ -330,7 +352,7 @@ func (p *Provider) References() iter.Seq[string] {
 // After a snapshot that does not load, nothing is removed: the engine sets the
 // file aside, and it may name those bodies.
 func (p *Provider) Restore(r io.Reader) error {
-	buckets, err := readSnapshot(r)
+	buckets, managed, err := readSnapshot(r)
 
 	// The restored buckets are read here, while nothing else can reach them:
 	// once install publishes them, only a holder of a bucket's lock may.
@@ -351,7 +373,7 @@ func (p *Provider) Restore(r io.Reader) error {
 	p.transfer.Lock()
 	defer p.transfer.Unlock()
 
-	replaced := p.install(buckets)
+	replaced := p.install(buckets, managed)
 	p.restored = slices.Collect(maps.Keys(keep))
 
 	for _, b := range replaced {
@@ -379,16 +401,21 @@ func (p *Provider) Restored() iter.Seq[string] {
 }
 
 // install puts the buckets in their accounts' States, in place of every bucket
-// there was, and gives the name index their names. It returns the buckets it
-// replaced. The caller holds the transfer lock.
-func (p *Provider) install(buckets []*Bucket) []*Bucket {
+// there was, and gives the name index their names; managed, by account, takes
+// the place of every managed KMS key. It returns the buckets it replaced. The
+// caller holds the transfer lock.
+func (p *Provider) install(buckets []*Bucket, managed map[string]map[string]string) []*Bucket {
 	byAccount := make(map[string]map[string]*Bucket)
 	owners := make(map[string]string, len(buckets))
+
+	// Range is sure to walk only the States that exist when it starts.
+	for account := range managed {
+		p.state(account)
+	}
 
 	for _, b := range buckets {
 		if byAccount[b.Account] == nil {
 			byAccount[b.Account] = make(map[string]*Bucket)
-			// Range is sure to walk only the States that exist when it starts.
 			p.state(b.Account)
 		}
 
@@ -404,9 +431,15 @@ func (p *Provider) install(buckets []*Bucket) []*Bucket {
 			restored = make(map[string]*Bucket)
 		}
 
+		keys := managed[account]
+		if keys == nil {
+			keys = make(map[string]string)
+		}
+
 		s.mu.Lock()
 		replaced = slices.AppendSeq(replaced, maps.Values(s.buckets))
 		s.buckets = restored
+		s.managedKeys = keys
 		s.mu.Unlock()
 
 		return true
@@ -433,29 +466,31 @@ func (b *Bucket) drop() []string {
 	return ids
 }
 
-// readSnapshot reads a snapshot into buckets, checked whole.
-func readSnapshot(r io.Reader) ([]*Bucket, error) {
+// readSnapshot reads a snapshot into buckets and the managed KMS keys of each
+// account by region, checked whole.
+func readSnapshot(r io.Reader) ([]*Bucket, map[string]map[string]string, error) {
 	var file snapshotFile
 
 	dec := jsontext.NewDecoder(r, snapshotOptions)
 
 	err := json.UnmarshalDecode(dec, &file, snapshotOptions)
 	if err != nil {
-		return nil, fmt.Errorf("decode s3 snapshot: %w", err)
+		return nil, nil, fmt.Errorf("decode s3 snapshot: %w", err)
 	}
 
 	_, err = dec.ReadToken()
 	if !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode s3 snapshot: data after the snapshot")
+		return nil, nil, errors.New("decode s3 snapshot: data after the snapshot")
 	}
 
 	if file.Version != snapshotVersion {
-		return nil, fmt.Errorf("s3 snapshot is version %d, this build reads version %d", file.Version, snapshotVersion)
+		return nil, nil, fmt.Errorf("s3 snapshot is version %d, this build reads version %d",
+			file.Version, snapshotVersion)
 	}
 
 	// Snapshot always writes the list, empty when there is no bucket.
 	if file.Data.Buckets == nil {
-		return nil, errors.New("s3 snapshot has no list of buckets")
+		return nil, nil, errors.New("s3 snapshot has no list of buckets")
 	}
 
 	names := make(map[string]bool, len(file.Data.Buckets))
@@ -465,20 +500,49 @@ func readSnapshot(r io.Reader) ([]*Bucket, error) {
 		saved := &file.Data.Buckets[i]
 
 		if names[saved.Name] {
-			return nil, fmt.Errorf("s3 snapshot has the bucket %s twice", saved.Name)
+			return nil, nil, fmt.Errorf("s3 snapshot has the bucket %s twice", saved.Name)
 		}
 
 		names[saved.Name] = true
 
-		b, err := saved.bucket()
-		if err != nil {
-			return nil, fmt.Errorf("s3 snapshot, bucket %s: %w", saved.Name, err)
+		b, bucketErr := saved.bucket()
+		if bucketErr != nil {
+			return nil, nil, fmt.Errorf("s3 snapshot, bucket %s: %w", saved.Name, bucketErr)
 		}
 
 		buckets = append(buckets, b)
 	}
 
-	return buckets, nil
+	managed, err := readManagedKeys(file.Data.ManagedKMSKeys)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return buckets, managed, nil
+}
+
+// readManagedKeys is the managed KMS keys of a snapshot by account and region,
+// each with an account, a region and an ARN, and one per account and region.
+func readManagedKeys(saved []managedKeyData) (map[string]map[string]string, error) {
+	managed := make(map[string]map[string]string)
+
+	for _, k := range saved {
+		if k.Account == "" || k.Region == "" || k.ARN == "" {
+			return nil, errors.New("s3 snapshot has a managed KMS key with no account, region or ARN")
+		}
+
+		if managed[k.Account] == nil {
+			managed[k.Account] = make(map[string]string)
+		}
+
+		if _, twice := managed[k.Account][k.Region]; twice {
+			return nil, fmt.Errorf("s3 snapshot has two managed KMS keys for %s in %s", k.Account, k.Region)
+		}
+
+		managed[k.Account][k.Region] = k.ARN
+	}
+
+	return managed, nil
 }
 
 // bucket makes the Bucket d holds, checked.

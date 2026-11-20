@@ -1,11 +1,9 @@
 package s3
 
 import (
+	"context"
 	"crypto/md5" //nolint:gosec // SSE-C names the key by its MD5, by definition.
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
-	"strings"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 )
@@ -180,13 +178,14 @@ func isKMS(algorithm string) bool {
 
 // resolveEncryption is the encryption a write gets: an SSE-C key alone when
 // there is one, otherwise what the request names, with the bucket's default
-// encryption filling in what it leaves out. An aws:kms object always has a key
-// ARN, the bucket's or the account's AWS managed one when none is given. The
-// caller has validated the request's SSE-C parameters.
-func resolveEncryption(req encryptionRequest, b *Bucket) objectEncryption {
+// encryption filling in what it leaves out. A key it names becomes an ARN, and
+// for aws:kms one in another region than the bucket is refused. An aws:kms write that names
+// no key is left without one, for kmsKeyFor to give it the account's AWS
+// managed key. The caller has validated the request's SSE-C parameters.
+func resolveEncryption(req encryptionRequest, b *Bucket) (objectEncryption, error) {
 	if req.customer.key != "" {
 		// ServerSideEncryption does not apply to a request that has SSE-C.
-		return objectEncryption{customerKeyMD5: req.customer.md5}
+		return objectEncryption{customerKeyMD5: req.customer.md5}, nil
 	}
 
 	enc := objectEncryption{algorithm: req.algorithm, kmsKeyID: req.kmsKeyID}
@@ -207,7 +206,9 @@ func resolveEncryption(req encryptionRequest, b *Bucket) objectEncryption {
 			enc.algorithm = deref(rule.ApplyServerSideEncryptionByDefault.SSEAlgorithm)
 		}
 
-		if enc.kmsKeyID == "" && rule.ApplyServerSideEncryptionByDefault != nil {
+		// Only aws:kms takes the rule's key, as in LocalStack: an aws:kms:dsse
+		// write keeps no key it did not send, so GetObject has none to check.
+		if enc.kmsKeyID == "" && enc.algorithm == ruleKMS && rule.ApplyServerSideEncryptionByDefault != nil {
 			enc.kmsKeyID = deref(rule.ApplyServerSideEncryptionByDefault.KMSMasterKeyID)
 		}
 	}
@@ -216,12 +217,25 @@ func resolveEncryption(req encryptionRequest, b *Bucket) objectEncryption {
 		// A key and the bucket key mean nothing without a KMS algorithm.
 		enc.kmsKeyID, enc.bucketKey = "", false
 
-		return enc
+		return enc, nil
 	}
 
-	enc.kmsKeyID = kmsKeyARN(enc.kmsKeyID, b.Account, b.Region)
+	if enc.kmsKeyID == "" {
+		return enc, nil
+	}
 
-	return enc
+	// Only aws:kms takes the region check; aws:kms:dsse keeps a key of any
+	// region, as in LocalStack, which calls get_kms_key_arn for aws:kms alone.
+	if enc.algorithm == ruleKMS {
+		err := checkKeyRegion(enc.kmsKeyID, b)
+		if err != nil {
+			return enc, err
+		}
+	}
+
+	enc.kmsKeyID = namedKeyARN(enc.kmsKeyID, b)
+
+	return enc, nil
 }
 
 // defaultRule is the first rule of the bucket's default encryption. The caller
@@ -232,25 +246,6 @@ func defaultRule(b *Bucket) (s3api.ServerSideEncryptionRule, bool) {
 	}
 
 	return b.Encryption.Rules[0], true
-}
-
-// kmsKeyARN is the ARN S3 reports for the KMS key a request names, which is a
-// key id or an ARN: an ARN stays as it is, an id becomes the ARN of a key of
-// the bucket's account and region (get_kms_key_arn). Without one S3 uses the
-// account's AWS managed key aws/s3; there is no KMS to create it in, so its id
-// is derived from the account and region and is the same every time.
-func kmsKeyARN(key, account, region string) string {
-	if strings.HasPrefix(key, "arn:") {
-		return key
-	}
-
-	if key == "" {
-		sum := sha256.Sum256([]byte("aws/s3:" + account + ":" + region))
-		id := hex.EncodeToString(sum[:16])
-		key = id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
-	}
-
-	return "arn:aws:kms:" + region + ":" + account + ":key/" + key
 }
 
 // setEncryption gives the version the encryption it is stored with.
@@ -322,6 +317,22 @@ func copyEncryption(in *s3api.CopyObjectInput) encryptionRequest {
 		algorithm: deref(in.ServerSideEncryption), kmsKeyID: deref(in.SSEKMSKeyId), bucketKey: in.BucketKeyEnabled,
 		customer: customerKeyOf(in.SSECustomerAlgorithm, in.SSECustomerKey, in.SSECustomerKeyMD5),
 	}
+}
+
+// uploadEncryptionOf is the encryption a CreateMultipartUpload's object gets:
+// its SSE-C parameters are validated, then it is resolved as encryptionFor
+// does. The caller holds no lock.
+func (p *Provider) uploadEncryptionOf(
+	ctx context.Context, in *s3api.CreateMultipartUploadInput, b *Bucket,
+) (objectEncryption, error) {
+	request := uploadEncryptionRequest(in)
+
+	err := validateCustomerKey(request.customer, request.algorithm)
+	if err != nil {
+		return objectEncryption{}, err
+	}
+
+	return p.encryptionFor(ctx, request, b)
 }
 
 // uploadEncryptionRequest is the encryption a CreateMultipartUpload asks for.

@@ -44,6 +44,11 @@ type Settings struct {
 	// whose signature does not match, that has expired or that carries headers
 	// it did not sign is refused. The default, false, lets it through.
 	ValidateSignatures bool
+	// ValidateKMSKeys is S3_SKIP_KMS_KEY_VALIDATION=0: the KMS key a write
+	// names, and the key of an aws:kms object a GetObject reads, are looked up
+	// in KMS and refused when missing, disabled or pending deletion. The
+	// default, false, takes any key.
+	ValidateKMSKeys bool
 	// GatewayPort is the port of the first GATEWAY_LISTEN address. A presigned
 	// URL's host is also tried with it when its signature does not match.
 	GatewayPort int

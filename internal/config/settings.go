@@ -108,6 +108,10 @@ type Settings struct {
 	// presigned URL whose signature does not match, has expired, or leaves
 	// headers unsigned. It is true unless the variable is a false value.
 	S3SkipSignatureValidation bool
+	// S3SkipKMSKeyValidation is S3_SKIP_KMS_KEY_VALIDATION: S3 takes the KMS
+	// key a request names without asking KMS whether it exists and is enabled.
+	// It is true unless the variable is a false value.
+	S3SkipKMSKeyValidation bool
 	// MaxRequestBody is GOSTACK_MAX_REQUEST_BODY: the most bytes of a request
 	// body that is not streamed gostack reads, 16 MiB by default. Zero means no
 	// limit. It is read at start-up, and a value that cannot be parsed is the
@@ -205,6 +209,7 @@ func (s *Settings) values() map[string]any {
 		varDisableCustomCORSS3:             s.DisableCustomCORSS3,
 		varDisableCustomCORSAPIGateway:     s.DisableCustomCORSAPIGateway,
 		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
+		varS3SkipKMSKeyValidation:          s.S3SkipKMSKeyValidation,
 		varMaxRequestBody:                  s.MaxRequestBody,
 		varMaxInFlightBodies:               s.MaxInFlightBodies,
 		varRequestBodyIdleTimeout:          int(s.RequestBodyIdleTimeout / time.Second),
@@ -272,6 +277,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		DisableCustomCORSS3:               isTrue(get(varDisableCustomCORSS3)),
 		DisableCustomCORSAPIGateway:       isTrue(get(varDisableCustomCORSAPIGateway)),
 		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
+		S3SkipKMSKeyValidation:            isNotFalse(get(varS3SkipKMSKeyValidation)),
 		MaxRequestBody:                    base.maxRequestBody,
 		MaxInFlightBodies:                 base.maxInFlightBodies,
 		RequestBodyIdleTimeout:            base.requestBodyIdleTimeout,

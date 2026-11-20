@@ -10,6 +10,7 @@ func s3Settings(current *config.Settings) s3.Settings {
 	settings := s3.Settings{
 		LocalstackHost:     current.LocalstackHost.String(),
 		ValidateSignatures: !current.S3SkipSignatureValidation,
+		ValidateKMSKeys:    !current.S3SkipKMSKeyValidation,
 	}
 	if len(current.GatewayListen) > 0 {
 		settings.GatewayPort = current.GatewayListen[0].Port

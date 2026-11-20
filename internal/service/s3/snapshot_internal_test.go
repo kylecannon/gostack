@@ -177,6 +177,10 @@ func Test_Restore_RefusesABrokenSnapshot(t *testing.T) {
 		"part misfiled": strings.Replace(valid, `"Region"`,
 			`"Uploads":[{"ID":"u","Parts":{"1":{"Number":2,"BlobID":"x"}}}],"Region"`, 1),
 		"raw not base64": strings.Replace(valid, `"Name":"a"`, `"Name":"\u0000b64:%%"`, 1),
+		"managed key without ARN": strings.Replace(valid, `]}}`,
+			`],"managedKMSKeys":[{"Account":"1","Region":"us-east-1"}]}}`, 1),
+		"managed key twice": strings.Replace(valid, `]}}`, `],"managedKMSKeys":[`+
+			`{"Account":"1","Region":"us-east-1","ARN":"a"},{"Account":"1","Region":"us-east-1","ARN":"b"}]}}`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := newSnapshotProvider(t)
