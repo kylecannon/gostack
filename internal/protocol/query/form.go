@@ -1,7 +1,6 @@
 package query
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -216,19 +215,21 @@ func RequestFormHeld(r *http.Request, hold protocol.DecodeHolder) (url.Values, e
 	return values, nil
 }
 
-// readBody reads the body of a form request and puts it back, so a service can
-// read it whole. A body an earlier call read and put back, and nothing has read
-// since, gives the same bytes again without a second copy: a request whose form
-// is refused is read by every caller that asks.
-func readBody(r *http.Request) ([]byte, error) {
+// readBody reads the body of a form request as text and puts it back, so a
+// service can read it whole. The pairs are parsed out of that text, and the
+// values that need no unescaping share it, so the form costs no copy of its
+// body past protocol.ReadBodyText's. A body an earlier call read and put back,
+// and nothing has read since, gives the same text again without a second copy:
+// a request whose form is refused is read by every caller that asks.
+func readBody(r *http.Request) (string, error) {
 	if put, ok := r.Body.(*formBody); ok && put.Len() == len(put.body) {
 		return put.body, put.err
 	}
 
 	original := r.Body
 
-	body, err := protocol.ReadRequestPlanned(r, protocol.FormDecode)
-	r.Body = &formBody{Reader: bytes.NewReader(body), rest: original, body: body, err: err}
+	body, err := protocol.ReadRequestText(r, protocol.FormDecode)
+	r.Body = &formBody{Reader: strings.NewReader(body), rest: original, body: body, err: err}
 
 	return body, err //nolint:wrapcheck // the caller wraps it in ErrForm
 }
@@ -245,23 +246,23 @@ func requestValues(r *http.Request, hold protocol.DecodeHolder) (url.Values, err
 	}
 
 	if !isForm(r.Header.Get("Content-Type")) || r.Body == nil || r.Body == http.NoBody {
-		return parsePairs(raw, nil, failure, hold)
+		return parsePairs(raw, "", failure, hold)
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		values, _ := parsePairs(raw, nil, nil, nil)
+		values, _ := parsePairs(raw, "", nil, nil)
 
 		return values, fmt.Errorf("%w: %w", ErrForm, err)
 	}
 
 	if protocol.OverBody(len(body)) {
-		values, _ := parsePairs(raw, nil, nil, nil)
+		values, _ := parsePairs(raw, "", nil, nil)
 
 		return values, fmt.Errorf("%w: the body is over %d bytes", ErrForm, protocol.MaxBody())
 	}
 
-	if !utf8.Valid(body) {
+	if !utf8.ValidString(body) {
 		failure = fmt.Errorf("%w: the body is not UTF-8", ErrForm)
 	}
 
@@ -273,13 +274,13 @@ func requestValues(r *http.Request, hold protocol.DecodeHolder) (url.Values, err
 // are counted before any is parsed: then only the first refusedPairs are, and
 // the error is errTooManyPairs. What the pairs cost past protocol.FreeDecode
 // is held from hold, when there is one, before any is parsed.
-func parsePairs(raw string, body []byte, failure error, hold protocol.DecodeHolder) (url.Values, error) {
+func parsePairs(raw, body string, failure error, hold protocol.DecodeHolder) (url.Values, error) {
 	values := url.Values{}
 	limit := int(protocol.DecodeBudget(len(raw)+len(body)) / PairCost)
 
-	_, left, over := pairsEnd(raw, limit, strings.IndexByte)
+	_, left, over := pairsEnd(raw, limit)
 	if !over {
-		_, left, over = pairsEnd(body, left, bytes.IndexByte)
+		_, left, over = pairsEnd(body, left)
 	}
 
 	pairs := limit - left
@@ -296,10 +297,9 @@ func parsePairs(raw string, body []byte, failure error, hold protocol.DecodeHold
 		}
 	}
 
-	// Only the text of the pairs parsed is copied out of body.
 	left = parseInto(values, raw, limit)
-	end, _, _ := pairsEnd(body, left, bytes.IndexByte)
-	parseInto(values, string(body[:end]), left)
+	end, _, _ := pairsEnd(body, left)
+	parseInto(values, body[:end], left)
 
 	return values, failure
 }
@@ -308,9 +308,9 @@ func parsePairs(raw string, body []byte, failure error, hold protocol.DecodeHold
 // pair after those starts, with over true, or the length of text and how many
 // more pairs were allowed. Empty pairs are not counted, as parseInto skips
 // them.
-func pairsEnd[T ~string | ~[]byte](text T, left int, index func(T, byte) int) (int, int, bool) {
+func pairsEnd(text string, left int) (int, int, bool) {
 	for start := 0; start < len(text); {
-		next := index(text[start:], '&')
+		next := strings.IndexByte(text[start:], '&')
 		if next == 0 {
 			start++
 
@@ -336,16 +336,16 @@ func pairsEnd[T ~string | ~[]byte](text T, left int, index func(T, byte) int) (i
 // formBody is a form body read and put back: the bytes read, then whatever
 // was left unread, closed with the original body.
 type formBody struct {
-	*bytes.Reader
+	*strings.Reader
 
 	rest io.ReadCloser
-	body []byte
+	body string
 	err  error
 }
 
 func (b *formBody) Read(p []byte) (int, error) {
 	if b.Len() > 0 {
-		return b.Reader.Read(p) //nolint:wrapcheck // io.Reader: a bytes.Reader's own result
+		return b.Reader.Read(p) //nolint:wrapcheck // io.Reader: a strings.Reader's own result
 	}
 
 	return b.rest.Read(p)

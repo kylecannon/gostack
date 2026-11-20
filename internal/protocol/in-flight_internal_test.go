@@ -398,6 +398,10 @@ func Test_ReadBody_ReadsEveryShape(t *testing.T) {
 					got, err := ReadBody(wrap(bytes.NewReader(want)), length(size))
 					require.NoError(t, err)
 
+					text, err := ReadBodyText(wrap(bytes.NewReader(want)), length(size))
+					require.NoError(t, err)
+					assert.Equal(t, string(got), text, "ReadBodyText reads what ReadBody does")
+
 					if OverBody(size) {
 						assert.Len(t, got, 4<<20+1, "a body over the cap reads one byte past it")
 						assert.True(t, OverBody(len(got)))
@@ -419,6 +423,21 @@ func Test_ReadBody_ReadsEveryShape(t *testing.T) {
 		runtime.ReadMemStats(&before)
 
 		got, err := ReadBody(bytes.NewReader(body), int64(len(body)))
+
+		runtime.ReadMemStats(&after)
+		require.NoError(t, err)
+		require.Len(t, got, len(body))
+		assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(2*len(body)+2*FreeBody))
+	})
+
+	t.Run("the text of an honest body costs no copy past ReadBody's", func(t *testing.T) {
+		body := make([]byte, 3<<20)
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		got, err := ReadBodyText(bytes.NewReader(body), int64(len(body)))
 
 		runtime.ReadMemStats(&after)
 		require.NoError(t, err)

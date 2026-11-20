@@ -81,7 +81,7 @@ func (c *Charge) Release() {
 }
 
 // What decoding holds for each byte of an ordinary body, by the reader that
-// arms the body (ArmBody, ReadRequestPlanned): the room a body that states its
+// arms the body (ArmBody, ReadRequestText): the room a body that states its
 // length is admitted with. A body whose decoding holds more, one dense with
 // elements, charges the rest as it decodes (DecodeHold.Cover).
 const (

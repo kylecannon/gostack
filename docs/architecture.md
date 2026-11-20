@@ -327,7 +327,14 @@ How each piece is bounded, and why this way:
 - **Copies.** `protocol.ReadBody` sizes its buffers by what arrives, not by a
   stated Content-Length: each next buffer holds as many bytes as have arrived,
   and a body that fills more than the first is copied once, at its end, so a
-  body allocates about twice its length, as `io.ReadAll` does. The SQS number echo (`sqs/sent-number.go`) reads the
+  body allocates about twice its length, as `io.ReadAll` does. A query form
+  reads its body with `protocol.ReadBodyText`, whose last copy builds the
+  string itself, and parses its pairs out of that string, so the form's text
+  costs no third copy. That copy was a whole body the form's plan does not
+  charge. With it, a 1 MiB SendMessageBatch decode allocated three bodies
+  against the runtime's 4 MiB minimum heap goal, and its freed pages were
+  returned to the OS and faulted back every cycle: without it the decode
+  takes 4 to 5 times fewer page faults. The SQS number echo (`sqs/sent-number.go`) reads the
   one member from the body's tokens instead of a second parse into `any`.
 - **The charge seam** (`protocol/charge.go`). The gateway's recovery
   middleware, root step 8 and inside every mounted route, puts one
