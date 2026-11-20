@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -157,8 +158,46 @@ func BenchmarkRestore(b *testing.B) {
 			for b.Loop() {
 				require.NoError(b, p.Restore(bytes.NewReader(file)))
 			}
+
+			// The restore allocation bound: what the restored state holds,
+			// plus the file once. Measured after the loop, whose timing its
+			// collections would otherwise skew.
+			b.StopTimer()
+
+			held := heldBytes(b, file)
+			b.ReportMetric(float64(held), "held-B")
+			b.ReportMetric(float64(held+int64(len(file))), "bound-B")
 		})
 	}
+}
+
+// heldBytes restores file into a new provider and returns the heap the
+// restored state holds once the collector has run: the in-memory floor no
+// decoder can go under, since every byte of it is the state itself.
+func heldBytes(b *testing.B, file []byte) int64 {
+	b.Helper()
+
+	var before, after runtime.MemStats
+
+	p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)
+	require.NoError(b, p.Restore(bytes.NewReader([]byte(`{"v":1,"accounts":[],"states":[]}`))))
+	collect()
+	runtime.ReadMemStats(&before)
+
+	require.NoError(b, p.Restore(bytes.NewReader(file)))
+	collect()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(file) // else the collector frees it between the two reads
+
+	return int64(after.HeapAlloc) - int64(before.HeapAlloc)
+}
+
+// collect runs the collector twice, so the heap holds only what is reachable:
+// the second empties what sync.Pool kept from the first.
+func collect() {
+	runtime.GC() //nolint:revive // heldBytes reads the heap the state holds
+	runtime.GC() //nolint:revive // heldBytes reads the heap the state holds
 }
 
 // countingWriter counts the bytes written to it.

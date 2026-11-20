@@ -294,3 +294,12 @@ func Test_ItemSize(t *testing.T) {
 
 	assert.Equal(t, 6+5+3+2+5+7+6, value.ItemSize(item))
 }
+
+// Test_AppendKeyString checks it appends what KeyString returns.
+func Test_AppendKeyString(t *testing.T) {
+	str, num := "a\x00b", "-1.5"
+
+	for _, v := range []api.AttributeValue{{S: &str}, {N: &num}, {B: []byte{0, 1}}, {B: []byte{}}, {}} {
+		assert.Equal(t, "x"+value.KeyString(&v), string(value.AppendKeyString([]byte("x"), &v)))
+	}
+}

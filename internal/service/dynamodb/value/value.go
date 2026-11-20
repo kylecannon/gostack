@@ -259,6 +259,21 @@ func Compare(a, b *api.AttributeValue) int {
 	}
 }
 
+// AppendKeyString appends KeyString(v) to dst, for a lookup that allocates
+// nothing.
+func AppendKeyString(dst []byte, v *api.AttributeValue) []byte {
+	switch {
+	case v.S != nil:
+		return append(append(dst, 'S'), *v.S...)
+	case v.N != nil:
+		return append(append(dst, 'N'), *v.N...)
+	case v.B != nil:
+		return append(append(dst, 'B'), v.B...)
+	default:
+		return dst
+	}
+}
+
 // KeyString encodes a scalar key value as a string that is equal for two
 // values exactly when they are the same key: the type, then the bytes. The
 // numbers must be canonical.

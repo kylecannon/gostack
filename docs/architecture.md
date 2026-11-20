@@ -1270,6 +1270,48 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 - A reset scoped to an account or a region removes the bodies of the buckets it
   drops, through `Remove`, once the reset is saved.
 
+**DynamoDB.** `PERSIST_DYNAMODB=1` persists DynamoDB and, through the
+dependency expansion in `internal/config/persist.go`, DynamoDB Streams and
+Kinesis. The state is two files, LocalStack's split:
+
+- `<base>/dynamodb/store.{json,bin}` holds each account's tags, 2017 global
+  tables and 2019 replicas with their owning region; each table's definition
+  as CreateTable and UpdateTable keep it (key schema, index definitions,
+  billing and throughput, stream specification and label, time to live,
+  deletion protection, point-in-time recovery, Kinesis destinations); its
+  latest stream shard's identity and bounds; and every item. Secondary
+  indexes are not stored: Restore rebuilds them from the items. Numbers are
+  written in their canonical form, so they read back unchanged.
+- `<base>/dynamodbstreams/store.{json,bin}` holds the records of each latest
+  shard still inside the 24-hour retention, with their sequence numbers. A
+  shard takes its records back only when its identity (creation time to the
+  nanosecond) matches the table file's and they leave no gap below the
+  table's next sequence number, so a kill between the renames of the two files
+  never reads across a gap. A position or an iterator issued before a restart
+  reads the same records after it, within the iterator's 15 minutes.
+  `PERSIST_DYNAMODBSTREAMS=0` restores the shards empty, their numbering
+  going on from where it was.
+- ClientRequestToken windows are not saved. DynamoDB Local keeps them in
+  memory, so LocalStack loses them on a restart too.
+- State that changes outside a mutating operation marks the service dirty
+  itself: a stream record marks dynamodbstreams, and a time to live removal
+  (the hourly sweep, or `DELETE /_gostack/services/dynamodb/expired` and its
+  LocalStack path `/_aws/dynamodb/expired`) marks dynamodb. After
+  a load the sweep timer is armed only when `DYNAMODB_REMOVE_EXPIRED_ITEMS`
+  is set and a table has time to live on.
+- Snapshot holds a table's locks only to encode its definition and copy one
+  reference per item with its partition's key (stored items are immutable).
+  Sorting new partitions and encoding the items happen after the locks are
+  released, with a hand-written item codec rather than json v2's reflection.
+  The bound is about 56 ms of lock per 1,000,000 items (Apple M1 Max).
+  Snapshot and restore of one table of 1,000,000 items of about 100 bytes
+  (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
+  `-benchtime 1x -count 6` on that machine: snapshot 0.55 s allocating 92 MiB;
+  restore 2.45 s allocating 1.25 GiB, against 1.21 GiB the restored state holds
+  (`held-B`). Restore allocates no more than the state it builds plus the file
+  once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
+  this shape.
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus

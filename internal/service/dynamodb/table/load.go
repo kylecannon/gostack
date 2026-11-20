@@ -2,9 +2,10 @@ package table
 
 import (
 	"errors"
-	"maps"
 	"slices"
+	"strings"
 
+	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -14,27 +15,75 @@ var ErrDuplicateKey = errors.New("two items have the same key")
 // errNotEmpty is returned by Load for a table that holds items.
 var errNotEmpty = errors.New("load into a table that holds items")
 
-// ItemsHeld returns every stored item, partition after partition in the order
-// of their encoded hash values and in range key order within each, as Scan
-// reads them. The caller holds the table's lock through Lock or ReadLock. It
-// copies one reference per item and nothing else: stored items are immutable,
-// so the slice is an image of the table that later writes do not change, and
-// the caller encodes it after releasing the lock.
-func (t *Table) ItemsHeld() []value.Item {
-	items := make([]value.Item, 0, t.count)
+// Image is a table's items as one moment left them. ImageHeld takes it under
+// the table's lock; Items puts it in order after the lock is released.
+type Image struct {
+	parts  []imagePart
+	items  []value.Item
+	sorted bool
+}
 
-	// A sorted copy of the keys: the store's own order may be stale, and
-	// rebuilding it needs the write lock.
-	keys := t.primary.order
-	if !t.primary.sorted {
-		keys = slices.Sorted(maps.Keys(t.primary.parts))
-	}
+// imagePart is one partition of an Image: its encoded hash value and where
+// its items are in Image.items.
+type imagePart struct {
+	hash       string
+	start, end int
+}
 
-	for _, hash := range keys {
-		for _, e := range t.primary.parts[hash].entries {
-			items = append(items, e.item)
+// ImageHeld copies one reference per item, partition by partition, and the
+// partitions' keys. The caller holds the table's lock through Lock or
+// ReadLock, for this copy and no longer: stored items are immutable, so the
+// image is one that later writes do not change, and putting it in order,
+// which a table with new partitions needs, waits for Image.Items.
+func (t *Table) ImageHeld() Image {
+	img := Image{items: make([]value.Item, 0, t.count), sorted: t.primary.sorted}
+
+	visit := func(hash string, p *partition) {
+		start := len(img.items)
+
+		for _, e := range p.entries {
+			img.items = append(img.items, e.item)
+		}
+
+		if !img.sorted {
+			img.parts = append(img.parts, imagePart{hash: hash, start: start, end: len(img.items)})
 		}
 	}
+
+	if img.sorted {
+		for _, hash := range t.primary.order {
+			visit(hash, t.primary.parts[hash])
+		}
+	} else {
+		img.parts = make([]imagePart, 0, len(t.primary.parts))
+
+		for hash, p := range t.primary.parts {
+			visit(hash, p)
+		}
+	}
+
+	return img
+}
+
+// Items returns the image's items as Scan reads them: partition after
+// partition in the order of their encoded hash values, in range key order
+// within each. The image is left empty.
+func (img *Image) Items() []value.Item {
+	if img.sorted {
+		items := img.items
+		*img = Image{}
+
+		return items
+	}
+
+	slices.SortFunc(img.parts, func(a, b imagePart) int { return strings.Compare(a.hash, b.hash) })
+
+	items := make([]value.Item, 0, len(img.items))
+	for _, part := range img.parts {
+		items = append(items, img.items[part.start:part.end]...)
+	}
+
+	*img = Image{}
 
 	return items
 }
@@ -52,51 +101,144 @@ func (t *Table) Load(items []value.Item) error {
 		return errNotEmpty
 	}
 
-	indexes := t.indexList()
-
 	for _, item := range items {
 		err := t.CheckItem(item)
 		if err != nil {
 			return err
 		}
+	}
 
-		size := value.ItemSize(item)
-		hash, rng := t.primaryKey(item)
-		appendEntry(&t.primary, hash, entry{sort: rng, item: item})
-		t.count++
-		t.size += size
+	err := t.loadPrimary(items)
+	if err != nil {
+		return err
+	}
 
-		for _, idx := range indexes {
-			if ihash, isort, ok := indexKey(&idx.spec, item); ok {
-				appendEntry(&idx.data, ihash, entry{sort: isort, tie: t.tie(item), item: item})
-				idx.count++
-				idx.size += size
+	for _, idx := range t.indexList() {
+		key := idx.spec.Key
+
+		fill(&idx.data, items, func(dst []byte, item value.Item) ([]byte, bool) {
+			if key.HasRange() {
+				if _, ok := item[key.Range.Name]; !ok {
+					return dst, false
+				}
 			}
-		}
-	}
 
-	if !sortPartitions(&t.primary) {
-		return ErrDuplicateKey
-	}
+			h, ok := item[key.Hash.Name]
+			if !ok {
+				return dst, false
+			}
 
-	for _, idx := range indexes {
+			return value.AppendKeyString(dst, &h), true
+		}, func(item value.Item) entry {
+			idx.count++
+			idx.size += value.ItemSize(item)
+
+			return entry{sort: sortKey(key, item), tie: t.tie(item), item: item}
+		})
 		sortPartitions(&idx.data)
 	}
 
 	return nil
 }
 
-// appendEntry adds e to the end of its partition, leaving the order to
-// sortPartitions.
-func appendEntry(s *store, hash string, e entry) {
-	p := s.parts[hash]
-	if p == nil {
-		p = &partition{}
-		s.parts[hash] = p
-		s.sorted = false
+// loadPrimary puts items in the table's own store. A table without a range
+// key has one item per partition, so its partitions are made in one pass;
+// with one, fill sizes them first.
+func (t *Table) loadPrimary(items []value.Item) error {
+	add := func(item value.Item) entry {
+		t.count++
+		t.size += value.ItemSize(item)
+
+		return entry{sort: sortKey(t.key, item), item: item}
 	}
 
-	p.entries = append(p.entries, e)
+	if t.key.HasRange() {
+		fill(&t.primary, items, func(dst []byte, item value.Item) ([]byte, bool) {
+			h := item[t.key.Hash.Name]
+
+			return value.AppendKeyString(dst, &h), true
+		}, add)
+
+		if !sortPartitions(&t.primary) {
+			return ErrDuplicateKey
+		}
+
+		return nil
+	}
+
+	t.primary.parts = make(map[string]*partition, len(items))
+	t.primary.sorted = false
+
+	for _, item := range items {
+		h := item[t.key.Hash.Name]
+		hash := value.KeyString(&h)
+
+		if t.primary.parts[hash] != nil {
+			return ErrDuplicateKey
+		}
+
+		t.primary.parts[hash] = &partition{entries: []entry{add(item)}}
+	}
+
+	return nil
+}
+
+// sortKey is the range key value of item under key, nil without one.
+func sortKey(key KeySchema, item value.Item) *api.AttributeValue {
+	if !key.HasRange() {
+		return nil
+	}
+
+	r := item[key.Range.Name]
+
+	return &r
+}
+
+// fill puts in the empty store s an entry, made by add, for each item that
+// hash appends a partition key for. It counts the entries of each partition
+// first and makes each at its size, so a partition of many items is allocated
+// once rather than grown, and its key string once. The order is left to
+// sortPartitions.
+func fill(s *store, items []value.Item, hash func([]byte, value.Item) ([]byte, bool),
+	add func(value.Item) entry,
+) {
+	var (
+		key    []byte
+		counts = map[*partition]int{}
+	)
+
+	s.sorted = false
+
+	for _, item := range items {
+		var ok bool
+
+		key, ok = hash(key[:0], item)
+		if !ok {
+			continue
+		}
+
+		p := s.parts[string(key)]
+		if p == nil {
+			p = &partition{}
+			s.parts[string(key)] = p
+		}
+
+		counts[p]++
+	}
+
+	for p, n := range counts {
+		p.entries = make([]entry, 0, n)
+	}
+
+	for _, item := range items {
+		var ok bool
+
+		key, ok = hash(key[:0], item)
+		if ok {
+			p := s.parts[string(key)]
+			p.entries = append(p.entries, add(item))
+		}
+	}
 }
 
 // sortPartitions sorts every partition of s and reports whether no two

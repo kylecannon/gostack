@@ -33,10 +33,12 @@ import (
 // them on a restart too.
 //
 // Snapshot holds each table's locks only while it copies the table: its meta,
-// encoded under the lock, and one reference per item, stored items being
-// immutable. The items are encoded after the locks are released, one at a
-// time, so the snapshot holds the state once and a large table blocks its
-// writers for one pointer copy per item, never for the encode.
+// encoded under the lock, and one reference per item with its partition's
+// key, stored items being immutable (table.ImageHeld). The partitions are put
+// in order and the items encoded after the locks are released, so the
+// snapshot holds the state once and a large table blocks its writers for one
+// pointer copy per item, never for a sort or the encode. Items are written by
+// hand (snapshot-items.go), not through json v2's reflection.
 
 // snapshotVersion is the version of both DynamoDB snapshots. Restore refuses
 // any other.
@@ -87,9 +89,13 @@ type place struct{ account, region string }
 // Snapshot writes every table of every account and region to w. It implements
 // persist.Snapshotter.
 func (p *Provider) Snapshot(w io.Writer) error {
-	enc := jsontext.NewEncoder(w, snapshotOptions)
+	out := &snapshotWriter{w: w, buf: make([]byte, 0, snapshotBuffer+snapshotBuffer/4)}
 
-	err := p.writeSnapshot(enc)
+	err := p.writeSnapshot(out)
+	if err == nil {
+		err = out.flush()
+	}
+
 	if err != nil {
 		return fmt.Errorf("write dynamodb snapshot: %w", err)
 	}
@@ -97,31 +103,72 @@ func (p *Provider) Snapshot(w io.Writer) error {
 	return nil
 }
 
-func (p *Provider) writeSnapshot(enc *jsontext.Encoder) error {
-	err := writeTokens(enc, jsontext.BeginObject, jsontext.String("v"), jsontext.Int(snapshotVersion),
-		jsontext.String("accounts"))
+// snapshotBuffer is how much of a snapshot is held before it goes to the
+// writer.
+const snapshotBuffer = 64 << 10
+
+// snapshotWriter writes a snapshot to w through one buffer. The structure is
+// written by hand, meta and account state through json v2, items through
+// appendItem.
+type snapshotWriter struct {
+	w     io.Writer
+	buf   []byte
+	names []string
+}
+
+// flush writes the buffer out.
+func (s *snapshotWriter) flush() error {
+	_, err := s.w.Write(s.buf)
+	s.buf = s.buf[:0]
+
+	return err
+}
+
+// flushFull writes the buffer out once it holds snapshotBuffer bytes.
+func (s *snapshotWriter) flushFull() error {
+	if len(s.buf) < snapshotBuffer {
+		return nil
+	}
+
+	return s.flush()
+}
+
+func (s *snapshotWriter) text(text string) { s.buf = append(s.buf, text...) }
+
+func (s *snapshotWriter) string(text string) { s.buf = appendString(s.buf, text) }
+
+// json appends v as json v2 writes it.
+func (s *snapshotWriter) json(v any) error {
+	b, err := json.Marshal(v, snapshotOptions)
+	s.buf = append(s.buf, b...)
+
+	return err //nolint:wrapcheck // Snapshot wraps it
+}
+
+func (p *Provider) writeSnapshot(out *snapshotWriter) error {
+	out.text(fmt.Sprintf(`{"v":%d,"accounts":`, snapshotVersion))
+
+	err := out.json(p.saveAccounts())
 	if err != nil {
 		return err
 	}
 
-	err = json.MarshalEncode(enc, p.saveAccounts(), snapshotOptions)
-	if err != nil {
-		return err //nolint:wrapcheck // Snapshot wraps it
-	}
+	out.text(`,"states":[`)
 
-	err = writeTokens(enc, jsontext.String("states"), jsontext.BeginArray)
-	if err != nil {
-		return err
-	}
+	for i, s := range sortedStates(p) {
+		if i > 0 {
+			out.text(",")
+		}
 
-	for _, s := range sortedStates(p) {
-		err = writeState(enc, s.place, s.state)
+		err = writeState(out, s.place, s.state)
 		if err != nil {
 			return err
 		}
 	}
 
-	return writeTokens(enc, jsontext.EndArray, jsontext.EndObject)
+	out.text("]}")
+
+	return nil
 }
 
 type placedState struct {
@@ -153,7 +200,7 @@ func sortedStates(p *Provider) []placedState {
 	return out
 }
 
-func writeState(enc *jsontext.Encoder, at place, s *State) error {
+func writeState(out *snapshotWriter, at place, s *State) error {
 	s.mu.RLock()
 	names := slices.Sorted(maps.Keys(s.tables))
 	entries := make([]*tableEntry, len(names))
@@ -163,57 +210,68 @@ func writeState(enc *jsontext.Encoder, at place, s *State) error {
 	}
 	s.mu.RUnlock()
 
-	err := writeTokens(enc, jsontext.BeginObject,
-		jsontext.String("account"), jsontext.String(at.account),
-		jsontext.String("region"), jsontext.String(at.region),
-		jsontext.String("tables"), jsontext.BeginArray)
-	if err != nil {
-		return err
-	}
+	out.text(`{"account":`)
+	out.string(at.account)
+	out.text(`,"region":`)
+	out.string(at.region)
+	out.text(`,"tables":[`)
 
-	for _, e := range entries {
-		err = writeTable(enc, e)
+	for i, e := range entries {
+		if i > 0 {
+			out.text(",")
+		}
+
+		err := writeTable(out, e)
 		if err != nil {
 			return err
 		}
 	}
 
-	return writeTokens(enc, jsontext.EndArray, jsontext.EndObject)
+	out.text("]}")
+
+	return nil
 }
 
 // writeTable copies the table under its locks and encodes the copy.
-func writeTable(enc *jsontext.Encoder, e *tableEntry) error {
+func writeTable(out *snapshotWriter, e *tableEntry) error {
 	img, err := e.image()
 	if err != nil {
 		return err
 	}
 
-	err = writeTokens(enc, jsontext.BeginObject, jsontext.String("meta"))
-	if err == nil {
-		err = enc.WriteValue(img.meta)
-	}
+	out.text(`{"meta":`)
+	out.buf = append(out.buf, img.meta...)
 
-	if err == nil && img.shard != nil {
-		err = enc.WriteToken(jsontext.String("shard"))
-		if err == nil {
-			err = json.MarshalEncode(enc, img.shard, snapshotOptions)
+	if img.shard != nil {
+		out.text(`,"shard":`)
+
+		err = out.json(img.shard)
+		if err != nil {
+			return err
 		}
 	}
 
-	if err == nil {
-		err = writeTokens(enc, jsontext.String("items"), jsontext.BeginArray)
+	out.text(`,"items":[`)
+
+	items := img.items.Items()
+
+	for i := range items {
+		if i > 0 {
+			out.text(",")
+		}
+
+		out.buf, out.names = appendItem(out.buf, items[i], out.names)
+		items[i] = nil // let a table dropped meanwhile go before the encode ends
+
+		err = out.flushFull()
+		if err != nil {
+			return err
+		}
 	}
 
-	for i := 0; err == nil && i < len(img.items); i++ {
-		err = json.MarshalEncode(enc, img.items[i], snapshotOptions)
-		img.items[i] = nil // let a table dropped meanwhile go before the encode ends
-	}
+	out.text("]}")
 
-	if err != nil {
-		return err //nolint:wrapcheck // Snapshot wraps it
-	}
-
-	return writeTokens(enc, jsontext.EndArray, jsontext.EndObject)
+	return nil
 }
 
 // image is the table as one moment left it: its meta encoded, its shard's
@@ -241,14 +299,14 @@ func (e *tableEntry) image() (tableImage, error) {
 		}
 	}
 
-	return tableImage{meta: meta, shard: shard, items: e.data.ItemsHeld()}, nil
+	return tableImage{meta: meta, shard: shard, items: e.data.ImageHeld()}, nil
 }
 
 // tableImage is what image copies of a table.
 type tableImage struct {
 	meta  jsontext.Value
 	shard *shardData
-	items []value.Item
+	items table.Image
 }
 
 // saveAccounts copies the account-wide state of every account, by account.
@@ -310,6 +368,7 @@ func writeTokens(enc *jsontext.Encoder, tokens ...jsontext.Token) error {
 type restored struct {
 	accounts map[string]*accountState
 	states   map[place]map[string]*tableEntry
+	parser   *itemParser
 }
 
 // Restore replaces the state with the snapshot in r. It implements
@@ -519,7 +578,7 @@ func (p *Provider) readState(dec *jsontext.Decoder, got *restored) error {
 		case "region":
 			err = json.UnmarshalDecode(dec, &at.region, snapshotOptions)
 		case "tables":
-			err = readArray(dec, func() error { return p.readTable(dec, tables) })
+			err = readArray(dec, func() error { return p.readTable(dec, got, tables) })
 		default:
 			err = dec.SkipValue()
 		}
@@ -540,7 +599,7 @@ func (p *Provider) readState(dec *jsontext.Decoder, got *restored) error {
 
 // readTable reads one table and builds it, indexes and shard included. meta
 // must come before items, as Snapshot writes them.
-func (p *Provider) readTable(dec *jsontext.Decoder, tables map[string]*tableEntry) error {
+func (p *Provider) readTable(dec *jsontext.Decoder, got *restored, tables map[string]*tableEntry) error {
 	err := readKind(dec, '{')
 	if err != nil {
 		return err
@@ -570,7 +629,7 @@ func (p *Provider) readTable(dec *jsontext.Decoder, tables map[string]*tableEntr
 				return fmt.Errorf("%w: items before meta", errSnapshot)
 			}
 
-			items, err = readItems(dec)
+			items, err = got.readItems(dec)
 		default:
 			err = dec.SkipValue()
 		}
@@ -619,15 +678,24 @@ func readMeta(dec *jsontext.Decoder) (*tableEntry, error) {
 	return &tableEntry{meta: meta, data: meta.newEngine()}, nil
 }
 
-func readItems(dec *jsontext.Decoder) ([]value.Item, error) {
+// readItems reads a table's items: jsontext checks each one's syntax, and
+// parser, which got checks once per restore, builds it.
+func (got *restored) readItems(dec *jsontext.Decoder) ([]value.Item, error) {
 	var items []value.Item
 
-	err := readArray(dec, func() error {
-		var item value.Item
+	if got.parser == nil {
+		got.parser = newItemParser()
+	}
 
-		err := json.UnmarshalDecode(dec, &item, snapshotOptions)
+	err := readArray(dec, func() error {
+		raw, err := dec.ReadValue()
 		if err != nil {
 			return err //nolint:wrapcheck // Restore wraps it
+		}
+
+		item, err := got.parser.parse(raw)
+		if err != nil {
+			return err
 		}
 
 		err = value.ValidateItem(item)
