@@ -1095,6 +1095,8 @@ var errLeaderUnsaved = errors.New("its leader was not saved in this flush")
 func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*staged {
 	var deferred []*staged
 
+	followed := followedIn(pending)
+
 	for i, p := range pending {
 		if ctx.Err() != nil {
 			r.abandon(ctx, pending[i:])
@@ -1111,6 +1113,10 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 			}
 
 			continue
+		}
+
+		if l, ok := p.snap.(Leader); ok {
+			l.Followed(followed[p.name])
 		}
 
 		s := &staged{p: p, removed: p.assets.begin()}
@@ -1136,6 +1142,20 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 	}
 
 	return deferred
+}
+
+// followedIn is the services a [Follower] in pending follows: a flush saves
+// that follower right after its leader.
+func followedIn(pending []pendingService) map[string]bool {
+	followed := make(map[string]bool, len(pending))
+
+	for _, p := range pending {
+		if leader := follows(p.snap); leader != "" {
+			followed[leader] = true
+		}
+	}
+
+	return followed
 }
 
 // secondPass syncs the assets of each deferred service and renames its
@@ -1183,7 +1203,8 @@ func (r *flushRun) giveWay(p pendingService) {
 }
 
 // end ends one service's save with err and records what it failed with. A
-// save that ended in its rename is committed, and a [Committer] is told so.
+// save that ended in its rename is committed, and a [Committer] is told so. A
+// [Leader] whose save failed is told no follower is saved from it.
 func (r *flushRun) end(s *staged, err error) {
 	finishSave(s, err)
 
@@ -1198,6 +1219,11 @@ func (r *flushRun) end(s *staged, err error) {
 	}
 
 	p := s.p
+
+	if l, ok := p.snap.(Leader); ok {
+		l.Followed(false)
+	}
+
 	r.errs = append(r.errs, fmt.Errorf("persist %s: %w", p.name, err))
 
 	if leaves(r.root, err) {

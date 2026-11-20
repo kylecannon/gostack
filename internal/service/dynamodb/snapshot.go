@@ -228,9 +228,11 @@ type stateImage struct {
 // before engine locks is the documented order, and no lock holder takes a
 // second entry's lock, so holding all of them cannot deadlock.
 //
-// It keeps in cutTaken a copy of each shard's records below its next number
-// at the cut, the records of exactly the writes the cut holds, for the
-// dynamodbstreams snapshot once this one is on disk. A copy, not the shard:
+// When a dynamodbstreams save follows (Followed), it keeps in cutTaken a copy
+// of each shard's records below its next number at the cut, the records of
+// exactly the writes the cut holds, for the dynamodbstreams snapshot once
+// this one is on disk; otherwise it keeps none. Either way it first drops the
+// cut an earlier snapshot kept, so at most one is held. A copy, not the shard:
 // DeleteTable, a stream enabled again and a reset each Stop the shard and
 // drop its records before the streams snapshot runs, and retention zeroes a
 // dropped record in place (stream.Log.dropOldest), so neither the shard nor
@@ -239,6 +241,9 @@ type stateImage struct {
 // every Stop holds its entry's lock for writing, so none drops a record below
 // the cut first. Records appended since are numbered past it and not copied.
 func (p *Provider) cut() ([]stateImage, error) {
+	p.cutTaken.Store(nil)
+	p.streamCut.Store(nil)
+
 	states, entries, places := cutTables(sortedStates(p))
 
 	// A table shared between regions is locked once: a second read lock
@@ -271,8 +276,6 @@ func (p *Provider) cut() ([]stateImage, error) {
 		images[i].meta, engines[i] = meta, e.data
 	}
 
-	var shards []shardCut
-
 	unlock := table.ReadLock(engines...)
 	for i, e := range entries {
 		images[i].items = e.data.ImageHeld()
@@ -280,16 +283,20 @@ func (p *Provider) cut() ([]stateImage, error) {
 	}
 	unlock()
 
-	for i, e := range entries {
-		if images[i].shard != nil {
-			shards = append(shards, shardCut{
-				place: places[i], table: e.meta.Name, created: e.shard.Created(),
-				records: e.shard.RecordsBefore(images[i].shard.Next),
-			})
-		}
-	}
+	if !p.unfollowed.Load() {
+		var shards []shardCut
 
-	p.cutTaken.Store(&shards)
+		for i, e := range entries {
+			if images[i].shard != nil {
+				shards = append(shards, shardCut{
+					place: places[i], table: e.meta.Name, created: e.shard.Created(),
+					records: e.shard.RecordsBefore(images[i].shard.Next),
+				})
+			}
+		}
+
+		p.cutTaken.Store(&shards)
+	}
 
 	for i := range states {
 		n := copy(states[i].tables, images)

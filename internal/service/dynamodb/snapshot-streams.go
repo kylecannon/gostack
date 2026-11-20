@@ -37,6 +37,15 @@ import (
 // later cut. The sequence numbers are the ones the records had, so a position
 // read before a restart, and an iterator issued for it within its 15 minutes,
 // read the same records after it.
+//
+// The copy costs a []stream.Record of the shard's records, not their images,
+// which the records share with the shard. It is made only when persistence
+// saves the streams after that table snapshot (Followed) and dropped once the
+// streams snapshot has written it, so it lives for one flush. A cut of slice
+// headers would cost nothing, but retention zeroes a dropped record in place
+// so its images can be collected; leaving dropped records in the shard's
+// array instead would keep their images until the array is next grown, up to
+// the 24-hour retention for a shard no longer written.
 
 // StreamSnapshotter is how the dynamodbstreams service saves and restores the
 // records of DynamoDB's streams. Its snapshot is its own file, so
@@ -49,14 +58,26 @@ type StreamSnapshotter interface {
 var (
 	_ StreamSnapshotter = (*Provider)(nil)
 	_ persist.Committer = (*Provider)(nil)
+	_ persist.Leader    = (*Provider)(nil)
 )
 
 // Committed implements persist.Committer: the table snapshot last taken is on
-// disk, so the streams snapshot writes the records of its cut from now on.
+// disk, so the next streams snapshot writes the records of its cut.
 func (p *Provider) Committed() {
 	if cut := p.cutTaken.Swap(nil); cut != nil {
 		p.streamCut.Store(cut)
 	}
+}
+
+// Followed implements persist.Leader. Unless a dynamodbstreams save follows,
+// the next table snapshot's cut copies no records. Either way the cut kept
+// for an earlier one is dropped: persistence calls it before a table snapshot,
+// whose cut replaces it, and after a failed one, which no streams save
+// follows.
+func (p *Provider) Followed(saved bool) {
+	p.unfollowed.Store(!saved)
+	p.cutTaken.Store(nil)
+	p.streamCut.Store(nil)
 }
 
 type streamsFile struct {
@@ -97,8 +118,10 @@ type shardCut struct {
 // SnapshotStreams writes to w the records of the cut of the latest table
 // snapshot persistence committed: the records of exactly the writes that
 // snapshot holds, however long it took to encode and whatever was written,
-// deleted or reset since. Before a committed table snapshot, and after a
-// restore until the next, it writes no shard.
+// deleted or reset since. It takes that cut, so the records are not held
+// after it: persistence saves the streams only right after a committed table
+// snapshot, whose cut is new. Before a committed table snapshot, after a
+// restore until the next, and after it took the cut, it writes no shard.
 func (p *Provider) SnapshotStreams(w io.Writer) error {
 	enc := jsontext.NewEncoder(w, snapshotOptions)
 
@@ -117,9 +140,10 @@ func (p *Provider) writeStreams(enc *jsontext.Encoder) error {
 		return err
 	}
 
+	// The cut is this snapshot's alone: once written it is not held.
 	var shards []shardCut
-	if cut := p.streamCut.Load(); cut != nil {
-		shards = slices.Clone(*cut)
+	if cut := p.streamCut.Swap(nil); cut != nil {
+		shards = *cut
 	}
 
 	slices.SortStableFunc(shards, func(a, b shardCut) int {

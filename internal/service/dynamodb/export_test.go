@@ -43,6 +43,22 @@ func Cut(p *Provider) error {
 	return err
 }
 
+// CutRecords is the stream records the provider's cuts hold for a streams
+// snapshot, the one taken and the one committed together.
+func CutRecords(p *Provider) int {
+	n := 0
+
+	for _, cut := range []*[]shardCut{p.cutTaken.Load(), p.streamCut.Load()} {
+		if cut != nil {
+			for _, c := range *cut {
+				n += len(c.records)
+			}
+		}
+	}
+
+	return n
+}
+
 // Shard returns the latest stream shard of the test account's table in
 // region, nil when it never had a stream.
 func Shard(p *Provider, region, table string) *stream.Log {

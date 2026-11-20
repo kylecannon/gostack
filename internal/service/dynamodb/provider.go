@@ -78,10 +78,17 @@ type Provider struct {
 	// cutTaken is the stream shards of the latest table snapshot's cut, each
 	// with the records it held below its next number then, until persistence
 	// reports that snapshot on disk (Committed). streamCut is the last one
-	// reported: the dynamodbstreams snapshot writes its records and no others
-	// (snapshot-streams.go). Both are nil before a table snapshot, and Restore
-	// sets them to nil.
+	// reported, until the dynamodbstreams snapshot takes it to write its
+	// records and no others (snapshot-streams.go). A cut kept for no
+	// streams save is dropped: the next table snapshot replaces both, a failed
+	// one drops its own (Followed), and Restore sets both to nil. At most one
+	// is held.
 	cutTaken, streamCut atomic.Pointer[[]shardCut]
+	// unfollowed is set while persistence saves no dynamodbstreams snapshot
+	// after the next table snapshot (PERSIST_DYNAMODBSTREAMS=0, or the
+	// streams' own backoff), so that snapshot's cut copies no records. It is
+	// clear until persistence says so, so a caller that never does keeps them.
+	unfollowed atomic.Bool
 }
 
 var _ api.Handler = (*Provider)(nil)

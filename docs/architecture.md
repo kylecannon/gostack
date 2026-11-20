@@ -1575,7 +1575,18 @@ Kinesis. The state is two files, LocalStack's split:
   renamed (`persist.Committer`) the streams snapshot writes that copy, so a
   shard stopped between the two saves of a flush still has its records
   saved. Before a committed table save, and after a load until the next, it
-  writes no shard. A shard takes its records back only when its identity
+  writes no shard. The engine tells dynamodb before each table snapshot
+  whether a dynamodbstreams save follows it in the flush (`persist.Leader`):
+  with `PERSIST_DYNAMODBSTREAMS=0`, or dynamodbstreams in its own backoff,
+  the cut copies no records. The copy is dropped once the streams snapshot
+  has written it, when the table save fails, or at the next cut, so it lives
+  for one flush and at most one is held. It is a `[]stream.Record` of 88
+  bytes a record; the item images are shared with the shard. A shard at its
+  bound holds at most `MaxBytes / RecordOverhead`, about 1,048,576 records,
+  so the copy peaks at about 88 MiB per shard during a flush. A cut of slice
+  headers would cost nothing but needs retention to stop zeroing a dropped
+  record in place, which would keep dropped images until the shard's array
+  grows again. A shard takes its records back only when its identity
   (creation time to the nanosecond) matches the table file's and they leave
   no gap below the table's next sequence number, so a streams file older
   than the table file never reads across a gap. Records at or past that

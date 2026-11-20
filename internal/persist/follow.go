@@ -23,6 +23,16 @@ type Committer interface {
 	Committed()
 }
 
+// Leader is a Snapshotter told whether a [Follower] is saved from its
+// snapshot, so it keeps what its followers write only when one will. A flush
+// calls Followed before each Snapshot: true when it saves a follower right
+// after this service, false when it saves the service alone (the follower is
+// not persisted, is unsafe, or is in its own backoff). It calls Followed(false)
+// again when the save fails, since no follower is saved from that snapshot.
+type Leader interface {
+	Followed(saved bool)
+}
+
 // follows is the service s follows, "" for none.
 func follows(s Snapshotter) string {
 	if f, ok := s.(Follower); ok {

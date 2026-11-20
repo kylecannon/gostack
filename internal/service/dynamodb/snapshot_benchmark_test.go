@@ -160,6 +160,19 @@ func BenchmarkSnapshot(b *testing.B) {
 			}
 		})
 	}
+
+	// The table snapshot of tables with stream records: with the streams
+	// persisted its cut keeps their records for the streams snapshot.
+	for _, c := range streamCases() {
+		b.Run(fmt.Sprintf("items=1000/tables=%d/%s", streamTables, c.name()), func(b *testing.B) {
+			p := streamedProvider(b, 1_000, c)
+			b.ReportAllocs()
+
+			for b.Loop() {
+				require.NoError(b, p.Snapshot(io.Discard))
+			}
+		})
+	}
 }
 
 func BenchmarkRestore(b *testing.B) {
@@ -246,6 +259,128 @@ func BenchmarkSnapshotCut(b *testing.B) {
 			}
 		})
 	}
+
+	for _, c := range streamCases() {
+		b.Run(fmt.Sprintf("items=10000/tables=%d/%s", streamTables, c.name()), func(b *testing.B) {
+			p := streamedProvider(b, 10_000, c)
+			b.ReportAllocs()
+
+			for b.Loop() {
+				require.NoError(b, dynamodb.Cut(p))
+			}
+		})
+	}
+}
+
+// BenchmarkSnapshotStreams is one flush of DynamoDB and DynamoDB Streams,
+// both persisted, with stream records: the table snapshot, its commit, then
+// the streams snapshot, as the engine saves the pair. The 100,000-record row
+// is a large one.
+func BenchmarkSnapshotStreams(b *testing.B) {
+	for _, c := range streamCases() {
+		if !c.persisted || c.records > 1_000 && os.Getenv(largeEnv) != "1" {
+			continue
+		}
+
+		b.Run(fmt.Sprintf("items=1000/tables=%d/%s", streamTables, c.name()), func(b *testing.B) {
+			p := streamedProvider(b, 1_000, c)
+			b.ReportAllocs()
+
+			for b.Loop() {
+				require.NoError(b, p.Snapshot(io.Discard))
+
+				if committer, ok := any(p).(interface{ Committed() }); ok {
+					committer.Committed()
+				}
+
+				require.NoError(b, p.SnapshotStreams(io.Discard))
+			}
+		})
+	}
+}
+
+// streamTables is the tables of the stream rows, each with a KEYS_ONLY stream.
+const streamTables = 4
+
+// streamCase is a row with stream records: records across the shards of
+// streamTables tables, and whether persistence saves the streams, as
+// PERSIST_DYNAMODBSTREAMS sets it.
+type streamCase struct {
+	records   int
+	persisted bool
+}
+
+// streamCases are 1,000 and 100,000 records, with the streams saved and not.
+func streamCases() []streamCase {
+	return []streamCase{{1_000, true}, {1_000, false}, {100_000, true}, {100_000, false}}
+}
+
+func (c streamCase) name() string {
+	streams := "off"
+	if c.persisted {
+		streams = "on"
+	}
+
+	return fmt.Sprintf("records=%d/streams=%s", c.records, streams)
+}
+
+// streamedProvider is a provider holding streamTables tables, with the given
+// number of items between them, each with a KEYS_ONLY stream holding its share of c.records,
+// written now so retention keeps them. It is told whether a follower saves the
+// streams, as persistence tells it before each table snapshot.
+func streamedProvider(b *testing.B, items int, c streamCase) *dynamodb.Provider {
+	b.Helper()
+
+	created := time.Now().UTC()
+	at := created.Format(time.RFC3339Nano)
+	each := c.records / streamTables
+
+	file := string(generatedTables(streamTables, items/streamTables, itemPayloads[0].size))
+	file = strings.ReplaceAll(file, `"PayPerRequest":true,`, `"PayPerRequest":true,`+
+		`"Stream":{"StreamEnabled":true,"StreamViewType":"KEYS_ONLY"},"StreamLabel":"2026-01-01T00:00:00.000",`)
+	file = strings.ReplaceAll(file, `}]},"items":[`, fmt.Sprintf(
+		`}]},"shard":{"created":%q,"low":1,"next":%d,"viewType":"KEYS_ONLY","region":"us-east-1"},"items":[`,
+		at, each+1))
+
+	var streams bytes.Buffer
+
+	streams.WriteString(`{"v":1,"shards":[`)
+
+	for t := range streamTables {
+		if t > 0 {
+			streams.WriteByte(',')
+		}
+
+		fmt.Fprintf(&streams, `{"account":"000000000000","region":"us-east-1","table":"bench-%d","created":%q,"records":[`,
+			t, at)
+
+		for i := range each {
+			if i > 0 {
+				streams.WriteByte(',')
+			}
+
+			fmt.Fprintf(&streams, `{"seq":%d,"event":"INSERT","keys":{"id":{"S":"k%08d"}},"size":14,"at":%q}`,
+				i+1, i%(items/streamTables), at)
+		}
+
+		streams.WriteString(`]}`)
+	}
+
+	streams.WriteString(`]}`)
+
+	p := restoredProvider(b, []byte(file))
+	require.NoError(b, p.RestoreStreams(&streams))
+
+	for t := range streamTables {
+		shard := dynamodb.Shard(p, "us-east-1", fmt.Sprintf("bench-%d", t))
+		require.Len(b, shard.Records(), each, "the shard holds its records")
+	}
+
+	if leader, ok := any(p).(interface{ Followed(saved bool) }); ok {
+		leader.Followed(c.persisted)
+	}
+
+	return p
 }
 
 // generatedTables is generated's snapshot with n tables of count items
