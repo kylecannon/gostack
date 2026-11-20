@@ -131,6 +131,16 @@ func (d *deviceBench) clear() {
 func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 	d.b = b
 
+	// One untimed publish first, so a form that is too large or malformed
+	// fails here, before any cell is measured.
+	status, body := d.call(form)
+	if status != http.StatusOK {
+		b.Fatalf("first Publish answered %d: %s", status, body)
+	}
+
+	d.provider.AwaitDeliveries(b.Context())
+	d.clear()
+
 	var fail failed
 
 	b.SetBytes(int64(payload * workers))
@@ -181,11 +191,15 @@ func BenchmarkPublishEndpoint(b *testing.B) {
 
 // endpointForm is a Publish to the first endpoint or to the topic.
 func endpointForm(d *deviceBench, route, structure string, size int) string {
-	message := strings.Repeat("m", size)
-	params := []string{paramMessage, message}
+	params := []string{paramMessage, strings.Repeat("m", size)}
 
 	if structure == valueStructure {
-		params = []string{paramMessage, `{"default":"` + message + `"}`, paramStructure, valueStructure}
+		// size is the most the whole Message may hold, so the wrapper's bytes
+		// come out of the payload.
+		const open, closing = `{"default":"`, `"}`
+
+		message := open + strings.Repeat("m", size-len(open)-len(closing)) + closing
+		params = []string{paramMessage, message, paramStructure, valueStructure}
 	}
 
 	if route == routeDirect {
