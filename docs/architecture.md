@@ -1498,14 +1498,21 @@ is untouched.
   would share its time in order; S3 is the only one today.
 - A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
   timed save writing first saves, beside it and at once, every dirty service
-  the timed save does not hold (SQ-384). The timed save holds a service from
-  when it takes it until that service's own save ends, renamed or not, so a
-  service it has already renamed is free again while it is still in a slow
-  `Snapshot` or sync of another. It also holds the leader of a follower it
-  holds: dynamodb renamed but dynamodbstreams not yet snapshotted is one unit,
+  whose save the timed save has not begun (SQ-384): one it did not take, one
+  it has finished, and one it took and has not reached yet, queued behind
+  another service's slow `Snapshot` or sync. A queued one moves to the save
+  beside it, and the timed save skips it when it gets there. A service moves
+  only from the timed save to a save by hand, never back, so the timed save
+  never takes what a save that joined it took first. Once the timed save has
+  begun a service's save, it holds the service until that save ends, renamed
+  or not, so a service it has already renamed is free again while it is still
+  in a slow `Snapshot` or sync of another. It also holds the leader of a
+  follower it holds: dynamodb renamed but dynamodbstreams not yet snapshotted is one unit,
   so no save beside it puts a newer table on disk ahead of a streams file cut
   from the older one, and a follower is still saved only right after its
-  leader's rename in the same save. The timed save tells dynamodb
+  leader's rename in the same save. dynamodb and dynamodbstreams move
+  together or not at all: once the timed save has begun dynamodb's save,
+  dynamodbstreams stays with it. The timed save tells dynamodb
   `Followed(false)` when the pair's saves end, before it frees them, so its
   end never drops the cut of a save beside it that took the pair next. Two
   saves never hold one service, so
@@ -1513,7 +1520,11 @@ is untouched.
   shared: a load or reset waits for both, and the last of them to end frees
   it. A `Snapshot` or sync cannot be cut short, so this is what keeps a
   timed save inside dynamodb's long `Snapshot`, or stuck in the S3 asset
-  sync, from costing the shutdown the SQS write acknowledged after it began.
+  sync, from costing the shutdown the SQS write acknowledged after it began,
+  or the one it took with dynamodb and had not reached. So a timed save stuck
+  in a slow sync holds the shutdown until the shutdown's deadline and no
+  longer: the shutdown returns then with every other service saved and only
+  the service whose save the timed save had begun still unsaved.
   Only then does the waiter turn to what the timed save holds: it lends the
   timed save its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot
@@ -1555,20 +1566,15 @@ is untouched.
   the removal of bodies the loaded state does not name, the load marks the
   service dirty and arms the timer, whose save deletes them once the load is
   done.
-  So a timed save stuck in a slow sync holds the shutdown until the
-  shutdown's deadline and no longer: the shutdown returns then with every
-  other service saved and only what the timed save held still unsaved. A
-  shutdown whose save ran out of time still makes the last flush after
+- A shutdown whose save ran out of time still makes the last flush after
   `Close`, with what is left of `Close`'s time. That flush is skipped when a
   service's `Close` ran `Close`'s deadline out, since a flush under an
   ended deadline renames nothing.
 - Stated limit: writes acknowledged since the last save are lost at
   `docker stop` when the shutdown save takes longer than its window for the
   service itself: its own `Snapshot` or sync, or the one a timed save is
-  taking of it, outlasts the window, or a timed save took it and has not
-  reached it yet, behind another service's slow `Snapshot` or sync (open
-  after SQ-384). A service the timed save did not take, or has finished, is
-  saved beside it. The
+  taking of it, outlasts the window. A service whose save the timed save has
+  not begun is saved beside it (SQ-384). The
   last state file on disk is what the next start loads. The window is `Save`
   minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
   `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same

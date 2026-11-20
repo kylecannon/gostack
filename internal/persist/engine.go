@@ -52,7 +52,7 @@ type Engine struct {
 	// emptied but not yet refilled. It is a channel, so a Flush, Load or Close
 	// stops waiting when its context ends. A flush by the timer holds it shared:
 	// a Flush that finds it so joins it rather than wait, and saves beside it
-	// the services it does not hold (see Flush).
+	// the services whose save it has not begun (see Flush).
 	sem chan struct{}
 	// sharers counts the flushes that hold sem together, the timer's and the
 	// Flush calls that joined it; it is zero while sem is free or held by one
@@ -642,9 +642,10 @@ func preempted(ctx context.Context) bool {
 // still runs, and the next save renames only once that sync has returned.
 //
 // A Flush (lend) that finds sem shared by a flush by the timer joins it at
-// once and reports shared: it may then save the services no other flush holds,
-// and leaves with unshare. The join and a timed flush's start are decided under
-// mu, so a Flush either joins or is a waiter the timed flush gives way to.
+// once and reports shared: it may then save the services whose save no other
+// flush has begun (see takeDirty), and leaves with unshare. The join and a
+// timed flush's start are decided under mu, so a Flush either joins or is a
+// waiter the timed flush gives way to.
 func (e *Engine) acquire(ctx context.Context, mode timedSave) (shared bool, err error) {
 	e.mu.Lock()
 	if mode == lend && e.sharers > 0 {
@@ -727,8 +728,9 @@ func (e *Engine) unshare(ctx context.Context) error {
 	return e.wait(ctx)
 }
 
-// flushBeside writes, while sem is shared, the dirty services no other flush
-// holds. A panic that passes through it ends the share.
+// flushBeside writes, while sem is shared, the dirty services whose save no
+// other flush has begun, those a flush by the timer took and has not reached
+// among them. A panic that passes through it ends the share.
 func (e *Engine) flushBeside(ctx context.Context) (results []outcome, err error) {
 	ended := false
 
@@ -864,7 +866,7 @@ func (e *Engine) disarmLocked() {
 // deadline of its own: a caller waiting for sem cancels it or lends it its
 // deadline (see acquire), and one already waiting when the callback starts, or
 // when it takes sem, makes it skip the flush. It holds sem shared, so a Flush
-// that comes while it writes saves beside it what it did not take.
+// that comes while it writes saves beside it what it has not begun to save.
 func (e *Engine) flushOnTimer(gen uint64) {
 	ctx, timed := newTimedFlush()
 	defer timed.stop()
@@ -995,7 +997,7 @@ const (
 // flushRun.interrupt), and is not stopped here: its stack stays whole for
 // whoever recovers it.
 func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) {
-	run := newFlushRun(e)
+	run := newFlushRun(e, by)
 
 	pending := e.takeDirty(by, run)
 	if len(pending) == 0 {
@@ -1116,10 +1118,10 @@ func (e *Engine) redirtyLocked(u unsaved) {
 // A service another flush holds, one whose save there has not ended, is not
 // taken, and stays dirty; nor is the leader of a follower another flush
 // holds, so a leader saved again never falls between its rename and its
-// follower's snapshot in that flush. The exception is a service whose save
-// in the other flush has not begun, such as one queued behind another
-// service's slow Snapshot: it is moved to run, which saves it instead, and
-// the other flush skips it (see flushRun.own). A [Leader] and its follower
+// follower's snapshot in that flush. The exception, for a flush by hand, is a
+// service whose save in a flush by the timer beside it has not begun, such as
+// one queued behind another service's slow Snapshot: it is moved to run,
+// which saves it instead, and the timed flush skips it (see flushRun.own). A [Leader] and its follower
 // move together, or not at all: a follower moves only with its leader, and a
 // leader whose follower may not move stays. Each service it takes is held, by
 // run, until its save ends.
@@ -1134,7 +1136,7 @@ func (e *Engine) takeDirty(by flushBy, run *flushRun) []pendingService {
 	due := func(t *tracked) bool { return by == byHand || !now.Before(t.retryAt) }
 
 	wanted := e.wantedLocked(due)
-	held, movable := e.holdsLocked()
+	held, movable := e.holdsLocked(by)
 
 	var pending []pendingService
 
@@ -1205,9 +1207,11 @@ func (e *Engine) wantedLocked(due func(*tracked) bool) map[string]bool {
 // take, because a follower another flush holds is saved there after them:
 // that follower's save has begun, or its leader is not held with it, unsaved,
 // by the same flush. movable is the services, none of them a follower, whose
-// save in the flush that holds them has not begun, and that a flush may take
-// from it; the followers that move with them are decided by takeDirty.
-func (e *Engine) holdsLocked() (held, movable map[string]bool) {
+// save in the flush by the timer that holds them has not begun, and that a
+// flush by hand, by, may take from it: a timed flush never takes back what a
+// Flush that joined it took first. The followers that move with them are
+// decided by takeDirty.
+func (e *Engine) holdsLocked(by flushBy) (held, movable map[string]bool) {
 	held = make(map[string]bool, len(e.services))
 	movable = make(map[string]bool, len(e.services))
 
@@ -1224,7 +1228,8 @@ func (e *Engine) holdsLocked() (held, movable map[string]bool) {
 	}
 
 	for name, t := range e.services {
-		if t.owner != nil && follows(t.snap) == "" && !t.started && t.unsafe == nil && !held[name] {
+		if by == byHand && t.owner != nil && t.owner.by == byTimer && follows(t.snap) == "" && !t.started &&
+			t.unsafe == nil && !held[name] {
 			movable[name] = true
 		}
 	}
@@ -1397,6 +1402,8 @@ func saveOrder(pending []pendingService) []pendingService {
 type flushRun struct {
 	e    *Engine
 	root *os.Root
+	// by is who asked for the flush.
+	by flushBy
 
 	failed []unsaved
 	errs   []error
@@ -1418,10 +1425,10 @@ type flushRun struct {
 	current string
 }
 
-// newFlushRun returns the run of a flush, which takeDirty fills.
-func newFlushRun(e *Engine) *flushRun {
+// newFlushRun returns the run of a flush by by, which takeDirty fills.
+func newFlushRun(e *Engine, by flushBy) *flushRun {
 	return &flushRun{
-		e: e, committed: map[string]bool{}, deferred: map[string]bool{},
+		e: e, by: by, committed: map[string]bool{}, deferred: map[string]bool{},
 		holding: map[string]pendingService{}, followed: map[string]Leader{},
 	}
 }
