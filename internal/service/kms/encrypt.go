@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
-	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service/kms/ciphertext"
@@ -91,19 +90,13 @@ func (p *Provider) Encrypt(ctx context.Context, in *api.EncryptInput) (*api.Encr
 
 // Decrypt opens a blob this service sealed, finding its key in the blob when
 // the request names none. A KeyId with a blob that does not parse is how an
-// RSA key decrypts what was encrypted offline under its public key. Recipient
-// is answered 501, before the key is looked up: the CMS envelope LocalStack
-// builds for it is not written yet.
+// RSA key decrypts what was encrypted offline under its public key. A
+// Recipient gets the plaintext in a CMS envelope, as LocalStack builds it
+// (forRecipient).
 func (p *Provider) Decrypt(ctx context.Context, in *api.DecryptInput) (*api.DecryptOutput, error) {
 	rc, err := call(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	// Before the lookup, so a Recipient neither finds a key nor makes a
-	// managed alias, as GenerateDataKey and GenerateRandom check it first.
-	if in.Recipient != nil {
-		return nil, awserr.NotImplemented("kms", "Decrypt with a Recipient")
 	}
 
 	k, blob, err := p.sourceKey(rc, in.KeyId, in.CiphertextBlob, "Decrypt")
@@ -116,8 +109,16 @@ func (p *Provider) Decrypt(ctx context.Context, in *api.DecryptInput) (*api.Decr
 		return nil, err
 	}
 
+	sealed, plaintext, err := p.forRecipient(in.Recipient, plaintext)
+	if err != nil {
+		return nil, err
+	}
+
 	// KeyId is the key ARN, as AWS answers and LocalStack copies.
-	return &api.DecryptOutput{KeyId: new(k.ARN), Plaintext: plaintext, EncryptionAlgorithm: in.EncryptionAlgorithm}, nil
+	return &api.DecryptOutput{
+		KeyId: new(k.ARN), Plaintext: plaintext, CiphertextForRecipient: sealed,
+		EncryptionAlgorithm: in.EncryptionAlgorithm,
+	}, nil
 }
 
 // ReEncrypt is Decrypt under the source key then Encrypt under the
@@ -190,7 +191,11 @@ func (p *Provider) encryptWith(k *Key, plaintext []byte, encryptionContext map[s
 // asymmetric key is, makes LocalStack answer 500; it is KMSInvalidStateException
 // here.
 func (p *Provider) seal(k *Key, plaintext []byte, encryptionContext map[string]string) ([]byte, error) {
-	material := k.materials().current
+	material, err := k.currentMaterial()
+	if err != nil {
+		return nil, err
+	}
+
 	if !aesKey(material) {
 		return nil, api.NewKMSInvalidStateException(k.ARN + " has no symmetric key material to encrypt with.")
 	}
@@ -300,6 +305,9 @@ func open(k *Key, blob *ciphertext.Blob, data []byte, encryptionContext map[stri
 	// LocalStack's order: the current material, then those rotation replaced,
 	// oldest first. The blob does not say which one sealed it.
 	m := k.materials()
+	if m.current == nil {
+		return nil, k.pendingImport()
+	}
 
 	if plaintext, ok := openWith(m.current, blob, aad); ok {
 		return plaintext, nil
@@ -329,7 +337,7 @@ func openWith(material []byte, blob *ciphertext.Blob, aad []byte) ([]byte, bool)
 // decryptRSA is KmsKey.decrypt_rsa: OAEP with SHA-256 whatever algorithm the
 // request names, as LocalStack does.
 func decryptRSA(k *Key, data []byte) ([]byte, error) {
-	private, err := x509.ParsePKCS8PrivateKey(k.PrivateKey)
+	private, err := x509.ParsePKCS8PrivateKey(k.materials().private)
 	if err != nil {
 		return nil, api.NewInvalidCiphertextException("")
 	}

@@ -197,7 +197,7 @@ func (p *Provider) GetPublicKey(ctx context.Context, in *api.GetPublicKeyInput) 
 
 	return &api.GetPublicKeyOutput{
 		KeyId:                  new(k.ARN),
-		PublicKey:              k.PublicKey,
+		PublicKey:              k.materials().public,
 		KeySpec:                new(k.Spec),
 		KeyUsage:               new(k.Usage),
 		EncryptionAlgorithms:   encryptionAlgorithms(k.Usage, k.Spec),

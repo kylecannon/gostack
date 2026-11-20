@@ -99,12 +99,14 @@ func digestOf(message []byte, messageType *string, h signingHash, algorithm stri
 
 // privateKeyOf parses k's private key.
 func privateKeyOf(k *Key) (any, error) {
-	key, err := x509.ParsePKCS8PrivateKey(k.PrivateKey)
+	der := k.materials().private
+
+	key, err := x509.ParsePKCS8PrivateKey(der)
 	if err == nil {
 		return key, nil
 	}
 
-	secg, secgErr := parseSECGK1Private(k.PrivateKey)
+	secg, secgErr := parseSECGK1Private(der)
 	if secgErr == nil {
 		return secg, nil
 	}
@@ -114,12 +116,14 @@ func privateKeyOf(k *Key) (any, error) {
 
 // publicKeyOf parses k's public key, which is cheaper than its private key.
 func publicKeyOf(k *Key) (any, error) {
-	key, err := x509.ParsePKIXPublicKey(k.PublicKey)
+	der := k.materials().public
+
+	key, err := x509.ParsePKIXPublicKey(der)
 	if err == nil {
 		return key, nil
 	}
 
-	secg, secgErr := parseSECGK1Public(k.PublicKey)
+	secg, secgErr := parseSECGK1Public(der)
 	if secgErr == nil {
 		return secg, nil
 	}

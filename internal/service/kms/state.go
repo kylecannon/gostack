@@ -1,6 +1,7 @@
 package kms
 
 import (
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -19,6 +20,9 @@ type State struct {
 	keyOrder   []string
 	aliases    map[string]*Alias
 	aliasOrder []string
+	// imports are the import tokens GetParametersForImport handed out, by
+	// token (KmsStore.imports).
+	imports map[string]*importParams
 
 	// grants has its own lock.
 	grants grantStore
@@ -51,7 +55,32 @@ func (s *State) reset() {
 	s.keyOrder = nil
 	s.aliases = map[string]*Alias{}
 	s.aliasOrder = nil
+	s.imports = nil
 	s.grants.reset()
+}
+
+// addImport keeps the parameters of a new import token, first dropping those
+// that expired before now: nothing else removes a token, and a token no
+// import may use is only memory.
+func (s *State) addImport(token string, params *importParams, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	maps.DeleteFunc(s.imports, func(_ string, p *importParams) bool { return now.After(p.validTo) })
+
+	if s.imports == nil {
+		s.imports = map[string]*importParams{}
+	}
+
+	s.imports[token] = params
+}
+
+// importOf returns the parameters of an import token, or nil.
+func (s *State) importOf(token string) *importParams {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.imports[token]
 }
 
 // key returns the key with id, or nil.

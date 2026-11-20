@@ -45,26 +45,33 @@ func (r rotation) periodDays() int32 {
 	return r.period
 }
 
-// keyMaterial is a key's symmetric material at one moment: the current
+// keyMaterial is a key's material at one moment: the current symmetric
 // material, those rotation replaced, oldest first, the id DescribeKey shows,
-// and imported material waiting for RotateKeyOnDemand. Its slices are never
-// written after a key hands them out, so a reader may keep them.
+// imported material waiting for RotateKeyOnDemand, and an asymmetric key's
+// private and public DER. Its slices are never written after a key hands
+// them out, so a reader may keep them.
 type keyMaterial struct {
 	current  []byte
 	previous [][]byte
 	id       string
 	pending  []byte
+	private  []byte
+	public   []byte
 }
 
-// materials is the one way to read a key's symmetric material: one hold of
-// k.mu, so a rotation running at the same time is seen whole or not at all.
-// Encrypt, Decrypt, the MACs and a replica's copy read it here; rotation and
-// import write it with k.mu held, replacing slices rather than filling them.
+// materials is the one way to read a key's material: one hold of k.mu, so a
+// rotation or an import running at the same time is seen whole or not at all.
+// Encrypt, Decrypt, the MACs, Sign, Verify, GetPublicKey and a replica's copy
+// read it here; rotation, import and delete write it with k.mu held,
+// replacing slices rather than filling them.
 func (k *Key) materials() keyMaterial {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
-	return keyMaterial{current: k.Material, previous: k.previous, id: k.MaterialID, pending: k.pending}
+	return keyMaterial{
+		current: k.Material, previous: k.previous, id: k.MaterialID, pending: k.pending,
+		private: k.PrivateKey, public: k.PublicKey,
+	}
 }
 
 // rotate is KmsKey.rotate_key_on_demand with the checks before it, under one

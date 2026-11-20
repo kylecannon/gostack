@@ -233,12 +233,13 @@ func Test_Decrypt_errors(t *testing.T) {
 		require.Equal(t, "DisabledException", r.errorCode())
 	})
 
-	t.Run("a Recipient is not implemented", func(t *testing.T) {
+	t.Run("a Recipient whose document holds no key is ignored", func(t *testing.T) {
 		r := s.call(usEast1, "Decrypt", map[string]any{
 			fieldCiphertextBlob: b64(blob), fieldEncryptionContext: context,
 			"Recipient": map[string]any{fieldAttestation: b64([]byte("doc"))},
 		})
-		require.Equal(t, http.StatusNotImplemented, r.status)
+		require.Equal(t, http.StatusOK, r.status, "%v", r.body)
+		require.Contains(t, r.body, fieldPlaintext)
 	})
 }
 

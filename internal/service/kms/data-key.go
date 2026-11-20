@@ -2,9 +2,9 @@ package kms
 
 import (
 	"context"
+	"crypto/rsa"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
-	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
 
@@ -21,16 +21,39 @@ const (
 // dataKeySpecs are the sizes of the DataKeySpec values.
 var dataKeySpecs = map[string]int{"AES_128": aes128, "AES_256": aes256}
 
-// refuseRecipient answers 501 for a request that carries a Recipient, before
-// any key or random bytes are made. The CMS envelope that would hold the
-// plaintext for it is not written yet, and returning the plaintext instead is
-// wrong: AWS leaves it out when a recipient is given.
-func refuseRecipient(recipient *api.RecipientInfo, operation string) error {
-	if recipient == nil {
+// forRecipient is what a call answers for a Recipient: plaintext sealed in a
+// CMS envelope to the RSA key its attestation document holds, and no
+// plaintext, as AWS answers. A Recipient whose document holds no such key is
+// ignored and the plaintext answered, as LocalStack's Decrypt answers one
+// (test_decrypt_recipient_invalid_attestation); a null one is no Recipient.
+func (p *Provider) forRecipient(recipient *api.RecipientInfo, plaintext []byte) (sealed, bare []byte, err error) {
+	key := recipientKey(recipient)
+	if key == nil {
+		return nil, plaintext, nil
+	}
+
+	sealed, err = envelope(plaintext, key, p.random)
+	if err != nil {
+		return nil, nil, api.NewKMSInternalException("The envelope for the recipient could not be made: " + err.Error())
+	}
+
+	return sealed, nil, nil
+}
+
+// recipientKey is the RSA key a Recipient's attestation document holds, or
+// nil for no Recipient and for a document that holds none. LocalStack logs
+// the second and goes on.
+func recipientKey(recipient *api.RecipientInfo) *rsa.PublicKey {
+	if recipient == nil || len(recipient.AttestationDocument) == 0 {
 		return nil
 	}
 
-	return awserr.NotImplemented("kms", operation+" with a Recipient")
+	key, err := attestationKeyOf(recipient.AttestationDocument)
+	if err != nil {
+		return nil
+	}
+
+	return key
 }
 
 // dataKey is what the GenerateDataKey family makes: the data key or private
@@ -44,22 +67,23 @@ type dataKey struct {
 }
 
 // GenerateDataKey answers a random data key and its blob under the key.
-// DryRun is not read, in LocalStack either. A Recipient is answered 501, as
-// Decrypt answers it: LocalStack ignores it and returns the plaintext, which
-// AWS leaves out when a recipient is given.
+// DryRun is not read, in LocalStack either. A Recipient gets the data key in
+// CiphertextForRecipient, as forRecipient answers it; LocalStack ignores one.
 func (p *Provider) GenerateDataKey(ctx context.Context, in *api.GenerateDataKeyInput,
 ) (*api.GenerateDataKeyOutput, error) {
-	err := refuseRecipient(in.Recipient, "GenerateDataKey")
-	if err != nil {
-		return nil, err
-	}
-
 	d, err := p.newDataKey(ctx, in.KeyId, in.KeySpec, in.NumberOfBytes, in.EncryptionContext, "GenerateDataKey")
 	if err != nil {
 		return nil, err
 	}
 
-	return &api.GenerateDataKeyOutput{CiphertextBlob: d.blob, Plaintext: d.plaintext, KeyId: new(d.key.ARN)}, nil
+	sealed, plaintext, err := p.forRecipient(in.Recipient, d.plaintext)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.GenerateDataKeyOutput{
+		CiphertextBlob: d.blob, Plaintext: plaintext, CiphertextForRecipient: sealed, KeyId: new(d.key.ARN),
+	}, nil
 }
 
 // GenerateDataKeyWithoutPlaintext is GenerateDataKey without the plaintext.
@@ -77,23 +101,24 @@ func (p *Provider) GenerateDataKeyWithoutPlaintext(ctx context.Context,
 
 // GenerateDataKeyPair answers a key pair of KeyPairSpec, its private key in
 // the clear and as a blob under the key, both PKCS #8 DER, and its public key
-// as a DER SubjectPublicKeyInfo. A Recipient is answered 501, as
-// GenerateDataKey answers it.
+// as a DER SubjectPublicKeyInfo. A Recipient gets the private key in
+// CiphertextForRecipient, as GenerateDataKey answers it.
 func (p *Provider) GenerateDataKeyPair(ctx context.Context, in *api.GenerateDataKeyPairInput,
 ) (*api.GenerateDataKeyPairOutput, error) {
-	err := refuseRecipient(in.Recipient, "GenerateDataKeyPair")
+	d, err := p.newDataKeyPair(ctx, in.KeyId, in.KeyPairSpec, in.EncryptionContext, in.DryRun, "GenerateDataKeyPair")
 	if err != nil {
 		return nil, err
 	}
 
-	d, err := p.newDataKeyPair(ctx, in.KeyId, in.KeyPairSpec, in.EncryptionContext, in.DryRun, "GenerateDataKeyPair")
+	sealed, private, err := p.forRecipient(in.Recipient, d.plaintext)
 	if err != nil {
 		return nil, err
 	}
 
 	return &api.GenerateDataKeyPairOutput{
 		PrivateKeyCiphertextBlob: d.blob,
-		PrivateKeyPlaintext:      d.plaintext,
+		PrivateKeyPlaintext:      private,
+		CiphertextForRecipient:   sealed,
 		PublicKey:                d.public,
 		KeyId:                    new(d.key.ARN),
 		KeyPairSpec:              in.KeyPairSpec,

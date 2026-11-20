@@ -162,14 +162,17 @@ func (k *Key) replicaIn(region string, now time.Time, description, policy string
 		MaterialID:  k.MaterialID,
 		previous:    k.previous,
 		pending:     k.pending,
-		description: description,
-		state:       k.state,
-		enabled:     k.enabled,
-		manager:     k.manager,
-		policy:      policy,
-		tags:        tags,
-		rotation:    k.rotation,
-		replicas:    append(slices.Clone(k.replicas), regionKey{ARN: arn, Region: region}),
+		// The import's expiration, which LocalStack copies in the metadata.
+		expirationModel: k.expirationModel,
+		validTo:         k.validTo,
+		description:     description,
+		state:           k.state,
+		enabled:         k.enabled,
+		manager:         k.manager,
+		policy:          policy,
+		tags:            tags,
+		rotation:        k.rotation,
+		replicas:        append(slices.Clone(k.replicas), regionKey{ARN: arn, Region: region}),
 	}, nil
 }
 

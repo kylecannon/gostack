@@ -80,10 +80,11 @@ func Test_SignVerify_messageBounds(t *testing.T) {
 	require.Equal(t, changes, s.changes.Load())
 }
 
-// Test_Decrypt_recipientBeforeLookup holds that a Recipient answers 501 before
-// a key is looked up, so it neither finds a missing key nor makes a managed
-// alias, and that a null Recipient is no Recipient.
-func Test_Decrypt_recipientBeforeLookup(t *testing.T) {
+// Test_Decrypt_recipientAfterLookup holds that a Recipient changes nothing
+// before the plaintext is found: a missing key is the lookup's error, and a
+// blob naming an alias still makes no alias, key or change. An empty or null
+// Recipient is no Recipient.
+func Test_Decrypt_recipientAfterLookup(t *testing.T) {
 	s := newStack(t)
 	id := keyID(t, s.createKey(nil))
 	blob := blobOf(t, s.ok("Encrypt", map[string]any{fieldKeyID: id, fieldPlaintext: b64([]byte("x"))}),
@@ -94,20 +95,22 @@ func Test_Decrypt_recipientBeforeLookup(t *testing.T) {
 	changes := s.changes.Load()
 
 	for _, input := range []map[string]any{
-		{fieldKeyID: missingKeyID, fieldCiphertextBlob: b64(blob), fieldRecipient: map[string]any{}},
-		{fieldKeyID: aliasSSM, fieldCiphertextBlob: b64([]byte("AAAA")), fieldRecipient: map[string]any{}},
+		{fieldKeyID: missingKeyID, fieldCiphertextBlob: b64(blob), fieldRecipient: recipient()},
 		{fieldCiphertextBlob: b64(forgedBlob(aliasSSM)), fieldRecipient: recipient()},
 	} {
 		r := s.call(usEast1, opDecrypt, input)
-		require.Equal(t, http.StatusNotImplemented, r.status, "%v: %v", input, r.body)
+		require.Equal(t, "NotFoundException", r.errorCode(), "%v: %v", input, r.body)
 	}
 
 	require.Equal(t, aliases, s.ok("ListAliases", nil), "a Decrypt with a Recipient made an alias")
 	require.Equal(t, keys, s.ok("ListKeys", nil), "a Decrypt with a Recipient made a key")
 	require.Equal(t, changes, s.changes.Load())
 
-	out := s.ok(opDecrypt, map[string]any{fieldCiphertextBlob: b64(blob), fieldRecipient: nil})
-	require.Equal(t, b64([]byte("x")), out[fieldPlaintext])
+	for _, give := range []any{nil, map[string]any{}} {
+		out := s.ok(opDecrypt, map[string]any{fieldCiphertextBlob: b64(blob), fieldRecipient: give})
+		require.Equal(t, b64([]byte("x")), out[fieldPlaintext])
+		require.NotContains(t, out, fieldCiphertextForRecipient)
+	}
 }
 
 // spki is a SubjectPublicKeyInfo with the algorithm kept as it came.

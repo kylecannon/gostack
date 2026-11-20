@@ -17,15 +17,16 @@ const (
 	fieldPrivateKey       = "PrivateKeyPlaintext"
 )
 
-// recipient is a RecipientInfo no operation can honour yet.
+// recipient is a RecipientInfo whose attestation document holds no key.
 func recipient() map[string]any {
 	return map[string]any{fieldAttestation: b64([]byte("junk"))}
 }
 
-// Test_Recipient_isNotImplemented holds the ruling Decrypt already follows: a
-// call that carries a Recipient answers 501 and never the plaintext, which AWS
-// leaves out when a recipient is given.
-func Test_Recipient_isNotImplemented(t *testing.T) {
+// Test_Recipient_withoutKey holds LocalStack's answer to a Recipient whose
+// attestation document holds no public key
+// (test_decrypt_recipient_invalid_attestation): the recipient is ignored and
+// the call answers as it would without one, with no CiphertextForRecipient.
+func Test_Recipient_withoutKey(t *testing.T) {
 	s := newStack(t)
 	id := keyID(t, s.createKey(nil))
 	blob := blobOf(t, s.ok("Encrypt", map[string]any{fieldKeyID: id, fieldPlaintext: b64([]byte("x"))}),
@@ -48,19 +49,24 @@ func Test_Recipient_isNotImplemented(t *testing.T) {
 			maps.Copy(input, c.input)
 
 			r := s.call(usEast1, c.operation, input)
-			require.Equal(t, http.StatusNotImplemented, r.status, "%v", r.body)
-			require.NotContains(t, r.body, fieldPlaintext)
-			require.NotContains(t, r.body, fieldPrivateKey)
+			require.Equal(t, http.StatusOK, r.status, "%v", r.body)
+			require.NotContains(t, r.body, fieldCiphertextForRecipient)
+
+			if c.operation == opGenerateDataKeyPair {
+				require.Contains(t, r.body, fieldPrivateKey)
+			} else {
+				require.Contains(t, r.body, fieldPlaintext)
+			}
 		})
 	}
 
-	t.Run("it comes before the key is looked up", func(t *testing.T) {
+	t.Run("a missing key is still the lookup's error", func(t *testing.T) {
 		for _, operation := range []string{opGenerateDataKey, opGenerateDataKeyPair} {
 			r := s.call(usEast1, operation, map[string]any{
 				fieldKeyID: "6a1b2c3d-0000-4000-8000-000000000000", fieldKeyPairSpec: eccP256,
 				fieldRecipient: recipient(),
 			})
-			require.Equal(t, http.StatusNotImplemented, r.status, "%s: %v", operation, r.body)
+			require.Equal(t, "NotFoundException", r.errorCode(), "%s: %v", operation, r.body)
 		}
 	})
 

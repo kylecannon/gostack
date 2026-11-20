@@ -59,12 +59,6 @@ type Key struct {
 	Origin      string
 	MultiRegion bool
 
-	// PrivateKey is the PKCS #8 DER of an asymmetric key's private key, and
-	// PublicKey the DER SubjectPublicKeyInfo of its public key. Rotation never
-	// changes them: only a SYMMETRIC_DEFAULT key rotates.
-	PrivateKey []byte
-	PublicKey  []byte
-
 	// internalID is LocalStack's _internal_key_id, from which a material's id
 	// is made; a replica keeps its primary's.
 	internalID [16]byte
@@ -83,6 +77,19 @@ type Key struct {
 	MaterialID string
 	previous   [][]byte
 	pending    []byte
+
+	// PrivateKey is the PKCS #8 DER of an asymmetric key's private key, and
+	// PublicKey the DER SubjectPublicKeyInfo of its public key. Rotation never
+	// changes them; ImportKeyMaterial replaces both under mu, so they are read
+	// through materials too.
+	PrivateKey []byte
+	PublicKey  []byte
+
+	// expirationModel is the ExpirationModel of imported material, empty until
+	// ImportKeyMaterial and after DeleteImportedKeyMaterial; validTo is when
+	// that material expires, zero unless the model is KEY_MATERIAL_EXPIRES.
+	expirationModel string
+	validTo         time.Time
 
 	description  string
 	state        string
@@ -136,6 +143,14 @@ func (k *Key) metadata() *api.KeyMetadata {
 
 	if k.MaterialID != "" {
 		m.CurrentKeyMaterialId = new(k.MaterialID)
+	}
+
+	if k.expirationModel != "" {
+		m.ExpirationModel = new(k.expirationModel)
+	}
+
+	if !k.validTo.IsZero() {
+		m.ValidTo = &protocol.Time{Time: k.validTo}
 	}
 
 	m.MultiRegionConfiguration = k.multiRegionLocked()
@@ -213,10 +228,28 @@ func (k *Key) usable(usage, operation string) error {
 	k.mu.Unlock()
 
 	if state == statePendingImport {
-		return api.NewKMSInvalidStateException(k.ARN + " is pending import.")
+		return k.pendingImport()
 	}
 
 	return nil
+}
+
+// pendingImport is the error of a key pending import. A call also answers it
+// when the key's symmetric material is gone by the time it reads it: the
+// import was deleted after usable passed the key.
+func (k *Key) pendingImport() error {
+	return api.NewKMSInvalidStateException(k.ARN + " is pending import.")
+}
+
+// currentMaterial is the key's current symmetric material, or pendingImport
+// when DeleteImportedKeyMaterial took it.
+func (k *Key) currentMaterial() ([]byte, error) {
+	material := k.materials().current
+	if material == nil {
+		return nil, k.pendingImport()
+	}
+
+	return material, nil
 }
 
 // tagList returns a copy of k's tags, in the order they were first set.
