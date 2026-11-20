@@ -19,6 +19,8 @@ const (
 	msgBatchReads   = "BatchGetItem cannot fetch more than 25 items"
 	msgBatchWrites  = "BatchWriteItem cannot write more than 25 items"
 	msgSingleSelect = "Only single item select is supported"
+
+	msgBatchNotStatement = "Invalid operation. Only select, insert, update and delete operations are valid"
 )
 
 // errNotSingle is a SELECT that does not read exactly one item by its key.
@@ -61,8 +63,15 @@ func (c caller) compileRead(
 
 	if len(rest) > 0 {
 		// The rest is refused as a filter, after its own errors: an unknown
-		// function is named before the select is refused.
-		_, err = r.cond(joinAll(rest))
+		// function or a wrong operand is named before the select is refused.
+		var filter string
+
+		filter, err = r.cond(joinAll(rest))
+		if err != nil {
+			return nil, err
+		}
+
+		err = checkStatementExprs(r.attributeNames(), r.attributeValues(), &filter, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -103,31 +112,31 @@ func (p *Provider) BatchExecuteStatement(
 	}
 
 	c := p.caller(ctx)
-	batch := make([]batchStatement, len(stmts))
+	out := &api.BatchExecuteStatementOutput{Responses: make([]api.BatchStatementResponse, len(stmts))}
 	seen := map[string]struct{}{}
 
+	// DynamoDB Local runs the statements in order and refuses the batch at
+	// the first that names an item an earlier one named, after running that
+	// one too: what ran before stays written (verification/SQ-229 probe5).
 	for i, stmt := range stmts {
-		b := &batch[i]
-		if b.err = stmt.err; stmt.stmt == nil {
-			continue
+		b := batchStatement{err: stmt.err}
+
+		var dup bool
+
+		if stmt.stmt != nil {
+			key, table := c.compileBatch(&b, stmt.stmt, &in.Statements[i])
+			if key != nil {
+				k := itemKeyString(table, key)
+				_, dup = seen[k]
+				seen[k] = struct{}{}
+			}
 		}
 
-		key, table := c.compileBatch(b, stmt.stmt, &in.Statements[i])
-		if key == nil {
-			continue
-		}
+		out.Responses[i] = p.runBatch(ctx, &b)
 
-		k := itemKeyString(table, key)
-		if _, dup := seen[k]; dup {
+		if dup {
 			return nil, value.Invalid(msgBatchDuplicates)
 		}
-
-		seen[k] = struct{}{}
-	}
-
-	out := &api.BatchExecuteStatementOutput{Responses: make([]api.BatchStatementResponse, len(batch))}
-	for i := range batch {
-		out.Responses[i] = p.runBatch(ctx, &batch[i])
 	}
 
 	return out, nil
@@ -155,6 +164,12 @@ func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 		}
 
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, false)
+		if err != nil && messageOf(err) == partiql.MsgVariable {
+			// A batch names a lone name in its own words (verification/SQ-229
+			// probe5).
+			err = value.Invalid(msgBatchNotStatement)
+		}
+
 		out[i] = parsedStatement{stmt: stmt, err: err}
 
 		switch {
@@ -259,8 +274,11 @@ func batchError(err error, table string) api.BatchStatementResponse {
 		code = "ValidationError"
 	}
 
+	// A statement that failed on its item names its table: a failed
+	// condition, a duplicate, or an update of a key attribute
+	// (verification/SQ-229 probe5).
 	out := api.BatchStatementResponse{Error: &api.BatchStatementError{Code: &code, Message: &msg, Item: failedItem(err)}}
-	if code == "ConditionalCheckFailed" || code == "DuplicateItem" {
+	if table != "" {
 		out.TableName = &table
 	}
 

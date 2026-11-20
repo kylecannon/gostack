@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/partiql"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
@@ -118,7 +119,66 @@ func (c caller) compileWrite(
 		}
 	}
 
-	return w, err
+	return w.checked(err)
+}
+
+// checked is w when it compiled, err nil, and its expressions parse.
+func (w *writeStatement) checked(err error) (*writeStatement, error) {
+	if err == nil {
+		err = w.checkExpressions()
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return w, nil
+}
+
+// checkExpressions parses the expressions a compiled UPDATE, DELETE or
+// EXISTS runs with, so a statement's own mistake is refused while it is
+// compiled: before a batch runs it, and named by its index in a transaction.
+func (w *writeStatement) checkExpressions() error {
+	var (
+		cond, update *string
+		names        map[string]string
+		values       map[string]api.AttributeValue
+	)
+
+	switch {
+	case w.update != nil:
+		cond, update, names, values = w.update.ConditionExpression, w.update.UpdateExpression,
+			w.update.ExpressionAttributeNames, w.update.ExpressionAttributeValues
+	case w.del != nil:
+		cond, names, values = w.del.ConditionExpression, w.del.ExpressionAttributeNames, w.del.ExpressionAttributeValues
+	case w.check != nil:
+		cond, names, values = w.check.ConditionExpression, w.check.ExpressionAttributeNames,
+			w.check.ExpressionAttributeValues
+	default:
+		return nil
+	}
+
+	return checkStatementExprs(names, values, cond, update)
+}
+
+// checkStatementExprs parses a compiled statement's condition and update
+// expressions over its placeholders.
+func checkStatementExprs(
+	names map[string]string, values map[string]api.AttributeValue, cond, update *string,
+) error {
+	x, err := newExprs(names, values, true, true, "")
+	if err != nil {
+		return err
+	}
+
+	_, err = x.update(update)
+	if err != nil {
+		return err
+	}
+
+	_, err = x.condition(expression.ConditionExpression, cond)
+
+	return err
 }
 
 // codeValidation is ValidationException's code.

@@ -105,7 +105,7 @@ func (p *Provider) transactReads(
 		}
 
 		if err != nil {
-			return nil, txNotFound(err)
+			return nil, txStatementError(i, err)
 		}
 
 		g := read.get
@@ -208,8 +208,20 @@ func txCompileError(i, n int, err error) error {
 
 		return transactionCanceled(reasons)
 	default:
-		return txNotFound(err)
+		return txStatementError(i, err)
 	}
+}
+
+// txStatementError answers statement i failing to compile: a validation
+// error names the statement, without the prefix of the expression it came
+// from, and a missing table is the transaction's not-found
+// (verification/SQ-229 probe5).
+func txStatementError(i int, err error) error {
+	if isCode(err, codeValidation) {
+		return txFailed(i, messageOf(statementFailure(err)))
+	}
+
+	return txNotFound(err)
 }
 
 // isKeyMessage reports whether msg refuses an item key's shape.

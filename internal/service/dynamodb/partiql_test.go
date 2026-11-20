@@ -79,7 +79,7 @@ func Test_executeStatement_rows(t *testing.T) {
 	run(t, s, []step{
 		{
 			"insert", opStatement, stmt("INSERT INTO pmiss VALUE {`id`: `Alice123`, `FirstName`:`Alice`}"), http.StatusOK,
-			`{"Items":[]}`,
+			noItems,
 		},
 		{
 			"not missing", opStatement, stmt("SELECT id, FirstName FROM pmiss WHERE FirstName IS NOT MISSING"), http.StatusOK,
@@ -87,7 +87,7 @@ func Test_executeStatement_rows(t *testing.T) {
 		},
 		{
 			"missing", opStatement, stmt("SELECT id, FirstName FROM pmiss WHERE FirstName IS MISSING"),
-			http.StatusOK, `{"Items":[]}`,
+			http.StatusOK, noItems,
 		},
 		{
 			"empty parameters", opStatement, stmt("SELECT id FROM pmiss", `,"Parameters":[]`), http.StatusBadRequest,

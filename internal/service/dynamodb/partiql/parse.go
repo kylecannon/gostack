@@ -121,14 +121,14 @@ func (p *parser) statement() (*Statement, error) {
 	case t.kind == tokIdent && !reserved(t.text) && p.peek().kind == tokEOF:
 		// A lone name is a PartiQL expression, just not a statement
 		// DynamoDB runs (verification/SQ-229 probe2, "tx syntax").
-		return nil, &Error{Message: msgVariable}
+		return nil, &Error{Message: MsgVariable}
 	default:
 		return nil, errMalformed
 	}
 }
 
-// msgVariable refuses a statement that is a lone name.
-const msgVariable = "Unsupported operation: VariableReference"
+// MsgVariable refuses a statement that is a lone name.
+const MsgVariable = "Unsupported operation: VariableReference"
 
 func (p *parser) selectStatement() (*Statement, error) {
 	s := &Statement{Kind: Select}

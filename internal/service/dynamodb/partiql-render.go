@@ -15,6 +15,8 @@ const (
 	msgMissingCompare = "MISSING must be compared using IS operator"
 	msgUnknownFunc    = "Unrecognized function: "
 	msgSetFuncTarget  = "The first argument to %s must equal the assignment value"
+	msgSetFuncValue   = "The second argument to %s must be a value with type SET at "
+	msgUpdateFunc     = "The function is not allowed in an update expression; function: "
 )
 
 // render turns a statement's expressions into DynamoDB's expression
@@ -304,7 +306,34 @@ func (r *render) setFunc(a partiql.Action) (string, error) {
 		return "", value.Invalid(strings.Replace(msgSetFuncTarget, "%s", strings.ToUpper(a.Value.Name), 1))
 	}
 
+	// The second argument is a set literal or a parameter that holds a set;
+	// DynamoDB Local's message points at the first (verification/SQ-229
+	// probe6).
+	if !r.isSet(args[1]) {
+		msg := strings.Replace(msgSetFuncValue, "%s", strings.ToUpper(a.Value.Name), 1)
+
+		return "", value.Invalid(msg + args[0].At.String())
+	}
+
 	return r.operand(args[1])
+}
+
+// isSet reports whether n is a set: a bag, or a parameter that holds one.
+func (r *render) isSet(n *partiql.Node) bool {
+	switch n.Kind {
+	case partiql.KindBag:
+		return true
+	case partiql.KindParam:
+		if n.Param >= len(r.params) {
+			return false
+		}
+
+		v := &r.params[n.Param]
+
+		return v.SS != nil || v.NS != nil || v.BS != nil
+	default:
+		return false
+	}
 }
 
 // updateValue renders the value an UPDATE's SET assigns.
@@ -313,6 +342,10 @@ func (r *render) updateValue(n *partiql.Node) (string, error) {
 	case partiql.KindArith:
 		return r.joinedUpdate(n)
 	case partiql.KindCall:
+		if slices.Contains(conditionFuncs, n.Name) {
+			return "", value.Invalid(msgUpdateFunc + n.Text)
+		}
+
 		if !slices.Contains(updateFuncs, n.Name) {
 			return "", value.Invalid(msgUnknownFunc + n.Text)
 		}

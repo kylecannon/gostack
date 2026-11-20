@@ -22,6 +22,7 @@ const (
 	msgOrderNoWhere     = "Must have WHERE clause in the statement when using ORDER BY clause."
 	msgInvalidToken     = "Invalid NextToken"
 	msgDuplicateItem    = "Duplicate primary key exists in table"
+	msgDuplicateAlias   = "Duplicate identifiers in select clause: "
 	msgStatementLong    = "Member must have length less than or equal to 8192"
 	maxStatementBytes   = 8192
 

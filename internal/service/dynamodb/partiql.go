@@ -214,11 +214,16 @@ func (p *Provider) runSelect(
 		return &selectPage{items: out.Items, last: out.LastEvaluatedKey, used: out.ConsumedCapacity}, nil
 	}
 
+	start, ok := startFrom(q.start, key.Hash.Name, plan.hash)
+	if !ok {
+		return &selectPage{items: []map[string]api.AttributeValue{}}, nil
+	}
+
 	out, err := p.Query(ctx, &api.QueryInput{
 		TableName: q.table, IndexName: q.index, KeyConditionExpression: &plan.keyCond, FilterExpression: plan.filter,
 		ProjectionExpression: q.projection, ExpressionAttributeNames: r.attributeNames(),
 		ExpressionAttributeValues: r.attributeValues(), Limit: q.limit, ConsistentRead: q.consistent,
-		ExclusiveStartKey: q.start, ScanIndexForward: new(q.forward), ReturnConsumedCapacity: q.capacity,
+		ExclusiveStartKey: start, ScanIndexForward: new(q.forward), ReturnConsumedCapacity: q.capacity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
@@ -287,13 +292,37 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 		return nil, err
 	}
 
-	return &queryPlan{keyCond: keyCond, filter: filter}, nil
+	plan := &queryPlan{keyCond: keyCond, filter: filter}
+	if hv, ok := r.values[v]; ok {
+		plan.hash = &hv
+	}
+
+	return plan, nil
 }
 
 // queryPlan is the expressions of the Query a SELECT runs as.
 type queryPlan struct {
 	keyCond string
 	filter  *string
+	hash    *api.AttributeValue
+}
+
+// startFrom is where a Query that pins hash starts after start, a NextToken
+// another statement may have given. DynamoDB Local orders the start key with
+// the whole table's keys: from a lower hash key the Query reads all of its
+// own items, from a higher one none (verification/SQ-229 probe6). ok is false
+// for none.
+func startFrom(start value.Item, hashName string, hash *api.AttributeValue) (value.Item, bool) {
+	sv, has := start[hashName]
+	if start == nil || hash == nil || !has || value.Equal(&sv, hash) {
+		return start, true
+	}
+
+	if value.Compare(hash, &sv) > 0 {
+		return nil, true
+	}
+
+	return nil, false
 }
 
 // isRangeCond reports whether c is a condition on the range attribute name a
@@ -347,13 +376,23 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 
 	whole := newRender(nil)
 	full := make([]string, len(paths))
+	aliases := make(map[string]struct{}, len(paths))
 
 	var top []string
 
 	nested := false
 
 	for i, path := range paths {
-		full[i] = whole.path(path)
+		alias := path.Alias()
+		if _, dup := aliases[alias]; dup {
+			return nil, nil, value.Invalid(msgDuplicateAlias + alias)
+		}
+
+		aliases[alias] = struct{}{}
+
+		// DynamoDB Local names the later of two overlapping paths first
+		// (verification/SQ-229 probe6), so the check sees them reversed.
+		full[len(paths)-1-i] = whole.path(path)
 		nested = nested || len(path) > 1
 
 		if t := r.path(path[:1]); !slices.Contains(top, t) {
