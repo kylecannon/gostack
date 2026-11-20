@@ -111,7 +111,7 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
-	v, err := p.newCopiedVersion(ctx, in, plan.dest)
+	v, err := newCopiedVersion(in)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +130,11 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 
 	defer func() { _ = body.Close() }()
 
+	err = p.encryptTarget(ctx, v, in, plan.dest)
+	if err != nil {
+		return nil, err
+	}
+
 	inherit(v, in, source)
 
 	err = p.copyBody(v, body)
@@ -144,6 +149,11 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 
 	p.notify(ctx, plan.dest, plan.destKey, v)
 
+	return copyOutput(in, plan, v, source), nil
+}
+
+// copyOutput is the answer to a CopyObject that made v from source.
+func copyOutput(in *s3api.CopyObjectInput, plan copyPlan, v, source *Version) *s3api.CopyObjectOutput {
 	result := &s3api.CopyObjectResult{ETag: new(quoted(v.ETag)), LastModified: &protocol.Time{Time: v.LastModified.Time}}
 	c := checksumsOf(v)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
@@ -160,7 +170,24 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = copyEncryption(in).customer.echo()
 
-	return out, nil
+	return out
+}
+
+// encryptTarget gives the copy v the encryption the request names or the
+// bucket's default, never the source's. CopyObject resolves it once the source
+// has been found and checked, as LocalStack does, so a missing source answers
+// NoSuchKey whatever the encryption headers say, and a copy that fails there
+// makes no managed key for an aws:kms write that names none. The request's
+// SSE-C parameters were checked with the source's (checkSource).
+func (p *Provider) encryptTarget(ctx context.Context, v *Version, in *s3api.CopyObjectInput, dest *Bucket) error {
+	enc, err := p.encryptionFor(ctx, copyEncryption(in), dest)
+	if err != nil {
+		return err
+	}
+
+	v.setEncryption(enc)
+
+	return nil
 }
 
 // checkSource holds the source version to what a copy needs of it: not
@@ -209,9 +236,9 @@ func changesObject(in *s3api.CopyObjectInput) bool {
 
 // newCopiedVersion returns the version a CopyObject makes with what the request
 // sets, before it takes what it inherits from the source. Directives other than
-// COPY and REPLACE are refused. An aws:kms copy that names no key gets the
-// account's AWS managed key.
-func (p *Provider) newCopiedVersion(ctx context.Context, in *s3api.CopyObjectInput, dest *Bucket) (*Version, error) {
+// COPY and REPLACE are refused. Its encryption is left to CopyObject, which
+// resolves it once the source has been found.
+func newCopiedVersion(in *s3api.CopyObjectInput) (*Version, error) {
 	directive := deref(in.MetadataDirective)
 	if directive != "" && directive != directiveCopy && directive != directiveReplace {
 		return nil, invalidArgument("Unknown metadata directive.", "x-amz-metadata-directive", &directive)
@@ -242,16 +269,6 @@ func (p *Provider) newCopiedVersion(ctx context.Context, in *s3api.CopyObjectInp
 		StorageClass:            deref(in.StorageClass),
 		WebsiteRedirectLocation: deref(in.WebsiteRedirectLocation),
 	}
-
-	// The target takes the encryption the request names or the bucket's
-	// default, never the source's. The request's SSE-C parameters are checked
-	// with the source's (checkSource), once the source has been found.
-	enc, err := p.encryptionFor(ctx, copyEncryption(in), dest)
-	if err != nil {
-		return nil, err
-	}
-
-	v.setEncryption(enc)
 
 	if in.Tagging != nil {
 		v.Tags, err = parseTaggingHeader(*in.Tagging)

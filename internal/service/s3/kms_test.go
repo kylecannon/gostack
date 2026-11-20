@@ -27,6 +27,10 @@ const (
 	kmsStateEnabled    = "Enabled"
 	fakeKeyID          = "fake-key-id"
 	kmsTarget          = "TrentService."
+	kmsNotFoundCode    = "KMS.NotFoundException"
+	// westKey is a key of another region than the buckets of these tests.
+	westKey    = "arn:aws:kms:us-west-2:000000000000:key/abc"
+	sourcePath = "/bucket/source"
 )
 
 // fakeKMS answers the two KMS calls S3 makes, CreateKey and DescribeKey, for
@@ -37,6 +41,15 @@ type fakeKMS struct {
 	keys    map[string]*fakeKey
 	created []string // the description of every CreateKey, in order
 	calls   atomic.Int64
+	// answers are the DescribeKey answers a test scripts by key ARN, in place of
+	// the key the fake holds.
+	answers map[string]fakeAnswer
+}
+
+// fakeAnswer is a whole KMS answer: its status and body.
+type fakeAnswer struct {
+	status int
+	body   string
 }
 
 type fakeKey struct {
@@ -51,7 +64,7 @@ type kmsRequest struct {
 }
 
 func newFakeKMS() *fakeKMS {
-	return &fakeKMS{keys: make(map[string]*fakeKey)}
+	return &fakeKMS{keys: make(map[string]*fakeKey), answers: make(map[string]fakeAnswer)}
 }
 
 func (f *fakeKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +99,12 @@ func (f *fakeKMS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.keys[arn] = &fakeKey{enabled: true, state: kmsStateEnabled}
 		writeKMS(w, http.StatusOK, `{"KeyMetadata":{"Arn":"`+arn+`","Enabled":true}}`)
 	case "DescribeKey":
+		if scripted, ok := f.answers[in.KeyID]; ok {
+			writeKMS(w, scripted.status, scripted.body)
+
+			return
+		}
+
 		key, ok := f.keys[in.KeyID]
 		if !ok {
 			writeKMS(w, http.StatusBadRequest,
@@ -109,6 +128,13 @@ func (f *fakeKMS) add(arn string) {
 func (f *fakeKMS) set(arn string, enabled bool, state string) {
 	f.mu.Lock()
 	f.keys[arn] = &fakeKey{enabled: enabled, state: state}
+	f.mu.Unlock()
+}
+
+// answer scripts what DescribeKey answers for the key arn.
+func (f *fakeKMS) answer(arn string, status int, body string) {
+	f.mu.Lock()
+	f.answers[arn] = fakeAnswer{status: status, body: body}
 	f.mu.Unlock()
 }
 
@@ -391,8 +417,102 @@ func TestKMSKeyValidation(t *testing.T) {
 			headerSSE: sseKMS, headerSSEKMSKey: "arn:aws:kms:us-west-2:000000000000:key/abc",
 		})
 		require.Equal(t, http.StatusBadRequest, got.status)
-		assert.Equal(t, s3Error{Code: "KMS.NotFoundException", Message: "Invalid arn us-west-2"}, codeAndMessage(t, got))
+		assert.Equal(t, s3Error{Code: kmsNotFoundCode, Message: "Invalid arn us-west-2"}, codeAndMessage(t, got))
 		assert.Zero(t, k.kms.calls.Load())
+	})
+
+	t.Run("a key in another region is refused for aws:kms and kept for aws:kms:dsse", func(t *testing.T) {
+		t.Parallel()
+
+		k := newKMSStack(t)
+		k.bucket("bucket")
+		require.Equal(t, http.StatusOK, k.put(sourcePath, nil).status)
+
+		surfaces := []struct {
+			name  string
+			write func(algorithm string) reply
+		}{
+			{"PutObject", func(algorithm string) reply {
+				return k.put("/bucket/a", map[string]string{headerSSE: algorithm, headerSSEKMSKey: westKey})
+			}},
+			{"CreateMultipartUpload", func(algorithm string) reply {
+				return k.do(call{
+					method: http.MethodPost, target: "/bucket/up?uploads", region: regionUSEast1,
+					header: map[string]string{headerSSE: algorithm, headerSSEKMSKey: westKey},
+				})
+			}},
+			{"CopyObject", func(algorithm string) reply {
+				return copyTo(k.server, sourcePath, map[string]string{headerSSE: algorithm, headerSSEKMSKey: westKey})
+			}},
+		}
+
+		for _, surface := range surfaces {
+			refused := surface.write(sseKMS)
+			require.Equal(t, http.StatusBadRequest, refused.status, surface.name+" aws:kms")
+			assert.Equal(t, s3Error{Code: kmsNotFoundCode, Message: "Invalid arn us-west-2"},
+				codeAndMessage(t, refused), surface.name+" aws:kms")
+
+			kept := surface.write(sseKMSDSSE)
+			require.Equal(t, http.StatusOK, kept.status, surface.name+" aws:kms:dsse: "+string(kept.body))
+			assert.Equal(t, sseKMSDSSE, kept.header.Get(headerSSE), surface.name)
+			assert.Equal(t, westKey, kept.header.Get(headerSSEKMSKey), surface.name+": the key stays as it was sent")
+		}
+
+		assert.Equal(t, westKey, get(k.server, http.MethodHead, "/bucket/a", nil).header.Get(headerSSEKMSKey))
+		assert.Zero(t, k.kms.calls.Load(), "KMS is not asked")
+	})
+
+	t.Run("on: a key KMS answers with another error is passed on, typed or not", func(t *testing.T) {
+		t.Parallel()
+
+		k := newKMSStack(t)
+		k.bucket("bucket")
+		k.validate.Store(true)
+
+		keyARN := func(id string) string { return "arn:aws:kms:us-east-1:000000000000:key/" + id }
+		k.kms.answer(keyARN("denied"), http.StatusBadRequest,
+			`{"__type":"AccessDeniedException","message":"not allowed to describe"}`)
+		k.kms.answer(keyARN("namespaced"), http.StatusInternalServerError,
+			`{"__type":"com.amazonaws.kms#KMSInternalException","message":"KMS broke"}`)
+		k.kms.answer(keyARN("untyped"), http.StatusServiceUnavailable, `{"message":"no type"}`)
+		k.kms.answer(keyARN("html"), http.StatusBadGateway, `<html>bad gateway</html>`)
+
+		for id, want := range map[string]s3Error{
+			"denied":     {Code: "KMS.AccessDeniedException", Message: "not allowed to describe"},
+			"namespaced": {Code: "KMS.KMSInternalException", Message: "KMS broke"},
+		} {
+			got := k.put("/bucket/a", map[string]string{headerSSE: sseKMS, headerSSEKMSKey: id})
+			require.Equal(t, http.StatusBadRequest, got.status, id)
+			assert.Equal(t, want, codeAndMessage(t, got), id)
+		}
+
+		for id, status := range map[string]string{"untyped": "503", "html": "502"} {
+			got := k.put("/bucket/a", map[string]string{headerSSE: sseKMS, headerSSEKMSKey: id})
+			require.Equal(t, http.StatusInternalServerError, got.status, id)
+			assert.Equal(t, s3Error{
+				Code: "InternalError",
+				Message: "We encountered an internal error. Please try again. DescribeKey answered status " +
+					status + " with no error type",
+			}, codeAndMessage(t, got), id)
+		}
+	})
+
+	t.Run("on: a key KMS answers with another error is passed on by GetObject too", func(t *testing.T) {
+		t.Parallel()
+
+		k := newKMSStack(t)
+		k.bucket("bucket")
+		written := k.put("/bucket/a", map[string]string{headerSSE: sseKMS, headerSSEKMSKey: "denied"})
+		require.Equal(t, http.StatusOK, written.status, string(written.body))
+
+		k.validate.Store(true)
+		k.kms.answer("arn:aws:kms:us-east-1:000000000000:key/denied", http.StatusBadRequest,
+			`{"__type":"AccessDeniedException","message":"not allowed to describe"}`)
+
+		got := get(k.server, http.MethodGet, "/bucket/a", nil)
+		require.Equal(t, http.StatusBadRequest, got.status)
+		assert.Equal(t, s3Error{Code: "KMS.AccessDeniedException", Message: "not allowed to describe"},
+			codeAndMessage(t, got))
 	})
 
 	t.Run("on: a missing, disabled or deleted key is refused on every write and on GetObject", func(t *testing.T) {
@@ -458,5 +578,68 @@ func TestKMSKeyValidation(t *testing.T) {
 		k.validate.Store(false)
 		assert.Equal(t, http.StatusOK, get(k.server, http.MethodGet, "/bucket/a", nil).status,
 			"turning the check off reads the object again")
+	})
+}
+
+// TestCopyEncryptionAfterSource holds a CopyObject to resolving its target's
+// encryption after the source has been found and checked, as LocalStack does:
+// what the encryption headers say never changes a missing source's answer, and a
+// copy that fails makes no managed key.
+func TestCopyEncryptionAfterSource(t *testing.T) {
+	t.Parallel()
+
+	// stack is a KMS stack with the source of the copies.
+	stack := func(t *testing.T) *kmsStack {
+		t.Helper()
+
+		k := newKMSStack(t)
+		k.bucket("bucket")
+		require.Equal(t, http.StatusOK, k.put(sourcePath, nil).status)
+
+		return k
+	}
+
+	t.Run("a missing source answers NoSuchKey whatever the encryption headers", func(t *testing.T) {
+		t.Parallel()
+
+		k := stack(t)
+
+		for name, header := range map[string]map[string]string{
+			"aws:kms without a key":          {headerSSE: sseKMS},
+			"aws:kms in another region":      {headerSSE: sseKMS, headerSSEKMSKey: westKey},
+			"aws:kms:dsse in another region": {headerSSE: sseKMSDSSE, headerSSEKMSKey: westKey},
+		} {
+			got := copyTo(k.server, "/bucket/none", header)
+			require.Equal(t, http.StatusNotFound, got.status, name)
+			assert.Equal(t, "NoSuchKey", got.err(t).Code, name)
+		}
+
+		assert.Empty(t, k.kms.descriptions(), "no KMS key was made")
+	})
+
+	t.Run("a copy that fails after the source is found makes no KMS key", func(t *testing.T) {
+		t.Parallel()
+
+		k := stack(t)
+
+		got := copyTo(k.server, sourcePath, map[string]string{headerSSE: sseKMS, headerCopyIfMatch: `"not-the-etag"`})
+		require.Equal(t, http.StatusPreconditionFailed, got.status, string(got.body))
+		assert.Empty(t, k.kms.descriptions(), "no KMS key was made")
+	})
+
+	t.Run("a copy that succeeds makes the managed key, and one of another region is refused", func(t *testing.T) {
+		t.Parallel()
+
+		k := stack(t)
+
+		refused := copyTo(k.server, sourcePath, map[string]string{headerSSE: sseKMS, headerSSEKMSKey: westKey})
+		require.Equal(t, http.StatusBadRequest, refused.status)
+		assert.Equal(t, kmsNotFoundCode, refused.err(t).Code)
+		assert.Empty(t, k.kms.descriptions())
+
+		made := copyTo(k.server, sourcePath, map[string]string{headerSSE: sseKMS})
+		require.Equal(t, http.StatusOK, made.status, string(made.body))
+		assert.Equal(t, "arn:aws:kms:us-east-1:000000000000:key/made-0", made.header.Get(headerSSEKMSKey))
+		assert.Equal(t, []string{managedDescription}, k.kms.descriptions())
 	})
 }

@@ -179,7 +179,7 @@ func isKMS(algorithm string) bool {
 // resolveEncryption is the encryption a write gets: an SSE-C key alone when
 // there is one, otherwise what the request names, with the bucket's default
 // encryption filling in what it leaves out. A key it names becomes an ARN, and
-// one in another region than the bucket is refused. An aws:kms write that names
+// for aws:kms one in another region than the bucket is refused. An aws:kms write that names
 // no key is left without one, for kmsKeyFor to give it the account's AWS
 // managed key. The caller has validated the request's SSE-C parameters.
 func resolveEncryption(req encryptionRequest, b *Bucket) (objectEncryption, error) {
@@ -222,11 +222,18 @@ func resolveEncryption(req encryptionRequest, b *Bucket) (objectEncryption, erro
 		return enc, nil
 	}
 
-	var err error
+	// Only aws:kms takes the region check; aws:kms:dsse keeps a key of any
+	// region, as in LocalStack, which calls get_kms_key_arn for aws:kms alone.
+	if enc.algorithm == ruleKMS {
+		err := checkKeyRegion(enc.kmsKeyID, b)
+		if err != nil {
+			return enc, err
+		}
+	}
 
-	enc.kmsKeyID, err = kmsKeyARN(enc.kmsKeyID, b)
+	enc.kmsKeyID = namedKeyARN(enc.kmsKeyID, b)
 
-	return enc, err
+	return enc, nil
 }
 
 // defaultRule is the first rule of the bucket's default encryption. The caller

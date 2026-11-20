@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/account"
@@ -52,20 +53,37 @@ func kmsInternal(detail string) error {
 }
 
 // kmsKeyARN is the ARN of the KMS key a request names, which is a key id or an
-// ARN (get_kms_key_arn). An ARN, anything botocore's ArnParser splits into six
-// fields, stays as it is, and is refused when it is not in the bucket's region.
-// Anything else is a key id and becomes the ARN of a key of the bucket's
-// account and region.
+// ARN (get_kms_key_arn), refused when it is an ARN of another region than the
+// bucket's.
 func kmsKeyARN(key string, b *Bucket) (string, error) {
-	if parsed := parseARN(key); parsed.err == nil {
-		if parsed.region != b.Region {
-			return "", kmsError(kmsNotFound, "Invalid arn "+parsed.region)
-		}
-
-		return key, nil
+	err := checkKeyRegion(key, b)
+	if err != nil {
+		return "", err
 	}
 
-	return "arn:" + account.Partition(b.Region) + ":kms:" + b.Region + ":" + b.Account + ":key/" + key, nil
+	return namedKeyARN(key, b), nil
+}
+
+// checkKeyRegion refuses a key that is an ARN, anything botocore's ArnParser
+// splits into six fields, of another region than the bucket's, without asking
+// KMS. A key id has no region.
+func checkKeyRegion(key string, b *Bucket) error {
+	parsed := parseARN(key)
+	if parsed.err == nil && parsed.region != b.Region {
+		return kmsError(kmsNotFound, "Invalid arn "+parsed.region)
+	}
+
+	return nil
+}
+
+// namedKeyARN is the ARN of the KMS key a request names: an ARN stays as it is
+// and a key id becomes the ARN of a key of the bucket's account and region.
+func namedKeyARN(key string, b *Bucket) string {
+	if parseARN(key).err == nil {
+		return key
+	}
+
+	return "arn:" + account.Partition(b.Region) + ":kms:" + b.Region + ":" + b.Account + ":key/" + key
 }
 
 // derivedManagedKey is the ARN S3 reports for the managed key when no KMS is
@@ -193,12 +211,14 @@ func (p *Provider) checkKMSKey(ctx context.Context, key string, b *Bucket) error
 		return kmsInternal(err.Error())
 	case !resp.OK():
 		code, message := kmsFailure(resp.Body)
-		if code == kmsNotFound {
-			return kmsError(code, message)
+		if code == "" {
+			return kmsInternal("DescribeKey answered status " + strconv.Itoa(resp.Status) + " with no error type")
 		}
 
-		// LocalStack raises any other KMS error as it is.
-		return configError(code, message, resp.Status)
+		// A typed KMS error is KMS.<type> with 400, as AWS S3 prefixes KMS errors.
+		// LocalStack answers any error but NotFoundException with a 500
+		// InternalError (aws/handlers/service.py), which is not copied.
+		return kmsError(code, message)
 	}
 
 	meta, err := keyMetadataOf(resp.Body)

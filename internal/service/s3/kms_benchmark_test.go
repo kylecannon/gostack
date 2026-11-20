@@ -112,6 +112,47 @@ func (s *objectBenchServer) putWith(ctx context.Context, target string, body []b
 	return nil
 }
 
+// BenchmarkGetObjectSSEKMS is the read side of sse=kms-validated: with
+// S3_SKIP_KMS_KEY_VALIDATION=0 GetObject looks up the key of the object it
+// reads with a DescribeKey, on every read. The same payload and concurrency
+// axes as BenchmarkGetObject, to read against its no-KMS rows. For example
+//
+//	BenchmarkGetObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=16
+func BenchmarkGetObjectSSEKMS(b *testing.B) {
+	option := kmsBenchOptions[len(kmsBenchOptions)-1]
+
+	for _, payload := range kmsBenchPayloads {
+		for _, workers := range benchConcurrency {
+			name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
+
+			b.Run(name, func(b *testing.B) {
+				s := newKMSBenchServer(b, option.validate)
+				body := bytes.Repeat([]byte("x"), payload.size)
+
+				for worker := range workers {
+					err := s.putWith(b.Context(), fmt.Sprintf("/bucket/key-%d", worker), body, option.header)
+					require.NoError(b, err)
+				}
+
+				b.SetBytes(int64(payload.size * workers))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					err := fanOut(workers, func(worker int) error {
+						status, err := s.call(b.Context(), http.MethodGet, fmt.Sprintf("/bucket/key-%d", worker), nil)
+						if err == nil && status != http.StatusOK {
+							err = fmt.Errorf("GET answered %d", status)
+						}
+
+						return err
+					})
+					require.NoError(b, err)
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkPutObjectSSEKMS(b *testing.B) {
 	for _, option := range kmsBenchOptions {
 		for _, payload := range kmsBenchPayloads {
