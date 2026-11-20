@@ -2866,10 +2866,14 @@ func errBodyTooLarge() *awserr.Error {
 
 // errXMLBody is the error for an xml request body that failed to decode: too
 // large when the read hit protocol.MaxBody, SlowDown when the bodies in flight
-// left it no room, malformed otherwise.
+// left it no room, RequestTimeout when the client stopped sending it,
+// malformed otherwise.
 func errXMLBody(err error) *awserr.Error {
 	if errors.Is(err, protocol.ErrBusy) {
 		return protocol.SlowDown()
+	}
+	if errors.Is(err, protocol.ErrBodyIdle) {
+		return protocol.RequestTimeout()
 	}
 	if errors.Is(err, rest.ErrBodyTooLarge) {
 		return errBodyTooLarge()
@@ -2882,6 +2886,9 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
 	if errors.Is(err, protocol.ErrBusy) {
 		return nil, protocol.SlowDown()
+	}
+	if errors.Is(err, protocol.ErrBodyIdle) {
+		return nil, protocol.RequestTimeout()
 	}
 	if protocol.OverBody(len(body)) {
 		return nil, errBodyTooLarge()

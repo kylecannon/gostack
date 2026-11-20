@@ -452,7 +452,8 @@ func TestCopyOfAMultipartObjectIsWhole(t *testing.T) {
 
 	sum := md5.Sum(slices.Concat(first, second))
 	assert.Contains(t, string(got.body), hex.EncodeToString(sum[:]))
-	assert.NotContains(t, string(got.body), "-2")
+	// The ETag, not the date: LastModified holds "-2" from the 20th of a month.
+	assert.NotContains(t, string(got.body), `-2"</ETag>`)
 
 	read := get(s, http.MethodGet, destPath+"?partNumber=2", nil)
 	assert.Equal(t, http.StatusRequestedRangeNotSatisfiable, read.status, "a copy has one part")

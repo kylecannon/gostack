@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/protocol"
 )
@@ -39,6 +40,26 @@ const DefaultMaxInFlightBodies = protocol.DefaultInFlight
 // parseMaxRequestBody reads its variable. Zero means no bound.
 func parseMaxInFlightBodies(value string) (int64, error) {
 	return parseBytes("GOSTACK_MAX_IN_FLIGHT_BODIES", value, DefaultMaxInFlightBodies)
+}
+
+// DefaultRequestBodyIdleTimeout is GOSTACK_REQUEST_BODY_IDLE_TIMEOUT when it is
+// not set.
+const DefaultRequestBodyIdleTimeout = protocol.DefaultBodyIdle
+
+// parseRequestBodyIdleTimeout reads GOSTACK_REQUEST_BODY_IDLE_TIMEOUT: a whole
+// number of seconds, as SHUTDOWN_TIMEOUT is. Zero means no limit. An empty
+// value is the default.
+func parseRequestBodyIdleTimeout(value string) (time.Duration, error) {
+	if value == "" {
+		return DefaultRequestBodyIdleTimeout, nil
+	}
+
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds < 0 || seconds > maxShutdownSeconds {
+		return 0, fmt.Errorf("GOSTACK_REQUEST_BODY_IDLE_TIMEOUT: %q is not a number of seconds", value)
+	}
+
+	return time.Duration(seconds) * time.Second, nil
 }
 
 // parseBytes reads a count of bytes named by variable, which is def when empty.

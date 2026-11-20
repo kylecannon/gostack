@@ -107,6 +107,13 @@ type Settings struct {
 	// for room in order and is answered with its protocol's throttling error when
 	// none comes in time. It is read at start-up, as MaxRequestBody is.
 	MaxInFlightBodies int64
+	// RequestBodyIdleTimeout is GOSTACK_REQUEST_BODY_IDLE_TIMEOUT: how long a
+	// buffered request body longer than 64 KiB may send nothing before its request
+	// is answered (S3 RequestTimeout; the json and query services as a body they
+	// cannot read) and what it holds of MaxInFlightBodies is given back. 20 s by
+	// default, a whole number of seconds; zero means no limit. It is read at
+	// start-up, as MaxRequestBody is.
+	RequestBodyIdleTimeout time.Duration
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
@@ -170,6 +177,7 @@ func (s *Settings) values() map[string]any {
 		varS3SkipSignatureValidation:       s.S3SkipSignatureValidation,
 		varMaxRequestBody:                  s.MaxRequestBody,
 		varMaxInFlightBodies:               s.MaxInFlightBodies,
+		varRequestBodyIdleTimeout:          int(s.RequestBodyIdleTimeout / time.Second),
 		varParityAWSAccessKeyID:            s.ParityAWSAccessKeyID,
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
@@ -228,6 +236,7 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		S3SkipSignatureValidation:         isNotFalse(get(varS3SkipSignatureValidation)),
 		MaxRequestBody:                    base.maxRequestBody,
 		MaxInFlightBodies:                 base.maxInFlightBodies,
+		RequestBodyIdleTimeout:            base.requestBodyIdleTimeout,
 		ParityAWSAccessKeyID:              isTrue(get(varParityAWSAccessKeyID)),
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),

@@ -234,6 +234,8 @@ func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 			if meter := meterBody(r); meter != nil {
 				defer meter.Release()
 
+				meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+
 				r = r.WithContext(protocol.WithBodyMeter(r.Context(), meter))
 				r.Body = meter
 			}

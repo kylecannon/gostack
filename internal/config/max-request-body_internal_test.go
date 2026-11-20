@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,4 +96,24 @@ func Test_Set_maxRequestBody_isNotApplied(t *testing.T) {
 	cfg := mustLoad(t)
 	require.NoError(t, cfg.Set("MAX_REQUEST_BODY", "1"))
 	assert.Equal(t, int64(16<<20), cfg.Settings().MaxRequestBody)
+}
+
+func Test_Load_requestBodyIdleTimeout(t *testing.T) {
+	isolate(t)
+	require.Equal(t, 20*time.Second, mustLoad(t).Settings().RequestBodyIdleTimeout)
+
+	for give, want := range map[string]time.Duration{
+		"5":      5 * time.Second,
+		"0":      0,
+		"20s":    20 * time.Second, // seconds only, as SHUTDOWN_TIMEOUT: anything else keeps the default
+		"banana": 20 * time.Second,
+		"-5":     20 * time.Second,
+	} {
+		t.Setenv("GOSTACK_REQUEST_BODY_IDLE_TIMEOUT", give)
+		assert.Equal(t, want, mustLoad(t).Settings().RequestBodyIdleTimeout, give)
+	}
+
+	t.Setenv("GOSTACK_REQUEST_BODY_IDLE_TIMEOUT", "")
+	t.Setenv("REQUEST_BODY_IDLE_TIMEOUT", "1")
+	assert.Equal(t, 20*time.Second, mustLoad(t).Settings().RequestBodyIdleTimeout, "only the GOSTACK_ form")
 }

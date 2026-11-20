@@ -3,8 +3,10 @@ package protocol
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,7 +31,30 @@ const (
 	// DefaultBodyWait is how long a body waits for room under the bound before
 	// its request is answered with the protocol's throttling error.
 	DefaultBodyWait = 5 * time.Second
+
+	// DefaultBodyIdle is GOSTACK_REQUEST_BODY_IDLE_TIMEOUT when it is not set:
+	// how long a metered body may send nothing before its request is answered
+	// and what it holds is given back. A client that sends at all sends a 16 MiB
+	// body's next packet well within it: 20 s is room for a stalled mobile link
+	// or a paused debugger, and still frees the pool from a client that stopped.
+	DefaultBodyIdle = 20 * time.Second
 )
+
+// ErrBodyIdle is what reading a metered body fails with when its client sent
+// nothing for the idle timeout (SetBodyIdle). S3 answers it with RequestTimeout;
+// the json and query services answer it as any body they cannot read.
+var ErrBodyIdle = errors.New("protocol: the request body sent nothing for the idle timeout")
+
+// RequestTimeout is S3's answer to a body that stopped arriving, with AWS's
+// code and message.
+func RequestTimeout() *awserr.Error {
+	return &awserr.Error{
+		Code: "RequestTimeout",
+		Message: "Your socket connection to the server was not read from or written to within " +
+			"the timeout period. Idle connections will be closed.",
+		StatusCode: http.StatusBadRequest, Fault: awserr.FaultSender,
+	}
+}
 
 // ErrBusy is what reading a metered body fails with when the bodies in flight
 // leave it no room before its wait ends, or its request is cancelled while it
@@ -69,14 +94,22 @@ func SlowDown() *awserr.Error {
 
 var (
 	inFlight atomic.Pointer[bodyPool]
-	bodyWait = newBodyWait()
+	bodyWait = newDuration(DefaultBodyWait)
+	bodyIdle = newDuration(DefaultBodyIdle)
 )
 
-func newBodyWait() *atomic.Int64 {
-	wait := new(atomic.Int64)
-	wait.Store(int64(DefaultBodyWait))
+func newDuration(d time.Duration) *atomic.Int64 {
+	v := new(atomic.Int64)
+	v.Store(int64(d))
 
-	return wait
+	return v
+}
+
+// SetBodyIdle sets how long a metered body may send nothing before its read
+// fails with ErrBodyIdle. Zero or less means no limit. Start-up calls it once;
+// a test that changes it puts the old value back.
+func SetBodyIdle(idle time.Duration) {
+	bodyIdle.Store(int64(max(idle, 0)))
 }
 
 // SetInFlight sets the in-flight bound: the bytes that the request bodies being
@@ -227,6 +260,11 @@ type BodyMeter struct {
 	armed bool
 	done  bool
 	err   error
+
+	// deadline sets the connection's read deadline (IdleBy); timed is whether
+	// one is set now.
+	deadline func(time.Time) error
+	timed    bool
 }
 
 type meterKey struct{}
@@ -263,7 +301,25 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 		return 0, m.err
 	}
 
+	if m.armed && !m.done {
+		m.idle()
+	}
+
 	n, err := m.body.Read(p)
+	if m.timed {
+		switch {
+		case errors.Is(err, os.ErrDeadlineExceeded):
+			m.Release()
+			m.err = fmt.Errorf("%w: %w", ErrBodyIdle, err)
+
+			return 0, m.err
+		case errors.Is(err, io.EOF):
+			m.clearDeadline()
+		default:
+			// A body still arriving keeps its deadline for the next read.
+		}
+	}
+
 	if !m.armed || m.done || n == 0 {
 		return n, err
 	}
@@ -309,9 +365,43 @@ func (m *BodyMeter) Release() {
 	}
 
 	m.done = true
+	m.clearDeadline()
+
 	if m.held > 0 {
 		m.pool.release(m.held)
 		m.held = 0
+	}
+}
+
+// IdleBy makes the meter bound how long its client may send nothing, once it
+// is armed: before each read it sets the connection's read deadline through set
+// (http.ResponseController.SetReadDeadline) to the idle timeout ahead
+// (SetBodyIdle), and it clears it at the end of the body and at Release, so
+// nothing after the body, an SQS long poll or the connection's next request,
+// meets it. An S3 object stream is never armed, so never bounded here.
+func (m *BodyMeter) IdleBy(set func(time.Time) error) {
+	m.deadline = set
+}
+
+// idle sets the read deadline for the next read, when IdleBy gave a way to.
+func (m *BodyMeter) idle() {
+	idle := time.Duration(bodyIdle.Load())
+	if m.deadline == nil || idle <= 0 {
+		return
+	}
+
+	// A writer that cannot set deadlines (http.ErrNotSupported) leaves the
+	// body unbounded in time, as it was before.
+	if m.deadline(time.Now().Add(idle)) == nil {
+		m.timed = true
+	}
+}
+
+// clearDeadline clears the read deadline idle set.
+func (m *BodyMeter) clearDeadline() {
+	if m.timed {
+		m.timed = false
+		_ = m.deadline(time.Time{})
 	}
 }
 
