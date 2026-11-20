@@ -290,6 +290,76 @@ func Test_ParseUpdate_Errors(t *testing.T) {
 	}
 }
 
+// Test_ParseUpdate_ErrorOrder pins the order of the LocalStack image's checks
+// across the actions and the names of one expression, as probed in SQ-331
+// (verification/SQ-331 p7 and p8): the operand checks run on the last action
+// first; the reserved words, the functions DynamoDB refuses and a list_append
+// out of place are reported in the order they are written.
+//
+//nolint:lll // each row holds the exact text the LocalStack image answered
+func Test_ParseUpdate_ErrorOrder(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bad      = "Invalid UpdateExpression: "
+		noValue  = bad + "An expression attribute value used in expression is not defined; attribute value: "
+		operand  = bad + "Incorrect operand type for operator or function; "
+		arity    = bad + "Incorrect number of operands for operator or function; operator or function: "
+		reserved = bad + "Attribute name is a reserved keyword; reserved keyword: "
+		badFunc  = bad + "Invalid function name; function: "
+		notHere  = bad + "The function is not allowed to be used this way in an expression; function: list_append"
+		noPath   = bad + "Operator or function requires a document path; operator or function: if_not_exists"
+		sameOne  = bad + "The first operand must be distinct from the remaining operands for this operator or " +
+			"function; operator: if_not_exists, first operand: "
+		// values is :s, a string, :l, an empty list and :n, the number 1.
+		values = `{":s":{"S":"a"},":l":{"L":[]},":n":{"N":"1"}}`
+	)
+
+	tests := []struct {
+		name     string
+		giveExpr string
+		wantMsg  string
+	}{
+		{"two undefined values", "SET a = :u1, b = :u2", noValue + ":u2"},
+		{"undefined value across clauses", "SET a = :u1 REMOVE b ADD c :u2", noValue + ":u2"},
+		{"undefined value then ADD, written order", "ADD c :u2 SET a = :u1", noValue + ":u1"},
+		{"undefined value before operand type", "SET a = :u1, b = :s + :s", operand + "operator or function: +, operand type: S"},
+		{"operand type before undefined value", "SET a = :s + :s, b = :u1", noValue + ":u1"},
+		{"two operand types", "SET a = :s + :s, b = :s - :s", operand + "operator or function: -, operand type: S"},
+		{"arity before undefined value", "SET a = if_not_exists(b), c = :u1", noValue + ":u1"},
+		{"undefined value before arity", "SET c = :u1, a = if_not_exists(b)", arity + "if_not_exists, number of operands: 1"},
+		{"two arities", "SET a = if_not_exists(b), c = list_append(:l)", arity + "list_append, number of operands: 1"},
+		{"ADD type before set operand type", "ADD c :s SET a = :s + :s", operand + "operator or function: +, operand type: S"},
+		{"set operand type before ADD type", "SET a = :s + :s ADD c :s", operand + "operator: ADD, operand type: STRING, typeSet: ALLOWED_FOR_ADD_OPERAND"},
+		{"ADD type before DELETE type", "ADD c :s DELETE d :n", operand + "operator: DELETE, operand type: NUMBER, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
+		{"two distinct operands", "SET a = if_not_exists(a, a), c = if_not_exists(c, c)", sameOne + "[c]"},
+		{"distinct operand before arity", "SET a = if_not_exists(a, a), c = if_not_exists(d)", arity + "if_not_exists, number of operands: 1"},
+		{"path required before distinct operand", "SET c = if_not_exists(:s, :s), a = if_not_exists(a, a)", sameOne + "[a]"},
+		{"distinct operand before path required", "SET a = if_not_exists(a, a), c = if_not_exists(:s, :s)", noPath},
+		{"operands of one action stay in order", "SET a = :u1 + :u2", noValue + ":u1"},
+		{"function before reserved word", "SET a = foo(:s), status = :s", badFunc + "foo"},
+		{"reserved word before function", "SET status = :s, a = foo(:s)", reserved + "status"},
+		{"condition function before reserved word", "SET a = contains(b, :s), status = :s", bad + "The function is not allowed in an update expression; function: contains"},
+		{"list_append before reserved word", "SET a = list_append(:l, :l) + :l, status = :s", notHere},
+		{"reserved word before list_append", "SET status = :s, a = list_append(:l, :l) + :l", reserved + "status"},
+		{"function before reserved REMOVE", "SET a = foo(:s) REMOVE status", badFunc + "foo"},
+		{"reserved word in a call before a function", "SET a = if_not_exists(status, :s), b = foo(:s)", reserved + "status"},
+		{"function before reserved word in a call", "SET b = foo(:s), a = if_not_exists(status, :s)", badFunc + "foo"},
+		{"nested function before reserved word", "SET a = if_not_exists(b, foo(c)), status = :s", badFunc + "foo"},
+		{"list_append in list_append before reserved word", "SET a = list_append(list_append(:l, :l), :l), status = :s", notHere},
+		{"list_append before reserved REMOVE", "SET b = list_append(:l, :l) + :l REMOVE status", notHere},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(tt.giveExpr, updateSubs(t, "", values), nil)
+			requireUpdateError(t, err, tt.wantMsg)
+		})
+	}
+}
+
 // The forms the LocalStack image accepts (SQ-224 probe5, probe6, probe7): ID
 // and CONTAINS are names in an update expression as in a condition, and one
 // pair of parentheses goes around any operand, or a sum as the whole value.

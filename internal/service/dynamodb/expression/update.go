@@ -89,7 +89,7 @@ func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*Up
 	}
 
 	for _, check := range []func(*updateParser) error{
-		updateCheckReserved, updateCheckFuncs, updateCheckClauses, updateCheckDepth,
+		updateCheckNames, updateCheckClauses, updateCheckDepth,
 	} {
 		if err != nil {
 			return nil, err
@@ -123,7 +123,9 @@ func updateResolve(p *updateParser, subs Substitutions, used map[string]struct{}
 		return nil, err
 	}
 
-	for _, act := range p.actions {
+	// DynamoDB checks the actions last to first, the operands of each in the
+	// order written (probed in SQ-331).
+	for _, act := range slices.Backward(p.actions) {
 		err = updateCheckOperand(act.rhs, subs.Values, used)
 		if err == nil {
 			err = updateCheckAction(act)
@@ -145,35 +147,52 @@ func (u *UpdateExpr) Paths() []Path {
 	return u.paths
 }
 
-func updateCheckReserved(p *updateParser) error {
+// updateCheckNames refuses the first, in the order written, of a reserved word
+// used as an attribute name, a function an update expression does not take,
+// and a list_append that is not the whole value of its SET action: DynamoDB
+// takes it nowhere inside another function or a sum, parenthesized or not.
+func updateCheckNames(p *updateParser) error {
+	var (
+		err error
+		at  int
+	)
+
 	for _, tok := range p.pathNames {
 		if _, isReserved := reserved[strings.ToUpper(tok.text)]; tok.kind == tokIdent && isReserved {
-			return value.Invalid(msgUpdateReserved + tok.text)
+			err, at = value.Invalid(msgUpdateReserved+tok.text), tok.start
+
+			break
 		}
 	}
 
-	return nil
+	for _, call := range p.calls {
+		if err != nil && call.tok.start > at {
+			break
+		}
+
+		callErr := updateCheckFunc(call)
+		if callErr != nil {
+			return callErr
+		}
+	}
+
+	return err
 }
 
-// updateCheckFuncs refuses, in the order the calls are written, a function an
-// update expression does not take, and a list_append that is not the whole
-// value of its SET action: DynamoDB takes it nowhere inside another function
-// or a sum, parenthesized or not.
-func updateCheckFuncs(p *updateParser) error {
-	for _, call := range p.calls {
-		name := call.tok.text
+// updateCheckFunc refuses a function call an update expression does not take.
+func updateCheckFunc(call *updateOperand) error {
+	name := call.tok.text
 
-		if _, cond := updateCondFuncs[name]; cond {
-			return value.Invalid(msgUpdateCondFunc + name)
-		}
+	if _, cond := updateCondFuncs[name]; cond {
+		return value.Invalid(msgUpdateCondFunc + name)
+	}
 
-		if name != funcIfNotExists && name != funcListAppend {
-			return value.Invalid(msgUpdateBadFunc + name)
-		}
+	if name != funcIfNotExists && name != funcListAppend {
+		return value.Invalid(msgUpdateBadFunc + name)
+	}
 
-		if name == funcListAppend && !call.whole {
-			return value.Invalid(msgUpdateFuncPlace + name)
-		}
+	if name == funcListAppend && !call.whole {
+		return value.Invalid(msgUpdateFuncPlace + name)
 	}
 
 	return nil
