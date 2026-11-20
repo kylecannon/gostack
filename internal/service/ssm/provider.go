@@ -40,6 +40,7 @@ func (p *Provider) Registration() service.Registration {
 		Mutating: mutating,
 		Persist:  p,
 		Reset:    p.Reset,
+		Handler:  p,
 	}
 }
 
