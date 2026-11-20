@@ -105,7 +105,7 @@ func Test_items_errors(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, http.StatusNotImplemented, s.call(t, usEast1, "UpdateItem",
+	require.Equal(t, http.StatusOK, s.call(t, usEast1, "UpdateItem",
 		`{"TableName":"tab1","Key":{"id":{"S":"a"}},"AttributeUpdates":{"n":{"Action":"PUT","Value":{"N":"1"}}}}`).status)
 	require.Equal(t, http.StatusOK,
 		s.call(t, usEast1, opGet, `{"TableName":"tab1","Key":{"id":{"S":"a"}},"AttributesToGet":["id"]}`).status)

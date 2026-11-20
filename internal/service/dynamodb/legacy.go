@@ -242,18 +242,11 @@ func legacyQuery(in *api.QueryInput, schema table.KeySchema) (*legacyKey, error)
 	return &legacyKey{key: key, filter: filter}, nil
 }
 
-// legacyExpected checks a write's Expected and ConditionalOperator and
-// translates them into a condition on the stored item, nil when there are
-// none. An attribute is expected by Value (with Exists, true unless it says
-// otherwise) or by a ComparisonOperator over its values, never both.
-//
-//nolint:ireturn // the parsed form is the expression package's interface
-func legacyExpected(expected map[string]api.ExpectedAttributeValue, op *string) (expression.Condition, error) {
-	anyOf, err := legacyOperator(op, len(expected))
-	if err != nil {
-		return nil, err
-	}
-
+// expectedTests checks every attribute of a write's Expected, in attribute
+// name order, and returns them ready to translate. An attribute is expected
+// by Value (with Exists, true unless it says otherwise) or by a
+// ComparisonOperator over its values, never both.
+func expectedTests(expected map[string]api.ExpectedAttributeValue) ([]expression.LegacyTest, error) {
 	tests := make([]expression.LegacyTest, 0, len(expected))
 
 	for _, name := range slices.Sorted(maps.Keys(expected)) {
@@ -265,6 +258,26 @@ func legacyExpected(expected map[string]api.ExpectedAttributeValue, op *string) 
 		}
 
 		tests = append(tests, t)
+	}
+
+	return tests, nil
+}
+
+// expectedCondition checks a write's ConditionalOperator against the n tests
+// of its Expected and translates them into a condition on the stored item,
+// nil when there are neither. DynamoDB Local checks the operator after the
+// entries of Expected, and a write's ReturnValuesOnConditionCheckFailure
+// between them.
+//
+//nolint:ireturn // the parsed form is the expression package's interface
+func expectedCondition(tests []expression.LegacyTest, op *string) (expression.Condition, error) {
+	if len(tests) == 0 && op == nil {
+		return nil, nil //nolint:nilnil // no legacy condition
+	}
+
+	anyOf, err := legacyOperator(op, len(tests))
+	if err != nil {
+		return nil, err
 	}
 
 	return expression.Legacy(tests, anyOf), nil
@@ -326,29 +339,18 @@ func legacyExpectedCompare(name string, ev *api.ExpectedAttributeValue) (express
 	return legacyTest(name, ev.ComparisonOperator, values)
 }
 
-// legacyWrite makes the condition of a write from its Expected and
-// ConditionalOperator, after refusing them with any of the write's
-// expression parameters. It returns nil for a write with neither.
-//
-//nolint:ireturn // the parsed form is the expression package's interface
-func legacyWrite(
-	expected map[string]api.ExpectedAttributeValue, op *string, exprs ...namedExpr,
-) (expression.Condition, error) {
+// checkWriteMixed refuses a write's AttributeUpdates (updates of them),
+// Expected and ConditionalOperator together with any of its expression
+// parameters, naming the legacy ones in that order.
+func checkWriteMixed(
+	updates int, expected map[string]api.ExpectedAttributeValue, op *string, exprs ...namedExpr,
+) error {
 	params := make([]param, 0, len(exprs))
 	for _, e := range exprs {
 		params = append(params, param{e.name, e.src != nil})
 	}
 
-	err := checkMixedParams([]param{
-		{paramExpected, len(expected) > 0}, {paramConditionalOp, op != nil},
+	return checkMixedParams([]param{
+		{paramAttributeUpdates, updates > 0}, {paramExpected, len(expected) > 0}, {paramConditionalOp, op != nil},
 	}, params)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(expected) == 0 && op == nil {
-		return nil, nil //nolint:nilnil // no legacy condition
-	}
-
-	return legacyExpected(expected, op)
 }
