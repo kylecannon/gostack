@@ -301,7 +301,13 @@ func Test_trimmed(t *testing.T) {
 
 	info, ok := s.ddb.StreamByARN(request.With(t.Context(), ctx(t)), arn)
 	require.True(t, ok)
-	info.Shard.SetLimits(time.Hour, 3*300)
+	// The test narrows the shard's byte bound, a write-side knob the reader's
+	// interface does not carry.
+	limits, ok := info.Shard.(interface {
+		SetLimits(retention time.Duration, maxBytes int64)
+	})
+	require.True(t, ok)
+	limits.SetLimits(time.Hour, 3*300)
 
 	old := s.iterator(t, arn, shard, "TRIM_HORIZON")
 

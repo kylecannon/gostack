@@ -4,6 +4,11 @@
 // dynamodb.Streams interface DynamoDB's package exports for it. That is the
 // one place a service reaches another service's state other than through the
 // in-process client; dynamodb.Streams says why.
+//
+// Beyond that package the service imports two more of DynamoDB's: stream, for
+// the Record and Page a shard's Read returns and the errors it names, and
+// value, for the Item a record holds and the ValidationException both services
+// answer alike.
 package dynamodbstreams
 
 import (
@@ -21,6 +26,7 @@ import (
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
 // Limits of the model's documentation: "The upper limit is 1000" for
@@ -52,22 +58,17 @@ func New(streams dynamodb.Streams) *Provider {
 // Registration returns DynamoDB Streams for the gateway. It signs as dynamodb,
 // and the gateway tells the two apart by X-Amz-Target. No operation changes
 // state, so none marks it dirty: DynamoDB marks it for each record a write
-// leaves. It persists the records of DynamoDB's streams when DynamoDB can
-// save them (dynamodb.StreamSnapshotter), and has nothing to reset: a reset
-// of DynamoDB drops its tables and their shards.
+// leaves. It persists the records of DynamoDB's streams through the snapshot
+// dynamodb.Streams declares, and has nothing to reset: a reset of DynamoDB
+// drops its tables and their shards.
 func (p *Provider) Registration() service.Registration {
-	reg := service.Registration{
+	return service.Registration{
 		Metadata: api.Metadata,
 		Serve:    func(w http.ResponseWriter, rc *request.Context) { api.Serve(p, w, rc) },
 		Mutating: func(string) bool { return false },
 		Handler:  p,
+		Persist:  snapshotter{p.streams},
 	}
-
-	if saver, ok := p.streams.(dynamodb.StreamSnapshotter); ok {
-		reg.Persist = snapshotter{saver}
-	}
-
-	return reg
 }
 
 // snapshotter saves the stream records under DynamoDB Streams' own name.
@@ -91,7 +92,7 @@ func (p *Provider) ListStreams(ctx context.Context, in *api.ListStreamsInput) (*
 	checkLimit(&report, in.Limit, maxStreams)
 
 	if report.Failed() {
-		return nil, invalid(report.Message())
+		return nil, value.Invalid(report.Message())
 	}
 
 	all := p.streams.StreamList(ctx)
@@ -136,7 +137,7 @@ func (p *Provider) DescribeStream(ctx context.Context, in *api.DescribeStreamInp
 	checkLimit(&report, in.Limit, maxStreams)
 
 	if report.Failed() {
-		return nil, invalid(report.Message())
+		return nil, value.Invalid(report.Message())
 	}
 
 	info, ok := p.streams.StreamByARN(ctx, *in.StreamArn)
@@ -209,7 +210,7 @@ func (p *Provider) GetShardIterator(
 	}
 
 	if report.Failed() {
-		return nil, invalid(report.Message())
+		return nil, value.Invalid(report.Message())
 	}
 
 	info, ok := p.streams.StreamByARN(ctx, *in.StreamArn)
@@ -244,12 +245,12 @@ func position(info dynamodb.StreamInfo, typ string, seq *string) (int, error) {
 	}
 
 	if seq == nil {
-		return 0, invalid("Sequence number must be specified for shard iterator type " + typ)
+		return 0, value.Invalid("Sequence number must be specified for shard iterator type " + typ)
 	}
 
 	n, err := info.Shard.ParseSequenceNumber(*seq)
 	if err != nil {
-		return 0, invalid("Invalid SequenceNumber " + *seq + " for shard " + shardID(info.Shard.Created()))
+		return 0, value.Invalid("Invalid SequenceNumber " + *seq + " for shard " + shardID(info.Shard.Created()))
 	}
 
 	if typ == afterSeq {
@@ -277,12 +278,12 @@ func (p *Provider) GetRecords(ctx context.Context, in *api.GetRecordsInput) (*ap
 	checkLimit(&report, in.Limit, maxRecords)
 
 	if report.Failed() {
-		return nil, invalid(report.Message())
+		return nil, value.Invalid(report.Message())
 	}
 
 	it, ok := parseIterator(*in.ShardIterator)
 	if !ok {
-		return nil, invalid("Invalid ShardIterator")
+		return nil, value.Invalid("Invalid ShardIterator")
 	}
 
 	now := p.now()
@@ -328,13 +329,6 @@ func checkLimit(report *constraint.Report, limit *int32, most int32) {
 		report.Value(nil, "limit", strconv.Itoa(int(*limit)),
 			"Member must have value less than or equal to "+strconv.Itoa(int(most)))
 	default:
-	}
-}
-
-// invalid is a ValidationException.
-func invalid(msg string) *awserr.Error {
-	return &awserr.Error{
-		Code: "ValidationException", Message: msg, StatusCode: http.StatusBadRequest, Fault: awserr.FaultSender,
 	}
 }
 

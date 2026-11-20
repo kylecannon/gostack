@@ -11,6 +11,7 @@ import (
 	api "github.com/kylecannon/gostack/internal/api/dynamodbstreams"
 	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
 // iteratorLifetime is how long a shard iterator stays usable: 15 minutes, as
@@ -97,8 +98,8 @@ func positionError(err error, seq string, info dynamodb.StreamInfo) error {
 		return api.NewTrimmedDataAccessException(
 			"The operation attempted to read past the oldest stream record in a shard.")
 	case seq != "":
-		return invalid("Invalid SequenceNumber " + seq + " for shard " + shardID(info.Shard.Created()))
+		return value.Invalid("Invalid SequenceNumber " + seq + " for shard " + shardID(info.Shard.Created()))
 	default:
-		return invalid("Invalid ShardIterator")
+		return value.Invalid("Invalid ShardIterator")
 	}
 }

@@ -195,8 +195,36 @@ type StreamInfo struct {
 	Key      []api.KeySchemaElement
 	// Region is the awsRegion its records carry.
 	Region string
-	Shard  *stream.Log
+	Shard  StreamShard
 }
+
+// StreamShard is the read side of a stream's one shard: what the
+// dynamodbstreams service needs to describe it and serve its records. The
+// write side (Append, Close, Stop, SetLimits, Attach) stays with DynamoDB.
+// *stream.Log implements it. The stream package is the one other DynamoDB
+// package dynamodbstreams imports, for Read's Page and the Record in it,
+// whose images are DynamoDB's values.
+type StreamShard interface {
+	// Created is when the shard was created; it names the shard.
+	Created() time.Time
+	// Bounds returns the lowest position kept, the next one to be written and
+	// whether the shard is closed.
+	Bounds() (low, next int, closed bool)
+	// SequenceNumber is the text of record number seq; 0 is the shard's
+	// StartingSequenceNumber.
+	SequenceNumber(seq int) string
+	// ParseSequenceNumber returns the number of one of the shard's sequence
+	// numbers.
+	ParseSequenceNumber(s string) (int, error)
+	// Position resolves pos to a position a read can start from, or says it
+	// is out of the shard or trimmed.
+	Position(pos int) (int, error)
+	// Read returns the records from pos on: at most limit of them and, past
+	// the first, at most maxBytes of them by SizeBytes.
+	Read(pos, limit int, maxBytes int64) (stream.Page, error)
+}
+
+var _ StreamShard = (*stream.Log)(nil)
 
 // Streams is how the dynamodbstreams service reads DynamoDB's streams. It is
 // the one exception to the rule that another service is reached only through
@@ -204,6 +232,9 @@ type StreamInfo struct {
 // under a table's lock in the order the writes applied, and the API DynamoDB
 // serves has no call that would hand them over.
 type Streams interface {
+	// StreamSnapshotter saves and restores the records, which
+	// PERSIST_DYNAMODBSTREAMS decides the survival of.
+	StreamSnapshotter
 	// StreamList returns the caller's streams, oldest first.
 	StreamList(ctx context.Context) []StreamInfo
 	// StreamByARN returns the caller's stream with arn.

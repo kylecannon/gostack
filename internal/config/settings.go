@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // DefaultShutdownTimeout is how long the supervisor waits for the child process
@@ -281,9 +283,12 @@ type dynamoDBSettings struct {
 	shareDB               int
 }
 
-// parseDynamoDB reads the DYNAMODB_* settings as LocalStack's config.py does:
-// float(value or 0.0) and int(value or 0), which refuse to start on a value
-// they cannot parse.
+// parseDynamoDB reads the DYNAMODB_* settings as LocalStack's config.py does
+// (config.py:928 and :940): float(value.strip() or 0.0) for the probabilities
+// and int(value or 0) for DYNAMODB_SHARE_DB. They refuse to start on a value
+// Python's float() or int() refuses, and read what they accept: underscores
+// between digits, inf and nan, and surrounding white space. The share value is
+// not stripped first, so one of white space alone is refused, as int() does.
 func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
 	var out dynamoDBSettings
 
@@ -295,9 +300,9 @@ func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
 		{varDynamoDBReadErrorProbability, &out.readErrorProbability},
 		{varDynamoDBWriteErrorProbability, &out.writeErrorProbability},
 	} {
-		if value := get(f.name); value != "" {
-			parsed, err := strconv.ParseFloat(value, 64)
-			if err != nil {
+		if value := strings.TrimSpace(get(f.name)); value != "" {
+			parsed, ok := protocol.ParsePyFloat(value)
+			if !ok {
 				return out, fmt.Errorf("%s: %q is not a number", f.name, value)
 			}
 
@@ -306,12 +311,12 @@ func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
 	}
 
 	if value := get(varDynamoDBShareDB); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil {
+		parsed, ok := protocol.ParsePyInt(value)
+		if !ok {
 			return out, fmt.Errorf("%s: %q is not an integer", varDynamoDBShareDB, value)
 		}
 
-		out.shareDB = parsed
+		out.shareDB = int(parsed)
 	}
 
 	return out, nil
