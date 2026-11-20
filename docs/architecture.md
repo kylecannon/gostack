@@ -262,13 +262,24 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
 
 ### Request memory
 
-The rule: for every protocol and every path a client body takes, the heap one
-request allocates is at most four times its decoded size plus a constant
+The rule: for a request body that a generated decoder, the query form reader
+or the SQS number echo reads, in every protocol, the heap one request
+allocates is at most four times its decoded size plus a constant
 (`protocol.DecodeSlack`, 16 MiB, and 8 MiB of bookkeeping), for any body up to
 `GOSTACK_MAX_REQUEST_BODY`; and what all requests hold at once is bounded by
 `GOSTACK_MAX_IN_FLIGHT_BODIES`, not by the number of connections. A request
 that would pass a bound is refused with its protocol's own error before the
 allocation. `docs/compat.md` lists the answers.
+
+Open: these paths take client bytes the rule does not yet bound, and stay as
+they are on `main`. Each is filed on its own.
+
+- Policy documents a service parses after decoding: SQS `SetQueueAttributes`
+  `Policy` and `AddPermission`, S3 `PutBucketPolicy`, STS
+  `AssumeRoleWithSAML`. Their nesting is bounded; their width is not.
+- The `x-localstack-data` header, parsed as json in `markInternal`.
+- `POST /_localstack/health`.
+- The part headers of an S3 browser POST upload.
 
 Settings, all read at start-up:
 
@@ -314,25 +325,51 @@ How each piece is bounded, and why this way:
   and a body that fills more than the first is copied once, at its end, so a
   body allocates about twice its length, as `io.ReadAll` does. The SQS number echo (`sqs/sent-number.go`) reads the
   one member from the body's tokens instead of a second parse into `any`.
+- **The charge seam** (`protocol/charge.go`). The gateway's recovery
+  middleware, root step 8 and inside every mounted route, puts one
+  `protocol.Charge` on each request's context before any handler runs, meters
+  the body there (after gzip decoding) and calls `Charge.Release` when the
+  handler returns. Readers find it through the context: `protocol.ReadRequest`
+  and `rest.CapBody` arm the body meter, and `request.Context.HoldDecode` and
+  `query.RequestForm` charge decoding to it. So a service that wraps the body
+  (S3's `trackedBody`, the raw-header reader) or builds its own
+  `request.Context` (SQS at a queue URL, the developer API) charges the same
+  `Charge`, and the gateway gives all of it back whatever the handler built.
+  An SQS long poll gives its charge back before it waits
+  (`protocol.ReleaseBody`). Calls one service makes to another through
+  `inproc` carry `request.MarkInternal`, which no header or listener sets, and
+  are not charged, since the outside request that caused them was.
+  `gateway.ServedAsInternal` is a different test: it also accepts the
+  `x-localstack-data` header, which any client can send, so it only decides
+  what a stopping gateway still serves.
 - **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
   The gateway meters a body from a listener that states more than
-  `protocol.FreeBody` (64 KiB) or no length, after gzip decoding, so a
-  compressed body is charged at its decoded size. A smaller body takes no lock
-  and no atomic. The meter charges only once a buffering reader arms it
-  (`ReadBody`, `LimitBody`, `rest.CapBody`), by bytes read in doubling steps,
-  so an S3 object stream is never charged and a client that states 16 MiB and
-  sends one byte holds one step. Decoding past `protocol.FreeDecode` (1 MiB)
-  charges the same pool in 1 MiB steps, capped per request at the bound less
-  one body at the cap, so a request alone always fits. Waiters are served in
-  order, holders growing ahead of new bodies, for up to 5 s, then answered with
-  the protocol's throttling error. Charges are given back when the handler
-  returns; an SQS long poll gives its back before it waits. Calls one service
-  makes to another through `inproc` carry `request.MarkInternal` and are not
-  charged, since the outside request that caused them was.
+  `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
+  no atomic. The meter charges only once a buffering reader arms it, so an S3
+  object stream is never charged. A body that states its length is charged
+  all of it, up to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), at
+  once, the first time it reads past `FreeBody`: all or nothing, in order
+  behind other new bodies, so a body that waits holds nothing while it waits
+  and no two stated bodies each hold part and wait for the rest. A body of
+  unknown length (chunked) is charged in doubling steps of what has arrived.
+  Decoding past `protocol.FreeDecode` (1 MiB) charges the same pool, capped
+  per request at the bound less one body's share, so a request alone always
+  fits: json and query charge their whole cost at once, known before they
+  build anything; rest-xml grows in 1 MiB steps as it decodes. A charge that
+  grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  or until the request's context ends, then answered with the protocol's
+  throttling error. net/http notices a client that went away only once the
+  body has been read, so a waiter whose client left keeps its place, holding
+  nothing, until the wait ends. `SetInFlight` raises a bound below twice one
+  byte over `GOSTACK_MAX_REQUEST_BODY` to that, so decoding room is never zero.
 - **Idle bodies.** An armed meter sets the connection's read deadline
   `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` ahead before each read and clears it at
   the end of the body and when the charge is given back, so a request held open
-  after its body, and the connection's next request, never meet it.
+  after its body, and the connection's next request, never meet it. When the
+  deadline passes, the meter gives back its charge and leaves the deadline in
+  the past: net/http reads what is left of a short body before it writes an
+  answer, and with the deadline past that read fails at once, so the answer is
+  sent and the connection closed after it.
 - **`GOMEMLIMIT`** is honored by the Go runtime as it is. Deriving a default
   from the container's memory limit is a separate decision with its own
   trade-off (garbage collection under pressure), so nothing here sets one.
@@ -358,14 +395,17 @@ The tightest is `CompleteMultipartUpload` with all five checksums on each of
 with 23% of its budget to spare. It needs the factor: on `DecodeSlack` alone
 it would be refused (1.09 of 16 MiB).
 
-Residuals: each connection may hold its free allowances (64 KiB of body, 1 MiB
-of decoding) outside the pool, and a client that trickles one byte per idle
-period keeps its charge. Many bodies at the cap at once are answered in waves
-of the 5 s wait: each is charged in doubling steps as it arrives, so they can
-all hold part of the pool and all wait to grow, and none finishes until the
-oldest waiters give up and are throttled, which frees room for the rest. 64
-bodies of 16 MiB sent at once are answered at 5, 10, 15 and 20 s, whatever the
-idle timeout (0, 8 s or 20 s), with a peak RSS of 372 to 393 MiB.
+Residuals, accepted: a bounded pool trades availability under abuse for
+memory.
+
+- Each connection may hold its free allowances (64 KiB of body, 1 MiB of
+  decoding) outside the pool.
+- A client that states `GOSTACK_MAX_REQUEST_BODY` and sends just over 64 KiB
+  holds a whole body's share until the idle timeout; one that then trickles a
+  byte per idle period keeps it. With the defaults, four such clients hold the
+  whole pool, and every other body over 64 KiB is throttled while they do. A
+  client that states 16 MiB and sends one byte holds nothing.
+- Many bodies at the cap at once are answered in waves of the 5 s wait.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,

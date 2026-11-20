@@ -56,11 +56,13 @@ func Record(r *http.Request, rc *request.Context) {
 	}
 }
 
-// MarkedByLocalStackHeader reports whether ctx belongs to a call that a client
-// marked as one a service made to another with the x-localstack-data header.
-// Any client can send the header, so it is never grounds to exempt a request
-// from a bound; request.IsInternal, which no header sets, is.
-func MarkedByLocalStackHeader(ctx context.Context) bool {
+// ServedAsInternal reports whether the gateway serves ctx's call as one a
+// service made to another while it is stopping: one served through
+// InternalHandler, which nothing outside the process can reach, or one marked
+// by the x-localstack-data header. Any client can send the header, so this is
+// never grounds to exempt a request from a memory bound; request.IsInternal,
+// which no header sets, is.
+func ServedAsInternal(ctx context.Context) bool {
 	internal, _ := ctx.Value(internalKey{}).(bool)
 
 	return internal
@@ -96,7 +98,7 @@ func (g *Gateway) shutdownGuard(next http.Handler) http.Handler {
 
 			return
 		case phaseStopping:
-			if !MarkedByLocalStackHeader(r.Context()) && !isDeveloperPath(r.URL.Path) {
+			if !ServedAsInternal(r.Context()) && !isDeveloperPath(r.URL.Path) {
 				g.refuse(w)
 
 				return
