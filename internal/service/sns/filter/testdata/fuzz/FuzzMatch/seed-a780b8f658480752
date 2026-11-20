@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"price\": [{\"anything-but\": [100, 500]}]}")
+bool(false)
+string("{\"price\": {\"DataType\": \"Number\", \"StringValue\": \"101\"}}")

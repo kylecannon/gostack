@@ -48,13 +48,10 @@ const decimal = 10
 
 // snapshotOptions are the json settings of a snapshot, on both sides of it: the
 // same state gives the same bytes, and a string that is not valid UTF-8, such
-// as a description, goes through as it is instead of failing the save. So
-// does a time RFC 3339 cannot write, such as a ValidTo past year 9999.
+// as a description, goes through as it is instead of failing the save.
 var snapshotOptions = json.JoinOptions(
 	json.Deterministic(true),
 	jsontext.AllowInvalidUTF8(true),
-	json.WithMarshalers(protocol.SnapshotTimeMarshalers),
-	json.WithUnmarshalers(protocol.SnapshotTimeUnmarshalers),
 )
 
 var errSnapshot = errors.New("invalid kms snapshot")
@@ -80,14 +77,14 @@ type stateData struct {
 }
 
 type keyData struct {
-	ID          string    `json:"id"`
-	ARN         string    `json:"arn"`
-	Created     time.Time `json:"created"`
-	Spec        string    `json:"spec"`
-	Usage       string    `json:"usage"`
-	Origin      string    `json:"origin"`
-	MultiRegion bool      `json:"multiRegion,omitzero"`
-	InternalID  []byte    `json:"internalId"`
+	ID          string                `json:"id"`
+	ARN         string                `json:"arn"`
+	Created     protocol.SnapshotTime `json:"created"`
+	Spec        string                `json:"spec"`
+	Usage       string                `json:"usage"`
+	Origin      string                `json:"origin"`
+	MultiRegion bool                  `json:"multiRegion,omitzero"`
+	InternalID  []byte                `json:"internalId"`
 	// Primary is the primary of a multi-Region replica; Replicas is the key's
 	// list of replicas. Both name keys by ARN and region.
 	Primary  *regionKeyData  `json:"primary,omitzero"`
@@ -104,15 +101,15 @@ type keyData struct {
 	// decrypts nothing it encrypted.
 	Digest []byte `json:"digest"`
 
-	ExpirationModel string       `json:"expirationModel,omitzero"`
-	ValidTo         time.Time    `json:"validTo,omitzero"`
-	Description     string       `json:"description,omitzero"`
-	State           string       `json:"state"`
-	Manager         string       `json:"manager"`
-	DeletionDate    time.Time    `json:"deletionDate,omitzero"`
-	Policy          string       `json:"policy"`
-	Tags            []tagData    `json:"tags,omitzero"`
-	Rotation        rotationData `json:"rotation,omitzero"`
+	ExpirationModel string                `json:"expirationModel,omitzero"`
+	ValidTo         protocol.SnapshotTime `json:"validTo,omitzero"`
+	Description     string                `json:"description,omitzero"`
+	State           string                `json:"state"`
+	Manager         string                `json:"manager"`
+	DeletionDate    protocol.SnapshotTime `json:"deletionDate,omitzero"`
+	Policy          string                `json:"policy"`
+	Tags            []tagData             `json:"tags,omitzero"`
+	Rotation        rotationData          `json:"rotation,omitzero"`
 }
 
 type regionKeyData struct {
@@ -126,31 +123,31 @@ type tagData struct {
 }
 
 type rotationData struct {
-	Enabled  bool      `json:"enabled,omitzero"`
-	Period   int32     `json:"period,omitzero"`
-	NextDate time.Time `json:"nextDate,omitzero"`
+	Enabled  bool                  `json:"enabled,omitzero"`
+	Period   int32                 `json:"period,omitzero"`
+	NextDate protocol.SnapshotTime `json:"nextDate,omitzero"`
 }
 
 type aliasData struct {
-	Name        string    `json:"name"`
-	ARN         string    `json:"arn"`
-	TargetKeyID string    `json:"targetKeyId"`
-	Created     time.Time `json:"created"`
-	Updated     time.Time `json:"updated"`
+	Name        string                `json:"name"`
+	ARN         string                `json:"arn"`
+	TargetKeyID string                `json:"targetKeyId"`
+	Created     protocol.SnapshotTime `json:"created"`
+	Updated     protocol.SnapshotTime `json:"updated"`
 }
 
 type grantData struct {
-	ID                string          `json:"id"`
-	KeyID             string          `json:"keyId"`
-	KeyARN            string          `json:"keyArn"`
-	Name              string          `json:"name,omitzero"`
-	Created           time.Time       `json:"created"`
-	GranteePrincipal  string          `json:"granteePrincipal"`
-	RetiringPrincipal string          `json:"retiringPrincipal,omitzero"`
-	IssuingAccount    string          `json:"issuingAccount"`
-	Operations        []string        `json:"operations,omitzero"`
-	Constraints       *constraintData `json:"constraints,omitzero"`
-	Tokens            []string        `json:"tokens"`
+	ID                string                `json:"id"`
+	KeyID             string                `json:"keyId"`
+	KeyARN            string                `json:"keyArn"`
+	Name              string                `json:"name,omitzero"`
+	Created           protocol.SnapshotTime `json:"created"`
+	GranteePrincipal  string                `json:"granteePrincipal"`
+	RetiringPrincipal string                `json:"retiringPrincipal,omitzero"`
+	IssuingAccount    string                `json:"issuingAccount"`
+	Operations        []string              `json:"operations,omitzero"`
+	Constraints       *constraintData       `json:"constraints,omitzero"`
+	Tokens            []string              `json:"tokens"`
 }
 
 type constraintData struct {
@@ -159,11 +156,11 @@ type constraintData struct {
 }
 
 type importData struct {
-	Token     string    `json:"token"`
-	KeyID     string    `json:"keyId"`
-	Algorithm string    `json:"algorithm"`
-	Wrapping  []byte    `json:"wrapping"`
-	ValidTo   time.Time `json:"validTo"`
+	Token     string                `json:"token"`
+	KeyID     string                `json:"keyId"`
+	Algorithm string                `json:"algorithm"`
+	Wrapping  []byte                `json:"wrapping"`
+	ValidTo   protocol.SnapshotTime `json:"validTo"`
 }
 
 // Snapshot writes the keys, aliases, grants and import tokens of every account
@@ -220,7 +217,8 @@ func (s *State) save(account, region string) (stateData, error) {
 	for _, name := range s.aliasOrder {
 		a := s.aliases[name]
 		saved.Aliases = append(saved.Aliases, aliasData{
-			Name: a.Name, ARN: a.ARN, TargetKeyID: a.TargetKeyID, Created: a.Created, Updated: a.Updated,
+			Name: a.Name, ARN: a.ARN, TargetKeyID: a.TargetKeyID, Created: protocol.SnapshotTime{Time: a.Created},
+			Updated: protocol.SnapshotTime{Time: a.Updated},
 		})
 	}
 
@@ -243,7 +241,8 @@ func (s *State) save(account, region string) (stateData, error) {
 		}
 
 		saved.Imports = append(saved.Imports, importData{
-			Token: token, KeyID: params.keyID, Algorithm: params.algorithm, Wrapping: wrapping, ValidTo: params.validTo,
+			Token: token, KeyID: params.keyID, Algorithm: params.algorithm, Wrapping: wrapping,
+			ValidTo: protocol.SnapshotTime{Time: params.validTo},
 		})
 	}
 
@@ -258,16 +257,17 @@ func (k *Key) save() keyData {
 	m := k.materialsLocked()
 
 	saved := keyData{
-		ID: k.ID, ARN: k.ARN, Created: k.Created, Spec: k.Spec, Usage: k.Usage, Origin: k.Origin,
+		ID: k.ID, ARN: k.ARN, Created: protocol.SnapshotTime{Time: k.Created}, Spec: k.Spec, Usage: k.Usage, Origin: k.Origin,
 		MultiRegion: k.MultiRegion, InternalID: bytes.Clone(k.internalID[:]),
 		Material: m.current, MaterialID: m.id, Previous: m.previous, Pending: m.pending,
 		PrivateKey: m.private, PublicKey: m.public,
 		Digest:          materialDigest(k.internalID, m),
-		ExpirationModel: k.expirationModel, ValidTo: k.validTo,
-		Description: k.description, State: k.state, Manager: k.manager, DeletionDate: k.deletionDate,
-		Policy: k.policy,
+		ExpirationModel: k.expirationModel, ValidTo: protocol.SnapshotTime{Time: k.validTo},
+		Description: k.description, State: k.state, Manager: k.manager,
+		DeletionDate: protocol.SnapshotTime{Time: k.deletionDate},
+		Policy:       k.policy,
 		Rotation: rotationData{
-			Enabled: k.rotation.enabled, Period: k.rotation.period, NextDate: k.rotation.nextDate,
+			Enabled: k.rotation.enabled, Period: k.rotation.period, NextDate: protocol.SnapshotTime{Time: k.rotation.nextDate},
 		},
 	}
 
@@ -296,7 +296,7 @@ func (s *grantStore) save() []grantData {
 	for _, id := range s.order {
 		g := s.grants[id]
 		saved := grantData{
-			ID: g.ID, KeyID: g.KeyID, KeyARN: g.KeyARN, Name: g.Name, Created: g.Created,
+			ID: g.ID, KeyID: g.KeyID, KeyARN: g.KeyARN, Name: g.Name, Created: protocol.SnapshotTime{Time: g.Created},
 			GranteePrincipal: g.GranteePrincipal, RetiringPrincipal: g.RetiringPrincipal,
 			IssuingAccount: g.IssuingAccount, Operations: slices.Clone(g.Operations), Tokens: slices.Clone(g.Tokens),
 		}
@@ -430,7 +430,7 @@ func (saved *stateData) state() (*State, error) {
 		}
 
 		s.addAliasLocked(&Alias{
-			Name: a.Name, ARN: a.ARN, TargetKeyID: a.TargetKeyID, Created: a.Created, Updated: a.Updated,
+			Name: a.Name, ARN: a.ARN, TargetKeyID: a.TargetKeyID, Created: a.Created.Time, Updated: a.Updated.Time,
 		})
 	}
 
@@ -468,19 +468,19 @@ func (saved *keyData) key(account, region string) (*Key, error) {
 	}
 
 	k := &Key{
-		ID: saved.ID, ARN: saved.ARN, Account: account, Region: region, Created: saved.Created,
+		ID: saved.ID, ARN: saved.ARN, Account: account, Region: region, Created: saved.Created.Time,
 		Spec: saved.Spec, Usage: saved.Usage, Origin: saved.Origin, MultiRegion: saved.MultiRegion,
 		Material: nilIfEmpty(saved.Material), MaterialID: saved.MaterialID, pending: nilIfEmpty(saved.Pending),
 		PrivateKey: nilIfEmpty(saved.PrivateKey), PublicKey: nilIfEmpty(saved.PublicKey),
-		expirationModel: saved.ExpirationModel, validTo: saved.ValidTo,
+		expirationModel: saved.ExpirationModel, validTo: saved.ValidTo.Time,
 		description: saved.Description, manager: saved.Manager, policy: saved.Policy,
 		rotation: rotation{
-			enabled: saved.Rotation.Enabled, period: saved.Rotation.Period, nextDate: saved.Rotation.NextDate,
+			enabled: saved.Rotation.Enabled, period: saved.Rotation.Period, nextDate: saved.Rotation.NextDate.Time,
 		},
 	}
 
 	copy(k.internalID[:], saved.InternalID)
-	k.setState(saved.State, saved.DeletionDate)
+	k.setState(saved.State, saved.DeletionDate.Time)
 
 	// A build before CancelKeyDeletion sent an EXTERNAL key without material
 	// back to PendingImport could leave one Enabled or Disabled. It is not
@@ -567,7 +567,7 @@ func (s *grantStore) restore(saved []grantData) error {
 		}
 
 		g := &Grant{
-			ID: d.ID, KeyID: d.KeyID, KeyARN: d.KeyARN, Name: d.Name, Created: d.Created,
+			ID: d.ID, KeyID: d.KeyID, KeyARN: d.KeyARN, Name: d.Name, Created: d.Created.Time,
 			GranteePrincipal: d.GranteePrincipal, RetiringPrincipal: d.RetiringPrincipal,
 			IssuingAccount: d.IssuingAccount, Operations: d.Operations, Tokens: d.Tokens,
 		}
@@ -621,7 +621,7 @@ func restoreImports(saved []importData) (map[string]*importParams, error) {
 			return nil, fmt.Errorf("the wrapping key of import token %q is not RSA", d.Token)
 		}
 
-		imports[d.Token] = &importParams{keyID: d.KeyID, algorithm: d.Algorithm, wrapping: wrapping, validTo: d.ValidTo}
+		imports[d.Token] = &importParams{keyID: d.KeyID, algorithm: d.Algorithm, wrapping: wrapping, validTo: d.ValidTo.Time}
 	}
 
 	return imports, nil

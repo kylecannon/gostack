@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"$or\": [{\"k\": [\"a\"]}, {\"m\": [\"b\"]}]}")
+bool(false)
+string("{\"m\": {\"DataType\": \"String\", \"StringValue\": \"b\"}}")

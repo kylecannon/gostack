@@ -36,7 +36,8 @@ type api struct {
 // The canonical routes under /_gostack are always mounted, except the config
 // routes, which need [Deps.ConfigUpdates]. The LocalStack aliases under
 // /_localstack are mounted only when [Deps.CompatPaths] is set, and
-// /_localstack/diagnose only with [Deps.Debug] as well.
+// /_localstack/diagnose only with [Deps.Debug] as well. The protocol paths of
+// [Deps.Protocol] are always mounted.
 func Mount(r chi.Router, deps Deps) {
 	a := newAPI(deps)
 
@@ -58,6 +59,10 @@ func Mount(r chi.Router, deps Deps) {
 		r.Get(canonicalPrefix+"/config", a.getConfig)
 		r.Post(canonicalPrefix+"/config", a.gostackUpdateConfig)
 		r.Patch(canonicalPrefix+"/config", a.gostackUpdateConfig)
+	}
+
+	if deps.Protocol != nil {
+		deps.Protocol(r)
 	}
 
 	if deps.CompatPaths {

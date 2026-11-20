@@ -297,6 +297,42 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
 
+## SNS platform applications, endpoints and SMS
+
+Where gostack's platform application, platform endpoint and SMS operations (SQ-232)
+differ from LocalStack. Each row has a recorded AWS answer or a reference page, or
+it is a LocalStack crash or leaked state that is not copied.
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| Credentials (`PlatformPrincipal`, `PlatformCredential`) of a platform application | `CreatePlatformApplication` drops them, `SetPlatformApplicationAttributes` stores them as attributes and `GetPlatformApplicationAttributes` returns them | Both calls drop them, and `GetPlatformApplicationAttributes` never returns them | `GetPlatformApplicationAttributes` API reference lists the attributes it returns, and neither credential is among them. The `test_get_platform_application_attributes` snapshot, taken after a create with both, holds only `Enabled`. |
+| `CreatePlatformApplication` with attributes but neither credential | Crashes (`attributes.pop` raises `KeyError`) | Creates the application | A crash is not copied. |
+| `CreatePlatformApplication` for a name and platform that exist | Replaces the application and leaves its endpoints in the store | Replaces the attributes and keeps the endpoints | Leaked state is not copied. |
+| A new `Token` set through `SetEndpointAttributes`, then `DeleteEndpoint` | The application keeps finding the endpoint by its first token, and `DeleteEndpoint` removes the entry of the new one, so the first token stays registered to a deleted endpoint | The new token replaces the old as the key the application finds the endpoint by, and `DeleteEndpoint` removes it | Leaked state is not copied. |
+| `MonthlySpendLimit` in `SetSMSAttributes` | `400 InvalidParameter`: "MonthlySpendLimit is not a valid attribute" | Accepted | `SetSMSAttributes` API reference lists it. |
+| `DefaultSenderID` in `SetSMSAttributes` | Never checked: LocalStack reads the name `DefaultSendID`, which no call can set | 1 to 11 alphanumeric characters with at least one letter, else `400 InvalidParameter`: "DefaultSenderID is not a valid attribute" | `SetSMSAttributes` API reference: "The sender ID can be 1 - 11 alphanumeric characters, and it must contain at least one letter." The message follows LocalStack's form for the other attributes; no recorded AWS answer. |
+| `GetSMSAttributes` in a region that set none | Stores `MonthlySpendLimit` `1` on the first read | Reports `1` and stores nothing, so a read does not mark the service dirty | `test_get_sms_attributes_from_unmodified_region` snapshot (`MonthlySpendLimit` `1`) |
+| Two invalid attribute names in one `SetSMSAttributes`, `SetEndpointAttributes` or `CreatePlatformEndpoint` call | The error names the first in request order | The error names the first in sorted order: the generated decoder hands the handler a map, which keeps no order. One invalid name is reported the same in both. | No AWS answer recorded. |
+| `POST /_aws/sns/phone-opt-outs` with a body that is not a JSON object | Crashes with a 500 | `400` with `{"error": ...}` | A crash is not copied. |
+| `Publish` to a `GCM` endpoint with `LEGACY_SNS_GCM_PUBLISHING` | Posts to `fcm.googleapis.com` | Records the message, as for every platform. The setting has no effect. | gostack makes no outbound call to a real push provider. |
+
+`CreateSMSSandboxPhoneNumber`, `DeleteSMSSandboxPhoneNumber`,
+`GetSMSSandboxAccountStatus`, `ListSMSSandboxPhoneNumbers`,
+`VerifySMSSandboxPhoneNumber` and `ListOriginationNumbers` answer `501`. LocalStack
+has no handler for them either, and no test calls them.
+
+Messages to platform endpoints and phone numbers are recorded and never sent. They
+are listed at `/_gostack/services/sns/platform-endpoint-messages` and
+`/_gostack/services/sns/sms-messages` (also under `/_aws/sns/`, unless
+`GOSTACK_COMPAT_PATHS=0`), and `POST /_gostack/services/sns/phone-opt-outs` opts a
+number out.
+
+## SNS delivery
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| Deliveries waiting to be sent | Queued without bound on its executor: a publish never waits, and memory grows while a destination is slow | The same as LocalStack: each destination (a queue, or a dead-letter queue) has a lane that holds any number of deliveries, a publish never waits for them, and none is dropped for lack of room while gostack runs. Memory grows with the deliveries waiting for a slow destination; those still waiting at the end of a shutdown's drain are cut and counted | User ruling of 2026-11-20, which replaced SQ-288's bounded lanes. Model in `architecture.md`, "SNS delivery". |
+
 ## Secrets Manager
 
 | Behavior | LocalStack | gostack |

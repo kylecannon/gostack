@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key\": [{\"anything-but\": {\"wrong-operator\": null}}]}")
+bool(false)
+string("{}")

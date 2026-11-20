@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,14 @@ const (
 	nanosPerMicro  = 1_000
 	nanosDigits    = 9
 	decimalBase    = 10
+
+	// maxEpoch is the last epoch second a time.Time holds. A time.Time counts
+	// seconds from year 1, 62,135,596,800 before the epoch, in an int64, so
+	// time.Unix wraps a later second round to a date in the past.
+	maxEpoch = math.MaxInt64 - 62_135_596_800
+	// epochFloatLimit is 2^63: a float64 at or past it, either way, has no
+	// int64.
+	epochFloatLimit = 1 << 63
 )
 
 // Time is a timestamp. In json it is epoch seconds as a number; in query and
@@ -67,11 +76,15 @@ func appendEpoch(buf []byte, t time.Time) []byte {
 			sec++
 			nsec = nanosPerSecond - nsec
 		}
-
-		sec = -sec
 	}
 
-	buf = strconv.AppendInt(buf, sec, decimalBase)
+	// The magnitude as unsigned: negating math.MinInt64 as an int64 overflows.
+	magnitude := uint64(sec) //nolint:gosec // the bits of an int64, negated below when it is negative
+	if sec < 0 {
+		magnitude = -magnitude
+	}
+
+	buf = strconv.AppendUint(buf, magnitude, decimalBase)
 
 	if nsec > 0 {
 		var frac [nanosDigits]byte // zero-padded, then trimmed of trailing zeros
@@ -158,36 +171,58 @@ func (t *Time) ParseISO8601(s string) error {
 	return nil
 }
 
-// The years RFC 3339 writes, the only ones encoding/json/v2 writes a time.Time
-// in, and the zone offsets it writes: whole minutes.
+// The Unix seconds of the first and the last moment RFC 3339 can write, in the
+// zone the time is written in: 0000-01-01T00:00:00 and 9999-12-31T23:59:59.
+// A zone offset stays under secondsPerDay.
 const (
-	maxRFC3339Year   = 9999
-	secondsPerMinute = 60
+	minRFC3339Local = -62167219200
+	maxRFC3339Local = 253402300799
+	secondsPerDay   = 24 * 60 * 60
+	secondsPerMin   = 60
 )
 
-// SnapshotTimeMarshalers and SnapshotTimeUnmarshalers let a snapshot hold any
-// time.Time. A time RFC 3339 can write is written as encoding/json/v2 writes
-// it. Any other, a year past 9999 or before 0 in its own zone or a zone
-// offset with seconds, is epoch seconds, which json/v2 would refuse to write
-// and so fail the whole save. Reading takes both forms, so a snapshot written
-// before reads as it did; a time read from epoch seconds is in UTC.
-var (
-	SnapshotTimeMarshalers   = json.MarshalToFunc(marshalSnapshotTime)
-	SnapshotTimeUnmarshalers = json.UnmarshalFromFunc(unmarshalSnapshotTime)
-)
+// SnapshotTime is a time.Time that a snapshot can hold whatever it is. A time
+// RFC 3339 can write is written as encoding/json/v2 writes a time.Time, so a
+// snapshot reads as it did. That is a year from 0 through 9999 in the time's
+// own zone and an offset of whole minutes under a day. Any other is epoch
+// seconds: encoding/json/v2 refuses a year outside that range and an offset of
+// a day or more, which would fail the whole save, and writes an offset with
+// seconds without them, so the time reads back off by that much. Reading takes
+// both forms; a time read from epoch seconds is in UTC.
+//
+// A snapshot field that can hold any time has this type, so only that field
+// pays for the choice, and not every value the snapshot writes.
+//
+//nolint:recvcheck // marshal takes a value, so json can write one it cannot address, and unmarshal a pointer
+type SnapshotTime struct{ time.Time }
 
-func marshalSnapshotTime(enc *jsontext.Encoder, t time.Time) error {
-	_, offset := t.Zone()
-	if year := t.Year(); year >= 0 && year <= maxRFC3339Year && offset%secondsPerMinute == 0 {
-		return errors.ErrUnsupported // json/v2's own RFC 3339
+// MarshalJSONTo writes the time as RFC 3339 when RFC 3339 can hold it, and as
+// epoch seconds otherwise.
+func (t SnapshotTime) MarshalJSONTo(enc *jsontext.Encoder) error {
+	if !rfc3339Holds(t.Time) {
+		return (&Time{Time: t.Time}).MarshalJSONTo(enc)
 	}
 
-	return (&Time{Time: t}).MarshalJSONTo(enc)
+	// The longest RFC 3339 here, with nanoseconds and an offset, is 35 bytes.
+	var arr [40]byte
+
+	buf := append(arr[:0], '"')
+	buf = t.AppendFormat(buf, time.RFC3339Nano)
+	buf = append(buf, '"')
+
+	err := enc.WriteValue(buf)
+	if err != nil {
+		return fmt.Errorf("marshal protocol.SnapshotTime: %w", err)
+	}
+
+	return nil
 }
 
-func unmarshalSnapshotTime(dec *jsontext.Decoder, t *time.Time) error {
+// UnmarshalJSONFrom reads epoch seconds when the value is a number, and what
+// encoding/json/v2 reads for a time.Time otherwise.
+func (t *SnapshotTime) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if dec.PeekKind() != '0' {
-		return errors.ErrUnsupported // json/v2's own RFC 3339
+		return json.UnmarshalDecode(dec, &t.Time) //nolint:wrapcheck // json wraps it
 	}
 
 	var epoch Time
@@ -197,16 +232,35 @@ func unmarshalSnapshotTime(dec *jsontext.Decoder, t *time.Time) error {
 		return err
 	}
 
-	*t = epoch.UTC()
+	t.Time = epoch.UTC()
 
 	return nil
 }
 
-// epochTime reads epoch seconds written as an integer or a decimal.
+// rfc3339Holds reports whether encoding/json/v2 writes t as RFC 3339 and reads
+// the same instant back. It compares seconds, not t.Year(), so it holds at
+// either end of the int64 range.
+func rfc3339Holds(t time.Time) bool {
+	_, offset := t.Zone()
+	sec := t.Unix()
+
+	// A day either side of the range keeps sec+offset from overflowing.
+	return offset > -secondsPerDay && offset < secondsPerDay && offset%secondsPerMin == 0 &&
+		sec >= minRFC3339Local-secondsPerDay && sec <= maxRFC3339Local+secondsPerDay &&
+		sec+int64(offset) >= minRFC3339Local && sec+int64(offset) <= maxRFC3339Local
+}
+
+// epochTime reads epoch seconds written as an integer or a decimal. A second
+// past the last one a time.Time holds is refused, where time.Unix would wrap
+// it to a date in the past.
 func epochTime(s string) (time.Time, error) {
 	sec, nsec, err := parseEpoch(s)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("unmarshal protocol.Time: %w", err)
+	}
+
+	if sec > maxEpoch {
+		return time.Time{}, errors.New("unmarshal protocol.Time: epoch seconds: past the greatest time")
 	}
 
 	return time.Unix(sec, nsec), nil
@@ -220,6 +274,12 @@ func parseEpoch(s string) (int64, int64, error) {
 		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return 0, 0, fmt.Errorf("epoch seconds: %w", err)
+		}
+
+		// Go leaves the conversion of a float64 outside int64 to the platform:
+		// arm64 saturates, amd64 gives the least int64.
+		if f >= epochFloatLimit || f < -epochFloatLimit {
+			return 0, 0, errors.New("epoch seconds: past int64")
 		}
 
 		sec := int64(f)
@@ -251,6 +311,10 @@ func parseEpoch(s string) (int64, int64, error) {
 	}
 
 	if nsec > 0 && strings.HasPrefix(intPart, "-") {
+		if sec == math.MinInt64 {
+			return 0, 0, errors.New("epoch seconds: below the least time")
+		}
+
 		// "-1.5" is -1s minus 0.5s, which time.Unix expresses as -2s plus 0.5s.
 		return sec - 1, nanosPerSecond - nsec, nil
 	}

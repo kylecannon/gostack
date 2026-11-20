@@ -70,6 +70,19 @@ specific to gostack.
 
 1. **Unit tests** follow conventions-go.md: table tests, `testify/require`,
    `synctest` for time, `-race` always.
+   - A test never bounds how long something took by the wall clock. Asserting
+     that a timestamp is recent is fine. The tests that still bound a process
+     deadline by wall time, such as `cmd/gostack/shutdown-calls_internal_test.go`
+     (`assert.Less(t, time.Since(begin), saveBy, ...)`) and the others SQ-284
+     listed, are exceptions until SQ-361 removes them; a new test does not
+     join them.
+   - A test of growth (cost against input size) measures CPU time or counts
+     work, decides once on a fixed number of runs, and states in a comment the
+     smallest defect it is proven to catch. CPU time is not load-proof: a
+     loaded host, or a VM on one, still charges it time the guest cannot see,
+     so such a test takes the smallest of several runs per size and its
+     comment gives the false-failure rate measured under load. Counting work
+     is the only form no machine can move.
 2. **Codec conformance.** `scripts/vendor-specs.sh` fetches botocore's
    protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json,rest-xml,rest-json}.json`)
    into `internal/protocol/testdata/botocore` and records them in
@@ -189,15 +202,19 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   - A test whose result changes from run to run is excluded with a reason
     and demoted in the same change, never left to flap.
   - A test carrying LocalStack's `requires_in_process` marker is excluded,
-    unless `parity/bridgeable.yaml` lists it, which is allowed for two kinds
+    unless `parity/bridgeable.yaml` lists it, which is allowed for three kinds
     only. A `config` test patches nothing but `localstack.config`, which the
     config bridge forwards to the target. An `http-server` test is marked only
     because it starts pytest's `HTTPServer` for the target to deliver to; the
     runner shares the target's network namespace, so the target reaches it on
     localhost. An `http-server` test touches nothing else in the server process
     (no store, no `config.` read, no monkeypatch), and is listed only while the
-    LocalStack baseline passes it in the runner. Its note starts with
-    `http-server:`; a config note is the variable names.
+    LocalStack baseline passes it in the runner. A `marker-only` test carries
+    the marker and touches nothing in the server process: it patches nothing,
+    starts no server and reads no store, and what it does to the target goes
+    over the network from the runner. It follows the same baseline rule, and its
+    entry names the lines of the test read to establish that. Its note starts
+    with `http-server:` or `marker-only:`; a config note is the variable names.
 - **Parity ratchet** (`make parity-check`, in `parity.yml` and in `ci.yml`'s
   `parity-ledger` job, which compare the same merge ref with the same
   `HEAD^1`): a test that is `pass` in the gostack column of the
@@ -221,7 +238,9 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     and `parity/runner/`.
 - **benchstat** (`bench.yml`, every pull request) compares the micro benchmarks
   on the base and the head with `benchstat` and fails on a regression over 10%
-  at p<0.001.
+  at p<0.001. It compares only the packages whose test binary changed, in
+  shards of one job each, and passes without comparing when none did
+  (Benchmarks, "Micro benchmarks").
 - **System bench regression** (`bench-system.yml`) runs `bench compare`: a pull
   request's head against its base on the quick profile, and a scheduled or
   manual run against the previous passing run on main with the same profile
@@ -304,6 +323,75 @@ side by side.
   round), because a change elsewhere in the binary can move where a benchmark's
   functions land, and one fixed layout per tree would read that as a regression
   in code that did not change.
+- The gate compares only what can differ. `make bench-select` builds each
+  benchmark package's test binary for the base and the head with the gate's
+  flags at one layout (no `-randlayout`), plus `-trimpath`, which keeps the
+  checkout's path out of the binary, and builds the head a second time with an
+  empty build cache:
+  - a package whose head binary matches its base binary byte for byte and whose
+    files that are not Go source match too (below) cannot regress and is not
+    run;
+  - a package whose two head builds differ is not reproducible, and runs;
+  - a package only the head holds has nothing to compare against. Each of its
+    top-level benchmarks runs once at the gate's benchtime, as it will in a
+    later comparison, so one that breaks late or runs over the limit below
+    fails selection, and none is compared;
+  - a package only the base holds is dropped;
+  - a package whose test binary lists no benchmark (`-test.list '^Benchmark'`
+    prints none) is not a benchmark package, whether the head only, both trees
+    or the base only hold it: the grep that picks packages to build also matches
+    a `func Benchmark` inside a string literal, so the binary's list decides.
+    It is dropped and the summary prints it as `no benchmark`. A list that
+    fails (non-zero exit, a crash) fails selection;
+  - a top-level benchmark only the head holds, in a package that runs, is
+    treated the same way: it runs once at the gate's benchtime and is held to
+    the limit below, but is not planned and not compared, so a shard never holds
+    it alone.
+
+  The base is the target branch's tip, so a branch behind main also selects the
+  packages main changed since it branched.
+- A benchmark reads no file at run time. What it needs is built in code or
+  embedded, because the test binary does not hold a file the benchmark opens.
+  Selection does not check the rule at run time. It hashes every file under a
+  package's directory that is not a `.go` file, and every file under a `testdata`
+  directory, `.go` ones included, and a change to any of them makes the package
+  `changed`, so a benchmark that reads one of those is still compared. The hash
+  does not cover, and the rule stands for:
+  - a file outside the package directory;
+  - a file below a subdirectory that holds a `.go` file of its own, whether that
+    is another package (it has a verdict of its own, which the parent's does not
+    follow) or a generator the build ignores (`//go:build ignore`), unless the
+    subdirectory is itself under a `testdata` directory;
+  - a `.go` file outside `testdata` that the build ignores, read as data;
+  - a symbolic link's target: the link is hashed by name, so retargeting it is
+    not a change.
+- Selection times one run of each top-level benchmark of a selected package, and
+  of a package or benchmark only the head holds, at the gate's benchtime. It
+  packs what is compared into the fewest shards of about 40 minutes
+  (`BENCH_SHARD_BUDGET`). A shard's estimate is 5 minutes of setup plus ten
+  rounds, each running its benchmarks once per tree and relinking each of its
+  packages (1.5 s a package). A package that would overrun that is split by
+  top-level benchmark (`-test.bench '^(A|B)$'`). A top-level benchmark whose own
+  estimate is past 40 minutes gets a shard of its own, up to what a shard job
+  holds, its 60-minute timeout (`BENCH_SHARD_LIMIT`, about 164 s a run). Past
+  that, selection fails and names the benchmark and its estimate: its author
+  splits it. A benchmark only the head holds is held to the same limit. Each
+  shard is a job on its own runner that runs `make bench-ab` with `BENCH_PLAN`
+  naming its share, so base and head are always measured on one machine.
+- `make bench-ab` without `BENCH_PLAN` still runs every benchmark of both trees.
+  With one, it fails when the plan is missing, empty, malformed, or names a
+  package a tree holds no benchmark of. A regex that matches no benchmark of its
+  package does not fail it; `bench join` does, so a shard cannot measure nothing
+  and pass.
+- Each matrix entry carries its `index`, from zero, and the shard job names its
+  artifact `bench-shard-<index>` from it, not from `strategy.job-index`, whose
+  order GitHub does not say follows the entries'.
+- The `benchstat` job runs `bench join`, which reads exactly `bench-shard-0` to
+  `bench-shard-<n-1>` of select's matrix, however many `bench-shard-*` artifacts
+  the run holds (a re-run keeps those of the attempt before). It fails when one
+  of them is missing, or when the base or the head output of a shard has no
+  rows for a package and regex of that shard's plan. It then runs benchstat once
+  and `bench gate`, and fails when selection or any shard did not succeed.
 
 ### System bench (`bench/`)
 

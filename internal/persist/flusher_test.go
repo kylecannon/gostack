@@ -22,6 +22,9 @@ import (
 // shorter.
 const maxRetry = 30 * time.Second
 
+// sns is a second service, next to sqs.
+const sns = "sns"
+
 // errDisk is a second failure, with an error of its own.
 var errDisk = errors.New("disk full")
 
@@ -261,6 +264,145 @@ func Test_Engine_FailedFlushBackoffResetsAfterASave(t *testing.T) {
 	})
 }
 
+// Test_Engine_FailedFlushBackoffIsPerService checks that a service whose save
+// keeps failing backs off alone: another service's change is saved within
+// PERSIST_FREQUENCY, whatever wait the failing one has reached, and the
+// failing one is still tried at its own pace and at shutdown.
+func Test_Engine_FailedFlushBackoffIsPerService(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := t.TempDir()
+		cfg := baseCfg(base)
+		cfg.Frequency = 10 * time.Second
+
+		e := persist.New(cfg)
+		bad := &attempts{err: errSnapshot}
+		good := &attempts{state: stateA}
+		e.Register(sqs, bad)
+		e.Register(sns, good)
+
+		began := time.Now()
+		sec := time.Second
+
+		// sqs fails at 10 s, 20 s and 40 s. Its next retry is due at 70 s.
+		e.MarkDirty(sqs)
+		time.Sleep(45 * sec)
+		synctest.Wait()
+		require.Len(t, bad.times(), 3)
+
+		// sns changes at 45 s: it is saved by 55 s, not at 70 s with sqs's retry.
+		good.set(stateB)
+		e.MarkDirty(sns)
+		time.Sleep(10*sec + 500*time.Millisecond)
+		synctest.Wait()
+
+		assert.Equal(t, stateB, readFile(t, filepath.Join(base, sns, jsonFile)),
+			"sns is saved within PERSIST_FREQUENCY of its change")
+		require.Len(t, good.times(), 1)
+		assert.Equal(t, 55*sec, good.times()[0].Sub(began))
+		assert.Len(t, bad.times(), 3, "sqs is not tried again before its own retry")
+
+		// sqs keeps its own pace: 10 s, 20 s, then 30 s.
+		time.Sleep(15 * sec)
+		synctest.Wait()
+		assert.Equal(t, []time.Duration{10 * sec, 20 * sec, 30 * sec}, bad.gaps())
+
+		// A failing service is still tried at shutdown, and its failure is reported.
+		require.ErrorIs(t, e.Close(t.Context()), errSnapshot)
+		assert.Len(t, bad.times(), 5, "the retry at 70 s and the shutdown's")
+	})
+}
+
+// A timed save of another service that ends before a backed-off service's retry
+// does not move that retry: the service is tried at its own time.
+func Test_Engine_FailedFlushBackoffIsNotSlidByAnotherServicesSave(t *testing.T) {
+	sec := time.Second
+
+	for _, mark := range []time.Duration{52 * sec, 59900 * time.Millisecond} {
+		t.Run("sns changes at "+mark.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := baseCfg(t.TempDir())
+				cfg.Frequency = 10 * sec
+
+				e := persist.New(cfg)
+				bad := &attempts{err: errSnapshot}
+				good := &attempts{state: stateA}
+				e.Register(sqs, bad)
+				e.Register(sns, good)
+
+				began := time.Now()
+
+				// sqs fails at 10 s, 20 s and 40 s. Its next retry is due at 70 s.
+				e.MarkDirty(sqs)
+				time.Sleep(mark)
+				synctest.Wait()
+				require.Len(t, bad.times(), 3)
+
+				// sns is saved PERSIST_FREQUENCY after its change, before 70 s,
+				// and sqs is still tried at 70 s.
+				e.MarkDirty(sns)
+				time.Sleep(100*sec - mark)
+				synctest.Wait()
+
+				require.Len(t, good.times(), 1)
+				assert.Equal(t, mark+10*sec, good.times()[0].Sub(began))
+				require.GreaterOrEqual(t, len(bad.times()), 4)
+				assert.Equal(t, 70*sec, bad.times()[3].Sub(began), "sqs is tried at its own time")
+
+				_ = e.Close(t.Context())
+			})
+		})
+	}
+}
+
+// A timed save of another service that is under way when a backed-off service's
+// retry comes due does not move the retry either: the service is tried at 70 s,
+// or the instant the save ends if that is later, not PERSIST_FREQUENCY after.
+func Test_Engine_FailedFlushRetryDueDuringAnotherServicesSave(t *testing.T) {
+	sec := time.Second
+	ms := time.Millisecond
+
+	// sns changes at mark, is saved from mark+10 s, and the save takes took.
+	for _, c := range []struct{ mark, took time.Duration }{
+		{55 * sec, 5 * sec},    // 65 to 70 s: ends as the retry comes due
+		{55 * sec, 6 * sec},    // 65 to 71 s
+		{59900 * ms, 200 * ms}, // 69.9 to 70.1 s
+		{59999 * ms, 2 * ms},   // 69.999 to 70.001 s
+	} {
+		t.Run("sns saves "+(c.mark+10*sec).String()+" for "+c.took.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := baseCfg(t.TempDir())
+				cfg.Frequency = 10 * sec
+
+				e := persist.New(cfg)
+				bad := &attempts{err: errSnapshot}
+				slow := &attempts{state: stateA, took: c.took}
+				e.Register(sqs, bad)
+				e.Register(sns, slow)
+
+				began := time.Now()
+
+				// sqs fails at 10 s, 20 s and 40 s. Its next retry is due at 70 s.
+				e.MarkDirty(sqs)
+				time.Sleep(c.mark)
+				synctest.Wait()
+				require.Len(t, bad.times(), 3)
+
+				e.MarkDirty(sns)
+				time.Sleep(100*sec - c.mark)
+				synctest.Wait()
+
+				require.Len(t, slow.times(), 1)
+				assert.Equal(t, c.mark+10*sec, slow.times()[0].Sub(began))
+				require.GreaterOrEqual(t, len(bad.times()), 4)
+				assert.Equal(t, max(70*sec, c.mark+10*sec+c.took), bad.times()[3].Sub(began),
+					"sqs is tried at its own time, or when the save under way ends")
+
+				_ = e.Close(t.Context())
+			})
+		})
+	}
+}
+
 func Test_Engine_FailedFlushLogging(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var logs syncBuffer
@@ -307,6 +449,7 @@ func Test_Engine_FailedFlushLogging(t *testing.T) {
 		assert.Equal(t, 7, errorLines, "%s", logs.String())
 		assert.Equal(t, 1, recovered, "%s", logs.String())
 		assert.Contains(t, logs.String(), "failures=50")
+		assert.Contains(t, logs.String(), "service=sqs", "each line names the service whose save failed")
 	})
 }
 

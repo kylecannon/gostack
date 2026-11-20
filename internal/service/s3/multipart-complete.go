@@ -13,6 +13,7 @@ import (
 	"time"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // completion is a validated CompleteMultipartUpload: the parts in the order
@@ -247,7 +248,7 @@ func (u *MultipartUpload) object(plan *completion) *Version {
 	return &Version{
 		ID:                 versionNull,
 		ETag:               plan.etag,
-		LastModified:       time.Now().UTC(),
+		LastModified:       protocol.SnapshotTime{Time: time.Now().UTC()},
 		Metadata:           u.Metadata,
 		ContentType:        u.ContentType,
 		CacheControl:       u.CacheControl,
@@ -466,7 +467,7 @@ func completePrecondition(object *Object, upload *MultipartUpload, ifMatch, ifNo
 				"At least one of the pre-conditions you specified did not hold")
 		}
 
-		if upload.Initiated.Before(current.LastModified) {
+		if upload.Initiated.Before(current.LastModified.Time) {
 			return conditionalConflict("If-Match", upload.Key)
 		}
 	default:

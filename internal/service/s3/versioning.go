@@ -12,6 +12,7 @@ import (
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 const (
@@ -305,7 +306,7 @@ func (b *Bucket) deleteLocked(key, versionID string, bypass bool, now time.Time)
 	}
 
 	if versionID == "" {
-		marker := &Version{DeleteMarker: true, LastModified: now.UTC()}
+		marker := &Version{DeleteMarker: true, LastModified: protocol.SnapshotTime{Time: now.UTC()}}
 		replaced := b.addVersion(key, marker)
 
 		return deletion{versionID: marker.ID, marker: true, added: true}, replaced, nil

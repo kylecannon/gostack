@@ -53,7 +53,7 @@ func Test_Assets_OpenErrorInSyncIsNotFinal(t *testing.T) {
 	synced := recordSyncs(a, filepath.Join(dir, syncService, "store.json"))
 
 	e.mu.Lock()
-	e.retryAt = time.Time{}
+	e.services[syncService].retryAt = time.Time{}
 	e.mu.Unlock()
 	require.NoError(t, e.Flush(t.Context()))
 

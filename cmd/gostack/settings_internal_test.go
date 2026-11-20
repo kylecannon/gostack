@@ -28,6 +28,47 @@ func Test_s3Settings(t *testing.T) {
 	})
 }
 
+func Test_snsSettings(t *testing.T) {
+	t.Setenv("LOCALSTACK_HOST", "stack.test:4570")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	settings := liveSettings(cfg, snsSettings)
+
+	assert.Empty(t, settings().CertURLHost)
+	assert.Equal(t, "stack.test:4570", settings().Host)
+
+	t.Run("an update through the config endpoint reaches the next call", func(t *testing.T) {
+		require.NoError(t, cfg.Set("SNS_CERT_URL_HOST", "sns.us-east-1.amazonaws.com"))
+
+		assert.Equal(t, "sns.us-east-1.amazonaws.com", settings().CertURLHost)
+
+		require.NoError(t, cfg.Set("SNS_CERT_URL_HOST", ""))
+
+		assert.Empty(t, settings().CertURLHost, "the test's empty value puts LOCALSTACK_HOST back")
+	})
+
+	// envelope.BaseURL does not trim its host, so the settings must: as in
+	// LocalStack, a value with spaces around it names the host without them.
+	t.Run("the host is trimmed, from the environment and from an update", func(t *testing.T) {
+		require.NoError(t, cfg.Set("SNS_CERT_URL_HOST", "  sns.example.com \t"))
+
+		assert.Equal(t, "sns.example.com", settings().CertURLHost)
+
+		t.Setenv("SNS_CERT_URL_HOST", " env.example.com ")
+
+		fromEnv, err := config.Load()
+		require.NoError(t, err)
+
+		assert.Equal(t, "env.example.com", snsSettings(fromEnv.Settings()).CertURLHost)
+
+		require.NoError(t, cfg.Set("SNS_CERT_URL_HOST", "   "))
+
+		assert.Empty(t, settings().CertURLHost, "a blank value is no host")
+	})
+}
+
 func Test_liveSettings_mapsEachSnapshotOnce(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)

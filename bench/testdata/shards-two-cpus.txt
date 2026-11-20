@@ -1,0 +1,48 @@
+goos: linux
+goarch: amd64
+pkg: example.com/x
+cpu: Cpu A
+       │  base.txt   │           head.txt            │
+       │   sec/op    │   sec/op     vs base          │
+Fast-4   100.1n ± 0%   100.2n ± 0%  ~ (p=0.784 n=10)
+
+       │  base.txt  │            head.txt            │
+       │    B/op    │    B/op     vs base            │
+Fast-4   64.00 ± 0%   64.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+       │  base.txt  │            head.txt            │
+       │ allocs/op  │ allocs/op   vs base            │
+Fast-4   1.000 ± 0%   1.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+cpu: Cpu B
+       │  base.txt   │              head.txt               │
+       │   sec/op    │   sec/op     vs base                │
+Slow-4   499.5n ± 0%   600.3n ± 0%  +20.17% (p=0.000 n=10)
+
+       │  base.txt  │            head.txt            │
+       │    B/op    │    B/op     vs base            │
+Slow-4   64.00 ± 0%   64.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+       │  base.txt  │            head.txt            │
+       │ allocs/op  │ allocs/op   vs base            │
+Slow-4   1.000 ± 0%   1.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+pkg: example.com/y
+cpu: Cpu A
+        │  base.txt   │           head.txt            │
+        │   sec/op    │   sec/op     vs base          │
+Other-4   299.8n ± 0%   299.8n ± 0%  ~ (p=1.000 n=10)
+
+        │  base.txt  │            head.txt            │
+        │    B/op    │    B/op     vs base            │
+Other-4   64.00 ± 0%   64.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+        │  base.txt  │            head.txt            │
+        │ allocs/op  │ allocs/op   vs base            │
+Other-4   1.000 ± 0%   1.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

@@ -140,7 +140,7 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 
 	p.notify(ctx, plan.dest, plan.destKey, v)
 
-	result := &s3api.CopyObjectResult{ETag: new(quoted(v.ETag)), LastModified: &protocol.Time{Time: v.LastModified}}
+	result := &s3api.CopyObjectResult{ETag: new(quoted(v.ETag)), LastModified: &protocol.Time{Time: v.LastModified.Time}}
 	c := checksumsOf(v)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
 	result.ChecksumSHA1, result.ChecksumSHA256, result.ChecksumType = c.sha1, c.sha256, c.kind
@@ -333,7 +333,7 @@ func (p *Provider) copyBody(v *Version, body io.Reader) error {
 
 	v.ETag = hex.EncodeToString(etag.Sum(nil))
 	v.ChecksumValue, v.ChecksumType = encodeChecksum(sum), checksumFullObject
-	v.LastModified = time.Now().UTC()
+	v.LastModified = protocol.SnapshotTime{Time: time.Now().UTC()}
 
 	return nil
 }

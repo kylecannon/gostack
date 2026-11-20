@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"key\": [null, \"s\", 1, 1.5, true, false]}")
+bool(false)
+string("{}")

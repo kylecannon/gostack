@@ -21,7 +21,7 @@ func snapshotBenchProvider(b *testing.B, objects int) *Provider {
 	for i := range objects {
 		bucket.Objects["key-"+strconv.Itoa(i)] = &Object{Versions: []*Version{{
 			ID: versionNull, BlobID: "0123456789abcdef0123456789abcdef", Size: 1024, ETag: "etag",
-			LastModified: time.Now().UTC(), ContentType: defaultContentType, StorageClass: storageClassDefault,
+			LastModified: stamped(time.Now().UTC()), ContentType: defaultContentType, StorageClass: storageClassDefault,
 			Metadata: map[string]string{"owner": benchBucket},
 		}}}
 	}
