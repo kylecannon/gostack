@@ -134,7 +134,7 @@ func loadState(ctx context.Context, services *providers, eng *persist.Engine) er
 		return fmt.Errorf("load persisted state: %w", err)
 	}
 
-	services.useAssets(eng, assets)
+	services.useAssets(eng, assets, err)
 
 	return nil
 }
@@ -348,6 +348,28 @@ type saver struct {
 	services *providers
 	first    sync.Once
 	rest     sync.Once
+
+	// logged is the text of the last save error logged, so a failure every save
+	// repeats, such as a base dir the startup load refused, is logged once.
+	logMu  sync.Mutex
+	logged string
+}
+
+// logSave logs err, a save's error, unless it is nil or the error last logged.
+func (s *saver) logSave(err error) {
+	if err == nil {
+		return
+	}
+
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+
+	if err.Error() == s.logged {
+		return
+	}
+
+	s.logged = err.Error()
+	slog.Error("save persisted state", "error", err)
 }
 
 // saveFirst writes the state that changed, until ctx ends: the save that runs
@@ -357,10 +379,7 @@ type saver struct {
 // saves that follow. A write cut short keeps the old file.
 func (s *saver) saveFirst(ctx context.Context) {
 	s.first.Do(func() {
-		err := s.eng.Stop(ctx)
-		if err != nil {
-			slog.Error("save persisted state", "error", err)
-		}
+		s.logSave(s.eng.Stop(ctx))
 	})
 }
 
@@ -388,10 +407,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 		// A first save that ran out of time has said so; this one would only
 		// fail the same way.
 		if saveCtx.Err() == nil {
-			err := s.eng.Flush(saveCtx)
-			if err != nil {
-				slog.Error("save persisted state", "error", err)
-			}
+			s.logSave(s.eng.Flush(saveCtx))
 		}
 
 		// closeServices reports false only once closeCtx has ended, and a flush
@@ -403,10 +419,7 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 			return
 		}
 
-		err := s.eng.Close(closeCtx)
-		if err != nil {
-			slog.Error("save persisted state", "error", err)
-		}
+		s.logSave(s.eng.Close(closeCtx))
 	})
 }
 
