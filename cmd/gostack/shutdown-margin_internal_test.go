@@ -40,10 +40,73 @@ import (
 // within, since a receive that nothing answers is a deadlock panic that ends the
 // test binary, and with it the results of the rest of the package.
 func Test_serve_aBlockedShutdownCostsWorkAndNoMore(t *testing.T) {
-	synctest.Test(t, serveBlockedShutdown)
+	synctest.Test(t, func(t *testing.T) {
+		serveBlockedShutdown(t, nil, func(stop context.CancelFunc, _ *memListener) { stop() }, assert.NoError)
+	})
 }
 
-func serveBlockedShutdown(t *testing.T) {
+// Test_serve_aPanickingShutdownFunctionCostsNothing: a service shutdown function
+// that panics ends neither the process nor the functions after it. The one
+// after it here never returns, so the margin holds as it does without the panic:
+// the save starts at Work and the second save, which holds the services' Close,
+// follows. The panic is logged with the service's name. Both causes.
+func Test_serve_aPanickingShutdownFunctionCostsNothing(t *testing.T) {
+	causes := map[string]struct {
+		cause     func(stop context.CancelFunc, mem *memListener)
+		servedErr assert.ErrorAssertionFunc
+	}{
+		"the signal":            {func(stop context.CancelFunc, _ *memListener) { stop() }, assert.NoError},
+		"a listener that fails": {func(_ context.CancelFunc, mem *memListener) { _ = mem.Close() }, assert.Error},
+	}
+
+	for name, tt := range causes {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLog(t)
+
+			synctest.Test(t, func(t *testing.T) {
+				panicking := shutdownRegistration("panicky", func() { panic("a shutdown function panics") })
+
+				serveBlockedShutdown(t, []service.Registration{panicking}, tt.cause, tt.servedErr)
+			})
+
+			assert.Contains(t, logs.String(), "service=panicky", "the log names the service whose function panicked")
+			assert.Contains(t, logs.String(), "a shutdown function panics")
+		})
+	}
+}
+
+// shutdownRegistration is a registration of the given name, whose service has
+// the given shutdown function.
+func shutdownRegistration(name string, shutdown func()) service.Registration {
+	return service.Registration{
+		Metadata: service.Metadata{
+			Name: name, SigningName: name, EndpointPrefix: name,
+			Protocols: []protocol.Kind{protocol.KindQuery},
+		},
+		Serve:    func(http.ResponseWriter, *request.Context) {},
+		Shutdown: shutdown,
+	}
+}
+
+// Test_serve_aBlockedShutdownCostsWorkAndNoMoreWhenAListenerFails is the same
+// margin for the other cause of a shutdown: a listener fails, the gateway
+// starts the shutdown inside Serve, and serve finds it begun. A service
+// shutdown function that Serve ran inline held Serve, and serve with it, until
+// the supervisor's SIGKILL, with no save (SQ-379).
+func Test_serve_aBlockedShutdownCostsWorkAndNoMoreWhenAListenerFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		serveBlockedShutdown(t, nil, func(_ context.CancelFunc, mem *memListener) { _ = mem.Close() }, assert.Error)
+	})
+}
+
+// serveBlockedShutdown runs serve over an in-memory listener with a service
+// shutdown function that never returns, after the registrations of ahead, and
+// has cause start the shutdown: the signal (the context ends) or the failure of
+// the listener. servedErr is what serve's error must be for that cause.
+func serveBlockedShutdown(
+	t *testing.T, ahead []service.Registration,
+	cause func(stop context.CancelFunc, mem *memListener), servedErr assert.ErrorAssertionFunc,
+) {
 	const (
 		timeout = 2 * time.Second
 		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
@@ -59,18 +122,12 @@ func serveBlockedShutdown(t *testing.T) {
 
 	t.Cleanup(func() { close(stuck) })
 
-	reg := service.Registration{
-		Metadata: service.Metadata{
-			Name: testService, SigningName: testService, EndpointPrefix: testService,
-			Protocols: []protocol.Kind{protocol.KindQuery},
-		},
-		Serve:    func(http.ResponseWriter, *request.Context) {},
-		Shutdown: func() { <-stuck },
-	}
+	regs := make([]service.Registration, 0, len(ahead)+1)
+	regs = append(regs, ahead...)
+	regs = append(regs, shutdownRegistration(testService, func() { <-stuck }))
 
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{anyLoopbackPort}} },
-		[]service.Registration{reg}, nil, nil,
+		func() gateway.Settings { return gateway.Settings{Listen: []string{anyLoopbackPort}} }, regs, nil, nil,
 	)
 	require.NoError(t, err)
 
@@ -90,9 +147,10 @@ func serveBlockedShutdown(t *testing.T) {
 	firsts, rests := make(chan saved, 1), make(chan saved, 1)
 	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
 	done := make(chan error, 1)
+	mem := newMemListener()
 
 	go func() {
-		done <- serve(ctx, gw, []net.Listener{newMemListener()}, proc, timeout, nil, shutdownSave{
+		done <- serve(ctx, gw, []net.Listener{mem}, proc, timeout, nil, shutdownSave{
 			first: func(saveCtx context.Context) { record(firsts, saveCtx) },
 			rest:  func(saveCtx, _ context.Context) { record(rests, saveCtx) },
 		})
@@ -100,15 +158,14 @@ func serveBlockedShutdown(t *testing.T) {
 
 	synctest.Wait()
 
-	// SIGTERM.
 	begin := time.Now()
 
-	stop()
+	cause(stop, mem)
 
 	first := within(t, firsts, limit, "the first save")
 	rest := within(t, rests, limit, "the second save")
 
-	require.NoError(t, within(t, done, limit, "serve's return"))
+	servedErr(t, within(t, done, limit, "serve's return"))
 
 	assert.Equal(t, workAt, first.at.Sub(begin), "the save started when Work ended, not later")
 	assert.Equal(t, workAt, rest.at.Sub(begin), "the second save followed at once: no calls to drain")

@@ -166,7 +166,10 @@ func loadState(ctx context.Context, services *providers, eng *persist.Engine) er
 //
 // The budget is planned once, from the moment the shutdown starts: the signal,
 // or the failure of a listener. A failing listener makes the gateway drain by
-// itself, before this function can act, so the gateway asks for the plan.
+// itself, before this function can act, so the gateway asks for the plan. It
+// starts the services' shutdown functions without waiting for them, so a
+// function that never returns holds neither the drain nor this function past
+// Work: shutDown waits for it under the same deadline.
 func serve(
 	ctx context.Context,
 	gw *gateway.Gateway,
@@ -325,6 +328,10 @@ func shutDown(ctx context.Context, gw *gateway.Gateway, proc *lifecycle.Process,
 		defer close(done)
 
 		gw.BeginShutdown()
+		// Serve may have begun the shutdown (a listener failed), and then
+		// BeginShutdown returned at once: the hooks still run after the services
+		// have let go.
+		<-gw.Released()
 		proc.Shutdown(ctx)
 	}()
 
