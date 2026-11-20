@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:kms:us-west-2:111111111111:key/a:b")

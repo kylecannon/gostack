@@ -16,6 +16,7 @@ import (
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodbstreams"
+	"github.com/kylecannon/gostack/internal/service/kms"
 	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/secretsmanager"
 	"github.com/kylecannon/gostack/internal/service/sns"
@@ -75,6 +76,7 @@ func registrations(
 		s3Provider.Registration(),
 		ddb.Registration(),
 		dynamodbstreams.New(ddb).Registration(),
+		kms.New(changed).Registration(),
 		snsProvider.Registration(),
 		secretsmanager.New(changed).Registration(),
 		ssm.New().Registration(),

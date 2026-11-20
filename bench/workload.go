@@ -73,6 +73,9 @@ var (
 		updateWorkload{},
 		transactWorkload{},
 		streamWorkload{},
+		cryptWorkload{},
+		dataKeyWorkload{},
+		signWorkload{},
 	}
 	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )
