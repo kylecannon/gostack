@@ -65,10 +65,13 @@ type Registration struct {
 	// start with Get, Head, Query, List, Describe or Receive.
 	Mutating func(operation string) bool
 	// Shutdown is called once when the gateway starts to shut down, after it has
-	// begun refusing new AWS calls and before the listeners close. It wakes work
-	// that would otherwise keep a request open, such as long polls. It does not
-	// stop the service and does not drop its state. It is nil when there is
-	// nothing to do.
+	// begun refusing new AWS calls. It runs apart from the shutdown, in a
+	// goroutine of the gateway's, one registration's function after another's,
+	// while the listeners close and the requests drain, and it may still be
+	// running when Serve returns. It wakes work that would otherwise keep a
+	// request open, such as long polls. It does not stop the service and does not
+	// drop its state. A panic in it is logged and the next function runs. It is
+	// nil when there is nothing to do.
 	Shutdown func()
 	// DecodeFactor is how many bytes of decoded values each byte of a request
 	// body may cost before the request is refused as too large
