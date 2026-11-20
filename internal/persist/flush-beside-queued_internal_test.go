@@ -71,8 +71,9 @@ func Test_Engine_ShutdownBehindAQueuedService(t *testing.T) {
 
 // Test_Engine_FlushBesideMovesAQueuedPairTogether: the timed save took a slow
 // service and the dynamodb pair, and is in the slow one's Snapshot. A Flush
-// beside it moves the pair, whose saves the timed one had not begun, to
-// itself: the leader is told true, the table and the streams are snapshotted
+// beside it, under a 300 ms deadline, moves the pair, whose saves the timed
+// one had not begun, to itself, and saves it before the slow Snapshot ends:
+// the leader is told true, the table and the streams are snapshotted
 // in turn and the leader is told false, once. The timed save skips both.
 func Test_Engine_FlushBesideMovesAQueuedPairTogether(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -90,10 +91,13 @@ func Test_Engine_FlushBesideMovesAQueuedPairTogether(t *testing.T) {
 		e.MarkDirty(ddb)
 		<-big.started // the timed save took all three, and is in big's Snapshot
 
-		require.NoError(t, e.Flush(t.Context()))
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		defer cancel()
+
+		require.ErrorIs(t, e.Flush(ctx), context.DeadlineExceeded, "the slow Snapshot outlasts the Flush")
 
 		file := func(name string) string { return readState(t, filepath.Join(dir, name, FormatJSON.fileName())) }
-		assert.Equal(t, "table v2", file(ddb))
+		assert.Equal(t, "table v2", file(ddb), "saved beside the slow Snapshot, before it ends")
 		assert.Equal(t, "streams v2", file(ddbStream))
 
 		time.Sleep(3 * time.Second) // the timed save ends
