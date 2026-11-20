@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -87,9 +88,16 @@ func Test_gostack_s3_survives_a_kill(t *testing.T) {
 	_, etag1 := first.s3OK(t, http.MethodPut, "/bucket/upload?partNumber=1&uploadId="+initiated.UploadID, part)
 	_, etag2 := first.s3OK(t, http.MethodPut, "/bucket/upload?partNumber=2&uploadId="+initiated.UploadID, []byte("end"))
 
+	// The kill waits for a save that holds both parts: the flush timer runs on
+	// its own, so a save that ran after the upload began and before part 2 would
+	// hold the upload id and the versioned key but not the part, and the new
+	// process would answer the completion with InvalidPart. A save that holds
+	// part 2's ETag was taken after every call above, and the engine writes the
+	// assets before the state file that names them.
 	file := filepath.Join(dir, "s3", "store.json")
-	require.Eventually(t, fileHas(file, initiated.UploadID, `"versioned"`), flushDeadline, poll,
-		"no flush wrote %s", file)
+	require.Eventually(t,
+		fileHas(file, initiated.UploadID, `"versioned"`, strings.Trim(etag1, `"`), strings.Trim(etag2, `"`)),
+		flushDeadline, poll, "no flush wrote both parts to %s", file)
 
 	require.NoError(t, first.cmd.Process.Signal(syscall.SIGKILL))
 
