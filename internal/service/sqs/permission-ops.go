@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -170,7 +171,7 @@ func (q *Queue) addPermission(label string, actions, accountIDs []string) *awser
 
 	principals := make([]string, 0, len(accountIDs))
 	for _, id := range accountIDs {
-		principals = append(principals, "arn:"+partition(q.region)+":iam::"+id+":root")
+		principals = append(principals, "arn:"+account.Partition(q.region)+":iam::"+id+":root")
 	}
 
 	qualified := make([]string, 0, len(actions))
