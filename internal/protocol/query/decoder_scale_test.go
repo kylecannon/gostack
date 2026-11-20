@@ -1,9 +1,12 @@
 package query_test
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,40 +16,31 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 const (
-	// scaleMinRounds is how many times every size is decoded at least. A round
-	// decodes the sizes one after the other, and the cost of a size is its
-	// shortest run over all rounds. So the figure is what the decode costs when
-	// nothing else wants the CPU, and a burst of load that lasts a few runs
-	// raises one run of every size, not every run of one.
-	scaleMinRounds = 8
-	// scaleBudget is how long the test goes on adding rounds after the minimum
-	// while a figure is over its limit. The shortest run only falls as rounds are
-	// added, so on a busy machine the figures settle within their limits; a decode
-	// whose cost really grows too fast never gets within them, and fails when the
-	// budget is spent.
-	scaleBudget = 10 * time.Second
+	// scaleRounds is how many times every size is decoded. A round decodes the
+	// sizes one after the other, the cost of a size is its smallest over the
+	// rounds, and the test decides once, on that.
+	scaleRounds = 5
 	// scaleExponent is the most the cost over every size may grow faster than the
-	// size. It is the figure for a quadratic step on every lookup: linear is 1,
-	// the sort of the keys adds a little (a healthy decode fits 1.1 to 1.2 alone,
-	// 1.3 at most on a machine under load), a scan of every key per lookup is 2.
-	scaleExponent = 1.5
+	// size: linear is 1, the sort of the keys adds a little, a scan of every key
+	// per lookup is 2. See Test_Decoder_BatchScalesWithEntries for the figures.
+	scaleExponent = 1.3
 	// scaleTailSlope is the most the cost between 4,000 and 16,000 entries may
-	// grow faster than the size. It is the figure for a quadratic step with a
-	// small constant: the linear cost hides it at the small sizes and holds the
-	// fitted exponent down, but it outgrows the linear cost as the size grows. A
-	// scan of every key on 1 lookup in 256 fits an exponent of 1.36 up to 8,000
-	// entries, under the limit above, and a tail slope of 2.0 up to 16,000. A
-	// healthy decode measures 1.1 alone and up to 1.45 under load. The ends are
-	// four times apart so that noise in one of them moves the slope half as far as
-	// it would between neighbours, which put a healthy decode at 1.48 once in 192
-	// loaded runs.
-	scaleTailSlope = 1.5
-	// scaleCeiling stops one run that has already blown up, so a quadratic decode
-	// fails in seconds and not in minutes.
+	// grow faster than the size. It catches a quadratic step whose constant is
+	// small enough for the linear cost to hide it at the small sizes, where it
+	// holds the fitted exponent down. The ends are four times apart, so noise in
+	// one of them moves the slope half as far as it would between neighbours.
+	scaleTailSlope = 1.35
+	// scaleCeiling is the CPU time of the whole test process one decode may take
+	// before the test gives up on it, so a quadratic decode fails in seconds and
+	// not in minutes. A healthy decode of the largest size takes under 0.2 s
+	// under the race detector.
 	scaleCeiling = 4 * time.Second
+	// scalePoll is how often the ceiling is checked.
+	scalePoll = 10 * time.Millisecond
 
 	elemOne    = "L.1"
 	elemTwo    = "L.2"
@@ -54,8 +48,7 @@ const (
 	nameMember = "Name"
 )
 
-// scaleSizes are the batch sizes decoded. They are small, so a run is short
-// enough to finish inside one slice of the scheduler on a busy machine, and the
+// scaleSizes are the batch sizes decoded. Each doubles the one before, and the
 // largest is where the old ratio test looked.
 var scaleSizes = []int{1_000, 2_000, 4_000, 8_000, 16_000}
 
@@ -71,38 +64,76 @@ func scaleFigures(costs []time.Duration) (exponent, tail float64) {
 
 type decodeRun struct {
 	entries, attributes int
-	took                time.Duration
+	cpu                 time.Duration
+	err                 error
 }
 
-// timedDecode decodes one batch form and times it. It gives up on a decode that
-// is still running after scaleCeiling, and fails the test, so a quadratic decode
-// of the largest size costs seconds and not the minutes it would take to finish.
-// The abandoned decode ends with the test binary.
-func timedDecode(t *testing.T, vals url.Values) decodeRun {
+// threadCPU is the CPU time the calling OS thread has used. Time the thread
+// spends waiting for a CPU does not count, so a busy machine does not raise it.
+func threadCPU() (time.Duration, error) {
+	var ts unix.Timespec
+
+	err := unix.ClockGettime(unix.CLOCK_THREAD_CPUTIME_ID, &ts)
+	if err != nil {
+		return 0, fmt.Errorf("thread CPU clock: %w", err)
+	}
+
+	return time.Duration(ts.Nano()), nil
+}
+
+// processCPU is the CPU time the whole test process has used.
+func processCPU(t *testing.T) time.Duration {
 	t.Helper()
 
+	var usage unix.Rusage
+	require.NoError(t, unix.Getrusage(unix.RUSAGE_SELF, &usage))
+
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// cpuDecode decodes one batch form on a goroutine locked to its thread and
+// returns the thread's CPU time over the decode, so the figure counts that
+// decode and nothing else. It gives up on a decode once the process has used
+// scaleCeiling of CPU since it began, and fails the test, so a quadratic decode
+// of the largest size costs seconds and not the minutes it would take to finish.
+// The abandoned decode ends with the test binary.
+func cpuDecode(t *testing.T, vals url.Values) decodeRun {
+	t.Helper()
+
+	began := processCPU(t)
 	done := make(chan decodeRun, 1)
 
 	go func() {
-		start := time.Now()
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		start, startErr := threadCPU()
 		entries, attributes := decodeBatch(vals)
-		done <- decodeRun{entries: entries, attributes: attributes, took: time.Since(start)}
+		end, endErr := threadCPU()
+
+		done <- decodeRun{entries: entries, attributes: attributes, cpu: end - start, err: errors.Join(startErr, endErr)}
 	}()
 
-	select {
-	case run := <-done:
-		return run
-	case <-time.After(scaleCeiling):
-		t.Fatalf("one decode of %d keys took over %v", len(vals), scaleCeiling)
+	poll := time.NewTicker(scalePoll)
+	defer poll.Stop()
 
-		return decodeRun{}
+	for {
+		select {
+		case run := <-done:
+			require.NoError(t, run.err)
+
+			return run
+		case <-poll.C:
+			if used := processCPU(t) - began; used > scaleCeiling {
+				t.Fatalf("one decode of %d keys used over %v of CPU", len(vals), scaleCeiling)
+			}
+		}
 	}
 }
 
-// bestDecodes is the shortest decode of each of scaleSizes, so a pause of the
-// scheduler or the collector does not decide a figure. It decodes in rounds, at
-// least scaleMinRounds, and stops once both figures are within their limits or
-// scaleBudget is spent.
+// bestDecodes is the smallest CPU time of each of scaleSizes over scaleRounds
+// rounds. The collector is off while it measures, and runs between decodes, so
+// none of its work lands in one size's figure.
 func bestDecodes(t *testing.T) []time.Duration {
 	t.Helper()
 
@@ -111,27 +142,25 @@ func bestDecodes(t *testing.T) []time.Duration {
 
 	for i, n := range scaleSizes {
 		forms[i] = batchForm(n)
-		best[i] = time.Duration(1<<63 - 1)
+		best[i] = time.Duration(math.MaxInt64)
 	}
 
-	began := time.Now()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 
-	for round := 1; ; round++ {
+	for range scaleRounds {
 		for i, n := range scaleSizes {
-			run := timedDecode(t, forms[i])
+			runtime.GC() //nolint:revive // the collector is off, and the last decode's garbage goes before the next is measured.
+
+			run := cpuDecode(t, forms[i])
 
 			require.Equal(t, n, run.entries)
 			require.Equal(t, n, run.attributes)
 
-			best[i] = min(best[i], run.took)
-		}
-
-		exponent, tail := scaleFigures(best)
-		settled := exponent < scaleExponent && tail < scaleTailSlope
-		if round >= scaleMinRounds && (settled || time.Since(began) > scaleBudget) {
-			return best
+			best[i] = min(best[i], run.cpu)
 		}
 	}
+
+	return best
 }
 
 // growthExponent is the slope of the least-squares line through the points
@@ -170,7 +199,7 @@ func Test_Decoder_BatchScalesWithEntries(t *testing.T) {
 	costs := bestDecodes(t)
 
 	exponent, tail := scaleFigures(costs)
-	t.Logf("%v entries took %v: exponent %.2f, tail slope %.2f (linear is 1, quadratic is 2)",
+	t.Logf("%v entries used %v of CPU: exponent %.3f, tail slope %.3f (linear is 1, quadratic is 2)",
 		scaleSizes, costs, exponent, tail)
 
 	assert.Less(t, exponent, scaleExponent, "the cost over all sizes")
