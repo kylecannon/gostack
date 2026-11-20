@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // DefaultShutdownTimeout is how long the supervisor waits for the child process
@@ -130,6 +133,21 @@ type Settings struct {
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID: AKIA and ASIA access keys
 	// decode to an account.
 	ParityAWSAccessKeyID bool
+	// DynamoDBErrorProbability is DYNAMODB_ERROR_PROBABILITY: the chance that a
+	// DynamoDB item read or write is throttled.
+	DynamoDBErrorProbability float64
+	// DynamoDBReadErrorProbability is DYNAMODB_READ_ERROR_PROBABILITY, for item
+	// reads.
+	DynamoDBReadErrorProbability float64
+	// DynamoDBWriteErrorProbability is DYNAMODB_WRITE_ERROR_PROBABILITY, for
+	// item writes.
+	DynamoDBWriteErrorProbability float64
+	// DynamoDBShareDB is DYNAMODB_SHARE_DB, an integer: every account and region
+	// shares one set of tables when it is not 0.
+	DynamoDBShareDB int
+	// DynamoDBRemoveExpiredItems is DYNAMODB_REMOVE_EXPIRED_ITEMS: an hourly
+	// sweep removes the expired items of tables with time to live on.
+	DynamoDBRemoveExpiredItems bool
 	// ExtraCORSAllowedHeaders is EXTRA_CORS_ALLOWED_HEADERS, split on commas.
 	ExtraCORSAllowedHeaders []string
 	// ExtraCORSExposeHeaders is EXTRA_CORS_EXPOSE_HEADERS, split on commas.
@@ -199,6 +217,11 @@ func (s *Settings) values() map[string]any {
 		varExtraCORSAllowedHeaders:         strings.Join(s.ExtraCORSAllowedHeaders, ","),
 		varExtraCORSExposeHeaders:          strings.Join(s.ExtraCORSExposeHeaders, ","),
 		varExtraCORSAllowedOrigins:         strings.Join(s.ExtraCORSAllowedOrigins, ","),
+		varDynamoDBErrorProbability:        s.DynamoDBErrorProbability,
+		varDynamoDBReadErrorProbability:    s.DynamoDBReadErrorProbability,
+		varDynamoDBWriteErrorProbability:   s.DynamoDBWriteErrorProbability,
+		varDynamoDBShareDB:                 s.DynamoDBShareDB,
+		varDynamoDBRemoveExpiredItems:      s.DynamoDBRemoveExpiredItems,
 	}
 }
 
@@ -263,6 +286,57 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),
 		ExtraCORSAllowedOrigins:           splitList(get(varExtraCORSAllowedOrigins)),
 	}, nil
+}
+
+// parseDynamoDB reads the DYNAMODB_* settings as LocalStack's config.py does
+// (config.py:928 and :940): float(value.strip() or 0.0) for the probabilities
+// and int(value or 0) for DYNAMODB_SHARE_DB. They refuse to start on a value
+// Python's float() or int() refuses, and read what they accept: underscores
+// between digits, inf and nan, and surrounding white space. get must return
+// the value as set, not trimmed: str.strip() also strips U+001C to U+001F,
+// which float() alone refuses, and the share value is not stripped first, so
+// one of white space alone is refused, as int() does. It sets the values it
+// reads in out.
+func parseDynamoDB(get lookup, out *Settings) error {
+	out.DynamoDBRemoveExpiredItems = isTrue(strings.TrimSpace(get(varDynamoDBRemoveExpiredItems)))
+
+	for _, f := range []struct {
+		name string
+		to   *float64
+	}{
+		{varDynamoDBErrorProbability, &out.DynamoDBErrorProbability},
+		{varDynamoDBReadErrorProbability, &out.DynamoDBReadErrorProbability},
+		{varDynamoDBWriteErrorProbability, &out.DynamoDBWriteErrorProbability},
+	} {
+		if value := pyStrip(get(f.name)); value != "" {
+			parsed, ok := protocol.ParsePyFloat(value)
+			if !ok {
+				return fmt.Errorf("%s: %q is not a number", f.name, value)
+			}
+
+			*f.to = parsed
+		}
+	}
+
+	if value := get(varDynamoDBShareDB); value != "" {
+		parsed, ok := protocol.ParsePyInt(value)
+		if !ok {
+			return fmt.Errorf("%s: %q is not an integer", varDynamoDBShareDB, value)
+		}
+
+		out.DynamoDBShareDB = int(parsed)
+	}
+
+	return nil
+}
+
+// pyStrip is Python's str.strip() with no argument: it strips what
+// str.isspace() calls space, Go's unicode.IsSpace plus the separators U+001C
+// to U+001F.
+func pyStrip(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || r >= '\x1c' && r <= '\x1f'
+	})
 }
 
 // parseGatewayListen parses the comma-separated GATEWAY_LISTEN. The host default

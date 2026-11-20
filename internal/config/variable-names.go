@@ -38,6 +38,11 @@ const (
 	varS3SkipSignatureValidation       = "S3_SKIP_SIGNATURE_VALIDATION"
 	varS3SkipKMSKeyValidation          = "S3_SKIP_KMS_KEY_VALIDATION"
 	varMaxRequestBody                  = "MAX_REQUEST_BODY"
+	varDynamoDBErrorProbability        = "DYNAMODB_ERROR_PROBABILITY"
+	varDynamoDBReadErrorProbability    = "DYNAMODB_READ_ERROR_PROBABILITY"
+	varDynamoDBWriteErrorProbability   = "DYNAMODB_WRITE_ERROR_PROBABILITY"
+	varDynamoDBShareDB                 = "DYNAMODB_SHARE_DB"
+	varDynamoDBRemoveExpiredItems      = "DYNAMODB_REMOVE_EXPIRED_ITEMS"
 	varMaxInFlightBodies               = "MAX_IN_FLIGHT_BODIES"
 	varRequestBodyIdleTimeout          = "REQUEST_BODY_IDLE_TIMEOUT"
 )

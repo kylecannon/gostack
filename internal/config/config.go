@@ -79,6 +79,11 @@ var variables = []variable{
 	{name: varS3SkipSignatureValidation},
 	{name: varS3SkipKMSKeyValidation},
 	{name: varMaxRequestBody, gostackOnly: true},
+	{name: varDynamoDBErrorProbability},
+	{name: varDynamoDBReadErrorProbability},
+	{name: varDynamoDBWriteErrorProbability},
+	{name: varDynamoDBShareDB},
+	{name: varDynamoDBRemoveExpiredItems},
 	{name: varMaxInFlightBodies, gostackOnly: true},
 	{name: varRequestBodyIdleTimeout, gostackOnly: true},
 }
@@ -244,12 +249,23 @@ func (c *Config) Value(key string) any {
 }
 
 // build creates a viper instance holding the overrides and parses the settings.
+// The DYNAMODB_* values are read as set, untrimmed, as LocalStack reads them.
 func (c *Config) build(overrides map[string]any) (*Settings, error) {
 	v := newViper(c.base.listenHost, overrides)
 
-	return buildSettings(func(name string) string {
+	s, err := buildSettings(func(name string) string {
 		return strings.TrimSpace(v.GetString(name))
 	}, c.base)
+	if err != nil {
+		return nil, err
+	}
+
+	err = parseDynamoDB(v.GetString, s)
+	if err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // newViper registers every variable with its lookup order and default, then

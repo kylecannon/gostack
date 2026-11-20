@@ -1,0 +1,461 @@
+package expression_test
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	// updateKey is the key of every item the update tests write.
+	updateKey = `{"pk":{"S":"k"}}`
+	// updateX is the values of most error rows: :v, the string x.
+	updateX = `{":v":{"S":"x"}}`
+	// updateN is :n, the number 1.
+	updateN = `{":n":{"N":"1"}}`
+	// updateAddS is an ADD of :v to s.
+	updateAddS = "ADD s :v"
+	// updateXY is the values x and y.
+	updateXY = `{":v":{"S":"x"},":w":{"S":"y"}}`
+	// updateList012 is the list 0, 1, 2 in a.
+	updateList012 = `{"a":{"L":[{"S":"0"},{"S":"1"},{"S":"2"}]}}`
+	// updateAddN is an ADD of :v to n.
+	updateAddN = "ADD n :v"
+	// updateV1 is :v, the number 1.
+	updateV1 = `{":v":{"N":"1"}}`
+	// updateDeleteS is a DELETE of :v from s.
+	updateDeleteS = "DELETE s :v"
+	// updateSA is the string set a in s.
+	updateSA = `{"s":{"SS":["a"]}}`
+	// updateAX is the string x in a.
+	updateAX = `{"a":{"S":"x"}}`
+	// updateAQ is the string q in a.
+	updateAQ = `{"a":{"S":"q"}}`
+)
+
+// updateItem decodes a JSON item and validates it, as the provider does before
+// an item reaches the engine. An empty string is no item.
+func updateItem(t *testing.T, s string) value.Item {
+	t.Helper()
+
+	if s == "" {
+		return nil
+	}
+
+	var item value.Item
+	require.NoError(t, json.Unmarshal([]byte(s), &item))
+	require.NoError(t, value.ValidateItem(item))
+
+	return item
+}
+
+// updateSubs builds the substitutions of a test from JSON names and values.
+func updateSubs(t *testing.T, names, values string) expression.Substitutions {
+	t.Helper()
+
+	subs := expression.Substitutions{Values: updateItem(t, values)}
+	if names != "" {
+		require.NoError(t, json.Unmarshal([]byte(names), &subs.Names))
+	}
+
+	return subs
+}
+
+// updateJSON encodes an item to compare it, or "" for none.
+func updateJSON(t *testing.T, item value.Item) string {
+	t.Helper()
+
+	if item == nil {
+		return ""
+	}
+
+	b, err := json.Marshal(item)
+	require.NoError(t, err)
+
+	return string(b)
+}
+
+// requireUpdateError checks err is DynamoDB's ValidationException with msg.
+func requireUpdateError(t *testing.T, err error, msg string) {
+	t.Helper()
+
+	var awsErr *awserr.Error
+	require.ErrorAs(t, err, &awsErr)
+	require.Equal(t, "ValidationException", awsErr.Code)
+	require.Equal(t, msg, awsErr.Message)
+}
+
+// Every message below was observed from DynamoDB Local in the LocalStack image
+// (gostack-parity-localstack:8b9a79f) for the same expression; rows that hold
+// two problems pin which one DynamoDB reports first.
+//
+//nolint:lll // each row holds the exact text the LocalStack image answered
+func Test_ParseUpdate_Errors(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bad      = "Invalid UpdateExpression: "
+		syntax   = bad + "Syntax error; "
+		rewrite  = "must remove or rewrite one of these paths; "
+		overlap  = bad + "Two document paths overlap with each other; " + rewrite
+		conflict = bad + "Two document paths conflict with each other; " + rewrite
+		operand  = bad + "Incorrect operand type for operator or function; "
+		arity    = bad + "Incorrect number of operands for operator or function; operator or function: "
+		reserved = bad + "Attribute name is a reserved keyword; reserved keyword: "
+		noName   = bad + "An expression attribute name used in the document path is not defined; attribute name: "
+		noValue  = bad + "An expression attribute value used in expression is not defined; attribute value: "
+		twoSets  = bad + `The "SET" section can only be used once in an update expression;`
+		deep     = "a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.u.v.w.x.y.z.a1.b1.c1.d1.e1.f1.g1"
+		addType  = operand + "operator: ADD, operand type: "
+		delType  = operand + "operator: DELETE, operand type: "
+		emptyL   = `{":v":{"L":[]}}`
+		parens   = bad + "The expression has redundant parentheses;"
+		// listAndN is :v, an empty list, and :n, the number 1.
+		listAndN  = `{":v":{"L":[]},":n":{"N":"1"}}`
+		notHere   = bad + "The function is not allowed to be used this way in an expression; function: list_append"
+		sameFirst = bad + "The first operand must be distinct from the remaining operands for this operator or " +
+			"function; operator: if_not_exists, first operand: "
+	)
+
+	tests := []struct {
+		name       string
+		giveExpr   string
+		giveNames  string
+		giveValues string
+		wantMsg    string
+	}{
+		{"empty", "", "", "", bad + "The expression can not be empty;"},
+		{"only spaces", "   ", "", "", syntax + `token: "<EOF>", near: "   "`},
+		{"equals first", "SET = :v", "", updateX, syntax + `token: "=", near: "SET = :v"`},
+		{"trailing comma", "SET a = :v,", "", updateX, syntax + `token: "<EOF>", near: ","`},
+		{"missing equals", "SET a :v", "", updateX, syntax + `token: ":v", near: "a :v"`},
+		{"spacing kept", "SET   a   =    =  :v", "", updateX, syntax + `token: "=", near: "=    =  :v"`},
+		{"unknown clause", "PUT a = :v", "", updateX, syntax + `token: "PUT", near: "PUT a"`},
+		{"clause alone", "SET", "", "", syntax + `token: "<EOF>", near: "SET"`},
+		{"missing comma", "SET a = :v, b = :v c = :v", "", updateX, syntax + `token: "c", near: ":v c ="`},
+		{"stray character", "SET a$b = :v", "", updateX, syntax + `token: "$", near: "a$b"`},
+		{"underscore start", "SET a_1 = :v, _b = :v", "", updateX, syntax + `token: "_", near: ", _b"`},
+		{"digit start", "SET 1a = :v", "", updateX, syntax + `token: "1", near: "SET 1a"`},
+		{"leading zero index", "SET a[01] = :v", "", updateX, syntax + `token: "1", near: "01]"`},
+		{"negative index", "SET a[-1] = :v", "", updateX, syntax + `token: "-", near: "[-1"`},
+		{"value as path", "SET :v = :v", "", updateX, syntax + `token: ":v", near: "SET :v ="`},
+		{"three terms", "SET a = :n + :n + :n", "", updateN, syntax + `token: "+", near: ":n + :n"`},
+		{"sum as argument", "SET a = list_append(:n + :n, :n)", "", updateN, syntax + `token: "+", near: ":n + :n"`},
+		{"path as ADD value", "ADD s b", "", "", syntax + `token: "b", near: "s b"`},
+		{"empty clause", "SET a = :v REMOVE", "", updateX, syntax + `token: "<EOF>", near: "REMOVE"`},
+		{"syntax before undefined", "SET a = :nope,", "", updateX, syntax + `token: "<EOF>", near: ","`},
+		{
+			"index too large", "SET a[2147483648] = :v, name = :v", "", updateX,
+			bad + "List index is not within the allowable range; index: [2147483648]",
+		},
+		{"reserved word", "SET a = :nope SET name = :v", "", updateX, reserved + "name"},
+		{"reserved word as written", "REMOVE a.Status", "", "", reserved + "Status"},
+		{"reserved before function", "SET name = foo(:v)", "", updateX, reserved + "name"},
+		{"unknown function", "SET a = foo(:v) SET b = :v", "", updateX, bad + "Invalid function name; function: foo"},
+		{
+			"function name case", "SET a = IF_NOT_EXISTS(a, :v)", "", updateX,
+			bad + "Invalid function name; function: IF_NOT_EXISTS",
+		},
+		{
+			"condition function", "SET a = size(b)", "", "",
+			bad + "The function is not allowed in an update expression; function: size",
+		},
+		{"repeated clause", "set a = :v remove b set c = :v", "", updateX, twoSets},
+		{"repeated before depth", "SET " + deep + " = :v SET b = :v", "", updateX, twoSets},
+		{
+			"too deep", "SET a" + "[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]" +
+				"[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0] = :v", "", updateX,
+			bad + "The document path has too many nesting levels; nesting levels: 33",
+		},
+		{"undefined name", "SET a = :nope, #nope = :v", "", updateX, noName + "#nope"},
+		{"undefined name before arity", "SET a = list_append(#nope)", "", "", noName + "#nope"},
+		{"overlap", "SET a = :v, a.b = :nope", "", updateX, overlap + "path one: [a], path two: [a, b]"},
+		{"overlap same path", "SET a = :v REMOVE a", "", updateX, overlap + "path one: [a], path two: [a]"},
+		{
+			"overlap through names", "SET #a = :v, #b.c = :v", `{"#a":"x","#b":"x"}`, updateX,
+			overlap + "path one: [x], path two: [x, c]",
+		},
+		{
+			"overlap at index", "SET a[1] = :v, a[1].b = :v", "", updateX,
+			overlap + "path one: [a, [1]], path two: [a, [1], b]",
+		},
+		{"conflict", "SET a.b = :v, a[1] = :v", "", updateX, conflict + "path one: [a, b], path two: [a, [1]]"},
+		{
+			"overlap before operand type", "SET a = list_append(:v, :v), a.b = :v", "", updateX,
+			overlap + "path one: [a], path two: [a, b]",
+		},
+		{"undefined value", "SET a = :nope", "", updateX, noValue + ":nope"},
+		// Probed on the LocalStack image (SQ-280): list_append is the whole
+		// value of an action or nothing, and if_not_exists names two paths.
+		{"list_append in if_not_exists", "SET a = if_not_exists(b, list_append(c, :v))", "", emptyL, notHere},
+		{"list_append in list_append", "SET a = list_append(b, list_append(c, :v))", "", emptyL, notHere},
+		{"list_append first in list_append", "SET a = list_append(list_append(c, :v), b)", "", emptyL, notHere},
+		{"list_append in parens in if_not_exists", "SET a = if_not_exists(b, (list_append(c, :v)))", "", emptyL, notHere},
+		{"list_append in if_not_exists in list_append", "SET a = list_append(if_not_exists(b, list_append(c, :v)), c)", "", emptyL, notHere},
+		{"list_append beside a sum", "SET a = list_append(c, :v) + :n", "", listAndN, notHere},
+		{"list_append on the right of a sum", "SET a = :n + list_append(c, :v)", "", listAndN, notHere},
+		{"list_append minus", "SET a = list_append(c, :v) - :n", "", listAndN, notHere},
+		{"list_append in a sum in parens", "SET a = (list_append(c, :v) + :n)", "", listAndN, notHere},
+		{"list_append in parens beside a sum", "SET a = (list_append(c, :v)) + :n", "", listAndN, notHere},
+		{"list_append in the second action", "SET b = :n, a = if_not_exists(c, list_append(d, :v))", "", listAndN, notHere},
+		{"list_append before a repeated clause", "SET a = if_not_exists(b, list_append(c, :v)) SET d = :n", "", listAndN, notHere},
+		{"list_append after a repeated clause", "SET d = :n SET a = if_not_exists(b, list_append(c, :v))", "", listAndN, notHere},
+		{"list_append before an undefined name", "SET a = if_not_exists(b, list_append(c, :v)), #nope = :n", "", listAndN, notHere},
+		{"list_append before overlap", "SET a = if_not_exists(b, list_append(c, :v)), a.b = :n", "", listAndN, notHere},
+		{"list_append before an undefined value", "SET a = if_not_exists(b, list_append(c, :v)), d = :nope", "", listAndN, notHere},
+		{"list_append before arity", "SET a = if_not_exists(b, list_append(c))", "", "", notHere},
+		{"list_append before operand type", "SET a = list_append(c, :v) + :v", "", emptyL, notHere},
+		{"reserved name before list_append", "SET values = :n, a = if_not_exists(b, list_append(c, :v))", "", listAndN, reserved + "values"},
+		{"if_not_exists one path", "SET a = if_not_exists(b, b)", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path, absent from the item", "SET a = if_not_exists(nope, nope)", "", "", sameFirst + "[nope]"},
+		{"if_not_exists one nested path", "SET a = if_not_exists(m.b, m.b)", "", "", sameFirst + "[m, b]"},
+		{"if_not_exists one index path", "SET a = if_not_exists(l[0], l[0])", "", "", sameFirst + "[l, [0]]"},
+		{"if_not_exists one path through a name", "SET a = if_not_exists(#x, b)", `{"#x":"b"}`, "", sameFirst + "[b]"},
+		{"if_not_exists one path through two names", "SET a = if_not_exists(#x, #y)", `{"#x":"b","#y":"b"}`, "", sameFirst + "[b]"},
+		{"if_not_exists one path in parens", "SET a = if_not_exists(b, (b))", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path in a sum", "SET a = if_not_exists(b, b) + :n", "", listAndN, sameFirst + "[b]"},
+		{"if_not_exists one path in list_append", "SET a = list_append(if_not_exists(b, b), c)", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path inside if_not_exists", "SET a = if_not_exists(c, if_not_exists(b, b))", "", "", sameFirst + "[b]"},
+		{"if_not_exists one path before an undefined value", "SET a = if_not_exists(b, b) + :nope", "", listAndN, sameFirst + "[b]"},
+		{"undefined value before if_not_exists one path", "SET a = :nope + if_not_exists(b, b)", "", listAndN, noValue + ":nope"},
+		{"if_not_exists one path before overlap", "SET a = if_not_exists(b, b), a.c = :n", "", listAndN, overlap + "path one: [a], path two: [a, c]"},
+		{
+			"path required", "SET a = if_not_exists(:v, :v)", "", updateX,
+			bad + "Operator or function requires a document path; operator or function: if_not_exists",
+		},
+		{"one operand", "SET a = if_not_exists(b)", "", "", arity + "if_not_exists, number of operands: 1"},
+		{"three operands", "SET a = list_append(:v, :v, :v)", "", emptyL, arity + "list_append, number of operands: 3"},
+		{
+			"list_append string", "SET a = list_append(:w, :v)", "", `{":v":{"S":"x"},":w":{"L":[]}}`,
+			operand + "operator or function: list_append, operand type: S",
+		},
+		{
+			"list_append string set", "SET a = list_append(:v, :v)", "", `{":v":{"SS":["1"]}}`,
+			operand + "operator or function: list_append, operand type: SS",
+		},
+		{
+			"plus string", "SET a = :v + :n", "", `{":v":{"S":"x"},":n":{"N":"1"}}`,
+			operand + "operator or function: +, operand type: S",
+		},
+		{
+			"minus list", "SET a = :n - :v", "", `{":v":{"L":[]},":n":{"N":"1"}}`,
+			operand + "operator or function: -, operand type: L",
+		},
+		{"ADD string", updateAddS, "", `{":v":{"S":"a"}}`, addType + "STRING, typeSet: ALLOWED_FOR_ADD_OPERAND"},
+		{"ADD boolean", updateAddS, "", `{":v":{"BOOL":true}}`, addType + "BOOLEAN, typeSet: ALLOWED_FOR_ADD_OPERAND"},
+		{"ADD map", updateAddS, "", `{":v":{"M":{}}}`, addType + "MAP, typeSet: ALLOWED_FOR_ADD_OPERAND"},
+		{"DELETE number", updateDeleteS, "", updateV1, delType + "NUMBER, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
+		{"DELETE list", updateDeleteS, "", emptyL, delType + "LIST, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
+		// Probed on the LocalStack image (SQ-224 probe5, probe6, probe7): the
+		// update grammar shares the condition lexer and its parentheses rules.
+		{"keyword as name", "SET and = :v", "", updateX, syntax + `token: "and", near: "SET and ="`},
+		{"keyword after comma", "SET c = :v, in = :v", "", updateX, syntax + `token: "in", near: ", in ="`},
+		{"keyword in path", "SET c.not = :v", "", updateX, syntax + `token: "not", near: ".not ="`},
+		{"keyword after REMOVE", "REMOVE or", "", "", syntax + `token: "or", near: "REMOVE or"`},
+		{"keyword after value", "SET c = :v AND b", "", updateX, syntax + `token: "AND", near: ":v AND b"`},
+		{"two-character comparator", "SET c = b <= :v", "", updateX, syntax + `token: "<=", near: "b <= :v"`},
+		{"not-equal as one token", "SET c <> :v", "", updateX, syntax + `token: "<>", near: "c <> :v"`},
+		{"leading spaces kept", "   FOO a = :v", "", updateX, syntax + `token: "FOO", near: "   FOO a"`},
+		{"redundant value", "SET c = ((:v))", "", updateX, parens},
+		{"redundant sum", "SET c = ((:n + :n))", "", updateN, parens},
+		{"redundant argument", "SET c = if_not_exists(c, ((:v)))", "", updateX, parens},
+		{"redundant call", "SET c = ((if_not_exists(c, :v)))", "", updateX, parens},
+		{"redundant right operand", "SET c = :n + ((c))", "", updateN, parens},
+		{"redundant before syntax", "SET c = ((:v)) +", "", updateX, parens},
+		{"redundant before unused", "SET c = ((:v))", "", updateXY, parens},
+		{"sum in parens then plus", "SET c = (:n + :n) + :n", "", updateN, syntax + `token: "+", near: ") + :n"`},
+		{"sum in parens on the right", "SET c = :n + (:n + :n)", "", updateN, syntax + `token: "+", near: ":n + :n"`},
+		{
+			"sum in parens as argument", "SET c = if_not_exists(c, (:n + :n))", "", updateN,
+			syntax + `token: "+", near: ":n + :n"`,
+		},
+		{"nested sum in parens", "SET c = ((:n + :n) + :n)", "", updateN, syntax + `token: "+", near: ") + :n"`},
+		{"parens around target", "SET (c) = :v", "", updateX, syntax + `token: "(", near: "SET (c"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(tt.giveExpr, updateSubs(t, tt.giveNames, tt.giveValues), nil)
+			requireUpdateError(t, err, tt.wantMsg)
+		})
+	}
+}
+
+// Test_ParseUpdate_ErrorOrder pins the order of the LocalStack image's checks
+// across the actions and the names of one expression, as probed in SQ-331
+// (verification/SQ-331 p7 and p8): the operand checks run on the last action
+// first; the reserved words, the functions DynamoDB refuses and a list_append
+// out of place are reported in the order they are written.
+//
+//nolint:lll // each row holds the exact text the LocalStack image answered
+func Test_ParseUpdate_ErrorOrder(t *testing.T) {
+	t.Parallel()
+
+	const (
+		bad      = "Invalid UpdateExpression: "
+		noValue  = bad + "An expression attribute value used in expression is not defined; attribute value: "
+		operand  = bad + "Incorrect operand type for operator or function; "
+		arity    = bad + "Incorrect number of operands for operator or function; operator or function: "
+		reserved = bad + "Attribute name is a reserved keyword; reserved keyword: "
+		badFunc  = bad + "Invalid function name; function: "
+		notHere  = bad + "The function is not allowed to be used this way in an expression; function: list_append"
+		noPath   = bad + "Operator or function requires a document path; operator or function: if_not_exists"
+		sameOne  = bad + "The first operand must be distinct from the remaining operands for this operator or " +
+			"function; operator: if_not_exists, first operand: "
+		// values is :s, a string, :l, an empty list and :n, the number 1.
+		values = `{":s":{"S":"a"},":l":{"L":[]},":n":{"N":"1"}}`
+	)
+
+	tests := []struct {
+		name     string
+		giveExpr string
+		wantMsg  string
+	}{
+		{"two undefined values", "SET a = :u1, b = :u2", noValue + ":u2"},
+		{"undefined value across clauses", "SET a = :u1 REMOVE b ADD c :u2", noValue + ":u2"},
+		{"undefined value then ADD, written order", "ADD c :u2 SET a = :u1", noValue + ":u1"},
+		{"undefined value before operand type", "SET a = :u1, b = :s + :s", operand + "operator or function: +, operand type: S"},
+		{"operand type before undefined value", "SET a = :s + :s, b = :u1", noValue + ":u1"},
+		{"two operand types", "SET a = :s + :s, b = :s - :s", operand + "operator or function: -, operand type: S"},
+		{"arity before undefined value", "SET a = if_not_exists(b), c = :u1", noValue + ":u1"},
+		{"undefined value before arity", "SET c = :u1, a = if_not_exists(b)", arity + "if_not_exists, number of operands: 1"},
+		{"two arities", "SET a = if_not_exists(b), c = list_append(:l)", arity + "list_append, number of operands: 1"},
+		{"ADD type before set operand type", "ADD c :s SET a = :s + :s", operand + "operator or function: +, operand type: S"},
+		{"set operand type before ADD type", "SET a = :s + :s ADD c :s", operand + "operator: ADD, operand type: STRING, typeSet: ALLOWED_FOR_ADD_OPERAND"},
+		{"ADD type before DELETE type", "ADD c :s DELETE d :n", operand + "operator: DELETE, operand type: NUMBER, typeSet: ALLOWED_FOR_DELETE_OPERAND"},
+		{"two distinct operands", "SET a = if_not_exists(a, a), c = if_not_exists(c, c)", sameOne + "[c]"},
+		{"distinct operand before arity", "SET a = if_not_exists(a, a), c = if_not_exists(d)", arity + "if_not_exists, number of operands: 1"},
+		{"path required before distinct operand", "SET c = if_not_exists(:s, :s), a = if_not_exists(a, a)", sameOne + "[a]"},
+		{"distinct operand before path required", "SET a = if_not_exists(a, a), c = if_not_exists(:s, :s)", noPath},
+		{"operands of one action stay in order", "SET a = :u1 + :u2", noValue + ":u1"},
+		{"function before reserved word", "SET a = foo(:s), status = :s", badFunc + "foo"},
+		{"reserved word before function", "SET status = :s, a = foo(:s)", reserved + "status"},
+		{"condition function before reserved word", "SET a = contains(b, :s), status = :s", bad + "The function is not allowed in an update expression; function: contains"},
+		{"list_append before reserved word", "SET a = list_append(:l, :l) + :l, status = :s", notHere},
+		{"reserved word before list_append", "SET status = :s, a = list_append(:l, :l) + :l", reserved + "status"},
+		{"function before reserved REMOVE", "SET a = foo(:s) REMOVE status", badFunc + "foo"},
+		{"reserved word in a call before a function", "SET a = if_not_exists(status, :s), b = foo(:s)", reserved + "status"},
+		{"function before reserved word in a call", "SET b = foo(:s), a = if_not_exists(status, :s)", badFunc + "foo"},
+		{"nested function before reserved word", "SET a = if_not_exists(b, foo(c)), status = :s", badFunc + "foo"},
+		{"list_append in list_append before reserved word", "SET a = list_append(list_append(:l, :l), :l), status = :s", notHere},
+		{"list_append before reserved REMOVE", "SET b = list_append(:l, :l) + :l REMOVE status", notHere},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(tt.giveExpr, updateSubs(t, "", values), nil)
+			requireUpdateError(t, err, tt.wantMsg)
+		})
+	}
+}
+
+// The forms the LocalStack image accepts (SQ-224 probe5, probe6, probe7): ID
+// and CONTAINS are names in an update expression as in a condition, and one
+// pair of parentheses goes around any operand, or a sum as the whole value.
+func Test_ParseUpdate_Accepted(t *testing.T) {
+	t.Parallel()
+
+	for _, expr := range []string{
+		"SET id = :n", "SET ID = :n", "SET contains = :n", "SET CONTAINS = :n", "REMOVE id", "REMOVE contains",
+		"SET c = (:n)", "SET c = (:n + :n)", "SET c = (:n - :n)", "SET c = (c) + :n",
+		"SET c = :n + (c)", "SET c = ((c) + :n)", "SET c = if_not_exists(c, (:n))",
+		"SET c = (if_not_exists(c, :n))",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(expr, updateSubs(t, "", updateN), nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// The function uses the image accepts (SQ-280): list_append as a whole value,
+// parenthesized or with if_not_exists inside it, if_not_exists in a sum or
+// naming two different paths, one a prefix of the other or two list indexes.
+func Test_ParseUpdate_AcceptedFunctions(t *testing.T) {
+	t.Parallel()
+
+	for _, expr := range []string{
+		"SET a = list_append(b, :l )", "SET a = (list_append(b, :l))", "SET a = list_append((b), :l)",
+		"SET a = list_append(if_not_exists(b, :l), :l)", "SET a = list_append(b, if_not_exists(c, :l))",
+		"SET a = if_not_exists(b, :n) + :n", "SET a = :n + if_not_exists(b, :n)", "SET a = if_not_exists(b, c)",
+		"SET a = if_not_exists(m.b, m)", "SET a = if_not_exists(m, m.b)", "SET a = if_not_exists(l[0], l[1])",
+		"SET a = if_not_exists(b, if_not_exists(c, :n))", "SET a = if_not_exists(m.b, m.B)",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdate(expr, autoSubs(expr), nil)
+			require.NoError(t, err)
+		})
+	}
+}
+
+// Test_ParseUpdate_SizeCap: 4,097 characters answer the image's size message
+// before parsing, and a REMOVE list as long as the cap allows parses in well
+// under a second; the pairwise overlap check was 344 ms at 64 KiB before the
+// cap (SQ-268).
+func Test_ParseUpdate_SizeCap(t *testing.T) {
+	t.Parallel()
+
+	over := "REMOVE a" + strings.Repeat("b", 4097-len("REMOVE a"))
+	_, err := expression.ParseUpdate(over, expression.Substitutions{}, nil)
+	requireUpdateError(t, err, "Invalid UpdateExpression: Expression size has exceeded the maximum allowed size;")
+
+	var b strings.Builder
+
+	b.WriteString("REMOVE a0")
+
+	for i := 1; b.Len() < 4096-len(",a9999"); i++ {
+		b.WriteString(",a" + strconv.Itoa(i))
+	}
+
+	start := time.Now()
+	u, err := expression.ParseUpdate(b.String(), expression.Substitutions{}, nil)
+	require.NoError(t, err)
+	require.Greater(t, len(u.Paths()), 700)
+	require.Less(t, time.Since(start), time.Second)
+}
+
+func Test_ParseUpdate_Used(t *testing.T) {
+	t.Parallel()
+
+	subs := updateSubs(t, `{"#a":"a","#b":"b","#c":"c"}`, `{":v":{"S":"x"},":w":{"N":"1"},":z":{"S":"z"}}`)
+	used := map[string]struct{}{}
+
+	u, err := expression.ParseUpdate("SET #a = if_not_exists(#b, :v) ADD n :w", subs, used)
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{"#a": {}, "#b": {}, ":v": {}, ":w": {}}, used)
+	require.Equal(t, []expression.Path{{{Name: "a"}}, {{Name: "n"}}}, u.Paths())
+
+	requireUpdateError(t, expression.CheckUnused(subs, used),
+		"Value provided in ExpressionAttributeNames unused in expressions: keys: {#c}")
+
+	used["#c"] = struct{}{}
+	requireUpdateError(t, expression.CheckUnused(subs, used),
+		"Value provided in ExpressionAttributeValues unused in expressions: keys: {:z}")
+
+	used[":z"] = struct{}{}
+	require.NoError(t, expression.CheckUnused(subs, used))
+}
+
+// DynamoDB Local lists unused keys in its hash set's order: {:z, :w}.
+func Test_CheckUnused_Order(t *testing.T) {
+	t.Parallel()
+
+	subs := updateSubs(t, "", `{":v":{"S":"x"},":w":{"S":"y"},":z":{"S":"y"}}`)
+	err := expression.CheckUnused(subs, map[string]struct{}{":v": {}})
+	requireUpdateError(t, err, "Value provided in ExpressionAttributeValues unused in expressions: keys: {:z, :w}")
+}

@@ -78,8 +78,8 @@ Commands (standard library only):
     test-dirs SERVICES
            Print the LocalStack test path (tests/aws/services/<dir>) of each
            comma separated service, one per line. parity/run.sh runs these.
-    tables Print DEPENDS_ON, ROUTING_REACH and the services of TEST_DIRS as
-           JSON, for the Go test that checks them against the code
+    tables Print DEPENDS_ON, ROUTING_REACH, GATEWAY_NAMESPACES and the services
+           of TEST_DIRS as JSON, for the Go test that checks them against the code
            (cmd/gostack, Test_parityTables).
 """
 
@@ -212,7 +212,15 @@ GO_TEST_SUFFIX = "_test.go"
 #   preprocesses every request.
 # - sqs mounts its queue-URL paths, /<account>/<queue>, which a path-style
 #   call to another service can match.
+# A Mount whose every route is under GATEWAY_NAMESPACES is not a hook of this
+# kind, since no AWS call is made to those paths: dynamodb mounts DELETE
+# /_gostack/services/dynamodb/expired and its /_aws name, and is not in the list.
 ROUTING_REACH = ("s3", "sqs")
+# The path prefixes the gateway keeps for its own endpoints: /_gostack, and the
+# /_localstack and /_aws names it also answers. Test_parityTables reads them
+# from here, so a Mount confined to them is the one kind of Mount that does not
+# reach another service's requests.
+GATEWAY_NAMESPACES = ("/_aws/", "/_gostack/", "/_localstack/")
 # Every workflow but this one: they run checks, they do not build the image
 # parity runs against.
 WORKFLOWS = ".github/workflows/"
@@ -1317,6 +1325,7 @@ def tables(args: argparse.Namespace) -> None:
                 "declared_ahead": list(DECLARED_AHEAD),
                 "depends_on": {service: list(dependencies) for service, dependencies in DEPENDS_ON.items()},
                 "every_service": EVERY_SERVICE,
+                "gateway_namespaces": list(GATEWAY_NAMESPACES),
                 "routing_reach": list(ROUTING_REACH),
                 "test_dirs": sorted(TEST_DIRS),
             },
@@ -1434,7 +1443,7 @@ def main() -> None:
     dirs_parser.add_argument("services", help="comma separated service names")
     dirs_parser.set_defaults(func=test_dirs)
 
-    tables_parser = sub.add_parser("tables", help="print DEPENDS_ON and ROUTING_REACH as JSON")
+    tables_parser = sub.add_parser("tables", help="print DEPENDS_ON, ROUTING_REACH and GATEWAY_NAMESPACES as JSON")
     tables_parser.set_defaults(func=tables)
 
     docs_parser = sub.add_parser("docs", help="rewrite docs/parity.md")

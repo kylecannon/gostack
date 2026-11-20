@@ -96,6 +96,34 @@
 // agentic workload is 200 cycles of create bucket, put 10 objects, list them,
 // delete them, delete the bucket, at concurrency 16.
 //
+// # The DynamoDB matrix
+//
+// dynamodb.go speaks json 1.0 over plain HTTP, as s3.go speaks S3, with a SigV4
+// header nobody checks. Each cell makes its table, keyed on pk and sk, and the
+// items its reads need before the clock starts; each worker keeps to its own
+// partition. It has five workloads:
+//
+//	dynamodb/item      PutItem, then GetItem of the item it wrote, at 100 B,
+//	                   4 KiB and 399 KiB (the largest whole KiB inside the
+//	                   400 KB item limit), at concurrency 1, 16, 64
+//	dynamodb/query     Query of a partition of ten 100 B items
+//	dynamodb/update    UpdateItem SET n = n + :one under attribute_exists(pk)
+//	dynamodb/transact  TransactWriteItems of two 100 B Puts
+//	dynamodb/stream    GetRecords of a shard holding 100 records, NEW_IMAGE,
+//	                   through DynamoDB Streams, from an iterator taken before
+//	                   the clock; the cell waits for every record to be readable
+//	                   first, since LocalStack feeds its streams through Kinesis
+//
+// The last four run at 100 B and concurrency 1, 16, 64. Every cell also runs
+// with PERSIST_DYNAMODB=1 and a tmpfs at /persisted-data. Each write replaces an
+// item the cell already holds or adds to a number, so the state a save writes
+// stays the same size; LocalStack runs no persistence cell.
+//
+// -profile full runs 42 cells per image that persists, 21 on LocalStack.
+// -profile quick runs 6, all at concurrency 16: item at 100 B with persistence
+// off and on, and query, update, transact and stream. DynamoDB has no agentic
+// workload.
+//
 // # The KMS matrix
 //
 // kms.go speaks json 1.1 over plain HTTP, as s3.go speaks S3, with a SigV4
