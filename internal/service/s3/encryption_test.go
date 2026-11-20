@@ -491,15 +491,20 @@ func TestDefaultEncryptionIsEchoed(t *testing.T) {
 		}
 	})
 
-	t.Run("a deleted default leaves new objects unencrypted", func(t *testing.T) {
+	t.Run("a deleted default gives new objects SSE-S3 again", func(t *testing.T) {
 		s := newServer(t)
 		createBucket(t, s)
 
+		config := cfgDoc("ServerSideEncryptionConfiguration", "<Rule><ApplyServerSideEncryptionByDefault>"+
+			"<SSEAlgorithm>aws:kms</SSEAlgorithm></ApplyServerSideEncryptionByDefault>"+
+			"<BucketKeyEnabled>true</BucketKeyEnabled></Rule>")
+		require.Equal(t, http.StatusOK, cfgPut(s, "/bucket?encryption", config, nil).status)
 		require.Equal(t, http.StatusNoContent, cfgDelete(s, "/bucket?encryption").status)
 
 		written := s.do(call{method: http.MethodPut, target: objectPath, region: regionUSEast1, body: []byte(objectBody)})
-		assert.Empty(t, written.header.Get(headerSSE))
-		assert.Empty(t, get(s, http.MethodHead, objectPath, nil).header.Get(headerSSE))
+		assert.Equal(t, sseAES256, written.header.Get(headerSSE))
+		assert.Empty(t, written.header.Get(headerBucketKey))
+		assert.Equal(t, sseAES256, get(s, http.MethodHead, objectPath, nil).header.Get(headerSSE))
 	})
 
 	t.Run("a bucket default of aws:kms gives the object the key and the bucket key", func(t *testing.T) {

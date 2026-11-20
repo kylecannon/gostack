@@ -171,6 +171,12 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | A write to a bucket whose versioning is `Suspended` | The new null version keeps the slot of the old one | The new null version replaces the old one and is the newest in the chain | S3 User Guide, versioning-suspended buckets: a write adds a version with the ID `null` and overwrites an existing null version, which makes it the current one |
 | `GetBucketVersioning` on a bucket that stored `MfaDelete` | Drops it | Returns it | `GetBucketVersioning`: "MfaDelete ... is only returned if the bucket has been configured with MFA delete." gostack stores and reports it and checks no MFA code. |
 
+### S3 default encryption
+
+| Behavior | LocalStack | gostack | AWS source |
+|---|---|---|---|
+| `GetBucketEncryption`, and the encryption of a write, after `DeleteBucketEncryption` (SQ-375) | The rule is dropped: `GetBucketEncryption` answers `200` with an empty `ServerSideEncryptionConfiguration`, a `PutObject` without encryption headers is stored and answered with no `x-amz-server-side-encryption`, and an `aws:kms` write with no key id gets no key. | The delete resets the bucket to the SSE-S3 rule a new bucket has, `AES256` with `BucketKeyEnabled` false: `GetBucketEncryption` answers it, a plain `PutObject` is `AES256`, and an `aws:kms` write with no key id gets the managed key, as on a new bucket. A snapshot saved by a build that left no rule restores with the SSE-S3 rule. | `DeleteBucketEncryption` API reference: "resets the default encryption for the bucket as server-side encryption with Amazon S3 managed keys (SSE-S3)". `GetBucketEncryption`: "By default, all buckets have a default encryption configuration that uses ... SSE-S3". LocalStack's `test_s3_default_bucket_encryption` calls `get_bucket_versioning` after the delete, so no snapshot records the answer. |
+
 ### S3 where AWS is unverified
 
 `docs/architecture.md` ("Behavior the suite does not pin") has gostack match
