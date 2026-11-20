@@ -296,19 +296,22 @@ func endpointCall(endpoint string) inproc.Call {
 	return inproc.Call{Lane: endpoint}
 }
 
-// deadLetterCall is the SendMessage that puts body on s's dead-letter queue,
-// nil without one.
-func deadLetterCall(s *subscriber, body []byte) *inproc.Call {
-	if s.dlq == "" {
+// deadLetterCall makes the SendMessage that puts body on s's dead-letter queue,
+// nil without one. It holds body, which the delivery holds already, and builds
+// the call, an escaped copy, only when the delivery fails.
+func deadLetterCall(s *subscriber, body []byte) func() inproc.Call {
+	if _, ok := parseARN(s.dlq); !ok {
 		return nil
 	}
 
-	target, ok := parseARN(s.dlq)
-	if !ok {
-		return nil
-	}
+	dlq, source := s.dlq, s.arn
 
-	return new(sendCall(target, s.dlq, s.arn, &sendParams{body: string(body)}))
+	return func() inproc.Call {
+		target, _ := parseARN(dlq) // it parsed when the delivery was built.
+		call, _ := sendCall(target, dlq, source, &sendParams{body: string(body)})
+
+		return call
+	}
 }
 
 // postOf is the HTTP delivery of body, a message of type kind, to the

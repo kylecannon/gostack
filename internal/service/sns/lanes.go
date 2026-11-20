@@ -100,9 +100,9 @@ type job struct {
 	call inproc.Call
 	// post is the HTTP delivery, nil for a queue.
 	post *post
-	// dlq is the call that puts the message on its subscription's dead-letter
-	// queue, nil without one.
-	dlq *inproc.Call
+	// dlq makes the call that puts the message on its subscription's
+	// dead-letter queue, nil without one; fail runs it.
+	dlq func() inproc.Call
 	// dead marks a dead-letter delivery: one that fails is dropped, never sent
 	// to another dead-letter queue.
 	dead bool
@@ -326,7 +326,7 @@ func (ls *lanes) fail(j *job, reason string) {
 		return
 	}
 
-	dead := &job{call: *j.dlq, dead: true}
+	dead := &job{call: j.dlq(), dead: true}
 	if !ls.add(dead) {
 		return
 	}
