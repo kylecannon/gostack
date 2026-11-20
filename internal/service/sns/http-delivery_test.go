@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/service/sns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -678,6 +679,109 @@ func Test_Provider_Close_cutsHTTPAtOnce(t *testing.T) {
 	}
 
 	assert.Equal(t, int64(2), s.sns.Dropped(), "the delivery in flight and the one behind it are cut")
+}
+
+// drainStack is a stack whose calls go through a hub, with a gate in front of
+// the gateway that holds the calls naming the queue "held".
+func drainStack(t *testing.T) (*stack, *inproc.Hub, *gate) {
+	t.Helper()
+
+	var hub *inproc.Hub
+
+	g := newGate("/held")
+	s := newStack(t, func(h http.Handler) http.Handler {
+		hub = inproc.NewHub(g.wrap(h))
+
+		return hub
+	})
+
+	return s, hub, g
+}
+
+// hungTopic is a topic of s with an HTTP subscriber that never answers a
+// Notification.
+func hungTopic(t *testing.T, s *stack) (string, *endpoint) {
+	t.Helper()
+
+	e := hungNotifications(t)
+
+	closeBeforeEndpoint(t, s)
+
+	topic := s.createTopic(paramName, "t")
+
+	s.confirmHTTP(topic, e)
+
+	return topic, e
+}
+
+// Test_Provider_HTTP_drainDoesNotWait: the hub's drain does not wait for an
+// HTTP delivery, which changes no state that is saved and may hang for the
+// delivery timeout: with one in flight to an endpoint that never answers, and
+// none held for a queue, Drain returns at once, with a context that does not
+// end, and cuts no call.
+func Test_Provider_HTTP_drainDoesNotWait(t *testing.T) {
+	s, hub, _ := drainStack(t)
+	topic, e := hungTopic(t, s)
+
+	s.publish(paramTopicArn, topic, paramMessage, "in flight")
+	e.next(t)
+
+	drained := make(chan int, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	defer cancel()
+
+	go func() { drained <- hub.Drain(ctx) }()
+
+	select {
+	case cut := <-drained:
+		assert.Zero(t, cut, "calls cut")
+	case <-time.After(waitFor):
+		cancel()
+		require.FailNow(t, "Drain waited for the HTTP delivery in flight")
+	}
+}
+
+// Test_Provider_HTTP_drainWaitsForQueue: a delivery to an SQS queue is still
+// waited for, with an HTTP delivery hung beside it. Drain does not return
+// while the queue's call is held, returns once it is served, and the message
+// is on the queue; the hung HTTP delivery adds nothing.
+func Test_Provider_HTTP_drainWaitsForQueue(t *testing.T) {
+	s, hub, g := drainStack(t)
+	topic, e := hungTopic(t, s)
+	open := opener(t, g)
+	held := s.createQueue(account, region, "held", nil)
+
+	s.subscribeQueue(topic, held.arn, attrRaw, textTrue)
+
+	s.publish(paramTopicArn, topic, paramMessage, "both")
+	e.next(t)
+	g.awaitEntered(t)
+
+	drained := make(chan int, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+
+	defer cancel()
+
+	go func() { drained <- hub.Drain(ctx) }()
+
+	select {
+	case <-drained:
+		require.FailNow(t, "Drain returned with the queue's delivery held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	open()
+
+	select {
+	case cut := <-drained:
+		assert.Zero(t, cut, "calls cut")
+	case <-time.After(waitFor):
+		cancel()
+		require.FailNow(t, "Drain waited for the HTTP delivery in flight")
+	}
+
+	assert.Equal(t, 1, s.depth(held), "the queue's delivery arrived")
 }
 
 // stallingBody answers a Notification with a 200 and the start of a body that

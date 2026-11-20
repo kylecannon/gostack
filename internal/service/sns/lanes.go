@@ -38,6 +38,9 @@ const (
 // sends the next; an empty lane is gone. A parked lane has work and no call in
 // the client, so the lanes hold the hub's pending count while any delivery is
 // in them (unhold), which is what a shutdown's drain of the client waits for.
+// An HTTP delivery is not held: it changes no state SNS saves, and a send to
+// a hung endpoint must not cost a stop its drain, so the drain does not wait
+// for it (Close cuts it).
 //
 // Every delivery that enters a lane leaves it once, under mu: sent, failed
 // (to its dead-letter queue or dropped), or cut. queued counts the ones in a
@@ -60,13 +63,16 @@ type lanes struct {
 	posting     int
 	postWaiting []*lane
 	queued      int
+	// held counts the queued deliveries that are not HTTP: the ones the hub's
+	// drain waits for.
+	held int
 	// idle, when not nil, is closed when queued reaches zero.
 	idle chan struct{}
-	// unhold, while queued is above zero, lets go of the hold the deliveries
+	// unhold, while held is above zero, lets go of the hold the deliveries
 	// have on the in-process hub's pending count (inproc.Client.Hold), so a
 	// shutdown's drain of the calls waits for a delivery that is not a call
 	// in the client: one waiting in its lane, in a parked lane, or added and
-	// not yet started.
+	// not yet started. An HTTP delivery is never held.
 	unhold func()
 	// closed is set when Close begins.
 	closed bool
@@ -129,10 +135,17 @@ func (ls *lanes) add(j *job) bool {
 
 	if ls.queued == 0 {
 		ls.idle = make(chan struct{})
-		ls.unhold = ls.client.Hold()
 	}
 
 	ls.queued++
+
+	if j.post == nil {
+		if ls.held == 0 {
+			ls.unhold = ls.client.Hold()
+		}
+
+		ls.held++
+	}
 
 	return true
 }
@@ -245,10 +258,12 @@ func (ls *lanes) finish(l *lane, failure func() string) {
 		return
 	}
 
-	ls.queued++ // see settle
-	j := ls.removeHead(l)
+	j := l.jobs[0]
 
-	defer ls.settle()
+	ls.retain(j) // see settle
+	ls.removeHead(l)
+
+	defer ls.settle(j)
 	defer ls.proceed(l) // before settle, as it was when it ended answered
 
 	switch {
@@ -328,22 +343,38 @@ func (ls *lanes) removeHead(l *lane) *job {
 	l.jobs = l.jobs[1:]
 	j.lane = nil
 
-	ls.settle()
+	ls.settle(j)
 
 	return j
 }
 
-// settle counts one delivery out of the lanes. The last one out signals idle
-// and lets go of the hub. A delivery that fails is counted once more until
-// its dead-letter delivery is in a lane, so Close, AwaitDeliveries and the
-// hub's drain never see the lanes empty between the two.
-func (ls *lanes) settle() {
+// retain counts j once more, as add counted it.
+func (ls *lanes) retain(j *job) {
+	ls.queued++
+
+	if j.post == nil {
+		ls.held++
+	}
+}
+
+// settle counts j out of the lanes. The last delivery out signals idle, and
+// the last one that is not HTTP lets go of the hub. A delivery that fails is
+// counted once more until its dead-letter delivery is in a lane, so Close,
+// AwaitDeliveries and the hub's drain never see the lanes empty between the
+// two.
+func (ls *lanes) settle(j *job) {
 	ls.queued--
 	if ls.queued == 0 {
 		close(ls.idle)
 		ls.idle = nil
-		ls.unhold()
-		ls.unhold = nil
+	}
+
+	if j.post == nil {
+		ls.held--
+		if ls.held == 0 {
+			ls.unhold()
+			ls.unhold = nil
+		}
 	}
 }
 

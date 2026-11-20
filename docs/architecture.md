@@ -772,10 +772,11 @@ queue.
   were parked before its own lane sends again. A stuck destination holds one
   client worker; the others serve every other lane.
 - **Shutdown.** SNS has no `Shutdown` function: nothing waits for room, so
-  nothing needs letting go. While any delivery is in a lane, the lanes hold
+  nothing needs letting go. While any SQS delivery is in a lane, the lanes hold
   one count in the hub's pending count (`inproc.Client.Hold`), so `Hub.Drain`
   waits for a parked lane, or deliveries queued behind a head, as for a
-  queued call, until the lanes are empty or the drain's deadline. A
+  queued call, until the lanes hold no SQS delivery or the drain's deadline.
+  HTTP deliveries are not counted (see the HTTP section). A
   dead-letter delivery never fails over to another, so the chain of calls a
   lane queues is finite. Once the drain cuts the client, a refused head parks
   or is cut and queues nothing more. `Close` waits for nothing: it cuts the
@@ -833,8 +834,13 @@ endpoint holds up no queue.
   through that queue's lane, with the body that was posted and no message
   attributes; with no dead-letter queue it is dropped and counted. A failed
   `UnsubscribeConfirmation` is always dropped and counted.
-- **Shutdown.** An endpoint's lane holds the same hub count as a queue's, so
-  `Hub.Drain` waits for its deliveries. `Close(ctx)` starts no new send and
+- **Shutdown.** HTTP sends are not drained: an HTTP delivery does not count in
+  the hub's pending count, so `Hub.Drain` does not wait for it, whether it is
+  in flight, waiting in its lane, or a send to an endpoint that never answers.
+  A delivery over HTTP changes no state that is saved, and a failure's
+  dead-letter delivery would be cut at the shutdown anyway. The drain exists
+  so SNS to SQS deliveries reach their queues before the save, and it still
+  waits for those. `Close(ctx)` starts no new send and
   cancels the sends in flight at once, without waiting for them to finish,
   so a hung endpoint adds nothing to a stop; ctx bounds only the wait for
   the cut sends to return, which they do as soon as the cut reaches them. It
