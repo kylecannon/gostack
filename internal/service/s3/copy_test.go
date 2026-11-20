@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/xml"
 	"maps"
 	"net/http"
 	"net/url"
@@ -451,9 +452,11 @@ func TestCopyOfAMultipartObjectIsWhole(t *testing.T) {
 	require.Equal(t, http.StatusOK, got.status, string(got.body))
 
 	sum := md5.Sum(slices.Concat(first, second))
-	assert.Contains(t, string(got.body), hex.EncodeToString(sum[:]))
-	// The ETag, not the date: LastModified holds "-2" from the 20th of a month.
-	assert.NotContains(t, string(got.body), `-2"</ETag>`)
+	var result struct {
+		ETag string `xml:"ETag"`
+	}
+	require.NoError(t, xml.Unmarshal(got.body, &result), string(got.body))
+	assert.Equal(t, `"`+hex.EncodeToString(sum[:])+`"`, result.ETag, "an MD5 ETag with no -N suffix")
 
 	read := get(s, http.MethodGet, destPath+"?partNumber=2", nil)
 	assert.Equal(t, http.StatusRequestedRangeNotSatisfiable, read.status, "a copy has one part")
