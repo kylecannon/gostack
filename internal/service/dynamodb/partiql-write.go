@@ -58,7 +58,7 @@ type writeStatement struct {
 func (c caller) compileWrite(
 	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
 ) (*writeStatement, error) {
-	name, e, err := c.lookup(&stmt.Table)
+	name, e, err := c.statementTable(&stmt.Table)
 	if err != nil {
 		// DynamoDB Local looks an INSERT's table up without checking its name.
 		if stmt.Kind == partiql.Insert && isCode(err, codeValidation) {
@@ -109,8 +109,11 @@ func (c caller) compileWrite(
 			return nil, value.Invalid(msgExistsCondition)
 		}
 
+		// DynamoDB Local returns no item for a failed EXISTS, whatever
+		// ReturnValuesOnConditionCheckFailure asks (verification/SQ-229
+		// probe2, "tx exists fail").
 		w.check = &api.ConditionCheck{
-			TableName: &w.table, Key: w.key, ConditionExpression: cond, ReturnValuesOnConditionCheckFailure: onFailure,
+			TableName: &w.table, Key: w.key, ConditionExpression: cond,
 			ExpressionAttributeNames: r.attributeNames(), ExpressionAttributeValues: r.attributeValues(),
 		}
 	}

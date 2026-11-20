@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SELECT a, m.k, l[1] FROM \"t\".\"idx\" WHERE id = ? AND n BETWEEN 1 AND 2 OR NOT x IS MISSING")

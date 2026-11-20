@@ -1,6 +1,7 @@
 package partiql
 
 import (
+	"slices"
 	"strconv"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -15,6 +16,7 @@ const (
 	msgBagType         = "Unsupported data type in Bag. DynamoDB only supports either numbers or strings in bags"
 	msgEmptyBag        = "Empty bags are not supported"
 	msgDuplicateKey    = "Duplicate keys in tuple. Key: "
+	msgBagDuplicates   = "Input collection contains duplicates"
 	rootKey            = "root"
 )
 
@@ -143,6 +145,12 @@ func bagValue(n *Node, params []api.AttributeValue, under string) (api.Attribute
 		default:
 			return api.AttributeValue{}, &Error{Message: msgBagType}
 		}
+	}
+
+	// DynamoDB Local refuses a repeated string with the number set's words
+	// (verification/SQ-229 probe4); a repeated number is the value check's.
+	if sorted := slices.Sorted(slices.Values(out.SS)); len(slices.Compact(sorted)) < len(out.SS) {
+		return api.AttributeValue{}, &Error{Message: msgBagDuplicates}
 	}
 
 	return out, nil

@@ -21,7 +21,13 @@ const (
 	msgTxReturning = "RETURNING clause is not supported in ExecuteTransaction."
 	msgTxSelectKey = "Select statements within ExecuteTransaction must specify the primary key in the where clause."
 	msgTxNotFound  = "Requested resource not found"
+
+	msgTxTokenMismatch = "Specified idempotent token was used with different request parameters " +
+		"within the idempotency window"
 )
+
+// codeTokenMismatch is IdempotentParameterMismatchException's code.
+const codeTokenMismatch = "IdempotentParameterMismatchException" //nolint:gosec // an error code, not a credential
 
 // ExecuteTransaction runs up to 100 statements, all reads or all writes, as
 // one TransactGetItems or TransactWriteItems: all or nothing, with a
@@ -165,6 +171,12 @@ func (p *Provider) transactWrites(
 
 	if cancel, ok := errors.AsType[*canceledError](err); ok {
 		return nil, transactionCanceled(insertReasons(stmts, cancel.reasons))
+	}
+
+	// TransactWriteItems answers a reused token with no message, and
+	// ExecuteTransaction with one (verification/SQ-229 probe2).
+	if isCode(err, codeTokenMismatch) {
+		return nil, api.NewIdempotentParameterMismatchException(msgTxTokenMismatch)
 	}
 
 	if err != nil {

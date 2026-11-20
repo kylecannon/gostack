@@ -37,7 +37,7 @@ type readStatement struct {
 func (c caller) compileRead(
 	stmt *partiql.Statement, params []api.AttributeValue, consistent *bool,
 ) (*readStatement, error) {
-	name, e, err := c.lookup(&stmt.Table)
+	name, e, err := c.statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
 	}
@@ -49,13 +49,25 @@ func (c caller) compileRead(
 	r := newRender(params)
 
 	key, rest, err := singleItem(stmt.Where, e.data.Key(), r)
-	var shape *shapeError
-	if errors.As(err, &shape) || (err == nil && len(rest) > 0) {
+
+	_, shaped := errors.AsType[*shapeError](err)
+	if shaped {
 		return nil, errNotSingle
 	}
 
 	if err != nil {
 		return nil, err
+	}
+
+	if len(rest) > 0 {
+		// The rest is refused as a filter, after its own errors: an unknown
+		// function is named before the select is refused.
+		_, err = r.cond(joinAll(rest))
+		if err != nil {
+			return nil, err
+		}
+
+		return nil, errNotSingle
 	}
 
 	projected, aliases, err := projection(stmt.Projection, r)
@@ -239,7 +251,7 @@ func (p *Provider) runBatch(ctx context.Context, b *batchStatement) api.BatchSta
 func batchError(err error, table string) api.BatchStatementResponse {
 	code, msg := "InternalServerError", err.Error()
 
-	if ae, ok := errors.AsType[*awserr.Error](err); ok {
+	if ae, ok := errors.AsType[*awserr.Error](statementFailure(err)); ok {
 		code, msg = strings.TrimSuffix(ae.Code, "Exception"), ae.Message
 	}
 

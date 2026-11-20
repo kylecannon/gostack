@@ -91,6 +91,13 @@ func (r *render) resolve(n *partiql.Node) (api.AttributeValue, error) {
 		return api.AttributeValue{}, statementError(err)
 	}
 
+	// The value is checked on its own, before it stands in an expression, so
+	// its message names no placeholder (verification/SQ-229 probe3).
+	err = value.Validate(&v)
+	if err != nil {
+		return api.AttributeValue{}, err
+	}
+
 	return v, nil
 }
 

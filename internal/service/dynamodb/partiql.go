@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/partiql"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
@@ -24,9 +25,27 @@ const codeConditionFailed = "ConditionalCheckFailedException"
 func (p *Provider) ExecuteStatement(
 	ctx context.Context, in *api.ExecuteStatementInput,
 ) (*api.ExecuteStatementOutput, error) {
+	out, err := p.runStatement(ctx, in)
+	if err != nil {
+		return nil, statementFailure(err)
+	}
+
+	return out, nil
+}
+
+func (p *Provider) runStatement(
+	ctx context.Context, in *api.ExecuteStatementInput,
+) (*api.ExecuteStatementOutput, error) {
 	err := in.Validate()
 	if err != nil {
 		return nil, err
+	}
+
+	if in.Limit != nil && *in.Limit < 1 {
+		var r constraint.Report
+		r.Value(nil, "limit", constraint.Number(*in.Limit), "Member must have value greater than or equal to 1")
+
+		return nil, value.Invalid(r.Message())
 	}
 
 	returnOld, err := returnOnConditionFailure(in.ReturnValuesOnConditionCheckFailure)
@@ -95,7 +114,7 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 func (p *Provider) executeSelect(
 	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
 ) (*api.ExecuteStatementOutput, error) {
-	_, e, err := p.caller(ctx).lookup(&stmt.Table)
+	_, e, err := p.caller(ctx).statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
 	}
@@ -234,6 +253,11 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 			rangeCond = rest[i]
 			rest = slices.Delete(rest, i, i+1)
 		}
+
+		err := checkRangeTypes(rangeCond, rest, key.Range, r)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if left := joinAll(rest); left != nil && mentions(left, key.Hash.Name, key.Range.Name) {
@@ -354,14 +378,6 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 // shapeItems puts each projected path of items under its alias; with no
 // paths, items are as read. It never returns nil, so an empty result is [].
 func shapeItems(items []map[string]api.AttributeValue, paths []partiql.Path) []map[string]api.AttributeValue {
-	if paths == nil {
-		if items == nil {
-			return []map[string]api.AttributeValue{}
-		}
-
-		return items
-	}
-
 	out := make([]map[string]api.AttributeValue, len(items))
 	for i, item := range items {
 		out[i] = shapeItem(item, paths)
@@ -370,9 +386,11 @@ func shapeItems(items []map[string]api.AttributeValue, paths []partiql.Path) []m
 	return out
 }
 
+// shapeItem puts each projected path of item under its alias; with no paths,
+// the item is as read.
 func shapeItem(item value.Item, paths []partiql.Path) value.Item {
-	if item == nil {
-		return nil
+	if item == nil || paths == nil {
+		return item
 	}
 
 	out := make(value.Item, len(paths))

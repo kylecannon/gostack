@@ -24,6 +24,10 @@ const (
 	msgDuplicateItem    = "Duplicate primary key exists in table"
 	msgStatementLong    = "Member must have length less than or equal to 8192"
 	maxStatementBytes   = 8192
+
+	msgStatementTable = "Table name should be within the length [3, 255] and only contain " +
+		"'a-z', 'A-Z', '0-9', '-', '_', '.'."
+	msgRangeType = "One or more parameter values were invalid: Condition parameter type does not match schema type"
 )
 
 // statementError is the ValidationException for a statement the parser
@@ -34,6 +38,77 @@ func statementError(err error) error {
 	}
 
 	return err
+}
+
+// exprPrefixes start the messages of the expressions a statement compiles to.
+var exprPrefixes = []string{
+	"Invalid ConditionExpression: ", "Invalid FilterExpression: ", "Invalid KeyConditionExpression: ",
+	"Invalid ProjectionExpression: ", "Invalid UpdateExpression: ",
+}
+
+// statementFailure is err as a statement answers it. A statement holds no
+// expression of its own, so DynamoDB Local leaves off the prefix that names
+// one (verification/SQ-229 probe3).
+func statementFailure(err error) error {
+	ae := asAWSError(err)
+	if ae == nil || ae.Code != codeValidation {
+		return err
+	}
+
+	for _, prefix := range exprPrefixes {
+		if msg, ok := strings.CutPrefix(ae.Message, prefix); ok {
+			return value.Invalid(msg)
+		}
+	}
+
+	return err
+}
+
+// statementTable looks a statement's table up. A name that is not a table
+// name is refused in DynamoDB Local's PartiQL words.
+func (c caller) statementTable(name *string) (string, *tableEntry, error) {
+	resolved, e, err := c.lookup(name)
+
+	ae := asAWSError(err)
+	if ae != nil && ae.Code == codeValidation && ae.Message == msgTableName {
+		return "", nil, value.Invalid(msgStatementTable)
+	}
+
+	return resolved, e, err
+}
+
+// checkRangeTypes refuses a Query's range key conditions whose values are not
+// of the range key's type, as DynamoDB Local does: a BETWEEN with the key's
+// message and an IN with the key condition's (verification/SQ-229 probe3).
+func checkRangeTypes(rangeCond *partiql.Node, rest []*partiql.Node, attr table.KeyAttribute, r *render) error {
+	if rangeCond != nil && rangeCond.Kind == partiql.KindBetween && !ofType(rangeCond.Args[1:], attr.Type, r) {
+		return value.Invalid(msgStatementKeyType + attr.Name)
+	}
+
+	for _, c := range rest {
+		if c.Kind == partiql.KindIn && isAttr(c.Args[0], attr.Name) && !ofType(c.Args[1:], attr.Type, r) {
+			return value.Invalid(msgRangeType)
+		}
+	}
+
+	return nil
+}
+
+// ofType reports whether every value of ns is of type typ. A node that is no
+// value, or does not resolve, is left to the expression that holds it.
+func ofType(ns []*partiql.Node, typ string, r *render) bool {
+	for _, n := range ns {
+		if !partiql.IsValue(n) {
+			continue
+		}
+
+		v, err := r.resolve(n)
+		if err == nil && value.Type(&v) != typ {
+			return false
+		}
+	}
+
+	return true
 }
 
 // shapeError is a WHERE clause that does not name one item by its whole key.
