@@ -111,8 +111,10 @@ fmt:
 # golangci-lint run takes a machine-wide lock in the temp directory and exits 3
 # ("parallel golangci-lint is running") when another run holds it for more than
 # five seconds, which two worktrees linting at once hit. The flag skips the
-# lock: the lint cache is Go's build cache, which its source documents as safe
-# for several processes on one machine. golangci-lint fmt takes no lock.
+# lock. golangci-lint keeps its own cache, under <UserCacheDir>/golangci-lint
+# (GOLANGCI_LINT_CACHE moves it), in a copy of the code of Go's build cache,
+# which documents that cache as safe for several processes on one machine.
+# golangci-lint fmt takes no lock.
 lint:
 	$(LINT) run --allow-parallel-runners $(PKGS)
 

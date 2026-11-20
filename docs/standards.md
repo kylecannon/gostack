@@ -70,6 +70,10 @@ specific to gostack.
 
 1. **Unit tests** follow conventions-go.md: table tests, `testify/require`,
    `synctest` for time, `-race` always.
+   - A test never asserts on wall-clock time.
+   - A test of growth (cost against input size) measures CPU time or counts
+     work, decides once on a fixed number of runs, and states in a comment the
+     smallest defect it is proven to catch.
 2. **Codec conformance.** `scripts/vendor-specs.sh` fetches botocore's
    protocol test fixtures (`tests/unit/protocols/{input,output}/{query,json,rest-xml,rest-json}.json`)
    into `internal/protocol/testdata/botocore` and records them in
@@ -246,9 +250,6 @@ are missing, and holds the reason for the layout below.
   a tool dependency of its own module, `tools/go.mod`, run as
   `go tool -modfile=tools/go.mod golangci-lint`. The product `go.mod` carries
   none of its dependencies.
-- **`make lint`** passes `--allow-parallel-runners`, so lints in several
-  worktrees run at once; without it, golangci-lint's machine-wide lock makes
-  the second one exit 3 after five seconds. `make fmt` takes no lock.
 - **Editors and gopls** do not read the Makefile, so the pin does not reach
   them. Run `export GOTOOLCHAIN=$(make -s toolchain)` in the shell that starts
   the editor. Plain `go` commands outside `make` need it too.
