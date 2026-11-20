@@ -1390,14 +1390,16 @@ func (r *flushRun) failAll(pending []pendingService, err error) error {
 //   - whether the service has assets to sync, or an earlier sync to wait for,
 //     at flush start: those go after the ones with none, since their sync can
 //     take the whole deadline;
+//   - whether the service is one the flush took from a timed flush: those go
+//     first, so a service the shutdown moved to save is never queued behind
+//     one of the flush's own whose Snapshot was never measured, however slow
+//     it is, and a measured one is no reason to hold it back: the timed flush
+//     would have saved it before that service's;
 //   - the service's last measured Snapshot in this process, or the Restore of
 //     a later Load until its next Snapshot, shortest first, so a large S3 with
 //     nothing pending, whose Snapshot grows with its objects, does not cost SQS
 //     and STS their save; a service with neither counts as zero, so the first
 //     flush of a process with no state to load is in name order;
-//   - whether the service is one the flush took from a timed flush: those go
-//     first among equals, so a service moved to save it is not queued behind
-//     one of the flush's own whose Snapshot was never measured;
 //   - name.
 //
 // A [Follower] and the service it follows, when both are pending, are one
@@ -1457,7 +1459,7 @@ func saveOrder(pending []pendingService) []pendingService {
 		}
 
 		return cmp.Or(
-			cmp.Compare(took[ha], took[hb]), cmp.Compare(own[ha], own[hb]),
+			cmp.Compare(own[ha], own[hb]), cmp.Compare(took[ha], took[hb]),
 			strings.Compare(ha, hb), strings.Compare(a.name, b.name))
 	})
 

@@ -1509,9 +1509,9 @@ is untouched.
   another service's slow `Snapshot` or sync. A queued one moves to the save
   beside it, and the timed save skips it when it gets there. A service moves
   only from the timed save to a save by hand, never back, so the timed save
-  never takes what a save that joined it took first. The save by hand puts a
-  service it moved ahead of its own of the same measured time, so one with no
-  measured `Snapshot` yet, however slow, never queues it behind itself. A
+  never takes what a save that joined it took first. The save by hand saves the
+  services it moved before its own, so one with no measured `Snapshot` yet,
+  however slow, never queues them behind itself. A
   moved service the save by hand does not reach before its deadline was never
   tried: it is dirty again, counted as no failure and with no backoff. A save
   by hand that comes while a `Load` or reset waits does not join the timed

@@ -69,6 +69,17 @@ func heldBy(e *Engine) held {
 // not take sorts after: sqs is on disk before the timed save ends, and the
 // kill finds it there.
 func Test_Engine_ShutdownSavesAMovedServiceBesideAnUnmeasuredSlowOne(t *testing.T) {
+	for name, measured := range map[string]time.Duration{
+		"sqs was never measured":        0,
+		"sqs measured at a millisecond": time.Millisecond,
+	} {
+		t.Run(name, func(t *testing.T) { shutdownSavesAMoved(t, measured) })
+	}
+}
+
+func shutdownSavesAMoved(t *testing.T, measured time.Duration) {
+	t.Helper()
+
 	for name, timed := range map[string]time.Duration{
 		"the timed save ends inside the save deadline": 200 * time.Millisecond,
 		"the timed save ends after the save deadline":  500 * time.Millisecond,
@@ -83,6 +94,10 @@ func Test_Engine_ShutdownSavesAMovedServiceBesideAnUnmeasuredSlowOne(t *testing.
 				e.Register(slowName, big)
 				e.Register("b-slow", mine)
 				e.Register(sqsName, &stateSnap{state: sqsAcked})
+
+				e.mu.Lock()
+				e.services[sqsName].took = measured
+				e.mu.Unlock()
 
 				e.MarkDirty(sqsName)
 				e.MarkDirty(slowName)
@@ -122,11 +137,12 @@ func Test_Engine_ShutdownSavesAMovedServiceBesideAnUnmeasuredSlowOne(t *testing.
 
 // movedBehindSlowTimedSave is the setup of the tests of what a Flush that
 // moved a queued service does when its deadline ends before it reaches it. The
-// timed save took athena, with a Snapshot of timed, and sqs, whose Snapshot was
-// measured at a second, so a Flush saves b-slow, which was never measured and
-// takes a second, ahead of it. A Flush under 300 ms moves sqs, is inside
-// b-slow's Snapshot when its deadline ends, and abandons sqs when that Snapshot
-// returns, at a second.
+// timed save took athena, with a Snapshot of timed, and then x-slow, a second
+// long and measured at a millisecond, and sqs, measured at a second. A Flush
+// under 300 ms moves both and saves x-slow first, since a service it moved
+// sorts by its measured time among those it moved; its deadline ends inside
+// x-slow's Snapshot, and it abandons sqs when that Snapshot returns, at a
+// second.
 func movedBehindSlowTimedSave(t *testing.T, timed time.Duration) (e *Engine, sqs *countingSnap, dir string) {
 	t.Helper()
 
@@ -136,24 +152,25 @@ func movedBehindSlowTimedSave(t *testing.T, timed time.Duration) (e *Engine, sqs
 	mine := verySlow{stateSnap: &stateSnap{state: bSlowState}, d: time.Second, started: make(chan struct{})}
 	sqs = &countingSnap{stateSnap: &stateSnap{state: sqsAcked}}
 	e.Register(slowName, big)
-	e.Register("b-slow", mine)
+	e.Register("x-slow", mine)
 	e.Register(sqsName, sqs)
 
 	e.mu.Lock()
+	e.services["x-slow"].took = time.Millisecond
 	e.services[sqsName].took = time.Second
 	e.mu.Unlock()
 
 	e.MarkDirty(sqsName)
+	e.MarkDirty("x-slow")
 	e.MarkDirty(slowName)
 	<-big.started
-	e.MarkDirty("b-slow")
 
 	return e, sqs, dir
 }
 
 // Test_Engine_FlushDoesNotCountAMovedServiceItDidNotReachAsFailed is review
 // SQ-391 C2 and C3 in one: the Flush moved sqs from the timed save, and its
-// deadline ends inside b-slow's Snapshot, before it reaches sqs. sqs was never
+// deadline ends inside x-slow's Snapshot, before it reaches sqs. sqs was never
 // tried, so it is no failure and has no backoff, whether the timed save has
 // ended (200 ms) or is still inside athena's Snapshot, which the Flush's
 // deadline then ends (3 s). It is dirty, and the next Flush writes it, once.
@@ -169,7 +186,7 @@ func Test_Engine_FlushDoesNotCountAMovedServiceItDidNotReachAsFailed(t *testing.
 				ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 300*time.Millisecond)
 				defer cancel()
 
-				require.ErrorIs(t, e.Stop(ctx), context.DeadlineExceeded, "the Flush runs out of time inside b-slow's Snapshot")
+				require.ErrorIs(t, e.Stop(ctx), context.DeadlineExceeded, "the Flush runs out of time inside x-slow's Snapshot")
 				time.Sleep(timed + time.Second)
 				synctest.Wait() // the timed save is over too
 				assert.False(t, onDisk(dir, sqsName), "sqs was not written by either")
@@ -203,18 +220,19 @@ func Test_Engine_FlushDoesNotCountAMovedPairItDidNotReachAsFailed(t *testing.T) 
 		big := verySlow{stateSnap: &stateSnap{state: athenaState}, d: 3 * time.Second, started: make(chan struct{})}
 		mine := verySlow{stateSnap: &stateSnap{state: bSlowState}, d: time.Second, started: make(chan struct{})}
 		e.Register(slowName, big)
-		e.Register("b-slow", mine)
+		e.Register("x-slow", mine)
 		e.Register(ddb, recLeader{stateSnap: &stateSnap{state: "table v2"}, log: log})
 		e.Register(ddbStream, recFollower{stateSnap: &stateSnap{state: "streams v2"}, log: log})
 
 		e.mu.Lock()
+		e.services["x-slow"].took = time.Millisecond
 		e.services[ddb].took = time.Second
 		e.mu.Unlock()
 
 		e.MarkDirty(ddb)
+		e.MarkDirty("x-slow")
 		e.MarkDirty(slowName)
 		<-big.started
-		e.MarkDirty("b-slow")
 
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 300*time.Millisecond)
 		defer cancel()
