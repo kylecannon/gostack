@@ -269,6 +269,33 @@ func (g *gate) wrap(h http.Handler) http.Handler {
 	})
 }
 
+// refuse holds the calls wrap would, and answers each 500 without reaching
+// SQS once open is closed, or 503 when its context ends first.
+func (g *gate) refuse(h http.Handler) http.Handler {
+	held := g.wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "refused", http.StatusInternalServerError)
+	}))
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		if strings.Contains(string(body), g.match) {
+			held.ServeHTTP(w, r)
+
+			return
+		}
+
+		h.ServeHTTP(w, r)
+	})
+}
+
 // awaitEntered waits for a held call.
 func (g *gate) awaitEntered(t *testing.T) {
 	t.Helper()

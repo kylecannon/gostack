@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,9 +46,10 @@ const (
 //
 // A lane has no goroutine of its own. Its head is with the transport, an SQS
 // SendMessage queued on the in-process client, and the transport's answer
-// sends the next, so a lane with work always has a call in the client, which
-// is what a shutdown's drain of the client waits for, and an empty lane is
-// gone.
+// sends the next; an empty lane is gone. A held or parked lane has work and no
+// call in the client, so the lanes hold the hub's pending count while any
+// delivery is in them (unhold), which is what a shutdown's drain of the
+// client waits for.
 //
 // Every delivery that enters a lane leaves it once, under mu: sent, failed
 // (to its dead-letter queue or dropped), or cut. queued counts the ones in a
@@ -68,6 +70,12 @@ type lanes struct {
 	queued   int
 	// idle, when not nil, is closed when queued reaches zero.
 	idle chan struct{}
+	// unhold, while queued is above zero, lets go of the hold the deliveries
+	// have on the in-process hub's pending count (inproc.Client.Hold), so a
+	// shutdown's drain of the calls waits for a delivery that is not a call
+	// in the client: one waiting in its lane, in a parked or a held lane, or
+	// added and not yet started.
+	unhold func()
 	// unbounded is set when the shutdown begins: no delivery waits any more.
 	// closed is set when Close begins.
 	unbounded, closed bool
@@ -76,11 +84,13 @@ type lanes struct {
 	log     dropLog
 }
 
-// lane is the deliveries to one destination. jobs[:depth] are admitted; a
-// publisher's deliveries past them wait for room, in order.
+// lane is the deliveries to one destination. jobs[:admitted] are admitted, up
+// to depth, and past it only for a dead-letter delivery that may not wait (see
+// add); the deliveries after them wait for room, in order.
 type lane struct {
-	key  string
-	jobs []*job
+	key      string
+	jobs     []*job
+	admitted int
 	// sending is set while jobs[0] is with the transport.
 	sending bool
 	parked  bool
@@ -99,8 +109,14 @@ type job struct {
 	// queue, nil without one.
 	dlq *inproc.Call
 	// dead marks a dead-letter delivery: one that fails is dropped, never sent
-	// to another dead-letter queue.
-	dead bool
+	// to another dead-letter queue. handoff marks one made at its publisher's
+	// deadline.
+	dead, handoff bool
+	// expired marks a publisher's delivery to a FIFO queue that was still
+	// waiting at its publisher's deadline and keeps its place in the lane:
+	// when it reaches the head it fails, to its dead-letter queue, after the
+	// deliveries ahead of it, so a message group keeps its order there.
+	expired bool
 	// waiting is set while the job is in its lane past the admitted ones.
 	waiting bool
 	// admit, for a publisher's waiting delivery, is closed when the delivery
@@ -116,7 +132,11 @@ type job struct {
 // room, up to its deadline, when something can wait for it, and is dropped
 // otherwise. A publisher's delivery has its publisher; a dead-letter delivery
 // has the lane it failed in (origin), and has none when it failed at its
-// publisher's deadline, which has passed. The ruling (SQ-288, orchestrator, provisional; the user
+// publisher's deadline, which has passed. A dead-letter delivery never waits
+// for a lane that is itself held up by a dead-letter delivery of its own: that
+// lane may be waiting, directly or not, for the one this delivery holds up, so
+// two queues that are each other's dead-letter queue would stall each other
+// to the deadline. The ruling (SQ-288, orchestrator, provisional; the user
 // has not ruled on waiting versus dropping) is that a delivery to a healthy
 // destination is never dropped and memory stays bounded, so the bound is paid
 // in time: a publisher waits, and the lane a dead-letter delivery comes from
@@ -124,15 +144,27 @@ type job struct {
 // dropped, and Publish still answers 200. Returning false here fails every
 // delivery that finds its lane full at once, to its dead-letter queue or
 // dropped, as the withdrawn contract did: that reverses the ruling.
-func mayWait(j *job) bool {
-	return !j.dead || j.origin != nil
+func mayWait(j *job, l *lane) bool {
+	return !j.dead || (j.origin != nil && l.held == nil)
 }
 
-// add puts j at the tail of the lane of its destination. It is the one place a
+// overflow reports whether dead, a dead-letter delivery that found l full and
+// may not wait, is admitted past l's depth: up to a ceiling of twice the
+// depth, and for a hand-off at a publisher's deadline only when nothing waits
+// in l, since the delivery it replaces already held its memory while it
+// waited. One that is not is dropped.
+func (ls *lanes) overflow(dead *job, l *lane) bool {
+	return l.admitted < 2*ls.depth && (!dead.handoff || len(l.jobs) == l.admitted)
+}
+
+// add puts j in the lane of its destination: admitted when the lane has room,
+// after the deliveries waiting in it otherwise. It is the one place a
 // delivery is refused: any once Close has begun, and one that finds its lane
-// full and may not wait. A delivery refused at Close is dropped; one refused
-// for room fails, to its dead-letter queue when it has one. Each is counted
-// and logged. add reports whether j is in the lane, admitted or waiting.
+// full and may not wait, unless it is a dead-letter delivery admitted past the
+// depth (overflow), ahead of the deliveries waiting. A delivery refused at
+// Close is dropped; one refused for room fails, to its dead-letter queue when
+// it has one. Each is counted and logged. add reports whether j is in the
+// lane, admitted or waiting.
 func (ls *lanes) add(j *job) bool {
 	if ls.closed {
 		ls.drop(j, reasonClosing)
@@ -141,18 +173,44 @@ func (ls *lanes) add(j *job) bool {
 	}
 
 	l := ls.byKey[j.call.Lane]
+	room := ls.unbounded || l == nil || (l.admitted < ls.depth && len(l.jobs) == l.admitted)
+	at := -1 // the tail
 
-	full := !ls.unbounded && l != nil && len(l.jobs) >= ls.depth
-	if full && !mayWait(j) {
+	switch {
+	case room:
+	case mayWait(j, l):
+		j.waiting = true
+
+		// A dead-letter delivery waits ahead of the publishers' deliveries,
+		// behind the dead-letter deliveries waiting already: the lane it holds
+		// up sends nothing meanwhile, and a publisher has its own deadline.
 		if j.dead {
-			ls.drop(j, reasonDLQNoRoom)
-		} else {
-			ls.fail(j, nil, reasonNoRoom)
+			at = l.admitted
+			for at < len(l.jobs) && l.jobs[at].dead {
+				at++
+			}
 		}
+	case j.dead && ls.overflow(j, l):
+		at = l.admitted
+	case j.dead:
+		ls.drop(j, reasonDLQNoRoom)
+
+		return false
+	default:
+		ls.fail(j, nil, reasonNoRoom)
 
 		return false
 	}
 
+	ls.place(j, l, at)
+
+	return true
+}
+
+// place puts j in l, or in a new lane when l is nil: at index at when it is
+// not negative, and at the tail otherwise; admitted unless it waits. j is
+// counted in queued.
+func (ls *lanes) place(j *job, l *lane, at int) {
 	if l == nil {
 		l = &lane{key: j.call.Lane}
 		l.done = func(resp inproc.Response, err error) { ls.answered(l, resp, err) }
@@ -165,21 +223,27 @@ func (ls *lanes) add(j *job) bool {
 	}
 
 	j.lane = l
-	j.waiting = full
 
-	if full && !j.dead {
+	switch {
+	case j.waiting && j.dead:
+		l.jobs = slices.Insert(l.jobs, at, j)
+	case j.waiting:
 		j.admit = make(chan struct{})
+		l.jobs = append(l.jobs, j)
+	case at >= 0:
+		l.jobs = slices.Insert(l.jobs, at, j)
+		l.admitted++
+	default:
+		l.jobs = append(l.jobs, j)
+		l.admitted++
 	}
-
-	l.jobs = append(l.jobs, j)
 
 	if ls.queued == 0 {
 		ls.idle = make(chan struct{})
+		ls.unhold = ls.client.Hold()
 	}
 
 	ls.queued++
-
-	return true
 }
 
 // dispatch starts the lanes of a publish's deliveries and waits, with no lock
@@ -235,13 +299,23 @@ func (ls *lanes) dispatch(jobs []*job) {
 }
 
 // expire fails a publisher's delivery still waiting at its deadline. Its
-// dead-letter delivery may not wait: the deadline has passed.
+// dead-letter delivery may not wait: the deadline has passed. A delivery to a
+// FIFO queue with a dead-letter queue keeps its place instead, up to twice
+// the lane's depth, and fails when it reaches the head (start), so its message
+// group reaches the dead-letter queue in order.
 func (ls *lanes) expire(j *job) {
-	if !j.waiting || j.lane == nil {
+	if !j.waiting || j.lane == nil || j.expired {
 		return
 	}
 
 	l := j.lane
+
+	if j.dlq != nil && strings.HasSuffix(l.key, fifoSuffix) && slices.Index(l.jobs, j) < 2*ls.depth {
+		j.expired = true
+
+		return
+	}
+
 	ls.queued++ // see settle
 	ls.remove(j)
 	ls.fail(j, nil, reasonNoRoom)
@@ -249,11 +323,20 @@ func (ls *lanes) expire(j *job) {
 	ls.tidy(l)
 }
 
-// start hands l's head to the transport when nothing holds the lane up. When
-// the client refuses it with a call of SNS's still in it, its queue is full,
-// and the lane is parked until an answer frees room; with none, the client
-// was stopped, and every delivery in the lane is cut.
+// start hands l's head to the transport when nothing holds the lane up. An
+// expired head fails instead (see expire), and the next is started. When the
+// client refuses the head with a call of SNS's still in it, its queue is
+// full, and the lane is parked until an answer frees room; with none, the
+// client was stopped, and every delivery in the lane is cut.
 func (ls *lanes) start(l *lane) {
+	for !ls.closed && !l.sending && !l.parked && l.held == nil && len(l.jobs) > 0 && l.jobs[0].expired {
+		j := l.jobs[0]
+		ls.queued++ // see settle
+		ls.remove(j)
+		ls.fail(j, l, reasonNoRoom)
+		ls.settle()
+	}
+
 	if ls.closed || l.sending || l.parked || l.held != nil || len(l.jobs) == 0 {
 		ls.tidy(l)
 
@@ -338,11 +421,15 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 		return
 	}
 
-	ls.start(l)
+	// The parked lanes go first, so a lane with more to send does not take
+	// the room its answer freed from them again and again; it is parked
+	// behind them when none is left.
 	ls.unpark()
+	ls.start(l)
 }
 
-// unpark starts the parked lanes again, until the client refuses one.
+// unpark starts the parked lanes again, in the order they were parked, until
+// the client refuses one, which keeps its place at the front.
 func (ls *lanes) unpark() {
 	for len(ls.parked) > 0 {
 		l := ls.parked[0]
@@ -353,6 +440,9 @@ func (ls *lanes) unpark() {
 		ls.start(l)
 
 		if l.parked {
+			// start parked it again, at the back.
+			ls.parked = slices.Insert(ls.parked[:len(ls.parked)-1], 0, l)
+
 			return
 		}
 	}
@@ -361,8 +451,9 @@ func (ls *lanes) unpark() {
 // fail is a delivery that was not made: it goes to its dead-letter queue when
 // it has one, and is dropped otherwise. origin is the lane of a delivery that
 // failed on its transport: when the dead-letter queue's lane is full, origin
-// pauses until it has room, up to the deadline. A delivery that failed at a
-// publisher's deadline has no origin and does not wait.
+// pauses until it has room, up to the deadline, unless that lane is held up
+// itself (mayWait). A delivery that failed at a publisher's deadline has no
+// origin and does not wait.
 func (ls *lanes) fail(j *job, origin *lane, reason string) {
 	if j.dlq == nil || j.dead {
 		ls.drop(j, reason)
@@ -370,7 +461,7 @@ func (ls *lanes) fail(j *job, origin *lane, reason string) {
 		return
 	}
 
-	dead := &job{call: *j.dlq, dead: true}
+	dead := &job{call: *j.dlq, dead: true, handoff: origin == nil}
 
 	// A lane cannot wait for room in itself.
 	if origin != nil && origin.key != dead.call.Lane {
@@ -447,7 +538,7 @@ func (ls *lanes) release(j *job) {
 func (ls *lanes) remove(j *job) {
 	l := j.lane
 	i := slices.Index(l.jobs, j)
-	admitted := i < ls.depth
+	admitted := i < l.admitted
 
 	if i == 0 {
 		l.jobs[0] = nil
@@ -457,6 +548,10 @@ func (ls *lanes) remove(j *job) {
 	}
 
 	j.lane = nil
+
+	if admitted {
+		l.admitted--
+	}
 
 	if j.waiting {
 		j.waiting = false
@@ -468,22 +563,26 @@ func (ls *lanes) remove(j *job) {
 		ls.release(j)
 	}
 
-	if admitted && len(l.jobs) >= ls.depth {
-		ls.admitJob(l.jobs[ls.depth-1])
+	for l.admitted < ls.depth && l.admitted < len(l.jobs) {
+		next := l.jobs[l.admitted]
+		l.admitted++
+		ls.admitJob(next)
 	}
 
 	ls.settle()
 }
 
-// settle counts one delivery out of the lanes. The last one out signals idle.
-// A delivery that fails is counted once more until its dead-letter delivery
-// is in a lane, so Close and AwaitDeliveries never see the lanes empty
-// between the two.
+// settle counts one delivery out of the lanes. The last one out signals idle
+// and lets go of the hub. A delivery that fails is counted once more until
+// its dead-letter delivery is in a lane, so Close, AwaitDeliveries and the
+// hub's drain never see the lanes empty between the two.
 func (ls *lanes) settle() {
 	ls.queued--
 	if ls.queued == 0 {
 		close(ls.idle)
 		ls.idle = nil
+		ls.unhold()
+		ls.unhold = nil
 	}
 }
 
@@ -506,7 +605,9 @@ func (ls *lanes) unbound() {
 	ls.unbounded = true
 
 	for _, l := range ls.byKey {
-		for _, j := range l.jobs {
+		for l.admitted < len(l.jobs) {
+			j := l.jobs[l.admitted]
+			l.admitted++
 			ls.admitJob(j)
 		}
 	}
@@ -533,12 +634,16 @@ func (ls *lanes) awaitIdle(ctx context.Context) {
 // stopped or cut the client, so nothing sent now could reach a queue. From
 // here every delivery is refused. Each delivery still in a lane is accounted
 // for once, counted in Dropped and logged: a head the client dropped without
-// an answer, or never got, is cut here.
+// an answer, or never got, is cut here. Close logs SNS's own count once, the
+// deliveries dropped since the process started: the in-process hub's count
+// of calls cut is a different number, since a lane has one call in the client
+// however many deliveries wait behind it.
 func (p *Provider) Close(context.Context) {
 	ls := &p.lanes
 
 	ls.mu.Lock()
 	ls.closed = true
+	before := ls.dropped.Load()
 	ls.mu.Unlock()
 
 	// Close answers the heads it cancels, which answered drops, and drops the
@@ -553,16 +658,20 @@ func (p *Provider) Close(context.Context) {
 			ls.remove(j)
 			ls.drop(j, reasonCut)
 		}
-
-		l.sending, l.parked = false, false
-		ls.tidy(l)
 	}
 
+	// Cutting a held lane's dead-letter delivery lets go of a lane already
+	// passed over above, so every lane is forgotten here.
+	ls.byKey = nil
 	ls.parked = nil
 	ls.inflight = 0
 	ls.mu.Unlock()
 
 	ls.log.flush()
+
+	if dropped := ls.dropped.Load(); dropped > 0 {
+		slog.Warn("SNS deliveries dropped", "count", dropped, "cut_at_close", dropped-before)
+	}
 }
 
 // shutdown is the gateway's word that it has begun to shut down: no delivery

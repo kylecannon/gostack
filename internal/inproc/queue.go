@@ -152,6 +152,30 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 	return true
 }
 
+// Hold counts work of the caller's own in the pending count of the Hub the
+// client is bound to, as a queued call counts, until release is called: work
+// that is not a call in the queue yet but will queue calls, such as deliveries
+// waiting in a lane of the caller's for room or for their turn. Hub.Drain
+// waits for it as it waits for a queued call. A client bound to no hub counts
+// nothing. release may be called more than once; only the first counts.
+func (c *Client) Hold() (release func()) {
+	q := &c.queue
+
+	q.mu.Lock()
+	hub := q.hub
+	q.mu.Unlock()
+
+	if hub == nil {
+		return func() {}
+	}
+
+	hub.enter()
+
+	var once sync.Once
+
+	return func() { once.Do(hub.leave) }
+}
+
 // Idle reports whether no call is queued and no worker is running.
 func (c *Client) Idle() bool {
 	q := &c.queue
