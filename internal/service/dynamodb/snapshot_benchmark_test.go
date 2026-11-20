@@ -21,8 +21,10 @@ import (
 
 // The persistence rows of the DynamoDB matrix (docs/standards.md,
 // "Benchmarks", axis "Persistence"): PutItem and UpdateItem under persist=on
-// (items_benchmark_test.go, reads_benchmark_test.go), and the snapshot and
-// restore of one table by item count and item size.
+// (items_benchmark_test.go, reads_benchmark_test.go), the snapshot and
+// restore of one table by item count and item size, and the table and
+// streams snapshots of tables with stream records, with the streams persisted
+// and not.
 
 const (
 	persistOn = "persist=on"

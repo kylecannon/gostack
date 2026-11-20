@@ -261,6 +261,9 @@ func Test_persist_cutHoldsRecordsOnlyForAStreamsSave(t *testing.T) {
 		require.Zero(t, held, "no streams save follows, so the cut copies no record")
 		require.Zero(t, dynamodb.CutRecords(s.provider))
 		require.Equal(t, []int{3, 0}, restoredCounts(t, dir), "the table is saved, the records are not")
+
+		_, told := s.provider.Registration().Persist.(persist.Leader)
+		require.True(t, told, "what DynamoDB registers with persistence is told, as hookedTables is")
 	})
 
 	t.Run("table save failed", func(t *testing.T) {
