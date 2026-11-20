@@ -7,6 +7,7 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
 )
 
@@ -48,6 +49,10 @@ func newState() *State {
 func (s *State) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	for _, e := range s.tables {
+		e.stopStream()
+	}
 
 	s.tables = map[string]*tableEntry{}
 	s.tokens.reset()
@@ -129,6 +134,13 @@ type tableEntry struct {
 	mu   sync.RWMutex
 	meta tableMeta
 	data *table.Table
+
+	// shard is the latest stream's shard, nil when the table never had a
+	// stream; closed once the stream is disabled. viewType and streamRegion
+	// are the view type and awsRegion it was enabled with. Guarded by mu.
+	shard        *stream.Log
+	viewType     string
+	streamRegion string
 }
 
 // tableMeta is a table's definition, as CreateTable and UpdateTable set it.
@@ -262,7 +274,7 @@ func (e *tableEntry) description(arn string) *api.TableDescription {
 	}
 
 	if m.StreamLabel != "" {
-		d.StreamSpecification = m.Stream
+		d.StreamSpecification = m.Stream // nil once the stream is disabled
 		d.LatestStreamLabel = new(m.StreamLabel)
 		d.LatestStreamArn = new(m.streamARN(arn))
 	}

@@ -41,6 +41,24 @@ type Table struct {
 	// put's check does not contend with writes. Each index's data and counts
 	// stay guarded by mu.
 	indexes atomic.Pointer[[]*index]
+
+	// observer is told of every write that changes what is stored, under mu,
+	// so it sees the writes in the order they applied. Nil when no one
+	// listens, which costs a write nothing.
+	observer Observer
+}
+
+// Observer is told of a write that changed what is stored, under the table's
+// write lock, in the order the writes applied. It must not call back into the
+// table and must not take a lock that is held while the table's is taken.
+type Observer func(Change)
+
+// Observe makes o the table's observer, nil to have none.
+func (t *Table) Observe(o Observer) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.observer = o
 }
 
 // index is one secondary index: its spec, its own partitions and its counts.
@@ -56,6 +74,9 @@ type index struct {
 type Change struct {
 	Old value.Item
 	New value.Item
+	// Expired marks a removal made through Expire: the service deleting an
+	// item whose time to live passed, not a caller.
+	Expired bool
 }
 
 // Changed reports whether the write changed what is stored: an item appeared,
@@ -157,34 +178,16 @@ func (t *Table) Write(key value.Item, decide func(old value.Item) (value.Item, e
 // WriteHeld is Write for a caller that holds the table's lock through Lock, as
 // a write across several tables does.
 func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Item, error)) (Change, error) {
-	hash, rng := t.primaryKey(key)
-	old := t.primary.get(hash, rng, "")
+	return t.apply(key, decide, false)
+}
 
-	updated, err := decide(old)
-	if err != nil {
-		return Change{Old: old}, err
-	}
+// Expire is Write for the service's own removal of an expired item: decide
+// returns nil to remove it, and the observer sees a Change marked Expired.
+func (t *Table) Expire(key value.Item, decide func(old value.Item) (value.Item, error)) (Change, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	if updated != nil {
-		err := t.CheckItem(updated)
-		if err != nil {
-			return Change{Old: old}, err
-		}
-
-		if h, s := t.primaryKey(updated); h != hash || (s != nil && value.Compare(s, rng) != 0) {
-			return Change{Old: old}, errKeyChanged
-		}
-	}
-
-	if old != nil {
-		t.unstore(hash, rng, old)
-	}
-
-	if updated != nil {
-		t.store(hash, rng, updated)
-	}
-
-	return Change{Old: old, New: updated}, nil
+	return t.apply(key, decide, true)
 }
 
 // Lock takes the write locks of tables, each once, in one global order, so
@@ -420,6 +423,43 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 	}
 
 	return nil
+}
+
+// apply is Write's body: the caller holds mu for writing.
+func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, error), expired bool) (Change, error) {
+	hash, rng := t.primaryKey(key)
+	old := t.primary.get(hash, rng, "")
+
+	updated, err := decide(old)
+	if err != nil {
+		return Change{Old: old}, err
+	}
+
+	if updated != nil {
+		err := t.CheckItem(updated)
+		if err != nil {
+			return Change{Old: old}, err
+		}
+
+		if h, s := t.primaryKey(updated); h != hash || (s != nil && value.Compare(s, rng) != 0) {
+			return Change{Old: old}, errKeyChanged
+		}
+	}
+
+	if old != nil {
+		t.unstore(hash, rng, old)
+	}
+
+	if updated != nil {
+		t.store(hash, rng, updated)
+	}
+
+	change := Change{Old: old, New: updated, Expired: expired}
+	if t.observer != nil && change.Changed() {
+		t.observer(change)
+	}
+
+	return change, nil
 }
 
 func (t *Table) needsSort(indexName string) bool {

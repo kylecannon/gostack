@@ -93,6 +93,8 @@ func (p *Provider) DeleteTable(ctx context.Context, in *api.DeleteTableInput) (*
 		return nil, err
 	}
 
+	e.stopStream()
+
 	d := e.description(c.tableARN(name))
 	d.TableStatus = new(statusDeleting)
 	d.WarmThroughput = nil
