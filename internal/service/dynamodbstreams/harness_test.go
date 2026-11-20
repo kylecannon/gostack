@@ -33,12 +33,14 @@ type stack struct {
 	handler  http.Handler
 	ddb      *dynamodb.Provider
 	provider *dynamodbstreams.Provider
+	// region is the region calls are signed for, us-east-1 unless set.
+	region string
 }
 
 func newStack(tb testing.TB) *stack {
 	tb.Helper()
 
-	s := &stack{ddb: dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} })}
+	s := &stack{ddb: dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }), region: usEast1}
 	s.provider = dynamodbstreams.New(s.ddb)
 
 	gw, err := gateway.New(
@@ -67,7 +69,7 @@ func (s *stack) call(tb testing.TB, target, operation, body string) reply {
 	req := httptest.NewRequestWithContext(tb.Context(), http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", jsonType)
 	req.Header.Set("X-Amz-Target", target+operation)
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/"+usEast1+
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/"+s.region+
 		"/dynamodb/aws4_request, SignedHeaders=host, Signature=abc")
 
 	rec := httptest.NewRecorder()

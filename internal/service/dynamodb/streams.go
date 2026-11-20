@@ -215,6 +215,19 @@ func (p *Provider) StreamList(ctx context.Context) []StreamInfo {
 	}
 	c.state.mu.RUnlock()
 
+	// A table replicated to the caller's region has its one stream in the
+	// owning region, shown with the caller's region in its ARN, as LocalStack's
+	// change_region_in_ddb_stream_arn shows it.
+	if !c.shared && p.replicated.Load() {
+		for _, name := range p.account(c).replicaNames(c.region) {
+			if state, _ := p.home(c, name); state != c.state {
+				if e := state.table(name); e != nil {
+					entries = append(entries, e)
+				}
+			}
+		}
+	}
+
 	out := make([]StreamInfo, 0, len(entries))
 
 	for _, e := range entries {
@@ -245,7 +258,10 @@ func (p *Provider) StreamByARN(ctx context.Context, arn string) (StreamInfo, boo
 
 	c := p.caller(ctx)
 
-	e := c.state.table(name)
+	// A replica region reads the owning region's stream (StreamList).
+	state, _ := p.home(c, name)
+
+	e := state.table(name)
 	if e == nil {
 		return StreamInfo{}, false
 	}
