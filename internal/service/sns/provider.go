@@ -63,6 +63,7 @@ func New(settings func() Settings) *Provider {
 	}
 
 	p.lanes.client = p.client
+	p.lanes.poster = newPoster()
 
 	// LocalStack starts its sequence at (now + 100) << 33, a 20-digit number
 	// that grows with the clock, so a restart never hands one out twice.

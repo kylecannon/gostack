@@ -81,8 +81,8 @@ func (p *Provider) Subscribe(ctx context.Context, in *api.SubscribeInput) (*api.
 	}
 
 	arn := sub.ARN
-	if created && (sub.Protocol == protocolHTTP || sub.Protocol == protocolHTTPS) {
-		p.subscriptionMessage(envelope.SubscriptionConfirmation, sub, sub.Token)
+	if created && isHTTP(sub.Protocol) {
+		p.subscriptionMessage(envelope.SubscriptionConfirmation, sub, sub.Token, t.attribute(signatureVersion))
 
 		if in.ReturnSubscriptionArn == nil || !*in.ReturnSubscriptionArn {
 			arn = pendingSubscriptionARN
@@ -91,14 +91,6 @@ func (p *Provider) Subscribe(ctx context.Context, in *api.SubscribeInput) (*api.
 
 	return &api.SubscribeOutput{SubscriptionArn: new(arn)}, nil
 }
-
-// subscriptionMessage is the one place Subscribe and Unsubscribe hand an HTTP
-// or HTTPS subscription its SubscriptionConfirmation or
-// UnsubscribeConfirmation, with token in its SubscribeURL. Delivery to HTTP
-// endpoints is a later ticket's: it builds the message with p.Envelope and
-// sends it here. Until then nothing is sent, and the token stays reachable
-// through /_aws/sns/subscription-tokens.
-func (*Provider) subscriptionMessage(envelope.Type, *Subscription, string) {}
 
 // checkEndpoint is LocalStack's check of a Subscribe protocol and endpoint,
 // in its order.
