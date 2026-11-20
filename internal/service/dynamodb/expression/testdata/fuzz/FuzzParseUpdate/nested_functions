@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET c = list_append(if_not_exists(z, :l), (c))")

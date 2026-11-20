@@ -62,6 +62,21 @@ change applies from the next one.
 |---|---|
 | `S3_SKIP_SIGNATURE_VALIDATION` | Defaults to `1`. `0` checks a presigned URL's signature, its expiry, the 7-day limit on `X-Amz-Expires` and the `x-amz-*` headers it did not sign. A missing presign parameter is refused, and the headers a presigned query carries move into the request, whatever the setting. Every access key signs with the secret `test`; LocalStack's internal keys sign with `__internal_call__`. |
 
+## DynamoDB
+
+| Variable | Effect |
+|---|---|
+| `DYNAMODB_ERROR_PROBABILITY` | A number from 0 to 1: the chance that an item read or write (`GetItem`, `Query`, `Scan`, `BatchGetItem`, `TransactGetItems`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `TransactWriteItems`) answers `400 ProvisionedThroughputExceededException`. One draw per request, except `BatchWriteItem`, which draws once per write request and returns each throttled one in `UnprocessedItems`; LocalStack draws the same way. |
+| `DYNAMODB_READ_ERROR_PROBABILITY`, `DYNAMODB_WRITE_ERROR_PROBABILITY` | The same for the reads alone or the writes alone, tested before the general one. |
+| `DYNAMODB_SHARE_DB` | An integer; any but `0` puts every account's and region's tables in one namespace, as DynamoDB Local's shared database does. ARNs still carry the caller's account and region. |
+| `DYNAMODB_REMOVE_EXPIRED_ITEMS` | Removes expired items every hour from tables with time to live on. Off, they are removed only by `DELETE /_aws/dynamodb/expired` (canonical `/_gostack/services/dynamodb/expired`). The sweep's timer exists only while the setting is on and a table has time to live on; LocalStack reads the setting at start only, gostack when a table turns time to live on and at each sweep. |
+
+A probability or `DYNAMODB_SHARE_DB` that does not parse as a number refuses
+start, as LocalStack's `config.py` does. DynamoDB Local's own JVM settings
+(`DYNAMODB_HEAP_SIZE`, `DYNAMODB_LOCAL_PORT`, `DYNAMODB_IN_MEMORY`,
+`DYNAMODB_DELAY_TRANSIENT_STATUSES`, `DYNAMODB_OPTIMIZE_DB_BEFORE_STARTUP`,
+`DYNAMODB_CORS`) are ignored: gostack runs no DynamoDB Local.
+
 ## Persistence
 
 | Variable | Effect |
@@ -135,6 +150,19 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | `ListObjects` (v1) `IsTruncated` | Looks ahead: true only when a further key or prefix follows the page | The same. A page that ends the listing exactly is not truncated, and `NextMarker` is set only with a delimiter. SQ-143 found no difference. | `ListObjects` API reference: `IsTruncated` is true when the results exceed `MaxKeys` and `NextMarker` is returned only with a delimiter |
 | A non-streaming request body over `GOSTACK_MAX_REQUEST_BODY` (16 MiB by default), such as an XML configuration document | No limit; reads it whole | `400 MaxMessageLengthExceeded`: "Your request was too big.", in S3's error XML. The reader stops at the limit and fails with `rest.ErrBodyTooLarge`, which the generated S3 reader answers this way. A body of exactly the limit reads. `GOSTACK_MAX_REQUEST_BODY=0` removes the limit, as in LocalStack. A streamed payload (`PutObject`, `UploadPart`) has no limit. `TestXMLBodyOverMaxBodyAnswersMaxMessageLengthExceeded` pins it. | S3 Error Responses: `MaxMessageLengthExceeded`, 400, "Your request was too big." AWS documents no size limit for a configuration document; the cap is gostack's, to keep a body from filling memory. |
 | A presigned URL whose `X-Amz-Credential` does not parse, such as one containing `;` or `%zz` | Not recorded | `400 AuthorizationQueryParametersError`: "Error parsing the X-Amz-Credential parameter; the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request"." Checked whether or not signatures are, by `readV4Params` with `account.ParseScope`. | S3 Error Responses: `AuthorizationQueryParametersError`, 400; the wording is the one AWS uses for a credential that is not `<AKID>/<date>/<region>/<service>/aws4_request` |
+| DynamoDB `DescribeContinuousBackups` and `UpdateContinuousBackups` on a missing table | `200` with a default description | `400 TableNotFoundException` "Table not found: <name>"; enabled point-in-time recovery answers `RecoveryPeriodInDays` (35 by default) and the restorable times | The API reference lists `TableNotFoundException`; the aws.validated snapshot of `test_continuous_backup_update` has the period and times. The message text is unverified |
+| DynamoDB time to live, point-in-time recovery and Kinesis destinations after `DeleteTable` | Kept by table name, so a table created again under the name inherits them | Deleted with the table | A recreated table that removes items it was never told to expire is a stuck state |
+| DynamoDB `EnableKinesisStreamingDestination` | `400 ValidationException` "User does not have a permission to use kinesis stream" unless Kinesis has the stream | Takes any stream ARN and stores the destination; nothing is delivered | gostack has no Kinesis to ask |
+| DynamoDB `ListGlobalTables` | Every record, in creation order, ignoring `Limit`, `RegionName` and `ExclusiveStartGlobalTableName` | Sorted by name, filtered by `RegionName`, paged by `Limit` | The API reference |
+| DynamoDB `ReplicaUpdates` that create a replica in the owning region or in a region holding a table of that name | Records it, and `DescribeTable` then lists the owning region twice | `400 ValidationException` "Failed to create a the new replica ... already existed as tables." | The message names the condition |
+| DynamoDB `UpdateTable` called in a replica region | `TableArn` names the owning region | `TableArn` names the caller's region, as `DescribeTable` does there | |
+| DynamoDB PartiQL `INSERT` of a key that exists, through `ExecuteStatement` | `400`, `__type` `DuplicateItem` | `400 DuplicateItemException`, same message | botocore's `ExecuteStatement` error shape is `DuplicateItemException` |
+| DynamoDB `ExecuteStatement` `ConsumedCapacity` and `LastEvaluatedKey` | Never answered | Answered: `ConsumedCapacity` when `ReturnConsumedCapacity` asks, `LastEvaluatedKey` beside a `NextToken` | The `ExecuteStatement` API reference lists both response members |
+| DynamoDB `ExecuteTransaction` `ConsumedCapacity` | Never answered | Answered when `ReturnConsumedCapacity` asks | The `ExecuteTransaction` API reference lists it |
+| DynamoDB PartiQL `SELECT` with `WHERE <hash key> IN [...]` | One Query per value, in DynamoDB Local's order | One Scan with the `IN` as its filter: the same items, possibly in another order | Unverified; only the order differs |
+| DynamoDB PartiQL `SELECT ... ORDER BY <range key> DESC` with `Limit` | Reads the first `Limit` items in ascending order and returns them reversed | Reads from the highest range key down, as a Query with `ScanIndexForward` false | The PartiQL `SELECT` reference: `DESC` orders the result descending |
+| DynamoDB `ExecuteStatement` with no `Statement` | `500 InternalError` | `400 ValidationException` "The statement was empty." | A crash is not copied; the message is the one an empty batch gets |
+| DynamoDB `DescribeEndpoints` | `400 UnknownOperationException`, from DynamoDB Local | `200` with one endpoint: `Address` is `LOCALSTACK_HOST`, `CachePeriodInMinutes` 1440 | `DescribeEndpoints` API reference: the response is a list of `Endpoint` with `Address` and `CachePeriodInMinutes` |
 
 ### S3 versioning and Object Lock
 
@@ -240,7 +268,9 @@ under 0.5 s on every protocol, and the process keeps serving.
 
 `Test_Gateway_DeeplyNestedBodies`, `Test_Decode_NestingBound`,
 `Test_Decoder_NestedToTheBodyCap` and `Test_queryFile_RecursiveInput` pin these.
-DynamoDB's own 32-level limit belongs to its handler, which is not on `main`.
+DynamoDB's own limit, 32 levels of `M` or `L` in an item or an expression
+value, is its handler's (`value.MaxDepth`), answered as DynamoDB Local's
+`ValidationException`.
 
 ## Request memory limits
 
@@ -296,6 +326,169 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 - A `PostObject` policy condition that fails is quoted in the `AccessDenied`
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
+
+## DynamoDB operations
+
+LocalStack serves DynamoDB by forwarding to Amazon's DynamoDB Local, rewriting
+some requests and answers in its provider (`services/dynamodb/provider.py` at
+8b9a79f). gostack runs a native engine (`docs/architecture.md`, "DynamoDB").
+It builds 36 of the 57 operations in the model, and `/_gostack/services`
+reports 36 of 57: the 35 operations the LocalStack image answers, plus
+`DescribeEndpoints` (the row under "Where gostack follows AWS").
+
+The other 21 answer `501 InternalFailure`, "API action '`<operation>`' for
+service 'dynamodb' not yet implemented": `CreateBackup`, `DeleteBackup`,
+`DescribeBackup`, `ListBackups`, `RestoreTableFromBackup`,
+`RestoreTableToPointInTime`, `ExportTableToPointInTime`, `DescribeExport`,
+`ListExports`, `ImportTable`, `DescribeImport`, `ListImports`,
+`GetResourcePolicy`, `PutResourcePolicy`, `DeleteResourcePolicy`,
+`DescribeGlobalTableSettings`, `UpdateGlobalTableSettings`,
+`DescribeTableReplicaAutoScaling`, `UpdateTableReplicaAutoScaling`,
+`ListContributorInsights` and `UpdateContributorInsights`. The LocalStack
+image answers `400 UnknownOperationException`, "An unknown operation was
+requested.", for the 11 of them SQ-230 probed (`verification/SQ-230/probe1b.txt`:
+the backup, export, import, resource policy, global table settings, replica
+auto scaling and contributor insights calls); the other 10 are unprobed. No
+test of LocalStack's suite calls any of the 21: a grep of
+`tests/aws/services/dynamodb` and `tests/aws/services/dynamodbstreams` at
+8b9a79f for their boto3 names (`create_backup` ... `update_contributor_insights`)
+finds none.
+`DescribeContributorInsights` is served: it echoes `TableName` and
+`IndexName` with `ContributorInsightsStatus` `DISABLED`, without checking the
+table, as the image does.
+
+DynamoDB Streams builds all four of its operations (`/_gostack/services`: 4 of
+4). LocalStack serves them from Kinesis; gostack keeps the records itself, one
+shard per stream, with no Kinesis behind it ("DynamoDB Streams", below).
+
+Parity: every row of `tests/aws/services/dynamodb` and
+`tests/aws/services/dynamodbstreams` that LocalStack passes, passes, except
+these, excluded with their reasons in `parity/exclusions/dynamodb.yaml` and
+`dynamodbstreams.yaml`:
+
+| Reason | Rows | Why |
+|---|---|---|
+| `depends-on:kinesis` | 5 | The test reads a Kinesis stream: a table's Kinesis streaming destination, or LocalStack's Kinesis-backed stream listed by `kinesis.list_streams`. gostack stores destinations and delivers nothing to them. |
+| `depends-on:kms` | 2 | The test calls `kms.describe_key` on the table's `KMSMasterKeyArn` ("DynamoDB until KMS", below). |
+| `depends-on:cloudformation` | 1 | `test_table_v2_stream` provisions its table through a CDK stack. |
+| `hard-skipped` | 2 | Skipped by the suite itself: `test_dynamodb_stream_records_with_update_item` always ("Flaky in CI"), `test_enable_kinesis_streaming_destination` on every run not against AWS. |
+
+What LocalStack adds over DynamoDB Local is kept: account and region
+namespacing with region `local` read as `us-east-1`, the `CreateTable` extras
+(`TableId`, `SSEDescription`, `WarmThroughput`, index backfill fields), stream
+record synthesis where a put that changes nothing leaves no record, Kinesis
+destinations stored but not delivered, global tables in the 2017 and 2019
+forms with the 2019 replica forwarding, tags, and time to live removal only on
+`DELETE /_aws/dynamodb/expired` or the hourly sweep under
+`DYNAMODB_REMOVE_EXPIRED_ITEMS`. The settings gostack honours and the
+DynamoDB Local ones it ignores are in "DynamoDB" under the environment
+variables, above.
+
+## DynamoDB until KMS
+
+A table created or updated with `SSESpecification` enabled and no
+`KMSMasterKeyId` has no `KMSMasterKeyArn` in its `SSEDescription`. LocalStack
+creates a KMS key for the table and reports its ARN; gostack does that once it
+serves KMS. A table given a `KMSMasterKeyId` reports it as an ARN in the
+caller's account and region, as LocalStack does.
+
+## DynamoDB expressions and reads
+
+- A request with two or more malformed `ExpressionAttributeNames` or
+  `ExpressionAttributeValues` keys: gostack names the first in sorted order,
+  LocalStack the first in the request's JSON order. The decoded request map
+  keeps no order. With one bad key the answers are the same.
+- `Scan` with `Segment` and `TotalSegments` puts an item in the segment that
+  the FNV hash of its partition key picks. Every item is in exactly one
+  segment, as in LocalStack, but which segment holds a given item differs
+  from DynamoDB Local's hash.
+- Arithmetic in an update expression stores its result in canonical form:
+  `1.5 + 1.5` is `3` and a result of zero is `0`, where DynamoDB Local in the
+  LocalStack image writes `3.0` and `0.0`. AWS trims trailing zeroes from
+  numbers (the data types page of the developer guide).
+- `ReturnItemCollectionMetrics` is accepted and never answered, as the
+  LocalStack image does on every write.
+- A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
+  is not `ALL`: LocalStack's message names the index `id-index` whatever it is
+  called; gostack names the index of the request. No snapshot pins the text.
+- The legacy `KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected` and
+  `ConditionalOperator` translate to the same key condition and condition
+  evaluator as the expressions. `UpdateItem` with `AttributeUpdates` is served
+  by the same update path as `UpdateExpression`; the deviations below are the
+  ones its probes found.
+- An `AttributeUpdates` entry with no `Action`: LocalStack leaves the item
+  alone; gostack applies it as `PUT`, the default botocore documents for the
+  member ("PUT (default)").
+- An `AttributeUpdates` `PUT` value nested 33 levels deep: LocalStack stores it;
+  gostack refuses it, as the 32 levels AWS documents for a nested attribute.
+- Several `AttributeUpdates` entries refused in one request: LocalStack names
+  the first in the request's JSON order; gostack names the first in
+  attribute-name order, as the decoded map keeps no request order.
+- An `AttributeUpdates` `ADD` or `DELETE` of a number set: gostack compares the
+  members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
+  collection contains duplicates" for them and its `DELETE` removes nothing.
+- A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
+  attribute the index does not project: LocalStack answers "Global secondary
+  index X does not project [attr]"; gostack returns the items without the
+  attribute. `AttributesToGet` gets the image's refusal in both.
+- `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
+  parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
+  not have empty statement." / "The statement was empty." and prefixes the
+  count message with "Validation failed in TransactStatements[i]: "; gostack's
+  texts differ. `BatchExecuteStatement` with an unknown
+  `ReturnValuesOnConditionCheckFailure` answers `500 InternalFailure` in the
+  image and `200` here with the statement answered.
+- A legacy filter or `Expected` with two or more invalid conditions: gostack
+  names the first in attribute-name order, the image the first in the request's
+  JSON order, which the decoded map does not keep. With one invalid condition
+  the answers are the same.
+- `ConditionalOperator` of a value other than `AND` or `OR`: LocalStack
+  answers `500 InternalFailure`; gostack answers the model's enum
+  `ValidationException`, as botocore defines the shape. The same goes for a
+  `KeyConditions` range key condition with `NE`: `500` there, `400` "Query key
+  condition not supported" here, the message the hash key gets.
+- A `Scan` or `Query` of a local secondary index that asks for an attribute the
+  index does not project (`AttributesToGet`, `ProjectionExpression`, or
+  `Select` `ALL_ATTRIBUTES`) with `ReturnConsumedCapacity` `INDEXES` reports
+  the fetched table items' read units under `Table`, plus the index's own.
+  LocalStack reports `Table` 0 and the index's units alone while returning the
+  same attributes. The developer guide's local secondary indexes page says "in
+  addition to the reads from the local secondary index ... you are charged for
+  read capacity units for every base table item fetched", so the document
+  wins.
+
+## DynamoDB batches and transactions
+
+The LocalStack column is the LocalStack 8b9a79f image, probed in SQ-293 and
+SQ-302 (`verification/SQ-293`, `verification/SQ-302`).
+
+| Behavior | AWS | LocalStack | gostack |
+|---|---|---|---|
+| Consumed capacity of a transaction | The developer guide's rule for transactions: each action costs twice what it costs alone, two write units per 1 KB written and two read units per 4 KB checked | DynamoDB Local collapses equal per-action amounts, so several equal writes can report less than twice their units | Twice each action's own units, index units included, summed per table (`transactCapacity`) |
+| `BatchWriteItem` with no `RequestItems`, `TransactWriteItems` or `TransactGetItems` with no `TransactItems` | `400 ValidationException`: the member is required | `500 InternalError` from a Python `NoneType` error (`BatchGetItem` with no `RequestItems` answers 400) | `400 ValidationException`: `BatchWriteItem cannot have a null or no requests set`, or `Value null at 'transactItems' failed to satisfy constraint: Member must not be null` |
+| A `BatchWriteItem` request throttled by `DYNAMODB_*ERROR_PROBABILITY` | An item in `UnprocessedItems` was not written | Returned in `UnprocessedItems` and written anyway: the provider still forwards the whole batch | Returned in `UnprocessedItems` and not written |
+| `{"N": "1"}` and `{"N": "1.0"}` as keys of one table | One number: the data types page trims leading and trailing zeroes, so they name one item | `BatchWriteItem` and `TransactGetItems` call them duplicates; `TransactWriteItems` and `BatchGetItem` treat them as two items and answer 200 | One key everywhere: each operation reports its duplicate error |
+| A `ClientRequestToken` reused more than 10 minutes after its transaction | The `TransactWriteItems` reference: after 10 minutes the request runs as a new one | Answers 200 and writes nothing, for the same request or a different one | Runs as a new transaction and writes |
+| A transaction that repeats an item | No recorded answer | Checks the values and expression syntax of every action first. Then, when a repeated action fails on its own (a condition, a key type, an update that cannot apply, an item too large), that failure, as `TransactionCanceledException` with reasons or a plain `ValidationException`; only when they pass, the duplicate error. A failing condition on another item still answers the duplicate error. | The duplicate error, checked action by action, so it also comes before a syntax error in a later action. Matching the image would need the duplicate check to wait for execution (SQ-302 ruling). |
+| One batch naming a table by name and by ARN | No recorded answer | `BatchGetItem` returns the item once but reports capacity twice; `BatchWriteItem` reports one write's capacity for two puts | Both entries are one table: `BatchGetItem` returns the item once per entry, and capacity sums both |
+| A reused `ClientRequestToken` on a different request that also fails validation | No recorded answer | Checks the values and expression syntax of every action, then the token (`IdempotentParameterMismatchException`), then table names, lookup, keys and duplicates | Checks each action in order, names, lookup and keys included, before the token, so a missing table or a bad key answers its own error first. Matching needs the validation split in two passes (SQ-302 ruling). |
+| Order of `ConsumedCapacity` and of the first error across tables in a batch | No recorded answer | Java hash order of the table names; two names in one hash bucket keep the request's order | Java hash order; two names in one bucket go in sorted order, because `RequestItems` decodes into a Go map that keeps no request order |
+
+## DynamoDB Streams
+
+LocalStack backs streams with Kinesis; gostack keeps them natively, one shard
+per stream (`internal/service/dynamodb/stream`). The LocalStack column is the
+8b9a79f image, probed in SQ-231 (`verification/SQ-231/probe1-3.jsonl`).
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| A put that leaves the item's values unchanged but spells a number differently, `{"N": "1.0"}` over `{"N": "1"}` | A `MODIFY` record | No record: values are compared canonically | The data types page: leading and trailing zeroes are trimmed, so the item is unchanged |
+| `SizeBytes` of a record | The size of DynamoDB Local's JSON record | The item size of `Keys` plus the images the view type includes | The aws.validated snapshots of `test_batch_write_items_streaming` and `test_transact_write_items_streaming`: 12, 16, 26, 38, 43, 46 |
+| `UpdateTable` enabling a stream on a table whose stream was disabled | `500 InternalError`: the Kinesis stream already exists | A new `LatestStreamLabel` and a new shard; the old stream's records are no longer readable | The `StreamSpecification` reference: enabling assigns a new label |
+| A bogus shard id, an unparsable iterator, `AT_SEQUENCE_NUMBER` without `SequenceNumber`, `Limit` 0 | `500 InternalError` from the Kinesis call behind it | `ResourceNotFoundException` for the shard; `ValidationException` for the rest, `Limit` with the model's constraint message | The DynamoDB Streams API reference's errors and the model's `min` |
+| `DescribeStream` with no `StreamArn` | `400 ResourceNotFoundException` "Requested resource not found: Stream: None not found" | `400 ValidationException` "Value null at 'streamArn' failed to satisfy constraint: Member must not be null" | The model marks `StreamArn` required |
+| `ListStreams` with `Limit` | Ignores it | Pages by it, with `LastEvaluatedStreamArn` | The `ListStreams` reference |
+| `ListStreams` with no `TableName` in a region a table is replicated to | Leaves the replica's stream out | Lists it, with the caller's region in the ARN | AWS gives every replica its own stream |
 
 ## SNS platform applications, endpoints and SMS
 

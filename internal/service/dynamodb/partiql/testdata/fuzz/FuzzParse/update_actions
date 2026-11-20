@@ -1,0 +1,2 @@
+go test fuzz v1
+string("UPDATE t SET n = n + 1, l = list_append(l, [3]) SET s = set_delete(s, <<'x'>>) REMOVE q WHERE id = 'a' RETURNING ALL NEW *")
