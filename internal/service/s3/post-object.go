@@ -111,7 +111,7 @@ func (p *Provider) PostObject(ctx context.Context, in *s3api.PostObjectInput) (*
 		put.Body = &lengthChecked{r: file, ranges: ranges}
 	}
 
-	out, err := p.PutObject(ctx, put)
+	out, err := p.storeObject(ctx, put, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -26,9 +26,10 @@ type copyPlan struct {
 	src             copySourceName
 }
 
-// planCopy validates the request's headers and finds both buckets, so that
-// nothing is read or written for a request that cannot succeed.
-func (p *Provider) planCopy(rc *request.Context, in *s3api.CopyObjectInput) (copyPlan, error) {
+// planCopy validates the request's headers, finds both buckets and checks the
+// KMS key the request names (checkKMSKey), so that nothing is read or written
+// for a request that cannot succeed.
+func (p *Provider) planCopy(ctx context.Context, rc *request.Context, in *s3api.CopyObjectInput) (copyPlan, error) {
 	plan := copyPlan{destKey: deref(in.Key)}
 
 	var err error
@@ -54,8 +55,11 @@ func (p *Provider) planCopy(rc *request.Context, in *s3api.CopyObjectInput) (cop
 	}
 
 	plan.srcBucket, err = p.bucket(rc.AccountID, plan.src.bucket)
+	if err != nil {
+		return plan, err
+	}
 
-	return plan, err
+	return plan, p.checkKMSKey(ctx, deref(in.SSEKMSKeyId), plan.dest)
 }
 
 // openSource reads the source, checks it and opens its body in one hold of the
@@ -102,19 +106,12 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 		return nil, err
 	}
 
-	plan, err := p.planCopy(rc, in)
+	plan, err := p.planCopy(ctx, rc, in)
 	if err != nil {
 		return nil, err
 	}
 
-	v, err := newCopiedVersion(in, plan.dest)
-	if err != nil {
-		return nil, err
-	}
-
-	// The copy keeps no lock from its source: it takes the one the request names,
-	// or the bucket's default retention.
-	v.Lock, err = plan.dest.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
+	v, err := newCopiedVersion(in)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +122,16 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	}
 
 	defer func() { _ = body.Close() }()
+
+	err = p.encryptTarget(ctx, v, in, plan.dest)
+	if err != nil {
+		return nil, err
+	}
+
+	err = lockAndACL(v, in, plan.dest)
+	if err != nil {
+		return nil, err
+	}
 
 	inherit(v, in, source)
 
@@ -140,6 +147,11 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 
 	p.notify(ctx, plan.dest, plan.destKey, v)
 
+	return copyOutput(in, plan, v, source), nil
+}
+
+// copyOutput is the answer to a CopyObject that made v from source.
+func copyOutput(in *s3api.CopyObjectInput, plan copyPlan, v, source *Version) *s3api.CopyObjectOutput {
 	result := &s3api.CopyObjectResult{ETag: new(quoted(v.ETag)), LastModified: &protocol.Time{Time: v.LastModified.Time}}
 	c := checksumsOf(v)
 	result.ChecksumCRC32, result.ChecksumCRC32C, result.ChecksumCRC64NVME = c.crc32, c.crc32c, c.crc64nvme
@@ -156,7 +168,45 @@ func (p *Provider) CopyObject(ctx context.Context, in *s3api.CopyObjectInput) (*
 	out.ServerSideEncryption, out.SSEKMSKeyId, out.BucketKeyEnabled = versionEncryption(v)
 	out.SSECustomerAlgorithm, out.SSECustomerKeyMD5 = copyEncryption(in).customer.echo()
 
-	return out, nil
+	return out
+}
+
+// encryptTarget gives the copy v the encryption the request names or the
+// bucket's default, never the source's. CopyObject resolves it once the source
+// has been found and checked, as LocalStack does, so a missing source answers
+// NoSuchKey whatever the encryption headers say, and a copy that fails there
+// makes no managed key for an aws:kms write that names none. The request's
+// SSE-C parameters were checked with the source's (checkSource).
+func (p *Provider) encryptTarget(ctx context.Context, v *Version, in *s3api.CopyObjectInput, dest *Bucket) error {
+	enc, err := p.encryptionFor(ctx, copyEncryption(in), dest)
+	if err != nil {
+		return err
+	}
+
+	v.setEncryption(enc)
+
+	return nil
+}
+
+// lockAndACL gives the copy v the Lock and ACL the request names, after its
+// encryption, as LocalStack's copy_object resolves them (lock parameters, then
+// the ACL): a bad ACL with another region's aws:kms key answers the key's
+// error, and a missing source answers NoSuchKey whatever the ACL says. The copy
+// keeps no lock or ACL from its source: it takes the lock the request names, or
+// the bucket's default retention, and the ACL the request names.
+func lockAndACL(v *Version, in *s3api.CopyObjectInput, dest *Bucket) error {
+	var err error
+
+	v.Lock, err = dest.lockFor(in.ObjectLockMode, in.ObjectLockRetainUntilDate, in.ObjectLockLegalHoldStatus)
+	if err != nil {
+		return err
+	}
+
+	v.ACL, err = newResourceACL(in.ACL, grantHeaders{
+		fullControl: in.GrantFullControl, read: in.GrantRead, readACP: in.GrantReadACP, writeACP: in.GrantWriteACP,
+	})
+
+	return err
 }
 
 // checkSource holds the source version to what a copy needs of it: not
@@ -205,8 +255,9 @@ func changesObject(in *s3api.CopyObjectInput) bool {
 
 // newCopiedVersion returns the version a CopyObject makes with what the request
 // sets, before it takes what it inherits from the source. Directives other than
-// COPY and REPLACE are refused.
-func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error) {
+// COPY and REPLACE are refused. Its encryption, lock and ACL are left to
+// CopyObject, which resolves them once the source has been found.
+func newCopiedVersion(in *s3api.CopyObjectInput) (*Version, error) {
 	directive := deref(in.MetadataDirective)
 	if directive != "" && directive != directiveCopy && directive != directiveReplace {
 		return nil, invalidArgument("Unknown metadata directive.", "x-amz-metadata-directive", &directive)
@@ -238,24 +289,11 @@ func newCopiedVersion(in *s3api.CopyObjectInput, dest *Bucket) (*Version, error)
 		WebsiteRedirectLocation: deref(in.WebsiteRedirectLocation),
 	}
 
-	// The target takes the encryption the request names or the bucket's
-	// default, never the source's. The request's SSE-C parameters are checked
-	// with the source's (checkSource), once the source has been found.
-	v.setEncryption(resolveEncryption(copyEncryption(in), dest))
-
 	if in.Tagging != nil {
 		v.Tags, err = parseTaggingHeader(*in.Tagging)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// A copy takes the ACL the request names, not the source's.
-	v.ACL, err = newResourceACL(in.ACL, grantHeaders{
-		fullControl: in.GrantFullControl, read: in.GrantRead, readACP: in.GrantReadACP, writeACP: in.GrantWriteACP,
-	})
-	if err != nil {
-		return nil, err
 	}
 
 	if v.StorageClass == "" {

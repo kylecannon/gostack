@@ -19,12 +19,15 @@ func Test_s3Settings(t *testing.T) {
 	got := settings()
 
 	assert.False(t, got.ValidateSignatures)
+	assert.False(t, got.ValidateKMSKeys, "KMS keys are not checked by default")
 	assert.Equal(t, 4570, got.GatewayPort)
 
 	t.Run("the config bridge's false turns validation on", func(t *testing.T) {
 		require.NoError(t, cfg.Set("S3_SKIP_SIGNATURE_VALIDATION", false))
+		require.NoError(t, cfg.Set("S3_SKIP_KMS_KEY_VALIDATION", false))
 
 		assert.True(t, settings().ValidateSignatures)
+		assert.True(t, settings().ValidateKMSKeys)
 	})
 }
 

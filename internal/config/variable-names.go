@@ -36,6 +36,7 @@ const (
 	varDisableCustomCORSS3             = "DISABLE_CUSTOM_CORS_S3"
 	varDisableCustomCORSAPIGateway     = "DISABLE_CUSTOM_CORS_APIGATEWAY"
 	varS3SkipSignatureValidation       = "S3_SKIP_SIGNATURE_VALIDATION"
+	varS3SkipKMSKeyValidation          = "S3_SKIP_KMS_KEY_VALIDATION"
 	varMaxRequestBody                  = "MAX_REQUEST_BODY"
 	varDynamoDBErrorProbability        = "DYNAMODB_ERROR_PROBABILITY"
 	varDynamoDBReadErrorProbability    = "DYNAMODB_READ_ERROR_PROBABILITY"

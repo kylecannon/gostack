@@ -128,7 +128,7 @@ func (p *Provider) CreateMultipartUpload(
 		return nil, err
 	}
 
-	err = checkStorageClass(in.StorageClass)
+	err = p.checkClassAndKMSKey(ctx, in.StorageClass, in.SSEKMSKeyId, b)
 	if err != nil {
 		return nil, err
 	}
@@ -145,15 +145,13 @@ func (p *Provider) CreateMultipartUpload(
 		return nil, err
 	}
 
-	request := uploadEncryptionRequest(in)
-
-	err = validateCustomerKey(request.customer, request.algorithm)
+	enc, err := p.uploadEncryptionOf(ctx, in, b)
 	if err != nil {
 		return nil, err
 	}
 
 	upload := newUpload(in, algorithm, kind)
-	enc := resolveEncryption(request, b)
+
 	upload.setEncryption(enc)
 	upload.ACL, upload.Tags = config.acl, config.tags
 
@@ -174,7 +172,7 @@ func (p *Provider) CreateMultipartUpload(
 	b.addUpload(upload)
 	b.mu.Unlock()
 
-	return createUploadOutput(in, upload, enc, request), nil
+	return createUploadOutput(in, upload, enc, uploadEncryptionRequest(in)), nil
 }
 
 // createUploadOutput is CreateMultipartUpload's answer for the upload it
