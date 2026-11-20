@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	ddbapi "github.com/kylecannon/gostack/internal/api/dynamodb"
 	kmsapi "github.com/kylecannon/gostack/internal/api/kms"
@@ -69,12 +71,11 @@ func jsonCall(svc, target, version string) map[string]string {
 	}
 }
 
-// Test_Gateway_DeeplyNestedBodies: a body built to nest as deeply as its syntax
-// allows, at the 16 MiB body cap, is refused with the protocol's malformed-body
-// error where the decoder bounds depth (json at 10,000 levels, rest-xml at
-// restxml.MaxDepth), or decodes where the shape bounds it (query). Either way
-// it answers within nestingAlloc, and the gateway serves the next request.
-func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
+// nestingHandler is a gateway whose generated services answer a body that
+// decodes with their Unimplemented handler.
+func nestingHandler(t *testing.T) http.Handler {
+	t.Helper()
+
 	regs := []service.Registration{
 		generatedRegistration(sqsapi.Metadata, func(w http.ResponseWriter, rc *request.Context) {
 			sqsapi.Serve(sqsapi.Unimplemented{}, w, rc)
@@ -92,8 +93,22 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 			s3api.Serve(s3api.Unimplemented{}, w, rc)
 		}),
 	}
-	handler := newGateway(t, newSettings(), regs).Handler()
+	return newGateway(t, newSettings(), regs).Handler()
+}
 
+// Test_Gateway_DeeplyNestedBodies: a body built to nest as deeply as its syntax
+// allows, at the 16 MiB body cap, is refused with the protocol's malformed-body
+// error where the decoder bounds depth (json at 10,000 levels, rest-xml at
+// restxml.MaxDepth), or decodes where the shape bounds it (query). Either way
+// it answers within nestingAlloc, waits for nothing, and the gateway serves the
+// next request.
+//
+// Each case runs in a synctest bubble, with no socket and no sleep of its own,
+// so a call that waited, on a timer or a sleep, would move the fake clock, and
+// each case asserts it did not. What a call costs in CPU is not seen there: the clock
+// stands still while it runs, and Test_Gateway_NestedBodiesScaleWithDepth
+// measures that.
+func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 	const (
 		bodyCap   = int(protocol.DefaultMaxBody)
 		wrap      = 200 // room for the members around a nested value
@@ -207,26 +222,33 @@ func Test_Gateway_DeeplyNestedBodies(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.LessOrEqual(t, len(tt.body), bodyCap, "the body must be under the cap, or the cap answers")
+			synctest.Test(t, func(t *testing.T) {
+				handler := nestingHandler(t)
 
-			var before, after runtime.MemStats
+				require.LessOrEqual(t, len(tt.body), bodyCap, "the body must be under the cap, or the cap answers")
 
-			runtime.ReadMemStats(&before)
+				var before, after runtime.MemStats
 
-			resp, body := call(t, handler, newRequest(t, tt.method, tt.target, tt.body, tt.headers))
+				runtime.ReadMemStats(&before)
 
-			runtime.ReadMemStats(&after)
+				begin := time.Now()
 
-			// Work is bounded by the allocation below, which a load cannot move; how
-			// long it took is not asserted. A body that took exponential time would
-			// hang here and fail on the suite's own timeout.
-			assert.Equal(t, tt.wantStatus, resp.StatusCode, body)
-			assert.Contains(t, body, tt.wantBody)
-			assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(nestingAlloc))
+				resp, body := call(t, handler, newRequest(t, tt.method, tt.target, tt.body, tt.headers))
 
-			// The gateway still serves: a plain call decodes and reaches the handler.
-			resp, body = call(t, handler, sendMessage(t))
-			assert.Equal(t, http.StatusNotImplemented, resp.StatusCode, body)
+				waited := time.Since(begin)
+
+				runtime.ReadMemStats(&after)
+
+				// Work is bounded by the allocation below, which a load cannot move.
+				assert.Zero(t, waited, "the call waited for something: the fake clock moved")
+				assert.Equal(t, tt.wantStatus, resp.StatusCode, body)
+				assert.Contains(t, body, tt.wantBody)
+				assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(nestingAlloc))
+
+				// The gateway still serves: a plain call decodes and reaches the handler.
+				resp, body = call(t, handler, sendMessage(t))
+				assert.Equal(t, http.StatusNotImplemented, resp.StatusCode, body)
+			})
 		})
 	}
 }

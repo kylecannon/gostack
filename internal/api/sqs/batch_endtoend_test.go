@@ -17,7 +17,7 @@ import (
 
 const (
 	hugeBatchEntries = 65_536
-	queueURLPath     ="http://localhost.localstack.cloud:4566/000000000000/huge-batch"
+	queueURLPath     = "http://localhost.localstack.cloud:4566/000000000000/huge-batch"
 )
 
 // Test_SendMessageBatch_of_65536_entries_is_refused sends the largest

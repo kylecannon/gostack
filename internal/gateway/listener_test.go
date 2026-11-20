@@ -344,9 +344,10 @@ func Test_Gateway_drainBy(t *testing.T) {
 		s.gateway.DrainBy(begin.Add(drainWait))
 		require.NoError(t, s.stop(t))
 		require.Error(t, <-failed)
-		// A drain that ignored DrainBy would wait for the request, which never ends,
-		// so the test would hang and fail on the suite's own timeout. How long the
-		// drain took is not asserted beyond its lower bound.
+		// A drain that ignored DrainBy would cut the request at the default five
+		// seconds instead, and this test would pass. Only the lower bound is
+		// asserted here, on a real socket; Test_Gateway_drainByIsTheDrainsDeadline
+		// asserts the instant of the cut.
 		assert.GreaterOrEqual(t, time.Since(begin), drainWait, "the drain waited until the deadline")
 	})
 
@@ -470,8 +471,8 @@ func Test_Gateway_drainDefaultTimeout(t *testing.T) {
 	require.NoError(t, s.stop(t), "cutting a request at the default timeout is not an error")
 	require.Error(t, <-failed, "the request still in flight was cut")
 
-	// A drain with no limit would wait for the request, which never ends: the test
-	// would hang and fail on the suite's own timeout. Only the lower bound is
+	// A drain with no limit would wait for the request, which never ends, and
+	// stop's guard would fail the test at ten seconds. Only the lower bound is
 	// asserted, since a loaded host can run the cut late.
 	assert.GreaterOrEqual(t, time.Since(begin), defaultDrain-time.Second, "the drain waited for the request first")
 }

@@ -34,8 +34,11 @@ const anyLoopbackPort = "127.0.0.1:0"
 // It runs in real time, with a real socket and real hook processes, which a
 // synctest bubble cannot move on. So it asserts order and lower bounds, and the
 // waits for the save and for serve are guards against a hang with seconds to
-// spare beyond the whole budget, not bounds on how long a step took. The
-// instants of the plan are asserted on the fake clock by
+// spare beyond the whole budget, not bounds on how long a step took. It does
+// not assert KillMargin: a save that started late still passes it. The instants
+// of the plan are asserted on the fake clock by
+// Test_serve_aBlockedShutdownCostsWorkAndNoMore (the save starts at Work, and
+// ends KillMargin before the kill, whatever the shutdown function does),
 // Test_serve_listenerFailureKeepsToOneBudget and
 // Test_serve_cutsQueuedCallsAtTheirDeadline.
 func Test_serve_savesBeforeTheKill(t *testing.T) {
@@ -161,9 +164,11 @@ func Test_serve_savesBeforeTheKill(t *testing.T) {
 			require.True(t, got.hasLimit, "the save has a deadline")
 
 			// The save's deadline is saveBy after the instant serve planned the
-			// shutdown, which was after the signal and before the save began. Order
-			// alone proves KillMargin: no wall-clock bound is asserted, because a
-			// loaded host can run any step late.
+			// shutdown, which was after the signal and before the save began. That
+			// is order only: it places the plan in a window that every late save
+			// also satisfies. Test_serve_aBlockedShutdownCostsWorkAndNoMore asserts
+			// the instants; no wall-clock bound is asserted here, because a loaded
+			// host can run any step late.
 			planned := got.deadline.Add(-saveBy)
 
 			assert.False(t, planned.Before(begin), "the plan counts from the signal, not before it")

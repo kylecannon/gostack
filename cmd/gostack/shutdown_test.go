@@ -163,6 +163,11 @@ func requireSaved(t *testing.T, dir string) {
 // Test_shutdown_savesBeforeTheSupervisorKills is the SIGTERM of docker stop: with
 // a request stuck in flight, the child saves its state and exits on its own
 // before the supervisor's SIGKILL, so the exit code is 0 and not 137.
+//
+// It asserts order only. The margin before the kill is KillMargin, and a child
+// that ends inside it still exits 0 here: the margin is asserted on the fake
+// clock by Test_serve_aBlockedShutdownCostsWorkAndNoMore (the save's start and
+// deadline) and Test_start_endsWhenServeDoes (nothing in start after serve).
 func Test_shutdown_savesBeforeTheSupervisorKills(t *testing.T) {
 	dir := t.TempDir()
 	sv := startSupervised(t, shutdownEnv(dir)...)
@@ -218,6 +223,11 @@ func Test_shutdown_restartSavesBeforeItStopsTheChild(t *testing.T) {
 
 // Test_shutdown_killSavesBeforeItExits is the kill action: it takes the same path,
 // with no supervisor to enforce the deadline, so the process keeps to it itself.
+//
+// It asserts order only, and its wait is a guard against a hang: a process that
+// ends inside KillMargin of the budget still passes. The margin is asserted on
+// the fake clock by Test_serve_aBlockedShutdownCostsWorkAndNoMore and
+// Test_start_endsWhenServeDoes.
 func Test_shutdown_killSavesBeforeItExits(t *testing.T) {
 	dir := t.TempDir()
 	g := startGostack(t, shutdownEnv(dir)...)

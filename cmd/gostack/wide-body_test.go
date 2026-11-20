@@ -318,17 +318,26 @@ func stall(t *testing.T, server *httptest.Server, method, path string, headers m
 // for every turn before it; on a loaded host the turns take longer, and a call
 // still queued at 5 s is throttled although the pool is working (SQ-361: 400
 // ThrottlingException on 128 busy loops, none on an idle host). So the wait is
-// two minutes, far past the burst's few seconds at any load, and it is the
-// deadline of a wedged pool: bodies that hold the pool while they wait for
-// decode room never give it back, so they all run out their wait and are
-// throttled, as the fix this test guards against once did. A wedge costs the
-// test those two minutes before it fails.
+// 30 seconds, three times the 9.1 s the burst took at load average 48 to 98 on
+// 10 cores, and it is the deadline of a wedged pool: bodies that hold the pool
+// while they wait for decode room never give it back, so they all run out their
+// wait and are throttled, as the fix this test guards against once did.
+//
+// This guards a wedge and nothing else. A call that waited up to 30 s shows
+// only that the pool gives back, not how fast: a pool that admits a tenth as
+// fast passes this test, and Test_Gateway_StalledBodies in internal/gateway is
+// what fails it. A wedge costs the test its waits before it fails, so the wait
+// is sized to keep every iteration of `go test -count=3` inside go test's
+// 10-minute default: with the pool's release planted to never grant, each
+// iteration failed after 60 to 90 s (the json subtest waits once or twice, the
+// query subtest once), and three iterations after 244.7 s in all, at load
+// average 8 to 13.
 func Test_wideBody_aColdBurstIsServed(t *testing.T) {
 	const (
 		calls = 128
 		// wedgeWait is the body wait, the deadline of a wedge and no bound on a
 		// healthy burst, which takes seconds.
-		wedgeWait = 2 * time.Minute
+		wedgeWait = 30 * time.Second
 	)
 
 	queueURL := "http://localhost/" + wideAccount + "/" + wideQueue
