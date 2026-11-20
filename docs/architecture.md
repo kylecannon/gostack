@@ -360,7 +360,12 @@ it would be refused (1.09 of 16 MiB).
 
 Residuals: each connection may hold its free allowances (64 KiB of body, 1 MiB
 of decoding) outside the pool, and a client that trickles one byte per idle
-period keeps its charge.
+period keeps its charge. Many bodies at the cap at once are answered in waves
+of the 5 s wait: each is charged in doubling steps as it arrives, so they can
+all hold part of the pool and all wait to grow, and none finishes until the
+oldest waiters give up and are throttled, which frees room for the rest. 64
+bodies of 16 MiB sent at once are answered at 5, 10, 15 and 20 s, whatever the
+idle timeout (0, 8 s or 20 s), with a peak RSS of 372 to 393 MiB.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
