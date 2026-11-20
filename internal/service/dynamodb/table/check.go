@@ -72,18 +72,10 @@ func (t *Table) CheckKey(key value.Item) error {
 // CheckItem checks a whole item before it is stored: every key attribute of
 // the table present with its type and a value DynamoDB accepts, every index key
 // attribute it carries of the index's type and not empty, and the item's size.
-// The values must have passed value.Validate. It reads the table's indexes
-// under its read lock, since UpdateTable adds and drops them.
+// The values must have passed value.Validate. It reads the published index
+// list and takes no lock, so it is safe with or without the table's lock held
+// while UpdateTable adds and drops indexes.
 func (t *Table) CheckItem(item value.Item) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	return t.CheckItemHeld(item)
-}
-
-// CheckItemHeld is CheckItem for a caller that holds the table's lock through
-// Lock, ReadLock or a write.
-func (t *Table) CheckItemHeld(item value.Item) error {
 	for _, attr := range t.keyAttributes() {
 		if _, ok := item[attr.Name]; !ok {
 			return value.Invalid(msgKeyMissing)
@@ -95,7 +87,7 @@ func (t *Table) CheckItemHeld(item value.Item) error {
 		return err
 	}
 
-	for _, idx := range t.indexes {
+	for _, idx := range t.indexList() {
 		err := checkIndexKey(&idx.spec, item)
 		if err != nil {
 			return err

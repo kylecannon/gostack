@@ -32,9 +32,15 @@ type Table struct {
 	mu      sync.RWMutex
 	key     KeySchema
 	primary store
-	indexes []*index
 	count   int
 	size    int
+
+	// indexes is copy-on-write. AddIndex and DropIndex publish a new slice
+	// while holding mu for writing; a published slice, and the spec of each
+	// index in it, never changes. CheckItem reads the list without mu, so a
+	// put's check does not contend with writes. Each index's data and counts
+	// stay guarded by mu.
+	indexes atomic.Pointer[[]*index]
 }
 
 // index is one secondary index: its spec, its own partitions and its counts.
@@ -65,9 +71,13 @@ func (c Change) Changed() bool {
 // New returns an empty table with key schema key and the given indexes.
 func New(key KeySchema, indexes []IndexSpec) *Table {
 	t := &Table{id: nextID.Add(1), key: key, primary: newStore()}
+
+	list := make([]*index, 0, len(indexes))
 	for _, spec := range indexes {
-		t.indexes = append(t.indexes, &index{spec: spec, data: newStore()})
+		list = append(list, &index{spec: spec, data: newStore()})
 	}
+
+	t.indexes.Store(&list)
 
 	return t
 }
@@ -109,11 +119,14 @@ func (t *Table) Get(key value.Item) value.Item {
 	return t.primary.get(hash, rng, "")
 }
 
-// IndexesHeld returns the specs of the table's indexes, for a caller that
-// holds the table's lock through Lock or ReadLock.
+// IndexesHeld returns the specs of the table's indexes. A caller that holds
+// the table's lock through Lock or ReadLock gets the indexes its writes will
+// maintain; it needs no lock to call it.
 func (t *Table) IndexesHeld() []IndexSpec {
-	specs := make([]IndexSpec, len(t.indexes))
-	for i, idx := range t.indexes {
+	list := t.indexList()
+
+	specs := make([]IndexSpec, len(list))
+	for i, idx := range list {
 		specs[i] = idx.spec
 	}
 
@@ -153,7 +166,7 @@ func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Ite
 	}
 
 	if updated != nil {
-		err := t.CheckItemHeld(updated)
+		err := t.CheckItem(updated)
 		if err != nil {
 			return Change{Old: old}, err
 		}
@@ -245,7 +258,8 @@ func (t *Table) AddIndex(spec IndexSpec) {
 		}
 	}
 
-	t.indexes = append(t.indexes, idx)
+	list := slices.Concat(t.indexList(), []*index{idx})
+	t.indexes.Store(&list)
 }
 
 // DropIndex removes the named secondary index, and reports whether there was
@@ -254,10 +268,14 @@ func (t *Table) DropIndex(name string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	before := len(t.indexes)
-	t.indexes = slices.DeleteFunc(t.indexes, func(idx *index) bool { return idx.spec.Name == name })
+	old := t.indexList()
 
-	return len(t.indexes) < before
+	// DeleteFunc works in place, so it runs on a copy: CheckItem may be
+	// reading the published slice.
+	list := slices.DeleteFunc(slices.Clone(old), func(idx *index) bool { return idx.spec.Name == name })
+	t.indexes.Store(&list)
+
+	return len(list) < len(old)
 }
 
 // SortOp is the comparison a range read applies to the range key.
@@ -575,7 +593,7 @@ func (t *Table) store(hash string, rng *api.AttributeValue, item value.Item) {
 	t.count++
 	t.size += size
 
-	for _, idx := range t.indexes {
+	for _, idx := range t.indexList() {
 		if ihash, isort, ok := indexKey(&idx.spec, item); ok {
 			idx.data.put(ihash, entry{sort: isort, tie: t.tie(item), item: item})
 			idx.count++
@@ -591,7 +609,7 @@ func (t *Table) unstore(hash string, rng *api.AttributeValue, item value.Item) {
 	t.count--
 	t.size -= size
 
-	for _, idx := range t.indexes {
+	for _, idx := range t.indexList() {
 		if ihash, isort, ok := indexKey(&idx.spec, item); ok {
 			idx.data.remove(ihash, isort, t.tie(item))
 			idx.count--
@@ -620,8 +638,17 @@ func indexKey(spec *IndexSpec, item value.Item) (string, *api.AttributeValue, bo
 	return value.KeyString(&h), &r, true
 }
 
+// indexList returns the published index list. The caller must not change it.
+func (t *Table) indexList() []*index {
+	if p := t.indexes.Load(); p != nil {
+		return *p
+	}
+
+	return nil
+}
+
 func (t *Table) index(name string) *index {
-	for _, idx := range t.indexes {
+	for _, idx := range t.indexList() {
 		if idx.spec.Name == name {
 			return idx
 		}

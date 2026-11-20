@@ -324,7 +324,7 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 		// An update that gives an index key attribute a value of another
 		// type cancels the transaction with this action's reason, as a put
 		// of one does; any other refusal of the new item refuses the request.
-		err := a.entry.data.CheckItemHeld(result.new)
+		err := a.entry.data.CheckItem(result.new)
 		if msg := table.KeyTypeMismatch(err); msg != "" {
 			return cancellation(reasonValidation, msg, nil), txResult{}, nil
 		}
