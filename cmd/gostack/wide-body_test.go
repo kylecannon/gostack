@@ -35,6 +35,7 @@ const (
 		"SignedHeaders=host, Signature=x"
 	headerAuthorization = "Authorization"
 	headerContentType   = "Content-Type"
+	headerTarget        = "X-Amz-Target"
 	jsonType            = "application/x-amz-json-1.0"
 	formType            = "application/x-www-form-urlencoded"
 	// wideMaxBody is the cap these tests set: small, so the bound is two of it.
@@ -64,7 +65,7 @@ func wideCalls() []wideCall {
 		}
 	}
 	sqsJSON := map[string]string{
-		headerAuthorization: sqsAuth, headerContentType: jsonType, "X-Amz-Target": "AmazonSQS.SendMessage",
+		headerAuthorization: sqsAuth, headerContentType: jsonType, headerTarget: "AmazonSQS.SendMessage",
 	}
 	sqsForm := map[string]string{headerAuthorization: sqsAuth, headerContentType: formType}
 
@@ -138,7 +139,7 @@ func wideServer(t *testing.T) *httptest.Server {
 	t.Cleanup(server.Close)
 
 	send(t, server, http.MethodPost, "/", map[string]string{
-		headerAuthorization: sqsAuth, headerContentType: jsonType, "X-Amz-Target": "AmazonSQS.CreateQueue",
+		headerAuthorization: sqsAuth, headerContentType: jsonType, headerTarget: "AmazonSQS.CreateQueue",
 	}, `{"QueueName":"`+wideQueue+`"}`, http.StatusOK)
 	s3Headers := map[string]string{headerAuthorization: s3AuthHeader}
 	send(t, server, http.MethodPut, "/wide-bucket", s3Headers, "", http.StatusOK)
