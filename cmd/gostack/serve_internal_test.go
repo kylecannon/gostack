@@ -53,7 +53,9 @@ func Test_serve_refusesCallsWhileTheServicesAreToldToStop(t *testing.T) {
 	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
 	done := make(chan error, 1)
 
-	go func() { done <- serve(ctx, gw, listeners, proc, 5*time.Second, func(_, _ context.Context) {}) }()
+	go func() {
+		done <- serve(ctx, gw, listeners, proc, 5*time.Second, nil, restOnly(func(_, _ context.Context) {}))
+	}()
 
 	// SIGTERM.
 	stop()

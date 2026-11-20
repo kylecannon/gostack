@@ -12,9 +12,11 @@ import (
 // through /_localstack/config has replaced the snapshot.
 //
 // SHUTDOWN_TIMEOUT is not mapped. start reads it once and plans one budget from
-// it, with four slots: the shutdown hooks, the drain, the save and the services'
-// Close (lifecycle.PlanShutdown). The gateway keeps no timeout of its own, and
-// SHUTDOWN_TIMEOUT=0 is no limit for all four.
+// it (lifecycle.PlanShutdown): the shutdown hooks and the drain of requests,
+// then the save's reserve, which holds the first save, the drain of the
+// in-process calls and the second save, then the services' Close. The gateway
+// keeps no timeout of its own. SHUTDOWN_TIMEOUT=0 is no limit for all of them,
+// except that the in-process calls still queued are cut at once.
 func settingsFunc(cfg *config.Config) func() gateway.Settings {
 	return liveSettings(cfg, gatewaySettings)
 }
