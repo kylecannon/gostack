@@ -17,6 +17,7 @@ import (
 	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/sns"
 	"github.com/kylecannon/gostack/internal/service/sqs"
+	"github.com/kylecannon/gostack/internal/service/ssm"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
 
@@ -67,6 +68,7 @@ func registrations(
 		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
 		snsProvider.Registration(),
+		ssm.New().Registration(),
 	}
 }
 

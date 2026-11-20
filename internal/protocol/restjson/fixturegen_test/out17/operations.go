@@ -4,6 +4,7 @@ package out17
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // HttpStringPayload returns awserr.NotImplemented.
 func (Unimplemented) HttpStringPayload(context.Context, *HttpStringPayloadInput) (*HttpStringPayloadOutput, error) {
 	return nil, awserr.NotImplemented("out17", "HttpStringPayload")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out17 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "HttpStringPayload":
+		return t.MethodByName("HttpStringPayload")
+	default:
+		return reflect.Method{}, false
+	}
 }

@@ -19,13 +19,14 @@ import (
 
 // Metadata describes the dynamodbstreams service.
 var Metadata = service.Metadata{
-	Name:           "dynamodbstreams",
-	SigningName:    "dynamodb",
-	TargetPrefix:   "DynamoDBStreams_20120810",
-	EndpointPrefix: "streams.dynamodb",
-	APIVersion:     "2012-08-10",
-	Protocols:      []protocol.Kind{protocol.KindJSON},
-	Operations:     Operations,
+	Name:            "dynamodbstreams",
+	SigningName:     "dynamodb",
+	TargetPrefix:    "DynamoDBStreams_20120810",
+	EndpointPrefix:  "streams.dynamodb",
+	APIVersion:      "2012-08-10",
+	Protocols:       []protocol.Kind{protocol.KindJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

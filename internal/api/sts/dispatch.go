@@ -16,13 +16,14 @@ import (
 
 // Metadata describes the sts service.
 var Metadata = service.Metadata{
-	Name:           "sts",
-	SigningName:    "sts",
-	TargetPrefix:   "",
-	EndpointPrefix: "sts",
-	APIVersion:     "2011-06-15",
-	Protocols:      []protocol.Kind{protocol.KindQuery},
-	Operations:     Operations,
+	Name:            "sts",
+	SigningName:     "sts",
+	TargetPrefix:    "",
+	EndpointPrefix:  "sts",
+	APIVersion:      "2011-06-15",
+	Protocols:       []protocol.Kind{protocol.KindQuery},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

@@ -4,6 +4,7 @@ package out01
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // DocumentType returns awserr.NotImplemented.
 func (Unimplemented) DocumentType(context.Context, *DocumentTypeInput) (*DocumentTypeOutput, error) {
 	return nil, awserr.NotImplemented("out01", "DocumentType")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out01 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "DocumentType":
+		return t.MethodByName("DocumentType")
+	default:
+		return reflect.Method{}, false
+	}
 }

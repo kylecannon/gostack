@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"reflect"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -30,6 +31,11 @@ type Metadata struct {
 	// other hint. It is empty when the list is not known, and the service then
 	// stays a candidate for any Action.
 	Operations []string
+	// OperationMethod returns the method of a type that implements an
+	// operation, as the generated OperationMethod does. [Implemented] looks
+	// methods up only through it. It is nil when the service has no generated
+	// API, and the operations it implements are then unknown.
+	OperationMethod func(t reflect.Type, operation string) (reflect.Method, bool)
 }
 
 // Snapshotter saves and restores the whole state of a service. It has the
@@ -44,7 +50,8 @@ type Snapshotter interface {
 // no other wiring. A service that reports changes the gateway does not see
 // takes the function for them in its constructor.
 //
-// Every func field but Serve may be nil.
+// Every func field but Serve may be nil. Set Handler to the provider in
+// Registration().
 type Registration struct {
 	// Metadata describes the service.
 	Metadata Metadata
@@ -138,4 +145,11 @@ type Registration struct {
 	// called once, before the listeners open. A service that calls no other
 	// service leaves it nil.
 	Bind func(http.Handler)
+
+	// Handler is the value the service's Serve hands the generated dispatcher:
+	// set it to the provider in Registration(). GET /_gostack/services reads
+	// from it, through [Implemented], which operations the service implements
+	// and which it leaves to the embedded generated Unimplemented. When it is
+	// nil the endpoint reports the service's implemented operations as unknown.
+	Handler any
 }

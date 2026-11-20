@@ -4,6 +4,7 @@ package secretsmanager
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -183,4 +184,60 @@ func (Unimplemented) UpdateSecretVersionStage(context.Context, *UpdateSecretVers
 // ValidateResourcePolicy returns awserr.NotImplemented.
 func (Unimplemented) ValidateResourcePolicy(context.Context, *ValidateResourcePolicyInput) (*ValidateResourcePolicyOutput, error) {
 	return nil, awserr.NotImplemented("secretsmanager", "ValidateResourcePolicy")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the secretsmanager API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "BatchGetSecretValue":
+		return t.MethodByName("BatchGetSecretValue")
+	case "CancelRotateSecret":
+		return t.MethodByName("CancelRotateSecret")
+	case "CreateSecret":
+		return t.MethodByName("CreateSecret")
+	case "DeleteResourcePolicy":
+		return t.MethodByName("DeleteResourcePolicy")
+	case "DeleteSecret":
+		return t.MethodByName("DeleteSecret")
+	case "DescribeSecret":
+		return t.MethodByName("DescribeSecret")
+	case "GetRandomPassword":
+		return t.MethodByName("GetRandomPassword")
+	case "GetResourcePolicy":
+		return t.MethodByName("GetResourcePolicy")
+	case "GetSecretValue":
+		return t.MethodByName("GetSecretValue")
+	case "ListSecretVersionIds":
+		return t.MethodByName("ListSecretVersionIds")
+	case "ListSecrets":
+		return t.MethodByName("ListSecrets")
+	case "PutResourcePolicy":
+		return t.MethodByName("PutResourcePolicy")
+	case "PutSecretValue":
+		return t.MethodByName("PutSecretValue")
+	case "RemoveRegionsFromReplication":
+		return t.MethodByName("RemoveRegionsFromReplication")
+	case "ReplicateSecretToRegions":
+		return t.MethodByName("ReplicateSecretToRegions")
+	case "RestoreSecret":
+		return t.MethodByName("RestoreSecret")
+	case "RotateSecret":
+		return t.MethodByName("RotateSecret")
+	case "StopReplicationToReplica":
+		return t.MethodByName("StopReplicationToReplica")
+	case "TagResource":
+		return t.MethodByName("TagResource")
+	case "UntagResource":
+		return t.MethodByName("UntagResource")
+	case "UpdateSecret":
+		return t.MethodByName("UpdateSecret")
+	case "UpdateSecretVersionStage":
+		return t.MethodByName("UpdateSecretVersionStage")
+	case "ValidateResourcePolicy":
+		return t.MethodByName("ValidateResourcePolicy")
+	default:
+		return reflect.Method{}, false
+	}
 }

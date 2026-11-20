@@ -7,26 +7,31 @@ import (
 	"slices"
 )
 
-// services answers GET /_gostack/services: for every service, the operations it
-// implements and how many its API has, so the coverage is stated honestly.
+// services answers GET /_gostack/services: for every service, its state, the
+// operations it implements and how many its API has, so the coverage is stated
+// honestly. A service whose implemented operations cannot be told reports null
+// for them rather than a guess.
 func (a *api) services(w http.ResponseWriter, _ *http.Request) {
 	type capability struct {
-		Implemented int      `json:"implemented"`
+		State       string   `json:"state"`
+		Implemented *int     `json:"implemented"`
 		Total       int      `json:"total"`
 		Operations  []string `json:"operations"`
 	}
 	services := map[string]capability{}
 	if a.deps.Services != nil {
+		states := a.deps.Services.States()
 		for _, service := range a.deps.Services.Capabilities() {
-			operations := slices.Sorted(slices.Values(service.Implemented))
-			if operations == nil {
-				operations = []string{}
+			entry := capability{State: states[service.Name].State, Total: service.Total}
+			if !service.Unknown {
+				operations := slices.Sorted(slices.Values(service.Implemented))
+				if operations == nil {
+					operations = []string{}
+				}
+				implemented := len(operations)
+				entry.Implemented, entry.Operations = &implemented, operations
 			}
-			services[service.Name] = capability{
-				Implemented: len(operations),
-				Total:       service.Total,
-				Operations:  operations,
-			}
+			services[service.Name] = entry
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{keyServices: services})

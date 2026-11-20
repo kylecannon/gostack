@@ -58,6 +58,13 @@ specific to gostack.
 - **Hot paths do not use reflection**, and request and response bodies are
   streamed. Never buffer a whole S3 object. Spill to disk above 512 KB, as
   LocalStack's `SpooledTemporaryFile` does.
+- **Reflection names a method with a constant.** `reflect.Type.MethodByName`
+  takes a string literal; `Type.Method(i)`, `Value.Method` and `MethodByName`
+  with a variable make the linker keep every exported method in the binary,
+  which cost `bin/gostack` 2.75 MB. Look an operation's method up through the
+  generated `OperationMethod`. A lint cannot see a dependency that does it, so
+  `Test_gostack_binaryPrunesMethods` in `cmd/gostack` reads the symbols of the
+  built binary and fails when methods nothing calls are kept.
 
 ## Tests, cheapest first
 
@@ -375,14 +382,37 @@ under "Accepted". A listed metric past its bound, and every unlisted one, still
 fails. A bound is a finite number above zero with at most one leading `+`, as
 `+50%` or, for a system metric, `6 MiB` (units `MiB`, `ms`, `s`, `cycles/s`).
 A percent is at most 1000%. An absolute value is at most 65536 `MiB`, 3600000
-`ms`, 3600 `s` or 10000000 `cycles/s`. An infinite, negative, zero,
+`ms`, 3600 `s` or 10000000 `cycles/s`. A percent bound reads as a rise in what
+the work costs, so a throughput (a `/s` unit, `cycles/s`) that falls d percent
+counts as a rise of 100d/(100-d) percent: `+100%` lets a latency double and a
+throughput halve, `+1000%` stops at a drop to an eleventh, and a throughput that
+falls to nothing, or a cost that rises from a base of zero, is past every
+bound. Neither prints a percent, so each gate finds them another way. `bench
+gate` reads the `?` change benchstat prints for a cost whose base is zero. It
+reads no row for a throughput that falls to zero, because benchstat sets each
+file's figure in a table of its own (the head's unit becomes `MB/s`); the
+benchmark's `sec/op` row catches it instead, a rise past the 1000% cap that no
+entry can hold. The system compare fails a throughput whose head median is
+zero against a measured base, even when one run of the head ran at the base's
+rate. A refusal states the rise it computed (an 18% fall under `+20%` reads "a
+rise of +22.0% in cost"). An absolute bound is the worst head value, a ceiling
+for a cost and a floor for a throughput, and is held to the same 1000% cap: a
+pair whose change the bound allows past 1000% fails, so
+`65536 MiB` accepts no more than `1000%` does. An infinite, negative, zero,
 repeated-sign or over-cap bound is a load error, as is a second YAML document
 and a second entry that can match the same row as another: one metric, or a
 benchmark `X` with `X-<digits>` (`RouteDetect/host` and `RouteDetect/host-2`
 both match the row `RouteDetect/host-2`). A benchmark whose own name ends in
 `-<digits>` is listed alone without trouble. A list with no entries is valid.
 An entry's `package` is the full import path or the path below the module
-(`internal/route`).
+(`internal/route`). Names compare exactly, so a glob or a trailing space in an
+entry matches nothing. A bound at or under what the gate flags holds nothing
+either: a benchstat cost is flagged past a rise of 10%, so `+10%` holds none, and
+a throughput past a fall of 10% (a rise of 11.11% in cost), so `+11.11%` holds
+none; the system gate flags a metric past its own limit (its output lists them).
+Both gates print such an entry, and an entry that matched no regression, quoted
+and with the reason, under "Unused accepted entries", even when nothing
+compares, and do not fail on them.
 
 An entry applies only while the head holds its commit and the base does not, so
 it expires once main holds the commit. The pull request lands with a merge
