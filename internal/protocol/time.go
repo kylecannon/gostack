@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"strconv"
@@ -153,6 +154,50 @@ func (t *Time) ParseISO8601(s string) error {
 	}
 
 	t.Time = parsed
+
+	return nil
+}
+
+// The years RFC 3339 writes, the only ones encoding/json/v2 writes a time.Time
+// in, and the zone offsets it writes: whole minutes.
+const (
+	maxRFC3339Year   = 9999
+	secondsPerMinute = 60
+)
+
+// SnapshotTimeMarshalers and SnapshotTimeUnmarshalers let a snapshot hold any
+// time.Time. A time RFC 3339 can write is written as encoding/json/v2 writes
+// it. Any other, a year past 9999 or before 0 in its own zone or a zone
+// offset with seconds, is epoch seconds, which json/v2 would refuse to write
+// and so fail the whole save. Reading takes both forms, so a snapshot written
+// before reads as it did; a time read from epoch seconds is in UTC.
+var (
+	SnapshotTimeMarshalers   = json.MarshalToFunc(marshalSnapshotTime)
+	SnapshotTimeUnmarshalers = json.UnmarshalFromFunc(unmarshalSnapshotTime)
+)
+
+func marshalSnapshotTime(enc *jsontext.Encoder, t time.Time) error {
+	_, offset := t.Zone()
+	if year := t.Year(); year >= 0 && year <= maxRFC3339Year && offset%secondsPerMinute == 0 {
+		return errors.ErrUnsupported // json/v2's own RFC 3339
+	}
+
+	return (&Time{Time: t}).MarshalJSONTo(enc)
+}
+
+func unmarshalSnapshotTime(dec *jsontext.Decoder, t *time.Time) error {
+	if dec.PeekKind() != '0' {
+		return errors.ErrUnsupported // json/v2's own RFC 3339
+	}
+
+	var epoch Time
+
+	err := epoch.UnmarshalJSONFrom(dec)
+	if err != nil {
+		return err
+	}
+
+	*t = epoch.UTC()
 
 	return nil
 }
