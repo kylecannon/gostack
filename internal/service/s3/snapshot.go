@@ -33,7 +33,7 @@ const rawPrefix = "\x00b64:"
 // map is written in key order, so the same state gives the same bytes, and
 // every string goes through as the bytes it is. A time is a
 // protocol.SnapshotTime where a field can hold any, such as a retain-until
-// date past year 9999, so no option is checked for it.
+// date past year 9999, so the options join no time marshalers.
 var snapshotOptions = json.JoinOptions(
 	json.Deterministic(true),
 	json.WithMarshalers(json.JoinMarshalers(

@@ -306,8 +306,8 @@ func Test_SnapshotTime_writesEpoch(t *testing.T) {
 			want: "-9223372036854775807.5", fails: true,
 		},
 		{
-			name: "the greatest time", give: time.Unix(math.MaxInt64, 999999999),
-			want: "9223372036854775807.999999999", fails: true,
+			name: "the greatest time", give: time.Unix(math.MaxInt64-62135596800, 999999999),
+			want: "9223371974719179007.999999999", fails: true,
 		},
 	}
 
@@ -362,6 +362,11 @@ func Test_SnapshotTime_readsBothForms(t *testing.T) {
 	for name, give := range map[string]string{
 		"a bad string":          `"yesterday"`,
 		"a number past int64":   "1e400",
+		"1e19, past int64":      "1e19",
+		"-1e19, past int64":     "-1e19",
+		"9.3e18, past int64":    "9.3e18",
+		"past the greatest":     "9223371974719179008",
+		"int64's greatest":      "9223372036854775807",
 		"a boolean":             "true",
 		"below the least time":  "-9223372036854775808.5",
 		"a loose RFC 3339 hour": `"2023-11-14T2:13:20Z"`,

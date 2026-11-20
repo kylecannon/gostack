@@ -23,6 +23,14 @@ const (
 	nanosPerMicro  = 1_000
 	nanosDigits    = 9
 	decimalBase    = 10
+
+	// maxEpoch is the last epoch second a time.Time holds. A time.Time counts
+	// seconds from year 1, 62,135,596,800 before the epoch, in an int64, so
+	// time.Unix wraps a later second round to a date in the past.
+	maxEpoch = math.MaxInt64 - 62_135_596_800
+	// epochFloatLimit is 2^63: a float64 at or past it, either way, has no
+	// int64.
+	epochFloatLimit = 1 << 63
 )
 
 // Time is a timestamp. In json it is epoch seconds as a number; in query and
@@ -242,11 +250,17 @@ func rfc3339Holds(t time.Time) bool {
 		sec+int64(offset) >= minRFC3339Local && sec+int64(offset) <= maxRFC3339Local
 }
 
-// epochTime reads epoch seconds written as an integer or a decimal.
+// epochTime reads epoch seconds written as an integer or a decimal. A second
+// past the last one a time.Time holds is refused, where time.Unix would wrap
+// it to a date in the past.
 func epochTime(s string) (time.Time, error) {
 	sec, nsec, err := parseEpoch(s)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("unmarshal protocol.Time: %w", err)
+	}
+
+	if sec > maxEpoch {
+		return time.Time{}, errors.New("unmarshal protocol.Time: epoch seconds: past the greatest time")
 	}
 
 	return time.Unix(sec, nsec), nil
@@ -260,6 +274,12 @@ func parseEpoch(s string) (int64, int64, error) {
 		f, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return 0, 0, fmt.Errorf("epoch seconds: %w", err)
+		}
+
+		// Go leaves the conversion of a float64 outside int64 to the platform:
+		// arm64 saturates, amd64 gives the least int64.
+		if f >= epochFloatLimit || f < -epochFloatLimit {
+			return 0, 0, errors.New("epoch seconds: past int64")
 		}
 
 		sec := int64(f)
