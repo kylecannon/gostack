@@ -155,6 +155,26 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 | A method no S3 operation takes, such as `PATCH /bucket` or `PATCH /bucket/key` | Crashes: `500 InternalError`, "Unable to find operation for request to service s3" | `405 MethodNotAllowed`, "The specified method is not allowed against this resource.", in S3's error XML with `Method` and `ResourceType` (`BUCKET` or `OBJECT`). A method token chi does not know reaches S3 too. | AWS's recorded 405s carry the same members (`test_s3.snapshot.json`, the website 405 pages). `TestMethodsNoOperationTakesAnswer405` |
 | `x-amz-object-lock-retain-until-date` in a response | Written with `.000Z` | Matches | LocalStack's serializer, `_timestamp_iso8601`. `TestRetainUntilHeaderCarriesMilliseconds` |
 
+## Request nesting limits
+
+How deeply a request body may nest before gostack refuses it. Each bound sits
+far above any real request: the deepest legitimate nesting found is a DynamoDB
+item, which AWS caps at 32 levels of `M` or `L` (about 67 json levels with the
+request around it), and the deepest S3 document nests eight elements. A body at
+the 16 MiB cap built to nest as deeply as its syntax allows is answered in
+under 0.5 s on every protocol, and the process keeps serving.
+
+| Protocol | Bound | Over it | LocalStack |
+|---|---|---|---|
+| json 1.0, json 1.1, rest-json | 10,000 levels of arrays and objects: the limit of Go's `encoding/json/v2`, which every json body meets in `awsjson.Decode`. A recursive member (DynamoDB's `AttributeValue`) counts two levels per `M` or `L`. | `400 SerializationException` | `500`, "An unknown error occurred when trying to parse the request" |
+| rest-xml (S3) | 64 elements, `restxml.MaxDepth` | `400 MalformedXML`. The decoder stops at the 65th open element without reading the rest, so a client still sending the body may see the connection close instead of the answer. | `500 InternalError` |
+| query (SQS, STS, SNS) | The input shape. Generated decoding walks the operation's input shape and looks up the keys it expects, so a key nested deeper than the shape is ignored. No query input holds itself, and the generator refuses one that does, since its decoding would recurse once per level of a key. | Ignored | `500 InternalError` |
+| Documents a service parses: S3 bucket and POST policies, SQS `Policy` and `RedrivePolicy`, STS SAML assertions | 10,000 levels, the limit of `encoding/json` and of `encoding/xml`'s `Unmarshal`. An S3 POST policy is also held to the 20 KiB of form fields before the file. | `PutBucketPolicy`: `400 MalformedPolicy`. `RedrivePolicy`: `400 InvalidParameterValue`. SAML: `400 InvalidIdentityToken`. A `Policy` is stored as sent, and a later `AddPermission` on that queue answers `500 InternalError`. | Not measured |
+
+`Test_Gateway_DeeplyNestedBodies`, `Test_Decode_NestingBound`,
+`Test_Decoder_NestedToTheBodyCap` and `Test_queryFile_RecursiveInput` pin these.
+DynamoDB's own 32-level limit belongs to its handler, which is not on `main`.
+
 ## S3 limits
 
 What S3 does not do, or does in part, so a client's expectations can be set.
