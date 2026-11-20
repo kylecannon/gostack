@@ -3,9 +3,11 @@ package protocol
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"runtime"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -153,4 +155,69 @@ func Test_ReadBody_SizesByArrival(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "{", string(body))
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(2*FreeBody))
+}
+
+// Test_ReadBody_ReadsEveryShape: a body of any size arrives whole, whatever
+// length it states and however its reader hands it over, a body over the cap
+// reads one byte past it, and an honest body allocates about twice its length.
+func Test_ReadBody_ReadsEveryShape(t *testing.T) {
+	SetMaxBody(4 << 20)
+	t.Cleanup(func() { SetMaxBody(DefaultMaxBody) })
+
+	sizes := []int{0, 1, FreeBody - 1, FreeBody, FreeBody + 1, 3*FreeBody + 7, 1 << 20, 4 << 20, 4<<20 + 1, 5 << 20}
+	stated := map[string]func(n int) int64{
+		"honest":      func(n int) int64 { return int64(n) },
+		"unstated":    func(int) int64 { return -1 },
+		"states less": func(n int) int64 { return int64(n / 2) },
+		"states more": func(n int) int64 { return int64(2*n + 1) },
+	}
+	readers := map[string]func(io.Reader) io.Reader{
+		"whole":    func(r io.Reader) io.Reader { return r },
+		"one byte": iotest.OneByteReader,
+		"half":     iotest.HalfReader,
+	}
+
+	for _, size := range sizes {
+		want := make([]byte, size)
+		for i := range want {
+			want[i] = byte(i * 7)
+		}
+
+		for sname, length := range stated {
+			for rname, wrap := range readers {
+				if rname == "one byte" && size > 1<<20 {
+					continue // the same paths as at 1 MiB, much slower
+				}
+
+				t.Run(fmt.Sprintf("%d/%s/%s", size, sname, rname), func(t *testing.T) {
+					got, err := ReadBody(wrap(bytes.NewReader(want)), length(size))
+					require.NoError(t, err)
+
+					if OverBody(size) {
+						assert.Len(t, got, 4<<20+1, "a body over the cap reads one byte past it")
+						assert.True(t, OverBody(len(got)))
+
+						return
+					}
+
+					assert.Equal(t, want, got)
+				})
+			}
+		}
+	}
+
+	t.Run("an honest body allocates about twice its length", func(t *testing.T) {
+		body := make([]byte, 3<<20)
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		got, err := ReadBody(bytes.NewReader(body), int64(len(body)))
+
+		runtime.ReadMemStats(&after)
+		require.NoError(t, err)
+		require.Len(t, got, len(body))
+		assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(2*len(body)+2*FreeBody))
+	})
 }

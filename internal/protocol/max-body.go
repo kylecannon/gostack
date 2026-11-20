@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"sync/atomic"
@@ -51,13 +50,19 @@ func LimitBody(r io.Reader) io.Reader {
 	return io.LimitReader(r, limit+1)
 }
 
-// ReadBody reads r through LimitBody into one buffer, sized by the bytes that
-// arrive and never by the length the client states alone: the first buffer
-// holds FreeBody bytes at most, and each next one doubles, but no further than
-// the stated length (plus room to see the end) while the body keeps to it, and
-// never past one byte more than MaxBody. A body allocates about twice its
-// length in all; io.ReadAll would grow 25% at a time and allocate some five
-// times. A client that states 16 MiB and sends one byte holds FreeBody. Check
+// endRoom is ReadBody's room past a stated length: a read into it that finds
+// the end shows the body kept to its length without growing the buffer.
+const endRoom = 1
+
+// ReadBody reads r through LimitBody, in buffers sized by the bytes that
+// arrive and never by the length the client states alone: the first holds
+// FreeBody bytes at most, and each next one as many as have arrived so far, but
+// no more than the stated length still to come (plus one byte, to see the end)
+// while the body keeps to it, and never past one byte more than MaxBody. So
+// what it holds while reading is at most twice what arrived: a client that
+// states 16 MiB and sends one byte holds FreeBody. A body that fills more than
+// the first buffer is copied once, at its end, into one of its own length, so
+// a body allocates about twice its length in all, as io.ReadAll does. Check
 // the result with OverBody.
 func ReadBody(r io.Reader, length int64) ([]byte, error) {
 	limit := MaxBody()
@@ -67,50 +72,73 @@ func ReadBody(r io.Reader, length int64) ([]byte, error) {
 
 	first := int64(FreeBody)
 	if length >= 0 {
-		first = min(first, length+bytes.MinRead)
+		first = min(first, length+endRoom)
 	}
 
 	buf := make([]byte, 0, first)
 	r = LimitBody(r)
 
+	var (
+		full [][]byte // the buffers filled before buf
+		have int      // the bytes in full
+	)
+
 	for {
-		if len(buf) == cap(buf) {
-			if limit > 0 && int64(len(buf)) > limit {
-				return buf, nil
-			}
-
-			buf = append(make([]byte, 0, nextSize(len(buf), length, limit)), buf...)
-		}
-
 		n, err := r.Read(buf[len(buf):cap(buf)])
 		buf = buf[:len(buf)+n]
 
 		if errors.Is(err, io.EOF) {
-			return buf, nil
+			return joinBody(full, have, buf), nil
 		}
 
 		if err != nil {
-			return buf, err
+			return joinBody(full, have, buf), err
 		}
+
+		if len(buf) < cap(buf) {
+			continue
+		}
+
+		if limit > 0 && int64(have+len(buf)) > limit {
+			return joinBody(full, have, buf), nil
+		}
+
+		full = append(full, buf)
+		have += len(buf)
+		buf = make([]byte, 0, nextSize(have, length, limit))
 	}
 }
 
-// nextSize is the capacity ReadBody grows a full buffer of have bytes to:
-// twice have, but no further than the stated length while the body is shorter,
-// and never past one byte more than limit.
+// nextSize is the capacity of the buffer ReadBody reads into once have bytes
+// have filled the ones before it: have again, but no more than the stated
+// length still to come while the body is shorter, and never past one byte more
+// than limit in all.
 func nextSize(have int, length, limit int64) int {
-	const growth = 2
-
-	next := growth * int64(have)
+	next := int64(have)
 	if length >= 0 && int64(have) < length {
-		next = min(next, length+bytes.MinRead)
+		next = min(next, length-int64(have)+endRoom)
 	}
 
 	if limit > 0 {
-		next = min(next, limit+1)
+		next = min(next, limit+1-int64(have))
 	}
 
 	return int(next)
+}
+
+// joinBody is the body read into full, which hold have bytes, and then last:
+// last itself when nothing came before it.
+func joinBody(full [][]byte, have int, last []byte) []byte {
+	if len(full) == 0 {
+		return last
+	}
+
+	body := make([]byte, 0, have+len(last))
+	for _, b := range full {
+		body = append(body, b...)
+	}
+
+	return append(body, last...)
 }
 
 // OverBody reports whether n bytes, read through LimitBody, are more than

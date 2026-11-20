@@ -305,9 +305,14 @@ How each piece is bounded, and why this way:
   token starts at the xml.Decoder's own `InputOffset`; a token is a tag when its
   first two bytes are `<` and anything but `!` or `?`. No second parser has to
   agree with encoding/xml on where a comment, CDATA section, processing
-  instruction or DOCTYPE ends.
-- **Copies.** `protocol.ReadBody` sizes its buffer by what arrives, not by a
-  stated Content-Length. The SQS number echo (`sqs/sent-number.go`) reads the
+  instruction or DOCTYPE ends. `tokenLimit` buffers the body itself, 4 KiB at a
+  time, so a byte costs one comparison against a precomputed stop index, as a
+  `bufio.Reader` byte would; the buffer's end, a tag's limit and a token's
+  first two bytes when they are not yet buffered take the slow path.
+- **Copies.** `protocol.ReadBody` sizes its buffers by what arrives, not by a
+  stated Content-Length: each next buffer holds as many bytes as have arrived,
+  and a body that fills more than the first is copied once, at its end, so a
+  body allocates about twice its length, as `io.ReadAll` does. The SQS number echo (`sqs/sent-number.go`) reads the
   one member from the body's tokens instead of a second parse into `any`.
 - **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
   The gateway meters a body from a listener that states more than
