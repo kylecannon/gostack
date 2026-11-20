@@ -340,7 +340,7 @@ func newBucket(name, owner, region, constraint string, ownership *string) *Bucke
 		Account:            owner,
 		Region:             region,
 		LocationConstraint: constraint,
-		CreationDate:       time.Now().UTC(),
+		CreationDate:       protocol.SnapshotTime{Time: time.Now().UTC()},
 		Objects:            make(map[string]*Object),
 		Uploads:            make(map[string]*MultipartUpload),
 		// The defaults every new bucket gets: SSE-S3 encryption, a public

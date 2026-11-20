@@ -34,7 +34,7 @@ const (
 type MultipartUpload struct {
 	ID        string
 	Key       string
-	Initiated time.Time
+	Initiated protocol.SnapshotTime
 
 	Metadata           map[string]string
 	ContentType        string
@@ -76,7 +76,7 @@ type Part struct {
 	BlobID        string
 	Size          int64
 	ETag          string
-	LastModified  time.Time
+	LastModified  protocol.SnapshotTime
 	ChecksumValue string
 	// ChecksumAlgorithm is the algorithm of ChecksumValue, "" when the part
 	// was sent without one.
@@ -205,7 +205,7 @@ func newUpload(in *s3api.CreateMultipartUploadInput, algorithm, kind string) *Mu
 	upload := &MultipartUpload{
 		ID:                 base64.RawURLEncoding.EncodeToString(id),
 		Key:                deref(in.Key),
-		Initiated:          time.Now().UTC(),
+		Initiated:          protocol.SnapshotTime{Time: time.Now().UTC()},
 		Metadata:           in.Metadata,
 		ContentType:        deref(in.ContentType),
 		CacheControl:       deref(in.CacheControl),

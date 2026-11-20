@@ -45,7 +45,7 @@ type Lock struct {
 	// Mode is GOVERNANCE or COMPLIANCE while the version has a retention
 	// period, "" otherwise; Until is the end of it.
 	Mode  string
-	Until time.Time
+	Until protocol.SnapshotTime
 	// LegalHold is ON or OFF once one has been put, "" before.
 	LegalHold string
 }
@@ -60,7 +60,7 @@ func (l Lock) active(now time.Time, bypass bool) bool {
 	case bypass && l.Mode == lockGovernance:
 		return false
 	default:
-		return l.Mode != "" && now.Before(l.Until)
+		return l.Mode != "" && now.Before(l.Until.Time)
 	}
 }
 
@@ -81,7 +81,7 @@ func (l Lock) headers() objectVersionHeaders {
 		h.lockMode = &l.Mode
 
 		if !l.Until.IsZero() {
-			h.retainUntil = &protocol.Time{Time: l.Until}
+			h.retainUntil = &protocol.Time{Time: l.Until.Time}
 		}
 	}
 
@@ -138,9 +138,10 @@ func (b *Bucket) lockAt(mode *string, until *protocol.Time, legalHold *string, n
 
 	switch {
 	case name != "":
-		lock.Mode, lock.Until = name, until.UTC()
+		lock.Mode, lock.Until = name, protocol.SnapshotTime{Time: until.UTC()}
 	case defaultRetention != nil:
-		lock.Mode, lock.Until = deref(defaultRetention.Mode), retainedUntil(now, defaultRetention)
+		lock.Mode = deref(defaultRetention.Mode)
+		lock.Until = protocol.SnapshotTime{Time: retainedUntil(now, defaultRetention)}
 	default:
 	}
 
@@ -289,7 +290,9 @@ func (p *Provider) GetObjectRetention(
 			return noObjectLockConfiguration()
 		}
 
-		out.Retention = &s3api.ObjectLockRetention{Mode: &v.Lock.Mode, RetainUntilDate: &protocol.Time{Time: v.Lock.Until}}
+		out.Retention = &s3api.ObjectLockRetention{
+			Mode: &v.Lock.Mode, RetainUntilDate: &protocol.Time{Time: v.Lock.Until.Time},
+		}
 
 		return nil
 	})
@@ -351,7 +354,9 @@ func (p *Provider) PutObjectRetention(
 			return retentionErr
 		}
 
-		replaceVersion(object, index, func(v *Version) { v.Lock.Mode, v.Lock.Until = mode, until })
+		replaceVersion(object, index, func(v *Version) {
+			v.Lock.Mode, v.Lock.Until = mode, protocol.SnapshotTime{Time: until}
+		})
 
 		return nil
 	})

@@ -204,9 +204,9 @@ func Test_Restore_RebuildsTheKeyIndexes(t *testing.T) {
 	}
 
 	started := time.Now().UTC()
-	b.addUpload(&MultipartUpload{ID: "u2", Key: "k", Initiated: started.Add(time.Second)})
-	b.addUpload(&MultipartUpload{ID: "u1", Key: "k", Initiated: started})
-	b.addUpload(&MultipartUpload{ID: "u0", Key: "a", Initiated: started.Add(time.Minute)})
+	b.addUpload(&MultipartUpload{ID: "u2", Key: "k", Initiated: stamped(started.Add(time.Second))})
+	b.addUpload(&MultipartUpload{ID: "u1", Key: "k", Initiated: stamped(started)})
+	b.addUpload(&MultipartUpload{ID: "u0", Key: "a", Initiated: stamped(started.Add(time.Minute))})
 
 	_, claimed := first.addBucket(b)
 	require.True(t, claimed)
