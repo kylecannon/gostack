@@ -425,8 +425,12 @@ memory.
   Bodies that state their length and decode within their plan do not: 128
   legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
   served, and so are as many as fill the pool when they all decode at the same
-  moment. 64 bodies of 16 MiB sent at once with a Content-Length are admitted
-  one at a time.
+  moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
+  room, so 21 such bodies held unfinished fill it; a 22nd that waits more than
+  5 s for one of them to end is throttled. 64 bodies of 16 MiB sent at once
+  with a Content-Length are admitted one at a time: on a non-race build all 64
+  are answered (400 `SerializationException`, their nesting) within 0.9 to
+  1.0 s, and the process peaks at 105 MiB RSS.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
