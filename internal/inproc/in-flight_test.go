@@ -51,9 +51,12 @@ func fillInFlight(t *testing.T, wait time.Duration) {
 
 // Test_InFlight_InternalCallsAreNotCharged: with the in-flight bound full, an
 // S3 put whose notification sends to SQS in process, and an SQS SendMessage
-// made in process with a body well past protocol.FreeBody, are both served at
-// once, and neither charges the bound. The gateway knows them by
-// request.MarkInternal, which inproc sets and no header or listener can.
+// made in process with a body well past protocol.FreeBody, are both served
+// while the bound stays full, and neither charges it. The notification is
+// queued after the put answers, so it may reach the queue late; the test waits
+// up to 10 s for it, and a dropped or refused one still fails. The gateway knows
+// both calls by request.MarkInternal, which inproc sets and no header or
+// listener can.
 func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
 	s := newStack(t)
 
