@@ -49,3 +49,30 @@
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
+
+- gate: benchstat
+  package: cmd/gostack
+  benchmark: ServiceTable_Capabilities
+  unit: sec/op
+  max: +350%
+  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 0.7 ms once per process
+  pr: 27
+  commit: f80026c677d899f43fab8ac082e403fbd0182224
+
+- gate: benchstat
+  package: cmd/gostack
+  benchmark: ServiceTable_Capabilities
+  unit: B/op
+  max: +330%
+  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 171 KiB once per process
+  pr: 27
+  commit: f80026c677d899f43fab8ac082e403fbd0182224
+
+- gate: benchstat
+  package: cmd/gostack
+  benchmark: ServiceTable_Capabilities
+  unit: allocs/op
+  max: +370%
+  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 3607 allocations once per process
+  pr: 27
+  commit: f80026c677d899f43fab8ac082e403fbd0182224
