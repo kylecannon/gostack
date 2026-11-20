@@ -213,7 +213,14 @@ func Test_Gateway_markDirty(t *testing.T) {
 	}
 	aborting := func(http.ResponseWriter, *request.Context) { panic(http.ErrAbortHandler) }
 	goexiting := func(http.ResponseWriter, *request.Context) { runtime.Goexit() }
-	custom := func(operation string) bool { return operation == "Purge" }
+	// A Serve that names another call with Record before it panics is still
+	// judged by the call serveAWS gave it.
+	recordsOther := func(_ http.ResponseWriter, rc *request.Context) {
+		gateway.Record(rc.Request, &request.Context{Service: nameSTS, Operation: "AssumeRole", Protocol: protocol.KindQuery})
+
+		panic("boom")
+	}
+	custom := func(operation string) bool { return operation == opPurge }
 	// A service that took the connection notes the status it sent, then panics.
 	notedThenPanics := func(code int) func(http.ResponseWriter, *request.Context) {
 		return func(w http.ResponseWriter, _ *request.Context) {
@@ -293,6 +300,11 @@ func Test_Gateway_markDirty(t *testing.T) {
 			name: "a Goexit in a write", giveServe: goexiting, giveRequest: operation("SendMessage"),
 			wantMarked: []string{nameSQS},
 		},
+		{
+			name: "a panic in a write that Records another call", giveServe: recordsOther,
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{name: "a panic in a read that Records another call", giveServe: recordsOther, giveRequest: operation("ListQueues")},
 		{name: "a Goexit in a read", giveServe: goexiting, giveRequest: operation("ListQueues")},
 		{name: "a panic in a read", giveServe: panicking, giveRequest: operation("ListQueues")},
 		{name: "a panic with no operation", giveServe: panicking, giveRequest: operation("")},
@@ -311,7 +323,7 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "no operation", giveServe: okServe, giveRequest: operation("")},
 		{
 			name: "own rule marks", giveServe: okServe, giveMutating: custom,
-			giveRequest: operation("Purge"), wantMarked: []string{nameSQS},
+			giveRequest: operation(opPurge), wantMarked: []string{nameSQS},
 		},
 		{
 			name: "own rule can say no for a write verb", giveServe: okServe, giveMutating: custom,
@@ -330,7 +342,8 @@ func Test_Gateway_markDirty(t *testing.T) {
 			reg := sqsRegistration(tt.giveServe)
 			reg.Mutating = tt.giveMutating
 
-			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			// sts is there to be named by Record, whose AssumeRole is a write.
+			g, err := gateway.New(newSettings().get, []service.Registration{reg, stsRegistration(okServe)}, nil, dirty)
 			require.NoError(t, err)
 
 			serveAborting(g.Handler(), tt.giveRequest(t))
@@ -370,9 +383,12 @@ func serveAborting(h http.Handler, r *http.Request) {
 // Test_Gateway_markDirty_onAMountedRoute checks a call served by a route a
 // service mounts, such as an SQS queue URL, which names its call with Record
 // and marks its own change once it returns: when its handler panics or calls
-// runtime.Goexit it never gets there, so the gateway marks it.
+// runtime.Goexit it never gets there, so the gateway marks it. The call is
+// judged by the rule of the registration Record names: sts comes first and
+// keeps its own rule, so a mark judged by the wrong registration shows.
 func Test_Gateway_markDirty_onAMountedRoute(t *testing.T) {
 	boom := func() { panic("boom") }
+	purgeOnly := func(operation string) bool { return operation == opPurge }
 
 	tests := []struct {
 		name          string
@@ -395,6 +411,14 @@ func Test_Gateway_markDirty_onAMountedRoute(t *testing.T) {
 			name: "a panic for a service the gateway does not have", giveService: "nope",
 			giveOperation: opSendMessage, giveServe: boom,
 		},
+		{
+			name: "a panic in a write the named service's own rule says no to", giveService: nameSTS,
+			giveOperation: opSendMessage, giveServe: boom,
+		},
+		{
+			name: "a panic in an operation the named service's own rule says yes to", giveService: nameSTS,
+			giveOperation: opPurge, giveServe: boom, wantMarked: []string{nameSTS},
+		},
 		// The service marks a call that returns, not the gateway.
 		{name: "a write that returns", giveService: nameSQS, giveOperation: opSendMessage, giveServe: func() {}},
 	}
@@ -413,7 +437,10 @@ func Test_Gateway_markDirty_onAMountedRoute(t *testing.T) {
 				})
 			}
 
-			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			sts := stsRegistration(okServe)
+			sts.Mutating = purgeOnly
+
+			g, err := gateway.New(newSettings().get, []service.Registration{sts, reg}, nil, dirty)
 			require.NoError(t, err)
 
 			serveAborting(g.Handler(), newRequest(t, http.MethodPost, "http://localhost:4566/000000000000/my-queue", "",

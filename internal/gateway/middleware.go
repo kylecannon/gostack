@@ -48,7 +48,10 @@ type call struct {
 // Record tells the recovery middleware which call r is, so that a panic is
 // answered in the protocol of the service. The gateway does it for the calls it
 // routes itself; a handler mounted by a service, which builds its own
-// request.Context, does it with the request it was given.
+// request.Context, does it with the request it was given. On a mounted route
+// it also decides the dirty mark of a handler that panics or calls
+// runtime.Goexit: the call is judged by the operation Record names, and a
+// route that never calls Record is not marked.
 func Record(r *http.Request, rc *request.Context) {
 	if state, ok := r.Context().Value(callKey{}).(*call); ok {
 		state.rc = rc
@@ -341,23 +344,30 @@ func (g *Gateway) recoverAbandoned(sw *statusWriter, r *http.Request, rc *reques
 
 // markAbandoned marks dirty a call whose handler did not return, when its
 // operation changes state, whatever status it wrote, unless the call has been
-// marked already. A call serveAWS serves is judged by its registration; one a
-// mounted route named with Record, by the registration of the service it names.
+// marked already. A call serveAWS serves is judged as the call serveAWS gave
+// it, whatever its Serve later named with Record. A call on a route a service
+// mounts, where serveAWS armed nothing, is judged by the registration of the
+// service rc names; with no rc, it is not marked.
 func (g *Gateway) markAbandoned(sw *statusWriter, rc *request.Context) {
 	p := &sw.pending
-	if p.marked || rc == nil {
+	if p.marked {
 		return
 	}
 
 	index := p.index
-	if p.rc != rc {
+	if p.rc != nil {
+		rc = p.rc
+	} else {
+		if rc == nil {
+			return
+		}
+
 		index = slices.IndexFunc(g.regs, func(reg service.Registration) bool { return reg.Metadata.Name == rc.Service })
 		if index < 0 {
 			return
 		}
 	}
 
-	p.armed = false
 	p.marked = g.markChanged(index, rc)
 }
 
