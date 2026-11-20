@@ -4,6 +4,7 @@ package sqs
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -183,4 +184,60 @@ func (Unimplemented) TagQueue(context.Context, *TagQueueInput) (*TagQueueOutput,
 // UntagQueue returns awserr.NotImplemented.
 func (Unimplemented) UntagQueue(context.Context, *UntagQueueInput) (*UntagQueueOutput, error) {
 	return nil, awserr.NotImplemented("sqs", "UntagQueue")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the sqs API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "AddPermission":
+		return t.MethodByName("AddPermission")
+	case "CancelMessageMoveTask":
+		return t.MethodByName("CancelMessageMoveTask")
+	case "ChangeMessageVisibility":
+		return t.MethodByName("ChangeMessageVisibility")
+	case "ChangeMessageVisibilityBatch":
+		return t.MethodByName("ChangeMessageVisibilityBatch")
+	case "CreateQueue":
+		return t.MethodByName("CreateQueue")
+	case "DeleteMessage":
+		return t.MethodByName("DeleteMessage")
+	case "DeleteMessageBatch":
+		return t.MethodByName("DeleteMessageBatch")
+	case "DeleteQueue":
+		return t.MethodByName("DeleteQueue")
+	case "GetQueueAttributes":
+		return t.MethodByName("GetQueueAttributes")
+	case "GetQueueUrl":
+		return t.MethodByName("GetQueueUrl")
+	case "ListDeadLetterSourceQueues":
+		return t.MethodByName("ListDeadLetterSourceQueues")
+	case "ListMessageMoveTasks":
+		return t.MethodByName("ListMessageMoveTasks")
+	case "ListQueueTags":
+		return t.MethodByName("ListQueueTags")
+	case "ListQueues":
+		return t.MethodByName("ListQueues")
+	case "PurgeQueue":
+		return t.MethodByName("PurgeQueue")
+	case "ReceiveMessage":
+		return t.MethodByName("ReceiveMessage")
+	case "RemovePermission":
+		return t.MethodByName("RemovePermission")
+	case "SendMessage":
+		return t.MethodByName("SendMessage")
+	case "SendMessageBatch":
+		return t.MethodByName("SendMessageBatch")
+	case "SetQueueAttributes":
+		return t.MethodByName("SetQueueAttributes")
+	case "StartMessageMoveTask":
+		return t.MethodByName("StartMessageMoveTask")
+	case "TagQueue":
+		return t.MethodByName("TagQueue")
+	case "UntagQueue":
+		return t.MethodByName("UntagQueue")
+	default:
+		return reflect.Method{}, false
+	}
 }

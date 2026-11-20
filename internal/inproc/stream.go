@@ -31,9 +31,9 @@ func (r *StreamResponse) OK() bool {
 // The handler runs on a goroutine of its own until it returns. Closing Body, or
 // the end of ctx, cancels the request and fails the handler's next write, and
 // Close returns only once the handler has returned. A body read to its end
-// means the handler has returned already. A handler that panics after the head
-// is fixed ends Body with ErrAborted; one that panics before is the error of
-// Stream.
+// means the handler has returned already. A handler that panics or calls
+// runtime.Goexit after the head is fixed ends Body with ErrAborted; one that
+// does before is the error of Stream.
 func (c *Client) Stream(ctx context.Context, call Call, body io.Reader, size int64) (*StreamResponse, error) {
 	if !c.Bound() {
 		return nil, ErrNotBound
@@ -73,13 +73,20 @@ func (c *Client) Stream(ctx context.Context, call Call, body io.Reader, size int
 	go func() {
 		defer close(s.done)
 
-		err := serve(handler, w, req)
-		if !w.committed {
-			failed = err
-			w.finish()
-		}
+		// A handler that calls runtime.Goexit never returns, and leaves err as
+		// errExited for the deferred tail, which runs either way.
+		err := errExited
 
-		_ = pw.CloseWithError(err)
+		defer func() {
+			if !w.committed {
+				failed = err
+				w.finish()
+			}
+
+			_ = pw.CloseWithError(err)
+		}()
+
+		err = serve(handler, w, req)
 	}()
 
 	<-ready

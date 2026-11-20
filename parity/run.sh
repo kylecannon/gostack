@@ -119,7 +119,9 @@ TARGET=gostack-parity-$COLUMN-target$SUFFIX-$$
 RUNNER=gostack-parity-$COLUMN-runner$SUFFIX-$$
 
 cleanup() {
-	docker rm -f "$RUNNER" "$TARGET" >/dev/null 2>&1 || true
+	# -v: the image declares VOLUME /var/lib/localstack, and rm -f without it
+	# leaves one anonymous volume behind per run.
+	docker rm -f -v "$RUNNER" "$TARGET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM

@@ -65,8 +65,8 @@ func emitMembersSet(p *printer, st *structType) {
 	p.blank()
 }
 
-// operationsFile writes the operation list, the Handler interface and
-// Unimplemented.
+// operationsFile writes the operation list, the Handler interface,
+// Unimplemented and OperationMethod.
 func (g *generator) operationsFile() (string, error) {
 	p := &printer{}
 
@@ -107,7 +107,32 @@ func (g *generator) operationsFile() (string, error) {
 		p.blank()
 	}
 
+	g.operationMethod(p)
+
 	return p.buf.String(), nil
+}
+
+// operationMethod writes OperationMethod: the method of a type for an
+// operation, looked up with the operation's name as a constant. The linker
+// keeps only the methods whose names a constant MethodByName mentions; one
+// MethodByName call with a variable name would make it keep every exported
+// method in the binary.
+func (g *generator) operationMethod(p *printer) {
+	p.f("// OperationMethod returns the method of t that implements operation, and false when")
+	p.f("// t has none or operation is not one of the %s API. Every lookup names its", g.name)
+	p.f("// method with a constant, so the linker keeps only the methods of those names.")
+	p.f("func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {")
+	p.f("\tswitch operation {")
+
+	for _, name := range g.opNames {
+		p.f("\tcase %q:", name)
+		p.f("\t\treturn t.MethodByName(%q)", name)
+	}
+
+	p.f("\tdefault:")
+	p.f("\t\treturn reflect.Method{}, false")
+	p.f("\t}")
+	p.f("}")
 }
 
 // inJSONBody reports whether a member is one of the json object a rest-json

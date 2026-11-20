@@ -25,6 +25,11 @@ func (g *generator) queryFile() (string, error) {
 		return "", nil
 	}
 
+	if looped := g.queryDecodeCycles(); len(looped) > 0 {
+		return "", fmt.Errorf("the query decoder has no depth bound, and %s holds itself below",
+			strings.Join(looped, ", "))
+	}
+
 	e := &queryEmitter{g: g, p: &printer{}, specs: &printer{}}
 
 	e.p.f("const (")
@@ -47,6 +52,53 @@ func (g *generator) queryFile() (string, error) {
 	}
 
 	return e.p.buf.String() + e.specs.buf.String(), nil
+}
+
+// queryDecodeCycles names, sorted, the structs the query codec decodes that
+// hold themselves somewhere below. Generated query decoding recurses once per
+// structure level and builds each level's key from its parent's, so through
+// such a struct the length of a request key sets the depth, and the time and
+// memory grow with its square: 100,000 levels took 96 s and allocated 290 GB.
+// No query service on the request path has one (SQS, STS and SNS); a service
+// that does needs a depth bound in the decoder before it generates.
+func (g *generator) queryDecodeCycles() []string {
+	var looped []string
+
+	for _, st := range g.sortedStructs() {
+		if st.decodes && g.reachesItself(st) {
+			looped = append(looped, st.goName)
+		}
+	}
+
+	return looped
+}
+
+// reachesItself reports whether start holds a struct of its own type at some
+// depth below it, through members, list elements and map values.
+func (g *generator) reachesItself(start *structType) bool {
+	seen := map[string]bool{}
+	stack := []*structType{start}
+
+	for len(stack) > 0 {
+		st := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		for _, f := range st.fields {
+			for _, shape := range g.nestedStructs(f.pair.p) {
+				name := g.goTypeName(shape)
+				if name == start.goName {
+					return true
+				}
+
+				if next, ok := g.structs[name]; ok && !seen[name] {
+					seen[name] = true
+					stack = append(stack, next)
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 func (e *queryEmitter) emitOperationDecode(op *operation) {

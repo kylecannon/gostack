@@ -10,9 +10,9 @@ gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tes
 | dynamodbstreams | 4 | 3 | 0 | 1 | 0 | not run | n/a |
 | kms | 151 | 0 | 0 | 151 | 0 | not run | n/a |
 | s3 | 573 | 37 | 0 | 535 | 1 | 536 | 100.0% |
-| secretsmanager | 66 | 8 | 0 | 58 | 0 | not run | n/a |
+| secretsmanager | 66 | 8 | 0 | 58 | 0 | 58 | 100.0% |
 | sns | 208 | 28 | 0 | 180 | 0 | not run | n/a |
 | sqs | 451 | 46 | 0 | 403 | 2 | 405 | 100.0% |
-| ssm | 14 | 3 | 0 | 11 | 0 | not run | n/a |
+| ssm | 14 | 6 | 0 | 8 | 0 | 8 | 100.0% |
 | sts | 14 | 7 | 0 | 7 | 0 | 7 | 100.0% |
-| **total** | 1538 | 139 | 0 | 1396 | 3 | 978 | 98.0% (975 of 995) |
+| **total** | 1538 | 142 | 0 | 1393 | 3 | 1044 | 98.1% (1041 of 1061) |

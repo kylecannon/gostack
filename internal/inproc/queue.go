@@ -2,6 +2,9 @@ package inproc
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -27,6 +30,9 @@ const (
 type queued struct {
 	call Call
 	done func(Response, error)
+	// hub, when not nil, counted the call when it was queued, and is told
+	// when the call is done with or dropped.
+	hub *Hub
 }
 
 // lane holds the calls queued under one lane key. One worker at most serves a
@@ -43,6 +49,8 @@ type queue struct {
 	cancel context.CancelFunc
 
 	mu sync.Mutex
+	// hub is the Hub the client is bound to, if any.
+	hub *Hub
 	// lanes are the lanes with a call waiting or running, by key.
 	lanes map[string]*lane
 	// waiting are the lanes with a call waiting and no worker, in the order
@@ -50,8 +58,15 @@ type queue struct {
 	waiting []*lane
 	queued  int
 	workers int
+	// running counts the calls a worker is serving: taken, and not yet
+	// answered by the handler.
+	running int
 	closed  bool
-	group   sync.WaitGroup
+	// cut counts the calls that were never served because the queue was shut:
+	// those queued when it shut, those running then that were not answered
+	// with a 2xx after all, and those Enqueue refused after.
+	cut   int
+	group sync.WaitGroup
 }
 
 // laneKey is the lane a call is queued in. It is the call's Lane when the
@@ -77,7 +92,8 @@ func laneKey(call Call) string {
 
 // Enqueue hands call to a worker and returns at once; done, when it is not nil,
 // gets the answer on the worker's goroutine, or the error of a call that could
-// not be made or whose handler panicked. The queue holds MaxQueued calls
+// not be made or whose handler panicked or called runtime.Goexit (ErrAborted).
+// A done that panics is logged, and the queue goes on. The queue holds MaxQueued calls
 // waiting to start: past that, and after Close, Enqueue refuses the call and
 // reports false.
 //
@@ -96,20 +112,34 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.closed || q.queued >= MaxQueued {
+	if q.closed {
+		q.cut++
+
+		return false
+	}
+
+	if q.queued >= MaxQueued {
 		return false
 	}
 
 	q.queued++
 
+	// The hub counts the call before any worker can see it, so a call queued
+	// by a call the hub is waiting for keeps the hub's count above zero.
+	if q.hub != nil {
+		q.hub.enter()
+	}
+
+	item := queued{call: call, done: done, hub: q.hub}
+
 	key := laneKey(call)
 	if l, ok := q.lanes[key]; ok {
-		l.calls = append(l.calls, queued{call: call, done: done})
+		l.calls = append(l.calls, item)
 
 		return true
 	}
 
-	l := &lane{key: key, calls: []queued{{call: call, done: done}}}
+	l := &lane{key: key, calls: []queued{item}}
 
 	if q.lanes == nil {
 		q.lanes = make(map[string]*lane)
@@ -138,42 +168,141 @@ func (c *Client) Idle() bool {
 
 // Close drops the calls still queued, cancels the ones in flight and waits for
 // the workers to exit. Later Enqueue calls are refused. It is safe to call more
-// than once.
+// than once. A dropped call's done is never called.
 func (c *Client) Close() {
-	q := &c.queue
+	c.queue.shut()
+	c.queue.group.Wait()
+}
 
+// shut is Close without the wait: it drops the calls still queued, without
+// answering them, cancels the ones in flight, and refuses later Enqueue calls.
+// It counts the calls it dropped or cancelled in cut; a cancelled call that
+// its handler still answers with a 2xx is taken off the count when it returns.
+// Shutting a queue that is already shut cuts nothing.
+func (q *queue) shut() {
 	q.mu.Lock()
+
+	if q.closed {
+		q.mu.Unlock()
+
+		return
+	}
+
+	for _, l := range q.lanes {
+		for _, dropped := range l.calls {
+			if dropped.hub != nil {
+				dropped.hub.leave()
+			}
+		}
+	}
+
 	q.closed = true
+	q.cut += q.queued + q.running
 	q.lanes = nil
 	q.waiting = nil
 	q.queued = 0
 	q.mu.Unlock()
 
 	q.cancel()
-	q.group.Wait()
 }
 
 // work serves the waiting lanes, one call from each in turn, until none waits.
-// Do turns a handler's panic into the call's error, so a worker outlives it.
 func (c *Client) work() {
-	var served *lane
+	c.workAfter(nil)
+}
 
+// workAfter is work for a worker that takes the place of one that was serving
+// lane served, or nil.
+func (c *Client) workAfter(served *lane) {
 	for {
 		l, next, ok := c.queue.next(served)
 		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.queue.ctx, callTimeout)
-		resp, err := c.Do(ctx, next.call)
-
-		cancel()
-
-		if next.done != nil {
-			next.done(resp, err)
-		}
+		c.serve(l, next)
 
 		served = l
+	}
+}
+
+// serve makes item, a call of lane l, and answers it. Do turns a handler's
+// panic into the call's error, and answer recovers a panic in done, so the
+// worker outlives both.
+//
+// A handler or a done that calls runtime.Goexit ends the worker's goroutine,
+// whatever it defers. The deferred calls answer the call all the same, with
+// errExited when the handler had not returned, and start a worker in the
+// goroutine's place, which puts l back in line as this one would have.
+func (c *Client) serve(l *lane, item queued) {
+	finished := false
+
+	defer func() {
+		if !finished {
+			c.queue.group.Go(func() { c.workAfter(l) })
+		}
+	}()
+
+	// After done, so that a call done queues keeps the hub waiting.
+	if item.hub != nil {
+		defer item.hub.leave()
+	}
+
+	answered := false
+
+	defer func() {
+		if !answered {
+			c.queue.answered(Response{}, errExited)
+			item.answer(Response{}, errExited)
+		}
+	}()
+
+	resp, err := c.call(item.call)
+	answered = true
+
+	c.queue.answered(resp, err)
+	item.answer(resp, err)
+
+	finished = true
+}
+
+// call makes a queued call, within callTimeout.
+func (c *Client) call(call Call) (Response, error) {
+	ctx, cancel := context.WithTimeout(c.queue.ctx, callTimeout)
+	defer cancel()
+
+	return c.Do(ctx, call)
+}
+
+// answer hands the call's answer to done. A done that panics is logged and
+// does not end the worker: the lane goes on with its next call.
+func (item queued) answer(resp Response, err error) {
+	if item.done == nil {
+		return
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("panic in the done of a queued call",
+				"service", item.call.Service, "method", methodOf(item.call), "path", pathOf(item.call),
+				"target", item.call.Target, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		}
+	}()
+
+	item.done(resp, err)
+}
+
+// answered is a call's handler returning with resp or err. A call the queue
+// was shut while it ran was counted as cut; one answered with a 2xx all the
+// same was served.
+func (q *queue) answered(resp Response, err error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.running--
+
+	if q.closed && err == nil && resp.OK() {
+		q.cut--
 	}
 }
 
@@ -214,6 +343,7 @@ func (q *queue) next(served *lane) (*lane, queued, bool) {
 	l.calls[0] = queued{}
 	l.calls = l.calls[1:]
 	q.queued--
+	q.running++
 
 	return l, head, true
 }

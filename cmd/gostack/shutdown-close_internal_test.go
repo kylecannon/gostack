@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,46 @@ func Test_saver_save_order(t *testing.T) {
 	}
 
 	require.Error(t, err, "the assets were never released by the last save")
+}
+
+// Test_saver_save_keepsWhatTheDrainDeliveredWhenACloseOverruns: the first save
+// runs before the in-process calls drain, a call the drain delivers changes
+// the state, and then a service's Close holds until its deadline, so the last
+// save is skipped. The second save, the engine's Flush, is the only one that
+// writes the change, and a new engine on the same directory finds it.
+func Test_saver_save_keepsWhatTheDrainDeliveredWhenACloseOverruns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		eng, dir := persistentEngine(t)
+		state := &widgets{data: "acknowledged before the shutdown"}
+
+		eng.Register(testService, state)
+		eng.MarkDirty(testService)
+
+		reg := state.registration()
+		// It honours its context, and returns at the deadline.
+		reg.Close = func(ctx context.Context) { <-ctx.Done() }
+
+		s := &saver{eng: eng, services: &providers{regs: []service.Registration{reg}}}
+
+		s.saveFirst(t.Context())
+
+		state.data = "delivered by the drain"
+		eng.MarkDirty(testService)
+
+		closeCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+
+		s.save(t.Context(), closeCtx)
+
+		require.ErrorIs(t, closeCtx.Err(), context.DeadlineExceeded, "the Close held past its deadline")
+
+		restarted := persist.New(persist.Config{PersistVarSet: true, BaseDir: dir})
+		loaded := &widgets{}
+
+		restarted.Register(testService, loaded)
+		require.NoError(t, restarted.Load(t.Context()))
+		assert.Equal(t, "delivered by the drain", loaded.data)
+	})
 }
 
 // Test_saver_closeServices_warnsOfASkippedLastSave checks the log of a last

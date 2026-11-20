@@ -4,6 +4,7 @@ package in37
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // PutWithContentEncoding returns awserr.NotImplemented.
 func (Unimplemented) PutWithContentEncoding(context.Context, *PutWithContentEncodingInput) (*PutWithContentEncodingOutput, error) {
 	return nil, awserr.NotImplemented("in37", "PutWithContentEncoding")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in37 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "PutWithContentEncoding":
+		return t.MethodByName("PutWithContentEncoding")
+	default:
+		return reflect.Method{}, false
+	}
 }
