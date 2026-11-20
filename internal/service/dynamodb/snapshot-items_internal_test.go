@@ -49,6 +49,45 @@ func Test_itemCodec_roundTrip(t *testing.T) {
 	}
 }
 
+// FuzzItemParser parses two items with one parser, so names shared from the
+// first reach the second. An item parse takes must be what json v2 reads from
+// the same bytes, and must come back unchanged through appendItem.
+func FuzzItemParser(f *testing.F) {
+	for _, text := range codecItems {
+		f.Add([]byte(text), []byte(`{"a":{"S":"b"}}`))
+	}
+
+	for _, pair := range collidingNames {
+		f.Add([]byte(pair[0]), []byte(pair[1]))
+		f.Add([]byte(pair[1]), []byte(pair[0]))
+	}
+
+	f.Fuzz(func(t *testing.T, first, second []byte) {
+		p := newItemParser()
+
+		for _, raw := range [][]byte{first, second} {
+			if !jsontext.Value(raw).IsValid() {
+				continue
+			}
+
+			got, err := p.parse(raw)
+			if err != nil {
+				continue
+			}
+
+			var want value.Item
+
+			require.NoError(t, json.Unmarshal(raw, &want), "parse took what json v2 refuses")
+			require.Equal(t, want, got)
+
+			out, _ := appendItem(nil, got, nil)
+			again, err := newItemParser().parse(out)
+			require.NoError(t, err)
+			require.Equal(t, got, again)
+		}
+	})
+}
+
 // Test_itemCodec_emptyValues checks an empty binary, list, map and set member
 // come back present, not absent: absent would leave no member set.
 func Test_itemCodec_emptyValues(t *testing.T) {
@@ -81,24 +120,28 @@ func Test_itemCodec_sharedNames(t *testing.T) {
 // Test_itemCodec_escapedNames checks names whose raw forms are another's
 // decoded form stay apart across the items of one parser, in either order.
 func Test_itemCodec_escapedNames(t *testing.T) {
-	for _, items := range [][]string{
-		{`{"a\\\"b":{"S":"1"}}`, `{"a\"b":{"S":"2"}}`},
-		{`{"a\"b":{"S":"2"}}`, `{"a\\\"b":{"S":"1"}}`},
-		{`{"\"x\"":{"S":"1"}}`, `{"x":{"S":"2"}}`},
-		{`{"x":{"S":"2"}}`, `{"\"x\"":{"S":"1"}}`},
-	} {
-		p := newItemParser()
+	for _, pair := range collidingNames {
+		for _, items := range [][2]string{pair, {pair[1], pair[0]}} {
+			p := newItemParser()
 
-		for _, text := range items {
-			got, err := p.parse(jsontext.Value(text))
-			require.NoError(t, err, text)
+			for _, text := range items {
+				got, err := p.parse(jsontext.Value(text))
+				require.NoError(t, err, text)
 
-			var want value.Item
+				var want value.Item
 
-			require.NoError(t, json.Unmarshal([]byte(text), &want))
-			require.Equal(t, want, got, text)
+				require.NoError(t, json.Unmarshal([]byte(text), &want))
+				require.Equal(t, want, got, text)
+			}
 		}
 	}
+}
+
+// collidingNames are pairs of items whose attribute name's raw json form is
+// the other's decoded name: a\"b and a"b, "x" and x.
+var collidingNames = [][2]string{
+	{`{"a\\\"b":{"S":"1"}}`, `{"a\"b":{"S":"2"}}`},
+	{`{"\"x\"":{"S":"1"}}`, `{"x":{"S":"2"}}`},
 }
 
 // Test_itemCodec_deepest checks an item nested as deep as value.Validate
