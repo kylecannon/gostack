@@ -5,6 +5,7 @@ package stream
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -155,13 +156,13 @@ func (l *Log) ParseSequenceNumber(s string) (int, error) {
 }
 
 // Append adds r as the next record, numbering it, unless the shard is
-// closed. It trims the oldest records while the byte bound is passed and arms
-// the retention timer when none is armed.
+// closed or has handed out every number. It trims the oldest records while
+// the byte bound is passed and arms the retention timer when none is armed.
 func (l *Log) Append(r Record) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.closed {
+	if l.closed || l.next == math.MaxInt {
 		return
 	}
 
@@ -241,7 +242,14 @@ func (l *Log) Read(pos, limit int, maxBytes int64) (Page, error) {
 		return Page{}, err
 	}
 
+	// records[i] is number low+i, and the records reach next, so start is
+	// within them; a state that broke that reads as trimmed rather than
+	// slicing past them.
 	start := pos - l.low
+	if start < 0 || start > len(l.records) {
+		return Page{}, ErrTrimmed
+	}
+
 	end := start
 
 	var size int64

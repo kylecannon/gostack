@@ -6,15 +6,15 @@ import (
 )
 
 // Restored returns a shard as a snapshot of its table left it: created at
-// created, its records numbered from low up to next, open or closed, and
-// holding none of them yet. Attach puts back the records the streams snapshot
-// kept. Without them the shard reads as one whose records were all trimmed:
-// every sequence number it handed out stays its own, and the next record is
-// numbered next.
-func Restored(created time.Time, low, next int, closed bool, now func() time.Time) *Log {
+// created, its next record numbered next, open or closed, and holding no
+// record yet. Attach puts back the records the streams snapshot kept. Without
+// them, with streams persistence off or a streams file Attach refuses, the
+// shard reads as one whose records were all trimmed: its window is empty at
+// next, so LATEST and TRIM_HORIZON read from the next record written, and an
+// iterator for a number it handed out before is trimmed.
+func Restored(created time.Time, next int, closed bool, now func() time.Time) *Log {
 	l := New(created, now)
-	l.low, l.next, l.closed = max(low, 1), max(next, 1), closed
-	l.low = min(l.low, l.next)
+	l.low, l.next, l.closed = max(next, 1), max(next, 1), closed
 
 	return l
 }

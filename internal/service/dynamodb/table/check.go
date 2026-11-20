@@ -76,13 +76,7 @@ func (t *Table) CheckKey(key value.Item) error {
 // list and takes no lock, so it is safe with or without the table's lock held
 // while UpdateTable adds and drops indexes.
 func (t *Table) CheckItem(item value.Item) error {
-	for _, attr := range t.keyAttributes() {
-		if _, ok := item[attr.Name]; !ok {
-			return value.Invalid(msgKeyMissing)
-		}
-	}
-
-	err := t.checkKeyValues(item)
+	err := t.checkStored(item)
 	if err != nil {
 		return err
 	}
@@ -92,6 +86,26 @@ func (t *Table) CheckItem(item value.Item) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// checkStored is what every stored item meets, a restored one included: the
+// table's key attributes present with values DynamoDB accepts, and the item's
+// size. It leaves out the index keys, since an index added over stored items
+// leaves out the ones its key does not fit (indexed) and keeps them in the
+// table.
+func (t *Table) checkStored(item value.Item) error {
+	for _, attr := range t.keyAttributes() {
+		if _, ok := item[attr.Name]; !ok {
+			return value.Invalid(msgKeyMissing)
+		}
+	}
+
+	err := t.checkKeyValues(item)
+	if err != nil {
+		return err
 	}
 
 	if value.ItemSize(item) > value.MaxItemSize {
@@ -154,6 +168,28 @@ func checkIndexKey(spec *IndexSpec, item value.Item) error {
 	}
 
 	return nil
+}
+
+// indexed reports whether item is in the index spec: it carries each of the
+// index's key attributes, of the attribute's type and not an empty string or
+// binary. A write never stores an item the index's key does not fit
+// (checkIndexKey), but an index added over stored items, as UpdateTable adds
+// one, leaves such an item out and keeps it in the table, as a backfill on
+// DynamoDB does; a restore leaves it out again. This is the one test of
+// membership, so storing, removing, backfilling and loading agree.
+func indexed(spec *IndexSpec, item value.Item) bool {
+	for _, attr := range []KeyAttribute{spec.Key.Hash, spec.Key.Range} {
+		if attr.Name == "" {
+			continue
+		}
+
+		v, ok := item[attr.Name]
+		if !ok || value.Type(&v) != attr.Type || emptyKind(&v) != "" {
+			return false
+		}
+	}
+
+	return true
 }
 
 // EmptyKeyMessage is DynamoDB Local's message for v, the value of key

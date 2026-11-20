@@ -729,7 +729,7 @@ func (p *Provider) restoreShard(e *tableEntry, saved *shardData) error {
 		return fmt.Errorf("%w: table %q has stream view type %q", errSnapshot, e.meta.Name, saved.ViewType)
 	}
 
-	e.shard = stream.Restored(saved.Created, saved.Low, saved.Next, saved.Closed || e.meta.Stream == nil, p.now)
+	e.shard = stream.Restored(saved.Created, saved.Next, saved.Closed || e.meta.Stream == nil, p.now)
 	e.viewType, e.streamRegion = saved.ViewType, saved.Region
 
 	if e.meta.Stream != nil {

@@ -659,23 +659,15 @@ func (t *Table) unstore(hash string, rng *api.AttributeValue, item value.Item) {
 }
 
 // indexKey returns the encoded index hash value and the index range value of
-// item, and false when the item lacks one of them and so is not in the index.
+// item, and false when the item is not in the index (indexed).
 func indexKey(spec *IndexSpec, item value.Item) (string, *api.AttributeValue, bool) {
-	h, ok := item[spec.Key.Hash.Name]
-	if !ok {
+	if !indexed(spec, item) {
 		return "", nil, false
 	}
 
-	if !spec.Key.HasRange() {
-		return value.KeyString(&h), nil, true
-	}
+	h := item[spec.Key.Hash.Name]
 
-	r, ok := item[spec.Key.Range.Name]
-	if !ok {
-		return "", nil, false
-	}
-
-	return value.KeyString(&h), &r, true
+	return value.KeyString(&h), sortKey(spec.Key, item), true
 }
 
 // indexList returns the published index list. The caller must not change it.

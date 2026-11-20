@@ -93,7 +93,8 @@ func (img *Image) Items() []value.Item {
 }
 
 // Load fills an empty table with items, as a restore does: each is checked
-// with CheckItem and stored with its index entries, then every partition is
+// as every stored item is (checkStored) and stored with the index entries of
+// the indexes it is in (indexed), then every partition is
 // sorted once, so a load costs O(n log n) whatever the order of items. Load
 // takes the items as they are, so the caller hands over maps nothing else
 // holds. It tells no observer: what a restore puts back is not a write.
@@ -106,7 +107,7 @@ func (t *Table) Load(items []value.Item) error {
 	}
 
 	for _, item := range items {
-		err := t.CheckItem(item)
+		err := t.checkStored(item)
 		if err != nil {
 			return err
 		}
@@ -121,16 +122,11 @@ func (t *Table) Load(items []value.Item) error {
 		key := idx.spec.Key
 
 		fill(&idx.data, items, func(dst []byte, item value.Item) ([]byte, bool) {
-			if key.HasRange() {
-				if _, ok := item[key.Range.Name]; !ok {
-					return dst, false
-				}
-			}
-
-			h, ok := item[key.Hash.Name]
-			if !ok {
+			if !indexed(&idx.spec, item) {
 				return dst, false
 			}
+
+			h := item[key.Hash.Name]
 
 			return value.AppendKeyString(dst, &h), true
 		}, func(item value.Item) entry {
