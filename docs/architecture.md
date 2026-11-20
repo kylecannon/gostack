@@ -499,6 +499,25 @@ notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
 the lane of the queue's ARN, so the events for one queue arrive in the order
 they were raised and a slow queue holds up no other.
 
+`cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
+the calls through the gateway's `InternalHandler`: the root router with each
+request marked internal, never put on a listener. A request from outside is
+marked internal too when it carries an `X-Localstack-Data` header holding a
+json object, as LocalStack marks it, so while the gateway is stopping and its
+listeners are still open (the hooks and the drain of requests), such a
+request is served like a service's call; once the listeners close, nothing
+from outside reaches the gateway. `Hub.Drain` is the shutdown's in-process
+phase. The hub keeps one count of the calls its clients have queued and not
+yet done with: a call is counted before a worker can see it and let go of
+after its `done` returns, so a call queued by a call being served, on any
+client, keeps the count above zero. `Drain` waits for that count to reach
+zero, or for its deadline. Then it shuts every queue: calls still queued are
+dropped without their `done` being called, as `Client.Close` drops them,
+calls running are cancelled, and `Enqueue` refuses every later call. It waits
+20 ms for the cancelled calls to return and logs `Hub.Cut` once: the calls
+dropped, refused, or cancelled and not answered with a 2xx. A cancelled call
+whose handler still answers it with a 2xx was served and is not counted.
+
 ### SNS delivery (`internal/service/sns/lanes.go`)
 
 SNS delivers through lanes of its own, one per destination: a subscribed
@@ -717,20 +736,38 @@ Tests split along the same line:
   overrun. `T` is `SHUTDOWN_TIMEOUT`, which the supervisor counts from the
   SIGTERM it sends. The child counts from the moment it sees the signal, which
   is microseconds later, and reads `T` once at start, so an update through
-  `/_localstack/config` does not move the deadline. The budget is one, with
-  four slots one after the other: the hooks, the drain, the save and the
-  services' `Close`. `lifecycle.PlanShutdown` plans it once, from the moment
-  the shutdown starts: the signal, or the failure of a listener, which starts
-  the shutdown inside the gateway. The gateway drains only to the time the plan
-  gave it, and a zero time is the plan's "no limit". A shutdown that nothing
-  planned, with no `DrainBy` call and no `PlanDrain`, drains for 5 s.
+  `/_localstack/config` does not move the deadline. The budget is one: the
+  hooks and the drain share the time to `Work`, the save's reserve follows to
+  `Save`, and the services' `Close` has the time after it. The reserve holds
+  the first save, the drain of the in-process calls and a second save.
+  `lifecycle.PlanShutdown` plans it once,
+  from the moment the shutdown starts: the signal, or the failure of a
+  listener, which starts the shutdown inside the gateway. The gateway drains
+  only to the times the plan gave it, and a zero time is the plan's "no
+  limit". A shutdown that nothing planned, with no `DrainBy` call and no
+  `PlanDrain`, gives the drain 5 s.
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
-     wakes its long polls there.
+     wakes its long polls there. The calls services make to each other are
+     still served, as internal calls (see the in-process client).
   2. The `shutdown.d` hooks run. A hook still running at `Work` is killed.
   3. The gateway drains the requests in flight. At `Work` it closes the
-     connections that are left.
-  4. The persisted state is saved, with a deadline of `Save`. Then every
+     connections that are left. Its listeners are closed from here on.
+  4. The persisted state is saved, with a deadline of `Save`: the save gostack
+     always made, so a slow drain of in-process calls never costs what was
+     acknowledged before the shutdown. The first save is
+     `persist.Engine.Stop`, which stops the timer.
+  5. `Hub.Drain` waits for the calls the services queued for each other, such
+     as S3's event notifications to SQS, until none is left or `Calls`. They
+     have been served all along; this waits for the ones the last requests
+     queued, which is why it follows the drain of requests. At `Calls` the hub
+     cuts what is left and logs the count. From here on the gateway answers
+     every request 503, internal ones too, so a call made while the services
+     close never reaches a closed service.
+  6. A second save, `Engine.Flush`, writes what changed since the first,
+     such as the events the drain delivered, until `Save`. When it cannot
+     finish, the first save's files stand, and what the drain delivered is
+     lost as it would be had the drain not run. Then every
      registration's `Close` stops the service's own goroutines (SQS's move
      tasks, S3's hijacked responses), all at once, each given a context that
      ends at `Close`, so a slow one takes no time from another. A `Close` that
@@ -739,29 +776,41 @@ Tests split along the same line:
      returned at the deadline is not abandoned. When every `Close` returned
      and `Close` has time left, a last save writes whatever they or a request
      cut at `Work` changed; when one was abandoned or the time is out,
-     what the others changed in their `Close` stays unsaved and the save of
-     step 4 is the last.
-     The first save is `persist.Engine.Stop`, which stops the timer; the last
-     is `Engine.Close`, which then releases the descriptors the assets hold
-     (the root on `assets/.gostack` and, with syncfs, the directory kept open
-     for it) once every sync started has returned.
+     what the others changed in their `Close` stays unsaved and the second
+     save is the last. The last save is `Engine.Close`, which then releases
+     the descriptors the assets hold (the root on `assets/.gostack` and, with
+     syncfs, the directory kept open for it) once every sync started has
+     returned.
 
   | Point | Time after the signal, with `T` = 5 s | Rule |
   | --- | --- | --- |
   | `Work` | 3.375 s | `Save` minus the reserve: a quarter of `Save`, at least 500 ms, at most half |
+  | `Calls` | 3.9375 s | `Save` minus half the reserve |
   | `Save` | 4.5 s | `T` minus 500 ms, the margin before SIGKILL |
   | `Close` | 4.9 s | `T` minus 100 ms: the time between `Save` and here is `Close`'s |
   | SIGKILL | 5 s | the supervisor, unchanged |
 
+  The first save starts when the requests have drained, at `Work` at the
+  latest, and may run to `Save`; the calls drain gets what is left of the time
+  to `Calls`, nothing when the first save runs past it; the second save has at
+  least the time from `Calls` to `Save`. For `T` of 1, 5, 10 and 60 s: hooks
+  and requests until 0.25, 3.375, 7.125 and 44.625 s; first save and calls
+  drain until 0.375, 3.9375, 8.3125 and 52.0625 s; second save at least 125 ms,
+  0.5625, 1.1875 and 7.4375 s, to 0.5, 4.5, 9.5 and 59.5 s; `Close` 400 ms.
+
   The hooks, the drain and the service `Shutdown` functions share the time up
   to `Work`, and a slow one cannot take the save's reserve: a service function
   that never returns is left behind at `Work`, the hooks that follow it are
-  skipped, and the drain and the save go on without it. A request still running
+  skipped, and the drain and the save go on without it. When time runs out,
+  the hooks and the requests are cut first, at `Work`, then the queued
+  in-process calls, at `Calls`; neither takes from the first save or `Close`. A request still running
   when the save starts can have its effect saved or not, and the file is whole
   either way, since the snapshot takes the service locks. For a `T` too short
   to leave room, `Close` falls together with `Save`. `SHUTDOWN_TIMEOUT=0` has
-  no deadline at all: the hooks, the drain, the save and `Close` take what they
-  need. With the supervisor's timer off nothing kills the child, so a stuck
+  no deadline at all: the hooks, the drain, the saves and `Close` take what
+  they need. The calls drain is skipped, and the calls still queued after the
+  first save are cut at once, since nothing would end a call that queues
+  itself again. With the supervisor's timer off nothing kills the child, so a stuck
   hook is the user's to fix.
 - **Init hooks:** `/etc/localstack/init/{boot,start,ready,shutdown}.d`,
   accepting `.sh` and `.py`. The status of each script is exposed at
