@@ -260,9 +260,11 @@ func Test_Engine_FlushIsClassifiedByItsError(t *testing.T) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 
-		assert.Equal(t, 1, e.failures)
-		assert.False(t, e.retryAt.IsZero(), "the next flush waits for the backoff")
-		assert.True(t, e.services["svc"].dirty)
+		svc := e.services["svc"]
+
+		assert.Equal(t, 1, svc.failures)
+		assert.False(t, svc.retryAt.IsZero(), "the next flush waits for the backoff")
+		assert.True(t, svc.dirty)
 	})
 
 	t.Run("a flush that saved everything as its context ended ends the run of failures", func(t *testing.T) {
@@ -275,7 +277,8 @@ func Test_Engine_FlushIsClassifiedByItsError(t *testing.T) {
 		require.NoError(t, err)
 
 		c.add(commitAsset(t, a, "body"))
-		e.failures, e.lastFailure, e.retryAt = 3, "disk full", time.Now().Add(time.Hour)
+		svc := e.services["svc"]
+		svc.failures, svc.lastFailure, svc.retryAt = 3, "disk full", time.Now().Add(time.Hour)
 		e.MarkDirty("svc")
 
 		require.NoError(t, e.Flush(ctx))
@@ -284,8 +287,8 @@ func Test_Engine_FlushIsClassifiedByItsError(t *testing.T) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
 
-		assert.Zero(t, e.failures)
-		assert.True(t, e.retryAt.IsZero(), "no stale backoff is left")
+		assert.Zero(t, svc.failures)
+		assert.True(t, svc.retryAt.IsZero(), "no stale backoff is left")
 	})
 
 	t.Run("a cancelled save does not log removals as stuck", func(t *testing.T) {
