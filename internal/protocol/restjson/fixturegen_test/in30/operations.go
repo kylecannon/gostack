@@ -4,6 +4,7 @@ package in30
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // MediaTypeHeader returns awserr.NotImplemented.
 func (Unimplemented) MediaTypeHeader(context.Context, *MediaTypeHeaderInput) (*MediaTypeHeaderOutput, error) {
 	return nil, awserr.NotImplemented("in30", "MediaTypeHeader")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in30 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "MediaTypeHeader":
+		return t.MethodByName("MediaTypeHeader")
+	default:
+		return reflect.Method{}, false
+	}
 }

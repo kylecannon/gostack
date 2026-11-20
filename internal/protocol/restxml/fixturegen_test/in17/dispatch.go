@@ -16,13 +16,14 @@ import (
 
 // Metadata describes the in17 service.
 var Metadata = service.Metadata{
-	Name:           "in17",
-	SigningName:    "in17",
-	TargetPrefix:   "",
-	EndpointPrefix: "in17",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestXML},
-	Operations:     Operations,
+	Name:            "in17",
+	SigningName:     "in17",
+	TargetPrefix:    "",
+	EndpointPrefix:  "in17",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestXML},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.

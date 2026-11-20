@@ -4,6 +4,7 @@ package in20
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // HttpRequestWithRegexLiteral returns awserr.NotImplemented.
 func (Unimplemented) HttpRequestWithRegexLiteral(context.Context, *HttpRequestWithRegexLiteralInput) (*HttpRequestWithRegexLiteralOutput, error) {
 	return nil, awserr.NotImplemented("in20", "HttpRequestWithRegexLiteral")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in20 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "HttpRequestWithRegexLiteral":
+		return t.MethodByName("HttpRequestWithRegexLiteral")
+	default:
+		return reflect.Method{}, false
+	}
 }

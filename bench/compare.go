@@ -54,6 +54,9 @@ const (
 	limitStartup = 0.25
 
 	maxListed = 25
+
+	// metricStartup names the startup metric, and the cell it is held under.
+	metricStartup = "startup"
 )
 
 // gated are the targets whose cells gate. LocalStack is reference only.
@@ -122,10 +125,24 @@ func (m metric) change() float64 {
 	return (m.head.Median - m.base.Median) / m.base.Median
 }
 
+// comparable reports whether both sides measured the metric. A throughput whose
+// head is zero was measured: the cell completed no cycle, and that is the
+// largest fall there is. A zero cost, or a zero base, was not measured.
+func (m metric) comparable() bool {
+	return !m.base.zero() && (!m.head.zero() || !m.lowerIsBetter)
+}
+
 // judge applies the two rules to a metric.
 func (m metric) judge() outcome {
-	if m.base.Median == 0 || m.head.Median == 0 {
+	if m.base.Median == 0 || (m.head.Median == 0 && m.lowerIsBetter) {
 		return steady
+	}
+
+	// A throughput whose median is zero completed no cycle in most runs: the
+	// largest fall there is, and a run or two at the base's level (head 0, 0,
+	// 2800) does not make the ranges overlap into noise.
+	if m.head.Median == 0 {
+		return worse
 	}
 
 	change := m.change()
@@ -178,14 +195,13 @@ func cellMetrics(target string, base, head cellResult) []metric {
 	var out []metric
 
 	add := func(name string, b, h spread, lower bool, limit, floor, scale float64, unit string) {
-		if b.zero() || h.zero() {
-			return
-		}
-
-		out = append(out, metric{
+		m := metric{
 			target: target, cell: base.ID, name: name, base: b, head: h,
 			lowerIsBetter: lower, limit: limit, floor: floor, scale: scale, unit: unit,
-		})
+		}
+		if m.comparable() {
+			out = append(out, m)
+		}
 	}
 
 	// Every operation the base timed, whatever the service: the cell names them.
@@ -211,6 +227,7 @@ type comparison struct {
 	metrics      int
 	regressions  []metric
 	accepted     []metric
+	unused       []string
 	noise        []metric
 	improvements []metric
 	missing      []string
@@ -220,9 +237,13 @@ type comparison struct {
 // settle moves each regression the accepted list holds for base..head out of
 // the regressions, and notes on the rest why a listed entry did not hold them.
 func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, head string) {
-	var still []metric
+	var (
+		still    []metric
+		matchers = make([]func(*acceptedEntry) bool, 0, len(cmp.regressions))
+	)
 
 	for _, m := range cmp.regressions {
+		matchers = append(matchers, m.matches)
 		v := accepted.judge(ctx, base, head, m.matches, m.within)
 		if v.entry != nil {
 			m.accepted = v.entry
@@ -236,6 +257,7 @@ func (cmp *comparison) settle(ctx context.Context, accepted acceptedSet, base, h
 	}
 
 	cmp.regressions = still
+	cmp.unused = accepted.unused(gateSystem, matchers)
 }
 
 // runsNote says which side of a cell completed fewer runs than its result asked
@@ -290,7 +312,7 @@ func compareTargets(base, head report) comparison {
 // addTarget holds one gated target of the head against the base's.
 func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want expectation) {
 	startup := metric{
-		target: bt.Name, cell: "startup", name: "startup", base: bt.Startup.MS, head: ht.Startup.MS,
+		target: bt.Name, cell: metricStartup, name: metricStartup, base: bt.Startup.MS, head: ht.Startup.MS,
 		lowerIsBetter: true, limit: limitStartup, scale: msPerSecond, unit: "s",
 	}
 	idle := metric{
@@ -332,7 +354,7 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 	}
 
 	for _, m := range all {
-		if m.base.zero() || m.head.zero() {
+		if !m.comparable() {
 			continue
 		}
 
@@ -373,6 +395,11 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	if cmp.metrics == 0 && len(cmp.problems) == 0 {
 		b.WriteString("Nothing to compare: the two results hold no gostack or gostack-slim cell in common.\n")
 
+		if len(cmp.unused) > 0 {
+			b.WriteString("\n")
+			unusedList(&b, cmp.unused)
+		}
+
 		return write(out, b.String())
 	}
 
@@ -386,6 +413,7 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	table(&b, "Regressions", cmp.regressions)
 	notes(&b, cmp.regressions)
 	acceptedTable(&b, cmp.accepted)
+	unusedList(&b, cmp.unused)
 	table(&b, "Changes past the limit with overlapping ranges (noise, not failing)", cmp.noise)
 	table(&b, "Improvements", cmp.improvements)
 	problemTable(&b, cmp.problems)
@@ -477,6 +505,22 @@ func notes(b *strings.Builder, regressions []metric) {
 	if listed {
 		b.WriteString("\n")
 	}
+}
+
+// unusedList names the entries of the accepted list that hold nothing, with why.
+// It says nothing when every entry holds a regression it can.
+func unusedList(b *strings.Builder, unused []string) {
+	if len(unused) == 0 {
+		return
+	}
+
+	fmt.Fprintf(b, "### Unused accepted entries (%d)\n\n", len(unused))
+
+	for _, name := range unused {
+		fmt.Fprintf(b, "- %s\n", name)
+	}
+
+	b.WriteString("\n")
 }
 
 // acceptedTable lists the regressions the accepted list holds, with its reason,

@@ -71,6 +71,7 @@ func (g *generator) emitMetadata(p *printer) {
 	p.f("\tAPIVersion: %q,", md.APIVersion)
 	p.f("\tProtocols: []protocol.Kind{%s},", strings.Join(kinds, ", "))
 	p.f("\tOperations: Operations,")
+	p.f("\tOperationMethod: OperationMethod,")
 	p.f("}")
 	p.blank()
 }

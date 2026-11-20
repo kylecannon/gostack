@@ -4,6 +4,7 @@ package in27
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // JsonMaps returns awserr.NotImplemented.
 func (Unimplemented) JsonMaps(context.Context, *JsonMapsInput) (*JsonMapsOutput, error) {
 	return nil, awserr.NotImplemented("in27", "JsonMaps")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in27 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "JsonMaps":
+		return t.MethodByName("JsonMaps")
+	default:
+		return reflect.Method{}, false
+	}
 }

@@ -19,13 +19,14 @@ import (
 
 // Metadata describes the secretsmanager service.
 var Metadata = service.Metadata{
-	Name:           "secretsmanager",
-	SigningName:    "secretsmanager",
-	TargetPrefix:   "secretsmanager",
-	EndpointPrefix: "secretsmanager",
-	APIVersion:     "2017-10-17",
-	Protocols:      []protocol.Kind{protocol.KindJSON},
-	Operations:     Operations,
+	Name:            "secretsmanager",
+	SigningName:     "secretsmanager",
+	TargetPrefix:    "secretsmanager",
+	EndpointPrefix:  "secretsmanager",
+	APIVersion:      "2017-10-17",
+	Protocols:       []protocol.Kind{protocol.KindJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

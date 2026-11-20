@@ -16,13 +16,14 @@ import (
 
 // Metadata describes the sns service.
 var Metadata = service.Metadata{
-	Name:           "sns",
-	SigningName:    "sns",
-	TargetPrefix:   "",
-	EndpointPrefix: "sns",
-	APIVersion:     "2010-03-31",
-	Protocols:      []protocol.Kind{protocol.KindQuery},
-	Operations:     Operations,
+	Name:            "sns",
+	SigningName:     "sns",
+	TargetPrefix:    "",
+	EndpointPrefix:  "sns",
+	APIVersion:      "2010-03-31",
+	Protocols:       []protocol.Kind{protocol.KindQuery},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the

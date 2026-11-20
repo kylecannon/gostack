@@ -4,6 +4,7 @@ package dynamodbstreams
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -50,4 +51,22 @@ func (Unimplemented) GetShardIterator(context.Context, *GetShardIteratorInput) (
 // ListStreams returns awserr.NotImplemented.
 func (Unimplemented) ListStreams(context.Context, *ListStreamsInput) (*ListStreamsOutput, error) {
 	return nil, awserr.NotImplemented("dynamodbstreams", "ListStreams")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the dynamodbstreams API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "DescribeStream":
+		return t.MethodByName("DescribeStream")
+	case "GetRecords":
+		return t.MethodByName("GetRecords")
+	case "GetShardIterator":
+		return t.MethodByName("GetShardIterator")
+	case "ListStreams":
+		return t.MethodByName("ListStreams")
+	default:
+		return reflect.Method{}, false
+	}
 }
