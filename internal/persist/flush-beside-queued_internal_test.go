@@ -31,6 +31,54 @@ func (c *countingSnap) Snapshot(w io.Writer) error {
 
 func (c *countingSnap) count() int { return int(c.snapshots.Load()) }
 
+// Test_Engine_takeDirty_MovesOnlyFromTheTimerToAFlushByHand: a service whose
+// save has not begun moves from a flush by the timer to a flush by hand, and
+// never back, so a timed flush that starts after a Flush joined it takes
+// nothing that Flush took first.
+func Test_Engine_takeDirty_MovesOnlyFromTheTimerToAFlushByHand(t *testing.T) {
+	names := func(pending []pendingService) []string {
+		out := make([]string, 0, len(pending))
+		for _, p := range pending {
+			out = append(out, p.name)
+		}
+
+		return out
+	}
+
+	setup := func() *Engine {
+		e := New(quietConfig(t.TempDir(), time.Hour))
+		e.Register("a", &stateSnap{state: "a"})
+		e.Register("b", &stateSnap{state: "b"})
+		e.MarkDirty("a")
+		e.MarkDirty("b")
+
+		return e
+	}
+
+	t.Run("a Flush takes from the timer", func(t *testing.T) {
+		e := setup()
+		timed, hand := newFlushRun(e, byTimer), newFlushRun(e, byHand)
+
+		require.Equal(t, []string{"a", "b"}, names(e.takeDirty(byTimer, timed)))
+		assert.Equal(t, []string{"a", "b"}, names(e.takeDirty(byHand, hand)), "neither save has begun")
+		assert.False(t, timed.own("a"), "the timed flush skips a moved service")
+
+		timed.close()
+		hand.close()
+	})
+
+	t.Run("the timer takes nothing from a Flush", func(t *testing.T) {
+		e := setup()
+		hand, timed := newFlushRun(e, byHand), newFlushRun(e, byTimer)
+
+		require.Equal(t, []string{"a", "b"}, names(e.takeDirty(byHand, hand)))
+		assert.Empty(t, names(e.takeDirty(byTimer, timed)), "the timed flush takes nothing back")
+		assert.True(t, hand.own("a"))
+
+		hand.close()
+	})
+}
+
 // Test_Engine_ShutdownBehindAQueuedService: the timed save took sqs, v2 and
 // acknowledged, together with dynamodb, and sqs waits its turn behind
 // dynamodb's 2 s Snapshot, which cannot be cut short, when the shutdown
