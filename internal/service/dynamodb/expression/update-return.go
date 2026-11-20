@@ -3,7 +3,6 @@ package expression
 import (
 	"slices"
 	"strings"
-	"unicode/utf16"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
@@ -119,12 +118,9 @@ func JavaHashOrder(keys []string) []string {
 	}
 
 	bucket := func(s string) int {
-		var h int32
-		for _, r := range utf16.Encode([]rune(s)) {
-			h = h*31 + int32(r) //nolint:mnd // Java's String.hashCode multiplier over a rune
-		}
+		h := uint32(javaStringHash(s)) //nolint:gosec // reads the bits of Java's signed int
 
-		spread := uint32(h) ^ uint32(h)>>16 //nolint:mnd // HashMap.hash folds the high half down
+		spread := h ^ h>>clashSpread
 
 		return int(spread) & (buckets - 1)
 	}
