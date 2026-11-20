@@ -32,11 +32,18 @@ const emptyBinTable = `{"TableName":"ebins","BillingMode":"PAY_PER_REQUEST",` +
 	`"KeySchema":[{"AttributeName":"pk","KeyType":"HASH"},{"AttributeName":"sk","KeyType":"RANGE"}],` +
 	`"AttributeDefinitions":[{"AttributeName":"pk","AttributeType":"B"},{"AttributeName":"sk","AttributeType":"B"}]}`
 
+// legacy is a Query of ekeys by the legacy KeyConditions: pk is "p" and
+// rangeCond the condition on sk.
+func legacy(rangeCond string) string {
+	return `{"TableName":"ekeys","KeyConditions":{"pk":{"ComparisonOperator":"EQ","AttributeValueList":[{"S":"p"}]},` +
+		rangeCond + `}}`
+}
+
 // vs ends a request body with the ExpressionAttributeValues naming the given
 // placeholders: :p is "p", :e is the empty string and :x is "x". A request
 // that holds a value no expression uses is refused for that first.
 func vs(names ...string) string {
-	all := map[string]string{":p": `{"S":"p"}`, ":e": `{"S":""}`, ":x": `{"S":"x"}`}
+	all := map[string]string{":p": `{"S":"p"}`, ":e": `{"S":""}`, ":x": `{"S":` + `"x"}`}
 	parts := make([]string, len(names))
 
 	for i, n := range names {
@@ -103,6 +110,33 @@ func Test_query_emptyKeyValues(t *testing.T) {
 		{
 			"local index hash", opQuery, `{"TableName":"ekeys","IndexName":"lsi1","KeyConditionExpression":"pk = :e",` + vs(":e"),
 			emptyIdx + "IndexName: lsi1, IndexKey: pk",
+		},
+		{
+			"legacy range equal", opQuery, legacy(`"sk":{"ComparisonOperator":"EQ","AttributeValueList":[{"S":""}]}`), emptyStr + "sk",
+		},
+		{
+			"legacy hash", opQuery, `{"TableName":"ekeys","KeyConditions":{"pk":{"ComparisonOperator":"EQ",` +
+				`"AttributeValueList":[{"S":""}]}}}`, emptyStr + "pk",
+		},
+		{
+			"legacy begins with", opQuery, legacy(`"sk":{"ComparisonOperator":"BEGINS_WITH","AttributeValueList":[{"S":""}]}`),
+			emptyStr + "sk",
+		},
+		{
+			"legacy between", opQuery, legacy(`"sk":{"ComparisonOperator":"BETWEEN","AttributeValueList":[{"S":""},{"S":"x"}]}`),
+			emptyStr + "sk",
+		},
+		{
+			"legacy greater", opQuery, legacy(`"sk":{"ComparisonOperator":"GT","AttributeValueList":[{"S":""}]}`), emptyStr + "sk",
+		},
+		{
+			"legacy index range", opQuery, `{"TableName":"ekeys","IndexName":"gsi1","KeyConditions":{"gk":{"ComparisonOperator":"EQ",` +
+				`"AttributeValueList":[{"S":"p"}]},"gs":{"ComparisonOperator":"EQ","AttributeValueList":[{"S":""}]}}}`,
+			emptyIdx + "IndexName: gsi1, IndexKey: gs",
+		},
+		{
+			"legacy binary", opQuery, `{"TableName":"ebins","KeyConditions":{"pk":{"ComparisonOperator":"EQ",` +
+				`"AttributeValueList":[{"B":""}]}}}`, emptyBin + "pk",
 		},
 		{
 			"binary range", opQuery, `{"TableName":"ebins","KeyConditionExpression":"pk = :p AND sk = :e",` +
