@@ -54,7 +54,8 @@ func Registration(parity func() bool) service.Registration {
 		Mutating: func(string) bool { return false },
 		// The sessions are kept in the region "global", so a reset of one region
 		// leaves them; a reset of every region, or of "global", empties them.
-		Reset: p.sessions.Reset,
+		Reset:   p.sessions.Reset,
+		Handler: p,
 	}
 }
 

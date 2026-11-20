@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/persist"
@@ -20,6 +21,13 @@ const stateRunning = "running"
 type serviceTable struct {
 	regs []service.Registration
 	eng  *persist.Engine
+
+	// capabilities are worked out once, on the first request for them: they
+	// never change after startup, and the startup does not pay for them. They
+	// are set only when complete, so a check that fails leaves them nil and the
+	// next request runs it again; guarded by mu.
+	capabilities []internalapi.ServiceCapability
+	mu           sync.Mutex
 }
 
 // States returns every registered service as running, and says whether its state
@@ -39,16 +47,34 @@ func (t *serviceTable) States() map[string]internalapi.ServiceState {
 // Check does nothing: the states never change after startup.
 func (*serviceTable) Check() {}
 
-// Capabilities lists the registered services. A registration carries no list of
-// the operations it implements yet, so only the names are reported.
+// Capabilities lists, for every registered service, the operations of its API
+// and the ones its Handler implements. A service without a Handler, or whose
+// Handler the check cannot read, reports them as unknown.
 func (t *serviceTable) Capabilities() []internalapi.ServiceCapability {
-	capabilities := make([]internalapi.ServiceCapability, 0, len(t.regs))
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	for i := range t.regs {
-		capabilities = append(capabilities, internalapi.ServiceCapability{Name: t.regs[i].Metadata.Name})
+	if t.capabilities == nil {
+		// Built in a local: a check that panics must not leave a table that
+		// holds only the services before it, which sync.Once would then keep as
+		// the answer for good.
+		capabilities := make([]internalapi.ServiceCapability, 0, len(t.regs))
+
+		for i := range t.regs {
+			metadata := &t.regs[i].Metadata
+			implemented, known := service.Implemented(t.regs[i].Handler, metadata.Operations, metadata.OperationMethod)
+			capabilities = append(capabilities, internalapi.ServiceCapability{
+				Name:        metadata.Name,
+				Implemented: implemented,
+				Unknown:     !known,
+				Total:       len(metadata.Operations),
+			})
+		}
+
+		t.capabilities = capabilities
 	}
 
-	return capabilities
+	return t.capabilities
 }
 
 // stateController implements [internalapi.StateController]: reset goes to the

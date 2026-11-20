@@ -4,6 +4,7 @@ package out38
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // XmlIntEnums returns awserr.NotImplemented.
 func (Unimplemented) XmlIntEnums(context.Context, *XmlIntEnumsInput) (*XmlIntEnumsOutput, error) {
 	return nil, awserr.NotImplemented("out38", "XmlIntEnums")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the out38 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "XmlIntEnums":
+		return t.MethodByName("XmlIntEnums")
+	default:
+		return reflect.Method{}, false
+	}
 }

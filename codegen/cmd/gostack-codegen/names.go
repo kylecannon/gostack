@@ -15,17 +15,18 @@ const shapeSuffix = "Shape"
 // A name here must not end in shapeSuffix: a shape that takes the suffix would
 // then land in the set again.
 var emittedNames = map[string]bool{
-	"Handler":        true, // emit_types.go: the interface a provider implements
-	"Unimplemented":  true, // emit_types.go: the provider that answers 501
-	"Operations":     true, // emit_types.go: the operation list
-	"Metadata":       true, // emit_dispatch.go: the service's description
-	"Serve":          true, // emit_dispatch.go, emit_rest.go: the entry point
-	"ServeValidated": true, // emit_dispatch.go: Serve that checks required members
-	"Route":          true, // emit_rest.go: the rest router's entry point
-	"Fixture":        true, // fixtures.go: the handler of the fixture harness
-	"Run":            true, // fixtures.go: runs a call on a Fixture
-	"NewOutput":      true, // fixtures.go: an empty output
-	"NewError":       true, // fixtures.go: the error of a shape name
+	"Handler":         true, // emit_types.go: the interface a provider implements
+	"Unimplemented":   true, // emit_types.go: the provider that answers 501
+	"Operations":      true, // emit_types.go: the operation list
+	"OperationMethod": true, // emit_types.go: an operation's method, looked up by a constant
+	"Metadata":        true, // emit_dispatch.go: the service's description
+	"Serve":           true, // emit_dispatch.go, emit_rest.go: the entry point
+	"ServeValidated":  true, // emit_dispatch.go: Serve that checks required members
+	"Route":           true, // emit_rest.go: the rest router's entry point
+	"Fixture":         true, // fixtures.go: the handler of the fixture harness
+	"Run":             true, // fixtures.go: runs a call on a Fixture
+	"NewOutput":       true, // fixtures.go: an empty output
+	"NewError":        true, // fixtures.go: the error of a shape name
 }
 
 // shapeName is the Go name of a shape, which a type, its constructor and every

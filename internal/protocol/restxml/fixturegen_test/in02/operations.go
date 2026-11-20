@@ -4,6 +4,7 @@ package in02
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // ConstantAndVariableQueryString returns awserr.NotImplemented.
 func (Unimplemented) ConstantAndVariableQueryString(context.Context, *ConstantAndVariableQueryStringInput) (*ConstantAndVariableQueryStringOutput, error) {
 	return nil, awserr.NotImplemented("in02", "ConstantAndVariableQueryString")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in02 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "ConstantAndVariableQueryString":
+		return t.MethodByName("ConstantAndVariableQueryString")
+	default:
+		return reflect.Method{}, false
+	}
 }

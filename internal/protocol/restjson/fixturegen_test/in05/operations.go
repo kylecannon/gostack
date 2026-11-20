@@ -4,6 +4,7 @@ package in05
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // DocumentTypeAsPayload returns awserr.NotImplemented.
 func (Unimplemented) DocumentTypeAsPayload(context.Context, *DocumentTypeAsPayloadInput) (*DocumentTypeAsPayloadOutput, error) {
 	return nil, awserr.NotImplemented("in05", "DocumentTypeAsPayload")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in05 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "DocumentTypeAsPayload":
+		return t.MethodByName("DocumentTypeAsPayload")
+	default:
+		return reflect.Method{}, false
+	}
 }

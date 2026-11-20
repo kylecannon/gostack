@@ -18,13 +18,14 @@ import (
 
 // Metadata describes the out26 service.
 var Metadata = service.Metadata{
-	Name:           "out26",
-	SigningName:    "out26",
-	TargetPrefix:   "",
-	EndpointPrefix: "out26",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestJSON},
-	Operations:     Operations,
+	Name:            "out26",
+	SigningName:     "out26",
+	TargetPrefix:    "",
+	EndpointPrefix:  "out26",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.

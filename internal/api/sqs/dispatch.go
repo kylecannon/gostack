@@ -20,13 +20,14 @@ import (
 
 // Metadata describes the sqs service.
 var Metadata = service.Metadata{
-	Name:           "sqs",
-	SigningName:    "sqs",
-	TargetPrefix:   "AmazonSQS",
-	EndpointPrefix: "sqs",
-	APIVersion:     "2012-11-05",
-	Protocols:      []protocol.Kind{protocol.KindJSON, protocol.KindQuery},
-	Operations:     Operations,
+	Name:            "sqs",
+	SigningName:     "sqs",
+	TargetPrefix:    "AmazonSQS",
+	EndpointPrefix:  "sqs",
+	APIVersion:      "2012-11-05",
+	Protocols:       []protocol.Kind{protocol.KindJSON, protocol.KindQuery},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // Serve decodes the call in rc by its protocol, runs it on h and writes the
