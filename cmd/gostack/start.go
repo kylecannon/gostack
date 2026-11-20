@@ -387,6 +387,11 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 			}
 		}
 
+		// closeServices reports false only once closeCtx has ended, and a flush
+		// under an ended context writes nothing
+		// (Test_Engine_Close_PastItsDeadlineWritesNothing), so the skip costs no
+		// save. What was acknowledged before the shutdown does not wait for this
+		// flush: Stop saves it, beside a timed save that is under way.
 		if !s.closeServices(closeCtx) {
 			return
 		}

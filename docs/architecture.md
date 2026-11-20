@@ -1402,7 +1402,22 @@ is untouched.
   The services share that one deadline, so two services with assets to sync
   would share its time in order; S3 is the only one today.
 - A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
-  timed save running lends it its own deadline and waits. A `Snapshot` cannot
+  timed save writing first saves, beside it and at once, every dirty service
+  the timed save does not hold (SQ-384). The timed save holds a service from
+  when it takes it until that service's own save ends, renamed or not, so a
+  service it has already renamed is free again while it is still in a slow
+  `Snapshot` or sync of another. It also holds the leader of a follower it
+  holds: dynamodb renamed but dynamodbstreams not yet snapshotted is one unit,
+  so no save beside it puts a newer table on disk ahead of a streams file cut
+  from the older one, and a follower is still saved only right after its
+  leader's rename in the same save. Two saves never hold one service, so
+  each state file still has one writer. The timed save holds the save guard
+  shared: a load or reset waits for both, and the last of them to end frees
+  it. A `Snapshot` or sync cannot be cut short, so this is what keeps a
+  timed save inside dynamodb's long `Snapshot`, or stuck in the S3 asset
+  sync, from costing the shutdown the SQS write acknowledged after it began.
+  Only then does the waiter turn to what the timed save holds: it lends the
+  timed save its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot
   already taken and make the shutdown take a second one. The timed save
   finishes, or is cancelled when the waiter's deadline passes; of several
@@ -1443,11 +1458,17 @@ is untouched.
   service dirty and arms the timer, whose save deletes them once the load is
   done.
   So a timed save stuck in a slow sync holds the shutdown until the
-  shutdown's deadline and no longer: the shutdown returns then with what the
-  timed save held still unsaved. A shutdown whose save ran out of time still
-  makes the last flush after `Close`, with what is left of `Close`'s time.
+  shutdown's deadline and no longer: the shutdown returns then with every
+  other service saved and only what the timed save held still unsaved. A
+  shutdown whose save ran out of time still makes the last flush after
+  `Close`, with what is left of `Close`'s time. That flush is skipped when a
+  service's `Close` ran `Close`'s deadline out, since a flush under an
+  ended deadline renames nothing.
 - Stated limit: writes acknowledged since the last save are lost at
-  `docker stop` when the shutdown save takes longer than its window, and the
+  `docker stop` when the shutdown save takes longer than its window for the
+  service itself: its own `Snapshot` or sync, or the one a timed save is
+  taking of it, outlasts the window. Another service's slow save no longer
+  costs it its save. The
   last state file on disk is what the next start loads. The window is `Save`
   minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
   `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same
