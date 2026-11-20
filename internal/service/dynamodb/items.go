@@ -251,7 +251,9 @@ func checkCondition(cond expression.Condition, old value.Item, returnOld bool) e
 	}
 
 	if returnOld && old != nil {
-		return (&api.ConditionalCheckFailedException{Item: old}).Err(msgConditionFailed)
+		err := (&api.ConditionalCheckFailedException{Item: old}).Err(msgConditionFailed)
+
+		return &conditionFailedError{item: old, err: err}
 	}
 
 	return api.NewConditionalCheckFailedException(msgConditionFailed)

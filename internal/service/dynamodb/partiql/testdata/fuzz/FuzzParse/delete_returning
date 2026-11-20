@@ -1,0 +1,2 @@
+go test fuzz v1
+string("DELETE FROM t WHERE id = 'a' AND n = 1 RETURNING ALL OLD *")

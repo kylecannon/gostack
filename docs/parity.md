@@ -6,7 +6,7 @@ gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tes
 
 | Service | Tests | Excluded | Skipped | LocalStack pass | LocalStack fail | gostack pass | Parity |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| dynamodb | 57 | 7 | 0 | 50 | 0 | 45 | 90.0% |
+| dynamodb | 57 | 7 | 0 | 50 | 0 | 50 | 100.0% |
 | dynamodbstreams | 4 | 3 | 0 | 1 | 0 | 1 | 100.0% |
 | kms | 151 | 0 | 0 | 151 | 0 | not run | n/a |
 | s3 | 573 | 37 | 0 | 535 | 1 | 536 | 100.0% |
@@ -15,4 +15,4 @@ gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tes
 | sqs | 451 | 46 | 0 | 403 | 2 | 405 | 100.0% |
 | ssm | 14 | 6 | 0 | 8 | 0 | 8 | 100.0% |
 | sts | 14 | 7 | 0 | 7 | 0 | 7 | 100.0% |
-| **total** | 1538 | 142 | 0 | 1393 | 3 | 1060 | 99.5% (1057 of 1062) |
+| **total** | 1538 | 142 | 0 | 1393 | 3 | 1065 | 100.0% (1062 of 1062) |
