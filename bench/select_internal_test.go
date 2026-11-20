@@ -20,7 +20,8 @@ import (
 var errBrokenBenchmark = errors.New("benchmark failed")
 
 // buildDir writes a bench-build directory: a manifest line and a binary with
-// the given bytes per package.
+// the given bytes per package, and an empty package directory at
+// <dir>/src/<package> for each, which writeData fills.
 func buildDir(t *testing.T, bins map[string]string) string {
 	t.Helper()
 
@@ -37,12 +38,22 @@ func buildDir(t *testing.T, bins map[string]string) string {
 	}) {
 		bin := strings.ReplaceAll(pkg, "/", "_") + ".test"
 		require.NoError(t, os.WriteFile(filepath.Join(dir, bin), []byte(bins[pkg]), 0o600))
-		fmt.Fprintf(&manifest, "%s /src/%s . %s\n", bin, pkg, pkg)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "src", pkg), 0o750))
+		fmt.Fprintf(&manifest, "%s %s . %s\n", bin, filepath.Join(dir, "src", pkg), pkg)
 	}
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, manifestName), []byte(manifest.String()), 0o600))
 
 	return dir
+}
+
+// writeData writes a file into a package directory of a buildDir.
+func writeData(t *testing.T, dir, pkg, name, content string) {
+	t.Helper()
+
+	path := filepath.Join(dir, "src", pkg, filepath.FromSlash(name))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 }
 
 func verdicts(pkgs []*selected) map[string]buildVerdict {
@@ -83,12 +94,101 @@ func Test_classify(t *testing.T) {
 	}, verdicts(pkgs))
 }
 
+// A benchmark may read a file of its package directory at run time. The binary
+// does not hold it, so selection hashes the files of the directory that are not
+// Go source.
+func Test_classify_reads_the_files_a_package_holds(t *testing.T) {
+	const (
+		pkgTestdata = "p/testdata"
+		pkgNested   = "p/nested"
+		pkgFixture  = "p/fixture"
+		pkgReadme   = "p/readme"
+		pkgGoData   = "p/godata"
+		pkgGoSrc    = "p/gosrc"
+		pkgNew      = "p/newfile"
+	)
+
+	// Every package builds to the same binary on both sides.
+	bins := map[string]string{}
+	for _, pkg := range []string{pkgTestdata, pkgNested, pkgFixture, pkgReadme, pkgGoData, pkgGoSrc, pkgNew, pkgSame} {
+		bins[pkg] = "a"
+	}
+
+	base, head := buildDir(t, bins), buildDir(t, bins)
+
+	for _, dir := range []string{base, head} {
+		writeData(t, dir, pkgTestdata, "testdata/in.json", `{"n":1}`)
+		writeData(t, dir, pkgNested, "testdata/deep/er/in.json", "1")
+		writeData(t, dir, pkgFixture, "fixtures/in.yaml", "1")
+		writeData(t, dir, pkgReadme, "README.md", "1")
+		writeData(t, dir, pkgGoData, "testdata/gen/input.go", "package gen")
+		writeData(t, dir, pkgGoSrc, "src.go", "package x // 1")
+		writeData(t, dir, pkgSame, "testdata/in.json", "1")
+	}
+
+	// The binary stays the same bytes in every case: only a file the compiler
+	// did not read changes. A Go file outside testdata is in the binary, so on
+	// its own it proves nothing here.
+	writeData(t, head, pkgTestdata, "testdata/in.json", `{"n":2}`)
+	writeData(t, head, pkgNested, "testdata/deep/er/in.json", "2")
+	writeData(t, head, pkgFixture, "fixtures/in.yaml", "2")
+	writeData(t, head, pkgReadme, "README.md", "2")
+	writeData(t, head, pkgGoData, "testdata/gen/input.go", "package gen // 2")
+	writeData(t, head, pkgGoSrc, "src.go", "package x // 2")
+	writeData(t, head, pkgNew, "testdata/added.json", "1")
+
+	pkgs, err := classify(base, head, head)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]buildVerdict{
+		pkgTestdata: verdictChanged,
+		pkgNested:   verdictChanged,
+		pkgFixture:  verdictChanged,
+		pkgReadme:   verdictChanged,
+		pkgGoData:   verdictChanged,
+		pkgNew:      verdictChanged,
+		pkgGoSrc:    verdictUnchanged,
+		pkgSame:     verdictUnchanged,
+	}, verdicts(pkgs))
+}
+
+func Test_classify_sees_a_removed_file(t *testing.T) {
+	bins := map[string]string{pkgSame: "a"}
+	base, head := buildDir(t, bins), buildDir(t, bins)
+	writeData(t, base, pkgSame, "testdata/gone.json", "1")
+
+	pkgs, err := classify(base, head, head)
+	require.NoError(t, err)
+
+	assert.Equal(t, verdictChanged, verdicts(pkgs)[pkgSame])
+}
+
 func Test_readManifest_refuses_an_old_manifest(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, manifestName), []byte("x.test /src/x\n"), 0o600))
 
 	_, err := readManifest(dir)
 	require.ErrorIs(t, err, errSelect)
+}
+
+// Two import paths that one name stands for would build to one file, and the
+// second build would replace the first, so selection would compare a package
+// with another's binary.
+func Test_readManifest_refuses_two_packages_with_one_binary_name(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "internal_zz_a.test /src/a . internal/zz/a\ninternal_zz_a.test /src/b . internal/zz_a\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, manifestName), []byte(manifest), 0o600))
+
+	_, err := readManifest(dir)
+	require.ErrorIs(t, err, errSelect)
+	require.ErrorContains(t, err, "internal/zz/a")
+	require.ErrorContains(t, err, "internal/zz_a")
+
+	manifest = "x.test /src/a . p/x\nX.test /src/b . p/X\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, manifestName), []byte(manifest), 0o600))
+
+	_, err = readManifest(dir)
+	require.ErrorIs(t, err, errSelect, "a case-insensitive file system writes both names to one file")
 }
 
 // fakeRunner stands in for the test binaries: each package lists its
@@ -136,7 +236,7 @@ func runSelect(t *testing.T, f *fakeRunner, base, head map[string]string) (strin
 	var out bytes.Buffer
 
 	err := selectMain(t.Context(), []string{
-		"-base", baseDir, "-head", headDir, "-again", headDir, "-matrix", path,
+		flagBase, baseDir, flagHead, headDir, "-again", headDir, "-matrix", path,
 		"-count", "10", "-budget", "40m", "-setup", "5m", "-link", "1s",
 	}, &out, f.run)
 	if err != nil {
@@ -166,9 +266,9 @@ func Test_selectMain(t *testing.T) {
 		assert.Contains(t, out, "nothing is compared")
 	})
 
-	t.Run("a changed package is timed and compared, a new one runs once at 1x", func(t *testing.T) {
+	t.Run("a changed package is timed and compared, a new one runs twice at 2x", func(t *testing.T) {
 		f := &fakeRunner{benches: map[string]map[string]time.Duration{
-			"x": {"BenchmarkA": time.Second, "BenchmarkB": 2 * time.Second},
+			"x": {benchA: time.Second, benchB: 2 * time.Second},
 		}}
 
 		base := map[string]string{"x": "1", "y": "2"}
@@ -178,7 +278,7 @@ func Test_selectMain(t *testing.T) {
 
 		require.Equal(t, []matrixEntry{{Shard: "1 of 1", Plan: "x .\n"}}, m.Include)
 		assert.Contains(t, f.calls,
-			"n -test.run ^$ -test.bench . -test.benchmem -test.benchtime 1x -test.count 1 -test.timeout 30m")
+			"n -test.run ^$ -test.bench . -test.benchmem -test.benchtime 2x -test.count 1 -test.timeout 30m")
 		assert.Contains(t, f.calls,
 			"x -test.run ^$ -test.bench ^(BenchmarkA)$ -test.benchmem -test.benchtime 500ms -test.count 1 -test.timeout 30m")
 		assert.NotContains(t, strings.Join(f.calls, "\n"), "y -test", "an unchanged package does not run")
@@ -189,6 +289,27 @@ func Test_selectMain(t *testing.T) {
 
 		_, _, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "1", "n": "3"})
 		require.ErrorIs(t, err, errBrokenBenchmark)
+	})
+
+	t.Run("a benchmark estimated past the shard budget fails selection with its name and estimate", func(t *testing.T) {
+		f := &fakeRunner{benches: map[string]map[string]time.Duration{
+			"x": {"BenchmarkSlow": 3 * time.Minute, "BenchmarkQuick": time.Second},
+		}}
+
+		_, _, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+		require.ErrorIs(t, err, errSelect)
+		// 5m setup + 10 rounds of 2 * 180s and a 1s link is 1h5m10s.
+		require.ErrorContains(t, err, "BenchmarkSlow")
+		require.ErrorContains(t, err, "1h5m10s")
+		assert.NotContains(t, err.Error(), "BenchmarkQuick")
+	})
+
+	t.Run("a package of one benchmark past the shard budget fails selection too", func(t *testing.T) {
+		f := &fakeRunner{benches: map[string]map[string]time.Duration{"x": {"BenchmarkOnly": 3 * time.Minute}}}
+
+		_, _, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+		require.ErrorIs(t, err, errSelect)
+		require.ErrorContains(t, err, "BenchmarkOnly")
 	})
 }
 
@@ -231,15 +352,6 @@ func Test_pack(t *testing.T) {
 		assert.ElementsMatch(t, pkgs, got, "every unit lands once")
 	})
 
-	t.Run("a unit over the budget alone gets a shard of its own", func(t *testing.T) {
-		huge := unit{pkg: "huge", names: []string{"BenchmarkAll"}, cost: 3 * time.Minute}
-		shards := pack([]unit{huge, {pkg: "a", cost: time.Second}}, p)
-
-		require.Len(t, shards, 2, "the limit rises to the big unit's estimate, and the rest still packs to the budget")
-		assert.Equal(t, "huge ^(BenchmarkAll)$\n", shards[0].plan())
-		assert.Equal(t, "a .\n", shards[1].plan())
-	})
-
 	t.Run("nothing to run is no shard", func(t *testing.T) {
 		assert.Empty(t, pack(nil, p))
 	})
@@ -256,11 +368,12 @@ func Test_units_splits_a_package_one_shard_cannot_hold(t *testing.T) {
 		{name: "BenchmarkFilter", cost: 20 * time.Second},
 	}}
 	small := &selected{bin: benchBin{pkg: pkgRoute}, verdict: verdictChanged, benches: []benchCost{
-		{name: "BenchmarkA", cost: time.Second}, {name: "BenchmarkB", cost: time.Second},
+		{name: benchA, cost: time.Second}, {name: benchB, cost: time.Second},
 	}}
 	skipped := &selected{bin: benchBin{pkg: "svc/store"}, verdict: verdictUnchanged}
 
-	us := units([]*selected{sns, small, skipped}, p)
+	us, err := units([]*selected{sns, small, skipped}, p)
+	require.NoError(t, err)
 
 	require.Equal(t, []unit{
 		{pkg: pkgSNS, names: []string{"BenchmarkPublish"}, cost: 90 * time.Second},

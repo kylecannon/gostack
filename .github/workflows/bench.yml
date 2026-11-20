@@ -5,7 +5,8 @@ name: bench
 # hold (docs/standards.md, "Benchmarks"). `select` keeps the packages whose test
 # binary differs between the trees (`make bench-select`) and packs them into
 # shards; each shard measures its share of both trees interleaved on one runner
-# (`make bench-ab`); `benchstat` joins the shards and runs `go run ./bench gate`.
+# (`make bench-ab`); `benchstat` joins the planned shards (`go run ./bench join`)
+# and runs `go run ./bench gate`.
 
 on:
   pull_request:
@@ -142,33 +143,36 @@ jobs:
       - name: Install benchstat
         if: needs.select.outputs.shards != '0'
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
+      # A re-run of the workflow keeps the artifacts of the attempt before, so
+      # this downloads every bench-shard-* of the run, and `bench join` reads
+      # only the shards select planned.
       - uses: actions/download-artifact@v4
         if: needs.select.outputs.shards != '0'
         with:
           pattern: bench-shard-*
           path: shards
-      # Each shard ran on its own runner, so its output carries that runner's
-      # cpu line and benchstat compares it in a table of its own: base and head
-      # are only ever compared from the same machine.
+      # `bench join` takes bench-shard-0 up to bench-shard-<shards-1> of select's
+      # matrix and fails when one is missing or holds no rows, in the base or in
+      # the head, for a package (and split regex) of its plan. Each shard ran on
+      # its own runner, so its output carries that runner's cpu line and
+      # benchstat compares it in a table of its own: base and head are only ever
+      # compared from the same machine.
       - name: Compare
         if: needs.select.outputs.shards != '0'
-        id: compare
         run: |
-          cat shards/*/base.txt > base.txt
-          cat shards/*/head.txt > head.txt
-          if ! grep -q '^Benchmark' base.txt; then
-            echo "The base has no benchmarks, so there is nothing to compare against." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "compared=true" >> "$GITHUB_OUTPUT"
+          printf '%s' "$MATRIX" > "$RUNNER_TEMP/matrix.json"
+          (cd head && go run ./bench join -matrix "$RUNNER_TEMP/matrix.json" -shards "$GITHUB_WORKSPACE/shards" \
+            -base "$GITHUB_WORKSPACE/base.txt" -head "$GITHUB_WORKSPACE/head.txt")
           benchstat base.txt head.txt | tee benchstat.txt
           {
             echo '```'
             cat benchstat.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          MATRIX: ${{ needs.select.outputs.matrix }}
       - name: Fail on a regression over 10% at p<0.001
-        if: steps.compare.outputs.compared == 'true'
+        if: needs.select.outputs.shards != '0'
         working-directory: head
         run: |
           # Without pipefail the pipe's status is tee's, and a failing gate

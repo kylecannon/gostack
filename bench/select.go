@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,12 @@ const (
 	manifestFields   = 4 // <binary> <dir> <bench regex> <import path>
 	wholePackage     = "."
 	runTimeout       = "30m"
+	// smokeBenchtime runs a head-only benchmark twice. The framework calls a
+	// benchmark once with b.N of 1 and then with b.N of 2, so one that breaks
+	// on its second call fails selection.
+	smokeBenchtime = "2x"
+	testdataDir    = "testdata"
+	goSuffix       = ".go"
 )
 
 // buildVerdict is what selection decided about one benchmark package.
@@ -153,12 +160,15 @@ type selectConfig struct {
 // runs and packs them into shards. -base and -head are bench-build directories
 // of the two trees, built at one fixed layout with -trimpath; -again is the head
 // built a second time with an empty build cache. A package runs when its head
-// binary differs from its base binary, or from its second build (the build is
-// not reproducible, so equal bytes would prove nothing). A package only the
-// head holds runs once at -benchtime 1x, so a broken benchmark fails here, and
-// is not compared. Each package that runs has each of its top-level benchmarks
-// run once at -benchtime, timed, and the shards are packed from those times.
-// The report goes to out and the GitHub Actions matrix to -matrix.
+// binary differs from its base binary, when the files of its directory that are
+// not Go source differ (a benchmark may read them at run time, and the binary
+// does not hold them), or when its head binary differs from its second build
+// (the build is not reproducible, so equal bytes would prove nothing). A
+// package only the head holds runs once at -benchtime 2x, so a broken benchmark
+// fails here, and is not compared. Each package that runs has each of its
+// top-level benchmarks run once at -benchtime, timed, and the shards are packed
+// from those times. A benchmark that would overrun a shard on its own fails
+// selection. The report goes to out and the GitHub Actions matrix to -matrix.
 func selectMain(ctx context.Context, args []string, out io.Writer, run runBin) error {
 	cfg, err := parseSelect(args)
 	if err != nil {
@@ -175,7 +185,12 @@ func selectMain(ctx context.Context, args []string, out io.Writer, run runBin) e
 		return err
 	}
 
-	shards := pack(units(pkgs, cfg.params), cfg.params)
+	us, err := units(pkgs, cfg.params)
+	if err != nil {
+		return err
+	}
+
+	shards := pack(us, cfg.params)
 
 	err = writeMatrix(cfg.matrix, shards)
 	if err != nil {
@@ -236,8 +251,8 @@ func classify(baseDir, headDir, againDir string) ([]*selected, error) {
 	var pkgs []*selected
 
 	for _, b := range head {
-		v, err := compareBuilds(filepath.Join(headDir, b.bin),
-			builtPath(baseDir, base, b.bin), builtPath(againDir, again, b.bin))
+		v, err := compareBuilds(heldBuild(headDir, head, b.bin),
+			heldBuild(baseDir, base, b.bin), heldBuild(againDir, again, b.bin))
 		if err != nil {
 			return nil, err
 		}
@@ -258,51 +273,128 @@ func inManifest(bins []benchBin, bin string) bool {
 	return slices.ContainsFunc(bins, func(b benchBin) bool { return b.bin == bin })
 }
 
-// builtPath is where a build directory holds bin, or "" when its manifest does
-// not list it.
-func builtPath(dir string, bins []benchBin, bin string) string {
-	if !inManifest(bins, bin) {
-		return ""
+// build is a package's test binary in one build directory, and the package
+// directory it was built from. The zero build is one that does not hold the
+// package.
+type build struct {
+	path string
+	dir  string
+}
+
+// heldBuild is the build of bin in a build directory, or the zero build when
+// its manifest does not list bin.
+func heldBuild(dir string, bins []benchBin, bin string) build {
+	i := slices.IndexFunc(bins, func(b benchBin) bool { return b.bin == bin })
+	if i < 0 {
+		return build{}
 	}
 
-	return filepath.Join(dir, bin)
+	return build{path: filepath.Join(dir, bin), dir: bins[i].dir}
 }
 
 // compareBuilds compares a head binary with the base's and with its own second
-// build; a path of "" is a build that does not hold the package.
-func compareBuilds(headPath, basePath, againPath string) (buildVerdict, error) {
-	if basePath == "" {
+// build, then the files beside the base's and the head's package directory that
+// the binary does not hold.
+func compareBuilds(head, base, again build) (buildVerdict, error) {
+	if base.path == "" {
 		return verdictHeadOnly, nil
 	}
 
-	if againPath == "" {
+	if again.path == "" {
 		return verdictUnreproducible, nil
 	}
 
-	head, err := fileSum(headPath)
+	headSum, err := fileSum(head.path)
 	if err != nil {
 		return "", err
 	}
 
-	again, err := fileSum(againPath)
+	againSum, err := fileSum(again.path)
 	if err != nil {
 		return "", err
 	}
 
-	if again != head {
+	if againSum != headSum {
 		return verdictUnreproducible, nil
 	}
 
-	base, err := fileSum(basePath)
+	baseSum, err := fileSum(base.path)
 	if err != nil {
 		return "", err
 	}
 
-	if base != head {
+	if baseSum != headSum {
+		return verdictChanged, nil
+	}
+
+	headData, err := dataSum(head.dir)
+	if err != nil {
+		return "", err
+	}
+
+	baseData, err := dataSum(base.dir)
+	if err != nil {
+		return "", err
+	}
+
+	if baseData != headData {
 		return verdictChanged, nil
 	}
 
 	return verdictUnchanged, nil
+}
+
+// dataSum hashes what a test binary can read at run time from its package
+// directory without the compiler having seen it: every file under dir whose
+// name does not end in .go, and every file under a testdata directory, which go
+// tooling ignores and a test reads as data. Each is hashed by its path below dir
+// and its content, so a changed, added, removed or renamed file changes the sum.
+func dataSum(dir string) ([sha256.Size]byte, error) {
+	h := sha256.New()
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return fmt.Errorf("rel %s: %w", path, err)
+		}
+
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() || (strings.HasSuffix(rel, goSuffix) && !isTestdata(rel)) {
+			return nil
+		}
+
+		sum := [sha256.Size]byte{}
+		if d.Type().IsRegular() {
+			sum, err = fileSum(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		_, _ = fmt.Fprintf(h, "%s\x00%x\n", rel, sum) // a hash's Write never fails
+
+		return nil
+	})
+
+	var sum [sha256.Size]byte
+
+	if err != nil {
+		return sum, fmt.Errorf("hash the files of %s: %w", dir, err)
+	}
+
+	h.Sum(sum[:0])
+
+	return sum, nil
+}
+
+// isTestdata reports whether a slash path below a package directory has a
+// testdata directory in it.
+func isTestdata(rel string) bool {
+	return strings.Contains("/"+rel, "/"+testdataDir+"/")
 }
 
 func fileSum(path string) ([sha256.Size]byte, error) {
@@ -340,6 +432,11 @@ func readManifest(dir string) ([]benchBin, error) {
 
 	var bins []benchBin
 
+	// owners maps a binary name, folded to lower case because a case-insensitive
+	// file system would write two names that differ in case to one file, to the
+	// package that holds it.
+	owners := map[string]string{}
+
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
@@ -351,6 +448,13 @@ func readManifest(dir string) ([]benchBin, error) {
 			return nil, fmt.Errorf("%w: %s: manifest line %q is not <binary> <dir> <bench> <package>", errSelect, dir, sc.Text())
 		}
 
+		key := strings.ToLower(fields[0])
+		if owner, ok := owners[key]; ok {
+			return nil, fmt.Errorf("%w: %s: packages %s and %s share the test binary name %s, so one would overwrite the other",
+				errSelect, dir, owner, fields[3], fields[0])
+		}
+
+		owners[key] = fields[3]
 		bins = append(bins, benchBin{bin: fields[0], dir: fields[1], pkg: fields[3]})
 	}
 
@@ -358,13 +462,13 @@ func readManifest(dir string) ([]benchBin, error) {
 }
 
 // measure runs what selection picked from the head's build: a head-only
-// package once at 1x, and every top-level benchmark of a package that runs once
+// package twice (-benchtime 2x), and every top-level benchmark of a package that runs once
 // at benchtime, timed. A failing run fails selection.
 func measure(ctx context.Context, binDir string, benchtime time.Duration, pkgs []*selected, run runBin) error {
 	for _, s := range pkgs {
 		switch s.verdict {
 		case verdictHeadOnly:
-			_, _, err := run(ctx, binDir, s.bin, benchArgs(wholePackage, "1x")...)
+			_, _, err := run(ctx, binDir, s.bin, benchArgs(wholePackage, smokeBenchtime)...)
 			if err != nil {
 				return err
 			}
@@ -421,8 +525,9 @@ func anchored(names []string) string {
 
 // units turns the packages that run into packing units: a whole package, or,
 // when the package alone would overrun a shard, each of its top-level
-// benchmarks.
-func units(pkgs []*selected, p shardParams) []unit {
+// benchmarks. A top-level benchmark is the smallest unit there is, so one whose
+// own estimate overruns the budget fails selection: its author splits it.
+func units(pkgs []*selected, p shardParams) ([]unit, error) {
 	var us []unit
 
 	for _, s := range pkgs {
@@ -431,23 +536,30 @@ func units(pkgs []*selected, p shardParams) []unit {
 		}
 
 		whole := unit{pkg: s.bin.pkg, cost: s.cost()}
-		if len(s.benches) == 1 || p.estimate([]unit{whole}) <= p.budget {
+		if p.estimate([]unit{whole}) <= p.budget {
 			us = append(us, whole)
 
 			continue
 		}
 
 		for _, m := range s.benches {
-			us = append(us, unit{pkg: s.bin.pkg, names: []string{m.name}, cost: m.cost})
+			u := unit{pkg: s.bin.pkg, names: []string{m.name}, cost: m.cost}
+
+			if est := p.estimate([]unit{u}); est > p.budget {
+				return nil, fmt.Errorf("%w: %s %s alone is estimated at %s, over the budget of %s: split the benchmark",
+					errSelect, s.bin.pkg, m.name, est.Round(time.Second), p.budget)
+			}
+
+			us = append(us, u)
 		}
 	}
 
-	return us
+	return us, nil
 }
 
 // pack spreads the units over the fewest shards whose estimates all fit the
-// budget, longest unit first onto the shard estimated to finish first. A unit
-// that overruns the budget on its own raises the limit to its own estimate.
+// budget, longest unit first onto the shard estimated to finish first. Every
+// unit fits the budget alone (units refuses one that does not).
 func pack(us []unit, p shardParams) []shard {
 	if len(us) == 0 {
 		return nil
@@ -456,11 +568,9 @@ func pack(us []unit, p shardParams) []shard {
 	sorted := slices.Clone(us)
 	slices.SortStableFunc(sorted, func(a, b unit) int { return cmp.Compare(b.cost, a.cost) })
 
-	limit := max(p.budget, p.estimate(sorted[:1]))
-
 	for n := 1; ; n++ {
 		shards := spreadUnits(sorted, n, p)
-		if n == len(sorted) || !overruns(shards, limit) {
+		if n == len(sorted) || !overruns(shards, p.budget) {
 			return shards
 		}
 	}

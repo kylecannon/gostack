@@ -77,7 +77,8 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            Writes BENCH_BASE_OUT
 #                            and BENCH_HEAD_OUT for benchstat. Each tree builds with its own pinned
 #                            toolchain. With no BENCH_PLAN it runs every benchmark; BENCH_PLAN names
-#                            a file of "<import path> <bench regex>" lines, one CI shard's share.
+#                            a file of "<import path> <bench regex>" lines, one CI shard's share, and
+#                            the target fails when the plan resolves to no package or regex.
 #   make bench-select BASE=<dir> HEAD=<dir>
 #                            what CI compares: builds both trees' benchmark binaries at one layout,
 #                            keeps the packages whose binary differs, and packs them into shards of
@@ -238,7 +239,8 @@ bench:
 # prints what went wrong and fails. BENCH_PLAN, a file of "<import path>
 # <bench regex>" lines that `make bench-select` writes for each CI shard, limits
 # both trees to the packages it names and each package to the benchmarks its
-# regex matches; without it every benchmark runs.
+# regex matches; without it every benchmark runs. A plan that is missing, empty
+# or names a package a tree holds no benchmark of fails the build (bench-build).
 bench-ab:
 	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-ab BASE=<dir> HEAD=<dir>' >&2; exit 2; }
 	@mkdir -p $(dir $(BENCH_BASE_OUT)) $(dir $(BENCH_HEAD_OUT))
@@ -272,10 +274,18 @@ bench-ab:
 # sets GOTOOLCHAIN. BENCH_LAYOUT, when set to a nonzero number, links with
 # -randlayout=BENCH_LAYOUT, which shuffles the order of the functions in the
 # binary with that seed. BENCH_PLAN (an absolute path) builds only the packages
-# it names, with its regex; otherwise every package gets ".". BENCH_BUILD_FLAGS
-# adds flags to go test -c.
+# it names, with its regex; otherwise every package gets ".". The build fails
+# when the plan is missing or empty, has a line that is not "<import path> <bench
+# regex>" or names a package twice, or names a package this tree holds no
+# benchmark of: a plan that built nothing would measure nothing and pass.
+# BENCH_BUILD_FLAGS adds flags to go test -c. A binary's name is its import path
+# with each _ written _u and each / written _s, so no two paths share one.
 bench-build:
 	@rm -rf $(BENCH_BIN) && mkdir -p $(BENCH_BIN) && : >$(BENCH_BIN)/manifest
+	@if [ -n "$(BENCH_PLAN)" ]; then \
+		test -s "$(BENCH_PLAN)" || { echo 'bench-build: BENCH_PLAN $(BENCH_PLAN) is missing or empty' >&2; exit 1; }; \
+		awk 'NF == 0 { next } { n++ } NF != 2 || seen[$$1]++ { bad = 1; print "bench-build: BENCH_PLAN line is not a new <import path> <bench regex>: " $$0 > "/dev/stderr" } END { if (n == 0) { print "bench-build: BENCH_PLAN names no package" > "/dev/stderr"; bad = 1 } exit bad }' "$(BENCH_PLAN)" || exit 1; \
+	fi
 	@go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}} {{.Dir}}{{end}}' $(BENCH_PKGS) >$(BENCH_BIN)/packages
 	@while read -r pkg dir; do \
 		test -n "$$pkg" && grep -qs '^func Benchmark' "$$dir"/*_test.go || continue; \
@@ -284,10 +294,13 @@ bench-build:
 			bench="$$(awk -v pkg="$$pkg" '$$1 == pkg { print $$2 }' "$(BENCH_PLAN)")"; \
 			test -n "$$bench" || continue; \
 		fi; \
-		bin="$$(echo "$$pkg" | tr / _).test"; \
+		bin="$$(echo "$$pkg" | sed 's/_/_u/g; s|/|_s|g').test"; \
 		go test -c -vet=off $(BENCH_BUILD_FLAGS) $(if $(BENCH_LAYOUT),-ldflags=-randlayout=$(BENCH_LAYOUT)) -o "$(BENCH_BIN)/$$bin" "$$pkg" || exit 1; \
 		echo "$$bin $$dir $$bench $$pkg" >>$(BENCH_BIN)/manifest; \
 	done <$(BENCH_BIN)/packages
+	@if [ -n "$(BENCH_PLAN)" ]; then \
+		awk 'FILENAME == ARGV[1] { built[$$4] = 1; next } NF && !built[$$1] { print "bench-build: BENCH_PLAN names " $$1 ", which holds no benchmark here" > "/dev/stderr"; bad = 1 } END { exit bad }' $(BENCH_BIN)/manifest "$(BENCH_PLAN)" || exit 1; \
+	fi
 
 # bench-select decides what CI's bench-ab shards compare (docs/standards.md,
 # "Benchmarks"). It builds the benchmark binaries of BASE and of HEAD with no
