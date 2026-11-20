@@ -91,7 +91,7 @@ func jsonMembers(r *http.Request, name string) []string {
 		return nil
 	}
 
-	raw, err := protocol.ReadBody(r.Body, r.ContentLength)
+	raw, err := protocol.ReadRequest(r)
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 
 	if err != nil {

@@ -32,9 +32,9 @@ const (
 // request by its host at root step 3 has been found already.
 func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	// rc is made first so that parsing a form to route the call charges its
-	// decoding to it; what it charged is given back when the call is over.
+	// decoding, to the request's protocol.Charge, which recoverPanic gives back
+	// when the call is over.
 	rc := &request.Context{Request: r}
-	defer rc.ReleaseDecode()
 
 	form := &formReader{r: r, hold: rc}
 

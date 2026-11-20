@@ -255,7 +255,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 		return nil
 	case strings.HasPrefix(f.typ, "*") && f.pair.p.shape.Type == spec.TypeStructure &&
 		g.hasProtocol(protoRestXML):
-		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)")
+		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.%s = &%s{}", f.goName, strings.TrimPrefix(f.typ, "*"))
 		p.f("\t\tin.%s.decodeXML(xd)", f.goName)
@@ -302,7 +302,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\tin := &%s{}", in.goName)
 	case g.hasProtocol(protoRestXML):
 		p.f("\tin := &%s{}", in.goName)
-		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)")
+		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.decodeXML(xd)")
 		p.f("\t}")
@@ -593,7 +593,7 @@ func (g *generator) emitErrorHelpers(p *printer) {
 func (g *generator) emitReadBody(p *printer) {
 	p.f("// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.")
 	p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-	p.f("\tbody, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)")
+	p.f("\tbody, err := protocol.ReadRequest(rc.Request)")
 	p.f("\tif errors.Is(err, protocol.ErrBusy) {")
 	p.f("\t\treturn nil, %s", g.busyError())
 	p.f("\t}")

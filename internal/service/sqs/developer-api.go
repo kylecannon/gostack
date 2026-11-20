@@ -424,7 +424,7 @@ func (c *devCall) queueURL() (string, *awserr.Error) {
 			return "", onlyReceiveMessage()
 		}
 
-		body, err := io.ReadAll(protocol.LimitBody(c.r.Body))
+		body, err := protocol.ReadRequest(c.r)
 		if err != nil {
 			return "", unreadableBody(err)
 		}

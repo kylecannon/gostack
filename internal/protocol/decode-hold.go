@@ -42,9 +42,10 @@ type DecodeHold struct {
 
 // Cover makes the hold cover cost bytes of decoding for a request whose
 // context is ctx, waiting for room as a body does, and returns what it covers.
-// One request's charge stops at the bound less one body at
-// MaxBody, so a request alone always fits whatever the bound and the
-// service's decode factor; what it decodes beyond that is not charged.
+// One request's charge stops at the bound less one body's share (bodyShare),
+// at least as much as that share, so a request alone always fits whatever the
+// bound and the service's decode factor; what it decodes beyond that is not
+// charged.
 func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 	switch {
 	case h.err != nil:
@@ -63,12 +64,7 @@ func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 			return math.MaxInt64, nil
 		}
 
-		body := pool.capacity
-		if limit := MaxBody(); limit > 0 {
-			body = min(body, limit+1)
-		}
-
-		h.pool, h.room = pool, pool.capacity-body
+		h.pool, h.room = pool, pool.capacity-pool.bodyShare()
 	}
 
 	want := min((cost-FreeDecode+decodeChunk-1)/decodeChunk*decodeChunk, h.room)

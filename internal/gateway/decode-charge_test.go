@@ -43,7 +43,39 @@ func retryingClient(server *httptest.Server) *http.Client {
 		}
 	}
 
-	return &http.Client{Transport: transport}
+	return &http.Client{Transport: resetRetrier{next: transport}}
+}
+
+// resetRetrier sends a request again when its connection was reset or closed
+// before an answer came. macOS takes a burst of connections past its listen
+// backlog and resets some of them after the dial has succeeded, while the
+// request is being written or its answer awaited; the server never saw those
+// requests, so sending them again is what a client would do.
+type resetRetrier struct {
+	next http.RoundTripper
+}
+
+func (r resetRetrier) RoundTrip(req *http.Request) (*http.Response, error) {
+	const attempts = 50
+
+	for attempt := 1; ; attempt++ {
+		resp, err := r.next.RoundTrip(req)
+
+		reset := errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, net.ErrClosed)
+		if !reset || attempt == attempts || req.GetBody == nil || req.Context().Err() != nil {
+			return resp, err //nolint:wrapcheck // the transport's own error
+		}
+
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return resp, err //nolint:wrapcheck // the transport's own error
+		}
+
+		req = req.Clone(req.Context())
+		req.Body = body
+
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // barrier holds every handler that reaches it until each of n requests has

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"testing"
 	"testing/iotest"
@@ -25,13 +26,29 @@ func withBound(t *testing.T, bound int64, wait time.Duration) {
 	})
 }
 
-func meteredBody(t *testing.T, size int) (*BodyMeter, context.Context) {
+// streamBody is a metered body of size bytes that states length (-1: none), on
+// a request Charge, not armed: a stream.
+func streamBody(t *testing.T, size int, length int64) (*BodyMeter, context.Context) {
 	t.Helper()
 
-	m := NewBodyMeter(t.Context(), io.NopCloser(bytes.NewReader(make([]byte, size))))
+	c := new(Charge)
+	ctx := WithCharge(t.Context(), c)
+	m := NewBodyMeter(ctx, io.NopCloser(bytes.NewReader(make([]byte, size))), length)
 	require.NotNil(t, m)
+	c.Meter(m)
 
-	return m, WithBodyMeter(t.Context(), m)
+	return m, ctx
+}
+
+// meteredBody is streamBody armed through its context, as ReadRequest and
+// rest.CapBody arm it.
+func meteredBody(t *testing.T, size int, length int64) (*BodyMeter, context.Context) {
+	t.Helper()
+
+	m, ctx := streamBody(t, size, length)
+	ArmBody(ctx)
+
+	return m, ctx
 }
 
 // Test_BodyMeter_ChargesOnlyWhenArmed: a body read without arming (a stream)
@@ -40,14 +57,14 @@ func meteredBody(t *testing.T, size int) (*BodyMeter, context.Context) {
 func Test_BodyMeter_ChargesOnlyWhenArmed(t *testing.T) {
 	withBound(t, DefaultInFlight, time.Second)
 
-	stream, _ := meteredBody(t, 4<<20)
+	stream, _ := streamBody(t, 4<<20, -1)
 	_, err := io.Copy(io.Discard, stream)
 	require.NoError(t, err)
 
 	_, held := InFlight()
 	assert.Zero(t, held, "a stream is never charged")
 
-	buffered, ctx := meteredBody(t, 4<<20)
+	buffered, ctx := meteredBody(t, 4<<20, -1)
 	body, err := ReadBody(buffered, -1)
 	require.NoError(t, err)
 	require.Len(t, body, 4<<20)
@@ -71,17 +88,26 @@ func Test_BodyMeter_ChargesOnlyWhenArmed(t *testing.T) {
 // that holds it, and fails with ErrBusy when none comes within the wait.
 func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
-	withBound(t, DefaultMaxBody+1, 200*time.Millisecond)
+	withBound(t, 1, 200*time.Millisecond) // raised to two bodies at the cap
 
-	first, _ := meteredBody(t, int(DefaultMaxBody))
+	bound, _ := InFlight()
+	require.Equal(t, 2*(DefaultMaxBody+1), bound, "the bound has room for a body and its decoding")
+
+	first, _ := meteredBody(t, int(DefaultMaxBody), -1)
 	_, err := ReadBody(first, -1)
 	require.NoError(t, err)
 
-	second, _ := meteredBody(t, 1<<20)
+	filler, _ := meteredBody(t, int(DefaultMaxBody), DefaultMaxBody)
+	_, err = ReadBody(filler, -1)
+	require.NoError(t, err)
+
+	defer filler.Release()
+
+	second, _ := meteredBody(t, 1<<20, -1)
 	_, err = ReadBody(second, -1)
 	require.ErrorIs(t, err, ErrBusy, "no room within the wait")
 
-	waiting, _ := meteredBody(t, 1<<20)
+	waiting, _ := meteredBody(t, 1<<20, -1)
 	done := make(chan error, 1)
 
 	go func() {
@@ -94,9 +120,103 @@ func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 
 	require.NoError(t, <-done, "room that comes within the wait admits the body")
 	waiting.Release()
+	filler.Release()
 
 	_, held := InFlight()
 	assert.Zero(t, held)
+}
+
+// Test_BodyMeter_StatedLengthAtOnce: a body that states its length is charged
+// all of it the first time it reads past FreeBody, and holds nothing before:
+// one that waits for room holds nothing while it waits, so bodies admitted
+// never wait on each other to grow.
+func Test_BodyMeter_StatedLengthAtOnce(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, 1, 100*time.Millisecond)
+
+	const size = 4 << 20
+
+	m, _ := meteredBody(t, size, size)
+	buf := make([]byte, FreeBody)
+
+	_, err := io.ReadFull(m, buf)
+	require.NoError(t, err)
+
+	_, held := InFlight()
+	assert.Zero(t, held, "nothing is charged up to FreeBody")
+
+	_, err = io.ReadFull(m, buf[:1])
+	require.NoError(t, err)
+
+	_, held = InFlight()
+	assert.Equal(t, int64(size), held, "the stated length is charged at once")
+
+	_, err = io.Copy(io.Discard, m)
+	require.NoError(t, err)
+
+	_, held = InFlight()
+	assert.Equal(t, int64(size), held, "and never grows")
+
+	// The rest of the bound is taken, so the next body waits holding nothing
+	// and gives up holding nothing.
+	rest, _ := meteredBody(t, int(DefaultMaxBody), -1)
+	_, err = ReadBody(rest, -1)
+	require.NoError(t, err)
+
+	defer rest.Release()
+
+	bound, held := InFlight()
+	late, _ := meteredBody(t, int(bound-held)+1, bound-held+1)
+	_, err = ReadBody(late, -1)
+	require.ErrorIs(t, err, ErrBusy)
+
+	_, after := InFlight()
+	assert.Equal(t, held, after, "a body refused all at once held nothing")
+
+	m.Release()
+}
+
+// Test_BodyMeter_IdleDeadlineStaysPast: a body whose client stopped sending
+// fails with ErrBodyIdle, and its meter leaves the passed read deadline in
+// place, so the server's read of what is left of the body fails at once and
+// the answer is sent; a body read to its end clears its deadline.
+func Test_BodyMeter_IdleDeadlineStaysPast(t *testing.T) {
+	withBound(t, DefaultInFlight, time.Second)
+	SetBodyIdle(time.Minute)
+	t.Cleanup(func() { SetBodyIdle(DefaultBodyIdle) })
+
+	var cleared int
+
+	set := func(d time.Time) error {
+		if d.IsZero() {
+			cleared++
+		}
+
+		return nil
+	}
+
+	c := new(Charge)
+	ctx := WithCharge(t.Context(), c)
+	stalled := NewBodyMeter(ctx, io.NopCloser(iotest.ErrReader(os.ErrDeadlineExceeded)), 1<<20)
+	c.Meter(stalled)
+	stalled.IdleBy(set)
+	ArmBody(ctx)
+
+	_, err := stalled.Read(make([]byte, 16))
+	require.ErrorIs(t, err, ErrBodyIdle)
+
+	c.Release()
+	assert.Zero(t, cleared, "the passed deadline is left in place")
+
+	whole, wholeCtx := streamBody(t, 1<<20, 1<<20)
+	whole.IdleBy(set)
+	ArmBody(wholeCtx)
+
+	_, err = ReadBody(whole, 1<<20)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cleared, "a body read to its end clears its deadline")
+
+	whole.Release()
 }
 
 // Test_BodyPool_GrowingFirst: a body that already holds part of the pool is let

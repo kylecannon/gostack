@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"io"
+	"net/http"
 	"sync/atomic"
 )
 
@@ -37,17 +38,25 @@ func SetMaxBody(limit int64) {
 
 // LimitBody returns r limited to one byte more than MaxBody, so that a caller
 // can tell a body of exactly MaxBody bytes from a longer one with OverBody. It
-// returns r itself when there is no limit. It arms r when r is a BodyMeter, as
-// the caller buffers what it reads.
+// returns r itself when there is no limit.
 func LimitBody(r io.Reader) io.Reader {
-	ArmBody(r)
-
 	limit := MaxBody()
 	if limit == 0 {
 		return r
 	}
 
 	return io.LimitReader(r, limit+1)
+}
+
+// ReadRequest reads the body of r with ReadBody, after it arms the body's meter
+// (ArmBody), which is how every reader that buffers a request body reads it. A
+// body that states FreeBody bytes or fewer has no meter to arm.
+func ReadRequest(r *http.Request) ([]byte, error) {
+	if r.ContentLength < 0 || r.ContentLength > FreeBody {
+		ArmBody(r.Context())
+	}
+
+	return ReadBody(r.Body, r.ContentLength)
 }
 
 // endRoom is ReadBody's room past a stated length: a read into it that finds

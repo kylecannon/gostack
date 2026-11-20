@@ -953,7 +953,7 @@ func messageName(code string) string {
 }
 
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
+	body, err := protocol.ReadRequest(rc.Request)
 	if errors.Is(err, protocol.ErrBusy) {
 		return nil, protocol.ThrottledJSON()
 	}

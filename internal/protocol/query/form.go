@@ -185,7 +185,14 @@ func MalformedQueryString() *awserr.Error {
 // An error wraps ErrForm. The values returned with it are whatever was read,
 // for a caller that only routes the call. They can hold text that is not UTF-8
 // and are not stored in Form.
+//
+// Its decoding is charged to the Charge the gateway put on the request's
+// context (protocol.ChargeOf), when there is one.
 func RequestForm(r *http.Request) (url.Values, error) {
+	if c := protocol.ChargeOf(r.Context()); c != nil {
+		return RequestFormHeld(r, c)
+	}
+
 	return RequestFormHeld(r, nil)
 }
 
@@ -220,7 +227,7 @@ func readBody(r *http.Request) ([]byte, error) {
 
 	original := r.Body
 
-	body, err := protocol.ReadBody(original, r.ContentLength)
+	body, err := protocol.ReadRequest(r)
 	r.Body = &formBody{Reader: bytes.NewReader(body), rest: original, body: body, err: err}
 
 	return body, err //nolint:wrapcheck // the caller wraps it in ErrForm

@@ -45,18 +45,38 @@ func (rc *Context) DecodeBudget(n int) int64 {
 
 // HoldDecode is protocol.DecodeHolder: it charges what decoding this call's
 // body holds past protocol.FreeDecode against the in-flight bound, unless the
-// call is internal (IsInternal).
+// call is internal (IsInternal). The charge is the request's protocol.Charge,
+// which the gateway put on its context and gives back when the handler
+// returns, whichever Context a service built for the call. A Context whose
+// request carries none (a test, a benchmark) charges its own hold, which
+// ReleaseDecode gives back.
 func (rc *Context) HoldDecode(cost int64) (int64, error) {
 	ctx := context.Background()
 	if rc.Request != nil {
 		ctx = rc.Request.Context()
 	}
 
+	var (
+		covered int64
+		err     error
+	)
+
+	c := protocol.ChargeOf(ctx)
+
 	if IsInternal(ctx) {
+		if c != nil {
+			c.ExemptDecode()
+		}
+
 		rc.decode.Exempt()
 	}
 
-	covered, err := rc.decode.Cover(ctx, cost)
+	if c != nil {
+		covered, err = c.HoldDecode(cost)
+	} else {
+		covered, err = rc.decode.Cover(ctx, cost)
+	}
+
 	if err != nil {
 		return 0, fmt.Errorf("hold %d bytes of decoding: %w", cost, err)
 	}
@@ -64,9 +84,10 @@ func (rc *Context) HoldDecode(cost int64) (int64, error) {
 	return covered, nil
 }
 
-// ReleaseDecode gives back what HoldDecode charged. The gateway calls it when
-// the handler returns; a handler that holds its call open after decoding (an
-// SQS long poll) calls it first.
+// ReleaseDecode gives back what HoldDecode charged to this Context's own hold,
+// for a request that carries no protocol.Charge. What a request with one holds
+// is given back by protocol.ReleaseBody, and by the gateway when the handler
+// returns.
 func (rc *Context) ReleaseDecode() {
 	rc.decode.Release()
 }

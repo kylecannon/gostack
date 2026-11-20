@@ -86,7 +86,7 @@ func serveQueryPrecedence(h Handler, w http.ResponseWriter, rc *request.Context)
 
 func readQueryPrecedence(rc *request.Context) (*QueryPrecedenceInput, *awserr.Error) {
 	in := &QueryPrecedenceInput{}
-	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request.Body), rc.DecodeFactor, rc)
+	xd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)
 	if _, ok := xd.Root(); ok {
 		in.decodeXML(xd)
 	}
@@ -157,7 +157,7 @@ func errXMLBody(err error) *awserr.Error {
 
 // readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.
 func readBody(rc *request.Context) ([]byte, *awserr.Error) {
-	body, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)
+	body, err := protocol.ReadRequest(rc.Request)
 	if errors.Is(err, protocol.ErrBusy) {
 		return nil, protocol.ThrottledQuery()
 	}

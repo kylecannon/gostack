@@ -21,20 +21,29 @@ import (
 func fillInFlight(t *testing.T, wait time.Duration) {
 	t.Helper()
 
-	protocol.SetInFlight(protocol.MaxBody() + 1)
+	protocol.SetInFlight(1) // raised to the least it may be: two bodies at the cap
 	protocol.SetBodyWait(wait)
 
-	meter := protocol.NewBodyMeter(context.Background(), io.NopCloser(&pattern{}))
-	protocol.ArmBody(meter)
+	var charges [2]protocol.Charge
 
-	_, err := io.CopyN(io.Discard, meter, protocol.MaxBody()+1)
-	require.NoError(t, err)
+	for i := range charges {
+		ctx := protocol.WithCharge(context.Background(), &charges[i])
+		meter := protocol.NewBodyMeter(ctx, io.NopCloser(&pattern{}), -1)
+		charges[i].Meter(meter)
+		protocol.ArmBody(ctx)
+
+		_, err := io.CopyN(io.Discard, meter, protocol.MaxBody()+1)
+		require.NoError(t, err)
+	}
 
 	bound, held := protocol.InFlight()
 	require.Equal(t, bound, held, "the pool is full")
 
 	t.Cleanup(func() {
-		meter.Release()
+		for i := range charges {
+			charges[i].Release()
+		}
+
 		protocol.SetInFlight(0)
 		protocol.SetBodyWait(protocol.DefaultBodyWait)
 	})

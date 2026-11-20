@@ -113,10 +113,12 @@ func SetBodyIdle(idle time.Duration) {
 }
 
 // SetInFlight sets the in-flight bound: the bytes that the request bodies being
-// buffered at once may hold. Zero or less means no bound. A bound below one byte
-// more than MaxBody is raised to it, so that every body MaxBody admits fits.
-// Start-up calls it once, after SetMaxBody and before the gateway serves; a test
-// that changes it puts the old value back.
+// buffered at once may hold. Zero or less means no bound. A bound below twice
+// one byte more than MaxBody is raised to it, so that every body MaxBody admits
+// fits with at least as much room again for what it decodes into: decoding is
+// charged up to the bound less one body (DecodeHold), never zero. Start-up
+// calls it once, after SetMaxBody and before the gateway serves; a test that
+// changes it puts the old value back.
 func SetInFlight(bound int64) {
 	if bound <= 0 {
 		inFlight.Store(nil)
@@ -125,7 +127,7 @@ func SetInFlight(bound int64) {
 	}
 
 	if limit := MaxBody(); limit > 0 {
-		bound = max(bound, limit+1)
+		bound = max(bound, 2*(limit+1)) //nolint:mnd // a body and as much again for its decoding
 	}
 
 	inFlight.Store(&bodyPool{capacity: bound})
@@ -244,22 +246,24 @@ func removeWaiter(queue []*bodyWaiter, w *bodyWaiter) []*bodyWaiter {
 }
 
 // BodyMeter charges a request body against the in-flight bound as it is read,
-// once something that buffers the body (ReadBody, LimitBody, rest.CapBody)
-// arms it. Reading a body that is streamed (an S3 object) leaves it unarmed, so
-// it is never charged. It charges what has been read, in steps that double, up
-// to one byte more than MaxBody (the whole bound when there is no MaxBody), and
-// holds it until Release. A BodyMeter is read and released on the request's
-// own goroutine.
+// once something that buffers the body (ReadRequest, rest.CapBody) arms it
+// through the request's context (ArmBody), however the body has been wrapped
+// since. Reading a body that is streamed (an S3 object) leaves it unarmed, so
+// it is never charged. It charges the length the body states, or what has been
+// read in steps that double when it states none, up to its share of the bound
+// (bodyShare), and holds it until Release. A BodyMeter is read and released on
+// the request's own goroutine.
 type BodyMeter struct {
-	body  io.ReadCloser
-	ctx   context.Context //nolint:containedctx // the request's, for the wait while it is read
-	pool  *bodyPool
-	most  int64
-	read  int64
-	held  int64
-	armed bool
-	done  bool
-	err   error
+	body   io.ReadCloser
+	ctx    context.Context //nolint:containedctx // the request's, for the wait while it is read
+	pool   *bodyPool
+	most   int64
+	length int64
+	read   int64
+	held   int64
+	armed  bool
+	done   bool
+	err    error
 
 	// deadline sets the connection's read deadline (IdleBy); timed is whether
 	// one is set now.
@@ -267,35 +271,36 @@ type BodyMeter struct {
 	timed    bool
 }
 
-type meterKey struct{}
-
-// NewBodyMeter meters body against the in-flight bound for a request whose
-// context is ctx, or returns nil when there is no bound. WithBodyMeter puts it
-// on the request's context, for ReleaseBody. The gateway calls
-// it for a request from a listener whose body is longer than FreeBody or of
-// unknown length.
-func NewBodyMeter(ctx context.Context, body io.ReadCloser) *BodyMeter {
+// NewBodyMeter meters body, which states length bytes (-1 when it states none),
+// against the in-flight bound for a request whose context is ctx, or returns
+// nil when there is no bound. Charge.Meter puts it on the request's Charge, for
+// ArmBody and Release. The gateway calls it for a request from a listener whose
+// body is longer than FreeBody or of unknown length.
+func NewBodyMeter(ctx context.Context, body io.ReadCloser, length int64) *BodyMeter {
 	pool := inFlight.Load()
 	if pool == nil {
 		return nil
 	}
 
-	most := pool.capacity
+	return &BodyMeter{body: body, ctx: ctx, pool: pool, most: pool.bodyShare(), length: length}
+}
+
+// bodyShare is the most one body is charged: one byte more than MaxBody, or
+// half the bound when there is no MaxBody. SetInFlight keeps it to half the
+// bound at most, so what one request decodes always has room beside its body.
+func (p *bodyPool) bodyShare() int64 {
 	if limit := MaxBody(); limit > 0 {
-		most = min(most, limit+1)
+		return min(limit+1, p.capacity)
 	}
 
-	return &BodyMeter{body: body, ctx: ctx, pool: pool, most: most}
+	return p.capacity / 2 //nolint:mnd // half for the body, half for what it decodes into
 }
 
-// WithBodyMeter returns ctx carrying m, for ReleaseBody.
-func WithBodyMeter(ctx context.Context, m *BodyMeter) context.Context {
-	return context.WithValue(ctx, meterKey{}, m)
-}
-
-// Read reads the body and, once the meter is armed, charges what it has read
-// past FreeBody. When the bound leaves no room before the wait ends, it gives
-// back what the body held and fails with ErrBusy.
+// Read reads the body and, once the meter is armed, charges it past FreeBody:
+// a body that states its length is charged all of it at once, the first time
+// it reads past FreeBody, and one that states none in steps that double. When
+// the bound leaves no room before the wait ends, it gives back what the body
+// held and fails with ErrBusy.
 func (m *BodyMeter) Read(p []byte) (int, error) {
 	if m.err != nil {
 		return 0, m.err
@@ -309,6 +314,12 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 	if m.timed {
 		switch {
 		case errors.Is(err, os.ErrDeadlineExceeded):
+			// The deadline stays in the past. net/http reads what is left of
+			// a short body before it writes the answer; with the deadline
+			// cleared that read would wait for the client, and the answer
+			// would never be sent. With it past, the read fails at once and
+			// the connection is closed after the answer.
+			m.timed = false
 			m.Release()
 			m.err = fmt.Errorf("%w: %w", ErrBodyIdle, err)
 
@@ -337,6 +348,11 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 	}
 
 	want := min(max(growth*m.held, m.read, growth*FreeBody), m.most)
+	if m.held == 0 && m.length > 0 {
+		// All or nothing: a body that holds part of the bound never waits
+		// for the rest while others hold the remainder.
+		want = min(max(m.length, m.read), m.most)
+	}
 
 	busy := m.pool.acquire(m.ctx, want-m.held, queue)
 	if busy != nil {
@@ -402,22 +418,5 @@ func (m *BodyMeter) clearDeadline() {
 	if m.timed {
 		m.timed = false
 		_ = m.deadline(time.Time{})
-	}
-}
-
-// ReleaseBody releases the meter of the request whose context is ctx, if it has
-// one.
-func ReleaseBody(ctx context.Context) {
-	if m, ok := ctx.Value(meterKey{}).(*BodyMeter); ok {
-		m.Release()
-	}
-}
-
-// ArmBody arms r, when it is a BodyMeter, for a reader that buffers or decodes
-// the whole body as it reads it (rest.CapBody). ReadBody and LimitBody arm
-// their reader themselves.
-func ArmBody(r io.Reader) {
-	if m, ok := r.(*BodyMeter); ok {
-		m.armed = true
 	}
 }

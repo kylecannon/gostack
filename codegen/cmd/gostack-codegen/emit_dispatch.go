@@ -384,7 +384,7 @@ func (g *generator) jsonErrorOptions(extra ...string) string {
 func (g *generator) emitReaders(p *printer) {
 	if g.hasProtocol(protoJSON) {
 		p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-		p.f("\tbody, err := protocol.ReadBody(rc.Request.Body, rc.Request.ContentLength)")
+		p.f("\tbody, err := protocol.ReadRequest(rc.Request)")
 		p.f("\tif errors.Is(err, protocol.ErrBusy) {")
 		p.f("\t\treturn nil, protocol.ThrottledJSON()")
 		p.f("\t}")
