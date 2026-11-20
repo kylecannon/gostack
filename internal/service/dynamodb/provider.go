@@ -75,11 +75,13 @@ type Provider struct {
 	// then failed, a time to live removal, and a stream record, which the
 	// dynamodbstreams snapshot holds. It may be nil.
 	changed func(name string)
-	// streamCut is the stream shards of the latest table snapshot's cut, or of
-	// the snapshot Restore read, each with the number its next record had
-	// then. The dynamodbstreams snapshot writes their records below it and no
-	// others (snapshot-streams.go). nil before either.
-	streamCut atomic.Pointer[[]shardCut]
+	// cutTaken is the stream shards of the latest table snapshot's cut, each
+	// with the records it held below its next number then, until persistence
+	// reports that snapshot on disk (Committed). streamCut is the last one
+	// reported: the dynamodbstreams snapshot writes its records and no others
+	// (snapshot-streams.go). Both are nil before a table snapshot, and Restore
+	// sets them to nil.
+	cutTaken, streamCut atomic.Pointer[[]shardCut]
 }
 
 var _ api.Handler = (*Provider)(nil)

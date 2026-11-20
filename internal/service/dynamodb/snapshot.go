@@ -222,13 +222,22 @@ type stateImage struct {
 // table and not in another. It takes each table's entry lock, for its
 // definition, then every table's engine lock at once with table.ReadLock, in
 // the one global order TransactWriteItems takes them in, and copies one
-// reference per item of each (table.ImageHeld) and each shard's bounds. It
-// keeps each shard with its next number in streamCut, the records the
-// dynamodbstreams snapshot taken after it writes. The locks are released
-// before the items are put in order or encoded, so writers wait for the
-// reference copies of all tables and no longer. Entry locks before engine
-// locks is the documented order, and no lock holder takes a second entry's
-// lock, so holding all of them cannot deadlock.
+// reference per item of each (table.ImageHeld) and each shard's bounds. The
+// locks are released before the items are put in order or encoded, so writers
+// wait for the reference copies of all tables and no longer. Entry locks
+// before engine locks is the documented order, and no lock holder takes a
+// second entry's lock, so holding all of them cannot deadlock.
+//
+// It keeps in cutTaken a copy of each shard's records below its next number
+// at the cut, the records of exactly the writes the cut holds, for the
+// dynamodbstreams snapshot once this one is on disk. A copy, not the shard:
+// DeleteTable, a stream enabled again and a reset each Stop the shard and
+// drop its records before the streams snapshot runs, and retention zeroes a
+// dropped record in place (stream.Log.dropOldest), so neither the shard nor
+// its slice would still hold them. The copy is taken after the engine locks
+// are released, so writers do not wait for it, and under the entry locks:
+// every Stop holds its entry's lock for writing, so none drops a record below
+// the cut first. Records appended since are numbered past it and not copied.
 func (p *Provider) cut() ([]stateImage, error) {
 	states, entries, places := cutTables(sortedStates(p))
 
@@ -268,14 +277,19 @@ func (p *Provider) cut() ([]stateImage, error) {
 	for i, e := range entries {
 		images[i].items = e.data.ImageHeld()
 		images[i].shard = e.shardImage()
-
-		if images[i].shard != nil {
-			shards = append(shards, shardCut{places[i], e.meta.Name, e.shard, images[i].shard.Next})
-		}
 	}
 	unlock()
 
-	p.streamCut.Store(&shards)
+	for i, e := range entries {
+		if images[i].shard != nil {
+			shards = append(shards, shardCut{
+				place: places[i], table: e.meta.Name, created: e.shard.Created(),
+				records: e.shard.RecordsBefore(images[i].shard.Next),
+			})
+		}
+	}
+
+	p.cutTaken.Store(&shards)
 
 	for i := range states {
 		n := copy(states[i].tables, images)
@@ -463,6 +477,7 @@ type restored struct {
 func (p *Provider) Restore(r io.Reader) error {
 	got, err := p.readSnapshot(jsontext.NewDecoder(r, snapshotOptions))
 
+	p.cutTaken.Store(nil)
 	p.streamCut.Store(nil)
 	p.states.Reset("", "")
 	p.accounts.Reset("", "")
@@ -480,23 +495,10 @@ func (p *Provider) Restore(r io.Reader) error {
 }
 
 // publish puts a restored state in place, and sets what depends on it: the
-// replica directory flag, the time to live sweep, and the stream cut, which
-// is the snapshot's own: a dynamodbstreams snapshot taken before the next
-// table snapshot writes the records the restore put back.
+// replica directory flag and the time to live sweep. It sets no stream cut:
+// persistence saves the streams only after a table snapshot it committed,
+// whose cut holds the records RestoreStreams put back.
 func (p *Provider) publish(got *restored) {
-	var shards []shardCut
-
-	for at, tables := range got.states {
-		for name, e := range tables {
-			if e.shard != nil {
-				_, next, _ := e.shard.Bounds()
-				shards = append(shards, shardCut{at, name, e.shard, next})
-			}
-		}
-	}
-
-	p.streamCut.Store(&shards)
-
 	replicated := false
 
 	for account, a := range got.accounts {

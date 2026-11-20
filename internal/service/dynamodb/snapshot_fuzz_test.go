@@ -28,7 +28,7 @@ func seedSnapshot(tb testing.TB) (tables, streams []byte) {
 
 	// The streams snapshot writes the records of the table snapshot's cut, so
 	// it is taken second, as a flush takes it.
-	tables = snapshotOf(tb, s.provider)
+	tables = savedOf(tb, s.provider)
 
 	var buf bytes.Buffer
 	require.NoError(tb, s.provider.SnapshotStreams(&buf))

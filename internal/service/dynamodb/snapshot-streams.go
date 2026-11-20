@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
@@ -22,16 +23,20 @@ import (
 // It is LocalStack's split: the dynamodbstreams store and Kinesis's data hold
 // the records, DynamoDB's own store the table. The DynamoDB snapshot keeps
 // each shard's identity (its creation time, to the nanosecond) and its bounds.
-// The table snapshot's cut also keeps each shard's next number (streamCut),
-// and the streams snapshot writes the records below it: the records of
-// exactly the writes the table file holds. RestoreStreams gives a shard back
-// its records only when the identity matches; stream.Log.Attach refuses
-// records that would leave a gap, so a kill between the renames of the two
-// files never reads across one, and drops records past the table's next
-// number, from a streams file of a later cut than the table file. The
-// sequence numbers are the ones the records had, so a position read before a
-// restart, and an iterator issued for it within its 15 minutes, read the same
-// records after it.
+// The table snapshot's cut also copies each shard's records below its next
+// number (cut, in snapshot.go), and once persistence reports that table
+// snapshot on disk (Committed) the streams snapshot writes that copy: the
+// records of exactly the writes the table file on disk holds, whatever
+// happened to the shard since. Persistence saves the streams only right after
+// a committed table save, so the streams file is never of a later cut than the
+// table file; it is of an older one after a kill between the two renames, or a
+// failed streams save. RestoreStreams gives a shard back its records only when
+// the identity matches; stream.Log.Attach refuses records that would leave a
+// gap, so a streams file older than the table file never reads across one,
+// and drops records past the table's next number, from a streams file of a
+// later cut. The sequence numbers are the ones the records had, so a position
+// read before a restart, and an iterator issued for it within its 15 minutes,
+// read the same records after it.
 
 // StreamSnapshotter is how the dynamodbstreams service saves and restores the
 // records of DynamoDB's streams. Its snapshot is its own file, so
@@ -41,7 +46,18 @@ type StreamSnapshotter interface {
 	RestoreStreams(r io.Reader) error
 }
 
-var _ StreamSnapshotter = (*Provider)(nil)
+var (
+	_ StreamSnapshotter = (*Provider)(nil)
+	_ persist.Committer = (*Provider)(nil)
+)
+
+// Committed implements persist.Committer: the table snapshot last taken is on
+// disk, so the streams snapshot writes the records of its cut from now on.
+func (p *Provider) Committed() {
+	if cut := p.cutTaken.Swap(nil); cut != nil {
+		p.streamCut.Store(cut)
+	}
+}
 
 type streamsFile struct {
 	Version int          `json:"v"`
@@ -67,22 +83,22 @@ type recordSaved struct {
 	Expired   bool       `json:"expired,omitzero"`
 }
 
-// shardCut is a stream shard as a table snapshot left it: the table it
-// belongs to and the number its next record had.
+// shardCut is a stream shard as a table snapshot's cut left it: the table it
+// belongs to, its identity, and a copy of its records below the number its
+// next record had.
 type shardCut struct {
 	place
 
-	table string
-	shard *stream.Log
-	next  int
+	table   string
+	created time.Time
+	records []stream.Record
 }
 
-// SnapshotStreams writes to w the records of the shards the latest table
-// snapshot's cut holds, each below the number its next record had at the cut:
-// the records of exactly the writes that snapshot holds, however long it took
-// to encode and whatever was written since. Before any table snapshot or
-// restore it writes no shard. Each shard's records are copied under its own
-// lock and encoded after it.
+// SnapshotStreams writes to w the records of the cut of the latest table
+// snapshot persistence committed: the records of exactly the writes that
+// snapshot holds, however long it took to encode and whatever was written,
+// deleted or reset since. Before a committed table snapshot, and after a
+// restore until the next, it writes no shard.
 func (p *Provider) SnapshotStreams(w io.Writer) error {
 	enc := jsontext.NewEncoder(w, snapshotOptions)
 
@@ -111,17 +127,16 @@ func (p *Provider) writeStreams(enc *jsontext.Encoder) error {
 	})
 
 	for _, c := range shards {
-		records := c.shard.RecordsBefore(c.next)
-		if len(records) == 0 {
+		if len(c.records) == 0 {
 			continue
 		}
 
 		saved := shardSaved{
-			Account: c.account, Region: c.region, Table: c.table, Created: c.shard.Created(),
-			Records: make([]recordSaved, len(records)),
+			Account: c.account, Region: c.region, Table: c.table, Created: c.created,
+			Records: make([]recordSaved, len(c.records)),
 		}
 
-		for i, r := range records {
+		for i, r := range c.records {
 			saved.Records[i] = recordSaved{
 				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
 				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,

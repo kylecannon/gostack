@@ -62,7 +62,8 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 	runCutTransactions(t, s, "cut-a", "cut-b")
 
 	// check restores tables and streams and checks the counters against the
-	// records. It returns the restored provider's streams snapshot.
+	// records. It returns the restored provider's streams snapshot after a
+	// table save.
 	check := func(t *testing.T, i int, tables, streams []byte) []byte {
 		t.Helper()
 
@@ -88,6 +89,8 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 
 		require.Equal(t, updates[0], updates[1], "snapshot %d: the two shards disagree", i)
 
+		savedOf(t, restored.provider)
+
 		var again bytes.Buffer
 		require.NoError(t, restored.provider.SnapshotStreams(&again))
 
@@ -106,17 +109,17 @@ func Test_snapshot_streamsAtTheCut(t *testing.T) {
 	t.Run("one flush", func(t *testing.T) {
 		deadline := time.Now().Add(time.Second)
 		for i := 0; i < 3 || time.Now().Before(deadline); i++ {
-			tables, streams := snapshotOf(t, s.provider), streamsOf(t)
+			tables, streams := savedOf(t, s.provider), streamsOf(t)
 			require.Equal(t, string(streams), string(check(t, i, tables, streams)),
-				"a restored provider's streams snapshot, before any table snapshot, is the one it loaded")
+				"a restored provider's streams snapshot, after its first table save, is the one it loaded")
 		}
 	})
 
 	t.Run("streams of a later cut", func(t *testing.T) {
 		for i := range 3 {
-			tables := snapshotOf(t, s.provider)
+			tables := savedOf(t, s.provider)
 			s.ok(t, opTransactWrite, cutTxn("cut-a", "cut-b")) // the later cut holds at least one more
-			snapshotOf(t, s.provider)
+			savedOf(t, s.provider)
 			check(t, i, tables, streamsOf(t))
 		}
 	})

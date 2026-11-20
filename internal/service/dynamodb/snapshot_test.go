@@ -114,6 +114,17 @@ func snapshotOf(t testing.TB, p *dynamodb.Provider) []byte {
 	return buf.Bytes()
 }
 
+// savedOf is a table snapshot as persistence saves it: taken, then reported
+// on disk, so the streams snapshot writes the records of its cut.
+func savedOf(t testing.TB, p *dynamodb.Provider) []byte {
+	t.Helper()
+
+	b := snapshotOf(t, p)
+	p.Committed()
+
+	return b
+}
+
 const minimalMeta = `{"Name":"tab","Attributes":[{"AttributeName":"id","AttributeType":"S"}],` +
 	`"Key":[{"AttributeName":"id","KeyType":"HASH"}]}`
 

@@ -87,7 +87,8 @@ func (s snapshotter) Restore(r io.Reader) error {
 
 // Follows implements persist.Follower: the records go back into the shards of
 // DynamoDB's restored tables, so DynamoDB loads first, and a flush saves the
-// records right after DynamoDB's file so they are never the older of the two.
+// records only right after it renamed DynamoDB's file, with the records of
+// that file's cut, so they are never of a later moment than the tables.
 func (snapshotter) Follows() string {
 	return dynamoDBService
 }

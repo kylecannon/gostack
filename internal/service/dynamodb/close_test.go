@@ -39,7 +39,7 @@ func Test_close_stopsShardTimers(t *testing.T) {
 		"no timer trims a record after Close")
 
 	// The last save takes the table snapshot, then the streams one.
-	snapshotOf(t, s.provider)
+	savedOf(t, s.provider)
 
 	var buf bytes.Buffer
 	require.NoError(t, s.provider.SnapshotStreams(&buf))
