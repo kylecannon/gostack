@@ -1,6 +1,6 @@
 {
 "tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_enable_kinesis_streaming_destination": {"gostack": "excluded", "localstack": "excluded", "reason": "hard-skipped (Flaky and not implemented yet on the v2 implementation)"},
-"tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_non_existent_stream": {"gostack": null, "localstack": "pass", "reason": ""},
+"tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_non_existent_stream": {"gostack": "pass", "localstack": "pass", "reason": ""},
 "tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_stream_spec_and_region_replacement": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:kinesis"},
 "tests/aws/services/dynamodbstreams/test_dynamodb_streams.py::TestDynamoDBStreams::test_table_v2_stream": {"gostack": "excluded", "localstack": "excluded", "reason": "depends-on:cloudformation"}
 }

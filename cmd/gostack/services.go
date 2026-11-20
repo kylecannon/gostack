@@ -14,6 +14,8 @@ import (
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodbstreams"
 	"github.com/kylecannon/gostack/internal/service/kms"
 	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/secretsmanager"
@@ -65,10 +67,15 @@ func newProviders(cfg *config.Config, changed func(name string)) *providers {
 func registrations(
 	cfg *config.Config, changed func(name string), s3Provider *s3.Provider, snsProvider *sns.Provider,
 ) []service.Registration {
+	// DynamoDB Streams reads the streams of this DynamoDB provider.
+	ddb := dynamodb.New(liveSettings(cfg, dynamodbSettings), changed)
+
 	return []service.Registration{
 		sqs.New(liveSettings(cfg, sqsSettings), changed).Registration(),
 		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
+		ddb.Registration(),
+		dynamodbstreams.New(ddb).Registration(),
 		kms.New(changed).Registration(),
 		snsProvider.Registration(),
 		secretsmanager.New(changed).Registration(),

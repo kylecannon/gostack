@@ -114,15 +114,15 @@ func Test_gostack_serviceNotEnabled(t *testing.T) {
 	g := startGostack(t)
 
 	got := g.request(t, http.MethodPost, "/", "{}", map[string]string{
-		"Authorization": "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/dynamodb/aws4_request, " +
+		"Authorization": "AWS4-HMAC-SHA256 Credential=test/20240101/us-east-1/cloudcontrolapi/aws4_request, " +
 			"SignedHeaders=host, Signature=abc",
-		"X-Amz-Target":    "DynamoDB_20120810.ListTables",
+		"X-Amz-Target":    "CloudApiService.ListResources",
 		headerContentType: "application/x-amz-json-1.0",
 	})
 
 	require.NoError(t, got.err)
 	assert.Equal(t, http.StatusNotImplemented, got.status, got.body)
-	assert.JSONEq(t, `{"__type":"InternalFailure","message":"Service 'dynamodb' is not enabled. `+
+	assert.JSONEq(t, `{"__type":"InternalFailure","message":"Service 'cloudcontrol' is not enabled. `+
 		`Please check your 'SERVICES' configuration variable."}`, got.body)
 }
 

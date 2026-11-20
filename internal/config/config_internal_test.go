@@ -308,6 +308,34 @@ func Test_Load_variableForms(t *testing.T) {
 			},
 		},
 		{
+			name: "DynamoDB probabilities and shared database",
+			give: map[string]string{
+				varDynamoDBErrorProbability:      "0.5",
+				varDynamoDBReadErrorProbability:  "1",
+				varDynamoDBWriteErrorProbability: " 0.25 ",
+				varDynamoDBShareDB:               "2",
+				varDynamoDBRemoveExpiredItems:    "1",
+			},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.True(t, got.DynamoDBRemoveExpiredItems)
+				require.InDelta(t, 0.5, got.DynamoDBErrorProbability, 0)
+				require.InDelta(t, 1.0, got.DynamoDBReadErrorProbability, 0)
+				require.InDelta(t, 0.25, got.DynamoDBWriteErrorProbability, 0)
+				require.Equal(t, 2, got.DynamoDBShareDB)
+				require.Equal(t, 2, got.values()[varDynamoDBShareDB])
+			},
+		},
+		{
+			name: "DynamoDB defaults",
+			give: map[string]string{},
+			check: func(t *testing.T, got *Settings) {
+				t.Helper()
+				require.Zero(t, got.DynamoDBErrorProbability)
+				require.Zero(t, got.DynamoDBShareDB)
+			},
+		},
+		{
 			name: "SNS settings, the two strings trimmed",
 			give: map[string]string{
 				varSNSCertURLHost:         " sns.us-east-1.amazonaws.com ",
@@ -369,6 +397,8 @@ func Test_Load_invalidValues(t *testing.T) {
 		{name: "bad LOCALSTACK_HOST port", giveK: varLocalstackHost, giveV: "host:99999"},
 		{name: "bad SHUTDOWN_TIMEOUT", giveK: varShutdownTimeout, giveV: "soon"},
 		{name: "negative SHUTDOWN_TIMEOUT", giveK: varShutdownTimeout, giveV: "-1"},
+		{name: "bad DYNAMODB_ERROR_PROBABILITY", giveK: varDynamoDBErrorProbability, giveV: "often"},
+		{name: "DYNAMODB_SHARE_DB that is not an integer", giveK: varDynamoDBShareDB, giveV: "true"},
 		{name: "SHUTDOWN_TIMEOUT one second past the largest Duration", giveK: varShutdownTimeout, giveV: "9223372037"},
 		{name: "SHUTDOWN_TIMEOUT far past the largest Duration", giveK: varShutdownTimeout, giveV: "18446744074"},
 	}

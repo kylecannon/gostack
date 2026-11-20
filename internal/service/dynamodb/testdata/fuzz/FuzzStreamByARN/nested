@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:dynamodb:us-east-1:000000000000:table/streamed/stream/x:table/streamed/stream/y")

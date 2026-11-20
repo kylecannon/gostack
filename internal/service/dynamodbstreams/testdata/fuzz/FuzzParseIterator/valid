@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:dynamodb:us-east-1:000000000000:table/t/stream/2024-11-18T14:36:44.149|1|AAAAAAAAAAEAAAGTO1VscBgJpOO9e6ZA")

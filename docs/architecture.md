@@ -589,7 +589,11 @@ change, the import and its `registrations()` line, and nothing else shared: the
 service's settings mapping is a pure `func(*config.Settings) T` in its own
 `cmd/gostack/settings-<svc>.go`, which `liveSettings` wraps on the
 registration line, and parity selection reads a change to that file as a change
-to `<svc>` and its dependents, not to every service. The selection tables in
+to `<svc>` and its dependents, not to every service. The exception is a service
+whose provider another one is handed: DynamoDB adds a third line, the `ddb :=
+dynamodb.New(...)` that `dynamodbstreams.New(ddb)` takes, ahead of the list.
+It is code outside the list, so parity selection reads a change to that line,
+and any other like it, as a change to every service. The selection tables in
 `parity/ledger.py` are seeded for `dynamodb`, `dynamodbstreams`, `sns`, `kms`,
 `secretsmanager` and `ssm`: their source and API paths follow from the service
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
@@ -602,7 +606,11 @@ holds a non-test `.go` file: ledger rows alone (a LocalStack baseline) do not co
 service is selected by nothing, as a dependent or otherwise. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
 `Preprocess` sees other services' requests, so a change to that service
 selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
-`Test_parityTables` holds it to `registrations()`.
+`Test_parityTables` holds it to `registrations()`. A `Mount` whose every route
+is under the gateway's own namespaces, `GATEWAY_NAMESPACES` in the same file
+(`/_gostack/`, `/_aws/` and `/_localstack/`), is the exception: no AWS call is
+made to those paths, so DynamoDB's two developer `DELETE` routes leave it out
+of `ROUTING_REACH`, while SQS's queue-URL paths keep it in.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
@@ -648,6 +656,24 @@ A service calls another one through `inproc.Client`, which builds an HTTP reques
 with a credential scope for the caller's account and region and serves it
 through the gateway's own handler. Detection, account resolution, logging and
 dirty marking all apply, and a service never reaches into another's state.
+
+One exception: `dynamodbstreams` reads DynamoDB's streams through the
+`dynamodb.Streams` interface, which `registrations()` wires by handing it the
+DynamoDB provider. A stream's records are DynamoDB's state, appended by the
+table engine under the table's write lock in the order the writes applied, and
+DynamoDB's API has no call that hands them over. The interface hands out each
+stream as a `StreamInfo` whose shard is the read side of `stream.Log`
+(`dynamodb.StreamShard`: `Created`, `Bounds`, `SequenceNumber`,
+`ParseSequenceNumber`, `Position`, `Read`), never the log itself, and declares
+the records' snapshot (`StreamSnapshotter`), which `PERSIST_DYNAMODBSTREAMS`
+saves under DynamoDB Streams' own name. Beside `dynamodb` the service imports
+two of DynamoDB's packages: `dynamodb/stream` for the `Record` and `Page` a read
+returns and the errors it names, and `dynamodb/value` for the `Item` a record
+holds and the `ValidationException` both services answer alike. DynamoDB Streams keeps no
+state of its own: its iterators carry their position, issue time and shard.
+Each shard keeps records for 24 hours, on a timer armed only while it holds
+records, and at most 256 MiB of them, each counted as its `SizeBytes` plus 256
+bytes, oldest trimmed first.
 
 An `inproc.Call` names the method, path, query, content type, headers and body,
 so it speaks every protocol. Its zero values are a json 1.0 call: `POST /`,
@@ -1174,6 +1200,12 @@ cites the lines.
   back, is tried when that ends. A flush by
   hand, which `Stop` and `Close` end with, tries every dirty service whatever
   its wait.
+- A service that follows another (`persist.Follower`, dynamodbstreams after
+  dynamodb) is saved only right after its leader's file is renamed in the
+  same flush. It waits out its leader's backoff and is due no sooner than its
+  leader, and its own backoff leaves the leader to be saved alone. A follower
+  left unsaved because its leader was not saved is dirty again with no
+  failure counted.
 - Of a service's run of failed saves the log shows the first in full, each one
   whose error differs from the one before, every tenth with the count, and
   `save recovered after N failures` when a save succeeds, each line with the
@@ -1527,6 +1559,111 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 - A reset scoped to an account or a region removes the bodies of the buckets it
   drops, through `Remove`, once the reset is saved.
 
+**DynamoDB.** `PERSIST_DYNAMODB=1` persists DynamoDB and, through the
+dependency expansion in `internal/config/persist.go`, DynamoDB Streams and
+Kinesis. The state is two files, LocalStack's split:
+
+- `<base>/dynamodb/store.{json,bin}` holds each account's tags, 2017 global
+  tables and 2019 replicas with their owning region; each table's definition
+  as CreateTable and UpdateTable keep it (key schema, index definitions,
+  billing and throughput, stream specification and label, time to live,
+  deletion protection, point-in-time recovery, Kinesis destinations); its
+  latest stream shard's identity and bounds; and every item. Secondary
+  indexes are not stored: Restore rebuilds them from the items. An item whose
+  attribute does not fit an index's key (another type, or an empty string or
+  binary) is in the table and not in that index, as UpdateTable's backfill
+  left it, so Restore takes every state the API can leave. Numbers are
+  written in their canonical form, so they read back unchanged.
+- `<base>/dynamodbstreams/store.{json,bin}` holds the records of each latest
+  shard still inside the 24-hour retention, with their sequence numbers, of
+  exactly the writes the table file on disk holds: the table snapshot's cut
+  copies each shard's records below its next sequence number, under the
+  table locks that keep a DeleteTable, a stream enabled again or a reset
+  from dropping them first, and once the engine reports that table file
+  renamed (`persist.Committer`) the streams snapshot writes that copy, so a
+  shard stopped between the two saves of a flush still has its records
+  saved. Before a committed table save, and after a load until the next, it
+  writes no shard. The engine tells dynamodb before each table snapshot
+  whether a dynamodbstreams save follows it in the flush (`persist.Leader`):
+  with `PERSIST_DYNAMODBSTREAMS=0`, or dynamodbstreams in its own backoff,
+  the cut copies no records. The copy is dropped once the streams snapshot
+  has written it, and at the end of every flush that copied it whatever
+  happened (the engine tells dynamodb `Followed(false)`: a failed table save,
+  a streams save that failed before its snapshot, a flush cancelled between
+  the two saves, Stop's flush), or at the next cut, so it lives for one flush
+  and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
+  the item images are shared with the shard. A shard at its bound holds at
+  most `MaxBytes / RecordOverhead`, about 1,048,576 records, so the copy is
+  about 88 MiB per full shard during a flush. The streams snapshot encodes
+  each record from the copy as it writes it, with no second array, so a full
+  shard's save peaks at about that 88 MiB live, and a written shard's copy is
+  released before the next shard is written. A cut of slice
+  headers would cost nothing but needs retention to stop zeroing a dropped
+  record in place, which would keep dropped images until the shard's array
+  grows again. A shard takes its records back only when its identity
+  (creation time to the nanosecond) matches the table file's and they leave
+  no gap below the table's next sequence number, so a streams file older
+  than the table file never reads across a gap. Records at or past that
+  number, from a streams file of a later cut (one written before SQ-365),
+  are dropped on load, so a stream never holds a change its restored table
+  does not. A position or an iterator issued before a restart reads the same
+  records after it, within the iterator's 15 minutes.
+  A shard that takes no records back (`PERSIST_DYNAMODBSTREAMS=0`, or a
+  streams file that is older, refused or moved aside) restores with an empty
+  window at its saved next number: `LATEST` and `TRIM_HORIZON` read from the
+  next record written, and an iterator for an older sequence number answers
+  `TrimmedDataAccessException`.
+- Load order: dynamodb loads before dynamodbstreams, whose Restore puts the
+  records back into the shards of the tables dynamodb restored. The engine
+  takes the order from a declaration, `persist.Follower`, which the
+  dynamodbstreams snapshotter implements, not from the names. A flush saves
+  dynamodbstreams only right after it renamed dynamodb's file, whatever their
+  last durations and whether or not a stream record marked it, so the
+  streams file is of the cut the table file holds and never of a later one.
+  A kill between the table file's commit and the streams file's commit
+  restores the table with fewer stream records: each shard written since the
+  last saved pair takes no records back, by the no-gap rule above. That window is the whole streams save, not only the gap
+  between two renames: at `PERSIST_FREQUENCY=0` under steady writes it can
+  be about half of wall time (46% to 57% measured in SQ-370, one writer, a
+  put each millisecond).
+  A service follows at most one level: `persist.Engine.Register` panics on a
+  follower whose leader is a follower, or one that follows itself.
+  When dynamodb is not saved (its backoff, a failed save, or
+  `PERSIST_DYNAMODB=0`), dynamodbstreams is not saved either and stays dirty,
+  and the pair on disk stays the last one saved. When dynamodbstreams is in
+  its own backoff, dynamodb is saved alone: the streams file falls behind the
+  table file until the two are saved again, and a load in that span restores
+  each shard whose records would leave a gap with none, by the no-gap rule
+  above. A dirty dynamodbstreams that is due takes dynamodb into the flush
+  with it, so it is saved again after a failure even when no table changes.
+- ClientRequestToken windows are not saved. DynamoDB Local keeps them in
+  memory, so LocalStack loses them on a restart too.
+- State that changes outside a mutating operation marks the service dirty
+  itself: a stream record marks dynamodbstreams, and a time to live removal
+  (the hourly sweep, or `DELETE /_gostack/services/dynamodb/expired` and its
+  LocalStack path `/_aws/dynamodb/expired`) marks dynamodb. After
+  a load the sweep timer is armed only when `DYNAMODB_REMOVE_EXPIRED_ITEMS`
+  is set and a table has time to live on.
+- Snapshot takes one consistent cut of the service: every table's lock at
+  once, in the global order TransactWriteItems takes them, held only to
+  encode the definitions and copy one reference per item with its
+  partition's key (stored items are immutable). A save therefore never holds
+  a transaction applied in one table and not in another. Sorting new
+  partitions and encoding the items happen after the locks are released,
+  with a hand-written item codec rather than json v2's reflection. Writers to
+  every table wait for the copy of all tables: `BenchmarkSnapshotCut` at
+  1,000,000 items across four tables measures 125 to 158 ms (Apple M1 Max at
+  load average 249; one table of 1,000,000 items measured about 56 ms on the
+  same machine unloaded).
+  Snapshot and restore of one table of 1,000,000 items of about 100 bytes
+  (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
+  `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
+  snapshot 0.57 s allocating 46 MiB; restore 2.23 s allocating 1.24 GiB,
+  against 1.20 GiB the restored state holds (`held-B`). Restore allocates no more than the state it builds plus the file
+  once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
+  this shape. `bin/gostack` loading that file, saving once and shutting down
+  peaks at 1.46 GB resident (`/usr/bin/time -l`).
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus
@@ -1537,6 +1674,112 @@ its state at `<base>/s3/store.json` and its object and part bodies as assets.
 - The promise covers the compose file. It does not cover the data directory.
 
 ## Services
+
+### DynamoDB (`internal/service/dynamodb`)
+
+LocalStack runs Amazon's DynamoDB Local behind its provider. gostack runs no
+JVM: the engine is Go, in five packages under `internal/service/dynamodb`, and
+the handlers beside them take LocalStack's provider (`provider.py`,
+`utils.py`, `models.py` at 8b9a79f) for what it adds over the engine. What it
+answers differently, and the 21 operations at 501, are in `docs/compat.md`,
+"DynamoDB operations" and the DynamoDB sections after it.
+
+| Package | Holds |
+|---|---|
+| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. |
+| `table` | One table's items under its key schema, its secondary indexes, the write path and the ordered reads. No handler state. |
+| `expression` | The four expression languages: one lexer, one path parser, one reserved-word list, a parsed form per language. |
+| `partiql` | The PartiQL parser. It knows no tables. |
+| `stream` | One stream's shard (`stream.Log`). |
+
+**State.** A `State` per account and region in a `store.Bundle` holds a map of
+`tableEntry`, each a table's definition (`tableMeta`, under the entry's own
+lock), its engine `table.Table` and its latest stream shard. An `accountState`
+per account holds what LocalStack keeps across regions: tags by ARN, 2017
+global tables and 2019 replicas with their owning region, and is locked
+before any `State`. `DYNAMODB_SHARE_DB` puts every account and region in one
+namespace. A call in a region a 2019 table is replicated to is answered from
+the owning region's table (`Provider.lookupHome`) for the operations LocalStack
+forwards; batches and transactions are not forwarded.
+
+**Engine.** A `table.Table` keeps its items in partitions: a map from the
+encoded hash key to a slice of entries sorted by range key, binary searched
+for a read or a write. A list of the partition keys in order is rebuilt only
+when a read across partitions (Scan) finds a partition added since. A local or
+global secondary index is a second such store whose entries reference the
+same item maps as the primary; the index list is copy-on-write, published
+through an atomic pointer, so a put's key check reads it without the table
+lock. `Range` reads one partition between bounds a `SortCondition` sets, in
+either direction, from an exclusive start key; `Scan` walks the partitions in
+order. Both hand the caller whole stored items, and the caller projects.
+
+Each table has its own `sync.RWMutex`, and nothing locks across tables except
+`table.Lock` and `table.ReadLock`, which take several tables' locks in the
+order of their creation ids, so a transaction or batch that spans tables
+cannot deadlock against another. Stored items are immutable: a write replaces
+the whole map, so a reader may keep what it was handed and no read copies an
+item.
+
+**The write path.** Every write, from `PutItem` to a PartiQL `UPDATE`, a
+transaction or a time to live removal, goes through `Table.Write` (or
+`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `decide` with
+the stored item under the table's write lock and stores what `decide` returns,
+nil to delete; a condition expression, an update expression and the return
+values are all evaluated inside `decide`, so nothing changes between the check
+and the write. It updates the indexes under the same lock and returns a
+`Change` with the old and new item. `Change.Changed()` is false for a put
+that stores an equal item, which is what keeps such a put out of the stream.
+A transaction decides every action first and writes them all through
+`WriteHeld` only when none failed.
+
+**Expressions.** A request's expressions are parsed once, with
+`ExpressionAttributeNames` and `ExpressionAttributeValues` substituted, into
+one parsed form per language: `Condition` (condition and filter),
+`KeyCondition` (its hash value and a `table.SortCondition`), `Projection` and
+`UpdateExpr`. Evaluation reads no placeholder. Parsing records every name and
+value it used, so the unused-placeholder check runs once over the whole
+request, in DynamoDB Local's order: substitution syntax first, then filter,
+projection and key condition, then unused names before unused values. The
+legacy parameters (`KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected`,
+`AttributeUpdates`) translate into the same parsed forms. Every error is a
+`ValidationException` with DynamoDB Local's message for the first problem in
+the text.
+
+**PartiQL.** `partiql` parses `SELECT`, `INSERT`, `UPDATE`, `DELETE` and, in a
+transaction, `EXISTS`. The handlers (`partiql*.go`) compile a statement to
+expression text with generated `#nN` and `:vN` placeholders and call the
+existing operations: a `SELECT` becomes a `GetItem`, `Query` or `Scan`, an
+`INSERT` a `PutItem` under `attribute_not_exists`, an `UPDATE` an `UpdateItem`
+under `attribute_exists`, and `ExecuteTransaction` a `TransactGetItems` or
+`TransactWriteItems`. PartiQL has no write path or reader of its own, so its
+writes reach streams and persistence like any other.
+
+**Streams.** A table with a stream registers a `table.Observer`, which the
+engine calls under the table's write lock for every `Change` that changed
+something, so records are numbered in the order the writes applied. The
+observer builds the record for the stream's view type and appends it to the
+table's `stream.Log`. DynamoDB Streams reads the logs through `dynamodb.Streams`
+("In-process client", above, for the shard, its retention and its byte bound).
+A time to live removal goes through `Table.Expire`, whose record carries the
+`dynamodb.amazonaws.com` service identity.
+
+**What is held in memory.** Everything. Each item is a
+`map[string]api.AttributeValue`, referenced once from the primary store and
+once from each index that projects it; about 1.3 KB per item of 100 bytes
+(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records
+for 24 hours. `TransactWriteItems` client request tokens are held for their
+10-minute window and swept when a later transaction looks. Time to live
+removes nothing unless asked: the hourly sweep runs only under
+`DYNAMODB_REMOVE_EXPIRED_ITEMS`, on a timer armed while a table has time to
+live on. No other goroutine runs while the service is idle.
+
+**Persistence.** The two files, their contents and the lock a snapshot takes
+are under Persistence, "DynamoDB". The format: `{"v":1,"accounts":[…],
+"states":[{"account","region","tables":[{"meta","shard","items"}]}]}` in
+`dynamodb/store.*`, items as the wire writes them with numbers canonical, and
+the shard records in `dynamodbstreams/store.*`. Restore rebuilds the indexes
+from the items with `table.Load`, which sizes each partition before it fills
+it and sorts it once.
 
 ### KMS (`internal/service/kms`)
 

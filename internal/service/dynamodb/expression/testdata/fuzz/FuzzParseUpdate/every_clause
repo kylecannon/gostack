@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET a = a + :n REMOVE c[1] ADD e :ns DELETE d :ss")

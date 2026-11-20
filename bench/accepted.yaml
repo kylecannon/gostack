@@ -54,25 +54,25 @@
   package: cmd/gostack
   benchmark: ServiceTable_Capabilities
   unit: sec/op
-  max: +350%
-  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 0.7 ms once per process
-  pr: 27
-  commit: f80026c677d899f43fab8ac082e403fbd0182224
+  max: +25%
+  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 0.5 ms once per process
+  pr: 36
+  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3
 
 - gate: benchstat
   package: cmd/gostack
   benchmark: ServiceTable_Capabilities
   unit: B/op
-  max: +330%
-  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 171 KiB once per process
-  pr: 27
-  commit: f80026c677d899f43fab8ac082e403fbd0182224
+  max: +20%
+  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 227 KiB once per process
+  pr: 36
+  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3
 
 - gate: benchstat
   package: cmd/gostack
   benchmark: ServiceTable_Capabilities
   unit: allocs/op
-  max: +370%
-  reason: the first GET /_gostack/services now counts Secrets Manager's 23 and SSM's 146 operations, which it skipped as unknown; 3607 allocations once per process
-  pr: 27
-  commit: f80026c677d899f43fab8ac082e403fbd0182224
+  max: +20%
+  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 4686 allocations once per process
+  pr: 36
+  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3

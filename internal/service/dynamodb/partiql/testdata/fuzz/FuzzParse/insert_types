@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT INTO t VALUE {'id': 'a', 'n': -1.5e3, 'b': true, 'z': null, 'l': [1, 'x'], 'm': {'k': 'v'}, 'ss': <<'x','y'>>, 'ns': <<1,2>>}")
