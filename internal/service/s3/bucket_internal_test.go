@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBucketARNFollowsThePartitionOfItsRegion: one partitionOf serves the ARN a
-// bucket answers with and the one its events carry.
+// TestBucketARNFollowsThePartitionOfItsRegion: account.Partition serves the ARN
+// a bucket answers with and the one its events carry.
 func TestBucketARNFollowsThePartitionOfItsRegion(t *testing.T) {
 	t.Parallel()
 
@@ -28,6 +28,8 @@ func TestBucketARNFollowsThePartitionOfItsRegion(t *testing.T) {
 		{"us-gov-west-1", "arn:aws-us-gov:s3:::b"},
 		{"us-iso-east-1", "arn:aws-iso:s3:::b"},
 		{"us-isob-east-1", "arn:aws-iso-b:s3:::b"},
+		{"eu-isoe-west-1", "arn:aws-iso-e:s3:::b"},
+		{"us-isof-east-1", "arn:aws-iso-f:s3:::b"},
 		{"eusc-de-east-1", "arn:aws-eusc:s3:::b"},
 	}
 
@@ -36,7 +38,6 @@ func TestBucketARNFollowsThePartitionOfItsRegion(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, test.want, bucketARN("b", test.region))
-			assert.Equal(t, "arn:"+partitionOf(test.region)+":s3:::b", bucketARN("b", test.region))
 		})
 	}
 }
