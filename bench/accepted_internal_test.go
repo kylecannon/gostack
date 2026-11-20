@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -687,11 +688,48 @@ type workflowFile struct {
 }
 
 type workflowJob struct {
-	Steps []workflowStep `yaml:"steps"`
+	TimeoutMinutes int            `yaml:"timeout-minutes"`
+	Steps          []workflowStep `yaml:"steps"`
 }
 
 type workflowStep struct {
-	Run string `yaml:"run"`
+	Run  string            `yaml:"run"`
+	Uses string            `yaml:"uses"`
+	With map[string]string `yaml:"with"`
+}
+
+func readWorkflow(t *testing.T) workflowFile {
+	t.Helper()
+
+	text, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "bench.yml"))
+	require.NoError(t, err)
+
+	var workflow workflowFile
+
+	require.NoError(t, yaml.Unmarshal(text, &workflow))
+
+	return workflow
+}
+
+// A shard names its artifact from the index select wrote into its matrix entry,
+// which is the name join reads, and not from strategy.job-index, whose order GitHub
+// does not say follows the entries'. The shard job's timeout is the limit select
+// holds a shard to.
+func Test_workflow_shard_job(t *testing.T) {
+	shard := readWorkflow(t).Jobs["shard"]
+
+	assert.Equal(t, int(defaultShardLimit/time.Minute), shard.TimeoutMinutes,
+		"selection fails a unit past the limit, so the limit is the job's timeout")
+
+	var names []string
+
+	for _, step := range shard.Steps {
+		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
+			names = append(names, step.With["name"])
+		}
+	}
+
+	assert.Equal(t, []string{shardArtifactPrefix + "${{ matrix.index }}"}, names)
 }
 
 // The gate step fails when the gate exits 1, whatever shell the workflow
@@ -703,16 +741,9 @@ func Test_workflow_gate_step(t *testing.T) {
 		t.Skip("bash is not installed")
 	}
 
-	text, err := os.ReadFile(filepath.Join("..", ".github", "workflows", "bench.yml"))
-	require.NoError(t, err)
-
-	var workflow workflowFile
-
-	require.NoError(t, yaml.Unmarshal(text, &workflow))
-
 	var script string
 
-	for _, step := range workflow.Jobs["benchstat"].Steps {
+	for _, step := range readWorkflow(t).Jobs["benchstat"].Steps {
 		if strings.Contains(step.Run, "bench gate") {
 			script = step.Run
 		}

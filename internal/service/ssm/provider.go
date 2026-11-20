@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/kylecannon/gostack/internal/account"
 	ssmapi "github.com/kylecannon/gostack/internal/api/ssm"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/request"
@@ -39,6 +40,7 @@ func (p *Provider) Registration() service.Registration {
 		Mutating: mutating,
 		Persist:  p,
 		Reset:    p.Reset,
+		Handler:  p,
 	}
 }
 
@@ -76,12 +78,12 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 // stateAt returns the State of an account and region. A place that is not
 // valid UTF-8 gets an empty State nothing else reaches, so it never becomes a
 // key a snapshot would write as U+FFFD.
-func (p *Provider) stateAt(account, region string) *State {
-	if !utf8.ValidString(account) || !utf8.ValidString(region) {
-		return newState(account, region)
+func (p *Provider) stateAt(accountID, region string) *State {
+	if !utf8.ValidString(accountID) || !utf8.ValidString(region) {
+		return newState(accountID, region)
 	}
 
-	return p.states.Get(account, region)
+	return p.states.Get(accountID, region)
 }
 
 // call is what an operation needs of the request: its place and its State.
@@ -103,20 +105,8 @@ func (p *Provider) callOf(ctx context.Context) (call, error) {
 
 // arn is a parameter's ARN, moto's parameter_arn.
 func (c *call) arn(name string) string {
-	return "arn:" + partition(c.region) + ":ssm:" + c.region + ":" + c.account + ":parameter/" +
+	return "arn:" + account.Partition(c.region) + ":ssm:" + c.region + ":" + c.account + ":parameter/" +
 		strings.TrimPrefix(name, "/")
-}
-
-// partition is the partition of a region.
-func partition(region string) string {
-	switch {
-	case strings.HasPrefix(region, "cn-"):
-		return "aws-cn"
-	case strings.HasPrefix(region, "us-gov-"):
-		return "aws-us-gov"
-	default:
-		return "aws"
-	}
 }
 
 // missing is the error for a required member the request left out.
