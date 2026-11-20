@@ -20,6 +20,7 @@ const (
 	msgUpdateMissing     = "The provided expression refers to an attribute that does not exist in the item"
 	msgUpdateType        = "An operand in the update expression has an incorrect data type"
 	msgUpdateTooLarge    = "Item size to update has exceeded the maximum allowed size"
+	msgUpdateTooDeep     = "Nesting Levels have exceeded supported limits"
 )
 
 // updateFinal is the last step of an action: it reads or changes the element
@@ -56,11 +57,36 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 		}
 	}
 
+	err = u.checkNesting(item)
+	if err != nil {
+		return nil, err
+	}
+
 	if value.ItemSize(item) > value.MaxItemSize {
 		return nil, value.Invalid(msgUpdateTooLarge)
 	}
 
 	return item, nil
+}
+
+// checkNesting refuses an item whose update pushed an attribute past
+// value.MaxDepth levels: a value that fits an ExpressionAttributeValues can
+// be one level too deep once it sits inside the item, and so can a list_append
+// or a SET at a nested path. Only the attributes an action wrote can have
+// grown, and the walk stops at the limit.
+func (u *UpdateExpr) checkNesting(item value.Item) error {
+	for _, act := range u.order {
+		if act.clause == updateRemove || act.clause == updateDelete {
+			continue
+		}
+
+		v := item[act.target.path[0].Name]
+		if value.TooDeep(&v) {
+			return value.Invalid(msgUpdateTooDeep)
+		}
+	}
+
+	return nil
 }
 
 // evaluate computes the value of every SET right-hand side against old. Every

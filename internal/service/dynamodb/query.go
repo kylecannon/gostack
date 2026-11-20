@@ -187,6 +187,10 @@ func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, 
 		err = x.done()
 	}
 
+	if err == nil {
+		err = r.checkKeyConditionEmpty(kc)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -200,6 +204,34 @@ func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, 
 	r.decideFetch(topNames(r.projection))
 
 	return kc, nil
+}
+
+// checkKeyConditionEmpty refuses a key condition that compares a key attribute
+// with an empty string or binary, the partition value first, whatever the
+// operator: DynamoDB does not take the empty value in a key, so no item can
+// match it. It runs after the placeholders are checked and before the filter
+// is held to the non-key attributes.
+func (r *reader) checkKeyConditionEmpty(kc expression.KeyCondition) error {
+	hashName, hash := kc.Hash()
+
+	msg := table.EmptyKeyMessage(r.index, hashName, &hash)
+	if msg != "" {
+		return value.Invalid(msg)
+	}
+
+	rangeName, cond, ok := kc.Range()
+	if !ok {
+		return nil
+	}
+
+	for i := range cond.Values {
+		msg = table.EmptyKeyMessage(r.index, rangeName, &cond.Values[i])
+		if msg != "" {
+			return value.Invalid(msg)
+		}
+	}
+
+	return nil
 }
 
 // indexName is the engine's name for the source read: "" for the table.

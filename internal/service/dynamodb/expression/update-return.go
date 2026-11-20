@@ -82,7 +82,7 @@ func CheckUnused(subs Substitutions, used map[string]struct{}) error {
 	} {
 		if len(check.keys) > 0 {
 			return value.Invalid("Value provided in " + check.kind + " unused in expressions: keys: {" +
-				strings.Join(javaHashOrder(check.keys), ", ") + "}")
+				strings.Join(JavaHashOrder(check.keys), ", ") + "}")
 		}
 	}
 
@@ -101,12 +101,12 @@ func unusedKeys[V string | api.AttributeValue](m map[string]V, used map[string]s
 	return keys
 }
 
-// javaHashOrder sorts keys into the order a java.util.HashSet of them
+// JavaHashOrder sorts keys into the order a java.util.HashSet of them
 // iterates: by bucket of the spread String.hashCode in a table of the default
 // size, doubled while the set fills it past three quarters. Keys in one bucket
 // keep their insertion order in Java, which the request does not carry, so
 // they are sorted by text.
-func javaHashOrder(keys []string) []string {
+func JavaHashOrder(keys []string) []string {
 	const (
 		initialBuckets = 16
 		loadNum        = 3

@@ -18,8 +18,13 @@ const (
 	msgUpdateReserved = updatePrefix + "Attribute name is a reserved keyword; reserved keyword: "
 	msgUpdateBadFunc  = updatePrefix + "Invalid function name; function: "
 	msgUpdateCondFunc = updatePrefix + "The function is not allowed in an update expression; function: "
-	msgUpdateDepth    = updatePrefix + "The document path has too many nesting levels; nesting levels: "
-	msgUpdateNoName   = updatePrefix + "An expression attribute name used in the document path is not defined; " +
+	// msgUpdateFuncPlace is list_append's: inside another function or a sum.
+	msgUpdateFuncPlace = updatePrefix + "The function is not allowed to be used this way in an expression; function: "
+	// msgUpdateSameFirst is if_not_exists naming one path twice.
+	msgUpdateSameFirst = updatePrefix + "The first operand must be distinct from the remaining operands for " +
+		"this operator or function; operator: if_not_exists, first operand: "
+	msgUpdateDepth  = updatePrefix + "The document path has too many nesting levels; nesting levels: "
+	msgUpdateNoName = updatePrefix + "An expression attribute name used in the document path is not defined; " +
 		"attribute name: "
 	msgUpdateNoValue = updatePrefix + "An expression attribute value used in expression is not defined; " +
 		"attribute value: "
@@ -150,14 +155,24 @@ func updateCheckReserved(p *updateParser) error {
 	return nil
 }
 
+// updateCheckFuncs refuses, in the order the calls are written, a function an
+// update expression does not take, and a list_append that is not the whole
+// value of its SET action: DynamoDB takes it nowhere inside another function
+// or a sum, parenthesized or not.
 func updateCheckFuncs(p *updateParser) error {
-	for _, tok := range p.funcs {
-		if _, cond := updateCondFuncs[tok.text]; cond {
-			return value.Invalid(msgUpdateCondFunc + tok.text)
+	for _, call := range p.calls {
+		name := call.tok.text
+
+		if _, cond := updateCondFuncs[name]; cond {
+			return value.Invalid(msgUpdateCondFunc + name)
 		}
 
-		if tok.text != funcIfNotExists && tok.text != funcListAppend {
-			return value.Invalid(msgUpdateBadFunc + tok.text)
+		if name != funcIfNotExists && name != funcListAppend {
+			return value.Invalid(msgUpdateBadFunc + name)
+		}
+
+		if name == funcListAppend && !call.whole {
+			return value.Invalid(msgUpdateFuncPlace + name)
 		}
 	}
 
@@ -227,7 +242,7 @@ func updateResolveNames(p *updateParser, names map[string]string, used map[strin
 func updateCheckOverlap(paths []Path) error {
 	for j := range paths {
 		for i := range j {
-			prefix, conflict := updateComparePaths(paths[i], paths[j])
+			prefix, conflict := comparePaths(paths[i], paths[j])
 
 			switch {
 			case conflict:
@@ -240,24 +255,6 @@ func updateCheckOverlap(paths []Path) error {
 	}
 
 	return nil
-}
-
-// updateComparePaths reports whether a and b agree on every step they share,
-// and whether they part at a step where one names a key and the other an
-// index.
-func updateComparePaths(a, b Path) (bool, bool) {
-	for k := range min(len(a), len(b)) {
-		x, y := a[k], b[k]
-		if (x.Name == "") != (y.Name == "") {
-			return false, true
-		}
-
-		if x != y {
-			return false, false
-		}
-	}
-
-	return true, false
 }
 
 func updatePathPair(a, b Path) string {
@@ -289,8 +286,8 @@ func updatePathString(path Path) string {
 
 // updateCheckOperand checks an operand after its own operands: a value must be
 // defined, a function must have two operands and if_not_exists a path for its
-// first, and a value given to + and - must be a number and to list_append a
-// list.
+// first that its second does not repeat, and a value given to + and - must be
+// a number and to list_append a list.
 func updateCheckOperand(op *updateOperand, values map[string]api.AttributeValue, used map[string]struct{}) error {
 	if op == nil {
 		return nil
@@ -343,8 +340,13 @@ func updateCheckCall(op *updateOperand) error {
 	}
 
 	if name == funcIfNotExists {
-		if op.args[0].kind != updateOpPath {
+		first := op.args[0]
+		if first.kind != updateOpPath {
 			return value.Invalid(msgUpdateNeedsPath + name)
+		}
+
+		if rest := op.args[1]; rest.kind == updateOpPath && samePath(first.path.path, rest.path.path) {
+			return value.Invalid(msgUpdateSameFirst + updatePathString(first.path.path))
 		}
 
 		return nil

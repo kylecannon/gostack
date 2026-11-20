@@ -115,22 +115,29 @@ func (p *parser) parsePathList() ([]*operand, error) {
 	}
 }
 
-// checkOverlap refuses two paths of which one is the other or leads into it.
+// checkOverlap refuses two paths of which one is the other or leads into it,
+// and two that part where one names a map key and the other a list index, as
+// DynamoDB does (SQ-280).
 func (r *resolver) checkOverlap(paths []Path) error {
+	const rewrite = " with each other; must remove or rewrite one of these paths; path one: "
+
 	for j := 1; j < len(paths); j++ {
 		for i := range j {
-			if isPrefix(paths[i], paths[j]) || isPrefix(paths[j], paths[i]) {
-				return r.fail("Two document paths overlap with each other; must remove or rewrite one of these paths; path one: " +
-					formatPath(paths[i]) + ", path two: " + formatPath(paths[j]))
+			prefix, conflict := comparePaths(paths[i], paths[j])
+
+			kind := "overlap"
+			if conflict {
+				kind = "conflict"
+			}
+
+			if prefix || conflict {
+				return r.fail("Two document paths " + kind + rewrite + formatPath(paths[i]) + ", path two: " +
+					formatPath(paths[j]))
 			}
 		}
 	}
 
 	return nil
-}
-
-func isPrefix(prefix, p Path) bool {
-	return len(prefix) <= len(p) && samePath(prefix, p[:len(prefix)])
 }
 
 func (n *projNode) add(path Path) {

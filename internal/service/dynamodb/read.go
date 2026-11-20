@@ -236,11 +236,55 @@ func (r *reader) checkStart(start value.Item) error {
 	}
 
 	err := value.ValidateItem(start)
+	if err == nil {
+		err = r.checkStartEmpty(start)
+	}
+
 	if err != nil {
 		return fmt.Errorf("exclusive start key: %w", err)
 	}
 
 	r.start = start
+
+	return nil
+}
+
+// checkStartEmpty refuses an exclusive start key with an empty string or
+// binary key value, the table's attributes first and then the index's, as
+// DynamoDB does. A hash attribute's refusal also says the query cannot be
+// restarted from a key with no partition.
+func (r *reader) checkStartEmpty(start value.Item) error {
+	const (
+		oneRow  = "The query can return at most one row and cannot be restarted. "
+		invalid = "The provided starting key is invalid: "
+	)
+
+	type attr struct {
+		name string
+		spec *table.IndexSpec
+		hash bool
+	}
+
+	attrs := []attr{{r.tableKey.Hash.Name, nil, true}, {r.tableKey.Range.Name, nil, false}}
+	if r.index != nil {
+		attrs = append(attrs, attr{r.key.Hash.Name, r.index, true}, attr{r.key.Range.Name, r.index, false})
+	}
+
+	for _, a := range attrs {
+		v, ok := start[a.name]
+		if !ok {
+			continue
+		}
+
+		msg := table.EmptyKeyMessage(a.spec, a.name, &v)
+		switch {
+		case msg == "":
+		case a.hash:
+			return value.Invalid(oneRow + invalid + msg)
+		default:
+			return value.Invalid(invalid + msg)
+		}
+	}
 
 	return nil
 }
