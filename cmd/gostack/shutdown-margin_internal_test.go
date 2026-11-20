@@ -40,10 +40,29 @@ import (
 // within, since a receive that nothing answers is a deadlock panic that ends the
 // test binary, and with it the results of the rest of the package.
 func Test_serve_aBlockedShutdownCostsWorkAndNoMore(t *testing.T) {
-	synctest.Test(t, serveBlockedShutdown)
+	synctest.Test(t, func(t *testing.T) {
+		serveBlockedShutdown(t, func(stop context.CancelFunc, _ *memListener) { stop() }, assert.NoError)
+	})
 }
 
-func serveBlockedShutdown(t *testing.T) {
+// Test_serve_aBlockedShutdownCostsWorkAndNoMoreWhenAListenerFails is the same
+// margin for the other cause of a shutdown: a listener fails, the gateway
+// starts the shutdown inside Serve, and serve finds it begun. A service
+// shutdown function that Serve ran inline held Serve, and serve with it, until
+// the supervisor's SIGKILL, with no save (SQ-379).
+func Test_serve_aBlockedShutdownCostsWorkAndNoMoreWhenAListenerFails(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		serveBlockedShutdown(t, func(_ context.CancelFunc, mem *memListener) { _ = mem.Close() }, assert.Error)
+	})
+}
+
+// serveBlockedShutdown runs serve over an in-memory listener with a service
+// shutdown function that never returns, and has cause start the shutdown: the
+// signal (the context ends) or the failure of the listener. servedErr is what
+// serve's error must be for that cause.
+func serveBlockedShutdown(
+	t *testing.T, cause func(stop context.CancelFunc, mem *memListener), servedErr assert.ErrorAssertionFunc,
+) {
 	const (
 		timeout = 2 * time.Second
 		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
@@ -90,9 +109,10 @@ func serveBlockedShutdown(t *testing.T) {
 	firsts, rests := make(chan saved, 1), make(chan saved, 1)
 	proc := &lifecycle.Process{Hooks: lifecycle.NewHooks(t.TempDir()), Out: io.Discard}
 	done := make(chan error, 1)
+	mem := newMemListener()
 
 	go func() {
-		done <- serve(ctx, gw, []net.Listener{newMemListener()}, proc, timeout, nil, shutdownSave{
+		done <- serve(ctx, gw, []net.Listener{mem}, proc, timeout, nil, shutdownSave{
 			first: func(saveCtx context.Context) { record(firsts, saveCtx) },
 			rest:  func(saveCtx, _ context.Context) { record(rests, saveCtx) },
 		})
@@ -100,15 +120,14 @@ func serveBlockedShutdown(t *testing.T) {
 
 	synctest.Wait()
 
-	// SIGTERM.
 	begin := time.Now()
 
-	stop()
+	cause(stop, mem)
 
 	first := within(t, firsts, limit, "the first save")
 	rest := within(t, rests, limit, "the second save")
 
-	require.NoError(t, within(t, done, limit, "serve's return"))
+	servedErr(t, within(t, done, limit, "serve's return"))
 
 	assert.Equal(t, workAt, first.at.Sub(begin), "the save started when Work ended, not later")
 	assert.Equal(t, workAt, rest.at.Sub(begin), "the second save followed at once: no calls to drain")

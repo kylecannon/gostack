@@ -59,6 +59,10 @@ type Gateway struct {
 	phase   atomic.Int32
 	handler http.Handler
 
+	// released closes when the Shutdown functions, started by the first call
+	// to startShutdown, have all returned.
+	released chan struct{}
+
 	// tlsConfig is the certificate Listen loaded, for Serve.
 	tlsConfig *tls.Config
 
@@ -88,7 +92,10 @@ func New(
 		return nil, fmt.Errorf("build service table: %w", err)
 	}
 
-	g := &Gateway{settings: settings, regs: regs, table: table, eng: eng, unnamed: make([]atomic.Bool, len(regs))}
+	g := &Gateway{
+		settings: settings, regs: regs, table: table, eng: eng,
+		unnamed: make([]atomic.Bool, len(regs)), released: make(chan struct{}),
+	}
 	g.cors = newCORSRules(settings())
 	g.corsEnforced, g.corsOpen = newCORSHandlers(g.cors)
 	g.handler = buildRouter(g, internal)
@@ -114,19 +121,14 @@ func (g *Gateway) InternalHandler() http.Handler {
 // BeginShutdown makes the gateway refuse every request except internal calls
 // and the developer paths, and then calls the Shutdown function of each
 // registration that has one, so that work holding a request open, such as an
-// SQS long poll, lets it go. Serve calls it when its context ends; the runtime
-// calls it first when it has shutdown hooks to run. Only the first call does
-// anything.
+// SQS long poll, lets it go. It returns when they all have, and waits for them
+// as long as they take: a caller that keeps to a deadline runs it apart, as the
+// runtime does. Serve begins the shutdown when its context ends and when a
+// listener fails, without waiting for the functions. The runtime calls it first
+// when it has shutdown hooks to run. Only the first call acts; the others wait
+// for the functions of the first.
 func (g *Gateway) BeginShutdown() {
-	if !g.phase.CompareAndSwap(phaseRunning, phaseStopping) {
-		return
-	}
-
-	for i := range g.regs {
-		if shutdown := g.regs[i].Shutdown; shutdown != nil {
-			shutdown()
-		}
-	}
+	<-g.startShutdown()
 }
 
 // DrainBy sets the time at which Serve stops waiting for requests in flight and
@@ -289,7 +291,9 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 		}
 	}
 
-	g.BeginShutdown()
+	// The Shutdown functions run apart: Serve drains meanwhile, and the caller
+	// keeps to its plan whatever one of them does.
+	g.startShutdown()
 
 	shutdownErr := g.shutdown(ctx, server)
 
@@ -306,6 +310,27 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 // are closed by then); the caller ends the shutdown with this.
 func (g *Gateway) EndShutdown() {
 	g.phase.Store(phaseStopped)
+}
+
+// startShutdown makes the gateway refuse requests at once, as the first call
+// only, and starts the Shutdown functions in a goroutine of their own, one
+// after another. It returns the channel that closes when they have all
+// returned. Serve takes it without waiting: a function that never returns must
+// not hold the drain, or the save after it, past the plan.
+func (g *Gateway) startShutdown() <-chan struct{} {
+	if g.phase.CompareAndSwap(phaseRunning, phaseStopping) {
+		go func() {
+			defer close(g.released)
+
+			for i := range g.regs {
+				if shutdown := g.regs[i].Shutdown; shutdown != nil {
+					shutdown()
+				}
+			}
+		}()
+	}
+
+	return g.released
 }
 
 func (g *Gateway) shutdown(ctx context.Context, server *http.Server) error {

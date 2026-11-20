@@ -981,7 +981,15 @@ Tests split along the same line:
   listener, which starts the shutdown inside the gateway. The gateway drains
   only to the times the plan gave it, and a zero time is the plan's "no
   limit". A shutdown that nothing planned, with no `DrainBy` call and no
-  `PlanDrain`, gives the drain 5 s.
+  `PlanDrain`, gives the drain 5 s. The same budget holds whichever cause
+  starts the shutdown: a service `Shutdown` function that never returns costs
+  the time to `Work` and no more, and the save starts then. On the signal the
+  runtime runs the functions and the hooks apart from the drain, and cuts both
+  at `Work`. On the failure of a listener the gateway starts the functions in
+  a goroutine of their own, without waiting for them, and drains meanwhile;
+  the runtime then waits for them, and runs the hooks, under the same `Work`.
+  (A function Serve ran inline held Serve until the supervisor's SIGKILL, with
+  no save, SQ-379.)
   1. The gateway refuses AWS calls with 503 (`/_localstack`, `/_gostack` and the
      developer paths stay up), and each service's `Shutdown` function runs. SQS
      wakes its long polls there. The calls services make to each other are
