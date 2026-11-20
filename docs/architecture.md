@@ -737,7 +737,8 @@ whose handler still answers it with a 2xx was served and is not counted.
 ### SNS delivery (`internal/service/sns/lanes.go`)
 
 SNS delivers through lanes of its own, one per destination: a subscribed
-queue, or a dead-letter queue. A destination's deliveries are sent one at a
+queue, a dead-letter queue, or an HTTP or HTTPS endpoint (the next section).
+This section describes the queue lanes. A destination's deliveries are sent one at a
 time, in the order they entered its lane, for a standard queue as for a FIFO
 queue.
 
@@ -750,7 +751,10 @@ queue.
   waiting for any of them, and no delivery is refused or dropped for lack of
   room while the server runs. The cost is memory: every delivery waiting for
   a slow or stuck destination stays in its lane, body included, until the
-  destination answers, and nothing caps that. Publish answers 200 with its
+  destination answers, and nothing caps that. A delivery to an HTTP endpoint
+  that has a dead-letter queue also holds its dead-letter call, built when
+  the message was published, so it costs 1.5 to 8 times the message
+  (SQ-327 owns reducing that). Publish answers 200 with its
   MessageId whatever happens to the deliveries.
 - **Failure.** A delivery the destination refuses (the queue is gone, or the
   send fails) goes to the tail of its subscription's dead-letter queue's lane,
@@ -768,14 +772,16 @@ queue.
   were parked before its own lane sends again. A stuck destination holds one
   client worker; the others serve every other lane.
 - **Shutdown.** SNS has no `Shutdown` function: nothing waits for room, so
-  nothing needs letting go. While any delivery is in a lane, the lanes hold
+  nothing needs letting go. While any SQS delivery is in a lane, the lanes hold
   one count in the hub's pending count (`inproc.Client.Hold`), so `Hub.Drain`
   waits for a parked lane, or deliveries queued behind a head, as for a
-  queued call, until the lanes are empty or the drain's deadline. A
+  queued call, until the lanes hold no SQS delivery or the drain's deadline.
+  HTTP deliveries are not counted (see the HTTP section). A
   dead-letter delivery never fails over to another, so the chain of calls a
   lane queues is finite. Once the drain cuts the client, a refused head parks
-  or is cut and queues nothing more. `Close` does not wait: it refuses every
-  later delivery, stops the client, counts each delivery still in a lane
+  or is cut and queues nothing more. `Close` waits for nothing: it cuts the
+  HTTP sends in flight (next section) at once, refuses every later delivery,
+  stops the client, counts each delivery still in a lane
   once, as dropped, and logs the per-destination counts and then one line,
   `SNS deliveries dropped`, with `count`, every delivery SNS lost since the
   process started, and `cut_at_close`, the ones Close cut. The hub's
@@ -785,12 +791,61 @@ queue.
   call counts in the hub's line, a dead-letter attempt included. Either count
   can be the larger. A slow destination at shutdown is where the
   missing bound shows: what it had not taken by the drain's deadline is cut.
-- **Other transports.** A lane meets its transport in one function,
-  `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
-  destination's head would be sent on a goroutine that lives for that send,
-  with its own timeout and retries, and answer the same way. The order and
-  the absent bound stay as they are. `inflight` must go on counting only the
-  in-process client's calls, since a refused head parks or is cut by it.
+- **Transports.** A lane meets its transport in one function, `lanes.send`,
+  and a head's answer settles it in `lanes.finish`, through `lanes.answered`
+  for a queue and `lanes.posted` for an HTTP endpoint. `inflight` counts only
+  the in-process client's calls, since a refused head parks or is cut by it;
+  an HTTP head never touches `inflight` or the parked list.
+
+### SNS delivery to HTTP and HTTPS (`internal/service/sns/http-delivery.go`)
+
+An `http` or `https` subscription's deliveries, its `SubscriptionConfirmation`
+and `UnsubscribeConfirmation` included, go through the same lanes, keyed by
+the endpoint URL, so an endpoint never shares a lane with a queue and a slow
+endpoint holds up no queue.
+
+- **One at a time per endpoint.** An endpoint's lane sends its head and
+  nothing else until that head is answered, in the order deliveries entered
+  the lane. Two subscriptions to one URL share its lane.
+- **In flight.** `lanes.post` runs a head on a goroutine that lives for that
+  one send. At most 64 sends (`maxPosts`) are in flight across every
+  endpoint; a lane whose head finds them all taken waits in `postWaiting`,
+  and each answer starts the first lane waiting. A hung endpoint holds one
+  of the 64 for up to its 10 s timeout, so 64 hung endpoints delay every
+  HTTP delivery in the process, `SubscriptionConfirmation` included, until
+  a timeout frees a slot. SQS deliveries are not sent through them and are
+  unaffected.
+- **Client.** SNS owns its `http.Client` and `http.Transport`, apart from the
+  in-process client. TLS certificates are not verified and redirects are
+  followed (net/http's limit of 10), as LocalStack's `requests.post` does.
+  A send has 10 s (`postTimeout`) for the whole exchange, redirects included,
+  and is not retried. At most the first 64 KiB of the answer is read
+  (`maxAnswer`); a longer answer's connection is not reused. An answer
+  whose status line and headers pass 64 KiB (`maxAnswerHeader`) fails the
+  delivery. At most 64 idle connections are kept across endpoints
+  (`maxIdleConns`, and the same for one host), and a connection is
+  closed 2 s after its last delivery (`idleConnTimeout`), which ends the
+  goroutines it holds.
+- **Failure.** A transport error, the timeout, a read of the answer that
+  fails (a 2xx whose body the timeout cuts included, as the read timeout of
+  `requests.post` raises), or a status of 400 or more fails the delivery, as
+  `raise_for_status` does. A failed notification or
+  `SubscriptionConfirmation` goes to the subscription's dead-letter queue,
+  through that queue's lane, with the body that was posted and no message
+  attributes; with no dead-letter queue it is dropped and counted. A failed
+  `UnsubscribeConfirmation` is always dropped and counted.
+- **Shutdown.** HTTP sends are not drained: an HTTP delivery does not count in
+  the hub's pending count, so `Hub.Drain` does not wait for it, whether it is
+  in flight, waiting in its lane, or a send to an endpoint that never answers.
+  A delivery over HTTP changes no state that is saved, and a failure's
+  dead-letter delivery would be cut at the shutdown anyway. The drain exists
+  so SNS to SQS deliveries reach their queues before the save, and it still
+  waits for those. `Close(ctx)` starts no new send and
+  cancels the sends in flight at once, without waiting for them to finish,
+  so a hung endpoint adds nothing to a stop; ctx bounds only the wait for
+  the cut sends to return, which they do as soon as the cut reaches them. It
+  closes idle connections and counts every delivery still in a lane, the
+  sends cut included, as cut.
 
 ### Body store (`internal/blob`)
 

@@ -38,6 +38,9 @@ const (
 // sends the next; an empty lane is gone. A parked lane has work and no call in
 // the client, so the lanes hold the hub's pending count while any delivery is
 // in them (unhold), which is what a shutdown's drain of the client waits for.
+// An HTTP delivery is not held: it changes no state SNS saves, and a send to
+// a hung endpoint must not cost a stop its drain, so the drain does not wait
+// for it (Close cuts it).
 //
 // Every delivery that enters a lane leaves it once, under mu: sent, failed
 // (to its dead-letter queue or dropped), or cut. queued counts the ones in a
@@ -51,15 +54,25 @@ type lanes struct {
 	// full; the next answer starts them again.
 	parked []*lane
 	// inflight counts the heads handed to the client and not yet answered.
+	// HTTP deliveries never count in it.
 	inflight int
-	queued   int
+	// poster sends the HTTP deliveries; posting counts the ones in flight, at
+	// most maxPosts, and postWaiting holds the lanes whose head waits for one
+	// of them to finish.
+	poster      *poster
+	posting     int
+	postWaiting []*lane
+	queued      int
+	// held counts the queued deliveries that are not HTTP: the ones the hub's
+	// drain waits for.
+	held int
 	// idle, when not nil, is closed when queued reaches zero.
 	idle chan struct{}
-	// unhold, while queued is above zero, lets go of the hold the deliveries
+	// unhold, while held is above zero, lets go of the hold the deliveries
 	// have on the in-process hub's pending count (inproc.Client.Hold), so a
 	// shutdown's drain of the calls waits for a delivery that is not a call
 	// in the client: one waiting in its lane, in a parked lane, or added and
-	// not yet started.
+	// not yet started. An HTTP delivery is never held.
 	unhold func()
 	// closed is set when Close begins.
 	closed bool
@@ -82,7 +95,11 @@ type lane struct {
 // job is one delivery.
 type job struct {
 	lane *lane
+	// call is the SQS SendMessage; for an HTTP delivery only its Lane, the
+	// endpoint, is set.
 	call inproc.Call
+	// post is the HTTP delivery, nil for a queue.
+	post *post
 	// dlq is the call that puts the message on its subscription's dead-letter
 	// queue, nil without one.
 	dlq *inproc.Call
@@ -118,10 +135,17 @@ func (ls *lanes) add(j *job) bool {
 
 	if ls.queued == 0 {
 		ls.idle = make(chan struct{})
-		ls.unhold = ls.client.Hold()
 	}
 
 	ls.queued++
+
+	if j.post == nil {
+		if ls.held == 0 {
+			ls.unhold = ls.client.Hold()
+		}
+
+		ls.held++
+	}
 
 	return true
 }
@@ -156,14 +180,12 @@ func (ls *lanes) start(l *lane) {
 	}
 
 	l.sending = true
-	ls.inflight++
 
 	if ls.send(l) {
 		return
 	}
 
 	l.sending = false
-	ls.inflight--
 
 	if ls.inflight > 0 {
 		l.parked = true
@@ -179,25 +201,56 @@ func (ls *lanes) start(l *lane) {
 	ls.tidy(l)
 }
 
-// send hands l's head to its transport, which answers through l.done, on a
-// goroutine of its own, and never blocks; it reports whether the transport
-// took it. It is the one place a lane meets a transport: an SQS SendMessage
-// queued on the in-process client, which counts in inflight.
+// send hands l's head to its transport, which answers on a goroutine of its
+// own, and never blocks; it reports whether the transport took it. It is the
+// one place a lane meets a transport: an HTTP delivery goes to the poster
+// (post), which always takes it and answers through posted; an SQS
+// SendMessage is queued on the in-process client, counts in inflight and
+// answers through l.done.
 func (ls *lanes) send(l *lane) bool {
-	return ls.client.Enqueue(l.jobs[0].call, l.done)
+	if l.jobs[0].post != nil {
+		ls.post(l)
+
+		return true
+	}
+
+	ls.inflight++
+
+	if ls.client.Enqueue(l.jobs[0].call, l.done) {
+		return true
+	}
+
+	ls.inflight--
+
+	return false
 }
 
-// answered is the transport's answer to l's head, on the client's worker. It
-// takes the head out of the lane, fails it when it was not delivered, and
-// sends the next. The lane goes on, and the head is counted out, even when
-// failing the head panics: the panic is not recovered here, so the worker's
-// recover logs it once, but the lane's other deliveries are not left behind,
-// and the hub's drain is not held to its deadline by their hold.
+// answered is the in-process client's answer to l's head, on the client's
+// worker.
 func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	ls.inflight--
+
+	var failure func() string
+
+	if err != nil {
+		failure = err.Error
+	} else if !resp.OK() {
+		failure = func() string { return "SQS answered " + strconv.Itoa(resp.Status) }
+	}
+
+	ls.finish(l, failure)
+}
+
+// finish takes l's answered head out of the lane, fails it when failure is
+// not nil (it says why the head was not delivered), and sends the next;
+// under mu. The lane goes on, and the head is counted out, even when failing
+// the head panics: the panic is not recovered here, so the transport's
+// recover logs it once, but the lane's other deliveries are not left behind,
+// and the hub's drain is not held to its deadline by their hold.
+func (ls *lanes) finish(l *lane, failure func() string) {
 	l.sending = false
 
 	if len(l.jobs) == 0 {
@@ -205,22 +258,20 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 		return
 	}
 
-	ls.queued++ // see settle
-	j := ls.removeHead(l)
+	j := l.jobs[0]
 
-	defer ls.settle()
+	ls.retain(j) // see settle
+	ls.removeHead(l)
+
+	defer ls.settle(j)
 	defer ls.proceed(l) // before settle, as it was when it ended answered
 
 	switch {
-	case err == nil && resp.OK():
+	case failure == nil:
 	case ls.closed:
 		ls.drop(j, reasonCut)
 	default:
-		reason := "SQS answered " + strconv.Itoa(resp.Status)
-		if err != nil {
-			reason = err.Error()
-		}
-
+		reason := failure()
 		if j.dead {
 			reason = reasonDLQRefused + ": " + reason
 		}
@@ -292,22 +343,38 @@ func (ls *lanes) removeHead(l *lane) *job {
 	l.jobs = l.jobs[1:]
 	j.lane = nil
 
-	ls.settle()
+	ls.settle(j)
 
 	return j
 }
 
-// settle counts one delivery out of the lanes. The last one out signals idle
-// and lets go of the hub. A delivery that fails is counted once more until
-// its dead-letter delivery is in a lane, so Close, AwaitDeliveries and the
-// hub's drain never see the lanes empty between the two.
-func (ls *lanes) settle() {
+// retain counts j once more, as add counted it.
+func (ls *lanes) retain(j *job) {
+	ls.queued++
+
+	if j.post == nil {
+		ls.held++
+	}
+}
+
+// settle counts j out of the lanes. The last delivery out signals idle, and
+// the last one that is not HTTP lets go of the hub. A delivery that fails is
+// counted once more until its dead-letter delivery is in a lane, so Close,
+// AwaitDeliveries and the hub's drain never see the lanes empty between the
+// two.
+func (ls *lanes) settle(j *job) {
 	ls.queued--
 	if ls.queued == 0 {
 		close(ls.idle)
 		ls.idle = nil
-		ls.unhold()
-		ls.unhold = nil
+	}
+
+	if j.post == nil {
+		ls.held--
+		if ls.held == 0 {
+			ls.unhold()
+			ls.unhold = nil
+		}
 	}
 }
 
@@ -340,16 +407,18 @@ func (ls *lanes) awaitIdle(ctx context.Context) {
 	}
 }
 
-// Close stops delivery at once, without waiting: the shutdown's drain of the
-// in-process calls has already made the deliveries it had time for, and
-// stopped or cut the client, so nothing sent now could reach a queue. From
-// here every delivery is refused. Each delivery still in a lane is accounted
-// for once, counted in Dropped and logged: a head the client dropped without
-// an answer, or never got, is cut here. Close logs SNS's own count once, the
+// Close stops delivery: the shutdown's drain of the in-process calls has
+// already made the deliveries it had time for, and stopped or cut the client,
+// so nothing sent now could reach a queue. From here every delivery is
+// refused. Close cuts the HTTP deliveries in flight at once, so a hung endpoint
+// costs a stop no time; ctx bounds only the wait for the cut sends to return.
+// Each delivery still in a lane is accounted for once, counted in Dropped and
+// logged: a head the client dropped without an answer, or never got, is cut
+// here. Close logs SNS's own count once, the
 // deliveries dropped since the process started: the in-process hub's count
 // of calls cut is a different number, since a lane has one call in the client
 // however many deliveries wait behind it.
-func (p *Provider) Close(context.Context) {
+func (p *Provider) Close(ctx context.Context) {
 	ls := &p.lanes
 
 	ls.mu.Lock()
@@ -361,6 +430,11 @@ func (p *Provider) Close(context.Context) {
 	// ones still queued without an answer.
 	p.client.Close()
 
+	// The HTTP deliveries in flight are cut at once, as the queued ones are
+	// below; none starts now.
+	ls.cutPosts(ctx)
+	ls.poster.client.CloseIdleConnections()
+
 	ls.mu.Lock()
 
 	for _, l := range ls.byKey {
@@ -371,6 +445,7 @@ func (p *Provider) Close(context.Context) {
 
 	ls.byKey = nil
 	ls.parked = nil
+	ls.postWaiting = nil
 	ls.inflight = 0
 	ls.mu.Unlock()
 

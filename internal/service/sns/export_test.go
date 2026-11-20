@@ -1,11 +1,29 @@
 package sns
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AwaitDeliveries waits until no delivery is in a lane or ctx ends, for the
 // benchmarks, which time a publish with its deliveries.
 func (p *Provider) AwaitDeliveries(ctx context.Context) {
 	p.lanes.awaitIdle(ctx)
+}
+
+// MaxPosts is the most HTTP deliveries in flight at once.
+const MaxPosts = maxPosts
+
+// SetPostTimeout sets the time one HTTP delivery may take, 10 s by default,
+// so a test of a hung endpoint does not wait for it.
+func (p *Provider) SetPostTimeout(d time.Duration) {
+	p.lanes.poster.timeout = d
+}
+
+// SetIdleConnTimeout sets how long a connection to an endpoint is kept after
+// its last delivery. It is called before the first delivery.
+func (p *Provider) SetIdleConnTimeout(d time.Duration) {
+	p.lanes.poster.transport.IdleConnTimeout = d
 }
 
 // CutCalls stops the in-process client as a shutdown's drain does at its

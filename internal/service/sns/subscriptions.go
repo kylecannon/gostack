@@ -63,13 +63,13 @@ func (p *Provider) Unsubscribe(ctx context.Context, in *api.UnsubscribeInput) (*
 		return &api.UnsubscribeOutput{}, nil
 	}
 
-	if sub.Protocol == protocolHTTP || sub.Protocol == protocolHTTPS {
+	if isHTTP(sub.Protocol) {
 		rc, err := callOf(ctx)
 		if err != nil {
 			return nil, err
 		}
 
-		p.subscriptionMessage(envelope.UnsubscribeConfirmation, sub, newToken(rc.Region))
+		p.subscriptionMessage(envelope.UnsubscribeConfirmation, sub, newToken(rc.Region), "")
 	}
 
 	return &api.UnsubscribeOutput{}, nil

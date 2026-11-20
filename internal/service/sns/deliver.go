@@ -42,15 +42,39 @@ func (p *Provider) Bind(h http.Handler) {
 type subscriber struct {
 	sub      *Subscription
 	arn      string
+	protocol string
 	endpoint string
 	raw      bool
 	scope    string
 	policy   *filter.Policy
 	dlq      string
+	// deliveryPolicy is the subscription's DeliveryPolicy, and contentType
+	// the Content-Type an HTTP Notification goes with, "" for the default.
+	deliveryPolicy string
+	contentType    string
 }
 
-// subscribers are t's confirmed SQS subscriptions as they stand now. Delivery
-// to the other protocols belongs to later tickets.
+// subscriberOf reads sub, under its lock.
+func subscriberOf(sub *Subscription) subscriber {
+	return subscriber{
+		sub: sub, arn: sub.ARN, protocol: sub.Protocol, endpoint: sub.Endpoint,
+		raw: sub.RawMessageDelivery == valueTrue, scope: sub.FilterPolicyScope, policy: sub.policy,
+		dlq: deadLetterTarget(sub.RedrivePolicy), deliveryPolicy: deref(sub.DeliveryPolicy),
+	}
+}
+
+// delivers reports whether SNS delivers to the protocol: SQS, HTTP and HTTPS.
+// Delivery to the others belongs to later tickets.
+func delivers(protocol string) bool {
+	return protocol == protocolSQS || isHTTP(protocol)
+}
+
+func isHTTP(protocol string) bool {
+	return protocol == protocolHTTP || protocol == protocolHTTPS
+}
+
+// subscribers are t's confirmed SQS, HTTP and HTTPS subscriptions as they
+// stand now.
 func (t *Topic) subscribers() []subscriber {
 	t.mu.Lock()
 	subs := slices.Clone(t.subs)
@@ -59,15 +83,12 @@ func (t *Topic) subscribers() []subscriber {
 	out := make([]subscriber, 0, len(subs))
 
 	for _, sub := range subs {
-		if sub.Protocol != protocolSQS {
+		if !delivers(sub.Protocol) {
 			continue
 		}
 
 		sub.mu.Lock()
-		s := subscriber{
-			sub: sub, arn: sub.ARN, endpoint: sub.Endpoint, raw: sub.RawMessageDelivery == valueTrue,
-			scope: sub.FilterPolicyScope, policy: sub.policy, dlq: deadLetterTarget(sub.RedrivePolicy),
-		}
+		s := subscriberOf(sub)
 		confirmed := sub.PendingConfirmation == valueFalse
 		sub.mu.Unlock()
 
@@ -105,31 +126,54 @@ func (s *subscriber) matches(m *outgoing) bool {
 	}
 
 	if s.scope == string(filter.ScopeMessageBody) {
-		return s.policy.MatchBody(m.sqsBody())
+		return s.policy.MatchBody(m.bodyFor(s.protocol))
 	}
 
 	return s.policy.MatchAttributes(m.filterAttributes())
 }
 
 // outgoing is a message on its way to the subscribers of one publish, with
-// what is worked out once for all of them.
+// what is worked out once for all of them: once for each content, as a
+// MessageStructure=json message can give each protocol its own.
 type outgoing struct {
 	*message
 
-	signed     *envelope.Signed
-	signErr    error
-	signedOnce bool
-	body       *filter.Body
-	bodyParsed bool
-	attrs      map[string]filter.Attribute
+	signed map[string]signedResult
+	parsed map[string]*filter.Body
+	attrs  map[string]filter.Attribute
 }
 
-func (m *outgoing) sqsBody() *filter.Body {
-	if !m.bodyParsed {
-		m.body, m.bodyParsed = filter.ParseBody(m.content(protocolSQS)), true
+type signedResult struct {
+	signed *envelope.Signed
+	err    error
+}
+
+// contentKey names the content protocol gets: its own member of a
+// MessageStructure=json message, or "" for the default one.
+func (m *message) contentKey(protocol string) string {
+	if _, ok := m.bodies[protocol]; ok {
+		return protocol
 	}
 
-	return m.body
+	return ""
+}
+
+// bodyFor is the content protocol gets, parsed for a MessageBody filter.
+func (m *outgoing) bodyFor(protocol string) *filter.Body {
+	key := m.contentKey(protocol)
+
+	body, ok := m.parsed[key]
+	if !ok {
+		body = filter.ParseBody(m.content(protocol))
+
+		if m.parsed == nil {
+			m.parsed = make(map[string]*filter.Body, 1)
+		}
+
+		m.parsed[key] = body
+	}
+
+	return body
 }
 
 func (m *outgoing) filterAttributes() map[string]filter.Attribute {
@@ -143,20 +187,28 @@ func (m *outgoing) filterAttributes() map[string]filter.Attribute {
 	return m.attrs
 }
 
-// envelopeFor is the signed envelope of the message, signed on first use,
-// once for every subscriber.
-func (p *Provider) envelopeFor(m *outgoing, version string) (*envelope.Signed, error) {
-	if !m.signedOnce {
-		m.signedOnce = true
-		m.signed, m.signErr = p.signer.Sign(m.envelopeMessage(version), p.baseURL())
+// envelopeFor is the signed envelope of the message as protocol gets it,
+// signed on first use, once for every subscriber that gets the same content.
+func (p *Provider) envelopeFor(m *outgoing, version, protocol string) (*envelope.Signed, error) {
+	key := m.contentKey(protocol)
+
+	r, ok := m.signed[key]
+	if !ok {
+		r.signed, r.err = p.signer.Sign(m.envelopeMessage(version, protocol), p.baseURL())
+
+		if m.signed == nil {
+			m.signed = make(map[string]signedResult, 1)
+		}
+
+		m.signed[key] = r
 	}
 
-	return m.signed, m.signErr
+	return r.signed, r.err
 }
 
-func (m *message) envelopeMessage(version string) *envelope.Message {
+func (m *message) envelopeMessage(version, protocol string) *envelope.Message {
 	em := &envelope.Message{
-		MessageID: m.id, TopicARN: m.topicARN, Subject: m.subject, Message: m.content(protocolSQS),
+		MessageID: m.id, TopicARN: m.topicARN, Subject: m.subject, Message: m.content(protocol),
 		Timestamp: m.time, SequenceNumber: m.sequence, SignatureVersion: version,
 	}
 
@@ -172,17 +224,19 @@ func (m *message) envelopeMessage(version string) *envelope.Message {
 	return em
 }
 
-// delivery is one message on its way to one queue.
+// delivery is one message on its way to one queue or endpoint.
 type delivery struct {
 	sub  *Subscription
 	call inproc.Call
 	// dlq is the call that puts the message on the subscription's dead-letter
 	// queue, nil without one.
 	dlq *inproc.Call
+	// post is the delivery to an HTTP or HTTPS endpoint, nil for a queue.
+	post *post
 }
 
 // fanOut queues the deliveries of msgs, published together to t, to every
-// confirmed SQS subscription whose filter policy matches, and returns them
+// confirmed subscription whose filter policy matches, and returns them
 // for lanes.dispatch, which the caller runs once it holds no lock. The bodies
 // are built with no lock held; the deliveries are queued under t's lock, after
 // a check that each subscription is still the topic's, so a subscription
@@ -204,10 +258,22 @@ func (p *Provider) fanOut(rc *request.Context, t *Topic, msgs []*message) []*job
 		out[i].message = m
 	}
 
-	var deliveries []delivery
+	var (
+		deliveries  []delivery
+		topicPolicy string
+		policyRead  bool
+	)
 
 	for i := range subs {
 		s := &subs[i]
+
+		if isHTTP(s.protocol) {
+			if !policyRead {
+				topicPolicy, policyRead = t.attribute(attrTopicDeliveryPolicy), true
+			}
+
+			s.contentType = contentType(s.deliveryPolicy, topicPolicy, s.protocol)
+		}
 
 		for j := range out {
 			m := &out[j]
@@ -225,8 +291,13 @@ func (p *Provider) fanOut(rc *request.Context, t *Topic, msgs []*message) []*job
 	return p.queue(t, deliveries)
 }
 
-// deliveryOf is the SendMessage call that puts m on s's queue.
+// deliveryOf is the delivery of m to s: the SendMessage call that puts m on
+// s's queue, or the POST to s's endpoint.
 func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string) (delivery, bool) {
+	if isHTTP(s.protocol) {
+		return p.httpDeliveryOf(s, m, version)
+	}
+
 	queue, ok := parseARN(s.endpoint)
 	if !ok {
 		slog.Error("SNS delivery skipped: unparseable queue ARN", "subscription", s.arn, "endpoint", s.endpoint)
@@ -236,7 +307,7 @@ func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string)
 
 	body := m.content(protocolSQS)
 	if !s.raw {
-		signed, err := p.envelopeFor(m, version)
+		signed, err := p.envelopeFor(m, version, protocolSQS)
 		if err != nil {
 			slog.Error("SNS delivery skipped: cannot sign the message", "subscription", s.arn, "error", err)
 
@@ -291,7 +362,7 @@ func (p *Provider) queue(t *Topic, deliveries []delivery) []*job {
 			continue
 		}
 
-		j := &job{call: d.call, dlq: d.dlq}
+		j := &job{call: d.call, dlq: d.dlq, post: d.post}
 		if ls.add(j) {
 			jobs = append(jobs, j)
 		}
