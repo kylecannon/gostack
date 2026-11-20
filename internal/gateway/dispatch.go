@@ -104,9 +104,11 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 // it. One that answers a call with success and leaves rc.Operation empty while
 // it sets Mutating has a bug: its Mutating is never asked and the change is
 // never saved. That is logged once per service, persistence on or off.
-func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, rc *request.Context) {
+//
+// It reports whether it marked the service.
+func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, rc *request.Context) bool {
 	if sw, ok := w.(*statusWriter); ok && !sw.succeeded() {
-		return
+		return false
 	}
 
 	mutating := g.regs[index].Mutating
@@ -119,20 +121,31 @@ func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, r
 					"and persistence does not save the change", "service", rc.Service)
 		}
 
-		return
+		return false
 	}
 
-	if g.eng == nil {
-		return
+	return g.markChanged(index, rc)
+}
+
+// markChanged tells persistence the service changed, when rc names an operation
+// that changes state, whatever the call answered. It reports whether it did.
+func (g *Gateway) markChanged(index int, rc *request.Context) bool {
+	if g.eng == nil || rc.Operation == "" {
+		return false
 	}
 
+	mutating := g.regs[index].Mutating
 	if mutating == nil {
 		mutating = defaultMutating
 	}
 
-	if mutating(rc.Operation) {
-		g.eng.MarkDirty(rc.Service)
+	if !mutating(rc.Operation) {
+		return false
 	}
+
+	g.eng.MarkDirty(rc.Service)
+
+	return true
 }
 
 // defaultMutating is the persistence rule for a service that sets none: every
