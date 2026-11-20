@@ -525,7 +525,7 @@ func (m measured) within(l limit) string {
 	case l.unit != m.unit:
 		return fmt.Sprintf("the accepted %s is not in %s, the metric's unit", l, m.unit)
 	case worse > maxPercent:
-		return fmt.Sprintf("the accepted %s allows a change of %s, past the %d%% cap on a percent bound", l,
+		return fmt.Sprintf("the accepted %s allows a change of %s, past the %d%% cap on every bound", l,
 			describePercent(worse), maxPercent)
 	case m.headWithin(l.absolute):
 		return ""
