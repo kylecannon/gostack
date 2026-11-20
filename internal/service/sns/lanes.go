@@ -253,7 +253,7 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 
 		ls.mu.Unlock()
 
-		built = deadLetterOf(j)
+		built = ls.deadLetterOf(j)
 
 		ls.mu.Lock()
 	}
@@ -264,11 +264,22 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 // deadLetterOf builds the dead-letter call of j, a delivery that has failed,
 // with no lock held, for fail to add to its lane: the call is the costly step
 // of a failure, an escaped copy of the message for an HTTP delivery and a
-// splice of it for a queue's, and the lanes lock is every publish's. It is nil
-// when j has none or is a dead letter itself; and when the build panics, which
+// splice of it for a queue's, and the lanes lock is every publish's. At most
+// poster.building are built at once: a burst of failures would build as many as
+// there are deliveries in flight, and builders on every processor leave the
+// goroutines that wait for the lock, the publishes among them, waiting for a
+// processor instead. It is nil when j has none, is a dead letter itself, or the
+// poster was cut, as Close drops what it cuts; and when the build panics, which
 // is logged and drops the delivery, so the lane goes on.
-func deadLetterOf(j *job) (call *inproc.Call) {
+func (ls *lanes) deadLetterOf(j *job) (call *inproc.Call) {
 	if j.dlq == nil || j.dead {
+		return nil
+	}
+
+	select {
+	case ls.poster.building <- struct{}{}:
+		defer func() { <-ls.poster.building }()
+	case <-ls.poster.ctx.Done():
 		return nil
 	}
 

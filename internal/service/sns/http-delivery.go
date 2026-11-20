@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -29,6 +30,9 @@ const (
 	// endpoint holds one of them. LocalStack's executor runs ten threads
 	// for every protocol together (publisher.py PublishDispatcher, num_thread).
 	maxPosts = 64
+	// buildShare is the part of the processors, 1 in buildShare, that build
+	// dead-letter calls at once (poster.building); BenchmarkBurst measures it.
+	buildShare = 4
 	// maxAnswer is the most of an endpoint's answer read. The rest is not
 	// read, and the connection is not reused.
 	maxAnswer = 64 << 10
@@ -119,6 +123,9 @@ type poster struct {
 	// running counts the goroutines of deliveries in flight, which Close
 	// waits for.
 	running sync.WaitGroup
+	// building holds a place for each dead-letter call being built (see
+	// lanes.deadLetterOf): 1 in buildShare of the processors, at least one.
+	building chan struct{}
 }
 
 func newPoster() *poster {
@@ -136,6 +143,7 @@ func newPoster() *poster {
 	}
 
 	return &poster{
+		building:  make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/buildShare)),
 		client:    &http.Client{Transport: transport},
 		transport: transport,
 		timeout:   postTimeout,
@@ -216,7 +224,7 @@ func (ls *lanes) runPost(l *lane, j *job) {
 	// A poster that was cut is Close's, which drops what it cuts.
 	var dead *inproc.Call
 	if err != nil && ls.poster.ctx.Err() == nil {
-		dead = deadLetterOf(j)
+		dead = ls.deadLetterOf(j)
 	}
 
 	ls.posted(l, err, dead)
