@@ -181,10 +181,18 @@ func fanOutErr(workers int, fn func(worker int) error) error {
 }
 
 func BenchmarkUpdateItem(b *testing.B) {
+	benchUpdate(b, newStack)
+	b.Run(persistOn, func(b *testing.B) { benchUpdate(b, persistedStack) })
+}
+
+// benchUpdate runs the UpdateItem matrix on the stacks mk builds.
+func benchUpdate(b *testing.B, mk func(testing.TB) *stack) {
+	b.Helper()
+
 	for _, actions := range updateActions {
 		for _, workers := range readConcurrency {
 			b.Run(fmt.Sprintf("actions=%d/concurrency=%d", actions, workers), func(b *testing.B) {
-				s := newStack(b)
+				s := mk(b)
 				s.ok(b, opCreate, hashTable(benchTable))
 
 				sets := make([]string, actions)

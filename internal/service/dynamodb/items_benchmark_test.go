@@ -36,11 +36,19 @@ type itemPayload struct {
 // each on a fresh stack holding the table bench, keyed by id.
 func itemMatrix(b *testing.B, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
 	b.Helper()
+	itemMatrixOn(b, newStack, run)
+}
+
+// itemMatrixOn is itemMatrix on the stacks mk builds.
+func itemMatrixOn(
+	b *testing.B, mk func(testing.TB) *stack, run func(b *testing.B, s *stack, p itemPayload, workers int),
+) {
+	b.Helper()
 
 	for _, payload := range itemPayloads {
 		for _, workers := range itemConcurrency {
 			b.Run(fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers), func(b *testing.B) {
-				s := newStack(b)
+				s := mk(b)
 				s.ok(b, opCreate, hashTable(benchTable))
 				run(b, s, payload, workers)
 			})
@@ -89,19 +97,24 @@ func (s *stack) fanOut(b *testing.B, operation string, workers int, body func(wo
 }
 
 func BenchmarkPutItem(b *testing.B) {
-	itemMatrix(b, func(b *testing.B, s *stack, p itemPayload, workers int) {
-		bodies := make([]string, workers)
-		for worker := range workers {
-			bodies[worker] = putBody(worker, p.size)
-		}
+	itemMatrix(b, benchPut)
+	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, benchPut) })
+}
 
-		b.SetBytes(int64(p.size * workers))
-		b.ReportAllocs()
+func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
+	b.Helper()
 
-		for b.Loop() {
-			require.NoError(b, s.fanOut(b, opPut, workers, func(worker int) string { return bodies[worker] }))
-		}
-	})
+	bodies := make([]string, workers)
+	for worker := range workers {
+		bodies[worker] = putBody(worker, p.size)
+	}
+
+	b.SetBytes(int64(p.size * workers))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, s.fanOut(b, opPut, workers, func(worker int) string { return bodies[worker] }))
+	}
 }
 
 func BenchmarkGetItem(b *testing.B) {

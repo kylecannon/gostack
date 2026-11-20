@@ -22,6 +22,9 @@ const (
 	streamsName = "dynamodbstreams"
 )
 
+// listenAll is the gateway's listen address in the stacks these tests build.
+const listenAll = "0.0.0.0:4566"
+
 // changes records the service names a provider reports changed.
 type changes struct {
 	mu    sync.Mutex
@@ -51,7 +54,7 @@ func changedStack(t *testing.T, changed func(string)) *stack {
 	s.provider = dynamodb.New(func() dynamodb.Settings { return *s.settings.Load() }, changed)
 
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
+		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAll}} },
 		[]service.Registration{s.provider.Registration()}, nil, nil,
 	)
 	require.NoError(t, err)
