@@ -154,3 +154,18 @@ func Test_BatchGetSecretValue_of_a_secret_with_no_value(t *testing.T) {
 	// The single read is unchanged.
 	requireError(t, h, "GetSecretValue", `{"SecretId":"empty"}`, "ResourceNotFoundException")
 }
+
+// BatchGetSecretValue over a secret none of whose versions holds AWSCURRENT
+// fails the call as the no-version case does, where it used to read the
+// version the secret last made current.
+func Test_BatchGetSecretValue_when_no_version_holds_AWSCURRENT(t *testing.T) {
+	h := newHandler(t)
+
+	mustCall(t, h, "CreateSecret", `{"Name":"nocur","SecretString":"one","ClientRequestToken":"`+token1+`"}`)
+	mustCall(t, h, "UpdateSecretVersionStage",
+		`{"SecretId":"nocur","VersionStage":"AWSCURRENT","RemoveFromVersionId":"`+token1+`"}`)
+
+	status, out := call(t, h, "BatchGetSecretValue", `{"SecretIdList":["nocur"]}`)
+	require.Equal(t, http.StatusNotFound, status, "%v", out)
+	assert.Equal(t, "Secrets Manager can't find the specified secret value for VersionId: AWSCURRENT", out["Message"])
+}

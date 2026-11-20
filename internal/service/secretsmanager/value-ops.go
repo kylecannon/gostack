@@ -436,10 +436,10 @@ func (b *batch) read(secret *Secret, id string, filters []api.Filter) *awserr.Er
 		return api.NewInvalidRequestException(msgBatchDeleted)
 	case secret.deleted():
 		b.errors = append(b.errors, batchError(id, api.NewInvalidRequestException(msgBatchDeleted)))
-	case secret.version(secret.current) == nil:
+	case secret.versionWithStage(stageCurrent) == nil:
 		return errBatchNoValue()
 	default:
-		v, err := secret.value(nil, "")
+		v, err := secret.value(nil, stageCurrent)
 		if err != nil {
 			return err
 		}
