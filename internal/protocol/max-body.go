@@ -49,11 +49,17 @@ func LimitBody(r io.Reader) io.Reader {
 }
 
 // ReadRequest reads the body of r with ReadBody, after it arms the body's meter
-// (ArmBody), which is how every reader that buffers a request body reads it. A
-// body that states FreeBody bytes or fewer has no meter to arm.
+// (ArmBody), which is how every reader that buffers a json request body reads
+// it. A body that states FreeBody bytes or fewer has no meter to arm.
 func ReadRequest(r *http.Request) ([]byte, error) {
+	return ReadRequestPlanned(r, TextDecode)
+}
+
+// ReadRequestPlanned is ReadRequest for a body whose decoding holds plan bytes
+// for each of its bytes (FormDecode for a query form).
+func ReadRequestPlanned(r *http.Request, plan int64) ([]byte, error) {
 	if r.ContentLength < 0 || r.ContentLength > FreeBody {
-		ArmBody(r.Context())
+		armBodyFor(r.Context(), plan)
 	}
 
 	return ReadBody(r.Body, r.ContentLength)

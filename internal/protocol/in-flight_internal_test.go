@@ -97,7 +97,7 @@ func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 	_, err := ReadBody(first, -1)
 	require.NoError(t, err)
 
-	filler, _ := meteredBody(t, int(DefaultMaxBody), DefaultMaxBody)
+	filler, _ := meteredBody(t, int(DefaultMaxBody), -1)
 	_, err = ReadBody(filler, -1)
 	require.NoError(t, err)
 
@@ -127,16 +127,22 @@ func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 }
 
 // Test_BodyMeter_StatedLengthAtOnce: a body that states its length is charged
-// all of it the first time it reads past FreeBody, and holds nothing before:
-// one that waits for room holds nothing while it waits, so bodies admitted
-// never wait on each other to grow.
+// all of it the first time it reads past FreeBody, with the room its decoding
+// is planned to hold, and holds nothing before: one that waits for room holds
+// nothing while it waits, and decoding an ordinary body takes nothing more, so
+// bodies admitted never wait on each other to grow or to decode.
 func Test_BodyMeter_StatedLengthAtOnce(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, 1, 100*time.Millisecond)
 
-	const size = 4 << 20
+	const (
+		size = 4 << 20
+		// room is TextDecode times the body, and FreeBody for its structure,
+		// past FreeDecode, in whole steps.
+		room = 8 << 20
+	)
 
-	m, _ := meteredBody(t, size, size)
+	m, ctx := meteredBody(t, size, size)
 	buf := make([]byte, FreeBody)
 
 	_, err := io.ReadFull(m, buf)
@@ -149,13 +155,22 @@ func Test_BodyMeter_StatedLengthAtOnce(t *testing.T) {
 	require.NoError(t, err)
 
 	_, held = InFlight()
-	assert.Equal(t, int64(size), held, "the stated length is charged at once")
+	assert.Equal(t, int64(size+room), held, "the stated length and the decode room are charged at once")
 
 	_, err = io.Copy(io.Discard, m)
 	require.NoError(t, err)
 
+	covered, err := ChargeOf(ctx).HoldDecode(TextDecode * size)
+	require.NoError(t, err)
+	assert.Equal(t, int64(FreeDecode+room), covered, "decoding what was planned is covered")
+
 	_, held = InFlight()
-	assert.Equal(t, int64(size), held, "and never grows")
+	assert.Equal(t, int64(size+room), held, "and never grows")
+
+	ChargeOf(ctx).ReleaseDecode()
+
+	_, held = InFlight()
+	assert.Equal(t, int64(size), held, "the decode room is given back with the decoding")
 
 	// The rest of the bound is taken, so the next body waits holding nothing
 	// and gives up holding nothing.
@@ -174,6 +189,76 @@ func Test_BodyMeter_StatedLengthAtOnce(t *testing.T) {
 	assert.Equal(t, held, after, "a body refused all at once held nothing")
 
 	m.Release()
+}
+
+// Test_BodyMeter_DecodeRoomByReader: the room a body is admitted with follows
+// the reader that arms it, and a lone body at the cap fits the least bound with
+// its room; a body that stops arriving gives its room back with its bytes.
+func Test_BodyMeter_DecodeRoomByReader(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, 1, 100*time.Millisecond)
+
+	bound, _ := InFlight()
+
+	whole, ctx := meteredBody(t, int(DefaultMaxBody), DefaultMaxBody)
+	_, err := ReadBody(whole, DefaultMaxBody)
+	require.NoError(t, err, "a lone body at the cap fits with its decode room")
+
+	_, held := InFlight()
+	assert.Equal(t, DefaultMaxBody+bound-(DefaultMaxBody+1), held,
+		"its room stops at the bound less one body's share")
+
+	ReleaseBody(ctx)
+
+	const size = 4 << 20
+
+	form, formCtx := streamBody(t, size, size)
+	armBodyFor(formCtx, FormDecode)
+	_, err = ReadBody(form, size)
+	require.NoError(t, err)
+
+	_, held = InFlight()
+	assert.Equal(t, int64(size), held, "a form plans no decode room")
+
+	ReleaseBody(formCtx)
+
+	SetBodyIdle(time.Minute)
+	t.Cleanup(func() { SetBodyIdle(DefaultBodyIdle) })
+
+	stalled, stalledCtx := streamBody(t, 0, size)
+	stalled.body = io.NopCloser(io.MultiReader(bytes.NewReader(make([]byte, 2*FreeBody)),
+		iotest.ErrReader(os.ErrDeadlineExceeded)))
+	stalled.IdleBy(func(time.Time) error { return nil })
+	ArmBody(stalledCtx)
+
+	_, err = ReadBody(stalled, size)
+	require.ErrorIs(t, err, ErrBodyIdle)
+
+	_, held = InFlight()
+	assert.Zero(t, held, "a body that stopped arriving gives back its bytes and its decode room")
+}
+
+// Test_BodyMeter_UnknownLengthKeepsWhatItRead: a body of unknown length a few
+// bytes past a doubling step is charged twice what it read while it is read,
+// as ReadBody's buffers are, and only what it read once it ends.
+func Test_BodyMeter_UnknownLengthKeepsWhatItRead(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, 1, 100*time.Millisecond)
+
+	const size = 1<<20 + 72
+
+	m, ctx := meteredBody(t, size, -1)
+	body, err := ReadBody(m, -1)
+	require.NoError(t, err)
+	require.Len(t, body, size)
+
+	_, held := InFlight()
+	assert.Equal(t, int64(size), held, "the body holds what it read, not the 2 MiB step it reached")
+
+	ReleaseBody(ctx)
+
+	_, held = InFlight()
+	assert.Zero(t, held)
 }
 
 // Test_BodyMeter_IdleDeadlineStaysPast: a body whose client stopped sending

@@ -93,12 +93,35 @@ func (h *DecodeHold) Exempt() {
 }
 
 // Release gives back what the hold charged. Decoding is over by then: a later
-// Cover charges nothing.
+// Cover charges nothing. A nil hold holds nothing.
 func (h *DecodeHold) Release() {
+	if h == nil {
+		return
+	}
+
 	h.free = true
 
 	if h.held > 0 {
 		h.pool.release(h.held)
 		h.held = 0
+	}
+}
+
+// planned is what Cover would hold from pool for a decoding that costs cost, for
+// a hold that holds nothing yet: what passes FreeDecode, in whole steps, up to
+// its room. It is zero for a hold that charges nothing or already holds some.
+func (h *DecodeHold) planned(pool *bodyPool, cost int64) int64 {
+	if h.free || h.pool != nil || cost <= FreeDecode {
+		return 0
+	}
+
+	return min((cost-FreeDecode+decodeChunk-1)/decodeChunk*decodeChunk, pool.capacity-pool.bodyShare())
+}
+
+// prepaid makes the hold keep n bytes of pool that its body's meter took for it
+// when the body was admitted (BodyMeter.admit), as if Cover had taken them.
+func (h *DecodeHold) prepaid(pool *bodyPool, n int64) {
+	if n > 0 {
+		h.pool, h.room, h.held = pool, pool.capacity-pool.bodyShare(), n
 	}
 }

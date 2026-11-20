@@ -227,7 +227,7 @@ func readBody(r *http.Request) ([]byte, error) {
 
 	original := r.Body
 
-	body, err := protocol.ReadRequest(r)
+	body, err := protocol.ReadRequestPlanned(r, protocol.FormDecode)
 	r.Body = &formBody{Reader: bytes.NewReader(body), rest: original, body: body, err: err}
 
 	return body, err //nolint:wrapcheck // the caller wraps it in ErrForm

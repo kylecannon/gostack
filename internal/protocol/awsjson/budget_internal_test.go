@@ -231,3 +231,21 @@ func Test_DecodeCost_TextIsNotWalked(t *testing.T) {
 	_, err = decodeCost(dense, p, protocol.DecodeSlack/8, math.MaxInt64)
 	assert.Equal(t, ErrTooLarge, err, "refused past the budget")
 }
+
+// Test_DecodeCost_TextFitsTheAdmittedRoom: what decoding an ordinary body
+// charges stays within the room its body was admitted with
+// (protocol.TextDecode times the body, and protocol.FreeBody), so a body that
+// states its length never asks the bound for more after it is admitted.
+func Test_DecodeCost_TextFitsTheAdmittedRoom(t *testing.T) {
+	require.Equal(t, int64(decodePasses), int64(protocol.TextDecode), "the plan is both passes of the text")
+
+	p := planOf(reflect.TypeFor[boundShapes]())
+
+	for _, size := range []int{protocol.FreeBody + 1, 1 << 20, 1<<20 - 100, 4 << 20, 16<<20 - 100} {
+		body := []byte(`{"Entries":[{"Id":"a","Body":"` + strings.Repeat("m", size-40) + `"}]}`)
+
+		cost, err := decodeCost(body, p, protocol.DecodeBudget(len(body)), protocol.FreeDecode)
+		require.Nil(t, err)
+		assert.LessOrEqual(t, cost, protocol.TextDecode*int64(len(body))+protocol.FreeBody, "%d bytes", len(body))
+	}
+}

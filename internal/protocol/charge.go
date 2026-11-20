@@ -39,9 +39,12 @@ func ChargeOf(ctx context.Context) *Charge {
 }
 
 // Meter makes m the request's body meter, so that ArmBody arms it and Release
-// gives back what it holds.
+// gives back what it holds. A body that states its length is admitted together
+// with the room its decoding is planned to hold (BodyMeter.Read), which m
+// charges to the request's decode hold.
 func (c *Charge) Meter(m *BodyMeter) {
 	c.meter = m
+	m.decode = &c.decode
 }
 
 // HoldDecode is DecodeHolder: it makes the request's charge cover cost bytes of
@@ -77,13 +80,37 @@ func (c *Charge) Release() {
 	c.ReleaseDecode()
 }
 
+// What decoding holds for each byte of an ordinary body, by the reader that
+// arms the body (ArmBody, ReadRequestPlanned): the room a body that states its
+// length is admitted with. A body whose decoding holds more, one dense with
+// elements, charges the rest as it decodes (DecodeHold.Cover).
+const (
+	// TextDecode is json's and xml's: json decodes a body twice, strict then
+	// lenient, and charges both passes of its text (awsjson's decodePasses);
+	// xml charges its character data twice (restxml's chargeToken).
+	TextDecode = 2
+	// FormDecode is query's: a form charges its pairs (query.PairCost), not its
+	// text, and every legal form's pairs cost less than FreeDecode.
+	FormDecode = 0
+)
+
 // ArmBody arms the body meter of the request whose context is ctx, for a reader
-// that buffers or decodes the whole body as it reads it (ReadRequest,
-// rest.CapBody). A body that is streamed (an S3 object) is never armed, so it
-// is never charged.
+// that buffers or decodes the whole body as it reads it as json or xml
+// (ReadRequest, rest.CapBody). A body that is streamed (an S3 object) is never
+// armed, so it is never charged.
 func ArmBody(ctx context.Context) {
+	armBodyFor(ctx, TextDecode)
+}
+
+// armBodyFor is ArmBody for a reader whose decoding holds plan bytes for each byte
+// of an ordinary body (TextDecode, FormDecode). A body already admitted keeps
+// the plan it was admitted with.
+func armBodyFor(ctx context.Context, plan int64) {
 	if c := ChargeOf(ctx); c != nil && c.meter != nil {
 		c.meter.armed = true
+		if c.meter.held == 0 {
+			c.meter.plan = plan
+		}
 	}
 }
 

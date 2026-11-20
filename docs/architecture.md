@@ -280,13 +280,17 @@ they are on `main`. Each is filed on its own.
 - The `x-localstack-data` header, parsed as json in `markInternal`.
 - `POST /_localstack/health`.
 - The part headers of an S3 browser POST upload.
+- SQS `SetQueueAttributes` `RedrivePolicy`, parsed into a generic tree
+  (`sqs/redrive.go`): 16 KB of gzip reaches 665 MiB.
+- SSM `PutParameter` `Policies`, kept and parsed again by every
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
 
 Settings, all read at start-up:
 
 | Variable | Default | Sized for |
 |---|---|---|
 | `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
-| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four bodies at the cap, or one at the cap with 48 MiB of decoding. 64 cap-sized bodies sent at once peak at 178 MiB RSS, which leaves a 512 MiB container room for the services' state. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four form bodies at the cap, or one json or xml body at the cap with the 32 MiB of decoding it is admitted with, and room for 48 MiB of decoding at most. A 512 MiB container keeps room for the runtime and the services' state. |
 | `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
 
 How each piece is bounded, and why this way:
@@ -346,17 +350,24 @@ How each piece is bounded, and why this way:
   The gateway meters a body from a listener that states more than
   `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
   no atomic. The meter charges only once a buffering reader arms it, so an S3
-  object stream is never charged. A body that states its length is charged
-  all of it, up to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), at
-  once, the first time it reads past `FreeBody`: all or nothing, in order
-  behind other new bodies, so a body that waits holds nothing while it waits
-  and no two stated bodies each hold part and wait for the rest. A body of
-  unknown length (chunked) is charged in doubling steps of what has arrived.
-  Decoding past `protocol.FreeDecode` (1 MiB) charges the same pool, capped
-  per request at the bound less one body's share, so a request alone always
-  fits: json and query charge their whole cost at once, known before they
-  build anything; rest-xml grows in 1 MiB steps as it decodes. A charge that
-  grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  object stream is never charged. Decoding past `protocol.FreeDecode` (1 MiB)
+  charges the same pool, capped per request at the bound less one body's
+  share, so a request alone always fits: json and query charge their whole
+  cost at once, known before they build anything; rest-xml grows in 1 MiB
+  steps as it decodes. A body that states its length is charged all of it, up
+  to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), together with the
+  room its decoding is planned to hold, the first time it reads past
+  `FreeBody`: all or nothing, in order behind other new bodies, so a body
+  that waits holds nothing while it waits, and an admitted body never waits
+  on the pool while it holds part of it, for its bytes or for decoding them.
+  The plan follows the reader that arms the meter: json and xml plan twice
+  the body (`protocol.TextDecode`: json decodes twice, xml charges its text
+  twice) plus `FreeBody` for structure; a query form plans nothing, since its
+  pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
+  dense with elements, charges the rest in steps as it decodes. A body of
+  unknown length (chunked or gzip) is charged in doubling steps of what has
+  arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
+  ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
   throttling error. net/http notices a client that went away only once the
   body has been read, so a waiter whose client left keeps its place, holding
@@ -401,24 +412,32 @@ memory.
 - Each connection may hold its free allowances (64 KiB of body, 1 MiB of
   decoding) outside the pool.
 - A client that states `GOSTACK_MAX_REQUEST_BODY` and sends just over 64 KiB
-  holds a whole body's share until the idle timeout; one that then trickles a
-  byte per idle period keeps it. With the defaults, four such clients hold the
-  whole pool, and every other body over 64 KiB is throttled while they do. A
-  client that states 16 MiB and sends one byte holds nothing.
-- Bodies of unknown length grow in doubling steps, and rest-xml decoding in
-  1 MiB steps, so many of them at once can each hold part of the pool and wait
-  to grow until the oldest waiters give up at 5 s, which answers them in waves
-  of the wait. Bodies that state their length do not: 64 bodies of 16 MiB sent
-  at once with a Content-Length are all answered within 754 ms, at a peak RSS
-  of 178 MiB.
+  holds a whole body's share, with its planned decoding, until the idle
+  timeout; one that then trickles a byte per idle period keeps it. With the
+  defaults, one such json or xml client holds 48 MiB of the pool's 64, so every
+  other json body over about 5 MiB is throttled while it does; four such query
+  clients hold the whole pool. A client that states 16 MiB and sends one byte
+  holds nothing.
+- Bodies of unknown length grow in doubling steps, and decoding past its plan
+  (rest-xml as it decodes, a dense json body once) in 1 MiB steps, so many of
+  them at once can each hold part of the pool and wait to grow until the
+  oldest waiters give up at 5 s, which answers them in waves of the wait.
+  Bodies that state their length and decode within their plan do not: 128
+  legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
+  served, and so are as many as fill the pool when they all decode at the same
+  moment. 64 bodies of 16 MiB sent at once with a Content-Length are admitted
+  one at a time.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
 `Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies`,
-`Test_BodyMeter_StatedLengthAtOnce`, `Test_BodyMeter_IdleDeadlineStaysPast`
+`Test_BodyMeter_StatedLengthAtOnce`, `Test_BodyMeter_DecodeRoomByReader`,
+`Test_BodyMeter_UnknownLengthKeepsWhatItRead`,
+`Test_BodyMeter_IdleDeadlineStaysPast`, `Test_DecodeCost_TextFitsTheAdmittedRoom`
 and `Test_Decoder_TagLimit` pin these on generated stubs;
 `cmd/gostack/wide-body_test.go` pins the charge seam on the real S3, SQS and
-STS providers, at `/` and at a queue URL.
+STS providers, at `/` and at a queue URL, and the cold burst and the bodies
+that decode together on the real SQS provider.
 
 ### Protocol details with explicit tests
 
