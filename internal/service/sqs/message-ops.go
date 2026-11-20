@@ -11,6 +11,7 @@ import (
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 )
 
@@ -305,6 +306,11 @@ func (p *Provider) ReceiveMessage(
 	}
 
 	if params.wait > 0 {
+		// The body is decoded: it holds nothing under the in-flight bound while
+		// the call waits, neither its body nor its decoding.
+		protocol.ReleaseBody(ctx)
+		rc.ReleaseDecode()
+
 		var release context.CancelFunc
 
 		ctx, release = p.untilShutdown(ctx)

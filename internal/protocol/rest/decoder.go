@@ -25,12 +25,22 @@ const (
 // with.
 var ErrBodyTooLarge = errors.New("rest: request body is longer than protocol.MaxBody")
 
-// CapBody returns r limited to protocol.MaxBody bytes, which is how a rest
-// service reads an xml body as it decodes it element by element: a read that
-// finds more fails with ErrBodyTooLarge, where io.LimitReader would end the
-// body as if it were complete. A body of exactly MaxBody bytes reads whole. It
-// returns r itself when there is no limit.
-func CapBody(r io.Reader) io.Reader {
+// CapBody returns the body of req limited to protocol.MaxBody bytes, which is
+// how a rest service reads an xml body as it decodes it element by element: a
+// read that finds more fails with ErrBodyTooLarge, where io.LimitReader would
+// end the body as if it were complete. A body of exactly MaxBody bytes reads
+// whole. It returns the body itself when there is no limit. It arms the body's
+// meter (protocol.ArmBody), as the decoder holds what it reads.
+func CapBody(req *http.Request) io.Reader {
+	if req.ContentLength < 0 || req.ContentLength > protocol.FreeBody {
+		protocol.ArmBody(req.Context())
+	}
+
+	return capReader(req.Body)
+}
+
+// capReader is CapBody for a reader.
+func capReader(r io.Reader) io.Reader {
 	limit := protocol.MaxBody()
 	if limit == 0 {
 		return r

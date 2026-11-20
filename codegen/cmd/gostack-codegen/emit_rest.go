@@ -255,7 +255,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 		return nil
 	case strings.HasPrefix(f.typ, "*") && f.pair.p.shape.Type == spec.TypeStructure &&
 		g.hasProtocol(protoRestXML):
-		p.f("\txd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))")
+		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.%s = &%s{}", f.goName, strings.TrimPrefix(f.typ, "*"))
 		p.f("\t\tin.%s.decodeXML(xd)", f.goName)
@@ -281,7 +281,7 @@ func (g *generator) emitRestBody(p *printer, in *structType) error {
 	case f.typ == typeDocument:
 		p.f("\t\tin.%s = jsontext.Value(body)", f.goName)
 	case f.pair.p.shape.Type == spec.TypeStructure:
-		p.f("\t\tin.%s, err = awsjson.Decode[%s](body)", f.goName, strings.TrimPrefix(f.typ, "*"))
+		p.f("\t\tin.%s, err = decodeJSONBody[%s](rc, body)", f.goName, strings.TrimPrefix(f.typ, "*"))
 		p.f("\t\tif err != nil {")
 		p.f("\t\t\treturn nil, err")
 		p.f("\t\t}")
@@ -302,7 +302,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\tin := &%s{}", in.goName)
 	case g.hasProtocol(protoRestXML):
 		p.f("\tin := &%s{}", in.goName)
-		p.f("\txd := restxml.NewDecoder(rest.CapBody(rc.Request.Body))")
+		p.f("\txd := restxml.NewDecoderFor(rest.CapBody(rc.Request), rc.DecodeFactor, rc)")
 		p.f("\tif _, ok := xd.Root(); ok {")
 		p.f("\t\tin.decodeXML(xd)")
 		p.f("\t}")
@@ -316,7 +316,7 @@ func (g *generator) emitRestRootBody(p *printer, in *structType) error {
 		p.f("\t}")
 		p.f("\tin := &%s{}", in.goName)
 		p.f("\tif len(body) > 0 {")
-		p.f("\t\tin, err = awsjson.Decode[%s](body)", in.goName)
+		p.f("\t\tin, err = decodeJSONBody[%s](rc, body)", in.goName)
 		p.f("\t\tif err != nil {")
 		p.f("\t\t\treturn nil, err")
 		p.f("\t\t}")
@@ -593,9 +593,15 @@ func (g *generator) emitErrorHelpers(p *printer) {
 func (g *generator) emitReadBody(p *printer) {
 	p.f("// readBody reads a request body that is not streamed, up to protocol.MaxBody bytes.")
 	p.f("func readBody(rc *request.Context) ([]byte, *awserr.Error) {")
-	p.f("\tbody, err := io.ReadAll(protocol.LimitBody(rc.Request.Body))")
+	p.f("\tbody, err := protocol.ReadRequest(rc.Request)")
+	p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+	p.f("\t\treturn nil, %s", g.busyError())
+	p.f("\t}")
 
 	if g.opts.S3Errors {
+		p.f("\tif errors.Is(err, protocol.ErrBodyIdle) {")
+		p.f("\t\treturn nil, protocol.RequestTimeout()")
+		p.f("\t}")
 		p.f("\tif protocol.OverBody(len(body)) {")
 		p.f("\t\treturn nil, errBodyTooLarge()")
 		p.f("\t}")
@@ -609,6 +615,25 @@ func (g *generator) emitReadBody(p *printer) {
 	p.f("\treturn body, nil")
 	p.f("}")
 	p.blank()
+
+	if g.hasProtocol(protoRestJSON) {
+		p.f("// decodeJSONBody reads a json request body into a T, refusing one that would")
+		p.f("// decode into more than the call's budget as a body over protocol.MaxBody.")
+		p.f("func decodeJSONBody[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {")
+		p.f("\tin, _, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)")
+		p.f("\tif err == awsjson.ErrTooLarge {")
+
+		if g.opts.S3Errors {
+			p.f("\t\treturn nil, errBodyTooLarge()")
+		} else {
+			p.f("\t\treturn nil, errMalformedBody()")
+		}
+
+		p.f("\t}")
+		p.f("\treturn in, err")
+		p.f("}")
+		p.blank()
+	}
 }
 
 // emitBodyTooLarge writes what an S3 request body over protocol.MaxBody is
@@ -617,6 +642,18 @@ func (g *generator) emitReadBody(p *printer) {
 // are AWS's for a request that is too big.
 func (g *generator) emitBodyTooLarge(p *printer) {
 	if !g.opts.S3Errors {
+		if g.hasProtocol(protoRestXML) {
+			p.f("// errXMLBody is the error for an xml request body that failed to decode:")
+			p.f("// throttled when the bodies in flight left it no room, malformed otherwise.")
+			p.f("func errXMLBody(err error) *awserr.Error {")
+			p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+			p.f("\t\treturn %s", g.busyError())
+			p.f("\t}")
+			p.f("\treturn errMalformedBody()")
+			p.f("}")
+			p.blank()
+		}
+
 		return
 	}
 
@@ -631,8 +668,16 @@ func (g *generator) emitBodyTooLarge(p *printer) {
 	p.f("}")
 	p.blank()
 	p.f("// errXMLBody is the error for an xml request body that failed to decode: too")
-	p.f("// large when the read hit protocol.MaxBody, malformed otherwise.")
+	p.f("// large when the read hit protocol.MaxBody, SlowDown when the bodies in flight")
+	p.f("// left it no room, RequestTimeout when the client stopped sending it,")
+	p.f("// malformed otherwise.")
 	p.f("func errXMLBody(err error) *awserr.Error {")
+	p.f("\tif errors.Is(err, protocol.ErrBusy) {")
+	p.f("\t\treturn protocol.SlowDown()")
+	p.f("\t}")
+	p.f("\tif errors.Is(err, protocol.ErrBodyIdle) {")
+	p.f("\t\treturn protocol.RequestTimeout()")
+	p.f("\t}")
 	p.f("\tif errors.Is(err, rest.ErrBodyTooLarge) {")
 	p.f("\t\treturn errBodyTooLarge()")
 	p.f("\t}")
@@ -643,12 +688,21 @@ func (g *generator) emitBodyTooLarge(p *printer) {
 
 // xmlBodyError is the Go expression a reader returns for an xml decoder whose
 // Err is set.
-func (g *generator) xmlBodyError() string {
-	if g.opts.S3Errors {
-		return "errXMLBody(xd.Err())"
-	}
+func (*generator) xmlBodyError() string {
+	return "errXMLBody(xd.Err())"
+}
 
-	return "errMalformedBody()"
+// busyError is the Go expression for the answer to a body that failed with
+// protocol.ErrBusy: S3's SlowDown, otherwise the protocol's throttling error.
+func (g *generator) busyError() string {
+	switch {
+	case g.opts.S3Errors:
+		return "protocol.SlowDown()"
+	case g.hasProtocol(protoRestXML):
+		return "protocol.ThrottledQuery()"
+	default:
+		return "protocol.ThrottledJSON()"
+	}
 }
 
 func emitModeledError(p *printer) {

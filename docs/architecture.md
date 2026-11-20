@@ -260,6 +260,196 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
   for 20s and responses stream.
 - `DisableGeneralOptionsHandler` is set.
 
+### Request memory
+
+The rule: for a request body that a generated decoder, the query form reader
+or the SQS number echo reads, in every protocol, the heap one request
+allocates is at most four times its decoded size plus a constant
+(`protocol.DecodeSlack`, 16 MiB, and 8 MiB of bookkeeping), for any body up to
+`GOSTACK_MAX_REQUEST_BODY`; and what all requests hold at once is bounded by
+`GOSTACK_MAX_IN_FLIGHT_BODIES`, not by the number of connections. A request
+that would pass a bound is refused with its protocol's own error before the
+allocation. `docs/compat.md` lists the answers.
+
+Open: these paths take client bytes the rule does not yet bound, and stay as
+they are on `main`. Each is filed on its own.
+
+- Policy documents a service parses after decoding: SQS `SetQueueAttributes`
+  `Policy` and `AddPermission`, S3 `PutBucketPolicy`, STS
+  `AssumeRoleWithSAML`. Their nesting is bounded; their width is not.
+- The `x-localstack-data` header, parsed as json in `markInternal`.
+- `POST /_localstack/health`.
+- The part headers of an S3 browser POST upload.
+- SQS `SetQueueAttributes` `RedrivePolicy`, parsed into a generic tree
+  (`sqs/redrive.go`): 16 KB of gzip reaches 665 MiB.
+- SSM `PutParameter` `Policies`, kept and parsed again by every
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
+
+Settings, all read at start-up:
+
+| Variable | Default | Sized for |
+|---|---|---|
+| `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four form bodies at the cap, or one json or xml body at the cap with the 32 MiB of decoding it is admitted with, and room for 48 MiB of decoding at most. A 512 MiB container keeps room for the runtime and the services' state. |
+| `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
+
+How each piece is bounded, and why this way:
+
+- **Decode budget, by cost, per service.** Decoding charges what it allocates
+  against `DecodeBudgetAt(n, factor)` = factor x the bytes read + `DecodeSlack`,
+  factor 2 unless `service.Registration.DecodeFactor` sets one. A count of
+  elements was too coarse: `{}` is 3 bytes and decodes to a 56-byte SQS entry,
+  `<Rule/>` is 7 and decodes to a 104-byte `LifecycleRule`, so the cost is what
+  is charged: a slice element at 5 times its size (append's regrowth), a map
+  entry at its key and value, text at twice its length. A botocore `max` trait
+  would stop only lists that carry one; the SQS batch limit of 10 lives in the
+  handler. json (`awsjson.DecodeWithin`) walks a body whose bound passes the
+  budget with a plan per Go type before unmarshalling; rest-xml charges each
+  token and each append as it decodes, following `InputOffset`; query charges
+  128 bytes (`query.PairCost`) per pair before parsing. A service whose legal
+  requests amplify more declares its own factor when it lands: DynamoDB's
+  `AttributeValue` lists reach about 18 times their size.
+- **Types that decode themselves** are free leaves only when listed
+  (`protocol.Time`, ISO8601, RFC822); any other is planned through its fields
+  or charged as an untyped value. `Test_Plan_EveryUnmarshalerInTheAPIIsKnown`
+  fails on one that is neither.
+- **XML tags.** encoding/xml builds a whole tag before a decoder sees it, so a
+  start or end tag is refused while it is read once it passes 4 KiB
+  (`restxml.MaxTag`; the longest S3 tag is under 100 bytes). encoding/xml reads
+  the body through `restxml`'s `tokenLimit`, which the decoder tells where each
+  token starts at the xml.Decoder's own `InputOffset`; a token is a tag when its
+  first two bytes are `<` and anything but `!` or `?`. No second parser has to
+  agree with encoding/xml on where a comment, CDATA section, processing
+  instruction or DOCTYPE ends. `tokenLimit` buffers the body itself, 4 KiB at a
+  time, so a byte costs one comparison against a precomputed stop index, as a
+  `bufio.Reader` byte would; the buffer's end, a tag's limit and a token's
+  first two bytes when they are not yet buffered take the slow path.
+- **Copies.** `protocol.ReadBody` sizes its buffers by what arrives, not by a
+  stated Content-Length: each next buffer holds as many bytes as have arrived,
+  and a body that fills more than the first is copied once, at its end, so a
+  body allocates about twice its length, as `io.ReadAll` does. A query form
+  reads its body with `protocol.ReadBodyText`, whose last copy builds the
+  string itself, and parses its pairs out of that string, so the form's text
+  costs no third copy. That copy was a whole body the form's plan does not
+  charge. With it, a 1 MiB SendMessageBatch decode allocated three bodies
+  against the runtime's 4 MiB minimum heap goal, and its freed pages were
+  returned to the OS and faulted back every cycle: without it the decode
+  takes 4 to 5 times fewer page faults. The SQS number echo (`sqs/sent-number.go`) reads the
+  one member from the body's tokens instead of a second parse into `any`.
+- **The charge seam** (`protocol/charge.go`). The gateway's recovery
+  middleware, root step 8 and inside every mounted route, puts one
+  `protocol.Charge` on each request's context before any handler runs, meters
+  the body there (after gzip decoding) and calls `Charge.Release` when the
+  handler returns. Readers find it through the context: `protocol.ReadRequest`
+  and `rest.CapBody` arm the body meter, and `request.Context.HoldDecode` and
+  `query.RequestForm` charge decoding to it. So a service that wraps the body
+  (S3's `trackedBody`, the raw-header reader) or builds its own
+  `request.Context` (SQS at a queue URL, the developer API) charges the same
+  `Charge`, and the gateway gives all of it back whatever the handler built.
+  An SQS long poll gives its charge back before it waits
+  (`protocol.ReleaseBody`). Calls one service makes to another through
+  `inproc` carry `request.MarkInternal`, which no header or listener sets, and
+  are not charged, since the outside request that caused them was.
+  `gateway.ServedAsInternal` is a different test: it also accepts the
+  `x-localstack-data` header, which any client can send, so it only decides
+  what a stopping gateway still serves.
+- **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
+  The gateway meters a body from a listener that states more than
+  `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
+  no atomic. The meter charges only once a buffering reader arms it, so an S3
+  object stream is never charged. Decoding past `protocol.FreeDecode` (1 MiB)
+  charges the same pool, capped per request at the bound less one body's
+  share, so a request alone always fits: json and query charge their whole
+  cost at once, known before they build anything; rest-xml grows in 1 MiB
+  steps as it decodes. A body that states its length is charged all of it, up
+  to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), together with the
+  room its decoding is planned to hold, the first time it reads past
+  `FreeBody`: all or nothing, in order behind other new bodies, so a body
+  that waits holds nothing while it waits, and an admitted body never waits
+  on the pool while it holds part of it, for its bytes or for decoding them.
+  The plan follows the reader that arms the meter: json and xml plan twice
+  the body (`protocol.TextDecode`: json decodes twice, xml charges its text
+  twice) plus `FreeBody` for structure; a query form plans nothing, since its
+  pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
+  dense with elements, charges the rest in steps as it decodes. A body of
+  unknown length (chunked or gzip) is charged in doubling steps of what has
+  arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
+  ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  or until the request's context ends, then answered with the protocol's
+  throttling error. net/http notices a client that went away only once the
+  body has been read, so a waiter whose client left keeps its place, holding
+  nothing, until the wait ends. `SetInFlight` raises a bound below twice one
+  byte over `GOSTACK_MAX_REQUEST_BODY` to that, so decoding room is never zero.
+- **Idle bodies.** An armed meter sets the connection's read deadline
+  `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` ahead before each read and clears it at
+  the end of the body and when the charge is given back, so a request held open
+  after its body, and the connection's next request, never meet it. When the
+  deadline passes, the meter gives back its charge and leaves the deadline in
+  the past: net/http reads what is left of a short body before it writes an
+  answer, and with the deadline past that read fails at once, so the answer is
+  sent and the connection closed after it.
+- **`GOMEMLIMIT`** is honored by the Go runtime as it is. Deriving a default
+  from the container's memory limit is a separate decision with its own
+  trade-off (garbage collection under pressure), so nothing here sets one.
+
+Headroom: what decoding the largest legal request of each shape charges
+against `DecodeBudget` at the default factor of 2. json charges both passes;
+query charges `PairCost` per pair. Measured on the generated decoders with a
+hold that records each charge.
+
+| Request | Body | Charged | Charged / budget |
+|---|---|---|---|
+| S3 `CompleteMultipartUpload`, 10,000 parts, every checksum on every part | 3.37 MiB | 17.5 MiB (5.2x) | 0.77 |
+| S3 `CompleteMultipartUpload`, 10,000 parts, SHA-256 only (what an SDK sends) | 1.58 MiB | 9.9 MiB (6.2x) | 0.52 |
+| S3 `PutBucketLifecycleConfiguration`, 1,000 rules with filter, tags, expiration, transition | 294 KiB | 3.1 MiB (10.9x) | 0.19 |
+| S3 `DeleteObjects`, 1,000 keys of 1,024 bytes | 1.03 MiB | 2.5 MiB (2.5x) | 0.14 |
+| SQS json `SendMessageBatch`, ten 256 KiB messages | 2.50 MiB | 5.0 MiB (2.0x) | 0.24 |
+| SQS json `SendMessageBatch`, 10 entries x 20 attributes x 20 list values | 44 KiB | 931 KiB (21.1x) | 0.06 |
+| SQS query `SendMessageBatch`, 4,853 pairs | 374 KiB | 607 KiB | 0.04 |
+| STS query `AssumeRole`, every member at its limit (180 pairs) | under 100 KiB | 23 KiB | under 0.01 |
+
+The tightest is `CompleteMultipartUpload` with all five checksums on each of
+10,000 parts, which no SDK sends (an upload uses one algorithm): it decodes
+with 23% of its budget to spare. It needs the factor: on `DecodeSlack` alone
+it would be refused (1.09 of 16 MiB).
+
+Residuals, accepted: a bounded pool trades availability under abuse for
+memory.
+
+- Each connection may hold its free allowances (64 KiB of body, 1 MiB of
+  decoding) outside the pool.
+- A client that states `GOSTACK_MAX_REQUEST_BODY` and sends just over 64 KiB
+  holds a whole body's share, with its planned decoding, until the idle
+  timeout; one that then trickles a byte per idle period keeps it. With the
+  defaults, one such json or xml client holds 48 MiB of the pool's 64, so every
+  other json body over about 5 MiB is throttled while it does; four such query
+  clients hold the whole pool. A client that states 16 MiB and sends one byte
+  holds nothing.
+- Bodies of unknown length grow in doubling steps, and decoding past its plan
+  (rest-xml as it decodes, a dense json body once) in 1 MiB steps, so many of
+  them at once can each hold part of the pool and wait to grow until the
+  oldest waiters give up at 5 s, which answers them in waves of the wait.
+  Bodies that state their length and decode within their plan do not: 128
+  legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
+  served, and so are as many as fill the pool when they all decode at the same
+  moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
+  room, so 21 such bodies held unfinished fill it; a 22nd that waits more than
+  5 s for one of them to end is throttled. 64 bodies of 16 MiB sent at once
+  with a Content-Length are admitted one at a time: on a non-race build all 64
+  are answered (400 `SerializationException`, their nesting) within 0.9 to
+  1.0 s, and the process peaks at 105 MiB RSS.
+
+`Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
+`Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
+`Test_Gateway_LyingSender`, `Test_Gateway_StalledBodies`,
+`Test_BodyMeter_StatedLengthAtOnce`, `Test_BodyMeter_DecodeRoomByReader`,
+`Test_BodyMeter_UnknownLengthKeepsWhatItRead`,
+`Test_BodyMeter_IdleDeadlineStaysPast`, `Test_DecodeCost_TextFitsTheAdmittedRoom`
+and `Test_Decoder_TagLimit` pin these on generated stubs;
+`cmd/gostack/wide-body_test.go` pins the charge seam on the real S3, SQS and
+STS providers, at `/` and at a queue URL, and the cold burst and the bodies
+that decode together on the real SQS provider.
+
 ### Protocol details with explicit tests
 
 - `Expect: 100-continue` with an empty body.

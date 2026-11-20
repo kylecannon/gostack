@@ -432,7 +432,7 @@ func (v *Grant) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Grantee":
-			v.Grantee = &Grantee{}
+			v.Grantee = restxml.New[Grantee](d)
 			v.Grantee.decodeXML(d)
 		case "Permission":
 			v.Permission = d.String()
@@ -665,15 +665,15 @@ func (v *InputSerialization) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "CSV":
-			v.CSV = &CSVInput{}
+			v.CSV = restxml.New[CSVInput](d)
 			v.CSV.decodeXML(d)
 		case "CompressionType":
 			v.CompressionType = d.String()
 		case "JSON":
-			v.JSON = &JSONInput{}
+			v.JSON = restxml.New[JSONInput](d)
 			v.JSON.decodeXML(d)
 		case "Parquet":
-			v.Parquet = &ParquetInput{}
+			v.Parquet = restxml.New[ParquetInput](d)
 			v.Parquet.decodeXML(d)
 		default:
 			d.Skip()
@@ -694,7 +694,7 @@ func (v *IntelligentTieringAndOperator) decodeXML(d *restxml.Decoder) {
 		case "Tag":
 			var e1 Tag
 			e1.decodeXML(d)
-			v.Tags = append(v.Tags, e1)
+			v.Tags = restxml.Append(d, v.Tags, e1)
 		default:
 			d.Skip()
 		}
@@ -725,14 +725,14 @@ func (v *IntelligentTieringConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Id":
 			v.Id = d.String()
 		case "Filter":
-			v.Filter = &IntelligentTieringFilter{}
+			v.Filter = restxml.New[IntelligentTieringFilter](d)
 			v.Filter.decodeXML(d)
 		case "Status":
 			v.Status = d.String()
 		case "Tiering":
 			var e1 Tiering
 			e1.decodeXML(d)
-			v.Tierings = append(v.Tierings, e1)
+			v.Tierings = restxml.Append(d, v.Tierings, e1)
 		default:
 			d.Skip()
 		}
@@ -771,10 +771,10 @@ func (v *IntelligentTieringFilter) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
-			v.Tag = &Tag{}
+			v.Tag = restxml.New[Tag](d)
 			v.Tag.decodeXML(d)
 		case "And":
-			v.And = &IntelligentTieringAndOperator{}
+			v.And = restxml.New[IntelligentTieringAndOperator](d)
 			v.And.decodeXML(d)
 		default:
 			d.Skip()
@@ -940,12 +940,12 @@ func (v *InventoryConfiguration) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Destination":
-			v.Destination = &InventoryDestination{}
+			v.Destination = restxml.New[InventoryDestination](d)
 			v.Destination.decodeXML(d)
 		case "IsEnabled":
 			v.IsEnabled = d.Bool()
 		case "Filter":
-			v.Filter = &InventoryFilter{}
+			v.Filter = restxml.New[InventoryFilter](d)
 			v.Filter.decodeXML(d)
 		case "Id":
 			v.Id = d.String()
@@ -963,10 +963,10 @@ func (v *InventoryConfiguration) decodeXML(d *restxml.Decoder) {
 				if x := d.String(); x != nil {
 					e1 = *x
 				}
-				v.OptionalFields = append(v.OptionalFields, e1)
+				v.OptionalFields = restxml.Append(d, v.OptionalFields, e1)
 			}
 		case "Schedule":
-			v.Schedule = &InventorySchedule{}
+			v.Schedule = restxml.New[InventorySchedule](d)
 			v.Schedule.decodeXML(d)
 		default:
 			d.Skip()
@@ -1019,7 +1019,7 @@ func (v *InventoryDestination) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "S3BucketDestination":
-			v.S3BucketDestination = &InventoryS3BucketDestination{}
+			v.S3BucketDestination = restxml.New[InventoryS3BucketDestination](d)
 			v.S3BucketDestination.decodeXML(d)
 		default:
 			d.Skip()
@@ -1046,10 +1046,10 @@ func (v *InventoryEncryption) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "SSE-S3":
-			v.SSES3 = &SSES3{}
+			v.SSES3 = restxml.New[SSES3](d)
 			v.SSES3.decodeXML(d)
 		case "SSE-KMS":
-			v.SSEKMS = &SSEKMS{}
+			v.SSEKMS = restxml.New[SSEKMS](d)
 			v.SSEKMS.decodeXML(d)
 		default:
 			d.Skip()
@@ -1113,7 +1113,7 @@ func (v *InventoryS3BucketDestination) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Encryption":
-			v.Encryption = &InventoryEncryption{}
+			v.Encryption = restxml.New[InventoryEncryption](d)
 			v.Encryption.decodeXML(d)
 		default:
 			d.Skip()
@@ -1178,7 +1178,7 @@ func (v *InventoryTableConfiguration) decodeXML(d *restxml.Decoder) {
 		case "ConfigurationState":
 			v.ConfigurationState = d.String()
 		case "EncryptionConfiguration":
-			v.EncryptionConfiguration = &MetadataTableEncryptionConfiguration{}
+			v.EncryptionConfiguration = restxml.New[MetadataTableEncryptionConfiguration](d)
 			v.EncryptionConfiguration.decodeXML(d)
 		default:
 			d.Skip()
@@ -1219,7 +1219,7 @@ func (v *InventoryTableConfigurationUpdates) decodeXML(d *restxml.Decoder) {
 		case "ConfigurationState":
 			v.ConfigurationState = d.String()
 		case "EncryptionConfiguration":
-			v.EncryptionConfiguration = &MetadataTableEncryptionConfiguration{}
+			v.EncryptionConfiguration = restxml.New[MetadataTableEncryptionConfiguration](d)
 			v.EncryptionConfiguration.decodeXML(d)
 		default:
 			d.Skip()
@@ -1268,10 +1268,10 @@ func (v *JournalTableConfiguration) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "RecordExpiration":
-			v.RecordExpiration = &RecordExpiration{}
+			v.RecordExpiration = restxml.New[RecordExpiration](d)
 			v.RecordExpiration.decodeXML(d)
 		case "EncryptionConfiguration":
-			v.EncryptionConfiguration = &MetadataTableEncryptionConfiguration{}
+			v.EncryptionConfiguration = restxml.New[MetadataTableEncryptionConfiguration](d)
 			v.EncryptionConfiguration.decodeXML(d)
 		default:
 			d.Skip()
@@ -1312,7 +1312,7 @@ func (v *JournalTableConfigurationUpdates) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "RecordExpiration":
-			v.RecordExpiration = &RecordExpiration{}
+			v.RecordExpiration = restxml.New[RecordExpiration](d)
 			v.RecordExpiration.decodeXML(d)
 		default:
 			d.Skip()
@@ -1348,9 +1348,9 @@ func (v *LambdaFunctionConfiguration) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.Events = append(v.Events, e1)
+			v.Events = restxml.Append(d, v.Events, e1)
 		case "Filter":
-			v.Filter = &NotificationConfigurationFilter{}
+			v.Filter = restxml.New[NotificationConfigurationFilter](d)
 			v.Filter.decodeXML(d)
 		default:
 			d.Skip()
@@ -1388,7 +1388,7 @@ func (v *LifecycleConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Rule":
 			var e1 Rule
 			e1.decodeXML(d)
-			v.Rules = append(v.Rules, e1)
+			v.Rules = restxml.Append(d, v.Rules, e1)
 		default:
 			d.Skip()
 		}
@@ -1438,30 +1438,30 @@ func (v *LifecycleRule) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Expiration":
-			v.Expiration = &LifecycleExpiration{}
+			v.Expiration = restxml.New[LifecycleExpiration](d)
 			v.Expiration.decodeXML(d)
 		case "ID":
 			v.ID = d.String()
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Filter":
-			v.Filter = &LifecycleRuleFilter{}
+			v.Filter = restxml.New[LifecycleRuleFilter](d)
 			v.Filter.decodeXML(d)
 		case "Status":
 			v.Status = d.String()
 		case "Transition":
 			var e1 Transition
 			e1.decodeXML(d)
-			v.Transitions = append(v.Transitions, e1)
+			v.Transitions = restxml.Append(d, v.Transitions, e1)
 		case "NoncurrentVersionTransition":
 			var e1 NoncurrentVersionTransition
 			e1.decodeXML(d)
-			v.NoncurrentVersionTransitions = append(v.NoncurrentVersionTransitions, e1)
+			v.NoncurrentVersionTransitions = restxml.Append(d, v.NoncurrentVersionTransitions, e1)
 		case "NoncurrentVersionExpiration":
-			v.NoncurrentVersionExpiration = &NoncurrentVersionExpiration{}
+			v.NoncurrentVersionExpiration = restxml.New[NoncurrentVersionExpiration](d)
 			v.NoncurrentVersionExpiration.decodeXML(d)
 		case "AbortIncompleteMultipartUpload":
-			v.AbortIncompleteMultipartUpload = &AbortIncompleteMultipartUpload{}
+			v.AbortIncompleteMultipartUpload = restxml.New[AbortIncompleteMultipartUpload](d)
 			v.AbortIncompleteMultipartUpload.decodeXML(d)
 		default:
 			d.Skip()
@@ -1526,7 +1526,7 @@ func (v *LifecycleRuleAndOperator) decodeXML(d *restxml.Decoder) {
 		case "Tag":
 			var e1 Tag
 			e1.decodeXML(d)
-			v.Tags = append(v.Tags, e1)
+			v.Tags = restxml.Append(d, v.Tags, e1)
 		case "ObjectSizeGreaterThan":
 			v.ObjectSizeGreaterThan = d.Int64()
 		case "ObjectSizeLessThan":
@@ -1567,14 +1567,14 @@ func (v *LifecycleRuleFilter) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
-			v.Tag = &Tag{}
+			v.Tag = restxml.New[Tag](d)
 			v.Tag.decodeXML(d)
 		case "ObjectSizeGreaterThan":
 			v.ObjectSizeGreaterThan = d.Int64()
 		case "ObjectSizeLessThan":
 			v.ObjectSizeLessThan = d.Int64()
 		case "And":
-			v.And = &LifecycleRuleAndOperator{}
+			v.And = restxml.New[LifecycleRuleAndOperator](d)
 			v.And.decodeXML(d)
 		default:
 			d.Skip()
@@ -2285,12 +2285,12 @@ func (v *LoggingEnabled) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 TargetGrant
 				e1.decodeXML(d)
-				v.TargetGrants = append(v.TargetGrants, e1)
+				v.TargetGrants = restxml.Append(d, v.TargetGrants, e1)
 			}
 		case "TargetPrefix":
 			v.TargetPrefix = d.String()
 		case "TargetObjectKeyFormat":
-			v.TargetObjectKeyFormat = &TargetObjectKeyFormat{}
+			v.TargetObjectKeyFormat = restxml.New[TargetObjectKeyFormat](d)
 			v.TargetObjectKeyFormat.decodeXML(d)
 		default:
 			d.Skip()
@@ -2332,10 +2332,10 @@ func (v *MetadataConfiguration) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "JournalTableConfiguration":
-			v.JournalTableConfiguration = &JournalTableConfiguration{}
+			v.JournalTableConfiguration = restxml.New[JournalTableConfiguration](d)
 			v.JournalTableConfiguration.decodeXML(d)
 		case "InventoryTableConfiguration":
-			v.InventoryTableConfiguration = &InventoryTableConfiguration{}
+			v.InventoryTableConfiguration = restxml.New[InventoryTableConfiguration](d)
 			v.InventoryTableConfiguration.decodeXML(d)
 		default:
 			d.Skip()
@@ -2390,7 +2390,7 @@ func (v *MetadataTableConfiguration) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "S3TablesDestination":
-			v.S3TablesDestination = &S3TablesDestination{}
+			v.S3TablesDestination = restxml.New[S3TablesDestination](d)
 			v.S3TablesDestination.decodeXML(d)
 		default:
 			d.Skip()
@@ -2455,7 +2455,7 @@ func (v *Metrics) decodeXML(d *restxml.Decoder) {
 		case "Status":
 			v.Status = d.String()
 		case "EventThreshold":
-			v.EventThreshold = &ReplicationTimeValue{}
+			v.EventThreshold = restxml.New[ReplicationTimeValue](d)
 			v.EventThreshold.decodeXML(d)
 		default:
 			d.Skip()
@@ -2489,7 +2489,7 @@ func (v *MetricsAndOperator) decodeXML(d *restxml.Decoder) {
 		case "Tag":
 			var e1 Tag
 			e1.decodeXML(d)
-			v.Tags = append(v.Tags, e1)
+			v.Tags = restxml.Append(d, v.Tags, e1)
 		case "AccessPointArn":
 			v.AccessPointArn = d.String()
 		default:
@@ -2525,7 +2525,7 @@ func (v *MetricsConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Id":
 			v.Id = d.String()
 		case "Filter":
-			v.Filter = &MetricsFilter{}
+			v.Filter = restxml.New[MetricsFilter](d)
 			v.Filter.decodeXML(d)
 		default:
 			d.Skip()
@@ -2557,12 +2557,12 @@ func (v *MetricsFilter) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
-			v.Tag = &Tag{}
+			v.Tag = restxml.New[Tag](d)
 			v.Tag.decodeXML(d)
 		case "AccessPointArn":
 			v.AccessPointArn = d.String()
 		case "And":
-			v.And = &MetricsAndOperator{}
+			v.And = restxml.New[MetricsAndOperator](d)
 			v.And.decodeXML(d)
 		default:
 			d.Skip()
@@ -2804,7 +2804,7 @@ func (v *NotificationConfigurationFilter) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "S3Key":
-			v.Key = &S3KeyFilter{}
+			v.Key = restxml.New[S3KeyFilter](d)
 			v.Key.decodeXML(d)
 		default:
 			d.Skip()
@@ -2867,7 +2867,7 @@ func (v *ObjectEncryption) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "SSE-KMS":
-			v.SSEKMS = &SSEKMSEncryption{}
+			v.SSEKMS = restxml.New[SSEKMSEncryption](d)
 			v.SSEKMS.decodeXML(d)
 		default:
 			d.Skip()
@@ -2910,7 +2910,7 @@ func (v *ObjectLockConfiguration) decodeXML(d *restxml.Decoder) {
 		case "ObjectLockEnabled":
 			v.ObjectLockEnabled = d.String()
 		case "Rule":
-			v.Rule = &ObjectLockRule{}
+			v.Rule = restxml.New[ObjectLockRule](d)
 			v.Rule.decodeXML(d)
 		default:
 			d.Skip()
@@ -3001,7 +3001,7 @@ func (v *ObjectLockRule) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "DefaultRetention":
-			v.DefaultRetention = &DefaultRetention{}
+			v.DefaultRetention = restxml.New[DefaultRetention](d)
 			v.DefaultRetention.decodeXML(d)
 		default:
 			d.Skip()
