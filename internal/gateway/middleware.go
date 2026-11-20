@@ -288,7 +288,12 @@ func (g *Gateway) identify(header http.Header) {
 // recoverPanic is root step 8, the innermost. A panic in a handler becomes a 500
 // InternalError in the protocol of the service being called, or a 501 under
 // FAIL_FAST, and the process keeps running. Once the response has started there
-// is no status left to send, so the connection is aborted.
+// is no status left to send, so the connection is aborted. A handler that
+// panics with http.ErrAbortHandler aborts the connection itself.
+//
+// Every panic is logged, http.ErrAbortHandler too, and a call that panics is
+// marked dirty when its operation changes state, whatever status it wrote: the
+// handler may have made its change before it panicked.
 func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &call{}
@@ -300,22 +305,40 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 				return
 			}
 
+			logPanic(r, state.rc, recovered)
+			sw.settlePanicked()
+
 			err, isError := recovered.(error)
 			if isError && errors.Is(err, http.ErrAbortHandler) {
 				panic(recovered)
 			}
 
-			g.answerPanic(sw, r, state.rc, recovered)
+			g.answerPanic(sw, state.rc, recovered)
 		}()
 
 		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), callKey{}, state)))
 	})
 }
 
-func (g *Gateway) answerPanic(w *statusWriter, r *http.Request, rc *request.Context, recovered any) {
-	slog.ErrorContext(r.Context(), "panic while serving request",
-		"method", r.Method, "path", r.URL.Path, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+// logPanic logs a handler's panic with the service and operation of the call,
+// when the gateway has learned them.
+func logPanic(r *http.Request, rc *request.Context, recovered any) {
+	attrs := []any{"method", r.Method, "path", r.URL.Path}
 
+	if rc != nil {
+		attrs = append(attrs, "service", rc.Service)
+
+		if rc.Operation != "" {
+			attrs = append(attrs, "operation", rc.Operation)
+		}
+	}
+
+	attrs = append(attrs, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+
+	slog.ErrorContext(r.Context(), "panic while serving request", attrs...)
+}
+
+func (g *Gateway) answerPanic(w *statusWriter, rc *request.Context, recovered any) {
 	if w.status != 0 {
 		panic(http.ErrAbortHandler)
 	}
@@ -436,4 +459,17 @@ func (w *statusWriter) settle() {
 
 	p.armed = false
 	p.g.markDirty(w, p.r, p.index, p.rc)
+}
+
+// settlePanicked is settle for a call whose handler panicked: it marks state
+// dirty when the operation changes state, whatever status the handler wrote,
+// since it may have made its change before it panicked.
+func (w *statusWriter) settlePanicked() {
+	p := &w.pending
+	if !p.armed {
+		return
+	}
+
+	p.armed = false
+	p.g.markChanged(p.index, p.rc)
 }

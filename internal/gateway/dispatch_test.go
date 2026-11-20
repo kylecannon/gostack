@@ -1,8 +1,10 @@
 package gateway_test
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -198,6 +200,15 @@ func Test_Gateway_requestIDs(t *testing.T) {
 func Test_Gateway_markDirty(t *testing.T) {
 	failing := func(w http.ResponseWriter, _ *request.Context) { w.WriteHeader(http.StatusBadRequest) }
 	panicking := func(http.ResponseWriter, *request.Context) { panic("boom") }
+	// A handler that panics after it wrote a status may have made its change.
+	panicsAfter := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			w.WriteHeader(code)
+
+			panic("late")
+		}
+	}
+	aborting := func(http.ResponseWriter, *request.Context) { panic(http.ErrAbortHandler) }
 	custom := func(operation string) bool { return operation == "Purge" }
 	// A service that takes the connection answers without calling WriteHeader,
 	// and tells the gateway the status it sent instead.
@@ -240,7 +251,28 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "head", giveServe: okServe, giveRequest: operation("HeadThing")},
 		{name: "receive", giveServe: okServe, giveRequest: operation("ReceiveMessage")},
 		{name: "an error response", giveServe: failing, giveRequest: operation("SendMessage")},
-		{name: "a panic", giveServe: panicking, giveRequest: operation("SendMessage")},
+		{
+			name: "a panic in a write", giveServe: panicking, giveRequest: operation("SendMessage"),
+			wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after a success status", giveServe: panicsAfter(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after an error status", giveServe: panicsAfter(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a handler that aborts with http.ErrAbortHandler", giveServe: aborting,
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{name: "a panic in a read", giveServe: panicking, giveRequest: operation("ListQueues")},
+		{name: "a panic with no operation", giveServe: panicking, giveRequest: operation("")},
+		{
+			name: "own rule can say no for a write verb that panics", giveServe: panicking, giveMutating: custom,
+			giveRequest: operation("SendMessage"),
+		},
 		{
 			name: "an error on a taken connection", giveServe: taken(http.StatusBadRequest),
 			giveRequest: operation("SendMessage"),
@@ -274,11 +306,29 @@ func Test_Gateway_markDirty(t *testing.T) {
 			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
 			require.NoError(t, err)
 
-			call(t, g.Handler(), tt.giveRequest(t))
+			serveAborting(g.Handler(), tt.giveRequest(t))
 
 			assert.Equal(t, tt.wantMarked, dirty.marked())
 		})
 	}
+}
+
+// serveAborting serves r and takes a panic with http.ErrAbortHandler, the way
+// a gateway aborts a response it has started, as net/http's server does.
+func serveAborting(h http.Handler, r *http.Request) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		err, isError := recovered.(error)
+		if !isError || !errors.Is(err, http.ErrAbortHandler) {
+			panic(recovered)
+		}
+	}()
+
+	h.ServeHTTP(httptest.NewRecorder(), r)
 }
 
 // Test_Gateway_markDirty_whenATakenResponseNotesItsStatus checks the mark

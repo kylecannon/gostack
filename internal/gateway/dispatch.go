@@ -118,10 +118,17 @@ func (g *Gateway) markDirty(w http.ResponseWriter, r *http.Request, index int, r
 		return
 	}
 
-	if g.eng == nil {
+	g.markChanged(index, rc)
+}
+
+// markChanged tells persistence the service changed, when rc names an operation
+// that changes state, whatever the call answered.
+func (g *Gateway) markChanged(index int, rc *request.Context) {
+	if g.eng == nil || rc.Operation == "" {
 		return
 	}
 
+	mutating := g.regs[index].Mutating
 	if mutating == nil {
 		mutating = defaultMutating
 	}

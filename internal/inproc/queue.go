@@ -2,6 +2,9 @@ package inproc
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -89,7 +92,8 @@ func laneKey(call Call) string {
 
 // Enqueue hands call to a worker and returns at once; done, when it is not nil,
 // gets the answer on the worker's goroutine, or the error of a call that could
-// not be made or whose handler panicked. The queue holds MaxQueued calls
+// not be made or whose handler panicked or called runtime.Goexit (ErrAborted).
+// A done that panics is logged, and the queue goes on. The queue holds MaxQueued calls
 // waiting to start: past that, and after Close, Enqueue refuses the call and
 // reports false.
 //
@@ -203,33 +207,89 @@ func (q *queue) shut() {
 }
 
 // work serves the waiting lanes, one call from each in turn, until none waits.
-// Do turns a handler's panic into the call's error, so a worker outlives it.
 func (c *Client) work() {
-	var served *lane
+	c.workAfter(nil)
+}
 
+// workAfter is work for a worker that takes the place of one that was serving
+// lane served, or nil.
+func (c *Client) workAfter(served *lane) {
 	for {
 		l, next, ok := c.queue.next(served)
 		if !ok {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.queue.ctx, callTimeout)
-		resp, err := c.Do(ctx, next.call)
-
-		cancel()
-		c.queue.answered(resp, err)
-
-		if next.done != nil {
-			next.done(resp, err)
-		}
-
-		// After done, so that a call done queues keeps the hub waiting.
-		if next.hub != nil {
-			next.hub.leave()
-		}
+		c.serve(l, next)
 
 		served = l
 	}
+}
+
+// serve makes item, a call of lane l, and answers it. Do turns a handler's
+// panic into the call's error, and answer recovers a panic in done, so the
+// worker outlives both.
+//
+// A handler or a done that calls runtime.Goexit ends the worker's goroutine,
+// whatever it defers. The deferred calls answer the call all the same, with
+// errExited when the handler had not returned, and start a worker in the
+// goroutine's place, which puts l back in line as this one would have.
+func (c *Client) serve(l *lane, item queued) {
+	finished := false
+
+	defer func() {
+		if !finished {
+			c.queue.group.Go(func() { c.workAfter(l) })
+		}
+	}()
+
+	// After done, so that a call done queues keeps the hub waiting.
+	if item.hub != nil {
+		defer item.hub.leave()
+	}
+
+	answered := false
+
+	defer func() {
+		if !answered {
+			c.queue.answered(Response{}, errExited)
+			item.answer(Response{}, errExited)
+		}
+	}()
+
+	resp, err := c.call(item.call)
+	answered = true
+
+	c.queue.answered(resp, err)
+	item.answer(resp, err)
+
+	finished = true
+}
+
+// call makes a queued call, within callTimeout.
+func (c *Client) call(call Call) (Response, error) {
+	ctx, cancel := context.WithTimeout(c.queue.ctx, callTimeout)
+	defer cancel()
+
+	return c.Do(ctx, call)
+}
+
+// answer hands the call's answer to done. A done that panics is logged and
+// does not end the worker: the lane goes on with its next call.
+func (item queued) answer(resp Response, err error) {
+	if item.done == nil {
+		return
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("panic in the done of a queued call",
+				"service", item.call.Service, "method", methodOf(item.call), "path", pathOf(item.call),
+				"target", item.call.Target, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		}
+	}()
+
+	item.done(resp, err)
 }
 
 // answered is a call's handler returning with resp or err. A call the queue
