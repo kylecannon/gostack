@@ -20,6 +20,10 @@ const (
 	dataKeyPairSpecEnum = "Member must satisfy enum value set: [RSA_2048, RSA_3072, RSA_4096, ECC_NIST_P256, " +
 		"ECC_NIST_P384, ECC_NIST_P521, ECC_SECG_P256K1, SM2, ECC_NIST_EDWARDS25519]"
 	dryRunMessage = "The request would have succeeded, but the DryRun option is set."
+	// unusableRecipientKey refuses a Recipient whose RSA key cannot wrap a key,
+	// with none of the Go crypto library's text. A key under 1024 bits is the case.
+	unusableRecipientKey = "The public key in the Recipient's attestation document cannot be used to encrypt: " +
+		"an RSA key must have a modulus of at least 1024 bits."
 )
 
 // dataKeySpecs are the sizes of the DataKeySpec values.
@@ -41,6 +45,10 @@ func (p *Provider) forRecipient(recipient *api.RecipientInfo, plaintext []byte) 
 	}
 
 	sealed, err = envelope(plaintext, key, p.random)
+	if errors.Is(err, errRecipientKey) {
+		return nil, nil, validation(unusableRecipientKey)
+	}
+
 	if err != nil {
 		return nil, nil, api.NewKMSInternalException("The envelope for the recipient could not be made: " + err.Error())
 	}

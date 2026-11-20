@@ -27,7 +27,10 @@ const (
 func Test_ImportKeyMaterial_ValidTo_outsideDateRange(t *testing.T) {
 	s := newStack(t)
 
-	for _, validTo := range []string{"300000000000", "253402300800", "-62135596801"} {
+	// -62135596800 is the first instant of year 1, Go's zero time, which
+	// DescribeKey cannot echo. Before, it answered 200 and the key showed
+	// KEY_MATERIAL_EXPIRES with no ValidTo.
+	for _, validTo := range []string{"300000000000", "253402300800", "-62135596801", "-62135596800"} {
 		t.Run(validTo, func(t *testing.T) {
 			id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
 			in := s.importParams(id, oaepSHA256).input(t, id, random(t, 32))
@@ -39,13 +42,20 @@ func Test_ImportKeyMaterial_ValidTo_outsideDateRange(t *testing.T) {
 		})
 	}
 
-	for _, validTo := range []string{"253402300799", "-62135596800"} {
+	for _, validTo := range []string{"253402300799", "-62135596799"} {
 		t.Run(validTo+" is a date", func(t *testing.T) {
 			id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
 			in := s.importParams(id, oaepSHA256).input(t, id, random(t, 32))
 			in[fieldExpiration], in[fieldValidTo] = expires, json.Number(validTo)
 
 			s.ok(opImport, in)
+
+			meta := s.metadata(id)
+			require.Equal(t, expires, meta["ExpirationModel"])
+
+			want, err := json.Number(validTo).Float64()
+			require.NoError(t, err)
+			require.InDelta(t, want, meta[fieldValidTo], 0)
 		})
 	}
 }
@@ -180,7 +190,7 @@ func Test_clientRSAKeys_areBounded(t *testing.T) {
 		s.fails("GenerateRandom", map[string]any{fieldNumberOfBytes: 32, fieldRecipient: r}, codeValidation, tooLargeKey)
 
 		id := keyID(t, s.createKey(nil))
-		s.fails(opGenerateDataKey, map[string]any{fieldKeyID: id, fieldKeySpec: "AES_256", fieldRecipient: r},
+		s.fails(opGenerateDataKey, map[string]any{fieldKeyID: id, fieldKeySpec: aes256Spec, fieldRecipient: r},
 			codeValidation, tooLargeKey)
 	})
 
@@ -188,6 +198,27 @@ func Test_clientRSAKeys_areBounded(t *testing.T) {
 		r := map[string]any{fieldAttestation: b64(attestation(oversizedPublicKey(t, 4096)))}
 		out := s.ok("GenerateRandom", map[string]any{fieldNumberOfBytes: 32, fieldRecipient: r})
 		require.Contains(t, out, fieldCiphertextForRecipient)
+	})
+
+	t.Run("a Recipient key under 1024 bits", func(t *testing.T) {
+		const unusable = "The public key in the Recipient's attestation document cannot be used to encrypt: " +
+			"an RSA key must have a modulus of at least 1024 bits."
+
+		id := keyID(t, s.createKey(nil))
+
+		for _, bits := range []int{16, 512, 1016} {
+			r := map[string]any{fieldAttestation: b64(attestation(oversizedPublicKey(t, bits)))}
+
+			// Before, a 400 KMSInternalException carrying Go's "512-bit keys
+			// are insecure" text.
+			s.fails("GenerateRandom", map[string]any{fieldNumberOfBytes: 32, fieldRecipient: r}, codeValidation, unusable)
+			s.fails(opGenerateDataKey, map[string]any{fieldKeyID: id, fieldKeySpec: aes256Spec, fieldRecipient: r},
+				codeValidation, unusable)
+		}
+
+		r := map[string]any{fieldAttestation: b64(attestation(oversizedPublicKey(t, 1024)))}
+		require.Contains(t, s.ok("GenerateRandom", map[string]any{fieldNumberOfBytes: 32, fieldRecipient: r}),
+			fieldCiphertextForRecipient)
 	})
 
 	t.Run("an AttestationDocument over 262144 bytes", func(_ *testing.T) {

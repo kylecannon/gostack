@@ -53,6 +53,7 @@ const (
 
 	symmetricDefault = "SYMMETRIC_DEFAULT"
 	hmac256          = "HMAC_256"
+	hmac512          = "HMAC_512"
 	aliasA           = "alias/a"
 	tag1             = "tag1"
 	tag4             = "tag4"

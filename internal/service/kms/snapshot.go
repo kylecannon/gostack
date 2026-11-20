@@ -482,6 +482,13 @@ func (saved *keyData) key(account, region string) (*Key, error) {
 	copy(k.internalID[:], saved.InternalID)
 	k.setState(saved.State, saved.DeletionDate)
 
+	// A build before CancelKeyDeletion sent an EXTERNAL key without material
+	// back to PendingImport could leave one Enabled or Disabled. It is not
+	// usable, so it is not shown as Enabled, and EnableKey must not enable it.
+	if k.awaitsImportLocked() && (k.state == stateEnabled || k.state == stateDisabled) {
+		k.setState(statePendingImport, time.Time{})
+	}
+
 	for _, previous := range saved.Previous {
 		k.previous = append(k.previous, nilIfEmpty(previous))
 	}

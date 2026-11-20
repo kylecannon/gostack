@@ -174,8 +174,14 @@ func newMaterial(spec string, custom []byte, random io.Reader) (material, error)
 	var m material
 
 	if hmac, ok := hmacLens[spec]; ok {
-		// Any length: LocalStack's test_create_key_custom_key_material_hmac
-		// gives a HMAC_256 key 24 bytes, under the 32 it makes itself.
+		// No shortest length: LocalStack's test_create_key_custom_key_material_hmac
+		// gives a HMAC_256 key 24 bytes, under the 32 it makes itself. The
+		// longest is the spec's, so that a key cannot be made of any size.
+		if len(custom) > hmac[1] {
+			return m, validation(fmt.Sprintf(
+				"The custom key material of a %s key must be at most %d bytes, but it is %d", spec, hmac[1], len(custom)))
+		}
+
 		if len(custom) > 0 {
 			m.symmetric = custom
 

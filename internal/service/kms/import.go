@@ -298,19 +298,22 @@ func unwrapAESKey(h hash.Hash, priv *rsa.PrivateKey, blob []byte) ([]byte, error
 	return unwrapKeyPadded(kek, blob[size:])
 }
 
-// The ValidTo range: years 1 to 9999, those of the Python datetime through
-// which LocalStack's parser reads a timestamp.
+// The ValidTo range: after the first instant of year 1 and before year 10000.
+// Years 1 to 9999 are those of the Python datetime through which LocalStack's
+// parser reads a timestamp. The first instant of year 1 is Go's zero time,
+// which DescribeKey leaves out as an unset ValidTo (the generated output type
+// omits a zero time), so it is refused with the rest: LocalStack, which never
+// stores a ValidTo, would take it, and here every other ValidTo is echoed.
 var (
-	firstValidTo    = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	zeroValidTo     = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
 	pastLastValidTo = time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
 )
 
-// checkValidTo refuses a ValidTo outside years 1 to 9999 before anything else
-// of the import is read, as LocalStack's parser refuses one. LocalStack
-// answers its message as a 500 InternalError; this answers it as a
-// ValidationException.
+// checkValidTo refuses a ValidTo outside that range before anything else of
+// the import is read, as LocalStack's parser refuses one. LocalStack answers
+// its message as a 500 InternalError; this answers it as a ValidationException.
 func checkValidTo(validTo *protocol.Time) error {
-	if validTo == nil || (!validTo.Before(firstValidTo) && validTo.Before(pastLastValidTo)) {
+	if validTo == nil || (validTo.After(zeroValidTo) && validTo.Before(pastLastValidTo)) {
 		return nil
 	}
 

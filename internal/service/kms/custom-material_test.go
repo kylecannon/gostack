@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,6 +84,29 @@ func Test_CreateKey_customMaterial(t *testing.T) {
 			fieldKeySpec: hmac256, fieldKeyUsage: usageGenerateMAC,
 		})
 		require.Contains(t, meta, "CurrentKeyMaterialId")
+	})
+
+	t.Run("an HMAC key takes no more than its spec's longest key", func(t *testing.T) {
+		create := func(spec string, n int) reply {
+			return s.call(usEast1, "CreateKey", map[string]any{
+				fieldTags:    []map[string]string{customMaterialTag(make([]byte, n))},
+				fieldKeySpec: spec, fieldKeyUsage: usageGenerateMAC,
+			})
+		}
+
+		for spec, longest := range map[string]int{hmac256: 64, hmac512: 128} {
+			require.Equal(t, 200, create(spec, longest).status, spec)
+
+			r := create(spec, longest+1)
+			require.Equal(t, 400, r.status, spec)
+			require.Equal(t, codeValidation, r.errorCode(), spec)
+			require.Equal(t, fmt.Sprintf(
+				"The custom key material of a %s key must be at most %d bytes, but it is %d", spec, longest, longest+1),
+				r.message())
+		}
+
+		// Before, 500,043 bytes made a key.
+		require.Equal(t, 400, create(hmac256, 500_043).status)
 	})
 
 	t.Run("an asymmetric key takes a private key of its size and curve", func(t *testing.T) {

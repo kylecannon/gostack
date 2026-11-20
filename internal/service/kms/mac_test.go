@@ -29,7 +29,7 @@ var macAlgorithms = []struct{ spec, algorithm string }{
 	{"HMAC_224", alg224},
 	{"HMAC_256", alg256},
 	{"HMAC_384", alg384},
-	{"HMAC_512", alg512},
+	{hmac512, alg512},
 }
 
 // sequence is the bytes 1 to n.
@@ -56,10 +56,11 @@ func hmacKey(t *testing.T, s *stack, spec string, material []byte) string {
 }
 
 // Test_GenerateMac_RFC4231 checks the MAC of each size against the test cases
-// of RFC 4231, section 4 (cases 1 to 4 and 6), made into the key material of an
-// HMAC key. The expected values were made with Python's hmac, an
-// implementation apart from this one; cases 1 and 2 agree with the RFC's own
-// tables.
+// of RFC 4231, section 4 (cases 1 to 4), made into the key material of an HMAC
+// key. The expected values were made with Python's hmac, an implementation
+// apart from this one; cases 1 and 2 agree with the RFC's own tables. Case 6,
+// a 131-byte key, is no longer made: no HMAC key spec takes a key over 128
+// bytes, which Test_CreateKey_customMaterial holds.
 func Test_GenerateMac_RFC4231(t *testing.T) {
 	vectors := []struct {
 		name string
@@ -99,18 +100,6 @@ func Test_GenerateMac_RFC4231(t *testing.T) {
 			alg512: "b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db" +
 				"a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd",
 		}},
-		{
-			"case 6", bytes.Repeat([]byte{0xaa}, 131),
-			[]byte("Test Using Larger Than Block-Size Key - Hash Key First"),
-			map[string]string{
-				alg224: "95e9a0db962095adaebe9b2d6f0dbce2d499f112f2d2b7273fa6870e",
-				alg256: "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
-				alg384: "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f" +
-					"3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952",
-				alg512: "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f352" +
-					"6b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598",
-			},
-		},
 	}
 
 	s := newStack(t)

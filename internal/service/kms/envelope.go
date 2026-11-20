@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -113,6 +114,10 @@ func sha256Algorithm() digestAlgorithm {
 	return digestAlgorithm{Algorithm: oidSHA256, Parameters: asn1Null}
 }
 
+// errRecipientKey marks the failure to wrap the content key to the recipient's
+// public key: a key RSA-OAEP cannot use, such as one under 1024 bits.
+var errRecipientKey = errors.New("the recipient's public key cannot wrap a key")
+
 // envelope seals plaintext to recipient in a CMS EnvelopedData, as
 // pkcs7_envelope_encrypt does. random gives the content key and IV.
 func envelope(plaintext []byte, recipient *rsa.PublicKey, random io.Reader) ([]byte, error) {
@@ -136,7 +141,7 @@ func envelope(plaintext []byte, recipient *rsa.PublicKey, random io.Reader) ([]b
 	// crypto/rand for OAEP's seed, as rsa.EncryptOAEP wants.
 	encryptedKey, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, recipient, contentKey, nil)
 	if err != nil {
-		return nil, fmt.Errorf("wrap the content key: %w", err)
+		return nil, fmt.Errorf("wrap the content key: %w: %w", errRecipientKey, err)
 	}
 
 	info := contentInfo{
