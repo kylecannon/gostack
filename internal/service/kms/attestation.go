@@ -53,7 +53,8 @@ var errAttestation = errors.New("the attestation document holds no RSA public ke
 // LocalStack's _extract_attestation_pubkey finds it: the payload of the
 // COSE_Sign1 array, a CBOR map, at its "public_key", a DER
 // SubjectPublicKeyInfo. Any other shape is an error, which a caller answers
-// as LocalStack does, by ignoring the recipient.
+// as LocalStack does, by ignoring the recipient. A key larger than RSA_4096 is
+// errKeyTooLarge, which a caller answers.
 func attestationKeyOf(document []byte) (*rsa.PublicKey, error) {
 	d := cborReader{data: document}
 
@@ -79,7 +80,11 @@ func attestationKeyOf(document []byte) (*rsa.PublicKey, error) {
 		return nil, err
 	}
 
-	parsed, err := x509.ParsePKIXPublicKey(der)
+	parsed, err := clientKey(der, x509.ParsePKIXPublicKey)
+	if errors.Is(err, errKeyTooLarge) {
+		return nil, err
+	}
+
 	if err != nil {
 		return nil, errAttestation
 	}

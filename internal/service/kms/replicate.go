@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/kms"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 )
@@ -74,6 +75,13 @@ func (p *Provider) ReplicateKey(ctx context.Context, in *api.ReplicateKeyInput) 
 		r.Null(nil, "replicaRegion")
 
 		return nil, validation(r.Message())
+	}
+
+	// A region the gateway does not serve holds a replica no request reaches.
+	// LocalStack answers its message as a 500 for a name botocore does not
+	// know, and takes cn-north-1, which the gateway rewrites to us-east-1.
+	if !account.KnownRegion(*in.ReplicaRegion) {
+		return nil, validation("'" + *in.ReplicaRegion + "' is not a valid AWS region name for kms")
 	}
 
 	if primary.primary != nil {

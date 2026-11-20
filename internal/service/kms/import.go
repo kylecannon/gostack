@@ -6,6 +6,7 @@ import (
 	"crypto/sha1" //nolint:gosec // RSAES_OAEP_SHA_1 and RSA_AES_KEY_WRAP_SHA_1 are KMS's wrapping algorithms.
 	"crypto/sha256"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"hash"
 	"slices"
@@ -178,6 +179,11 @@ func (p *Provider) ImportKeyMaterial(ctx context.Context, in *api.ImportKeyMater
 		return nil, err
 	}
 
+	err = checkValidTo(in.ValidTo)
+	if err != nil {
+		return nil, err
+	}
+
 	token := string(in.ImportToken)
 
 	params := p.stateAt(rc.AccountID, rc.Region).importOf(token)
@@ -292,6 +298,30 @@ func unwrapAESKey(h hash.Hash, priv *rsa.PrivateKey, blob []byte) ([]byte, error
 	return unwrapKeyPadded(kek, blob[size:])
 }
 
+// The ValidTo range: years 1 to 9999, those of the Python datetime through
+// which LocalStack's parser reads a timestamp.
+var (
+	firstValidTo    = time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	pastLastValidTo = time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// checkValidTo refuses a ValidTo outside years 1 to 9999 before anything else
+// of the import is read, as LocalStack's parser refuses one. LocalStack
+// answers its message as a 500 InternalError; this answers it as a
+// ValidationException.
+func checkValidTo(validTo *protocol.Time) error {
+	if validTo == nil || (!validTo.Before(firstValidTo) && validTo.Before(pastLastValidTo)) {
+		return nil
+	}
+
+	text, err := validTo.MarshalJSON()
+	if err != nil {
+		return fmt.Errorf("write ValidTo: %w", err)
+	}
+
+	return validation("Invalid type when parsing DateType: '" + string(text) + "' cannot be parsed to timestamp.")
+}
+
 // expiration is the ExpirationModel of an import, KEY_MATERIAL_EXPIRES when
 // none is given, and its ValidTo, which that model needs and the other does
 // not keep.
@@ -354,6 +384,10 @@ func loadable(spec string, raw []byte) (material, error) {
 	}
 
 	private, err := privateKey(spec, raw, nil)
+	if errors.Is(err, errKeyTooLarge) {
+		return m, err
+	}
+
 	if err != nil {
 		return m, incorrect
 	}

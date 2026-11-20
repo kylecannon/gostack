@@ -3,6 +3,8 @@ package kms
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
+	"strconv"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
@@ -11,6 +13,8 @@ import (
 const (
 	// maxDataKeyBytes is the largest NumberOfBytes (NumberOfBytesType).
 	maxDataKeyBytes = 1024
+	// maxAttestationDocument is the longest AttestationDocument (AttestationDocumentType).
+	maxAttestationDocument = 262144
 
 	dataKeySpecEnum     = "Member must satisfy enum value set: [AES_256, AES_128]"
 	dataKeyPairSpecEnum = "Member must satisfy enum value set: [RSA_2048, RSA_3072, RSA_4096, ECC_NIST_P256, " +
@@ -27,7 +31,11 @@ var dataKeySpecs = map[string]int{"AES_128": aes128, "AES_256": aes256}
 // ignored and the plaintext answered, as LocalStack's Decrypt answers one
 // (test_decrypt_recipient_invalid_attestation); a null one is no Recipient.
 func (p *Provider) forRecipient(recipient *api.RecipientInfo, plaintext []byte) (sealed, bare []byte, err error) {
-	key := recipientKey(recipient)
+	key, err := recipientKey(recipient)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	if key == nil {
 		return nil, plaintext, nil
 	}
@@ -42,18 +50,30 @@ func (p *Provider) forRecipient(recipient *api.RecipientInfo, plaintext []byte) 
 
 // recipientKey is the RSA key a Recipient's attestation document holds, or
 // nil for no Recipient and for a document that holds none. LocalStack logs
-// the second and goes on.
-func recipientKey(recipient *api.RecipientInfo) *rsa.PublicKey {
+// the second and goes on. A document longer than the model's 262144 bytes, or
+// one whose key is larger than RSA_4096, is refused, before its key costs a
+// parse or an encryption.
+func recipientKey(recipient *api.RecipientInfo) (*rsa.PublicKey, error) {
 	if recipient == nil || len(recipient.AttestationDocument) == 0 {
-		return nil
+		return nil, nil //nolint:nilnil // no Recipient, and that is not an error
+	}
+
+	if len(recipient.AttestationDocument) > maxAttestationDocument {
+		var r constraint.Report
+
+		r.Hidden(nil, "recipient.attestationDocument",
+			"Member must have length less than or equal to "+strconv.Itoa(maxAttestationDocument))
+
+		return nil, validation(r.Message())
 	}
 
 	key, err := attestationKeyOf(recipient.AttestationDocument)
-	if err != nil {
-		return nil
+	if errors.Is(err, errKeyTooLarge) {
+		return nil, err
 	}
 
-	return key
+	// Any other error leaves key nil: the recipient is ignored.
+	return key, nil
 }
 
 // dataKey is what the GenerateDataKey family makes: the data key or private

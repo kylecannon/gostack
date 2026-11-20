@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	api "github.com/kylecannon/gostack/internal/api/kms"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // The snapshot holds every key with its material in plaintext, as LocalStack
@@ -47,10 +48,13 @@ const decimal = 10
 
 // snapshotOptions are the json settings of a snapshot, on both sides of it: the
 // same state gives the same bytes, and a string that is not valid UTF-8, such
-// as a description, goes through as it is instead of failing the save.
+// as a description, goes through as it is instead of failing the save. So
+// does a time RFC 3339 cannot write, such as a ValidTo past year 9999.
 var snapshotOptions = json.JoinOptions(
 	json.Deterministic(true),
 	jsontext.AllowInvalidUTF8(true),
+	json.WithMarshalers(protocol.SnapshotTimeMarshalers),
+	json.WithUnmarshalers(protocol.SnapshotTimeUnmarshalers),
 )
 
 var errSnapshot = errors.New("invalid kms snapshot")

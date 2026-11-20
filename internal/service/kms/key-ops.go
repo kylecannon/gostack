@@ -125,6 +125,10 @@ func (p *Provider) ScheduleKeyDeletion(
 }
 
 // CancelKeyDeletion leaves a key pending deletion disabled, and answers its ARN.
+// A key of Origin EXTERNAL with no imported material goes back to
+// PendingImport instead, as AWS documents a key with no material (Key states
+// of AWS KMS keys), so EnableKey cannot make it usable. LocalStack leaves it
+// Disabled, and EnableKey then lets it encrypt under material nobody imported.
 func (p *Provider) CancelKeyDeletion(
 	ctx context.Context, in *api.CancelKeyDeletionInput,
 ) (*api.CancelKeyDeletionOutput, error) {
@@ -138,7 +142,14 @@ func (p *Provider) CancelKeyDeletion(
 		return nil, err
 	}
 
-	err = k.update(allowPendingDeletion, func() { k.setState(stateDisabled, time.Time{}) })
+	err = k.update(allowPendingDeletion, func() {
+		state := stateDisabled
+		if k.awaitsImportLocked() {
+			state = statePendingImport
+		}
+
+		k.setState(state, time.Time{})
+	})
 	if err != nil {
 		return nil, err
 	}

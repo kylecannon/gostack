@@ -224,14 +224,23 @@ func (k *Key) usable(usage, operation string) error {
 	}
 
 	k.mu.Lock()
-	state := k.state
+	pending := k.state == statePendingImport || k.awaitsImportLocked()
 	k.mu.Unlock()
 
-	if state == statePendingImport {
+	if pending {
 		return k.pendingImport()
 	}
 
 	return nil
+}
+
+// awaitsImportLocked reports, with k.mu held, whether k is a key of Origin
+// EXTERNAL with no imported material: none was imported, or its import was
+// deleted. Every import sets the expiration model, and
+// DeleteImportedKeyMaterial clears it. The material such a key holds is
+// CreateKey's, which no client imported, so no data operation may use it.
+func (k *Key) awaitsImportLocked() bool {
+	return k.Origin == originExternal && k.expirationModel == ""
 }
 
 // pendingImport is the error of a key pending import. A call also answers it

@@ -283,10 +283,58 @@ func secgPrivateKey(custom []byte, random io.Reader) (any, error) {
 	return key, nil
 }
 
+// The bounds on a key a request supplies. maxRSABits is RSA_4096's modulus,
+// the largest of a KMS key spec. maxKeyDER is held before the parse: a PKCS #8
+// RSA_4096 private key is about 2400 bytes, and a parse, which validates an
+// RSA private key, grows with the cube of its modulus.
+const (
+	maxRSABits = 4096
+	maxKeyDER  = 4096
+)
+
+// errKeyTooLarge refuses a key a request supplies, a Recipient's public key or
+// RSA or ECC key material, that is larger than any key of a KMS key spec.
+var errKeyTooLarge = validation(
+	"The key is larger than any key a KMS key spec holds: an RSA modulus is at most 4096 bits.")
+
+// clientKey parses der, a key a request supplied, with parse. A DER longer
+// than maxKeyDER is refused unread and an RSA key over maxRSABits once read,
+// both with errKeyTooLarge, before it costs a parse or an RSA operation.
+func clientKey(der []byte, parse func([]byte) (any, error)) (any, error) {
+	if len(der) > maxKeyDER {
+		return nil, errKeyTooLarge
+	}
+
+	key, err := parse(der)
+	if err != nil {
+		return nil, err
+	}
+
+	var n int
+
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		n = k.N.BitLen()
+	case *rsa.PublicKey:
+		n = k.N.BitLen()
+	default:
+	}
+
+	if n > maxRSABits {
+		return nil, errKeyTooLarge
+	}
+
+	return key, nil
+}
+
 // customPrivateKey reads the DER private key a request supplied for an RSA or
 // ECC spec, and checks it is the size or curve the spec names.
 func customPrivateKey(spec string, der []byte) (any, error) {
-	key, err := parsePrivateKey(der)
+	key, err := clientKey(der, parsePrivateKey)
+	if errors.Is(err, errKeyTooLarge) {
+		return nil, err
+	}
+
 	if err != nil {
 		return nil, validation("The custom key material is not a DER private key: " + err.Error())
 	}
