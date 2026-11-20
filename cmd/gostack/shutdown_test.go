@@ -23,8 +23,6 @@ const (
 	// deadline is KillMargin short of it.
 	shutdownSeconds = 3
 	shutdownTimeout = shutdownSeconds * time.Second
-	// saveBy is how long after SIGTERM the state must be on disk and the child gone.
-	saveBy = shutdownTimeout - lifecycle.KillMargin
 
 	queueSaved   = "saved-at-shutdown"
 	messageSaved = "survives-the-stop"
@@ -165,6 +163,11 @@ func requireSaved(t *testing.T, dir string) {
 // Test_shutdown_savesBeforeTheSupervisorKills is the SIGTERM of docker stop: with
 // a request stuck in flight, the child saves its state and exits on its own
 // before the supervisor's SIGKILL, so the exit code is 0 and not 137.
+//
+// It asserts order only. The margin before the kill is KillMargin, and a child
+// that ends inside it still exits 0 here: the margin is asserted on the fake
+// clock by Test_serve_aBlockedShutdownCostsWorkAndNoMore (the save's start and
+// deadline) and Test_start_endsWhenServeDoes (nothing in start after serve).
 func Test_shutdown_savesBeforeTheSupervisorKills(t *testing.T) {
 	dir := t.TempDir()
 	sv := startSupervised(t, shutdownEnv(dir)...)
@@ -173,17 +176,17 @@ func Test_shutdown_savesBeforeTheSupervisorKills(t *testing.T) {
 	seedQueue(t, g, dir)
 	stuckUpload(t, strings.TrimPrefix(g.base, "http://"))
 
-	begin := time.Now()
-
 	sv.cancel()
 
+	// The supervisor's own SIGKILL is the deadline: a child that saved and ended
+	// before it exits 0, and one it had to kill would be 137 and logged. The wait
+	// is a guard against a hang, twice the whole budget, not a bound on a step.
 	select {
 	case res := <-sv.done:
 		sv.done <- res
 
 		require.NoError(t, res.err)
-		assert.Zero(t, res.code, "the child exited on its own; a kill would be 137")
-		assert.Less(t, res.at.Sub(begin), saveBy, "the child ended before the supervisor's SIGKILL, with its margin")
+		assert.Zero(t, res.code, "the child exited on its own, before the supervisor's SIGKILL; a kill would be 137")
 	case <-time.After(2 * shutdownTimeout):
 		t.Fatal("the supervisor did not stop")
 	}
@@ -220,6 +223,11 @@ func Test_shutdown_restartSavesBeforeItStopsTheChild(t *testing.T) {
 
 // Test_shutdown_killSavesBeforeItExits is the kill action: it takes the same path,
 // with no supervisor to enforce the deadline, so the process keeps to it itself.
+//
+// It asserts order only, and its wait is a guard against a hang: a process that
+// ends inside KillMargin of the budget still passes. The margin is asserted on
+// the fake clock by Test_serve_aBlockedShutdownCostsWorkAndNoMore and
+// Test_start_endsWhenServeDoes.
 func Test_shutdown_killSavesBeforeItExits(t *testing.T) {
 	dir := t.TempDir()
 	g := startGostack(t, shutdownEnv(dir)...)
@@ -227,15 +235,15 @@ func Test_shutdown_killSavesBeforeItExits(t *testing.T) {
 	seedQueue(t, g, dir)
 	stuckUpload(t, strings.TrimPrefix(g.base, "http://"))
 
-	begin := time.Now()
-
 	status, body := g.do(t, http.MethodPost, "/_gostack/health", `{"action":"kill"}`)
 	require.Equal(t, http.StatusOK, status, body)
 
+	// Nothing but the process itself ends the stuck upload, so a process that
+	// kept to its deadline exits at all. The wait is a guard against a hang, twice
+	// the whole budget, not a bound on how long the shutdown took.
 	select {
 	case err := <-g.exited:
 		require.NoError(t, err, "the process ends with code 0")
-		assert.Less(t, time.Since(begin), saveBy, "the process ended with the margin before a SIGKILL would come")
 	case <-time.After(2 * shutdownTimeout):
 		t.Fatal("gostack did not stop")
 	}
