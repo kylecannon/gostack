@@ -318,15 +318,19 @@ side by side.
   - a package only the head holds has nothing to compare against. It runs
     twice, at `-benchtime 2x`, so a broken benchmark still fails the job, one
     that breaks on its second call included, and is not compared;
-  - a package only the base holds is dropped.
+  - a package only the base holds is dropped;
+  - a top-level benchmark only the head holds, in a package that runs, is
+    treated the same way: it runs twice at `-benchtime 2x` and is not timed, not
+    planned and not compared, so a shard never holds it alone.
 
   The base is the target branch's tip, so a branch behind main also selects the
   packages main changed since it branched.
 - A benchmark reads no file at run time. What it needs is built in code or
   embedded, because the test binary does not hold a file the benchmark opens.
   Selection enforces this rule: it hashes every file under a package's
-  directory that is not a `.go` file, and every file under a `testdata`
-  directory, `.go` ones included, and a change to any of them makes the package
+  directory that is not a `.go` file, leaving out the directories of other
+  packages below it, and every file under a `testdata` directory, `.go` ones
+  included, and a change to any of them makes the package
   `changed`, so a benchmark that reads one is still compared. A file outside the
   package directory is not hashed; the rule stands for those.
 - Selection times one run of each top-level benchmark of a selected package at
@@ -348,9 +352,7 @@ side by side.
   the run holds (a re-run keeps those of the attempt before). It fails when one
   of them is missing, or when the base or the head output of a shard has no
   rows for a package and regex of that shard's plan. It then runs benchstat once
-  and `bench gate`, and fails when selection or any shard did not succeed. A
-  shard whose regex for a split package names only benchmarks the base lacks
-  has no base rows, and the join fails on it.
+  and `bench gate`, and fails when selection or any shard did not succeed.
 
 ### System bench (`bench/`)
 

@@ -70,7 +70,9 @@ type benchBin struct {
 type selected struct {
 	bin     benchBin
 	verdict buildVerdict
+	base    *benchBin // the base's binary of the package, nil when the base holds none
 	benches []benchCost
+	smoked  []string // top-level benchmarks only the head holds
 }
 
 type benchCost struct {
@@ -164,11 +166,12 @@ type selectConfig struct {
 // not Go source differ (a benchmark may read them at run time, and the binary
 // does not hold them), or when its head binary differs from its second build
 // (the build is not reproducible, so equal bytes would prove nothing). A
-// package only the head holds runs once at -benchtime 2x, so a broken benchmark
-// fails here, and is not compared. Each package that runs has each of its
-// top-level benchmarks run once at -benchtime, timed, and the shards are packed
-// from those times. A benchmark that would overrun a shard on its own fails
-// selection. The report goes to out and the GitHub Actions matrix to -matrix.
+// package only the head holds, and a top-level benchmark only the head holds in
+// a package that runs, run at -benchtime 2x, so a broken benchmark fails here,
+// and are not compared. Each other top-level benchmark of a package that runs is
+// run once at -benchtime, timed, and the shards are packed from those times. A
+// benchmark that would overrun a shard on its own fails selection. The report
+// goes to out and the GitHub Actions matrix to -matrix.
 func selectMain(ctx context.Context, args []string, out io.Writer, run runBin) error {
 	cfg, err := parseSelect(args)
 	if err != nil {
@@ -180,7 +183,7 @@ func selectMain(ctx context.Context, args []string, out io.Writer, run runBin) e
 		return err
 	}
 
-	err = measure(ctx, cfg.head, cfg.benchtime, pkgs, run)
+	err = measure(ctx, cfg.head, cfg.base, cfg.benchtime, pkgs, run)
 	if err != nil {
 		return err
 	}
@@ -257,7 +260,7 @@ func classify(baseDir, headDir, againDir string) ([]*selected, error) {
 			return nil, err
 		}
 
-		pkgs = append(pkgs, &selected{bin: b, verdict: v})
+		pkgs = append(pkgs, &selected{bin: b, verdict: v, base: findBin(base, b.bin)})
 	}
 
 	for _, b := range base {
@@ -267,6 +270,16 @@ func classify(baseDir, headDir, againDir string) ([]*selected, error) {
 	}
 
 	return pkgs, nil
+}
+
+// findBin is the manifest entry of bin, or nil.
+func findBin(bins []benchBin, bin string) *benchBin {
+	i := slices.IndexFunc(bins, func(b benchBin) bool { return b.bin == bin })
+	if i < 0 {
+		return nil
+	}
+
+	return &bins[i]
 }
 
 func inManifest(bins []benchBin, bin string) bool {
@@ -345,9 +358,10 @@ func compareBuilds(head, base, again build) (buildVerdict, error) {
 }
 
 // dataSum hashes what a test binary can read at run time from its package
-// directory without the compiler having seen it: every file under dir whose
-// name does not end in .go, and every file under a testdata directory, which go
-// tooling ignores and a test reads as data. Each is hashed by its path below dir
+// directory without the compiler having seen it: every file under dir, outside
+// the directories of other packages, whose name does not end in .go, and every
+// file under a testdata directory, which go tooling ignores and a test reads as
+// data. Each is hashed by its path below dir
 // and its content, so a changed, added, removed or renamed file changes the sum.
 func dataSum(dir string) ([sha256.Size]byte, error) {
 	h := sha256.New()
@@ -363,7 +377,11 @@ func dataSum(dir string) ([sha256.Size]byte, error) {
 		}
 
 		rel = filepath.ToSlash(rel)
-		if d.IsDir() || (strings.HasSuffix(rel, goSuffix) && !isTestdata(rel)) {
+		if d.IsDir() {
+			return skipSubpackage(path, rel)
+		}
+
+		if strings.HasSuffix(rel, goSuffix) && !isTestdata(rel) {
 			return nil
 		}
 
@@ -394,7 +412,31 @@ func dataSum(dir string) ([sha256.Size]byte, error) {
 // isTestdata reports whether a slash path below a package directory has a
 // testdata directory in it.
 func isTestdata(rel string) bool {
-	return strings.Contains("/"+rel, "/"+testdataDir+"/")
+	return strings.Contains("/"+rel+"/", "/"+testdataDir+"/")
+}
+
+// skipSubpackage skips a directory below a package directory that holds Go
+// files of its own, which is another package with a verdict of its own. Its
+// files are not the parent's data, and hashing them would mark the parent
+// changed whenever a descendant's data did. A testdata directory is data, Go
+// files and all.
+func skipSubpackage(path, rel string) error {
+	if rel == "." || isTestdata(rel) {
+		return nil
+	}
+
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), goSuffix) {
+			return fs.SkipDir
+		}
+	}
+
+	return nil
 }
 
 func fileSum(path string) ([sha256.Size]byte, error) {
@@ -464,16 +506,18 @@ func readManifest(dir string) ([]benchBin, error) {
 // measure runs what selection picked from the head's build: a head-only
 // package twice (-benchtime 2x), and every top-level benchmark of a package that runs once
 // at benchtime, timed. A failing run fails selection.
-func measure(ctx context.Context, binDir string, benchtime time.Duration, pkgs []*selected, run runBin) error {
+func measure(
+	ctx context.Context, headDir, baseDir string, benchtime time.Duration, pkgs []*selected, run runBin,
+) error {
 	for _, s := range pkgs {
 		switch s.verdict {
 		case verdictHeadOnly:
-			_, _, err := run(ctx, binDir, s.bin, benchArgs(wholePackage, smokeBenchtime)...)
+			_, _, err := run(ctx, headDir, s.bin, benchArgs(wholePackage, smokeBenchtime)...)
 			if err != nil {
 				return err
 			}
 		case verdictChanged, verdictUnreproducible:
-			err := measurePackage(ctx, binDir, benchtime, s, run)
+			err := measurePackage(ctx, headDir, baseDir, benchtime, s, run)
 			if err != nil {
 				return err
 			}
@@ -484,30 +528,69 @@ func measure(ctx context.Context, binDir string, benchtime time.Duration, pkgs [
 	return nil
 }
 
-func measurePackage(ctx context.Context, binDir string, benchtime time.Duration, s *selected, run runBin) error {
-	list, _, err := run(ctx, binDir, s.bin, "-test.list", "^Benchmark")
+// measurePackage times each top-level benchmark of a package that runs. One
+// that only the head holds has nothing to compare against, so like a package
+// only the head holds it runs at smokeBenchtime and is no unit of a shard.
+func measurePackage(
+	ctx context.Context, headDir, baseDir string, benchtime time.Duration, s *selected, run runBin,
+) error {
+	head, err := listBenchmarks(ctx, headDir, s.bin, run)
 	if err != nil {
 		return err
 	}
 
-	for name := range strings.FieldsSeq(string(list)) {
-		if !strings.HasPrefix(name, "Benchmark") {
+	if len(head) == 0 {
+		return fmt.Errorf("%w: %s lists no benchmark", errSelect, s.bin.pkg)
+	}
+
+	var inBase []string
+
+	if s.base != nil {
+		inBase, err = listBenchmarks(ctx, baseDir, *s.base, run)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, name := range head {
+		if s.base != nil && !slices.Contains(inBase, name) {
+			_, _, runErr := run(ctx, headDir, s.bin, benchArgs(anchored([]string{name}), smokeBenchtime)...)
+			if runErr != nil {
+				return runErr
+			}
+
+			s.smoked = append(s.smoked, name)
+
 			continue
 		}
 
-		_, elapsed, err := run(ctx, binDir, s.bin, benchArgs(anchored([]string{name}), benchtime.String())...)
-		if err != nil {
-			return err
+		_, elapsed, runErr := run(ctx, headDir, s.bin, benchArgs(anchored([]string{name}), benchtime.String())...)
+		if runErr != nil {
+			return runErr
 		}
 
 		s.benches = append(s.benches, benchCost{name: name, cost: elapsed})
 	}
 
-	if len(s.benches) == 0 {
-		return fmt.Errorf("%w: %s lists no benchmark", errSelect, s.bin.pkg)
+	return nil
+}
+
+// listBenchmarks is the top-level benchmarks a test binary holds.
+func listBenchmarks(ctx context.Context, binDir string, b benchBin, run runBin) ([]string, error) {
+	list, _, err := run(ctx, binDir, b, "-test.list", "^Benchmark")
+	if err != nil {
+		return nil, err
 	}
 
-	return nil
+	var names []string
+
+	for name := range strings.FieldsSeq(string(list)) {
+		if strings.HasPrefix(name, "Benchmark") {
+			names = append(names, name)
+		}
+	}
+
+	return names, nil
 }
 
 func benchArgs(bench, benchtime string) []string {
@@ -536,6 +619,13 @@ func units(pkgs []*selected, p shardParams) ([]unit, error) {
 		}
 
 		whole := unit{pkg: s.bin.pkg, cost: s.cost()}
+		if len(s.smoked) > 0 {
+			// The plan names the timed benchmarks: the others have no base rows.
+			for _, m := range s.benches {
+				whole.names = append(whole.names, m.name)
+			}
+		}
+
 		if p.estimate([]unit{whole}) <= p.budget {
 			us = append(us, whole)
 
@@ -665,6 +755,10 @@ func writeSelection(out io.Writer, pkgs []*selected, shards []shard, p shardPara
 		line := fmt.Sprintf("%-16s %s", s.verdict, s.bin.pkg)
 		if len(s.benches) > 0 {
 			line += fmt.Sprintf(" (one run %s)", s.cost().Round(time.Second))
+		}
+
+		if len(s.smoked) > 0 {
+			line += fmt.Sprintf(" (only in the head, run at %s: %s)", smokeBenchtime, strings.Join(s.smoked, " "))
 		}
 
 		b.WriteString(line + "\n")

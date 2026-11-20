@@ -106,11 +106,14 @@ func Test_classify_reads_the_files_a_package_holds(t *testing.T) {
 		pkgGoData   = "p/godata"
 		pkgGoSrc    = "p/gosrc"
 		pkgNew      = "p/newfile"
+		pkgParent   = "p/parent"
 	)
 
 	// Every package builds to the same binary on both sides.
 	bins := map[string]string{}
-	for _, pkg := range []string{pkgTestdata, pkgNested, pkgFixture, pkgReadme, pkgGoData, pkgGoSrc, pkgNew, pkgSame} {
+	for _, pkg := range []string{
+		pkgTestdata, pkgNested, pkgFixture, pkgReadme, pkgGoData, pkgGoSrc, pkgNew, pkgSame, pkgParent,
+	} {
 		bins[pkg] = "a"
 	}
 
@@ -124,6 +127,8 @@ func Test_classify_reads_the_files_a_package_holds(t *testing.T) {
 		writeData(t, dir, pkgGoData, "testdata/gen/input.go", "package gen")
 		writeData(t, dir, pkgGoSrc, "src.go", "package x // 1")
 		writeData(t, dir, pkgSame, "testdata/in.json", "1")
+		writeData(t, dir, pkgParent, "child/child.go", "package child")
+		writeData(t, dir, pkgParent, "child/data.json", "1")
 	}
 
 	// The binary stays the same bytes in every case: only a file the compiler
@@ -136,6 +141,8 @@ func Test_classify_reads_the_files_a_package_holds(t *testing.T) {
 	writeData(t, head, pkgGoData, "testdata/gen/input.go", "package gen // 2")
 	writeData(t, head, pkgGoSrc, "src.go", "package x // 2")
 	writeData(t, head, pkgNew, "testdata/added.json", "1")
+	// child is a package of its own, with a verdict of its own.
+	writeData(t, head, pkgParent, "child/data.json", "2")
 
 	pkgs, err := classify(base, head, head)
 	require.NoError(t, err)
@@ -149,6 +156,7 @@ func Test_classify_reads_the_files_a_package_holds(t *testing.T) {
 		pkgNew:      verdictChanged,
 		pkgGoSrc:    verdictUnchanged,
 		pkgSame:     verdictUnchanged,
+		pkgParent:   verdictUnchanged,
 	}, verdicts(pkgs))
 }
 
@@ -196,10 +204,14 @@ func Test_readManifest_refuses_two_packages_with_one_binary_name(t *testing.T) {
 type fakeRunner struct {
 	benches map[string]map[string]time.Duration // package, benchmark, cost
 	broken  string                              // a package whose benchmarks fail
-	calls   []string
+	// baseHolds is what the base's binary of a package lists, where it is not
+	// what the head's lists.
+	baseHolds map[string][]string
+	baseDir   string
+	calls     []string
 }
 
-func (f *fakeRunner) run(_ context.Context, _ string, b benchBin, args ...string) ([]byte, time.Duration, error) {
+func (f *fakeRunner) run(_ context.Context, binDir string, b benchBin, args ...string) ([]byte, time.Duration, error) {
 	call := b.pkg + " " + strings.Join(args, " ")
 	f.calls = append(f.calls, call)
 
@@ -208,6 +220,10 @@ func (f *fakeRunner) run(_ context.Context, _ string, b benchBin, args ...string
 	}
 
 	if args[0] == "-test.list" {
+		if held, ok := f.baseHolds[b.pkg]; ok && binDir == f.baseDir {
+			return []byte(strings.Join(held, "\n") + "\n"), 0, nil
+		}
+
 		return []byte(strings.Join(slices.Sorted(func(yield func(string) bool) {
 			for k := range f.benches[b.pkg] {
 				if !yield(k) {
@@ -232,6 +248,7 @@ func runSelect(t *testing.T, f *fakeRunner, base, head map[string]string) (strin
 
 	baseDir, headDir := buildDir(t, base), buildDir(t, head)
 	path := filepath.Join(t.TempDir(), "matrix.json")
+	f.baseDir = baseDir
 
 	var out bytes.Buffer
 
@@ -310,6 +327,89 @@ func Test_selectMain(t *testing.T) {
 		_, _, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
 		require.ErrorIs(t, err, errSelect)
 		require.ErrorContains(t, err, "BenchmarkOnly")
+	})
+}
+
+// A pull request that adds a top-level benchmark to a package already too large
+// for one shard. The new benchmark has no base rows, so a shard that held it
+// alone would fail the join: selection runs it once at 2x, as it does a package
+// only the head holds, and plans the benchmarks the base has.
+func Test_selectMain_smokes_a_benchmark_only_the_head_holds(t *testing.T) {
+	const benchC = "BenchmarkC"
+
+	f := &fakeRunner{
+		benches: map[string]map[string]time.Duration{
+			"x": {benchA: 100 * time.Second, benchB: 100 * time.Second, benchC: 100 * time.Second},
+		},
+		baseHolds: map[string][]string{"x": {benchA, benchB}},
+	}
+
+	// Timed, A and B take 5m + 10 rounds of 2 * 200 s: 71 minutes in one shard.
+	out, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+	require.NoError(t, err)
+
+	smoke := "x -test.run ^$ -test.bench ^(" + benchC + ")$ -test.benchmem " +
+		"-test.benchtime 2x -test.count 1 -test.timeout 30m"
+	assert.Contains(t, f.calls, smoke)
+	assert.NotContains(t, f.calls, strings.Replace(smoke, "2x", "500ms", 1), "it is not timed")
+	assert.Contains(t, out, "only in the head, run at 2x: "+benchC)
+
+	plans := make([]string, 0, len(m.Include))
+	for _, e := range m.Include {
+		plans = append(plans, e.Plan)
+	}
+
+	require.ElementsMatch(t, []string{"x ^(" + benchA + ")$\n", "x ^(" + benchB + ")$\n"}, plans,
+		"the shards hold the benchmarks the base has, and none holds the new one alone")
+
+	// The shards' output, as bench-ab writes it for those plans, joins and gates.
+	dir := t.TempDir()
+
+	for i, e := range m.Include {
+		name := strings.TrimSuffix(strings.TrimPrefix(e.Plan, "x ^("), ")$\n")
+		writeShard(t, dir, i, shardOutput("x", name+"-4"), shardOutput("x", name+"-4"))
+	}
+
+	matrixPath := writeMatrixFile(t, plans...)
+	_, _, err = runJoin(t, matrixPath, dir)
+	require.NoError(t, err)
+
+	const benchstat = `goos: linux
+pkg: x
+cpu: Cpu A
+       │  base.txt   │           head.txt            │
+       │   sec/op    │   sec/op     vs base          │
+BenchmarkA-4   100.1n ± 0%   100.2n ± 0%  ~ (p=0.784 n=10)
+BenchmarkB-4   100.1n ± 0%   100.2n ± 0%  ~ (p=0.784 n=10)
+`
+
+	_, err = runGateOn(t, benchstat, "[]\n", history(false), commitFlags(baseCommit, headCommit)...)
+	require.NoError(t, err)
+
+	t.Run("a whole package that holds one names its timed benchmarks", func(t *testing.T) {
+		f := &fakeRunner{
+			benches:   map[string]map[string]time.Duration{"x": {benchA: time.Second, benchB: time.Second, benchC: time.Second}},
+			baseHolds: map[string][]string{"x": {benchA, benchB}},
+		}
+
+		_, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+		require.NoError(t, err)
+
+		require.Equal(t, []matrixEntry{{Shard: "1 of 1", Plan: "x ^(" + benchA + "|" + benchB + ")$\n"}}, m.Include)
+	})
+
+	t.Run("a package whose benchmarks are all new in the head is smoked and not planned", func(t *testing.T) {
+		f := &fakeRunner{
+			benches:   map[string]map[string]time.Duration{"x": {benchC: time.Second}},
+			baseHolds: map[string][]string{"x": {benchA}},
+		}
+
+		_, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+		require.NoError(t, err)
+
+		assert.Empty(t, m.Include)
+		assert.Contains(t, f.calls,
+			"x -test.run ^$ -test.bench ^("+benchC+")$ -test.benchmem -test.benchtime 2x -test.count 1 -test.timeout 30m")
 	})
 }
 
