@@ -65,15 +65,29 @@ type endpoint struct {
 	url    string
 	hits   chan hit
 	answer func(http.ResponseWriter, *http.Request)
+	// wire, when not nil, may write the answer to a request itself, byte by
+	// byte, and report that it did; the endpoint's usual answer is then not
+	// sent.
+	wire func(net.Conn, *http.Request) bool
+	// open counts the connections the endpoint holds.
+	open atomic.Int64
 }
 
 func newEndpoint(t *testing.T, answer func(http.ResponseWriter, *http.Request)) *endpoint {
 	t.Helper()
 
+	return newWireEndpoint(t, answer, nil)
+}
+
+func newWireEndpoint(
+	t *testing.T, answer func(http.ResponseWriter, *http.Request), wire func(net.Conn, *http.Request) bool,
+) *endpoint {
+	t.Helper()
+
 	ln, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	e := &endpoint{url: "http://" + ln.Addr().String() + "/sns", hits: make(chan hit, 2048), answer: answer}
+	e := &endpoint{url: "http://" + ln.Addr().String() + "/sns", hits: make(chan hit, 2048), answer: answer, wire: wire}
 
 	var wg sync.WaitGroup
 
@@ -99,6 +113,9 @@ func newEndpoint(t *testing.T, answer func(http.ResponseWriter, *http.Request)) 
 
 // serve reads requests off conn and keeps each one's raw head.
 func (e *endpoint) serve(conn net.Conn) {
+	e.open.Add(1)
+
+	defer e.open.Add(-1)
 	defer func() { _ = conn.Close() }()
 
 	var raw bytes.Buffer
@@ -120,6 +137,10 @@ func (e *endpoint) serve(conn net.Conn) {
 		raw.Reset()
 
 		e.hits <- hit{head: string(head), header: req.Header, body: string(body)}
+
+		if e.wire != nil && e.wire(conn, req) {
+			continue
+		}
 
 		w := &answerWriter{header: http.Header{}, status: http.StatusOK}
 		if e.answer != nil {
@@ -603,32 +624,20 @@ func Test_Provider_HTTP_goroutines(t *testing.T) {
 	settledGoroutines(t, s, before)
 }
 
-func Test_Provider_Close_waitsForHTTP(t *testing.T) {
-	s := newStack(t, nil)
+// closeBeforeEndpoint closes s's SNS when the test ends, before the cleanups
+// registered earlier, which are the endpoints': an endpoint's cleanup waits for
+// its connections to close, and SNS keeps the idle ones for a minute otherwise.
+func closeBeforeEndpoint(t *testing.T, s *stack) {
+	t.Helper()
 
-	release := make(chan struct{})
-	e := newEndpoint(t, func(_ http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(headerType) == typeNotification {
-			<-release
-		}
-	})
-	topic := s.createTopic(paramName, "t")
-	s.confirmHTTP(topic, e)
-
-	s.publish(paramTopicArn, topic, paramMessage, "in flight")
-	e.next(t)
-
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		close(release)
-	}()
-
-	s.sns.Close(t.Context())
-	assert.Zero(t, s.sns.Dropped(), "Close waited for the delivery in flight")
+	t.Cleanup(func() { s.sns.Close(context.WithoutCancel(t.Context())) })
 }
 
-func Test_Provider_Close_cutsHTTPAtDeadline(t *testing.T) {
-	s := newStack(t, nil)
+// hungNotifications is an endpoint that holds every Notification and answers
+// the rest at once. Its release is closed at the test's end, after the
+// endpoint's own cleanup in order, so before it in time.
+func hungNotifications(t *testing.T) *endpoint {
+	t.Helper()
 
 	release := make(chan struct{})
 	e := newEndpoint(t, func(_ http.ResponseWriter, r *http.Request) {
@@ -636,8 +645,18 @@ func Test_Provider_Close_cutsHTTPAtDeadline(t *testing.T) {
 			<-release
 		}
 	})
+
 	t.Cleanup(func() { close(release) })
 
+	return e
+}
+
+// Test_Provider_Close_cutsHTTPAtOnce: Close does not wait for an HTTP delivery
+// in flight, even with a context that never ends: it cuts it, and the one
+// behind it, and counts both.
+func Test_Provider_Close_cutsHTTPAtOnce(t *testing.T) {
+	s := newStack(t, nil)
+	e := hungNotifications(t)
 	topic := s.createTopic(paramName, "t")
 	s.confirmHTTP(topic, e)
 
@@ -645,9 +664,180 @@ func Test_Provider_Close_cutsHTTPAtDeadline(t *testing.T) {
 	s.publish(paramTopicArn, topic, paramMessage, "waiting")
 	e.next(t)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
+	closed := make(chan struct{})
 
-	s.sns.Close(ctx)
+	go func() {
+		s.sns.Close(context.WithoutCancel(t.Context()))
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		require.FailNow(t, "Close waited for the HTTP delivery in flight")
+	}
+
 	assert.Equal(t, int64(2), s.sns.Dropped(), "the delivery in flight and the one behind it are cut")
+}
+
+// stallingBody answers a Notification with a 200 and the start of a body that
+// never ends, until release is closed.
+func stallingBody(release <-chan struct{}) func(net.Conn, *http.Request) bool {
+	return func(conn net.Conn, r *http.Request) bool {
+		if r.Header.Get(headerType) != typeNotification {
+			return false
+		}
+
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab")
+		<-release
+
+		return true
+	}
+}
+
+// Test_Provider_HTTP_bodyReadCutByTimeout: a 200 whose body the timeout cuts
+// fails the delivery, as the read timeout of LocalStack's requests.post
+// raises, and the message goes to the dead-letter queue.
+func Test_Provider_HTTP_bodyReadCutByTimeout(t *testing.T) {
+	s := newStack(t, nil)
+	s.sns.SetPostTimeout(300 * time.Millisecond)
+
+	release := make(chan struct{})
+	e := newWireEndpoint(t, nil, stallingBody(release))
+
+	t.Cleanup(func() { close(release) })
+
+	topic := s.createTopic(paramName, "t")
+	dlq := s.createQueue(account, region, "dlq", nil)
+	s.confirmHTTP(topic, e, attrRedrive, `{"deadLetterTargetArn":"`+dlq.arn+`"}`)
+
+	out := s.publish(paramTopicArn, topic, paramMessage, "cut")
+
+	assert.Equal(t, out.MessageID, parseEnvelope(t, dlq.await(1)[0].Body).MessageID,
+		"the delivery whose answer never finished reached the dead-letter queue")
+	assert.Zero(t, s.sns.Dropped())
+}
+
+// padded answers a Notification with a 200 and a header of pad bytes.
+func padded(pad int) func(net.Conn, *http.Request) bool {
+	return func(conn net.Conn, r *http.Request) bool {
+		if r.Header.Get(headerType) != typeNotification {
+			return false
+		}
+
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nX-Pad: "+strings.Repeat("a", pad)+"\r\nContent-Length: 2\r\n\r\nok")
+
+		return true
+	}
+}
+
+// Test_Provider_HTTP_answerHeaderBound: an answer whose status line and
+// headers pass 64 KiB fails the delivery; one just under it is taken.
+func Test_Provider_HTTP_answerHeaderBound(t *testing.T) {
+	const limit = 64 << 10
+
+	for _, tc := range []struct {
+		name   string
+		pad    int
+		failed bool
+	}{
+		{"over", limit, true},
+		{"under", limit - 1<<10, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStack(t, nil)
+			e := newWireEndpoint(t, nil, padded(tc.pad))
+			closeBeforeEndpoint(t, s)
+
+			topic := s.createTopic(paramName, "t")
+			dlq := s.createQueue(account, region, "dlq", nil)
+			s.confirmHTTP(topic, e, attrRedrive, `{"deadLetterTargetArn":"`+dlq.arn+`"}`)
+
+			s.publish(paramTopicArn, topic, paramMessage, "big header")
+			e.next(t)
+
+			if tc.failed {
+				assert.Len(t, dlq.await(1), 1, "the delivery reached the dead-letter queue")
+			} else {
+				s.sns.AwaitDeliveries(t.Context())
+				assert.Empty(t, dlq.receive(0), "an answer under the bound is taken")
+			}
+
+			assert.Zero(t, s.sns.Dropped())
+		})
+	}
+}
+
+// Test_Provider_HTTP_idleConnectionBound: connections kept idle are bounded
+// across endpoints. maxPosts+6 endpoints each get one delivery; the oldest idle
+// connections are closed past maxPosts, so no more than maxPosts stay open.
+func Test_Provider_HTTP_idleConnectionBound(t *testing.T) {
+	const endpoints = sns.MaxPosts + 6
+
+	s := newStack(t, nil)
+	s.sns.SetIdleConnTimeout(time.Minute)
+
+	topic := s.createTopic(paramName, "t")
+	served := make([]*endpoint, endpoints)
+
+	for i := range served {
+		served[i] = newEndpoint(t, nil)
+		s.subscribeHTTP(topic, served[i])
+	}
+
+	closeBeforeEndpoint(t, s)
+	s.sns.AwaitDeliveries(t.Context())
+
+	open := func() int64 {
+		var n int64
+		for _, e := range served {
+			n += e.open.Load()
+		}
+
+		return n
+	}
+
+	assert.Eventually(t, func() bool { return open() == sns.MaxPosts }, waitFor, 10*time.Millisecond,
+		"connections open: %d", open())
+	assert.Never(t, func() bool { return open() > sns.MaxPosts }, 300*time.Millisecond, 10*time.Millisecond)
+}
+
+// Test_Provider_HTTP_idleConnectionsPerHost: one host keeps as many idle
+// connections as it had sends in flight, up to the bound, not net/http's
+// default of two.
+func Test_Provider_HTTP_idleConnectionsPerHost(t *testing.T) {
+	const paths = 8
+
+	s := newStack(t, nil)
+	s.sns.SetIdleConnTimeout(time.Minute)
+
+	var (
+		inFlight atomic.Int64
+		once     sync.Once
+	)
+
+	release := make(chan struct{})
+	e := newEndpoint(t, func(http.ResponseWriter, *http.Request) {
+		inFlight.Add(1)
+		<-release
+	})
+
+	finish := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(finish)
+	closeBeforeEndpoint(t, s)
+
+	topic := s.createTopic(paramName, "t")
+
+	// Each path is its own lane, so the confirmations are in flight together.
+	for i := range paths {
+		s.subscribe(paramTopicArn, topic, paramProtocol, protocolHTTP, paramEndpoint, e.url+"/"+strconv.Itoa(i))
+	}
+
+	require.Eventually(t, func() bool { return inFlight.Load() == paths }, waitFor, 5*time.Millisecond)
+	finish()
+	s.sns.AwaitDeliveries(t.Context())
+
+	assert.Eventually(t, func() bool { return e.open.Load() == paths }, waitFor, 10*time.Millisecond,
+		"connections open: %d", e.open.Load())
+	assert.Never(t, func() bool { return e.open.Load() < paths }, 300*time.Millisecond, 10*time.Millisecond)
 }

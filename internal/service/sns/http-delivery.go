@@ -32,6 +32,13 @@ const (
 	// maxAnswer is the most of an endpoint's answer read. The rest is not
 	// read, and the connection is not reused.
 	maxAnswer = 64 << 10
+	// maxAnswerHeader is the most an endpoint's answer may have in its status
+	// line and headers; an answer with more fails the delivery. net/http's
+	// default is 10 MiB, which one send could be made to hold.
+	maxAnswerHeader = 64 << 10
+	// maxIdleConns is the most idle connections kept across every endpoint,
+	// as many as sends in flight.
+	maxIdleConns = maxPosts
 	// idleConnTimeout is how long a connection to an endpoint is kept after
 	// its last delivery.
 	idleConnTimeout = 2 * time.Second
@@ -106,8 +113,7 @@ type poster struct {
 	client    *http.Client
 	transport *http.Transport
 	timeout   time.Duration
-	// ctx ends when Close stops waiting for the deliveries in flight, which
-	// cuts them.
+	// ctx ends when Close begins, which cuts the deliveries in flight.
 	ctx    context.Context //nolint:containedctx // the lifetime of the deliveries, not a request's.
 	cancel context.CancelFunc
 	// running counts the goroutines of deliveries in flight, which Close
@@ -121,10 +127,12 @@ func newPoster() *poster {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		//nolint:gosec // G402: LocalStack delivers with verify=False, and so does gostack (docs/compat.md).
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
-		MaxIdleConnsPerHost: maxPosts,
-		IdleConnTimeout:     idleConnTimeout,
-		DisableCompression:  true,
+		TLSClientConfig:        &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConns:           maxIdleConns,
+		MaxIdleConnsPerHost:    maxIdleConns,
+		IdleConnTimeout:        idleConnTimeout,
+		MaxResponseHeaderBytes: maxAnswerHeader,
+		DisableCompression:     true,
 	}
 
 	return &poster{
@@ -159,7 +167,12 @@ func (ps *poster) send(p *post) error {
 
 	defer func() { _ = resp.Body.Close() }()
 
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+	// The answer is read as requests reads it, before its status counts: a read
+	// the timeout or Close cuts raises there, and fails the delivery here.
+	_, err = io.Copy(io.Discard, io.LimitReader(resp.Body, maxAnswer))
+	if err != nil {
+		return fmt.Errorf("read the answer: %w", err)
+	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("the endpoint answered %s", strconv.Itoa(resp.StatusCode))
@@ -231,17 +244,11 @@ func (ls *lanes) posted(l *lane, err error) {
 	ls.finish(l, failure)
 }
 
-// awaitPosts waits for the HTTP deliveries in flight until ctx ends, then
-// cuts the ones left and waits for them to return, which they do at once.
-// Close calls it once nothing can start another.
-func (ls *lanes) awaitPosts(ctx context.Context) {
-	ls.mu.Lock()
-	posting := ls.posting
-	ls.mu.Unlock()
-
-	if posting == 0 {
-		return
-	}
+// cutPosts cuts the HTTP deliveries in flight at once, each of which answers
+// as cut, and waits until ctx ends for them to return, which they do as soon
+// as the cut reaches them. Close calls it once nothing can start another.
+func (ls *lanes) cutPosts(ctx context.Context) {
+	ls.poster.cancel()
 
 	done := make(chan struct{})
 
@@ -252,12 +259,8 @@ func (ls *lanes) awaitPosts(ctx context.Context) {
 
 	select {
 	case <-done:
-		return
 	case <-ctx.Done():
 	}
-
-	ls.poster.cancel()
-	<-done
 }
 
 // httpDeliveryOf is the POST of m to s's endpoint: the signed envelope, or

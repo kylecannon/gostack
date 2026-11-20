@@ -751,7 +751,10 @@ queue.
   waiting for any of them, and no delivery is refused or dropped for lack of
   room while the server runs. The cost is memory: every delivery waiting for
   a slow or stuck destination stays in its lane, body included, until the
-  destination answers, and nothing caps that. Publish answers 200 with its
+  destination answers, and nothing caps that. A delivery to an HTTP endpoint
+  that has a dead-letter queue also holds its dead-letter call, built when
+  the message was published, so it costs 1.5 to 8 times the message
+  (SQ-327 owns reducing that). Publish answers 200 with its
   MessageId whatever happens to the deliveries.
 - **Failure.** A delivery the destination refuses (the queue is gone, or the
   send fails) goes to the tail of its subscription's dead-letter queue's lane,
@@ -775,9 +778,9 @@ queue.
   queued call, until the lanes are empty or the drain's deadline. A
   dead-letter delivery never fails over to another, so the chain of calls a
   lane queues is finite. Once the drain cuts the client, a refused head parks
-  or is cut and queues nothing more. `Close` waits for nothing but the HTTP
-  sends in flight (next section): it refuses every later delivery, stops the
-  client, counts each delivery still in a lane
+  or is cut and queues nothing more. `Close` waits for nothing: it cuts the
+  HTTP sends in flight (next section) at once, refuses every later delivery,
+  stops the client, counts each delivery still in a lane
   once, as dropped, and logs the per-destination counts and then one line,
   `SNS deliveries dropped`, with `count`, every delivery SNS lost since the
   process started, and `cut_at_close`, the ones Close cut. The hub's
@@ -807,26 +810,36 @@ endpoint holds up no queue.
   one send. At most 64 sends (`maxPosts`) are in flight across every
   endpoint; a lane whose head finds them all taken waits in `postWaiting`,
   and each answer starts the first lane waiting. A hung endpoint holds one
-  of the 64 until its timeout.
+  of the 64 for up to its 10 s timeout, so 64 hung endpoints delay every
+  HTTP delivery in the process, `SubscriptionConfirmation` included, until
+  a timeout frees a slot. SQS deliveries are not sent through them and are
+  unaffected.
 - **Client.** SNS owns its `http.Client` and `http.Transport`, apart from the
   in-process client. TLS certificates are not verified and redirects are
   followed (net/http's limit of 10), as LocalStack's `requests.post` does.
   A send has 10 s (`postTimeout`) for the whole exchange, redirects included,
   and is not retried. At most the first 64 KiB of the answer is read
-  (`maxAnswer`); a longer answer's connection is not reused. A connection is
+  (`maxAnswer`); a longer answer's connection is not reused. An answer
+  whose status line and headers pass 64 KiB (`maxAnswerHeader`) fails the
+  delivery. At most 64 idle connections are kept across endpoints
+  (`maxIdleConns`, and the same for one host), and a connection is
   closed 2 s after its last delivery (`idleConnTimeout`), which ends the
   goroutines it holds.
-- **Failure.** A transport error, the timeout, or a status of 400 or more
-  fails the delivery, as `raise_for_status` does. A failed notification or
+- **Failure.** A transport error, the timeout, a read of the answer that
+  fails (a 2xx whose body the timeout cuts included, as the read timeout of
+  `requests.post` raises), or a status of 400 or more fails the delivery, as
+  `raise_for_status` does. A failed notification or
   `SubscriptionConfirmation` goes to the subscription's dead-letter queue,
   through that queue's lane, with the body that was posted and no message
   attributes; with no dead-letter queue it is dropped and counted. A failed
   `UnsubscribeConfirmation` is always dropped and counted.
 - **Shutdown.** An endpoint's lane holds the same hub count as a queue's, so
-  `Hub.Drain` waits for its deliveries. `Close(ctx)` starts no new send,
-  waits for the sends in flight until ctx ends, then cancels the ones left,
-  which return at once, closes idle connections, and counts every delivery
-  still in a lane as cut.
+  `Hub.Drain` waits for its deliveries. `Close(ctx)` starts no new send and
+  cancels the sends in flight at once, without waiting for them to finish,
+  so a hung endpoint adds nothing to a stop; ctx bounds only the wait for
+  the cut sends to return, which they do as soon as the cut reaches them. It
+  closes idle connections and counts every delivery still in a lane, the
+  sends cut included, as cut.
 
 ### Body store (`internal/blob`)
 

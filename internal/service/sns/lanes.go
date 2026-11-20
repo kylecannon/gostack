@@ -379,10 +379,11 @@ func (ls *lanes) awaitIdle(ctx context.Context) {
 // Close stops delivery: the shutdown's drain of the in-process calls has
 // already made the deliveries it had time for, and stopped or cut the client,
 // so nothing sent now could reach a queue. From here every delivery is
-// refused. Close waits only for the HTTP deliveries in flight, until ctx ends,
-// and cuts the ones left then. Each delivery still in a lane is accounted for
-// once, counted in Dropped and logged: a head the client dropped without an
-// answer, or never got, is cut here. Close logs SNS's own count once, the
+// refused. Close cuts the HTTP deliveries in flight at once, so a hung endpoint
+// costs a stop no time; ctx bounds only the wait for the cut sends to return.
+// Each delivery still in a lane is accounted for once, counted in Dropped and
+// logged: a head the client dropped without an answer, or never got, is cut
+// here. Close logs SNS's own count once, the
 // deliveries dropped since the process started: the in-process hub's count
 // of calls cut is a different number, since a lane has one call in the client
 // however many deliveries wait behind it.
@@ -398,8 +399,9 @@ func (p *Provider) Close(ctx context.Context) {
 	// ones still queued without an answer.
 	p.client.Close()
 
-	// The HTTP deliveries in flight go on until ctx ends; none starts now.
-	ls.awaitPosts(ctx)
+	// The HTTP deliveries in flight are cut at once, as the queued ones are
+	// below; none starts now.
+	ls.cutPosts(ctx)
 	ls.poster.client.CloseIdleConnections()
 
 	ls.mu.Lock()
