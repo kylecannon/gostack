@@ -1470,8 +1470,10 @@ is untouched.
 - Stated limit: writes acknowledged since the last save are lost at
   `docker stop` when the shutdown save takes longer than its window for the
   service itself: its own `Snapshot` or sync, or the one a timed save is
-  taking of it, outlasts the window. Another service's slow save no longer
-  costs it its save. The
+  taking of it, outlasts the window, or a timed save took it and has not
+  reached it yet, behind another service's slow `Snapshot` or sync (open
+  after SQ-384). A service the timed save did not take, or has finished, is
+  saved beside it. The
   last state file on disk is what the next start loads. The window is `Save`
   minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
   `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same
