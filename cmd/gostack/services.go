@@ -207,16 +207,18 @@ func (p *providers) persist(eng *persist.Engine) (*persist.Assets, error) {
 
 // useAssets makes S3 keep its bodies as assets once the load has run, and
 // only when the engine still persists S3: one whose assets could not be opened,
-// or whose state file the load refused, keeps its bodies in the ephemeral
-// store, since nothing would save or sweep them, and health reports S3 as not
-// persisted. It runs before S3 serves.
-func (p *providers) useAssets(eng *persist.Engine, assets *persist.Assets) {
+// or that the load refused, for its state file or for a base dir it could not
+// open at startup, keeps its bodies in the ephemeral store, since nothing would
+// save or sweep them, and health reports S3 as not persisted. loadErr is the
+// load's error, which names the reason. It runs before S3 serves.
+func (p *providers) useAssets(eng *persist.Engine, assets *persist.Assets, loadErr error) {
 	if assets == nil {
 		return
 	}
 
 	if !eng.Enabled(s3Service) {
-		slog.Error("s3 bodies are not persisted: its state file was refused")
+		slog.Error("s3 bodies are not persisted: the startup load refused s3, its state file or the base dir",
+			"error", loadErr)
 
 		return
 	}
