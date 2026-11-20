@@ -1098,9 +1098,17 @@ cites the lines.
   doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
   bring a pending retry forward. A successful save resets the wait, so with
   `PERSIST_FREQUENCY` zero a change is saved at once again.
-- Of a run of failed saves the log shows the first in full, each one whose error
-  differs from the one before, every tenth with the count, and
-  `save recovered after N failures` when a save succeeds.
+- The wait belongs to the service whose save failed. A service in its backoff
+  is left dirty by the timer's flush, which saves the others when
+  `PERSIST_FREQUENCY` after their change has passed, and the timer is armed for
+  the earliest of the dirty services' times, so a service that keeps failing
+  does not widen another's loss window beyond `PERSIST_FREQUENCY`. A flush by
+  hand, which `Stop` and `Close` end with, tries every dirty service whatever
+  its wait.
+- Of a service's run of failed saves the log shows the first in full, each one
+  whose error differs from the one before, every tenth with the count, and
+  `save recovered after N failures` when a save succeeds, each line with the
+  service's name.
 
 **Loading and unloadable files:**
 
@@ -1313,11 +1321,11 @@ is untouched.
   returns. A timed save still in its `Snapshot` when `Close` releases the
   assets fails on the released assets, which counts as giving way and is not
   logged as a failed flush. A flush is
-  judged by what its services failed with, never by its context: one whose
-  every unsaved service gave way to a cancellation counts as no failure; one
-  with a real error, such as `ENOSPC`, counts with the backoff even when its
-  context was cancelled too; one that saved every service ends a run of
-  failures whatever its context did. A cancelled save does not log its queued
+  judged by what each of its services failed with, never by its context: a
+  service that gave way to a cancellation counts as no failure; one with a real
+  error, such as `ENOSPC`, counts with its own backoff even when the context was
+  cancelled too; one that saved ends its run of failures whatever the context
+  did. A cancelled save does not log its queued
   removals as stuck.
 - `POST /_gostack/state/load` drains its own removals: when a `Restore` queued
   the removal of bodies the loaded state does not name, the load marks the
