@@ -27,10 +27,7 @@ const (
 func Test_ImportKeyMaterial_ValidTo_outsideDateRange(t *testing.T) {
 	s := newStack(t)
 
-	// -62135596800 is the first instant of year 1, Go's zero time, which
-	// DescribeKey cannot echo. Before, it answered 200 and the key showed
-	// KEY_MATERIAL_EXPIRES with no ValidTo.
-	for _, validTo := range []string{"300000000000", "253402300800", "-62135596801", "-62135596800"} {
+	for _, validTo := range []string{"300000000000", "253402300800", "-62135596801"} {
 		t.Run(validTo, func(t *testing.T) {
 			id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
 			in := s.importParams(id, oaepSHA256).input(t, id, random(t, 32))
@@ -58,6 +55,22 @@ func Test_ImportKeyMaterial_ValidTo_outsideDateRange(t *testing.T) {
 			require.InDelta(t, want, meta[fieldValidTo], 0)
 		})
 	}
+
+	// -62135596800, the first instant of year 1, is a date LocalStack's parser
+	// reads, so it is taken. It is Go's zero time, which the generated
+	// KeyMetadata leaves out, so DescribeKey shows no ValidTo, as LocalStack,
+	// which stores no ValidTo, shows none for any.
+	t.Run("-62135596800 is a date with no ValidTo shown", func(t *testing.T) {
+		id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
+		in := s.importParams(id, oaepSHA256).input(t, id, random(t, 32))
+		in[fieldExpiration], in[fieldValidTo] = expires, json.Number("-62135596800")
+
+		s.ok(opImport, in)
+
+		meta := s.metadata(id)
+		require.Equal(t, expires, meta["ExpirationModel"])
+		require.NotContains(t, meta, fieldValidTo)
+	})
 }
 
 // Test_externalKey_withoutMaterial_staysPendingImport takes an EXTERNAL key
