@@ -6,6 +6,7 @@ package stream
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -138,8 +139,15 @@ func (l *Log) ParseSequenceNumber(s string) (int, error) {
 		return 0, ErrPosition
 	}
 
-	n, err := strconv.Atoi(s[len(l.prefix):])
-	if err != nil || n < 0 {
+	// Digits only: Atoi would take a sign, and "+0…1" is not a sequence
+	// number this shard wrote.
+	counter := s[len(l.prefix):]
+	if strings.ContainsFunc(counter, func(r rune) bool { return r < '0' || r > '9' }) {
+		return 0, ErrPosition
+	}
+
+	n, err := strconv.Atoi(counter)
+	if err != nil {
 		return 0, ErrPosition
 	}
 
