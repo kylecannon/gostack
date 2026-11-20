@@ -2,6 +2,7 @@ package dynamodb_test
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,9 +15,16 @@ import (
 // expired the table is filled again, untimed, before each sweep. Names carry
 // the axes, for example
 //
-//	BenchmarkRemoveExpired/items=1000000/expired=all
+//	BenchmarkRemoveExpired/items=10000/expired=all
+//
+// 1,000,000 items, 0.5 s to 1.4 s a sweep, run only under GOSTACK_BENCH_LARGE=1.
 func BenchmarkRemoveExpired(b *testing.B) {
-	for _, items := range []int{1000, 1000000} {
+	sizes := []int{1000, 10000}
+	if os.Getenv(largeEnv) == "1" {
+		sizes = append(sizes, 1000000)
+	}
+
+	for _, items := range sizes {
 		for _, all := range []bool{false, true} {
 			name := "none"
 			if all {

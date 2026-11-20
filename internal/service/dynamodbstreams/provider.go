@@ -60,6 +60,7 @@ func (p *Provider) Registration() service.Registration {
 		Metadata: api.Metadata,
 		Serve:    func(w http.ResponseWriter, rc *request.Context) { api.Serve(p, w, rc) },
 		Mutating: func(string) bool { return false },
+		Handler:  p,
 	}
 
 	if saver, ok := p.streams.(dynamodb.StreamSnapshotter); ok {

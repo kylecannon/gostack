@@ -79,14 +79,30 @@ type snapshotCase struct {
 	payload itemPayload
 }
 
-// snapshotCases are the item counts at each item size. A million items of
-// 4 KiB would be 4 GB, so the large size stops at 100,000.
-var snapshotCases = []snapshotCase{
-	{1_000, itemPayloads[0]},
-	{100_000, itemPayloads[0]},
-	{1_000_000, itemPayloads[0]},
-	{1_000, itemPayloads[1]},
-	{100_000, itemPayloads[1]},
+// largeEnv, set to 1, adds the rows too slow for the benchstat gate, which
+// judges ten runs of each row: every op of these takes 0.1 s to 2 s.
+// docs/architecture.md (Persistence, "DynamoDB") quotes the million-item rows.
+const largeEnv = "GOSTACK_BENCH_LARGE"
+
+// snapshotCases are the item counts at each item size, each op under 50 ms.
+// The large cases add 100,000 and 1,000,000 items of 100 B and 100,000 of
+// 4 KiB; a million items of 4 KiB would be 4 GB.
+func snapshotCases() []snapshotCase {
+	cases := []snapshotCase{
+		{1_000, itemPayloads[0]},
+		{10_000, itemPayloads[0]},
+		{1_000, itemPayloads[1]},
+	}
+
+	if os.Getenv(largeEnv) == "1" {
+		cases = append(cases,
+			snapshotCase{100_000, itemPayloads[0]},
+			snapshotCase{1_000_000, itemPayloads[0]},
+			snapshotCase{100_000, itemPayloads[1]},
+		)
+	}
+
+	return cases
 }
 
 func (c snapshotCase) name() string {
@@ -130,7 +146,7 @@ func restoredProvider(b *testing.B, file []byte) *dynamodb.Provider {
 }
 
 func BenchmarkSnapshot(b *testing.B) {
-	for _, c := range snapshotCases {
+	for _, c := range snapshotCases() {
 		b.Run(c.name(), func(b *testing.B) {
 			p := restoredProvider(b, generated(c.items, c.payload.size))
 
@@ -147,7 +163,7 @@ func BenchmarkSnapshot(b *testing.B) {
 }
 
 func BenchmarkRestore(b *testing.B) {
-	for _, c := range snapshotCases {
+	for _, c := range snapshotCases() {
 		b.Run(c.name(), func(b *testing.B) {
 			file := generated(c.items, c.payload.size)
 			p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)

@@ -203,7 +203,9 @@ under 0.5 s on every protocol, and the process keeps serving.
 
 `Test_Gateway_DeeplyNestedBodies`, `Test_Decode_NestingBound`,
 `Test_Decoder_NestedToTheBodyCap` and `Test_queryFile_RecursiveInput` pin these.
-DynamoDB's own 32-level limit belongs to its handler, which is not on `main`.
+DynamoDB's own limit, 32 levels of `M` or `L` in an item or an expression
+value, is its handler's (`value.MaxDepth`), answered as DynamoDB Local's
+`ValidationException`.
 
 ## S3 limits
 
@@ -237,6 +239,63 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 - A `PostObject` policy condition that fails is quoted in the `AccessDenied`
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
+
+## DynamoDB operations
+
+LocalStack serves DynamoDB by forwarding to Amazon's DynamoDB Local, rewriting
+some requests and answers in its provider (`services/dynamodb/provider.py` at
+8b9a79f). gostack runs a native engine (`docs/architecture.md`, "DynamoDB").
+It builds 36 of the 57 operations in the model, and `/_gostack/services`
+reports 36 of 57: the 35 operations the LocalStack image answers, plus
+`DescribeEndpoints` (the row under "Where gostack follows AWS").
+
+The other 21 answer `501 InternalFailure`, "API action '`<operation>`' for
+service 'dynamodb' not yet implemented": `CreateBackup`, `DeleteBackup`,
+`DescribeBackup`, `ListBackups`, `RestoreTableFromBackup`,
+`RestoreTableToPointInTime`, `ExportTableToPointInTime`, `DescribeExport`,
+`ListExports`, `ImportTable`, `DescribeImport`, `ListImports`,
+`GetResourcePolicy`, `PutResourcePolicy`, `DeleteResourcePolicy`,
+`DescribeGlobalTableSettings`, `UpdateGlobalTableSettings`,
+`DescribeTableReplicaAutoScaling`, `UpdateTableReplicaAutoScaling`,
+`ListContributorInsights` and `UpdateContributorInsights`. The LocalStack
+image answers `400 UnknownOperationException`, "An unknown operation was
+requested.", for the 11 of them SQ-230 probed (`verification/SQ-230/probe1b.txt`:
+the backup, export, import, resource policy, global table settings, replica
+auto scaling and contributor insights calls); the other 10 are unprobed. No
+test of LocalStack's suite calls any of the 21: a grep of
+`tests/aws/services/dynamodb` and `tests/aws/services/dynamodbstreams` at
+8b9a79f for their boto3 names (`create_backup` ... `update_contributor_insights`)
+finds none.
+`DescribeContributorInsights` is served: it echoes `TableName` and
+`IndexName` with `ContributorInsightsStatus` `DISABLED`, without checking the
+table, as the image does.
+
+DynamoDB Streams builds all four of its operations (`/_gostack/services`: 4 of
+4). LocalStack serves them from Kinesis; gostack keeps the records itself, one
+shard per stream, with no Kinesis behind it ("DynamoDB Streams", below).
+
+Parity: every row of `tests/aws/services/dynamodb` and
+`tests/aws/services/dynamodbstreams` that LocalStack passes, passes, except
+these, excluded with their reasons in `parity/exclusions/dynamodb.yaml` and
+`dynamodbstreams.yaml`:
+
+| Reason | Rows | Why |
+|---|---|---|
+| `depends-on:kinesis` | 5 | The test reads a Kinesis stream: a table's Kinesis streaming destination, or LocalStack's Kinesis-backed stream listed by `kinesis.list_streams`. gostack stores destinations and delivers nothing to them. |
+| `depends-on:kms` | 2 | The test calls `kms.describe_key` on the table's `KMSMasterKeyArn` ("DynamoDB until KMS", below). |
+| `depends-on:cloudformation` | 1 | `test_table_v2_stream` provisions its table through a CDK stack. |
+| `hard-skipped` | 2 | Skipped by the suite itself: `test_dynamodb_stream_records_with_update_item` always ("Flaky in CI"), `test_enable_kinesis_streaming_destination` on every run not against AWS. |
+
+What LocalStack adds over DynamoDB Local is kept: account and region
+namespacing with region `local` read as `us-east-1`, the `CreateTable` extras
+(`TableId`, `SSEDescription`, `WarmThroughput`, index backfill fields), stream
+record synthesis where a put that changes nothing leaves no record, Kinesis
+destinations stored but not delivered, global tables in the 2017 and 2019
+forms with the 2019 replica forwarding, tags, and time to live removal only on
+`DELETE /_aws/dynamodb/expired` or the hourly sweep under
+`DYNAMODB_REMOVE_EXPIRED_ITEMS`. The settings gostack honours and the
+DynamoDB Local ones it ignores are in "DynamoDB" under the environment
+variables, above.
 
 ## DynamoDB until KMS
 

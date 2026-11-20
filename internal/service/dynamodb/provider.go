@@ -107,6 +107,7 @@ func (p *Provider) Registration() service.Registration {
 		Mount:    p.mountExpired,
 		Close:    p.close,
 		Persist:  p,
+		Handler:  p,
 	}
 }
 

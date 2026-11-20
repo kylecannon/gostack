@@ -1306,9 +1306,9 @@ Kinesis. The state is two files, LocalStack's split:
   The bound is about 56 ms of lock per 1,000,000 items (Apple M1 Max).
   Snapshot and restore of one table of 1,000,000 items of about 100 bytes
   (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
-  `-benchtime 1x -count 6` on that machine: snapshot 0.57 s allocating 46 MiB;
-  restore 2.23 s allocating 1.24 GiB, against 1.20 GiB the restored state holds
-  (`held-B`). Restore allocates no more than the state it builds plus the file
+  `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
+  snapshot 0.57 s allocating 46 MiB; restore 2.23 s allocating 1.24 GiB,
+  against 1.20 GiB the restored state holds (`held-B`). Restore allocates no more than the state it builds plus the file
   once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
   this shape. `bin/gostack` loading that file, saving once and shutting down
   peaks at 1.46 GB resident (`/usr/bin/time -l`).
@@ -1321,6 +1321,114 @@ Kinesis. The state is two files, LocalStack's split:
 - Old localstack-persist data cannot be read, because those files are pickled
   Python objects.
 - The promise covers the compose file. It does not cover the data directory.
+
+## Services
+
+### DynamoDB (`internal/service/dynamodb`)
+
+LocalStack runs Amazon's DynamoDB Local behind its provider. gostack runs no
+JVM: the engine is Go, in four packages under `internal/service/dynamodb`, and
+the handlers beside them take LocalStack's provider (`provider.py`,
+`utils.py`, `models.py` at 8b9a79f) for what it adds over the engine. What it
+answers differently, and the 21 operations at 501, are in `docs/compat.md`,
+"DynamoDB operations" and the DynamoDB sections after it.
+
+| Package | Holds |
+|---|---|
+| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. |
+| `table` | One table's items under its key schema, its secondary indexes, the write path and the ordered reads. No handler state. |
+| `expression` | The four expression languages: one lexer, one path parser, one reserved-word list, a parsed form per language. |
+| `partiql` | The PartiQL parser. It knows no tables. |
+| `stream` | One stream's shard (`stream.Log`). |
+
+**State.** A `State` per account and region in a `store.Bundle` holds a map of
+`tableEntry`, each a table's definition (`tableMeta`, under the entry's own
+lock), its engine `table.Table` and its latest stream shard. An `accountState`
+per account holds what LocalStack keeps across regions: tags by ARN, 2017
+global tables and 2019 replicas with their owning region, and is locked
+before any `State`. `DYNAMODB_SHARE_DB` puts every account and region in one
+namespace. A call in a region a 2019 table is replicated to is answered from
+the owning region's table (`Provider.lookupHome`) for the operations LocalStack
+forwards; batches and transactions are not forwarded.
+
+**Engine.** A `table.Table` keeps its items in partitions: a map from the
+encoded hash key to a slice of entries sorted by range key, binary searched
+for a read or a write. A list of the partition keys in order is rebuilt only
+when a read across partitions (Scan) finds a partition added since. A local or
+global secondary index is a second such store whose entries reference the
+same item maps as the primary; the index list is copy-on-write, published
+through an atomic pointer, so a put's key check reads it without the table
+lock. `Range` reads one partition between bounds a `SortCondition` sets, in
+either direction, from an exclusive start key; `Scan` walks the partitions in
+order. Both hand the caller whole stored items, and the caller projects.
+
+Each table has its own `sync.RWMutex`, and nothing locks across tables except
+`table.Lock` and `table.ReadLock`, which take several tables' locks in the
+order of their creation ids, so a transaction or batch that spans tables
+cannot deadlock against another. Stored items are immutable: a write replaces
+the whole map, so a reader may keep what it was handed and no read copies an
+item.
+
+**The write path.** Every write, from `PutItem` to a PartiQL `UPDATE`, a
+transaction or a time to live removal, goes through `Table.Write` (or
+`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `decide` with
+the stored item under the table's write lock and stores what `decide` returns,
+nil to delete; a condition expression, an update expression and the return
+values are all evaluated inside `decide`, so nothing changes between the check
+and the write. It updates the indexes under the same lock and returns a
+`Change` with the old and new item. `Change.Changed()` is false for a put
+that stores an equal item, which is what keeps such a put out of the stream.
+A transaction decides every action first and writes them all through
+`WriteHeld` only when none failed.
+
+**Expressions.** A request's expressions are parsed once, with
+`ExpressionAttributeNames` and `ExpressionAttributeValues` substituted, into
+one parsed form per language: `Condition` (condition and filter),
+`KeyCondition` (its hash value and a `table.SortCondition`), `Projection` and
+`UpdateExpr`. Evaluation reads no placeholder. Parsing records every name and
+value it used, so the unused-placeholder check runs once over the whole
+request, in DynamoDB Local's order: substitution syntax first, then filter,
+projection and key condition, then unused names before unused values. The
+legacy parameters (`KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected`,
+`AttributeUpdates`) translate into the same parsed forms. Every error is a
+`ValidationException` with DynamoDB Local's message for the first problem in
+the text.
+
+**PartiQL.** `partiql` parses `SELECT`, `INSERT`, `UPDATE`, `DELETE` and, in a
+transaction, `EXISTS`. The handlers (`partiql*.go`) compile a statement to
+expression text with generated `#nN` and `:vN` placeholders and call the
+existing operations: a `SELECT` becomes a `GetItem`, `Query` or `Scan`, an
+`INSERT` a `PutItem` under `attribute_not_exists`, an `UPDATE` an `UpdateItem`
+under `attribute_exists`, and `ExecuteTransaction` a `TransactGetItems` or
+`TransactWriteItems`. PartiQL has no write path or reader of its own, so its
+writes reach streams and persistence like any other.
+
+**Streams.** A table with a stream registers a `table.Observer`, which the
+engine calls under the table's write lock for every `Change` that changed
+something, so records are numbered in the order the writes applied. The
+observer builds the record for the stream's view type and appends it to the
+table's `stream.Log`. DynamoDB Streams reads the logs through `dynamodb.Streams`
+("In-process client", above, for the shard, its retention and its byte bound).
+A time to live removal goes through `Table.Expire`, whose record carries the
+`dynamodb.amazonaws.com` service identity.
+
+**What is held in memory.** Everything. Each item is a
+`map[string]api.AttributeValue`, referenced once from the primary store and
+once from each index that projects it; about 1.3 KB per item of 100 bytes
+(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records
+for 24 hours. `TransactWriteItems` client request tokens are held for their
+10-minute window and swept when a later transaction looks. Time to live
+removes nothing unless asked: the hourly sweep runs only under
+`DYNAMODB_REMOVE_EXPIRED_ITEMS`, on a timer armed while a table has time to
+live on. No other goroutine runs while the service is idle.
+
+**Persistence.** The two files, their contents and the lock a snapshot takes
+are under Persistence, "DynamoDB". The format: `{"v":1,"accounts":[…],
+"states":[{"account","region","tables":[{"meta","shard","items"}]}]}` in
+`dynamodb/store.*`, items as the wire writes them with numbers canonical, and
+the shard records in `dynamodbstreams/store.*`. Restore rebuilds the indexes
+from the items with `table.Load`, which sizes each partition before it fills
+it and sorts it once.
 
 ## Dependencies
 

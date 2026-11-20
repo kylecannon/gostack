@@ -20,10 +20,12 @@ import (
 //
 // One iteration reads the whole result, following LastEvaluatedKey across the
 // 1 MB pages, on each of concurrency simultaneous callers. The filter keeps
-// every item, so it adds its evaluation and not a smaller result.
+// every item, so it adds its evaluation and not a smaller result. 500 items of
+// 4 KiB are three pages; 10,000 items made ops of 60 to 340 ms, too slow for
+// the benchstat gate's ten runs a row.
 
 var (
-	readSizes       = []int{1, 100, 10000}
+	readSizes       = []int{1, 100, 500}
 	readPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}}
 	readConcurrency = []int{1, 16}
 	updateActions   = []int{1, 10, 50}
