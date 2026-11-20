@@ -45,7 +45,7 @@ func (e *Engine) idle() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	return e.timer == nil && !e.running && !e.flushing
+	return e.timer == nil && !e.running && e.flushing == 0
 }
 
 // Test_Engine_Immediate_OneFlusher runs in real time, not under synctest. The
