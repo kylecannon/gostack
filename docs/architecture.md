@@ -459,6 +459,16 @@ with a credential scope for the caller's account and region and serves it
 through the gateway's own handler. Detection, account resolution, logging and
 dirty marking all apply, and a service never reaches into another's state.
 
+One exception: `dynamodbstreams` reads DynamoDB's streams through the
+`dynamodb.Streams` interface, which `registrations()` wires by handing it the
+DynamoDB provider. A stream's records are DynamoDB's state, appended by the
+table engine under the table's write lock in the order the writes applied, and
+DynamoDB's API has no call that hands them over. DynamoDB Streams keeps no
+state of its own: its iterators carry their position, issue time and shard.
+Each shard keeps records for 24 hours, on a timer armed only while it holds
+records, and at most 256 MiB of them, each counted as its `SizeBytes` plus 256
+bytes, oldest trimmed first.
+
 An `inproc.Call` names the method, path, query, content type, headers and body,
 so it speaks every protocol. Its zero values are a json 1.0 call: `POST /`,
 `Content-Type: application/x-amz-json-1.0` and the `X-Amz-Target` of `Target`.
