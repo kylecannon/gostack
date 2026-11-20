@@ -183,7 +183,7 @@ func Test_Engine_TimerFlush_LeaderSavedAloneWhileItsFollowerBacksOff(t *testing.
 // that take nothing. It is due when its leader is, and never when its leader
 // is not persisted.
 func Test_Engine_nextDue_FollowerNoSoonerThanItsLeader(t *testing.T) {
-	p := newPair(t, 0)
+	p := newPair(t, Immediate)
 	now := time.Now()
 	retryAt := now.Add(time.Hour)
 
@@ -195,7 +195,7 @@ func Test_Engine_nextDue_FollowerNoSoonerThanItsLeader(t *testing.T) {
 
 	require.True(t, at.Equal(retryAt), "due at %v, want the leader's retryAt %v", at, retryAt)
 
-	alone := New(quietConfig(t.TempDir(), 0))
+	alone := New(quietConfig(t.TempDir(), Immediate))
 	alone.Register(follower, flakyFollower{flaky{logged{name: follower, leader: leader, log: p.log}, p.followerFails}})
 	alone.MarkDirty(follower)
 

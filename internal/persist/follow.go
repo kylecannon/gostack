@@ -9,7 +9,8 @@ package persist
 // leader is not saved (its backoff, a failure, or it is not persisted) the
 // follower is not saved and stays dirty; when the follower is in its own
 // backoff the leader is saved alone, and the follower's file is the older of
-// the two until both are saved again.
+// the two until both are saved again. A follower's leader follows no service,
+// and no service follows a follower: [Engine.Register] refuses a chain.
 type Follower interface {
 	// Follows names the service this one follows.
 	Follows() string
@@ -27,8 +28,9 @@ type Committer interface {
 // snapshot, so it keeps what its followers write only when one will. A flush
 // calls Followed before each Snapshot: true when it saves a follower right
 // after this service, false when it saves the service alone (the follower is
-// not persisted, is unsafe, or is in its own backoff). It calls Followed(false)
-// again when the save fails, since no follower is saved from that snapshot.
+// not persisted, is unsafe, or is in its own backoff). A flush that told it
+// true tells it Followed(false) once the flush ends, whatever happened to
+// either save, so nothing it kept for its follower outlives the flush.
 type Leader interface {
 	Followed(saved bool)
 }

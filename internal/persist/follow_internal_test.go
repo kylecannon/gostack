@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -133,4 +134,43 @@ func Test_Engine_Flush_SavesAFollowerWithItsLeader(t *testing.T) {
 	e.MarkDirty(follower)
 	require.NoError(t, e.Flush(t.Context()))
 	require.Equal(t, []string{leader, follower}, log.seen)
+}
+
+// Test_Engine_Register_RefusesAChainOfFollowers: SQ-370 S1. A follower of a
+// follower would never be saved alone, and at PERSIST_FREQUENCY 0 would fire
+// the timer for flushes that take nothing; a service that follows itself the
+// same. Register refuses either, in whichever order the services come.
+func Test_Engine_Register_RefusesAChainOfFollowers(t *testing.T) {
+	// The chain: other follows follower, which follows leader.
+	log := &orderLog{}
+	snaps := map[string]Snapshotter{
+		leader:   logged{name: leader, log: log},
+		follower: leading{logged{name: follower, leader: leader, log: log}},
+		other:    leading{logged{name: other, leader: follower, log: log}},
+	}
+
+	for _, order := range [][]string{{leader, follower, other}, {other, leader, follower}, {leader, other, follower}} {
+		t.Run(fmt.Sprint(order), func(t *testing.T) {
+			e := New(quietConfig(t.TempDir(), Immediate))
+			register := func(name string) func() { return func() { e.Register(name, snaps[name]) } }
+
+			require.NotPanics(t, register(order[0]))
+			require.NotPanics(t, register(order[1]))
+			require.Panics(t, register(order[2]), "the third service makes a chain")
+		})
+	}
+
+	t.Run("self", func(t *testing.T) {
+		e := New(quietConfig(t.TempDir(), Immediate))
+		require.Panics(t, func() { e.Register(other, leading{logged{name: other, leader: other, log: log}}) })
+	})
+
+	t.Run("two followers of one leader", func(t *testing.T) {
+		e := New(quietConfig(t.TempDir(), Immediate))
+		require.NotPanics(t, func() {
+			e.Register(leader, snaps[leader])
+			e.Register(follower, snaps[follower])
+			e.Register(other, leading{logged{name: other, leader: leader, log: log}})
+		})
+	})
 }

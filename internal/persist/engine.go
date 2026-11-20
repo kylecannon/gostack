@@ -185,8 +185,15 @@ func (e *Engine) Enabled(service string) bool {
 }
 
 // Register adds a service to the Engine. A service whose persistence is off is
-// not tracked.
+// not tracked. It panics, a wiring error, for a [Follower] that follows itself
+// or would make a chain with a registered service: a follower whose leader
+// follows a service, or one a registered service follows. A flush saves a
+// follower only with a leader that follows no service.
 func (e *Engine) Register(service string, s Snapshotter) {
+	if follows(s) == service {
+		panic(fmt.Sprintf("persist: %s follows itself", service))
+	}
+
 	if !e.Enabled(service) {
 		return
 	}
@@ -198,7 +205,27 @@ func (e *Engine) Register(service string, s Snapshotter) {
 		e.services = make(map[string]*tracked)
 	}
 
+	refuseChain(e.services, service, s)
 	e.services[service] = &tracked{snap: s}
+}
+
+// refuseChain panics when registering s as service would make a chain of
+// followers with one of the services registered.
+func refuseChain(services map[string]*tracked, service string, s Snapshotter) {
+	leader := follows(s)
+	if leader == "" {
+		return
+	}
+
+	if l, ok := services[leader]; ok && follows(l.snap) != "" {
+		panic(fmt.Sprintf("persist: %s follows %s, which follows %s", service, leader, follows(l.snap)))
+	}
+
+	for name, t := range services {
+		if name != service && follows(t.snap) == service {
+			panic(fmt.Sprintf("persist: %s follows %s, which follows %s", name, service, leader))
+		}
+	}
 }
 
 // Assets returns the assets of the service named by service, and opens
@@ -998,6 +1025,7 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]unsa
 	run := flushRun{e: e, root: root, committed: map[string]bool{}, deferred: map[string]bool{}}
 	deferred := run.firstPass(ctx, saveOrder(pending))
 	run.secondPass(ctx, deferred)
+	run.unfollow()
 
 	return run.failed, errors.Join(run.errs...)
 }
@@ -1069,6 +1097,9 @@ type flushRun struct {
 	// committed are the services whose snapshot this flush renamed into place,
 	// and deferred the ones it deferred to the second pass.
 	committed, deferred map[string]bool
+	// followed are the [Leader]s this flush told a follower is saved after
+	// them, told otherwise once it ends.
+	followed []Leader
 }
 
 // staged is one service's save between its snapshot and its rename.
@@ -1117,6 +1148,10 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 
 		if l, ok := p.snap.(Leader); ok {
 			l.Followed(followed[p.name])
+
+			if followed[p.name] {
+				r.followed = append(r.followed, l)
+			}
 		}
 
 		s := &staged{p: p, removed: p.assets.begin()}
@@ -1202,9 +1237,17 @@ func (r *flushRun) giveWay(p pendingService) {
 	r.failed = append(r.failed, unsaved{pendingService: p, err: errLeaderUnsaved, gaveWay: true})
 }
 
+// unfollow ends the flush for each [Leader] it told a follower is saved after
+// it: whatever happened to either save, nothing it kept for that follower is
+// needed past the flush.
+func (r *flushRun) unfollow() {
+	for _, l := range r.followed {
+		l.Followed(false)
+	}
+}
+
 // end ends one service's save with err and records what it failed with. A
-// save that ended in its rename is committed, and a [Committer] is told so. A
-// [Leader] whose save failed is told no follower is saved from it.
+// save that ended in its rename is committed, and a [Committer] is told so.
 func (r *flushRun) end(s *staged, err error) {
 	finishSave(s, err)
 
@@ -1219,10 +1262,6 @@ func (r *flushRun) end(s *staged, err error) {
 	}
 
 	p := s.p
-
-	if l, ok := p.snap.(Leader); ok {
-		l.Followed(false)
-	}
 
 	r.errs = append(r.errs, fmt.Errorf("persist %s: %w", p.name, err))
 

@@ -1,8 +1,11 @@
 package dynamodb_test
 
 import (
+	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,11 +27,12 @@ var errTableDisk = errors.New("test: the table file's disk")
 
 // hookedTables is DynamoDB's snapshotter with a change that lands after its
 // cut and before the streams save of the same flush, and a failure of the
-// table save after its cut.
+// table save after its cut, and a hook once the table file is committed.
 type hookedTables struct {
-	p     *dynamodb.Provider
-	after func()
-	fail  bool
+	p         *dynamodb.Provider
+	after     func()
+	committed func()
+	fail      bool
 }
 
 func (h *hookedTables) Snapshot(w io.Writer) error {
@@ -54,6 +58,10 @@ func (h *hookedTables) Restore(r io.Reader) error {
 func (h *hookedTables) Committed() {
 	if c, ok := any(h.p).(interface{ Committed() }); ok {
 		c.Committed()
+	}
+
+	if h.committed != nil {
+		h.committed()
 	}
 }
 
@@ -274,5 +282,50 @@ func Test_persist_cutHoldsRecordsOnlyForAStreamsSave(t *testing.T) {
 		tables.fail = true
 		require.ErrorIs(t, eng.Flush(t.Context()), errTableDisk)
 		require.Zero(t, dynamodb.CutRecords(s.provider), "no streams save follows a failed table save")
+	})
+}
+
+// Test_persist_copyDroppedAtTheEndOfEveryFlush (SQ-370 S2): the table file is
+// committed and the streams snapshot is never taken. Nothing reads the copy,
+// so it is not held once the flush, or Stop's, returns.
+func Test_persist_copyDroppedAtTheEndOfEveryFlush(t *testing.T) {
+	// streamsInTheWay leaves the streams directory unmakeable, so the streams
+	// save fails before its Snapshot.
+	streamsInTheWay := func(t *testing.T, dir string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, streamsName), []byte("in the way"), 0o600))
+	}
+
+	t.Run("streams directory unmakeable", func(t *testing.T) {
+		dir := t.TempDir()
+		s, eng, _ := pairStack(t, dir)
+		streamsInTheWay(t, dir)
+		pairSetup(t, s)
+
+		require.Error(t, eng.Flush(t.Context()))
+		require.Zero(t, dynamodb.CutRecords(s.provider))
+	})
+
+	t.Run("cancelled between the two saves", func(t *testing.T) {
+		dir := t.TempDir()
+		s, eng, tables := pairStack(t, dir)
+		pairSetup(t, s)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		tables.committed = cancel
+
+		require.ErrorIs(t, eng.Flush(ctx), context.Canceled)
+		require.Zero(t, dynamodb.CutRecords(s.provider))
+		require.Equal(t, []int{3, 0}, restoredCounts(t, dir))
+	})
+
+	t.Run("Stop", func(t *testing.T) {
+		dir := t.TempDir()
+		s, eng, _ := pairStack(t, dir)
+		streamsInTheWay(t, dir)
+		pairSetup(t, s)
+
+		require.Error(t, eng.Stop(t.Context()))
+		require.Zero(t, dynamodb.CutRecords(s.provider))
 	})
 }

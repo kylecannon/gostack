@@ -41,7 +41,10 @@ import (
 // The copy costs a []stream.Record of the shard's records, not their images,
 // which the records share with the shard. It is made only when persistence
 // saves the streams after that table snapshot (Followed) and dropped once the
-// streams snapshot has written it, so it lives for one flush. A cut of slice
+// streams snapshot has written it, or when persistence calls Followed(false)
+// at the end of the flush whatever happened, so it lives for one flush. The
+// streams snapshot encodes each record from the copy as it goes, with no
+// second array of the records. A cut of slice
 // headers would cost nothing, but retention zeroes a dropped record in place
 // so its images can be collected; leaving dropped records in the shard's
 // array instead would keep their images until the array is next grown, up to
@@ -72,8 +75,8 @@ func (p *Provider) Committed() {
 // Followed implements persist.Leader. Unless a dynamodbstreams save follows,
 // the next table snapshot's cut copies no records. Either way the cut kept
 // for an earlier one is dropped: persistence calls it before a table snapshot,
-// whose cut replaces it, and after a failed one, which no streams save
-// follows.
+// whose cut replaces it, and with false at the end of a flush that saved or
+// meant to save the streams, which reads no cut after it.
 func (p *Provider) Followed(saved bool) {
 	p.unfollowed.Store(!saved)
 	p.cutTaken.Store(nil)
@@ -150,21 +153,52 @@ func (p *Provider) writeStreams(enc *jsontext.Encoder) error {
 		return cmp.Or(cmp.Compare(a.account, b.account), cmp.Compare(a.region, b.region), cmp.Compare(a.table, b.table))
 	})
 
-	for _, c := range shards {
-		if len(c.records) == 0 {
+	for i := range shards {
+		if len(shards[i].records) == 0 {
 			continue
 		}
 
-		saved := shardSaved{
-			Account: c.account, Region: c.region, Table: c.table, Created: c.created,
-			Records: make([]recordSaved, len(c.records)),
+		err = writeShard(enc, &shards[i])
+		if err != nil {
+			return err
 		}
 
-		for i, r := range c.records {
-			saved.Records[i] = recordSaved{
-				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
-				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
-			}
+		// A written shard's records are not held for the shards after it.
+		shards[i].records = nil
+	}
+
+	return writeTokens(enc, jsontext.EndArray, jsontext.EndObject)
+}
+
+// writeShard writes c as a shardSaved, a record at a time, so the shard's
+// records are not held a second time as []recordSaved.
+func writeShard(enc *jsontext.Encoder, c *shardCut) error {
+	err := writeTokens(enc, jsontext.BeginObject,
+		jsontext.String("account"), jsontext.String(c.account),
+		jsontext.String("region"), jsontext.String(c.region),
+		jsontext.String("table"), jsontext.String(c.table),
+		jsontext.String("created"))
+	if err != nil {
+		return err
+	}
+
+	err = json.MarshalEncode(enc, c.created, snapshotOptions)
+	if err != nil {
+		return err //nolint:wrapcheck // SnapshotStreams wraps it
+	}
+
+	err = writeTokens(enc, jsontext.String("records"), jsontext.BeginArray)
+	if err != nil {
+		return err
+	}
+
+	// One recordSaved for the shard, not one allocated a record.
+	var saved recordSaved
+
+	for _, r := range c.records {
+		saved = recordSaved{
+			Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
+			SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
 		}
 
 		err = json.MarshalEncode(enc, &saved, snapshotOptions)

@@ -80,9 +80,9 @@ type Provider struct {
 	// reports that snapshot on disk (Committed). streamCut is the last one
 	// reported, until the dynamodbstreams snapshot takes it to write its
 	// records and no others (snapshot-streams.go). A cut kept for no
-	// streams save is dropped: the next table snapshot replaces both, a failed
-	// one drops its own (Followed), and Restore sets both to nil. At most one
-	// is held.
+	// streams save is dropped: the next table snapshot replaces both, the end
+	// of each flush drops both (Followed), and Restore sets both to nil. At
+	// most one is held.
 	cutTaken, streamCut atomic.Pointer[[]shardCut]
 	// unfollowed is set while persistence saves no dynamodbstreams snapshot
 	// after the next table snapshot (PERSIST_DYNAMODBSTREAMS=0, or the

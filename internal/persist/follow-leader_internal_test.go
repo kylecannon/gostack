@@ -1,7 +1,11 @@
 package persist
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -9,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The rule these tests hold (SQ-367): a [Leader] is told before each Snapshot
-// whether a flush saves a follower right after it, and told no follower is
-// saved when its save fails.
+// The rule these tests hold (SQ-367, SQ-371): a [Leader] is told before each
+// Snapshot whether a flush saves a follower right after it, and a flush that
+// told it true tells it false once the flush ends, whatever happened.
 
 // What telling logs for Followed.
 const (
@@ -50,7 +54,9 @@ func Test_Engine_Flush_LeaderToldItsFollowerIsSaved(t *testing.T) {
 
 	p.e.MarkDirty(leader)
 	require.NoError(t, p.e.Flush(t.Context()))
-	require.Equal(t, []string{followedTrue, leader, "commit " + leader, follower, "commit " + follower}, p.saves())
+	require.Equal(t,
+		[]string{followedTrue, leader, "commit " + leader, follower, "commit " + follower, followedFalse}, p.saves(),
+		"the flush ends by telling the leader no follower is saved after it any more")
 }
 
 func Test_Engine_Flush_LeaderWithNoFollowerToldSo(t *testing.T) {
@@ -87,4 +93,83 @@ func Test_Engine_Flush_FailedLeaderToldNoFollowerIsSaved(t *testing.T) {
 	require.ErrorIs(t, p.e.Flush(t.Context()), errTestDisk)
 	require.Equal(t, []string{followedTrue, leader, followedFalse}, p.saves(),
 		"the follower gives way, so nothing is saved from the failed snapshot")
+}
+
+// Test_Engine_Flush_FollowerNeverSnapshottedLeaderToldAtTheEnd: SQ-370 S2.
+// The leader commits, then the follower's save fails before its Snapshot, its
+// directory unmakeable. Nothing reads what the leader kept for it, so the
+// flush ends by telling the leader so.
+func Test_Engine_Flush_FollowerNeverSnapshottedLeaderToldAtTheEnd(t *testing.T) {
+	p := newTellingPair(t, true)
+	require.NoError(t, os.WriteFile(filepath.Join(p.dir, follower), []byte("in the way"), 0o600))
+
+	p.e.MarkDirty(leader)
+	require.Error(t, p.e.Flush(t.Context()))
+	require.Equal(t, []string{followedTrue, leader, "commit " + leader, followedFalse}, p.saves())
+}
+
+// cancelling is telling whose Committed cancels the flush, between the
+// leader's save and its follower's.
+type cancelling struct {
+	telling
+
+	cancel context.CancelFunc
+}
+
+func (c cancelling) Committed() {
+	c.telling.Committed()
+	c.cancel()
+}
+
+// Test_Engine_Flush_CancelledBetweenTheSavesLeaderToldAtTheEnd: SQ-370 S2.
+// The flush ends between the leader's commit and its follower's save.
+func Test_Engine_Flush_CancelledBetweenTheSavesLeaderToldAtTheEnd(t *testing.T) {
+	dir := t.TempDir()
+	log := &orderLog{}
+	ctx, cancel := context.WithCancel(t.Context())
+	e := New(quietConfig(dir, time.Hour))
+	e.Register(leader, cancelling{telling{flaky{logged{name: leader, log: log}, &atomic.Bool{}}}, cancel})
+	e.Register(follower, flakyFollower{flaky{logged{name: follower, leader: leader, log: log}, &atomic.Bool{}}})
+
+	e.MarkDirty(leader)
+	require.ErrorIs(t, e.Flush(ctx), context.Canceled)
+	require.Equal(t, []string{followedTrue, leader, "commit " + leader, followedFalse}, log.seen)
+}
+
+// tellingAssetLeader is assetLeader with Followed, and a hook after Snapshot.
+type tellingAssetLeader struct {
+	assetLeader
+
+	after func()
+}
+
+func (a tellingAssetLeader) Snapshot(w io.Writer) error {
+	err := a.assetLeader.Snapshot(w)
+	a.after()
+
+	return err
+}
+
+func (a tellingAssetLeader) Followed(saved bool) { a.log.add(fmt.Sprintf("followed %t", saved)) }
+
+// Test_Engine_Flush_DeferredLeaderAbandonedToldAtTheEnd: SQ-370 N1. A leader
+// with assets to sync is deferred to the second pass, and the flush ends
+// before it: neither is saved, and the leader is told no follower is.
+func Test_Engine_Flush_DeferredLeaderAbandonedToldAtTheEnd(t *testing.T) {
+	dir := t.TempDir()
+	log := &orderLog{}
+	ctx, cancel := context.WithCancel(t.Context())
+	e := New(quietConfig(dir, time.Hour))
+	n := &namer{}
+	e.Register(leader, tellingAssetLeader{assetLeader{n, log}, cancel})
+	e.Register(follower, flakyFollower{flaky{logged{name: follower, leader: leader, log: log}, &atomic.Bool{}}})
+
+	a, err := e.Assets(leader)
+	require.NoError(t, err)
+
+	n.add(commitAsset(t, a, "body"))
+	e.MarkDirty(leader)
+	require.ErrorIs(t, e.Flush(ctx), context.Canceled)
+	require.Equal(t, []string{followedTrue, leader, followedFalse}, log.seen)
+	require.Empty(t, stateFiles(t, dir))
 }

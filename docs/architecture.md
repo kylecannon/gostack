@@ -1579,11 +1579,17 @@ Kinesis. The state is two files, LocalStack's split:
   whether a dynamodbstreams save follows it in the flush (`persist.Leader`):
   with `PERSIST_DYNAMODBSTREAMS=0`, or dynamodbstreams in its own backoff,
   the cut copies no records. The copy is dropped once the streams snapshot
-  has written it, when the table save fails, or at the next cut, so it lives
-  for one flush and at most one is held. It is a `[]stream.Record` of 88
-  bytes a record; the item images are shared with the shard. A shard at its
-  bound holds at most `MaxBytes / RecordOverhead`, about 1,048,576 records,
-  so the copy peaks at about 88 MiB per shard during a flush. A cut of slice
+  has written it, and at the end of every flush that copied it whatever
+  happened (the engine tells dynamodb `Followed(false)`: a failed table save,
+  a streams save that failed before its snapshot, a flush cancelled between
+  the two saves, Stop's flush), or at the next cut, so it lives for one flush
+  and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
+  the item images are shared with the shard. A shard at its bound holds at
+  most `MaxBytes / RecordOverhead`, about 1,048,576 records, so the copy is
+  about 88 MiB per full shard during a flush. The streams snapshot encodes
+  each record from the copy as it writes it, with no second array, so a full
+  shard's save peaks at about that 88 MiB live, and a written shard's copy is
+  released before the next shard is written. A cut of slice
   headers would cost nothing but needs retention to stop zeroing a dropped
   record in place, which would keep dropped images until the shard's array
   grows again. A shard takes its records back only when its identity
@@ -1606,6 +1612,14 @@ Kinesis. The state is two files, LocalStack's split:
   dynamodbstreams only right after it renamed dynamodb's file, whatever their
   last durations and whether or not a stream record marked it, so the
   streams file is of the cut the table file holds and never of a later one.
+  A kill between the table file's commit and the streams file's commit
+  restores the table with fewer stream records: each shard written since the
+  last saved pair takes no records back, by the no-gap rule above. That window is the whole streams save, not only the gap
+  between two renames: at `PERSIST_FREQUENCY=0` under steady writes it can
+  be about half of wall time (46% to 57% measured in SQ-370, one writer, a
+  put each millisecond).
+  A service follows at most one level: `persist.Engine.Register` panics on a
+  follower whose leader is a follower, or one that follows itself.
   When dynamodb is not saved (its backoff, a failed save, or
   `PERSIST_DYNAMODB=0`), dynamodbstreams is not saved either and stays dirty,
   and the pair on disk stays the last one saved. When dynamodbstreams is in
