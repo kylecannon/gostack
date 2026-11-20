@@ -16,7 +16,7 @@ import (
 
 const (
 	// shardArtifactPrefix is the name of a shard's output artifact up to its
-	// index: shard i of the matrix uploads bench-shard-i.
+	// index: the shard whose matrix entry has index i uploads bench-shard-i.
 	shardArtifactPrefix = "bench-shard-"
 	baseFile            = "base.txt"
 	headFile            = "head.txt"
@@ -225,9 +225,16 @@ func joinShards(m matrix, shardsDir string) (base, head []byte, err error) {
 	var problems []error
 
 	for i, e := range m.Include {
-		name := shardArtifactPrefix + strconv.Itoa(i)
+		name := shardArtifactPrefix + strconv.Itoa(e.Index)
 
-		shardErr := joinShard(e, filepath.Join(shardsDir, name), &baseJoin, &headJoin)
+		var shardErr error
+
+		if e.Index == i {
+			shardErr = joinShard(e, filepath.Join(shardsDir, name), &baseJoin, &headJoin)
+		} else {
+			shardErr = fmt.Errorf("%w: its matrix entry has index %d, not %d", errJoin, e.Index, i)
+		}
+
 		if shardErr != nil {
 			problems = append(problems, fmt.Errorf("shard %d of %d (%s): %w", i+1, len(m.Include), name, shardErr))
 		}

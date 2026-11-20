@@ -207,6 +207,9 @@ type fakeRunner struct {
 	// baseHolds is what the base's binary of a package lists, where it is not
 	// what the head's lists.
 	baseHolds map[string][]string
+	// failsLate is a benchmark of a package that fails on its 101st iteration:
+	// a run of two iterations passes, one at the gate's benchtime does not.
+	failsLate map[string]string
 	baseDir   string
 	calls     []string
 }
@@ -217,6 +220,11 @@ func (f *fakeRunner) run(_ context.Context, binDir string, b benchBin, args ...s
 
 	if b.pkg == f.broken {
 		return nil, 0, fmt.Errorf("%s: %w", call, errBrokenBenchmark)
+	}
+
+	if name, ok := f.failsLate[b.pkg]; ok && args[0] != "-test.list" &&
+		args[slices.Index(args, "-test.benchtime")+1] != "2x" && strings.Contains(call, name) {
+		return nil, 0, fmt.Errorf("%s: iteration 101: %w", call, errBrokenBenchmark)
 	}
 
 	if args[0] == "-test.list" {
@@ -283,22 +291,26 @@ func Test_selectMain(t *testing.T) {
 		assert.Contains(t, out, "nothing is compared")
 	})
 
-	t.Run("a changed package is timed and compared, a new one runs twice at 2x", func(t *testing.T) {
+	t.Run("a changed package is timed and compared, a new one is timed and not compared", func(t *testing.T) {
 		f := &fakeRunner{benches: map[string]map[string]time.Duration{
 			"x": {benchA: time.Second, benchB: 2 * time.Second},
+			"n": {benchA: time.Second},
 		}}
 
 		base := map[string]string{"x": "1", "y": "2"}
 
-		_, m, err := runSelect(t, f, base, map[string]string{"x": "1+", "y": "2", "n": "3"})
+		out, m, err := runSelect(t, f, base, map[string]string{"x": "1+", "y": "2", "n": "3"})
 		require.NoError(t, err)
 
-		require.Equal(t, []matrixEntry{{Shard: "1 of 1", Plan: "x .\n"}}, m.Include)
+		require.Equal(t, []matrixEntry{{Index: 0, Shard: "1 of 1", Plan: "x .\n"}}, m.Include)
 		assert.Contains(t, f.calls,
-			"n -test.run ^$ -test.bench . -test.benchmem -test.benchtime 2x -test.count 1 -test.timeout 30m")
+			"n -test.run ^$ -test.bench ^(BenchmarkA)$ -test.benchmem -test.benchtime 500ms -test.count 1 -test.timeout 30m",
+			"a new package's benchmark runs at the gate's benchtime")
 		assert.Contains(t, f.calls,
 			"x -test.run ^$ -test.bench ^(BenchmarkA)$ -test.benchmem -test.benchtime 500ms -test.count 1 -test.timeout 30m")
 		assert.NotContains(t, strings.Join(f.calls, "\n"), "y -test", "an unchanged package does not run")
+		assert.Contains(t, out, "head only")
+		assert.Contains(t, out, "only in the head, timed and not compared: BenchmarkA 1s")
 	})
 
 	t.Run("a broken benchmark in a new package fails selection", func(t *testing.T) {
@@ -308,7 +320,7 @@ func Test_selectMain(t *testing.T) {
 		require.ErrorIs(t, err, errBrokenBenchmark)
 	})
 
-	t.Run("a benchmark estimated past the shard budget fails selection with its name and estimate", func(t *testing.T) {
+	t.Run("a benchmark past what a shard job holds fails selection with its name and estimate", func(t *testing.T) {
 		f := &fakeRunner{benches: map[string]map[string]time.Duration{
 			"x": {"BenchmarkSlow": 3 * time.Minute, "BenchmarkQuick": time.Second},
 		}}
@@ -321,20 +333,119 @@ func Test_selectMain(t *testing.T) {
 		assert.NotContains(t, err.Error(), "BenchmarkQuick")
 	})
 
-	t.Run("a package of one benchmark past the shard budget fails selection too", func(t *testing.T) {
+	t.Run("a package of one benchmark past what a shard job holds fails selection too", func(t *testing.T) {
 		f := &fakeRunner{benches: map[string]map[string]time.Duration{"x": {"BenchmarkOnly": 3 * time.Minute}}}
 
 		_, _, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
 		require.ErrorIs(t, err, errSelect)
 		require.ErrorContains(t, err, "BenchmarkOnly")
 	})
+
+	// 5m of setup and ten rounds of two runs is 40m at 104 s a run. The job
+	// holds 60m, so 110 s a run, 41m55s, runs, in a shard of its own.
+	t.Run("a benchmark past the budget and within the job's timeout gets a shard of its own", func(t *testing.T) {
+		f := &fakeRunner{benches: map[string]map[string]time.Duration{
+			"x": {"BenchmarkBig": 110 * time.Second, benchA: time.Second},
+		}}
+
+		out, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
+		require.NoError(t, err)
+
+		require.Equal(t, []matrixEntry{
+			{Index: 0, Shard: "1 of 2", Plan: "x ^(BenchmarkBig)$\n"},
+			{Index: 1, Shard: "2 of 2", Plan: "x ^(" + benchA + ")$\n"},
+		}, m.Include)
+		assert.Contains(t, out, "about 42m0s")
+	})
+}
+
+// A benchmark only the head holds has no base rows, and a shard that held it
+// would fail the join, so no shard plans it. It is still run once at the gate's
+// benchtime, as main runs it, and held to the shard job's limit: one that breaks
+// on its 101st iteration or runs too long would otherwise land green and fail
+// the next pull request that selects its package. A package only the head holds
+// and a benchmark only the head holds in a package that runs both count.
+func Test_selectMain_times_a_benchmark_only_the_head_holds(t *testing.T) {
+	const (
+		benchLate = "BenchmarkLate"
+		benchHuge = "BenchmarkHuge"
+	)
+
+	late := func(pkg string) map[string]string { return map[string]string{pkg: benchLate} }
+	huge := map[string]time.Duration{benchHuge: 3 * time.Minute}
+
+	t.Run("one that fails on its 101st iteration fails selection", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			f          *fakeRunner
+			base, head map[string]string
+		}{
+			"in a new package": {
+				f: &fakeRunner{
+					benches:   map[string]map[string]time.Duration{"n": {benchLate: time.Second}},
+					failsLate: late("n"),
+				},
+				base: map[string]string{"x": "1"}, head: map[string]string{"x": "1", "n": "3"},
+			},
+			"in a changed package": {
+				f: &fakeRunner{
+					benches:   map[string]map[string]time.Duration{"x": {benchA: time.Second, benchLate: time.Second}},
+					baseHolds: map[string][]string{"x": {benchA}},
+					failsLate: late("x"),
+				},
+				base: map[string]string{"x": "1"}, head: map[string]string{"x": "2"},
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, _, err := runSelect(t, tc.f, tc.base, tc.head)
+				require.ErrorIs(t, err, errBrokenBenchmark)
+				require.ErrorContains(t, err, benchLate)
+			})
+		}
+	})
+
+	t.Run("one estimated past what a shard job holds fails selection", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			f          *fakeRunner
+			base, head map[string]string
+		}{
+			"in a new package": {
+				f:    &fakeRunner{benches: map[string]map[string]time.Duration{"n": huge}},
+				base: map[string]string{"x": "1"}, head: map[string]string{"x": "1", "n": "3"},
+			},
+			"in a changed package": {
+				f: &fakeRunner{
+					benches:   map[string]map[string]time.Duration{"x": {benchA: time.Second, benchHuge: 3 * time.Minute}},
+					baseHolds: map[string][]string{"x": {benchA}},
+				},
+				base: map[string]string{"x": "1"}, head: map[string]string{"x": "2"},
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, _, err := runSelect(t, tc.f, tc.base, tc.head)
+				require.ErrorIs(t, err, errSelect)
+				// 5m setup + 10 rounds of 2 * 180s and a 1s link is 1h5m10s.
+				require.ErrorContains(t, err, benchHuge)
+				require.ErrorContains(t, err, "1h5m10s")
+			})
+		}
+	})
+
+	t.Run("one within the limit is run, reported, and planned in no shard", func(t *testing.T) {
+		f := &fakeRunner{benches: map[string]map[string]time.Duration{"n": {benchLate: 110 * time.Second}}}
+
+		out, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "1", "n": "3"})
+		require.NoError(t, err)
+
+		assert.Empty(t, m.Include)
+		assert.Contains(t, out, "only in the head, timed and not compared: "+benchLate+" 1m50s")
+	})
 }
 
 // A pull request that adds a top-level benchmark to a package already too large
 // for one shard. The new benchmark has no base rows, so a shard that held it
-// alone would fail the join: selection runs it once at 2x, as it does a package
-// only the head holds, and plans the benchmarks the base has.
-func Test_selectMain_smokes_a_benchmark_only_the_head_holds(t *testing.T) {
+// alone would fail the join: selection runs it once at the gate's benchtime, as
+// it does a package only the head holds, and plans the benchmarks the base has.
+func Test_selectMain_plans_no_benchmark_only_the_head_holds(t *testing.T) {
 	const benchC = "BenchmarkC"
 
 	f := &fakeRunner{
@@ -348,11 +459,9 @@ func Test_selectMain_smokes_a_benchmark_only_the_head_holds(t *testing.T) {
 	out, m, err := runSelect(t, f, map[string]string{"x": "1"}, map[string]string{"x": "2"})
 	require.NoError(t, err)
 
-	smoke := "x -test.run ^$ -test.bench ^(" + benchC + ")$ -test.benchmem " +
-		"-test.benchtime 2x -test.count 1 -test.timeout 30m"
-	assert.Contains(t, f.calls, smoke)
-	assert.NotContains(t, f.calls, strings.Replace(smoke, "2x", "500ms", 1), "it is not timed")
-	assert.Contains(t, out, "only in the head, run at 2x: "+benchC)
+	assert.Contains(t, f.calls, "x -test.run ^$ -test.bench ^("+benchC+")$ -test.benchmem "+
+		"-test.benchtime 500ms -test.count 1 -test.timeout 30m")
+	assert.Contains(t, out, "only in the head, timed and not compared: "+benchC+" 1m40s")
 
 	plans := make([]string, 0, len(m.Include))
 	for _, e := range m.Include {
@@ -398,7 +507,7 @@ BenchmarkB-4   100.1n ± 0%   100.2n ± 0%  ~ (p=0.784 n=10)
 		require.Equal(t, []matrixEntry{{Shard: "1 of 1", Plan: "x ^(" + benchA + "|" + benchB + ")$\n"}}, m.Include)
 	})
 
-	t.Run("a package whose benchmarks are all new in the head is smoked and not planned", func(t *testing.T) {
+	t.Run("a package whose benchmarks are all new in the head is timed and not planned", func(t *testing.T) {
 		f := &fakeRunner{
 			benches:   map[string]map[string]time.Duration{"x": {benchC: time.Second}},
 			baseHolds: map[string][]string{"x": {benchA}},
@@ -409,12 +518,17 @@ BenchmarkB-4   100.1n ± 0%   100.2n ± 0%  ~ (p=0.784 n=10)
 
 		assert.Empty(t, m.Include)
 		assert.Contains(t, f.calls,
-			"x -test.run ^$ -test.bench ^("+benchC+")$ -test.benchmem -test.benchtime 2x -test.count 1 -test.timeout 30m")
+			"x -test.run ^$ -test.bench ^("+benchC+")$ -test.benchmem -test.benchtime 500ms -test.count 1 -test.timeout 30m")
 	})
 }
 
+// testParams is the shard job of bench.yml: 40 minutes to pack to, 60 to run.
+var testParams = shardParams{
+	count: 10, budget: 40 * time.Minute, limit: 60 * time.Minute, setup: 5 * time.Minute, link: time.Second,
+}
+
 func Test_pack(t *testing.T) {
-	p := shardParams{count: 10, budget: 40 * time.Minute, setup: 5 * time.Minute, link: time.Second}
+	p := testParams
 
 	t.Run("packages that fit one shard share it", func(t *testing.T) {
 		shards := pack([]unit{{pkg: "a", cost: 30 * time.Second}, {pkg: "b", cost: 20 * time.Second}}, p)
@@ -455,10 +569,47 @@ func Test_pack(t *testing.T) {
 	t.Run("nothing to run is no shard", func(t *testing.T) {
 		assert.Empty(t, pack(nil, p))
 	})
+
+	// 110 s a run is 41m55s: past the budget, within the job's timeout. No shard
+	// can take it and stay within the budget, so it is not counted against the
+	// others, which still share a shard.
+	t.Run("a unit past the budget gets a shard of its own and does not split the others", func(t *testing.T) {
+		big := unit{pkg: "svc/big", cost: 110 * time.Second}
+		shards := pack([]unit{
+			{pkg: "a", cost: 20 * time.Second}, big, {pkg: "b", cost: 20 * time.Second},
+		}, p)
+
+		require.Len(t, shards, 2)
+		assert.Equal(t, []unit{big}, shards[0].units)
+		assert.Equal(t, 5*time.Minute+10*(220*time.Second+time.Second), shards[0].est)
+		assert.Equal(t, "a .\nb .\n", shards[1].plan())
+	})
+}
+
+// The limit is what the job's timeout holds: 5m of setup and ten rounds of two
+// runs and a link fit 60m up to 164 s a run, and not at 165 s.
+func Test_units_fails_a_benchmark_past_the_jobs_timeout(t *testing.T) {
+	p := testParams
+
+	pkg := func(cost time.Duration) []*selected {
+		return []*selected{{
+			bin: benchBin{pkg: pkgRoute}, verdict: verdictChanged,
+			benches: []benchCost{{name: benchA, cost: cost}, {name: benchB, cost: time.Second}},
+		}}
+	}
+
+	us, err := units(pkg(164*time.Second), p)
+	require.NoError(t, err)
+	assert.Contains(t, us, unit{pkg: pkgRoute, names: []string{benchA}, cost: 164 * time.Second})
+
+	_, err = units(pkg(165*time.Second), p)
+	require.ErrorIs(t, err, errSelect)
+	require.ErrorContains(t, err, benchA)
+	require.ErrorContains(t, err, "1h0m10s")
 }
 
 func Test_units_splits_a_package_one_shard_cannot_hold(t *testing.T) {
-	p := shardParams{count: 10, budget: 40 * time.Minute, setup: 5 * time.Minute, link: time.Second}
+	p := testParams
 
 	// The SNS package: about 150 s a round per tree on the runner, 50 minutes
 	// of rounds on its own.

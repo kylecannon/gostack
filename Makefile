@@ -78,12 +78,16 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            and BENCH_HEAD_OUT for benchstat. Each tree builds with its own pinned
 #                            toolchain. With no BENCH_PLAN it runs every benchmark; BENCH_PLAN names
 #                            a file of "<import path> <bench regex>" lines, one CI shard's share, and
-#                            the target fails when the plan resolves to no package or regex.
+#                            the target fails when the plan is missing, empty or malformed, or names
+#                            a package a tree holds no benchmark of. A regex that matches no
+#                            benchmark of its package does not fail it: `bench join` does.
 #   make bench-select BASE=<dir> HEAD=<dir>
 #                            what CI compares: builds both trees' benchmark binaries at one layout,
 #                            keeps the packages whose binary differs, and packs them into shards of
-#                            about BENCH_SHARD_BUDGET (go run ./bench select). Writes the shards to
-#                            BENCH_MATRIX and prints the selection.
+#                            about BENCH_SHARD_BUDGET, a unit past that into a shard of its own, and
+#                            fails a unit past BENCH_SHARD_LIMIT, what a shard job holds (go run
+#                            ./bench select). Writes the shards to BENCH_MATRIX and prints the
+#                            selection.
 #   make bench-system      the system bench, full profile: builds the images, measures gostack,
 #                            gostack-slim and the LocalStack image the parity harness built (make
 #                            parity-baseline), writes bench/results/<date>-<sha>.json and .md, then
@@ -105,6 +109,8 @@ BENCH_BUILD_FLAGS ?=
 BENCH_SELECT_DIR ?= bin/bench-select
 BENCH_MATRIX ?= $(BENCH_SELECT_DIR)/matrix.json
 BENCH_SHARD_BUDGET ?= 40m
+# The shard job's timeout-minutes in .github/workflows/bench.yml.
+BENCH_SHARD_LIMIT ?= 60m
 # bench-ab runs this Makefile in each tree, so that tree's go.mod pins the toolchain.
 BENCH_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BENCH_SYSTEM_ARGS ?=
@@ -307,8 +313,9 @@ bench-build:
 # random layout and -trimpath, which keeps the checkout's path out of the
 # binary, and HEAD's again with an empty build cache, to show the build is
 # reproducible; then `bench select` keeps the packages whose binaries differ,
-# times their benchmarks once and packs them into shards of about
-# BENCH_SHARD_BUDGET, written to BENCH_MATRIX.
+# times their benchmarks once, and those only the head holds, and packs the
+# compared ones into shards of about BENCH_SHARD_BUDGET, written to
+# BENCH_MATRIX.
 bench-select:
 	@test -n "$(BASE)" && test -n "$(HEAD)" || { echo 'usage: make bench-select BASE=<dir> HEAD=<dir>' >&2; exit 2; }
 	@rm -rf $(abspath $(BENCH_SELECT_DIR)) && mkdir -p $(abspath $(BENCH_SELECT_DIR)) $(dir $(abspath $(BENCH_MATRIX)))
@@ -323,7 +330,7 @@ bench-select:
 	@rm -rf $(abspath $(BENCH_SELECT_DIR))/cache
 	go run ./bench select -base $(abspath $(BENCH_SELECT_DIR))/base -head $(abspath $(BENCH_SELECT_DIR))/head \
 		-again $(abspath $(BENCH_SELECT_DIR))/again -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) \
-		-budget $(BENCH_SHARD_BUDGET) -matrix $(abspath $(BENCH_MATRIX))
+		-budget $(BENCH_SHARD_BUDGET) -limit $(BENCH_SHARD_LIMIT) -matrix $(abspath $(BENCH_MATRIX))
 
 bench-system: image image-slim
 	go run ./bench run -profile full $(BENCH_RUN)

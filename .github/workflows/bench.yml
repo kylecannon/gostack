@@ -24,7 +24,8 @@ jobs:
   select:
     runs-on: ubuntu-latest
     # Three builds, one of them from an empty cache, then one timed run of each
-    # selected benchmark: about 12 minutes when everything is selected.
+    # benchmark of a selected package and of each the head alone holds: about 12
+    # minutes when everything is selected.
     timeout-minutes: 30
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -62,7 +63,9 @@ jobs:
     needs: select
     if: needs.select.outputs.shards != '0'
     runs-on: ubuntu-latest
-    # Selection packs a shard to about 40 minutes; a slow runner gets the rest.
+    # Selection packs a shard to about 40 minutes and gives a unit past that a
+    # shard of its own; a slow runner gets the rest. Selection fails a unit this
+    # job could not hold, so this is `bench select`'s -limit (defaultShardLimit).
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -100,7 +103,7 @@ jobs:
           PLAN: ${{ matrix.plan }}
       - uses: actions/upload-artifact@v4
         with:
-          name: bench-shard-${{ strategy.job-index }}
+          name: bench-shard-${{ matrix.index }}
           path: ${{ runner.temp }}/out/
           if-no-files-found: error
           retention-days: 7

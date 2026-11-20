@@ -315,38 +315,54 @@ side by side.
     files that are not Go source match too (below) cannot regress and is not
     run;
   - a package whose two head builds differ is not reproducible, and runs;
-  - a package only the head holds has nothing to compare against. It runs
-    twice, at `-benchtime 2x`, so a broken benchmark still fails the job, one
-    that breaks on its second call included, and is not compared;
+  - a package only the head holds has nothing to compare against. Each of its
+    top-level benchmarks runs once at the gate's benchtime, as it will in a
+    later comparison, so one that breaks late or runs over the limit below
+    fails selection, and none is compared;
   - a package only the base holds is dropped;
   - a top-level benchmark only the head holds, in a package that runs, is
-    treated the same way: it runs twice at `-benchtime 2x` and is not timed, not
-    planned and not compared, so a shard never holds it alone.
+    treated the same way: it runs once at the gate's benchtime and is held to
+    the limit below, but is not planned and not compared, so a shard never holds
+    it alone.
 
   The base is the target branch's tip, so a branch behind main also selects the
   packages main changed since it branched.
 - A benchmark reads no file at run time. What it needs is built in code or
   embedded, because the test binary does not hold a file the benchmark opens.
-  Selection enforces this rule: it hashes every file under a package's
-  directory that is not a `.go` file, leaving out the directories of other
-  packages below it, and every file under a `testdata` directory, `.go` ones
-  included, and a change to any of them makes the package
-  `changed`, so a benchmark that reads one is still compared. A file outside the
-  package directory is not hashed; the rule stands for those.
-- Selection times one run of each top-level benchmark of a selected package at
-  the gate's benchtime and packs the packages into the fewest shards of about
-  40 minutes (`BENCH_SHARD_BUDGET`). A shard's estimate is 5 minutes of setup
-  plus ten rounds, each running its benchmarks once per tree and relinking each
-  of its packages (1.5 s a package). A package that would overrun a shard on
-  its own is split by top-level benchmark (`-test.bench '^(A|B)$'`). A
-  top-level benchmark whose own estimate overruns the budget fails selection
-  and names the benchmark and its estimate: its author splits it. Each shard is
-  a job on its own runner that runs `make bench-ab` with `BENCH_PLAN` naming its
-  share, so base and head are always measured on one machine.
+  Selection does not check the rule at run time. It hashes every file under a
+  package's directory that is not a `.go` file, and every file under a `testdata`
+  directory, `.go` ones included, and a change to any of them makes the package
+  `changed`, so a benchmark that reads one of those is still compared. The hash
+  does not cover, and the rule stands for:
+  - a file outside the package directory;
+  - a file below a subdirectory that holds a `.go` file of its own, whether that
+    is another package (it has a verdict of its own, which the parent's does not
+    follow) or a generator the build ignores (`//go:build ignore`), unless the
+    subdirectory is itself under a `testdata` directory;
+  - a `.go` file outside `testdata` that the build ignores, read as data;
+  - a symbolic link's target: the link is hashed by name, so retargeting it is
+    not a change.
+- Selection times one run of each top-level benchmark of a selected package, and
+  of a package or benchmark only the head holds, at the gate's benchtime. It
+  packs what is compared into the fewest shards of about 40 minutes
+  (`BENCH_SHARD_BUDGET`). A shard's estimate is 5 minutes of setup plus ten
+  rounds, each running its benchmarks once per tree and relinking each of its
+  packages (1.5 s a package). A package that would overrun that is split by
+  top-level benchmark (`-test.bench '^(A|B)$'`). A top-level benchmark whose own
+  estimate is past 40 minutes gets a shard of its own, up to what a shard job
+  holds, its 60-minute timeout (`BENCH_SHARD_LIMIT`, about 164 s a run). Past
+  that, selection fails and names the benchmark and its estimate: its author
+  splits it. A benchmark only the head holds is held to the same limit. Each
+  shard is a job on its own runner that runs `make bench-ab` with `BENCH_PLAN`
+  naming its share, so base and head are always measured on one machine.
 - `make bench-ab` without `BENCH_PLAN` still runs every benchmark of both trees.
   With one, it fails when the plan is missing, empty, malformed, or names a
-  package a tree holds no benchmark of, so a shard cannot measure nothing and
-  pass.
+  package a tree holds no benchmark of. A regex that matches no benchmark of its
+  package does not fail it; `bench join` does, so a shard cannot measure nothing
+  and pass.
+- Each matrix entry carries its `index`, from zero, and the shard job names its
+  artifact `bench-shard-<index>` from it, not from `strategy.job-index`, whose
+  order GitHub does not say follows the entries'.
 - The `benchstat` job runs `bench join`, which reads exactly `bench-shard-0` to
   `bench-shard-<n-1>` of select's matrix, however many `bench-shard-*` artifacts
   the run holds (a re-run keeps those of the attempt before). It fails when one

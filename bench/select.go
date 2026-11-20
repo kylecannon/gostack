@@ -21,11 +21,15 @@ import (
 )
 
 // Defaults of `bench select`. The Makefile passes its own BENCH_TIME,
-// BENCH_COUNT and BENCH_SHARD_BUDGET.
+// BENCH_COUNT, BENCH_SHARD_BUDGET and BENCH_SHARD_LIMIT.
 const (
 	defaultSelectBenchtime = 500 * time.Millisecond
 	defaultSelectCount     = 10
 	defaultShardBudget     = 40 * time.Minute
+	// defaultShardLimit is what a shard job holds: its timeout-minutes in
+	// .github/workflows/bench.yml. The budget is a packing target; a unit past
+	// the budget gets a shard of its own, and one past the limit cannot run.
+	defaultShardLimit = 60 * time.Minute
 	// defaultShardSetup is a shard job's time outside its rounds: two
 	// checkouts, setup-go, the first round's compile and the upload.
 	defaultShardSetup = 5 * time.Minute
@@ -36,12 +40,8 @@ const (
 	manifestFields   = 4 // <binary> <dir> <bench regex> <import path>
 	wholePackage     = "."
 	runTimeout       = "30m"
-	// smokeBenchtime runs a head-only benchmark twice. The framework calls a
-	// benchmark once with b.N of 1 and then with b.N of 2, so one that breaks
-	// on its second call fails selection.
-	smokeBenchtime = "2x"
-	testdataDir    = "testdata"
-	goSuffix       = ".go"
+	testdataDir      = "testdata"
+	goSuffix         = ".go"
 )
 
 // buildVerdict is what selection decided about one benchmark package.
@@ -72,7 +72,9 @@ type selected struct {
 	verdict buildVerdict
 	base    *benchBin // the base's binary of the package, nil when the base holds none
 	benches []benchCost
-	smoked  []string // top-level benchmarks only the head holds
+	// headOnly is the top-level benchmarks only the head holds, each timed once
+	// at the gate's benchtime. They have no base rows, so no shard plans them.
+	headOnly []benchCost
 }
 
 type benchCost struct {
@@ -107,6 +109,7 @@ type shard struct {
 type shardParams struct {
 	count  int
 	budget time.Duration
+	limit  time.Duration
 	setup  time.Duration
 	link   time.Duration
 }
@@ -165,13 +168,14 @@ type selectConfig struct {
 // binary differs from its base binary, when the files of its directory that are
 // not Go source differ (a benchmark may read them at run time, and the binary
 // does not hold them), or when its head binary differs from its second build
-// (the build is not reproducible, so equal bytes would prove nothing). A
-// package only the head holds, and a top-level benchmark only the head holds in
-// a package that runs, run at -benchtime 2x, so a broken benchmark fails here,
-// and are not compared. Each other top-level benchmark of a package that runs is
-// run once at -benchtime, timed, and the shards are packed from those times. A
-// benchmark that would overrun a shard on its own fails selection. The report
-// goes to out and the GitHub Actions matrix to -matrix.
+// (the build is not reproducible, so equal bytes would prove nothing). Every
+// top-level benchmark of a package that runs, and of a package only the head
+// holds, is run once at -benchtime and timed, so a broken benchmark fails here.
+// A benchmark only the head holds, in a package only the head holds or in one
+// that runs, has no base rows: it is checked against the limit but planned in
+// no shard. The shards are packed from the times of the others. A unit past the
+// budget gets a shard of its own, and one past what a shard job holds fails
+// selection. The report goes to out and the GitHub Actions matrix to -matrix.
 func selectMain(ctx context.Context, args []string, out io.Writer, run runBin) error {
 	cfg, err := parseSelect(args)
 	if err != nil {
@@ -213,6 +217,7 @@ func parseSelect(args []string) (selectConfig, error) {
 	flags.DurationVar(&cfg.benchtime, "benchtime", defaultSelectBenchtime, "the gate's -benchtime")
 	flags.IntVar(&cfg.params.count, "count", defaultSelectCount, "the gate's rounds")
 	flags.DurationVar(&cfg.params.budget, "budget", defaultShardBudget, "the most one shard should take")
+	flags.DurationVar(&cfg.params.limit, "limit", defaultShardLimit, "the most a shard job holds, its timeout")
 	flags.DurationVar(&cfg.params.setup, "setup", defaultShardSetup, "a shard's time outside its rounds")
 	flags.DurationVar(&cfg.params.link, "link", defaultShardLink, "one package's relink for both trees")
 	flags.StringVar(&cfg.matrix, "matrix", "", "where to write the matrix as JSON")
@@ -228,6 +233,10 @@ func parseSelect(args []string) (selectConfig, error) {
 
 	if cfg.params.count < 1 || cfg.benchtime <= 0 || cfg.params.budget <= 0 {
 		return cfg, fmt.Errorf("%w: -count, -benchtime and -budget must be above zero", errSelect)
+	}
+
+	if cfg.params.limit < cfg.params.budget {
+		return cfg, fmt.Errorf("%w: -limit %s is below -budget %s", errSelect, cfg.params.limit, cfg.params.budget)
 	}
 
 	return cfg, nil
@@ -503,20 +512,15 @@ func readManifest(dir string) ([]benchBin, error) {
 	return bins, nil
 }
 
-// measure runs what selection picked from the head's build: a head-only
-// package twice (-benchtime 2x), and every top-level benchmark of a package that runs once
-// at benchtime, timed. A failing run fails selection.
+// measure times what selection picked from the head's build: every top-level
+// benchmark of a package only the head holds or of a package that runs, once at
+// benchtime. A failing run fails selection.
 func measure(
 	ctx context.Context, headDir, baseDir string, benchtime time.Duration, pkgs []*selected, run runBin,
 ) error {
 	for _, s := range pkgs {
 		switch s.verdict {
-		case verdictHeadOnly:
-			_, _, err := run(ctx, headDir, s.bin, benchArgs(wholePackage, smokeBenchtime)...)
-			if err != nil {
-				return err
-			}
-		case verdictChanged, verdictUnreproducible:
+		case verdictHeadOnly, verdictChanged, verdictUnreproducible:
 			err := measurePackage(ctx, headDir, baseDir, benchtime, s, run)
 			if err != nil {
 				return err
@@ -528,9 +532,11 @@ func measure(
 	return nil
 }
 
-// measurePackage times each top-level benchmark of a package that runs. One
-// that only the head holds has nothing to compare against, so like a package
-// only the head holds it runs at smokeBenchtime and is no unit of a shard.
+// measurePackage times each top-level benchmark of a package at benchtime, the
+// way the gate runs it, so one that breaks late or runs long fails here and not
+// on the next pull request that selects the package. A benchmark that only the
+// head holds has nothing to compare against: it is timed into headOnly and is
+// no unit of a shard.
 func measurePackage(
 	ctx context.Context, headDir, baseDir string, benchtime time.Duration, s *selected, run runBin,
 ) error {
@@ -553,23 +559,18 @@ func measurePackage(
 	}
 
 	for _, name := range head {
-		if s.base != nil && !slices.Contains(inBase, name) {
-			_, _, runErr := run(ctx, headDir, s.bin, benchArgs(anchored([]string{name}), smokeBenchtime)...)
-			if runErr != nil {
-				return runErr
-			}
-
-			s.smoked = append(s.smoked, name)
-
-			continue
-		}
-
 		_, elapsed, runErr := run(ctx, headDir, s.bin, benchArgs(anchored([]string{name}), benchtime.String())...)
 		if runErr != nil {
 			return runErr
 		}
 
-		s.benches = append(s.benches, benchCost{name: name, cost: elapsed})
+		cost := benchCost{name: name, cost: elapsed}
+
+		if s.base == nil || !slices.Contains(inBase, name) {
+			s.headOnly = append(s.headOnly, cost)
+		} else {
+			s.benches = append(s.benches, cost)
+		}
 	}
 
 	return nil
@@ -607,20 +608,30 @@ func anchored(names []string) string {
 }
 
 // units turns the packages that run into packing units: a whole package, or,
-// when the package alone would overrun a shard, each of its top-level
+// when the package alone would overrun the budget, each of its top-level
 // benchmarks. A top-level benchmark is the smallest unit there is, so one whose
-// own estimate overruns the budget fails selection: its author splits it.
+// own estimate is past what a shard job holds fails selection: its author splits
+// it. A benchmark only the head holds is no unit, as no shard plans it, but it
+// is held to the same limit, so the pull request that adds it is the one that
+// fails and not the next that selects its package.
 func units(pkgs []*selected, p shardParams) ([]unit, error) {
 	var us []unit
 
 	for _, s := range pkgs {
+		for _, m := range s.headOnly {
+			err := fitsLimit(unit{pkg: s.bin.pkg, names: []string{m.name}, cost: m.cost}, p)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		if len(s.benches) == 0 {
 			continue
 		}
 
 		whole := unit{pkg: s.bin.pkg, cost: s.cost()}
-		if len(s.smoked) > 0 {
-			// The plan names the timed benchmarks: the others have no base rows.
+		if len(s.headOnly) > 0 {
+			// The plan names the benchmarks with base rows: the others have none.
 			for _, m := range s.benches {
 				whole.names = append(whole.names, m.name)
 			}
@@ -635,9 +646,9 @@ func units(pkgs []*selected, p shardParams) ([]unit, error) {
 		for _, m := range s.benches {
 			u := unit{pkg: s.bin.pkg, names: []string{m.name}, cost: m.cost}
 
-			if est := p.estimate([]unit{u}); est > p.budget {
-				return nil, fmt.Errorf("%w: %s %s alone is estimated at %s, over the budget of %s: split the benchmark",
-					errSelect, s.bin.pkg, m.name, est.Round(time.Second), p.budget)
+			err := fitsLimit(u, p)
+			if err != nil {
+				return nil, err
 			}
 
 			us = append(us, u)
@@ -647,10 +658,41 @@ func units(pkgs []*selected, p shardParams) ([]unit, error) {
 	return us, nil
 }
 
+// fitsLimit fails when a shard job holding only u would run past its timeout.
+func fitsLimit(u unit, p shardParams) error {
+	est := p.estimate([]unit{u})
+	if est <= p.limit {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s %s alone is estimated at %s, over the %s a shard job holds: split the benchmark",
+		errSelect, u.pkg, strings.Join(u.names, " "), est.Round(time.Second), p.limit)
+}
+
 // pack spreads the units over the fewest shards whose estimates all fit the
-// budget, longest unit first onto the shard estimated to finish first. Every
-// unit fits the budget alone (units refuses one that does not).
+// budget, longest unit first onto the shard estimated to finish first. A unit
+// that is past the budget alone, and within the limit (units refuses one
+// that is not), gets a shard of its own: no shard could take it and stay
+// within the budget.
 func pack(us []unit, p shardParams) []shard {
+	var alone []shard
+
+	var rest []unit
+
+	for _, u := range us {
+		if est := p.estimate([]unit{u}); est > p.budget {
+			alone = append(alone, shard{units: []unit{u}, est: est})
+		} else {
+			rest = append(rest, u)
+		}
+	}
+
+	return append(alone, packWithin(rest, p)...)
+}
+
+// packWithin packs units that each fit the budget alone into the fewest shards
+// that all fit it.
+func packWithin(us []unit, p shardParams) []shard {
 	if len(us) == 0 {
 		return nil
 	}
@@ -720,7 +762,11 @@ func (s shard) plan() string {
 	return b.String()
 }
 
+// matrixEntry is one shard job. Index is its place in the matrix, from zero:
+// the job names its artifact bench-shard-<index> from it, and join reads that
+// name, so neither rests on the order GitHub numbers the jobs in.
 type matrixEntry struct {
+	Index int    `json:"index"`
 	Shard string `json:"shard"`
 	Plan  string `json:"plan"`
 }
@@ -732,7 +778,7 @@ type matrix struct {
 func writeMatrix(path string, shards []shard) error {
 	m := matrix{Include: []matrixEntry{}}
 	for i, s := range shards {
-		m.Include = append(m.Include, matrixEntry{Shard: fmt.Sprintf("%d of %d", i+1, len(shards)), Plan: s.plan()})
+		m.Include = append(m.Include, matrixEntry{Index: i, Shard: fmt.Sprintf("%d of %d", i+1, len(shards)), Plan: s.plan()})
 	}
 
 	data, err := json.Marshal(m)
@@ -748,6 +794,16 @@ func writeMatrix(path string, shards []shard) error {
 	return nil
 }
 
+// describeHeadOnly lists benchmarks with the time of one run of each.
+func describeHeadOnly(benches []benchCost) string {
+	parts := make([]string, 0, len(benches))
+	for _, m := range benches {
+		parts = append(parts, fmt.Sprintf("%s %s", m.name, m.cost.Round(time.Second)))
+	}
+
+	return strings.Join(parts, ", ")
+}
+
 func writeSelection(out io.Writer, pkgs []*selected, shards []shard, p shardParams) error {
 	var b strings.Builder
 
@@ -757,8 +813,8 @@ func writeSelection(out io.Writer, pkgs []*selected, shards []shard, p shardPara
 			line += fmt.Sprintf(" (one run %s)", s.cost().Round(time.Second))
 		}
 
-		if len(s.smoked) > 0 {
-			line += fmt.Sprintf(" (only in the head, run at %s: %s)", smokeBenchtime, strings.Join(s.smoked, " "))
+		if len(s.headOnly) > 0 {
+			line += fmt.Sprintf(" (only in the head, timed and not compared: %s)", describeHeadOnly(s.headOnly))
 		}
 
 		b.WriteString(line + "\n")

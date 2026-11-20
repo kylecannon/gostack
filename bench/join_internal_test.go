@@ -59,7 +59,7 @@ func writeMatrixFile(t *testing.T, plans ...string) string {
 	var m matrix
 
 	for i, plan := range plans {
-		m.Include = append(m.Include, matrixEntry{Shard: fmt.Sprintf("%d of %d", i+1, len(plans)), Plan: plan})
+		m.Include = append(m.Include, matrixEntry{Index: i, Shard: fmt.Sprintf("%d of %d", i+1, len(plans)), Plan: plan})
 	}
 
 	data, err := json.Marshal(m)
@@ -113,6 +113,24 @@ func Test_joinMain_joins_the_planned_shards_only(t *testing.T) {
 	assert.NotContains(t, head, "Stale")
 	assert.True(t, strings.HasPrefix(base, "goos:"), "shards join in index order, from bench-shard-0")
 	assert.Less(t, strings.Index(base, benchA), strings.Index(base, rowB))
+}
+
+// A shard uploads the artifact its matrix entry's index names. A matrix whose
+// entries carry no index, or whose index is not its place, would send two
+// shards to one artifact name and leave another unread.
+func Test_joinMain_fails_when_an_entry_has_the_wrong_index(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, 0, shardOutput("x", rowA), shardOutput("x", rowA))
+	writeShard(t, dir, 1, shardOutput("y", rowB), shardOutput("y", rowB))
+
+	path := filepath.Join(t.TempDir(), "matrix.json")
+	matrixJSON := `{"include":[{"shard":"1 of 2","plan":"x .\n"},{"shard":"2 of 2","plan":"y .\n"}]}`
+	require.NoError(t, os.WriteFile(path, []byte(matrixJSON), 0o600))
+
+	_, _, err := runJoin(t, path, dir)
+	require.ErrorIs(t, err, errJoin)
+	require.ErrorContains(t, err, "shard 2 of 2 (bench-shard-0)")
+	require.ErrorContains(t, err, "index 0, not 1")
 }
 
 func Test_joinMain_fails_on_a_missing_shard(t *testing.T) {
