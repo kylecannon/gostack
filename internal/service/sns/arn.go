@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/sns"
 )
 
@@ -44,23 +45,6 @@ func parseTopicARN(arn string) (arnParts, error) {
 }
 
 // topicARN is the ARN of a topic.
-func topicARN(account, region, name string) string {
-	return "arn:" + partition(region) + ":sns:" + region + ":" + account + ":" + name
-}
-
-// partition is the ARN partition of a region.
-func partition(region string) string {
-	for _, p := range [...]struct{ prefix, name string }{
-		{"cn-", "aws-cn"},
-		{"us-gov-", "aws-us-gov"},
-		{"us-iso-", "aws-iso"},
-		{"us-isob-", "aws-iso-b"},
-		{"eusc-", "aws-eusc"},
-	} {
-		if strings.HasPrefix(region, p.prefix) {
-			return p.name
-		}
-	}
-
-	return "aws"
+func topicARN(accountID, region, name string) string {
+	return "arn:" + account.Partition(region) + ":sns:" + region + ":" + accountID + ":" + name
 }

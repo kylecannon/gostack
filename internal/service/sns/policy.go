@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/sns"
 )
 
@@ -119,8 +120,8 @@ func grant(region, arn, label string, accounts, actionNames []string) (map[strin
 	}
 
 	principals := make([]string, len(accounts))
-	for i, account := range accounts {
-		principals[i] = "arn:" + partition(region) + ":iam::" + account + ":root"
+	for i, accountID := range accounts {
+		principals[i] = "arn:" + account.Partition(region) + ":iam::" + accountID + ":root"
 	}
 
 	actions := make([]string, len(actionNames))
@@ -200,14 +201,14 @@ func oneOrMany(values []string) any {
 
 // defaultTopicPolicy is the Policy attribute of a new topic, LocalStack's
 // create_default_topic_policy.
-func defaultTopicPolicy(arn, account string) string {
+func defaultTopicPolicy(arn, accountID string) string {
 	var b strings.Builder
 
-	b.Grow(len(defaultPolicyHead) + len(defaultPolicyMiddle) + len(defaultPolicyTail) + 2*len(arn) + len(account))
+	b.Grow(len(defaultPolicyHead) + len(defaultPolicyMiddle) + len(defaultPolicyTail) + 2*len(arn) + len(accountID))
 	b.WriteString(defaultPolicyHead)
 	writeJSONString(&b, arn)
 	b.WriteString(defaultPolicyMiddle)
-	writeJSONString(&b, account)
+	writeJSONString(&b, accountID)
 	b.WriteString(defaultPolicyTail)
 
 	return b.String()

@@ -20,8 +20,7 @@ import (
 const (
 	snsAuth = "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/sns/aws4_request, " +
 		"SignedHeaders=host, Signature=0"
-	headerContentType = "Content-Type"
-	queueNameKey      = "QueueName"
+	queueNameKey = "QueueName"
 )
 
 var (

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/sns"
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -64,8 +65,8 @@ func parseMemberARN(arn, member string) *awserr.Error {
 }
 
 // applicationARN is the ARN of a platform application.
-func applicationARN(account, region, platform, name string) string {
-	return "arn:" + partition(region) + ":sns:" + region + ":" + account + ":app/" + platform + "/" + name
+func applicationARN(accountID, region, platform, name string) string {
+	return "arn:" + account.Partition(region) + ":sns:" + region + ":" + accountID + ":app/" + platform + "/" + name
 }
 
 // checkApplicationName is LocalStack's _validate_platform_application_name.

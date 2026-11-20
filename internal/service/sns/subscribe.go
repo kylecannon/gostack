@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/sns"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service/sns/envelope"
@@ -223,7 +224,7 @@ func newSubscription(rc *request.Context, topicARN, protocol, endpoint string, a
 		ARN:                   topicARN + ":" + newUUID(),
 		PendingConfirmation:   valueTrue,
 		Owner:                 rc.AccountID,
-		SubscriptionPrincipal: "arn:" + partition(rc.Region) + ":iam::" + rc.AccountID + ":user/DummySNSPrincipal",
+		SubscriptionPrincipal: "arn:" + account.Partition(rc.Region) + ":iam::" + rc.AccountID + ":user/DummySNSPrincipal",
 		FilterPolicyScope:     string(filter.ScopeMessageAttributes),
 		RawMessageDelivery:    valueFalse,
 	}
