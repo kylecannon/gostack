@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/config"
@@ -254,14 +256,23 @@ func Test_start_deliversANotificationHeldPastTheSignal(t *testing.T) {
 // destination that never answers cannot hold the shutdown. serve returns
 // inside SHUTDOWN_TIMEOUT, the save runs with its reserve, and the log says how
 // many calls were cut. The first save runs at once, before the calls drain.
+//
+// It runs on synctest's clock, over an in-memory listener, so each step of the
+// plan lands on its instant exactly and load cannot move it.
 func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
+	synctest.Test(t, serveCutsQueuedCalls)
+}
+
+func serveCutsQueuedCalls(t *testing.T) {
 	const (
 		timeout = 2 * time.Second
 		// The plan for 2 seconds: work ends at 1s, the in-process calls at 1.25s,
 		// the save at 1.5s.
 		callsAt = 1250 * time.Millisecond
 		saveBy  = timeout - lifecycle.KillMargin
-		slack   = 100 * time.Millisecond
+		// inproc.Hub.Drain waits this long, after the cut, for the calls to return.
+		// These ignore their context, so it passes in full.
+		cutGrace = 20 * time.Millisecond
 	)
 
 	log := captureLog(t)
@@ -304,8 +315,7 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 	ctx, stop := context.WithCancel(t.Context())
 	defer stop()
 
-	listeners, err := gw.Listen(ctx)
-	require.NoError(t, err)
+	listeners := []net.Listener{newMemListener()}
 
 	type saved struct {
 		at     time.Time
@@ -328,36 +338,25 @@ func Test_serve_cutsQueuedCallsAtTheirDeadline(t *testing.T) {
 		})
 	}()
 
-	require.Eventually(t, func() bool { return reached.Load() == inproc.MaxInFlight }, 5*time.Second, time.Millisecond)
+	// Every worker is inside the destination, and the rest of the thousand wait.
+	synctest.Wait()
+	require.Equal(t, int32(inproc.MaxInFlight), reached.Load())
 
 	// SIGTERM.
 	begin := time.Now()
 
 	stop()
 
-	var first, rest saved
+	rest := <-rests
+	first := <-firsts
 
-	select {
-	case rest = <-rests:
-	case <-time.After(timeout + 5*time.Second):
-		t.Fatal("the state was never saved")
-	}
+	require.NoError(t, <-done)
 
-	first = <-firsts
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("serve did not return")
-	}
-
+	assert.Equal(t, time.Duration(0), first.at.Sub(begin), "the first save did not wait for the calls")
+	assert.Equal(t, saveBy, first.saveBy.Sub(begin), "the first save may use the whole reserve")
+	assert.Equal(t, callsAt+cutGrace, rest.at.Sub(begin), "the queued calls had until Calls, and were cut at it")
+	assert.Equal(t, saveBy, rest.saveBy.Sub(begin), "the second save keeps the rest of the reserve")
 	assert.Less(t, time.Since(begin), saveBy, "serve returned before the supervisor's SIGKILL, with its margin")
-	assert.Less(t, first.at.Sub(begin), slack, "the first save did not wait for the calls")
-	assert.LessOrEqual(t, first.saveBy.Sub(begin), saveBy+slack, "the first save may use the whole reserve")
-	assert.GreaterOrEqual(t, rest.at.Sub(begin), callsAt-slack, "the queued calls had until Calls")
-	assert.Less(t, rest.at.Sub(begin), callsAt+slack, "the queued calls were cut at Calls, not later")
-	assert.LessOrEqual(t, rest.saveBy.Sub(begin), saveBy+slack, "the second save keeps the rest of the reserve")
 	assert.Equal(t, 1000, hub.Cut(), "every call was cut: the ones running and the ones queued")
 	assert.Contains(t, log.String(), "in-process calls cut at shutdown")
 	assert.Contains(t, log.String(), "count=1000")

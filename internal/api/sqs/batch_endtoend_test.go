@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
@@ -18,19 +17,15 @@ import (
 
 const (
 	hugeBatchEntries = 65_536
-	// The quadratic decoder took about 30 s here; the indexed one about
-	// 0.74 s under -race. 10 s keeps that regression caught on a loaded
-	// CI runner without failing on the runner's speed.
-	hugeBatchBudget = 10 * time.Second
 	queueURLPath     = "http://localhost.localstack.cloud:4566/000000000000/huge-batch"
 )
 
-// Test_SendMessageBatch_of_65536_entries_is_refused_quickly sends the largest
+// Test_SendMessageBatch_of_65536_entries_is_refused sends the largest
 // batch a 16 MiB form body can carry over the query protocol, through the real
 // gateway. The decoder reads every entry before the service can count them, and
 // it used to look for the keys below each entry in the whole form, so this one
 // request kept a core busy for minutes. It is now answered at once.
-func Test_SendMessageBatch_of_65536_entries_is_refused_quickly(t *testing.T) {
+func Test_SendMessageBatch_of_65536_entries_is_refused(t *testing.T) {
 	provider := sqs.New(func() sqs.Settings {
 		return sqs.Settings{EndpointStrategy: sqs.StrategyStandard, Host: "localhost.localstack.cloud:4566"}
 	}, nil)
@@ -66,14 +61,13 @@ func Test_SendMessageBatch_of_65536_entries_is_refused_quickly(t *testing.T) {
 		form.Set(prefix+"MessageBody", "x")
 	}
 
-	body := form.Encode()
-	start := time.Now()
-	rec := post(body)
-	took := time.Since(start)
+	// The refusal is asserted by its answer, not by how long it took: a decoder
+	// quadratic in the entries took about 30 s here, which wall time cannot catch
+	// without failing a loaded host. Test_Decoder_BatchScalesWithEntries in the
+	// query package measures that growth on CPU time.
+	rec := post(form.Encode())
 
-	t.Logf("refused in %v", took)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "<Code>AWS.SimpleQueueService.TooManyEntriesInBatchRequest</Code>")
 	assert.Contains(t, rec.Body.String(), "You have sent "+strconv.Itoa(hugeBatchEntries)+".")
-	assert.Less(t, took, hugeBatchBudget, "the refusal took %v", took)
 }

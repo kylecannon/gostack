@@ -71,11 +71,10 @@ specific to gostack.
 1. **Unit tests** follow conventions-go.md: table tests, `testify/require`,
    `synctest` for time, `-race` always.
    - A test never bounds how long something took by the wall clock. Asserting
-     that a timestamp is recent is fine. The tests that still bound a process
-     deadline by wall time, such as `cmd/gostack/shutdown-calls_internal_test.go`
-     (`assert.Less(t, time.Since(begin), saveBy, ...)`) and the others SQ-284
-     listed, are exceptions until SQ-361 removes them; a new test does not
-     join them.
+     that a timestamp is recent is fine. A step on the runtime's clock runs in
+     a `synctest` bubble and is asserted on the fake instant. Where real
+     sockets or processes stop that clock, a test asserts order and lower
+     bounds, and a wait that remains is a guard against a hang that says so.
    - A test of growth (cost against input size) measures CPU time or counts
      work, decides once on a fixed number of runs, and states in a comment the
      smallest defect it is proven to catch. CPU time is not load-proof: a

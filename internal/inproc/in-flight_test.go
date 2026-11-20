@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/inproc"
@@ -50,14 +51,22 @@ func fillInFlight(t *testing.T, wait time.Duration) {
 }
 
 // Test_InFlight_InternalCallsAreNotCharged: with the in-flight bound full, an
-// S3 put whose notification sends to SQS in process, and an SQS SendMessage
-// made in process with a body well past protocol.FreeBody, are both served
-// while the bound stays full, and neither charges it. The notification is
-// queued after the put answers, so it may reach the queue late; the test waits
-// up to 10 s for it, and a dropped or refused one still fails. The gateway knows
-// both calls by request.MarkInternal, which inproc sets and no header or
-// listener can.
+// S3 put whose notification sends to SQS in process, an SQS SendMessage made in
+// process with a body well past protocol.FreeBody, and the same SendMessage
+// queued for a worker, are all served while the bound stays full, and none
+// charges it. The notification is queued after the put answers, so the test
+// runs in a synctest bubble and waits for the bubble to go quiet, which is when
+// the queue worker has delivered it: no clock is read, so no load can make it
+// late. A dropped or refused notification still fails. The gateway knows these
+// calls by request.MarkInternal, which inproc sets and no header or listener
+// can. The notification's own body is under protocol.FreeBody, so it is free
+// even charged; the queued SendMessage, past it, is what shows a queued call
+// that lost its mark.
 func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
+	synctest.Test(t, internalCallsAreNotCharged)
+}
+
+func internalCallsAreNotCharged(t *testing.T) {
 	s := newStack(t)
 
 	created := s.do(t, inproc.Call{
@@ -87,27 +96,34 @@ func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
 		Body: []byte(big),
 	})
 
-	// S3 queues the notification and answers the put without waiting for it,
-	// so it can reach the queue after the SendMessage, and a receive can
-	// answer with the test event and the big message alone. Receive until it
-	// is there: a received message stays hidden, so each receive returns only
-	// what came after.
-	var received strings.Builder
+	// The same SendMessage, queued for a worker as a service queues its calls
+	// to another. Its answer is the proof: charged under the full pool, it would
+	// wait 50 ms and be throttled.
+	answered := make(chan inproc.Response, 1)
 
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
-		resp := s.do(t, inproc.Call{
-			Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
-			Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
-				`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":1}`),
-		})
-		received.Write(resp.Body)
+	require.True(t, s.client.Enqueue(inproc.Call{
+		Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.SendMessage",
+		Body: []byte(big),
+	}, func(resp inproc.Response, err error) {
+		assert.NoError(t, err)
 
-		if strings.Contains(received.String(), "ObjectCreated:Put") {
-			break
-		}
-	}
+		answered <- resp
+	}))
 
-	assert.Contains(t, received.String(), "ObjectCreated:Put", "the put's notification reached the queue")
+	queued := <-answered
+	assert.True(t, queued.OK(), "the queued call was served: %d %s", queued.Status, queued.Body)
+
+	// S3 queued the notification and answered the put without waiting for it.
+	// The bubble is quiet only once the worker has delivered it.
+	synctest.Wait()
+
+	resp := s.do(t, inproc.Call{
+		Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
+		Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
+			`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":1}`),
+	})
+
+	assert.Contains(t, string(resp.Body), "ObjectCreated:Put", "the put's notification reached the queue")
 
 	_, after := protocol.InFlight()
 	assert.Equal(t, held, after, "internal calls charge nothing")
