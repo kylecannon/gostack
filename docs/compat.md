@@ -259,6 +259,28 @@ caller's account and region, as LocalStack does.
 - A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
   is not `ALL`: LocalStack's message names the index `id-index` whatever it is
   called; gostack names the index of the request. No snapshot pins the text.
+- The legacy `KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected` and
+  `ConditionalOperator` translate to the same key condition and condition
+  evaluator as the expressions. `UpdateItem` with `AttributeUpdates` still
+  answers `501`; LocalStack serves it.
+- A legacy filter or `Expected` with two or more invalid conditions: gostack
+  names the first in attribute-name order, the image the first in the request's
+  JSON order, which the decoded map does not keep. With one invalid condition
+  the answers are the same.
+- `ConditionalOperator` of a value other than `AND` or `OR`: LocalStack
+  answers `500 InternalFailure`; gostack answers the model's enum
+  `ValidationException`, as botocore defines the shape. The same goes for a
+  `KeyConditions` range key condition with `NE`: `500` there, `400` "Query key
+  condition not supported" here, the message the hash key gets.
+- A `Scan` or `Query` of a local secondary index that asks for an attribute the
+  index does not project (`AttributesToGet`, `ProjectionExpression`, or
+  `Select` `ALL_ATTRIBUTES`) with `ReturnConsumedCapacity` `INDEXES` reports
+  the fetched table items' read units under `Table`, plus the index's own.
+  LocalStack reports `Table` 0 and the index's units alone while returning the
+  same attributes. The developer guide's local secondary indexes page says "in
+  addition to the reads from the local secondary index ... you are charged for
+  read capacity units for every base table item fetched", so the document
+  wins.
 
 ## DynamoDB batches and transactions
 
