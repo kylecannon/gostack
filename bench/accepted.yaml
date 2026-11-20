@@ -41,8 +41,11 @@
 #              MiB, 3600000 ms, 3600 s or 10000000 cycles/s, a larger one is a
 #              load error; it is a ceiling for a cost and a floor for a
 #              throughput, and a pair whose change it allows past the 1000%
-#              cap fails like a percent past it. A throughput that falls to
-#              zero and a cost that rises from zero are past every bound.
-#   reason:   one line.
+#              cap fails like a percent past it. A cost that rises from zero,
+#              and in the system gate a throughput that falls to zero, are
+#              past every bound. In the benchstat gate a throughput that
+#              collapses shows in the sec/op row of the same benchmark, a
+#              rise past the 1000% cap that no entry can hold.
+#   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.

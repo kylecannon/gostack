@@ -376,14 +376,17 @@ the work costs, so a throughput (a `/s` unit, `cycles/s`) that falls d percent
 counts as a rise of 100d/(100-d) percent: `+100%` lets a latency double and a
 throughput halve, `+1000%` stops at a drop to an eleventh, and a throughput that
 falls to nothing, or a cost that rises from a base of zero, is past every
-bound. Neither prints a percent, so each gate finds them another way: `bench
-gate` reads benchstat's `?` change of a zero base, and a throughput's head of
-zero that benchstat sets in a table of its own (its unit becomes `MB/s`); the
-system compare counts a zero throughput median against a measured base. Both
-fail with no entry at all. A refusal states the rise it computed (an 18% fall
-under `+20%` reads "a rise of +22.0% in cost"). An absolute bound is the worst head
-value, a ceiling for a cost and a floor for a throughput, and is held to the
-same 1000% cap: a pair whose change the bound allows past 1000% fails, so
+bound. Neither prints a percent, so each gate finds them another way. `bench
+gate` reads the `?` change benchstat prints for a cost whose base is zero. It
+reads no row for a throughput that falls to zero, because benchstat sets each
+file's figure in a table of its own (the head's unit becomes `MB/s`); the
+benchmark's `sec/op` row catches it instead, a rise past the 1000% cap that no
+entry can hold. The system compare fails a throughput whose head median is
+zero against a measured base, even when one run of the head ran at the base's
+rate. A refusal states the rise it computed (an 18% fall under `+20%` reads "a
+rise of +22.0% in cost"). An absolute bound is the worst head value, a ceiling
+for a cost and a floor for a throughput, and is held to the same 1000% cap: a
+pair whose change the bound allows past 1000% fails, so
 `65536 MiB` accepts no more than `1000%` does. An infinite, negative, zero,
 repeated-sign or over-cap bound is a load error, as is a second YAML document
 and a second entry that can match the same row as another: one metric, or a

@@ -434,14 +434,14 @@ func (s acceptedSet) unused(gate string, matchers []func(*acceptedEntry) bool) [
 	return lines
 }
 
-// quoted is the subject with its free-text names quoted, so that a trailing
-// space or a glob in one shows.
+// quoted is the subject with every name quoted, so that a trailing space or a
+// glob in one shows.
 func (e *acceptedEntry) quoted() string {
 	if e.Gate == gateBenchstat {
-		return fmt.Sprintf("benchstat %s %q %s", e.Package, e.Benchmark, e.Unit)
+		return fmt.Sprintf("benchstat %q %q %q", e.Package, e.Benchmark, e.Unit)
 	}
 
-	return fmt.Sprintf("system %s %q %q", e.Target, e.Cell, e.Metric)
+	return fmt.Sprintf("system %q %q %q", e.Target, e.Cell, e.Metric)
 }
 
 // deadBound is why a percent bound can hold no regression the gate flags, or
@@ -639,7 +639,7 @@ func (m measured) describe(floor float64) string {
 	case math.IsInf(worse, 1):
 		return "a fall to nothing is " + describeRise(worse, floor)
 	default:
-		return fmt.Sprintf("a fall of %s%% reads as %s in cost", exceeding(-m.change, 0), describeRise(worse, floor))
+		return fmt.Sprintf("a fall of %s%% reads as %s in cost", fallText(-m.change), describeRise(worse, floor))
 	}
 }
 
@@ -651,6 +651,12 @@ func describeRise(pct, floor float64) string {
 	}
 
 	return "a rise of +" + exceeding(pct, floor) + "%"
+}
+
+// fallText writes a fall in percent to two decimals, as benchstat prints it, less a
+// zero in the second: -10.01% does not read as 10.0%.
+func fallText(pct float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(pct, 'f', 2, 64), "0")
 }
 
 // exceeding writes pct with the fewest decimals, one at least, that still show

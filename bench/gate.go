@@ -43,7 +43,6 @@ const (
 	geomeanRow      = "geomean"
 	pkgPrefix       = "pkg: "
 	unitColumn      = 1 // the text between the first two separators of a header row
-	minRateFields   = 2 // a benchmark's name and its value
 	wholePercent    = 100.0
 )
 
@@ -79,14 +78,11 @@ type benchRow struct {
 }
 
 func (r benchRow) String() string {
-	switch {
-	case r.shape != "" && r.pValue == "":
-		return fmt.Sprintf("%s %s %s", r.name, r.unit, r.shape)
-	case r.shape != "":
+	if r.shape != "" {
 		return fmt.Sprintf("%s %s %s (p=%s)", r.name, r.unit, r.shape, r.pValue)
-	default:
-		return fmt.Sprintf("%s %s %+.2f%% (p=%s)", r.name, r.unit, r.delta, r.pValue)
 	}
+
+	return fmt.Sprintf("%s %s %+.2f%% (p=%s)", r.name, r.unit, r.delta, r.pValue)
 }
 
 func (r benchRow) lowerIsBetter() bool {
@@ -205,10 +201,11 @@ func reportGate(ctx context.Context, rows []benchRow, accepted acceptedSet, base
 
 // findRegressions returns each regressed benchmark and unit. Units that end in
 // "/s" are throughputs, where a drop is the regression; every other unit
-// (sec/op, B/op, allocs/op) is a cost, where a rise is. Two rows carry no
-// percent and are regressions all the same: a cost whose base is zero prints
-// "?" for its change, and a throughput that falls to zero moves to a table of
-// its own, because benchstat names the unit of a zero MB/s differently.
+// (sec/op, B/op, allocs/op) is a cost, where a rise is. One row carries no
+// percent and is a regression all the same: a cost whose base is zero prints
+// "?" for its change. A throughput that falls to zero is not found here. Its
+// benchmark takes as many times as long for the same work, so its sec/op row
+// shows a rise past the 1000% cap that no entry can hold.
 func findRegressions(in io.Reader) ([]benchRow, error) {
 	var scan benchScan
 
@@ -225,86 +222,29 @@ func findRegressions(in io.Reader) ([]benchRow, error) {
 		return nil, fmt.Errorf("read benchstat output: %w", err)
 	}
 
-	return append(scan.found, scan.fellToZero()...), nil
+	return scan.found, nil
 }
 
 // benchScan reads benchstat's text a line at a time.
 type benchScan struct {
 	pkg, unit string
-	// header counts the header lines of the table being read: file labels, then
-	// units.
-	header int
-	labels []string
-	// baseLabel is the label of the base file, and single the label of the file a
-	// table with one file column holds, or "" outside such a table.
-	baseLabel, single string
-	found             []benchRow
-	// baseRates and headRates are the throughput rows of the tables with one file
-	// column, by package and benchmark.
-	baseRates, headRates []rateRow
-}
-
-// rateRow is a throughput row of a table that compares nothing.
-type rateRow struct {
-	pkg, name, unit string
-	zero            bool
+	found     []benchRow
 }
 
 func (s *benchScan) line(line string) error {
-	trimmed := strings.TrimSpace(line)
+	if p, ok := strings.CutPrefix(line, pkgPrefix); ok {
+		s.pkg = strings.TrimSpace(p)
 
-	switch {
-	case trimmed == "":
-		s.header, s.single = 0, ""
-	case strings.HasPrefix(line, pkgPrefix):
-		s.pkg = strings.TrimSpace(strings.TrimPrefix(line, pkgPrefix))
-	case strings.HasPrefix(trimmed, columnSeparator):
-		s.headerLine(line)
-	case s.single != "":
-		s.rateRow(line)
-	default:
-		return s.comparisonRow(line)
+		return nil
 	}
 
-	return nil
-}
+	if strings.Contains(line, baseMarker) && strings.Contains(line, columnSeparator) {
+		s.unit = unitOf(line)
 
-// headerLine reads a header row of a table: the labels of its files, then the
-// units. A table of one file holds benchmarks the other file has no row for.
-func (s *benchScan) headerLine(line string) {
-	s.header++
-	cells := columnsOf(line)
-
-	switch {
-	case strings.Contains(line, baseMarker):
-		s.unit, s.single = unitOf(line), ""
-		if len(s.labels) > 1 && s.baseLabel == "" {
-			s.baseLabel = s.labels[0]
-		}
-	case s.header == 1:
-		s.labels = cells
-	case len(s.labels) == 1 && len(cells) == 1:
-		s.unit, s.single = cells[0], s.labels[0]
-		if s.baseLabel == "" {
-			s.baseLabel = s.single
-		}
-	default:
-	}
-}
-
-// rateRow keeps a throughput row of a table of one file.
-func (s *benchScan) rateRow(line string) {
-	fields := strings.Fields(line)
-	if len(fields) < minRateFields || fields[0] == geomeanRow || !strings.HasSuffix(s.unit, "/s") {
-		return
+		return nil
 	}
 
-	row := rateRow{pkg: s.pkg, name: fields[0], unit: s.unit, zero: isZero(fields[1])}
-	if s.single == s.baseLabel {
-		s.baseRates = append(s.baseRates, row)
-	} else {
-		s.headRates = append(s.headRates, row)
-	}
+	return s.comparisonRow(line)
 }
 
 // comparisonRow reads a row with a change: a percent, or the "?" of a base that
@@ -356,47 +296,11 @@ func (s *benchScan) fromZero(match []string) error {
 	return nil
 }
 
-// fellToZero returns the throughputs whose head is zero where the base was not.
-// benchstat does not compare them: a zero MB/s is a different unit from the
-// base's B/s, so each file gets a table with one column.
-func (s *benchScan) fellToZero() []benchRow {
-	var rows []benchRow
-
-	for _, head := range s.headRates {
-		if !head.zero {
-			continue
-		}
-
-		for _, base := range s.baseRates {
-			if base.pkg == head.pkg && base.name == head.name && !base.zero {
-				rows = append(rows, benchRow{
-					pkg: base.pkg, name: base.name, unit: base.unit, delta: -wholePercent, shape: "fell to zero",
-				})
-			}
-		}
-	}
-
-	return rows
-}
-
 // isZero reports whether a benchstat value, such as "0.000" or "0.00Mi", is zero.
 func isZero(value string) bool {
 	number, err := strconv.ParseFloat(strings.TrimRightFunc(value, unicode.IsLetter), 64)
 
 	return err == nil && number == 0
-}
-
-// columnsOf is the text of each column of a header row.
-func columnsOf(header string) []string {
-	var cells []string
-
-	for part := range strings.SplitSeq(header, columnSeparator) {
-		if text := strings.TrimSpace(part); text != "" {
-			cells = append(cells, text)
-		}
-	}
-
-	return cells
 }
 
 // unitOf reads the unit from a header row such as "│ sec/op │ sec/op vs base │".

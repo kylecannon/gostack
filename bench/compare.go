@@ -138,6 +138,13 @@ func (m metric) judge() outcome {
 		return steady
 	}
 
+	// A throughput whose median is zero completed no cycle in most runs: the
+	// largest fall there is, and a run or two at the base's level (head 0, 0,
+	// 2800) does not make the ranges overlap into noise.
+	if m.head.Median == 0 {
+		return worse
+	}
+
 	change := m.change()
 	if !m.lowerIsBetter {
 		change = -change
