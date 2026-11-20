@@ -4,6 +4,7 @@ package kms
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -393,4 +394,120 @@ func (Unimplemented) Verify(context.Context, *VerifyInput) (*VerifyOutput, error
 // VerifyMac returns awserr.NotImplemented.
 func (Unimplemented) VerifyMac(context.Context, *VerifyMacInput) (*VerifyMacOutput, error) {
 	return nil, awserr.NotImplemented("kms", "VerifyMac")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the kms API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "CancelKeyDeletion":
+		return t.MethodByName("CancelKeyDeletion")
+	case "ConnectCustomKeyStore":
+		return t.MethodByName("ConnectCustomKeyStore")
+	case "CreateAlias":
+		return t.MethodByName("CreateAlias")
+	case "CreateCustomKeyStore":
+		return t.MethodByName("CreateCustomKeyStore")
+	case "CreateGrant":
+		return t.MethodByName("CreateGrant")
+	case "CreateKey":
+		return t.MethodByName("CreateKey")
+	case "Decrypt":
+		return t.MethodByName("Decrypt")
+	case "DeleteAlias":
+		return t.MethodByName("DeleteAlias")
+	case "DeleteCustomKeyStore":
+		return t.MethodByName("DeleteCustomKeyStore")
+	case "DeleteImportedKeyMaterial":
+		return t.MethodByName("DeleteImportedKeyMaterial")
+	case "DeriveSharedSecret":
+		return t.MethodByName("DeriveSharedSecret")
+	case "DescribeCustomKeyStores":
+		return t.MethodByName("DescribeCustomKeyStores")
+	case "DescribeKey":
+		return t.MethodByName("DescribeKey")
+	case "DisableKey":
+		return t.MethodByName("DisableKey")
+	case "DisableKeyRotation":
+		return t.MethodByName("DisableKeyRotation")
+	case "DisconnectCustomKeyStore":
+		return t.MethodByName("DisconnectCustomKeyStore")
+	case "EnableKey":
+		return t.MethodByName("EnableKey")
+	case "EnableKeyRotation":
+		return t.MethodByName("EnableKeyRotation")
+	case "Encrypt":
+		return t.MethodByName("Encrypt")
+	case "GenerateDataKey":
+		return t.MethodByName("GenerateDataKey")
+	case "GenerateDataKeyPair":
+		return t.MethodByName("GenerateDataKeyPair")
+	case "GenerateDataKeyPairWithoutPlaintext":
+		return t.MethodByName("GenerateDataKeyPairWithoutPlaintext")
+	case "GenerateDataKeyWithoutPlaintext":
+		return t.MethodByName("GenerateDataKeyWithoutPlaintext")
+	case "GenerateMac":
+		return t.MethodByName("GenerateMac")
+	case "GenerateRandom":
+		return t.MethodByName("GenerateRandom")
+	case "GetKeyPolicy":
+		return t.MethodByName("GetKeyPolicy")
+	case "GetKeyRotationStatus":
+		return t.MethodByName("GetKeyRotationStatus")
+	case "GetParametersForImport":
+		return t.MethodByName("GetParametersForImport")
+	case "GetPublicKey":
+		return t.MethodByName("GetPublicKey")
+	case "ImportKeyMaterial":
+		return t.MethodByName("ImportKeyMaterial")
+	case "ListAliases":
+		return t.MethodByName("ListAliases")
+	case "ListGrants":
+		return t.MethodByName("ListGrants")
+	case "ListKeyPolicies":
+		return t.MethodByName("ListKeyPolicies")
+	case "ListKeyRotations":
+		return t.MethodByName("ListKeyRotations")
+	case "ListKeys":
+		return t.MethodByName("ListKeys")
+	case "ListResourceTags":
+		return t.MethodByName("ListResourceTags")
+	case "ListRetirableGrants":
+		return t.MethodByName("ListRetirableGrants")
+	case "PutKeyPolicy":
+		return t.MethodByName("PutKeyPolicy")
+	case "ReEncrypt":
+		return t.MethodByName("ReEncrypt")
+	case "ReplicateKey":
+		return t.MethodByName("ReplicateKey")
+	case "RetireGrant":
+		return t.MethodByName("RetireGrant")
+	case "RevokeGrant":
+		return t.MethodByName("RevokeGrant")
+	case "RotateKeyOnDemand":
+		return t.MethodByName("RotateKeyOnDemand")
+	case "ScheduleKeyDeletion":
+		return t.MethodByName("ScheduleKeyDeletion")
+	case "Sign":
+		return t.MethodByName("Sign")
+	case "TagResource":
+		return t.MethodByName("TagResource")
+	case "UntagResource":
+		return t.MethodByName("UntagResource")
+	case "UpdateAlias":
+		return t.MethodByName("UpdateAlias")
+	case "UpdateCustomKeyStore":
+		return t.MethodByName("UpdateCustomKeyStore")
+	case "UpdateKeyDescription":
+		return t.MethodByName("UpdateKeyDescription")
+	case "UpdatePrimaryRegion":
+		return t.MethodByName("UpdatePrimaryRegion")
+	case "Verify":
+		return t.MethodByName("Verify")
+	case "VerifyMac":
+		return t.MethodByName("VerifyMac")
+	default:
+		return reflect.Method{}, false
+	}
 }

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"v\":1,\"data\":{\"states\":[{\"account\":\"000000000000\",\"region\":\"us-east-1\",\"secrets\":[{\"name\":\"\",\"arn\":\"arn:aws:secretsmanager:us-east-1:000000000000:secret:-abcdef\",\"created\":\"2026-01-01T00:00:00Z\",\"lastChanged\":\"2026-01-01T00:00:00Z\",\"versions\":[{\"id\":\"a\",\"stages\":[\"AWSCURRENT\"],\"created\":\"2026-01-01T00:00:00Z\",\"string\":\"one\"}],\"current\":\"a\"}]}]}}")

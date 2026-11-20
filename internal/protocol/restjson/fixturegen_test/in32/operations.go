@@ -4,6 +4,7 @@ package in32
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // NoInputAndOutput returns awserr.NotImplemented.
 func (Unimplemented) NoInputAndOutput(context.Context, *NoInputAndOutputInput) (*NoInputAndOutputOutput, error) {
 	return nil, awserr.NotImplemented("in32", "NoInputAndOutput")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in32 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "NoInputAndOutput":
+		return t.MethodByName("NoInputAndOutput")
+	default:
+		return reflect.Method{}, false
+	}
 }

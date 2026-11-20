@@ -4,6 +4,7 @@ package in35
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -29,4 +30,16 @@ var _ Handler = Unimplemented{}
 // OmitsSerializingEmptyLists returns awserr.NotImplemented.
 func (Unimplemented) OmitsSerializingEmptyLists(context.Context, *OmitsSerializingEmptyListsInput) (*OmitsSerializingEmptyListsOutput, error) {
 	return nil, awserr.NotImplemented("in35", "OmitsSerializingEmptyLists")
+}
+
+// OperationMethod returns the method of t that implements operation, and false when
+// t has none or operation is not one of the in35 API. Every lookup names its
+// method with a constant, so the linker keeps only the methods of those names.
+func OperationMethod(t reflect.Type, operation string) (reflect.Method, bool) {
+	switch operation {
+	case "OmitsSerializingEmptyLists":
+		return t.MethodByName("OmitsSerializingEmptyLists")
+	default:
+		return reflect.Method{}, false
+	}
 }

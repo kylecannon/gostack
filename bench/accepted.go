@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,6 +402,103 @@ func (s acceptedSet) judge(ctx context.Context, base, head string, matches func(
 	return verdict{note: strings.Join(notes, "; ")}
 }
 
+// unused describes the entries of gate that hold nothing in a gate run, each
+// with why: it matched none of the regressions the run judged (a glob or a
+// stray space in a name, a benchmark that no longer exists, a regression that
+// has gone), or its bound is one no regression the gate flags can fit. Such an
+// entry says nothing until reported. matchers holds one per regression.
+func (s acceptedSet) unused(gate string, matchers []func(*acceptedEntry) bool) []string {
+	var lines []string
+
+	for i := range s.entries {
+		e := &s.entries[i]
+		if e.Gate != gate {
+			continue
+		}
+
+		var reasons []string
+
+		if !slices.ContainsFunc(matchers, func(matches func(*acceptedEntry) bool) bool { return matches(e) }) {
+			reasons = append(reasons, "matched no regression")
+		}
+
+		if dead := e.deadBound(); dead != "" {
+			reasons = append(reasons, dead)
+		}
+
+		if len(reasons) > 0 {
+			lines = append(lines, e.quoted()+": "+strings.Join(reasons, "; "))
+		}
+	}
+
+	return lines
+}
+
+// quoted is the subject with every name quoted, so that a trailing space or a
+// glob in one shows.
+func (e *acceptedEntry) quoted() string {
+	if e.Gate == gateBenchstat {
+		return fmt.Sprintf("benchstat %q %q %q", e.Package, e.Benchmark, e.Unit)
+	}
+
+	return fmt.Sprintf("system %q %q %q", e.Target, e.Cell, e.Metric)
+}
+
+// deadBound is why a percent bound can hold no regression the gate flags, or
+// "". Detection reads a throughput as a fall and a bound reads it as the rise
+// it costs, so a throughput flagged at a fall of f percent reads as a rise of
+// 100f/(100-f), and a bound at or under that holds none.
+func (e *acceptedEntry) deadBound() string {
+	if e.limit.percent <= 0 {
+		return ""
+	}
+
+	flagged, lower, ok := e.flaggedAt()
+	if !ok {
+		return ""
+	}
+
+	reads := flagged
+	if !lower {
+		reads = wholePercent * flagged / (wholePercent - flagged)
+	}
+
+	if e.limit.percent > reads {
+		return ""
+	}
+
+	what := fmt.Sprintf("a rise past %g%%", flagged)
+	if !lower {
+		what = fmt.Sprintf("a fall past %g%%, which reads as a rise past +%.2f%%", flagged, reads)
+	}
+
+	return fmt.Sprintf("its bound %s is at or under what the gate flags (%s), so it holds none", e.limit, what)
+}
+
+// flaggedAt is the change in percent past which the entry's gate flags its
+// metric, and whether the metric is a cost. ok is false for a metric the gate
+// has no limit for.
+func (e *acceptedEntry) flaggedAt() (percent float64, lower, ok bool) {
+	if e.Gate == gateBenchstat {
+		return maxRegressionPercent, !strings.HasSuffix(e.Unit, "/s"), true
+	}
+
+	switch {
+	case e.Metric == metricStartup:
+		return limitStartup * percentScale, true, true
+	case e.Metric == "idle RSS", e.Metric == "peak RSS":
+		return limitRSS * percentScale, true, true
+	case e.Metric == "throughput":
+		return limitThroughput * percentScale, false, true
+	case strings.HasSuffix(e.Metric, " p50"):
+		return limitP50 * percentScale, true, true
+	case strings.HasSuffix(e.Metric, " p99"):
+		return limitP99 * percentScale, true, true
+	default:
+		return 0, false, false
+	}
+}
+
 // outOfScope returns "" when the entry applies to a comparison of base and head,
 // and otherwise why it does not.
 func (s acceptedSet) outOfScope(ctx context.Context, e *acceptedEntry, base, head string) string {
@@ -490,15 +588,21 @@ type measured struct {
 }
 
 // within returns "" when the change is inside the limit, and otherwise says how
-// it is not.
+// it is not. A percent limit and the cap that holds an absolute one both read
+// the change as worsening reads it.
 func (m measured) within(l limit) string {
+	worse := m.worsening()
+
 	switch {
-	case l.percent > 0 && m.worsening() <= l.percent:
+	case l.percent > 0 && worse <= l.percent:
 		return ""
 	case l.percent > 0:
-		return fmt.Sprintf("the change is past the accepted %s", l)
+		return fmt.Sprintf("%s, past the accepted %s", m.describe(l.percent), l)
 	case l.unit != m.unit:
 		return fmt.Sprintf("the accepted %s is not in %s, the metric's unit", l, m.unit)
+	case worse > maxPercent:
+		return fmt.Sprintf("the accepted %s allows %s, past the %d%% cap on every bound", l,
+			describeRise(worse, maxPercent), maxPercent)
 	case m.headWithin(l.absolute):
 		return ""
 	default:
@@ -506,14 +610,70 @@ func (m measured) within(l limit) string {
 	}
 }
 
-// worsening is how much worse the change is, in percent: a rise for a cost, a
-// fall for a throughput.
+// worsening is how much worse the change is, as the rise in percent in what the
+// work costs. A cost is its own change. A throughput that falls d percent takes
+// 100/(100-d) times as long for the same work, a rise of 100d/(100-d) percent,
+// so "+100%" lets a latency double and a throughput halve. A throughput that
+// falls to nothing is a rise without end.
 func (m measured) worsening() float64 {
 	if m.lowerIsBetter {
 		return m.change
 	}
 
-	return -m.change
+	if m.change <= -wholePercent {
+		return math.Inf(1)
+	}
+
+	return -wholePercent * m.change / (wholePercent + m.change)
+}
+
+// describe says what the change is and how a percent bound reads it, so a
+// throughput that fell 18% is not shown beside a 20% bound it passes: the bound
+// reads the fall as the rise it costs.
+func (m measured) describe(floor float64) string {
+	worse := m.worsening()
+
+	switch {
+	case m.lowerIsBetter:
+		return "the change is " + describeRise(worse, floor)
+	case math.IsInf(worse, 1):
+		return "a fall to nothing is " + describeRise(worse, floor)
+	default:
+		return fmt.Sprintf("a fall of %s%% reads as %s in cost", fallText(-m.change), describeRise(worse, floor))
+	}
+}
+
+// describeRise writes a rise in percent for a message, "a rise without end"
+// for a throughput that fell to nothing or a cost that rose from zero.
+func describeRise(pct, floor float64) string {
+	if math.IsInf(pct, 1) {
+		return "a rise without end"
+	}
+
+	return "a rise of +" + exceeding(pct, floor) + "%"
+}
+
+// fallText writes a fall in percent to two decimals, as benchstat prints it, less a
+// zero in the second: -10.01% does not read as 10.0%.
+func fallText(pct float64) string {
+	return strings.TrimSuffix(strconv.FormatFloat(pct, 'f', 2, 64), "0")
+}
+
+// exceeding writes pct with the fewest decimals, one at least, that still show
+// it past floor: a rise of 1000.0001% prints as such and not as the cap.
+func exceeding(pct, floor float64) string {
+	const maxPlaces = 9
+
+	for places := 1; places <= maxPlaces; places++ {
+		text := strconv.FormatFloat(pct, 'f', places, 64)
+
+		shown, err := strconv.ParseFloat(text, 64)
+		if err == nil && shown > floor {
+			return text
+		}
+	}
+
+	return strconv.FormatFloat(pct, 'f', 1, 64)
 }
 
 // headWithin reports whether the head is no worse than an absolute limit.

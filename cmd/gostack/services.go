@@ -16,7 +16,9 @@ import (
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/kms"
 	"github.com/kylecannon/gostack/internal/service/s3"
+	"github.com/kylecannon/gostack/internal/service/secretsmanager"
 	"github.com/kylecannon/gostack/internal/service/sqs"
+	"github.com/kylecannon/gostack/internal/service/ssm"
 	"github.com/kylecannon/gostack/internal/service/sts"
 )
 
@@ -58,6 +60,8 @@ func registrations(cfg *config.Config, changed func(name string), s3Provider *s3
 		sts.Registration(liveSettings(cfg, stsSettings)),
 		s3Provider.Registration(),
 		kms.New(changed).Registration(),
+		secretsmanager.New(changed).Registration(),
+		ssm.New().Registration(),
 	}
 }
 

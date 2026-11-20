@@ -18,13 +18,14 @@ import (
 
 // Metadata describes the out08 service.
 var Metadata = service.Metadata{
-	Name:           "out08",
-	SigningName:    "out08",
-	TargetPrefix:   "",
-	EndpointPrefix: "out08",
-	APIVersion:     "2019-12-16",
-	Protocols:      []protocol.Kind{protocol.KindRestJSON},
-	Operations:     Operations,
+	Name:            "out08",
+	SigningName:     "out08",
+	TargetPrefix:    "",
+	EndpointPrefix:  "out08",
+	APIVersion:      "2019-12-16",
+	Protocols:       []protocol.Kind{protocol.KindRestJSON},
+	Operations:      Operations,
+	OperationMethod: OperationMethod,
 }
 
 // The request paths of the operations, which Route and the readers match.

@@ -115,7 +115,10 @@ func Test_serviceTable(t *testing.T) {
 		stateful:  {State: "running", Persisted: true},
 		stateless: {State: "running", Persisted: false},
 	}, table.States())
-	assert.Equal(t, []internalapi.ServiceCapability{{Name: stateful}, {Name: stateless}}, table.Capabilities())
+	assert.Equal(t, []internalapi.ServiceCapability{
+		{Name: stateful, Unknown: true},
+		{Name: stateless, Unknown: true},
+	}, table.Capabilities())
 
 	off := &serviceTable{regs: []service.Registration{registration(stateful)}, eng: persist.New(persist.Config{})}
 	assert.False(t, off.States()[stateful].Persisted, "persistence is off")
