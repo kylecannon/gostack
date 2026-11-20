@@ -3,9 +3,9 @@ package s3
 import (
 	"slices"
 	"sync"
-	"time"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // versionNull is the version id of an object in a bucket that never had
@@ -111,7 +111,7 @@ type Bucket struct {
 	Region string
 	// LocationConstraint is the constraint it was created with, "" for none.
 	LocationConstraint string
-	CreationDate       time.Time
+	CreationDate       protocol.SnapshotTime
 
 	// Objects maps a key to its versions.
 	Objects map[string]*Object
@@ -179,7 +179,7 @@ type Version struct {
 	BlobID       string
 	Size         int64
 	ETag         string
-	LastModified time.Time
+	LastModified protocol.SnapshotTime
 
 	// Metadata is the user metadata, x-amz-meta-*, keys in lower case.
 	Metadata map[string]string

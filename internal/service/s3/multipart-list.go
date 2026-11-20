@@ -77,7 +77,7 @@ func (p *Provider) ListParts(ctx context.Context, in *s3api.ListPartsInput) (*s3
 // upload has an algorithm.
 func listedPart(upload *MultipartUpload, part *Part) s3api.Part {
 	listed := s3api.Part{
-		ETag: new(quoted(part.ETag)), LastModified: timeOf(part.LastModified), PartNumber: &part.Number,
+		ETag: new(quoted(part.ETag)), LastModified: timeOf(part.LastModified.Time), PartNumber: &part.Number,
 		Size: &part.Size,
 	}
 
@@ -227,7 +227,7 @@ func (pg uploadPage) fill(out *s3api.ListMultipartUploadsOutput, uploads []*Mult
 			out.CommonPrefixes = append(out.CommonPrefixes, s3api.CommonPrefix{Prefix: new(common)})
 		} else {
 			out.Uploads = append(out.Uploads, s3api.MultipartUpload{
-				UploadId: &upload.ID, Key: &upload.Key, Initiated: timeOf(upload.Initiated),
+				UploadId: &upload.ID, Key: &upload.Key, Initiated: timeOf(upload.Initiated.Time),
 				StorageClass: &upload.StorageClass, Owner: owner, Initiator: initiator,
 				ChecksumAlgorithm: nonEmpty(upload.ChecksumAlgorithm), ChecksumType: nonEmpty(upload.ChecksumType),
 			})

@@ -66,7 +66,7 @@ func (p *Provider) GetObjectAttributes(
 
 // attributesOf selects from the version the attributes the request asks for.
 func attributesOf(v *Version, in *s3api.GetObjectAttributesInput) *s3api.GetObjectAttributesOutput {
-	out := &s3api.GetObjectAttributesOutput{LastModified: &protocol.Time{Time: v.LastModified}}
+	out := &s3api.GetObjectAttributesOutput{LastModified: &protocol.Time{Time: v.LastModified.Time}}
 	asked := func(name string) bool { return slices.Contains(in.ObjectAttributes, name) }
 
 	if asked(attributeETag) {

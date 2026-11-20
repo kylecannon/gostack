@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"encoding/json/v2"
+	"math"
 	"testing"
 	"time"
 
@@ -208,49 +209,198 @@ func Test_Time_inStruct(t *testing.T) {
 	assert.True(t, decoded.Whole.Equal(give.Whole.Time))
 }
 
-// Test_SnapshotTimes writes each time a snapshot can hold and reads it back:
-// one RFC 3339 can write keeps json/v2's own form, so an earlier snapshot
-// reads as it did, and any other is epoch seconds instead of failing the save.
-func Test_SnapshotTimes(t *testing.T) {
-	opts := json.JoinOptions(
-		json.WithMarshalers(protocol.SnapshotTimeMarshalers),
-		json.WithUnmarshalers(protocol.SnapshotTimeUnmarshalers),
-	)
+// snapshotted is a struct with a SnapshotTime field and a plain time.Time one,
+// as the snapshot's own types are.
+type snapshotted struct {
+	At    protocol.SnapshotTime
+	Plain time.Time
+}
+
+// Test_SnapshotTime_writesRFC3339 checks that a time RFC 3339 can write is
+// written as encoding/json/v2 writes a time.Time, byte for byte, so a snapshot
+// written before this type reads as it did and one written now reads in an
+// older build.
+func Test_SnapshotTime_writesRFC3339(t *testing.T) {
+	tests := map[string]time.Time{
+		"zero":               {},
+		"UTC":                time.Unix(1700000000, 0).UTC(),
+		"nanoseconds":        time.Unix(1700000000, 123456789).UTC(),
+		"east":               time.Unix(1700000000, 5).In(time.FixedZone("east", 5*60*60+30*60)),
+		"west":               time.Unix(1700000000, 0).In(time.FixedZone("west", -8*60*60)),
+		"year 0":             time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC),
+		"year 9999":          time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC),
+		"year 0, east":       time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("east", 2*60*60)),
+		"year 9999, west":    time.Date(9999, 12, 31, 23, 59, 59, 0, time.FixedZone("west", -60*60)),
+		"the widest offset":  time.Unix(1700000000, 0).In(time.FixedZone("wide", 23*60*60+59*60)),
+		"the widest, behind": time.Unix(1700000000, 0).In(time.FixedZone("wide", -(23*60*60 + 59*60))),
+	}
+
+	for name, give := range tests {
+		t.Run(name, func(t *testing.T) {
+			want, err := json.Marshal(give)
+			require.NoError(t, err)
+
+			got, err := json.Marshal(protocol.SnapshotTime{Time: give})
+			require.NoError(t, err)
+			assert.Equal(t, string(want), string(got))
+
+			var back protocol.SnapshotTime
+
+			require.NoError(t, json.Unmarshal(got, &back))
+			assert.True(t, give.Equal(back.Time), "read back %v", back.Time)
+		})
+	}
+}
+
+// Test_SnapshotTime_writesEpoch checks that a time RFC 3339 cannot hold is
+// epoch seconds, that it reads back as the same instant, and that the same
+// times fail as a time.Time or are lost by it, which is why the type exists.
+func Test_SnapshotTime_writesEpoch(t *testing.T) {
+	east := func(sec int) *time.Location { return time.FixedZone("", sec) }
+	parsed := func(s string) time.Time {
+		var p protocol.Time
+
+		require.NoError(t, p.ParseISO8601(s))
+
+		return p.Time
+	}
 
 	tests := []struct {
-		name string
-		give time.Time
-		want string
+		name  string
+		give  time.Time
+		want  string
+		fails bool // encoding/json/v2 refuses the time.Time
 	}{
-		{name: "in range", give: time.Unix(1700000000, 0).UTC(), want: `"` + isoWhole + `"`},
-		{name: "past 9999", give: time.Unix(300000000000, 0), want: "300000000000"},
-		{name: "before 0", give: time.Unix(-100000000000, 500000000), want: "-99999999999.5"},
+		{name: "past 9999", give: time.Unix(300000000000, 0), want: "300000000000", fails: true},
+		{name: "before 0", give: time.Unix(-100000000000, 500000000), want: "-99999999999.5", fails: true},
 		{
-			name: "9999 in UTC, 10000 east of it",
-			give: time.Date(9999, 12, 31, 23, 0, 0, 0, time.UTC).In(time.FixedZone("east", 2*60*60)),
-			want: "253402297200",
+			name:  "9999 in UTC, 10000 east of it",
+			give:  time.Date(9999, 12, 31, 23, 0, 0, 0, time.UTC).In(east(2 * 60 * 60)),
+			want:  "253402297200",
+			fails: true,
 		},
 		{
 			name: "an offset with seconds",
 			give: time.Date(1800, 1, 1, 0, 0, 0, 0, time.FixedZone("LMT", -28378)),
 			want: "-5364634022",
 		},
+		{
+			name:  "a day east",
+			give:  time.Unix(1700000000, 0).In(east(24 * 60 * 60)),
+			want:  "1700000000",
+			fails: true,
+		},
+		{
+			name:  "a day west",
+			give:  time.Unix(1700000000, 0).In(east(-24 * 60 * 60)),
+			want:  "1700000000",
+			fails: true,
+		},
+		{name: "+24:00", give: parsed("2023-11-14T22:13:20+24:00"), want: "1699913600", fails: true},
+		{name: "-24:00", give: parsed("2023-11-14T22:13:20-24:00"), want: "1700086400", fails: true},
+		{name: "+23:60", give: parsed("2023-11-14T22:13:20+23:60"), want: "1699913600", fails: true},
+		{name: "+24:60", give: parsed("2023-11-14T22:13:20+24:60"), want: "1699910000", fails: true},
+		{name: "the least time", give: time.Unix(math.MinInt64, 0), want: "-9223372036854775808", fails: true},
+		{
+			name: "the least, with a fraction", give: time.Unix(math.MinInt64, 500000000),
+			want: "-9223372036854775807.5", fails: true,
+		},
+		{
+			name: "the greatest time", give: time.Unix(math.MaxInt64, 999999999),
+			want: "9223372036854775807.999999999", fails: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := json.Marshal(tt.give, opts)
+			got, err := json.Marshal(protocol.SnapshotTime{Time: tt.give})
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, string(got))
 
-			var back time.Time
-			require.NoError(t, json.Unmarshal(got, &back, opts))
-			assert.True(t, tt.give.Equal(back), "read back %v", back)
+			var back protocol.SnapshotTime
+
+			require.NoError(t, json.Unmarshal(got, &back))
+			assert.True(t, tt.give.Equal(back.Time), "read back %v, wrote %v", back.Time, tt.give)
+			assert.Equal(t, time.UTC, back.Location(), "a time from epoch seconds is in UTC")
+
+			_, err = json.Marshal(tt.give)
+			if tt.fails {
+				require.Error(t, err, "encoding/json/v2 wrote it, so a time.Time field would do")
+			}
+		})
+	}
+}
+
+// Test_SnapshotTime_readsBothForms checks that each form an earlier snapshot
+// holds a time in reads as the same instant: RFC 3339 as encoding/json/v2
+// wrote a time.Time, and epoch seconds as the json option that the type
+// replaced wrote any other. Those two writers are the only ones there have
+// been.
+func Test_SnapshotTime_readsBothForms(t *testing.T) {
+	tests := []struct {
+		name string
+		give string
+		want time.Time
+	}{
+		{name: "RFC 3339", give: `"` + isoWhole + `"`, want: time.Unix(1700000000, 0)},
+		{name: "RFC 3339 with an offset", give: `"2023-11-14T23:13:20+01:00"`, want: time.Unix(1700000000, 0)},
+		{name: "RFC 3339 with nanoseconds", give: `"2023-11-14T22:13:20.5Z"`, want: time.Unix(1700000000, 500000000)},
+		{name: "integer epoch seconds", give: "300000000000", want: time.Unix(300000000000, 0)},
+		{name: "decimal epoch seconds", give: "-99999999999.5", want: time.Unix(-100000000000, 500000000)},
+		{name: "null", give: "null", want: time.Time{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got snapshotted
+
+			require.NoError(t, json.Unmarshal([]byte(`{"At":`+tt.give+`}`), &got))
+			assert.True(t, tt.want.Equal(got.At.Time), "read %v", got.At.Time)
 		})
 	}
 
-	t.Run("a number that is not epoch seconds", func(t *testing.T) {
-		var back time.Time
-		require.Error(t, json.Unmarshal([]byte("1e400"), &back, opts))
-	})
+	for name, give := range map[string]string{
+		"a bad string":          `"yesterday"`,
+		"a number past int64":   "1e400",
+		"a boolean":             "true",
+		"below the least time":  "-9223372036854775808.5",
+		"a loose RFC 3339 hour": `"2023-11-14T2:13:20Z"`,
+	} {
+		t.Run("refuses "+name, func(t *testing.T) {
+			var got snapshotted
+
+			require.Error(t, json.Unmarshal([]byte(`{"At":`+give+`}`), &got))
+		})
+	}
+}
+
+// Test_SnapshotTime_inStruct checks that only the SnapshotTime member is the
+// type's form: a time.Time beside it stays json/v2's own.
+func Test_SnapshotTime_inStruct(t *testing.T) {
+	give := snapshotted{
+		At:    protocol.SnapshotTime{Time: time.Unix(300000000000, 0)},
+		Plain: time.Unix(1700000000, 0).UTC(),
+	}
+
+	got, err := json.Marshal(give)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"At":300000000000,"Plain":"`+isoWhole+`"}`, string(got))
+}
+
+// Test_SnapshotTime_omitzero checks that omitzero leaves out a zero
+// SnapshotTime as it does a zero time.Time, which the KMS snapshot's fields
+// rely on, and keeps one that is set.
+func Test_SnapshotTime_omitzero(t *testing.T) {
+	type omitting struct {
+		At    protocol.SnapshotTime `json:",omitzero"`
+		Plain time.Time             `json:",omitzero"`
+	}
+
+	got, err := json.Marshal(omitting{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{}`, string(got))
+
+	got, err = json.Marshal(omitting{At: protocol.SnapshotTime{Time: time.Unix(300000000000, 0)}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"At":300000000000}`, string(got))
 }

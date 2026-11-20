@@ -46,7 +46,7 @@ func benchProviderOf(tb testing.TB, n int) *Provider {
 	for i := range n {
 		key := "folder-" + strconv.Itoa(i/100) + "/object-" + strconv.Itoa(i%100)
 		b.Objects[key] = &Object{Versions: []*Version{{
-			ID: versionNull, ETag: "d41d8cd98f00b204e9800998ecf8427e", Size: 11, LastModified: now,
+			ID: versionNull, ETag: "d41d8cd98f00b204e9800998ecf8427e", Size: 11, LastModified: stamped(now),
 			StorageClass: storageClassDefault, ChecksumAlgorithm: "CRC32", ChecksumType: checksumFullObject,
 		}}}
 	}

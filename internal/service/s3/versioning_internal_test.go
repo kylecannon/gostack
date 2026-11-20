@@ -44,12 +44,16 @@ func TestLockActive(t *testing.T) {
 		want       bool
 	}{
 		{"nothing", Lock{}, false, false},
-		{"a retention in force", Lock{Mode: lockGovernance, Until: later}, false, true},
-		{"a retention that has ended", Lock{Mode: lockCompliance, Until: earlier}, false, false},
-		{"bypass lifts GOVERNANCE", Lock{Mode: lockGovernance, Until: later}, true, false},
-		{"bypass does not lift COMPLIANCE", Lock{Mode: lockCompliance, Until: later}, true, true},
+		{"a retention in force", Lock{Mode: lockGovernance, Until: stamped(later)}, false, true},
+		{"a retention that has ended", Lock{Mode: lockCompliance, Until: stamped(earlier)}, false, false},
+		{"bypass lifts GOVERNANCE", Lock{Mode: lockGovernance, Until: stamped(later)}, true, false},
+		{"bypass does not lift COMPLIANCE", Lock{Mode: lockCompliance, Until: stamped(later)}, true, true},
 		{"a legal hold", Lock{LegalHold: legalHoldOn}, false, true},
-		{"bypass does not lift a legal hold", Lock{Mode: lockGovernance, Until: later, LegalHold: legalHoldOn}, true, true},
+		{
+			"bypass does not lift a legal hold",
+			Lock{Mode: lockGovernance, Until: stamped(later), LegalHold: legalHoldOn},
+			true, true,
+		},
 		{"a legal hold turned off", Lock{LegalHold: legalHoldOff}, false, false},
 	}
 

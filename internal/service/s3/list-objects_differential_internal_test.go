@@ -172,7 +172,7 @@ func randomBucket(rng *rand.Rand) *Bucket {
 		for range 1 + rng.IntN(3) {
 			sequence++
 			object.Versions = append(object.Versions, &Version{
-				ID: versionID(sequence), DeleteMarker: rng.IntN(4) == 0, LastModified: time.Unix(int64(sequence), 0),
+				ID: versionID(sequence), DeleteMarker: rng.IntN(4) == 0, LastModified: stamped(time.Unix(int64(sequence), 0)),
 			})
 		}
 
@@ -401,7 +401,7 @@ func TestListUploadsMatchTheBruteForceReference(t *testing.T) {
 			}
 
 			upload := &MultipartUpload{
-				ID: fmt.Sprintf("id-%03d", n), Key: key, Initiated: time.Unix(int64(rng.IntN(20)), 0),
+				ID: fmt.Sprintf("id-%03d", n), Key: key, Initiated: stamped(time.Unix(int64(rng.IntN(20)), 0)),
 			}
 			b.addUpload(upload)
 			ids = append(ids, upload.ID)
@@ -461,8 +461,8 @@ func TestIndexFollowsEveryChange(t *testing.T) {
 	b.reindex()
 	require.Equal(t, []string{"y", "z"}, b.keys)
 
-	first := &MultipartUpload{ID: "1", Key: "k", Initiated: time.Unix(2, 0)}
-	second := &MultipartUpload{ID: "2", Key: "k", Initiated: time.Unix(1, 0)}
+	first := &MultipartUpload{ID: "1", Key: "k", Initiated: stamped(time.Unix(2, 0))}
+	second := &MultipartUpload{ID: "2", Key: "k", Initiated: stamped(time.Unix(1, 0))}
 	b.addUpload(first)
 	b.addUpload(second)
 	b.addUpload(first)

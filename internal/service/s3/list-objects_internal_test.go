@@ -33,7 +33,7 @@ func chainOf(key string, sequences ...int) listed {
 
 	for _, sequence := range sequences {
 		k.versions = append(k.versions, &Version{
-			ID: versionID(abs(sequence)), DeleteMarker: sequence < 0, LastModified: time.Unix(int64(abs(sequence)), 0),
+			ID: versionID(abs(sequence)), DeleteMarker: sequence < 0, LastModified: stamped(time.Unix(int64(abs(sequence)), 0)),
 		})
 	}
 
