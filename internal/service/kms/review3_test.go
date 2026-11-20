@@ -39,6 +39,21 @@ func Test_ImportKeyMaterial_ValidTo_outsideDateRange(t *testing.T) {
 		})
 	}
 
+	// A second past the last a time.Time holds, or a number outside int64, is
+	// refused as the request is decoded, before ValidTo is checked. LocalStack
+	// refuses these too (datetime.fromtimestamp raises OSError or OverflowError),
+	// so no value it accepts is refused here.
+	for _, validTo := range []string{"9223371974719179008", "9223372036854775808", "-9223372036854775809", "1e19"} {
+		t.Run(validTo+" is refused as the request is decoded", func(t *testing.T) {
+			id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
+			in := s.importParams(id, oaepSHA256).input(t, id, random(t, 32))
+			in[fieldExpiration], in[fieldValidTo] = expires, json.Number(validTo)
+
+			s.fails(opImport, in, "SerializationException", "Start of structure or map found where not expected.")
+			require.Equal(t, statePending, s.metadata(id)[fieldKeyState])
+		})
+	}
+
 	for _, validTo := range []string{"253402300799", "-62135596799"} {
 		t.Run(validTo+" is a date", func(t *testing.T) {
 			id := keyID(t, s.createKey(map[string]any{fieldOrigin: originExternal}))
