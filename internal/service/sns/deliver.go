@@ -228,9 +228,11 @@ func (m *message) envelopeMessage(version, protocol string) *envelope.Message {
 type delivery struct {
 	sub  *Subscription
 	call inproc.Call
-	// dlq is the call that puts the message on the subscription's dead-letter
-	// queue, nil without one.
-	dlq *inproc.Call
+	// dlq makes the call that puts the message on the subscription's
+	// dead-letter queue, nil without one. It runs only when the delivery
+	// fails, on the body the delivery holds already, so a waiting delivery
+	// holds the message once.
+	dlq func() inproc.Call
 	// post is the delivery to an HTTP or HTTPS endpoint, nil for a queue.
 	post *post
 }
@@ -334,12 +336,12 @@ func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string)
 		params.groupID = m.groupID
 	}
 
-	d := delivery{sub: s.sub, call: sendCall(queue, s.endpoint, m.topicARN, &params)}
+	call, span := sendCall(queue, s.endpoint, m.topicARN, &params)
+	d := delivery{sub: s.sub, call: call}
 
 	if s.dlq != "" {
-		if target, ok := parseARN(s.dlq); ok {
-			params.trace = ""
-			d.dlq = new(sendCall(target, s.dlq, s.arn, &params))
+		if _, ok := parseARN(s.dlq); ok {
+			d.dlq = span.deadLetter(call.Body, s.dlq, s.arn)
 		}
 	}
 
@@ -386,13 +388,17 @@ type sendParams struct {
 // sendCall is the json SendMessage that puts a message on the queue arn names,
 // as an internal call from source, on the lane of the queue so a queue's
 // messages arrive in the order they were queued and a slow queue holds up no
-// other.
-func sendCall(queue arnParts, arn, source string, params *sendParams) inproc.Call {
-	queueURL := queueScheme + "://sqs." + queue.region + "." + queueHost + "/" + queue.account + "/" + queue.resource
+// other. It also says which members of the call's body a dead-letter call
+// repeats.
+func sendCall(queue arnParts, arn, source string, params *sendParams) (inproc.Call, sendSpan) {
+	queueURL := queueURLOf(queue)
 
 	b := make([]byte, 0, len(params.body)+len(queueURL)+callOverhead)
 	b = append(b, `{"QueueUrl":`...)
 	b = appendJSONString(b, queueURL)
+
+	from := len(b)
+
 	b = append(b, `,"MessageBody":`...)
 	b = appendJSONString(b, params.body)
 
@@ -410,6 +416,8 @@ func sendCall(queue arnParts, arn, source string, params *sendParams) inproc.Cal
 		b = appendJSONString(b, params.dedupID)
 	}
 
+	to := len(b)
+
 	if params.trace != "" {
 		b = append(b, `,"MessageSystemAttributes":{"`+traceAttribute+`":{"DataType":"String","StringValue":`...)
 		b = appendJSONString(b, params.trace)
@@ -418,12 +426,46 @@ func sendCall(queue arnParts, arn, source string, params *sendParams) inproc.Cal
 
 	b = append(b, '}')
 
+	return internalSend(queue, arn, source, b), sendSpan{from: from, to: to}
+}
+
+func queueURLOf(queue arnParts) string {
+	return queueScheme + "://sqs." + queue.region + "." + queueHost + "/" + queue.account + "/" + queue.resource
+}
+
+// internalSend is the internal call that sends body, a SendMessage's, to the
+// queue arn names, from source.
+func internalSend(queue arnParts, arn, source string, body []byte) inproc.Call {
 	meta := appendJSONString([]byte(`{"source_arn":`), source)
 	meta = append(meta, `,"service_principal":"sns"}`...)
 
 	return inproc.Call{
-		Account: queue.account, Region: queue.region, Service: sqsService, Target: sqsSendMessage, Body: b,
+		Account: queue.account, Region: queue.region, Service: sqsService, Target: sqsSendMessage, Body: body,
 		Header: http.Header{internalHeader: {string(meta)}}, Lane: arn,
+	}
+}
+
+// sendSpan is where in the body of a SendMessage the members start and end
+// that a dead-letter call to another queue repeats: the message body, its
+// attributes and its FIFO ids, but not the queue or the trace header.
+type sendSpan struct{ from, to int }
+
+// deadLetter is the call that sends the message of primary, a SendMessage this
+// span describes, to the dead-letter queue dlq for the subscription source. It
+// splices the bytes primary holds, so the dead letter carries what the queue
+// was sent, and it builds nothing until the delivery fails.
+func (sp sendSpan) deadLetter(primary []byte, dlq, source string) func() inproc.Call {
+	return func() inproc.Call {
+		target, _ := parseARN(dlq) // it parsed when the delivery was built.
+		queueURL := queueURLOf(target)
+
+		b := make([]byte, 0, sp.to-sp.from+len(queueURL)+callOverhead)
+		b = append(b, `{"QueueUrl":`...)
+		b = appendJSONString(b, queueURL)
+		b = append(b, primary[sp.from:sp.to]...)
+		b = append(b, '}')
+
+		return internalSend(target, dlq, source, b)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -29,6 +30,10 @@ const (
 	// endpoint holds one of them. LocalStack's executor runs ten threads
 	// for every protocol together (publisher.py PublishDispatcher, num_thread).
 	maxPosts = 64
+	// buildShare is the part of the processors, 1 in buildShare, that build
+	// dead-letter calls of failed HTTP deliveries at once (poster.building);
+	// BenchmarkBurst measures it.
+	buildShare = 4
 	// maxAnswer is the most of an endpoint's answer read. The rest is not
 	// read, and the connection is not reused.
 	maxAnswer = 64 << 10
@@ -119,6 +124,10 @@ type poster struct {
 	// running counts the goroutines of deliveries in flight, which Close
 	// waits for.
 	running sync.WaitGroup
+	// building holds a place for each dead-letter call of a failed HTTP
+	// delivery being built (see lanes.postDeadLetter): 1 in buildShare of the
+	// processors, at least one.
+	building chan struct{}
 }
 
 func newPoster() *poster {
@@ -136,6 +145,7 @@ func newPoster() *poster {
 	}
 
 	return &poster{
+		building:  make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/buildShare)),
 		client:    &http.Client{Transport: transport},
 		transport: transport,
 		timeout:   postTimeout,
@@ -194,20 +204,54 @@ func (ls *lanes) post(l *lane) {
 	ls.posting++
 	ls.poster.running.Add(1)
 
-	go ls.runPost(l, l.jobs[0].post)
+	go ls.runPost(l, l.jobs[0])
 }
 
-// runPost makes one HTTP delivery, with no lock held, and answers it. A panic
-// is logged, and one in the send fails the delivery, so the lane goes on.
-func (ls *lanes) runPost(l *lane, p *post) {
+// runPost makes one HTTP delivery, j, with no lock held, and answers it. A
+// panic is logged, and one in the send fails the delivery, so the lane goes
+// on. When the send fails and j has a dead-letter queue, the dead-letter call
+// is built here, with no lock held: it is the costly step of a failure, an
+// escaped copy of the body, and the lanes lock is every publish's. posted
+// only adds it to its lane.
+func (ls *lanes) runPost(l *lane, j *job) {
 	defer ls.poster.running.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("SNS HTTP delivery panicked", "endpoint", p.url, "panic", r)
+			slog.Error("SNS HTTP delivery panicked", "endpoint", j.post.url, "panic", r)
 		}
 	}()
 
-	ls.posted(l, ls.poster.sendRecovered(p))
+	err := ls.poster.sendRecovered(j.post)
+
+	// A poster that was cut is Close's, which drops what it cuts.
+	var dead *inproc.Call
+	if err != nil && ls.poster.ctx.Err() == nil {
+		dead = ls.postDeadLetter(j)
+	}
+
+	ls.posted(l, err, dead)
+}
+
+// postDeadLetter is deadLetterOf for a failed HTTP delivery, holding one of
+// poster.building places while it builds: a burst of failures would build as
+// many calls as there are deliveries in flight, and builders on every
+// processor leave the goroutines that wait for the lanes lock, the publishes
+// among them, waiting for a processor instead (BenchmarkBurst measures it).
+// The delivery waits for a place holding its maxPosts slot and nothing else
+// shared. It is nil too when the poster was cut, as Close drops what it cuts.
+func (ls *lanes) postDeadLetter(j *job) *inproc.Call {
+	if j.dlq == nil || j.dead {
+		return nil
+	}
+
+	select {
+	case ls.poster.building <- struct{}{}:
+		defer func() { <-ls.poster.building }()
+	case <-ls.poster.ctx.Done():
+		return nil
+	}
+
+	return deadLetterOf(j)
 }
 
 // sendRecovered is send, with a panic made its error.
@@ -223,7 +267,9 @@ func (ps *poster) sendRecovered(p *post) (err error) {
 
 // posted is the answer to l's head, an HTTP delivery: the head leaves the
 // lane, failed when err is not nil, and the next waiting HTTP delivery starts.
-func (ls *lanes) posted(l *lane, err error) {
+// dead is the dead-letter call runPost built for a failed head, nil without
+// one.
+func (ls *lanes) posted(l *lane, err error, dead *inproc.Call) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -241,7 +287,7 @@ func (ls *lanes) posted(l *lane, err error) {
 		failure = err.Error
 	}
 
-	ls.finish(l, failure)
+	ls.finish(l, failure, dead)
 }
 
 // cutPosts cuts the HTTP deliveries in flight at once, each of which answers
@@ -296,19 +342,26 @@ func endpointCall(endpoint string) inproc.Call {
 	return inproc.Call{Lane: endpoint}
 }
 
-// deadLetterCall is the SendMessage that puts body on s's dead-letter queue,
-// nil without one.
-func deadLetterCall(s *subscriber, body []byte) *inproc.Call {
+// deadLetterCall makes the SendMessage that puts body on s's dead-letter queue,
+// nil without one. It holds body, which the delivery holds already, and builds
+// the call, an escaped copy, only when the delivery fails.
+func deadLetterCall(s *subscriber, body []byte) func() inproc.Call {
 	if s.dlq == "" {
 		return nil
 	}
 
-	target, ok := parseARN(s.dlq)
-	if !ok {
+	if _, ok := parseARN(s.dlq); !ok {
 		return nil
 	}
 
-	return new(sendCall(target, s.dlq, s.arn, &sendParams{body: string(body)}))
+	dlq, source := s.dlq, s.arn
+
+	return func() inproc.Call {
+		target, _ := parseARN(dlq) // it parsed when the delivery was built.
+		call, _ := sendCall(target, dlq, source, &sendParams{body: string(body)})
+
+		return call
+	}
 }
 
 // postOf is the HTTP delivery of body, a message of type kind, to the

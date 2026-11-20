@@ -100,9 +100,11 @@ type job struct {
 	call inproc.Call
 	// post is the HTTP delivery, nil for a queue.
 	post *post
-	// dlq is the call that puts the message on its subscription's dead-letter
-	// queue, nil without one.
-	dlq *inproc.Call
+	// dlq makes the call that puts the message on its subscription's
+	// dead-letter queue, nil without one. It runs only when the delivery
+	// fails, with no lock held (deadLetterOf), so a waiting delivery holds the
+	// message once.
+	dlq func() inproc.Call
 	// dead marks a dead-letter delivery: one that fails is dropped, never sent
 	// to another dead-letter queue.
 	dead bool
@@ -226,13 +228,11 @@ func (ls *lanes) send(l *lane) bool {
 }
 
 // answered is the in-process client's answer to l's head, on the client's
-// worker.
+// worker. When the head failed and has a dead-letter queue, its dead-letter
+// call is built with the lock let go, as an HTTP delivery's is (runPost): l's
+// head is the delivery in the client, so nothing takes it out of the lane
+// meanwhile but Close, which finish sees.
 func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
-	ls.mu.Lock()
-	defer ls.mu.Unlock()
-
-	ls.inflight--
-
 	var failure func() string
 
 	if err != nil {
@@ -241,16 +241,62 @@ func (ls *lanes) answered(l *lane, resp inproc.Response, err error) {
 		failure = func() string { return "SQS answered " + strconv.Itoa(resp.Status) }
 	}
 
-	ls.finish(l, failure)
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	ls.inflight--
+
+	var built *inproc.Call
+
+	if failure != nil && !ls.closed && len(l.jobs) > 0 && l.jobs[0].dlq != nil {
+		j := l.jobs[0]
+
+		ls.mu.Unlock()
+
+		built = deadLetterOf(j)
+
+		ls.mu.Lock()
+	}
+
+	ls.finish(l, failure, built)
+}
+
+// deadLetterOf builds the dead-letter call of j, a delivery that has failed,
+// with no lock held, for fail to add to its lane: the call is the costly step
+// of a failure, an escaped copy of the message for an HTTP delivery and a
+// splice of it for a queue's, and the lanes lock is every publish's. It is nil
+// when j has none or is a dead letter itself; and when the build panics, which
+// is logged and drops the delivery, so the lane goes on. A queue's build is not
+// bounded: its delivery holds a worker of the in-process client, which no other
+// call may wait behind for a place to build in (postDeadLetter bounds an HTTP
+// delivery's).
+func deadLetterOf(j *job) (call *inproc.Call) {
+	if j.dlq == nil || j.dead {
+		return nil
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("SNS dead-letter call panicked", "destination", j.call.Lane, "panic", r)
+
+			call = nil
+		}
+	}()
+
+	built := j.dlq()
+
+	return &built
 }
 
 // finish takes l's answered head out of the lane, fails it when failure is
 // not nil (it says why the head was not delivered), and sends the next;
-// under mu. The lane goes on, and the head is counted out, even when failing
-// the head panics: the panic is not recovered here, so the transport's
-// recover logs it once, but the lane's other deliveries are not left behind,
-// and the hub's drain is not held to its deadline by their hold.
-func (ls *lanes) finish(l *lane, failure func() string) {
+// under mu. built is the head's dead-letter call, which deadLetterOf built
+// with no lock held when the head failed, nil without one. The lane goes on,
+// and the head is counted out, even when failing the head panics: the panic
+// is not recovered here, so the transport's recover logs it once, but the
+// lane's other deliveries are not left behind, and the hub's drain is not
+// held to its deadline by their hold.
+func (ls *lanes) finish(l *lane, failure func() string, built *inproc.Call) {
 	l.sending = false
 
 	if len(l.jobs) == 0 {
@@ -276,7 +322,7 @@ func (ls *lanes) finish(l *lane, failure func() string) {
 			reason = reasonDLQRefused + ": " + reason
 		}
 
-		ls.fail(j, reason)
+		ls.fail(j, reason, built)
 	}
 }
 
@@ -318,15 +364,16 @@ func (ls *lanes) unpark() {
 // fail is a delivery the destination did not take: it goes to the tail of
 // its dead-letter queue's lane when it has one, and is dropped otherwise. A
 // dead-letter delivery that fails is dropped, so the chain of deliveries one
-// publish makes is finite.
-func (ls *lanes) fail(j *job, reason string) {
-	if j.dlq == nil || j.dead {
+// publish makes is finite. The dead-letter call arrives built (built, nil
+// when j has none), so the lock is held only to add it.
+func (ls *lanes) fail(j *job, reason string, built *inproc.Call) {
+	if j.dead || built == nil {
 		ls.drop(j, reason)
 
 		return
 	}
 
-	dead := &job{call: *j.dlq, dead: true}
+	dead := &job{call: *built, dead: true}
 	if !ls.add(dead) {
 		return
 	}

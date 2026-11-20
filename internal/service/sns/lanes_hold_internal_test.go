@@ -84,8 +84,9 @@ func Test_lanes_drainWaitsForDeadLetters(t *testing.T) {
 
 	for range 6 {
 		for _, pair := range [][2]string{{"a", "b"}, {"b", "a"}} {
-			dlq := laneCall(pair[1], "{}")
-			deliveries = append(deliveries, delivery{sub: sub, call: laneCall(pair[0], "{}"), dlq: &dlq})
+			deliveries = append(deliveries, delivery{
+				sub: sub, call: laneCall(pair[0], "{}"), dlq: func() inproc.Call { return laneCall(pair[1], "{}") },
+			})
 		}
 	}
 
