@@ -373,8 +373,8 @@ func transactionCanceled(reasons []api.CancellationReason) error {
 		codes[i] = *r.Code
 	}
 
-	return (&api.TransactionCanceledException{CancellationReasons: reasons}).
-		Err(msgTransactCanceled + strings.Join(codes, ", ") + "]")
+	return &canceledError{reasons: reasons, err: (&api.TransactionCanceledException{CancellationReasons: reasons}).
+		Err(msgTransactCanceled + strings.Join(codes, ", ") + "]")}
 }
 
 // transactCapacity is what a transaction consumed on each table, as DynamoDB
