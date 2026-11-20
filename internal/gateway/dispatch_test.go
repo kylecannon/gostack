@@ -1,9 +1,14 @@
 package gateway_test
 
 import (
+	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -198,7 +203,34 @@ func Test_Gateway_requestIDs(t *testing.T) {
 func Test_Gateway_markDirty(t *testing.T) {
 	failing := func(w http.ResponseWriter, _ *request.Context) { w.WriteHeader(http.StatusBadRequest) }
 	panicking := func(http.ResponseWriter, *request.Context) { panic("boom") }
-	custom := func(operation string) bool { return operation == "Purge" }
+	// A handler that panics after it wrote a status may have made its change.
+	panicsAfter := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			w.WriteHeader(code)
+
+			panic("late")
+		}
+	}
+	aborting := func(http.ResponseWriter, *request.Context) { panic(http.ErrAbortHandler) }
+	goexiting := func(http.ResponseWriter, *request.Context) { runtime.Goexit() }
+	// A Serve that names another call with Record before it panics is still
+	// judged by the call serveAWS gave it.
+	recordsOther := func(_ http.ResponseWriter, rc *request.Context) {
+		gateway.Record(rc.Request, &request.Context{Service: nameSTS, Operation: "AssumeRole", Protocol: protocol.KindQuery})
+
+		panic("boom")
+	}
+	custom := func(operation string) bool { return operation == opPurge }
+	// A service that took the connection notes the status it sent, then panics.
+	notedThenPanics := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			if noter, ok := w.(interface{ NoteStatus(code int) }); ok {
+				noter.NoteStatus(code)
+			}
+
+			panic("late")
+		}
+	}
 	// A service that takes the connection answers without calling WriteHeader,
 	// and tells the gateway the status it sent instead.
 	taken := func(code int) func(http.ResponseWriter, *request.Context) {
@@ -240,7 +272,46 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "head", giveServe: okServe, giveRequest: operation("HeadThing")},
 		{name: "receive", giveServe: okServe, giveRequest: operation("ReceiveMessage")},
 		{name: "an error response", giveServe: failing, giveRequest: operation("SendMessage")},
-		{name: "a panic", giveServe: panicking, giveRequest: operation("SendMessage")},
+		{
+			name: "a panic in a write", giveServe: panicking, giveRequest: operation("SendMessage"),
+			wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after a success status", giveServe: panicsAfter(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after an error status", giveServe: panicsAfter(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a handler that aborts with http.ErrAbortHandler", giveServe: aborting,
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after a taken connection noted an error", giveServe: notedThenPanics(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after a taken connection noted a success", giveServe: notedThenPanics(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a Goexit in a write", giveServe: goexiting, giveRequest: operation("SendMessage"),
+			wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic in a write that Records another call", giveServe: recordsOther,
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{name: "a panic in a read that Records another call", giveServe: recordsOther, giveRequest: operation("ListQueues")},
+		{name: "a Goexit in a read", giveServe: goexiting, giveRequest: operation("ListQueues")},
+		{name: "a panic in a read", giveServe: panicking, giveRequest: operation("ListQueues")},
+		{name: "a panic with no operation", giveServe: panicking, giveRequest: operation("")},
+		{
+			name: "own rule can say no for a write verb that panics", giveServe: panicking, giveMutating: custom,
+			giveRequest: operation("SendMessage"),
+		},
 		{
 			name: "an error on a taken connection", giveServe: taken(http.StatusBadRequest),
 			giveRequest: operation("SendMessage"),
@@ -252,7 +323,7 @@ func Test_Gateway_markDirty(t *testing.T) {
 		{name: "no operation", giveServe: okServe, giveRequest: operation("")},
 		{
 			name: "own rule marks", giveServe: okServe, giveMutating: custom,
-			giveRequest: operation("Purge"), wantMarked: []string{nameSQS},
+			giveRequest: operation(opPurge), wantMarked: []string{nameSQS},
 		},
 		{
 			name: "own rule can say no for a write verb", giveServe: okServe, giveMutating: custom,
@@ -271,14 +342,152 @@ func Test_Gateway_markDirty(t *testing.T) {
 			reg := sqsRegistration(tt.giveServe)
 			reg.Mutating = tt.giveMutating
 
-			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			// sts is there to be named by Record, whose AssumeRole is a write.
+			g, err := gateway.New(newSettings().get, []service.Registration{reg, stsRegistration(okServe)}, nil, dirty)
 			require.NoError(t, err)
 
-			call(t, g.Handler(), tt.giveRequest(t))
+			serveAborting(g.Handler(), tt.giveRequest(t))
 
 			assert.Equal(t, tt.wantMarked, dirty.marked())
 		})
 	}
+}
+
+// serveAborting serves r and takes a panic with http.ErrAbortHandler, the way
+// a gateway aborts a response it has started, as net/http's server does. It
+// serves on a goroutine of its own, as net/http does, so that a handler that
+// calls runtime.Goexit ends that goroutine and not the test's.
+func serveAborting(h http.Handler, r *http.Request) {
+	served := make(chan struct{})
+
+	go func() {
+		defer close(served)
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+
+			err, isError := recovered.(error)
+			if !isError || !errors.Is(err, http.ErrAbortHandler) {
+				panic(recovered)
+			}
+		}()
+
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}()
+
+	<-served
+}
+
+// Test_Gateway_markDirty_onAMountedRoute checks a call served by a route a
+// service mounts, such as an SQS queue URL, which names its call with Record
+// and marks its own change once it returns: when its handler panics or calls
+// runtime.Goexit it never gets there, so the gateway marks it. The call is
+// judged by the rule of the registration Record names: sts comes first and
+// keeps its own rule, so a mark judged by the wrong registration shows.
+func Test_Gateway_markDirty_onAMountedRoute(t *testing.T) {
+	boom := func() { panic("boom") }
+	purgeOnly := func(operation string) bool { return operation == opPurge }
+
+	tests := []struct {
+		name          string
+		giveService   string
+		giveOperation string
+		giveServe     func()
+		wantMarked    []string
+	}{
+		{
+			name: "a panic in a write", giveService: nameSQS, giveOperation: opSendMessage, giveServe: boom,
+			wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a Goexit in a write", giveService: nameSQS, giveOperation: opSendMessage,
+			giveServe: runtime.Goexit, wantMarked: []string{nameSQS},
+		},
+		{name: "a panic in a read", giveService: nameSQS, giveOperation: "ListQueues", giveServe: boom},
+		{name: "a panic in a call that names no operation", giveService: nameSQS, giveServe: boom},
+		{
+			name: "a panic for a service the gateway does not have", giveService: "nope",
+			giveOperation: opSendMessage, giveServe: boom,
+		},
+		{
+			name: "a panic in a write the named service's own rule says no to", giveService: nameSTS,
+			giveOperation: opSendMessage, giveServe: boom,
+		},
+		{
+			name: "a panic in an operation the named service's own rule says yes to", giveService: nameSTS,
+			giveOperation: opPurge, giveServe: boom, wantMarked: []string{nameSTS},
+		},
+		// The service marks a call that returns, not the gateway.
+		{name: "a write that returns", giveService: nameSQS, giveOperation: opSendMessage, giveServe: func() {}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirty := &dirtyLog{}
+			reg := sqsRegistration(okServe)
+			reg.Mount = func(r chi.Router) {
+				r.Post("/{account}/{queue}", func(_ http.ResponseWriter, r *http.Request) {
+					gateway.Record(r, &request.Context{
+						Service: tt.giveService, Operation: tt.giveOperation, Protocol: protocol.KindQuery,
+					})
+
+					tt.giveServe()
+				})
+			}
+
+			sts := stsRegistration(okServe)
+			sts.Mutating = purgeOnly
+
+			g, err := gateway.New(newSettings().get, []service.Registration{sts, reg}, nil, dirty)
+			require.NoError(t, err)
+
+			serveAborting(g.Handler(), newRequest(t, http.MethodPost, "http://localhost:4566/000000000000/my-queue", "",
+				map[string]string{headerAuth: signed("test", usEast1, nameSQS)}))
+
+			assert.Equal(t, tt.wantMarked, dirty.marked())
+		})
+	}
+}
+
+// panickingLog is a slog handler that panics on every record.
+type panickingLog struct{}
+
+func (panickingLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (panickingLog) Handle(context.Context, slog.Record) error { panic("the log failed") }
+
+func (l panickingLog) WithAttrs([]slog.Attr) slog.Handler { return l }
+
+func (l panickingLog) WithGroup(string) slog.Handler { return l }
+
+// Test_Gateway_markDirty_whenThePanicLogPanics checks the mark of a write that
+// panics comes before its log, so a log that fails cannot lose it.
+func Test_Gateway_markDirty_whenThePanicLogPanics(t *testing.T) {
+	previous := slog.Default()
+
+	slog.SetDefault(slog.New(panickingLog{}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	dirty := &dirtyLog{}
+
+	g, err := gateway.New(newSettings().get,
+		[]service.Registration{sqsRegistration(func(http.ResponseWriter, *request.Context) { panic("boom") })},
+		nil, dirty)
+	require.NoError(t, err)
+
+	r := sendMessage(t)
+	served := make(chan any, 1)
+
+	go func() {
+		defer func() { served <- recover() }()
+
+		g.Handler().ServeHTTP(httptest.NewRecorder(), r)
+	}()
+
+	assert.Equal(t, "the log failed", <-served, "the log's own panic reaches the server")
+	assert.Equal(t, []string{nameSQS}, dirty.marked())
 }
 
 // Test_Gateway_markDirty_whenATakenResponseNotesItsStatus checks the mark
