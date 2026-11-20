@@ -44,20 +44,11 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 		return nil, fmt.Errorf("query: %w", err)
 	}
 
-	hashName, hash := kc.Hash()
+	_, hash := kc.Hash()
 
-	rangeName, cond, ok := kc.Range()
+	_, cond, ok := kc.Range()
 	if !ok {
 		cond = table.SortCondition{Op: table.SortAny}
-	}
-
-	err = r.checkStart(in.ExclusiveStartKey)
-	if err == nil && r.start != nil && !startMeets(r.start, hashName, &hash, rangeName, cond) {
-		err = value.Invalid(msgStartQuery)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
 	}
 
 	forward := in.ScanIndexForward == nil || *in.ScanIndexForward
@@ -100,8 +91,9 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 			return nil, nil, api.NewResourceNotFoundException(msgQueryNoIndex)
 		}
 
-		if spec.Global && in.Select != nil && *in.Select == selectAll && spec.Projection.Type != table.ProjectAll {
-			return nil, nil, value.Invalid(msgIndexSelect + *in.IndexName + msgIndexSelectTail)
+		err = checkIndexSelect(spec, in.Select)
+		if err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -126,17 +118,12 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		return nil, nil, err
 	}
 
-	r, err := newReader(e, spec, in.Limit, in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet),
-		in.ConsistentRead)
+	r, err := newReader(e, spec, in.Limit, in.ConsistentRead)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	r.name, r.legacy = name, legacy
-
-	if in.KeyConditionExpression == nil && legacy == nil {
-		return nil, nil, value.Invalid(msgNoKeyCondition)
-	}
 
 	return e, r, nil
 }
@@ -155,6 +142,11 @@ func queryLegacy(in *api.QueryInput, e *tableEntry, spec *table.IndexSpec) (*leg
 		return nil, err
 	}
 
+	err = checkConsistentRead(spec, in.ConsistentRead)
+	if err != nil {
+		return nil, err
+	}
+
 	schema := e.data.Key()
 	if spec != nil {
 		schema = spec.Key
@@ -168,43 +160,77 @@ func queryLegacy(in *api.QueryInput, e *tableEntry, spec *table.IndexSpec) (*leg
 	return legacy, nil
 }
 
-// newReader makes the checks Query and Scan share before their expressions:
-// Limit, Select, then ConsistentRead on a global index.
-func newReader(
-	e *tableEntry, spec *table.IndexSpec, limit *int32, selectMode *string, projection string, consistent *bool,
-) (*reader, error) {
+// newReader checks Limit and makes the reader of a table or an index. Query
+// and Scan make the rest of their checks as DynamoDB Local orders them.
+func newReader(e *tableEntry, spec *table.IndexSpec, limit *int32, consistent *bool) (*reader, error) {
 	n, err := limitOf(limit)
 	if err != nil {
 		return nil, err
 	}
 
-	mode, err := chooseSelect(selectMode, projection, spec != nil)
-	if err != nil {
-		return nil, err
-	}
-
-	r := &reader{tableKey: e.data.Key(), key: e.data.Key(), selectMode: mode, limit: n, consistent: consistent}
+	r := &reader{tableKey: e.data.Key(), key: e.data.Key(), limit: n, consistent: consistent}
 	if spec != nil {
-		if spec.Global && consistent != nil && *consistent {
-			return nil, value.Invalid(msgConsistentGSI)
-		}
-
 		r.index, r.key = spec, spec.Key
 	}
 
 	return r, nil
 }
 
-// queryExpressions parses a Query's expressions in DynamoDB Local's order,
-// FilterExpression, ProjectionExpression, then KeyConditionExpression, checks
-// their placeholders, and refuses a filter on a key attribute. A legacy Query
-// has its key condition and QueryFilter already; it may still give a
-// FilterExpression and a ProjectionExpression, and its AttributesToGet are
-// checked here.
+// queryExpressions makes the checks of a Query that follow its target in
+// DynamoDB Local's order (probed, SQ-331): the FilterExpression, the
+// ProjectionExpression and the KeyConditionExpression parse, the placeholders
+// are checked, the request must have a key condition, its operators and one
+// condition per key are checked, then ConsistentRead, the key condition's fit
+// to the key schema, the exclusive start key, the filter held to non-key
+// attributes, and last Select. A legacy Query has its key condition and
+// QueryFilter already; it may still give a FilterExpression and a
+// ProjectionExpression, and its AttributesToGet are checked here.
 //
 //nolint:ireturn // the parsed form is the expression package's interface
 func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, error) {
-	hasExpr, valuesUsable := true, true
+	text, err := r.parseQuery(in)
+	if err != nil {
+		return nil, err
+	}
+
+	kc, err := r.queryKey(text)
+	if err != nil {
+		return nil, err
+	}
+
+	err = r.checkStart(in.ExclusiveStartKey)
+	if err == nil {
+		err = r.checkStartedBy(kc)
+	}
+
+	if err == nil {
+		err = r.checkFilterKeys()
+	}
+
+	if err == nil {
+		err = r.checkSelect(in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet))
+	}
+
+	if err == nil && len(in.AttributesToGet) > 0 {
+		err = r.attributesToGet(in.AttributesToGet)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	r.decideFetch(topNames(r.projection))
+
+	return kc, nil
+}
+
+// parseQuery parses a Query's expressions, FilterExpression first, then
+// ProjectionExpression, then the text of the KeyConditionExpression (nil when
+// the Query gives none), and checks that its placeholders are all used.
+func (r *reader) parseQuery(in *api.QueryInput) (*expression.KeyText, error) {
+	hasExpr := in.KeyConditionExpression != nil || in.FilterExpression != nil || in.ProjectionExpression != nil
+	valuesUsable := in.KeyConditionExpression != nil || in.FilterExpression != nil
+
 	if r.legacy != nil {
 		hasExpr = in.FilterExpression != nil || in.ProjectionExpression != nil
 		valuesUsable = in.FilterExpression != nil
@@ -225,44 +251,79 @@ func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, 
 		return nil, err
 	}
 
-	var kc expression.KeyCondition
+	var text *expression.KeyText
 
-	key := r.key
-
-	if r.legacy != nil {
-		kc = r.legacy.key
+	switch {
+	case r.legacy != nil:
 		if r.filter == nil {
 			r.filter = r.legacy.filter
 		}
-
-		if len(in.AttributesToGet) > 0 {
-			err = r.attributesToGet(in.AttributesToGet)
-		}
-	} else {
-		kc, err = x.keyCondition(*in.KeyConditionExpression, key)
+	case in.KeyConditionExpression != nil:
+		text, err = x.keyConditionText(*in.KeyConditionExpression)
+	default:
 	}
 
 	if err == nil {
 		err = x.done()
 	}
 
-	if err == nil {
-		err = r.checkKeyConditionEmpty(kc)
+	return text, err
+}
+
+// queryKey makes the key condition checks that follow the placeholders: the
+// request must have one, its shape is checked, ConsistentRead is checked, and
+// the key condition is held to the key schema, empty values included. text is
+// nil for a legacy Query, whose key condition is already translated.
+//
+//nolint:ireturn // the parsed form is the expression package's interface
+func (r *reader) queryKey(text *expression.KeyText) (expression.KeyCondition, error) {
+	if text == nil && r.legacy == nil {
+		return nil, value.Invalid(msgNoKeyCondition)
 	}
 
-	if err != nil {
-		return nil, err
-	}
+	var shape *expression.KeyShape
 
-	for _, name := range expression.Names(r.filter) {
-		if name == key.Hash.Name || name == key.Range.Name {
-			return nil, value.Invalid(msgFilterOnKey + name)
+	if text != nil {
+		var err error
+
+		shape, err = text.Shape()
+		if err != nil {
+			return nil, fmt.Errorf("key condition: %w", err)
 		}
 	}
 
-	r.decideFetch(topNames(r.projection))
+	// A legacy Query is refused a consistent read of a global index before its
+	// key condition is translated.
+	if r.legacy == nil {
+		err := r.checkConsistent()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if r.legacy != nil {
+		return r.legacy.key, r.checkKeyConditionEmpty(r.legacy.key)
+	}
+
+	kc, err := shape.Fit(r.key, func(attr string, v *api.AttributeValue) string {
+		return table.EmptyKeyMessage(r.index, attr, v)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("key condition: %w", err)
+	}
 
 	return kc, nil
+}
+
+// checkFilterKeys refuses a filter on a key attribute of the table or index.
+func (r *reader) checkFilterKeys() error {
+	for _, name := range expression.Names(r.filter) {
+		if name == r.key.Hash.Name || name == r.key.Range.Name {
+			return value.Invalid(msgFilterOnKey + name)
+		}
+	}
+
+	return nil
 }
 
 // checkKeyConditionEmpty refuses a key condition that compares a key attribute

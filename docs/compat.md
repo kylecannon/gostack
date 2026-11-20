@@ -267,8 +267,31 @@ caller's account and region, as LocalStack does.
   called; gostack names the index of the request. No snapshot pins the text.
 - The legacy `KeyConditions`, `QueryFilter`, `ScanFilter`, `Expected` and
   `ConditionalOperator` translate to the same key condition and condition
-  evaluator as the expressions. `UpdateItem` with `AttributeUpdates` still
-  answers `501`; LocalStack serves it.
+  evaluator as the expressions. `UpdateItem` with `AttributeUpdates` is served
+  by the same update path as `UpdateExpression`; the deviations below are the
+  ones its probes found.
+- An `AttributeUpdates` entry with no `Action`: LocalStack leaves the item
+  alone; gostack applies it as `PUT`, the default botocore documents for the
+  member ("PUT (default)").
+- An `AttributeUpdates` `PUT` value nested 33 levels deep: LocalStack stores it;
+  gostack refuses it, as the 32 levels AWS documents for a nested attribute.
+- Several `AttributeUpdates` entries refused in one request: LocalStack names
+  the first in the request's JSON order; gostack names the first in
+  attribute-name order, as the decoded map keeps no request order.
+- An `AttributeUpdates` `ADD` or `DELETE` of a number set: gostack compares the
+  members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
+  collection contains duplicates" for them and its `DELETE` removes nothing.
+- A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
+  attribute the index does not project: LocalStack answers "Global secondary
+  index X does not project [attr]"; gostack returns the items without the
+  attribute. `AttributesToGet` gets the image's refusal in both.
+- `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
+  parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
+  not have empty statement." / "The statement was empty." and prefixes the
+  count message with "Validation failed in TransactStatements[i]: "; gostack's
+  texts differ. `BatchExecuteStatement` with an unknown
+  `ReturnValuesOnConditionCheckFailure` answers `500 InternalFailure` in the
+  image and `200` here with the statement answered.
 - A legacy filter or `Expected` with two or more invalid conditions: gostack
   names the first in attribute-name order, the image the first in the request's
   JSON order, which the decoded map does not keep. With one invalid condition

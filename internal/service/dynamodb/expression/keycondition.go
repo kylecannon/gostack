@@ -12,6 +12,7 @@ import (
 // gostack-parity-localstack:8b9a79f, except msgBeginsWithFirst, which mirrors
 // the BETWEEN message.
 const (
+	msgKeyLength         = "Conditions can be of length 1 or 2 only"
 	msgKeyNotSupported   = "Query key condition not supported"
 	msgKeyMissed         = "Query condition missed key schema element"
 	msgKeyTwice          = "KeyConditionExpressions must only contain one condition per key"
@@ -26,6 +27,10 @@ const (
 	msgKeyNotScalarStart = "Key attributes must be scalars; " +
 		"list random access '[]' and map lookup '.' are not allowed: Key: "
 )
+
+// maxKeyConditions is the most conditions a key condition has: one on the hash
+// attribute and one on the range attribute.
+const maxKeyConditions = 2
 
 // keyPart is one condition of a key condition: an attribute and the
 // comparison its value must meet.
@@ -42,66 +47,200 @@ type keyCondition struct {
 	isRng bool
 }
 
-// ParseKeyCondition parses a KeyConditionExpression against key, the key
-// schema of the table or index the query reads. It makes the checks every
-// condition makes, then DynamoDB's key checks: the operators, one key
-// attribute per condition, one condition per key, the hash attribute present
-// and no other attribute, the values' types, and equality on the hash key.
-//
-//nolint:ireturn // the parsed forms are the interfaces expression.go declares
-func ParseKeyCondition(
-	src string, key table.KeySchema, subs Substitutions, used map[string]struct{},
-) (KeyCondition, error) {
+// EmptyKey names the message DynamoDB refuses an empty key value with, or ""
+// for a value that is not empty. Fit asks it of the values of a key condition
+// in the order DynamoDB checks them.
+type EmptyKey func(attr string, v *api.AttributeValue) string
+
+// KeyText is a KeyConditionExpression that has parsed and had its placeholders
+// resolved, but is not yet held to the key schema: DynamoDB checks the
+// placeholders of the whole request between the two.
+type KeyText struct {
+	c *cond
+}
+
+// ParseKeyConditionText parses a KeyConditionExpression and makes the checks
+// every condition makes.
+func ParseKeyConditionText(src string, subs Substitutions, used map[string]struct{}) (*KeyText, error) {
 	c, _, err := parseChecked(KeyConditionExpression, src, subs, used)
 	if err != nil {
 		return nil, err
 	}
 
+	return &KeyText{c: c}, nil
+}
+
+// Shape checks the expression's operators, one key attribute per condition,
+// and one condition per key, and returns its conditions for Fit.
+func (k *KeyText) Shape() (*KeyShape, error) {
 	var parts []keyPart
-	err = collectKeyParts(c, &parts)
+
+	err := collectKeyParts(k.c, &parts)
 	if err != nil {
 		return nil, err
 	}
 
-	return buildKeyCondition(parts, key)
+	err = checkOnePerKey(parts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KeyShape{parts: parts}, nil
 }
 
-func buildKeyCondition(parts []keyPart, key table.KeySchema) (*keyCondition, error) {
+// KeyShape is the conditions of a key condition whose shape is checked.
+type KeyShape struct {
+	parts []keyPart
+}
+
+// Fit holds the conditions to key, the key schema of the table or index the
+// query reads, in DynamoDB's order: at most two conditions, none on a second
+// attribute of a hash-only key, the hash attribute present, its values' type,
+// equality, and its value not empty, then the range attribute named, its
+// values' type, and its values not empty. empty may be nil.
+//
+//nolint:ireturn // the parsed form is the interface expression.go declares
+func (s *KeyShape) Fit(key table.KeySchema, empty EmptyKey) (KeyCondition, error) {
+	kc, err := fitKeyParts(s.parts, key, empty)
+	if err != nil {
+		return nil, err
+	}
+
+	return kc, nil
+}
+
+// ParseKeyCondition parses a KeyConditionExpression against key, the key
+// schema of the table or index the query reads, in one step: the checks every
+// condition makes, then DynamoDB's key checks (see Fit), the empty value
+// aside.
+//
+//nolint:ireturn // the parsed forms are the interfaces expression.go declares
+func ParseKeyCondition(
+	src string, key table.KeySchema, subs Substitutions, used map[string]struct{},
+) (KeyCondition, error) {
+	text, err := ParseKeyConditionText(src, subs, used)
+	if err != nil {
+		return nil, err
+	}
+
+	shape, err := text.Shape()
+	if err != nil {
+		return nil, err
+	}
+
+	return shape.Fit(key, nil)
+}
+
+// checkOnePerKey refuses two conditions on one attribute.
+func checkOnePerKey(parts []keyPart) error {
 	seen := make(map[string]bool, len(parts))
 	for _, p := range parts {
 		if seen[p.name] {
-			return nil, value.Invalid(msgKeyTwice)
+			return value.Invalid(msgKeyTwice)
 		}
 
 		seen[p.name] = true
 	}
 
-	kc := &keyCondition{}
+	return nil
+}
 
-	for _, p := range parts {
-		switch {
-		case p.name == key.Hash.Name:
-			kc.hash = p
-		case key.HasRange() && p.name == key.Range.Name:
-			kc.rng, kc.isRng = p, true
-		default:
-			return nil, value.Invalid(msgKeyMissed)
-		}
-	}
-
-	if !seen[key.Hash.Name] {
-		return nil, value.Invalid(msgKeyMissed)
-	}
-
-	if !partHasType(kc.hash, key.Hash.Type) || (kc.isRng && !partHasType(kc.rng, key.Range.Type)) {
-		return nil, value.Invalid(msgKeyTypeMismatch)
-	}
-
-	if kc.hash.op != table.SortEQ {
+// fitKeyParts is Fit: DynamoDB Local's order for the checks of a key condition
+// against a key schema (probed, SQ-331).
+func fitKeyParts(parts []keyPart, key table.KeySchema, empty EmptyKey) (*keyCondition, error) {
+	switch {
+	case len(parts) > maxKeyConditions:
+		return nil, value.Invalid(msgKeyLength)
+	case len(parts) == maxKeyConditions && !key.HasRange():
 		return nil, value.Invalid(msgKeyNotSupported)
 	}
 
+	kc := &keyCondition{}
+
+	for _, p := range parts {
+		if p.name == key.Hash.Name {
+			kc.hash = p
+		}
+	}
+
+	if kc.hash.name == "" {
+		return nil, value.Invalid(msgKeyMissed)
+	}
+
+	err := checkKeyPartType(kc.hash, key.Hash.Type)
+	if err == nil && kc.hash.op != table.SortEQ {
+		err = value.Invalid(msgKeyNotSupported)
+	}
+
+	if err == nil {
+		err = checkKeyPartEmpty(kc.hash, empty)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, p := range parts {
+		if p.name == key.Hash.Name {
+			continue
+		}
+
+		if p.name != key.Range.Name {
+			return nil, value.Invalid(msgKeyMissed)
+		}
+
+		kc.rng, kc.isRng = p, true
+
+		err = checkKeyPartType(p, key.Range.Type)
+		if err == nil {
+			err = checkKeyPartEmpty(p, empty)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return kc, nil
+}
+
+// checkKeyPartType refuses a condition whose values are not of the key
+// attribute's type.
+func checkKeyPartType(p keyPart, typ string) error {
+	if !partHasType(p, typ) {
+		return value.Invalid(msgKeyTypeMismatch)
+	}
+
+	return nil
+}
+
+// checkKeyPartEmpty refuses a condition with an empty key value; empty may be
+// nil.
+func checkKeyPartEmpty(p keyPart, empty EmptyKey) error {
+	if empty == nil {
+		return nil
+	}
+
+	for i := range p.values {
+		msg := empty(p.name, &p.values[i])
+		if msg != "" {
+			return value.Invalid(msg)
+		}
+	}
+
+	return nil
+}
+
+// buildKeyCondition is the legacy KeyConditions' key checks: one condition
+// per key, then Fit without the empty value, which a legacy Query checks
+// later.
+func buildKeyCondition(parts []keyPart, key table.KeySchema) (*keyCondition, error) {
+	err := checkOnePerKey(parts)
+	if err != nil {
+		return nil, err
+	}
+
+	return fitKeyParts(parts, key, nil)
 }
 
 func partHasType(p keyPart, t string) bool {

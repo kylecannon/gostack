@@ -33,6 +33,8 @@ const (
 	msgSelectProj    = "Cannot specify the %s when choosing to get %s"
 	msgConsistentGSI = "Consistent reads are not supported on global secondary indexes"
 	msgStartSize     = "Exclusive Start Key must have same size as table's key schema"
+	msgStartInvalid  = "The provided starting key is invalid"
+	msgStartType     = "Type mismatch for attribute to update"
 	msgStartQuery    = "The provided starting key does not match the range key predicate"
 )
 
@@ -183,13 +185,28 @@ func (r *reader) keyOf(stored value.Item) value.Item {
 	return out
 }
 
-// keyNames are the attributes of an exclusive start key, each once.
-func (r *reader) keyNames() []string {
-	names := []string{r.tableKey.Hash.Name}
-	for _, name := range []string{r.tableKey.Range.Name, r.key.Hash.Name, r.key.Range.Name} {
-		if name != "" && !slices.Contains(names, name) {
-			names = append(names, name)
+// keyAttrs are the attributes of an exclusive start key, each once, with the
+// type the schema gives it: the table's hash and range attributes, then the
+// index's.
+func (r *reader) keyAttrs() []table.KeyAttribute {
+	attrs := []table.KeyAttribute{r.tableKey.Hash}
+
+	for _, attr := range []table.KeyAttribute{r.tableKey.Range, r.key.Hash, r.key.Range} {
+		if attr.Name != "" && !slices.ContainsFunc(attrs, func(a table.KeyAttribute) bool { return a.Name == attr.Name }) {
+			attrs = append(attrs, attr)
 		}
+	}
+
+	return attrs
+}
+
+// keyNames are the names of keyAttrs.
+func (r *reader) keyNames() []string {
+	attrs := r.keyAttrs()
+
+	names := make([]string, len(attrs))
+	for i, attr := range attrs {
+		names[i] = attr.Name
 	}
 
 	return names
@@ -221,34 +238,108 @@ func (r *reader) consumed(pg *page) consumption {
 	return c
 }
 
-// checkStart checks an ExclusiveStartKey: the table's and the index's key
-// attributes exactly, each a valid value.
+// checkStart checks an ExclusiveStartKey in DynamoDB Local's order (probed,
+// SQ-331): its size, each value valid, each key attribute present and of the
+// schema's type, in the order keyAttrs gives, then no key value empty. A start
+// key that is empty, or that is the wrong size for a global index, is refused
+// as invalid; for a table or a local index, as the wrong size.
 func (r *reader) checkStart(start value.Item) error {
 	if start == nil {
 		return nil
 	}
 
-	names := r.keyNames()
-	if len(start) != len(names) {
+	attrs := r.keyAttrs()
+	if len(start) != len(attrs) {
+		if len(start) == 0 || (r.index != nil && r.index.Global) {
+			return value.Invalid(msgStartInvalid)
+		}
+
 		return value.Invalid(msgStartSize)
 	}
 
-	for _, name := range names {
-		if _, ok := start[name]; !ok {
-			return value.Invalid(msgStartSize)
+	err := value.ValidateItem(start)
+	if err != nil {
+		return fmt.Errorf("exclusive start key: %w", err)
+	}
+
+	for _, attr := range attrs {
+		v, ok := start[attr.Name]
+
+		switch {
+		case !ok:
+			return value.Invalid(msgStartInvalid)
+		case value.Type(&v) != attr.Type:
+			return value.Invalid(msgStartType)
+		default:
 		}
 	}
 
-	err := value.ValidateItem(start)
-	if err == nil {
-		err = r.checkStartEmpty(start)
-	}
-
+	err = r.checkStartEmpty(start)
 	if err != nil {
 		return fmt.Errorf("exclusive start key: %w", err)
 	}
 
 	r.start = start
+
+	return nil
+}
+
+// checkStartedBy refuses a Query's exclusive start key that does not meet its
+// key condition.
+func (r *reader) checkStartedBy(kc expression.KeyCondition) error {
+	if r.start == nil {
+		return nil
+	}
+
+	hashName, hash := kc.Hash()
+
+	rangeName, cond, ok := kc.Range()
+	if !ok {
+		cond = table.SortCondition{Op: table.SortAny}
+	}
+
+	if !startMeets(r.start, hashName, &hash, rangeName, cond) {
+		return value.Invalid(msgStartQuery)
+	}
+
+	return nil
+}
+
+// checkConsistent refuses a consistent read of a global secondary index, which
+// has none.
+func (r *reader) checkConsistent() error {
+	return checkConsistentRead(r.index, r.consistent)
+}
+
+// checkConsistentRead refuses a consistent read of the global secondary index
+// spec, nil for the table.
+func checkConsistentRead(spec *table.IndexSpec, consistent *bool) error {
+	if spec != nil && spec.Global && consistent != nil && *consistent {
+		return value.Invalid(msgConsistentGSI)
+	}
+
+	return nil
+}
+
+// checkSelect checks Select against the request's projection and the index
+// and sets the mode the read answers in.
+func (r *reader) checkSelect(mode *string, projection string) error {
+	selected, err := chooseSelect(mode, projection, r.index != nil)
+	if err != nil {
+		return err
+	}
+
+	r.selectMode = selected
+
+	return nil
+}
+
+// checkIndexSelect refuses ALL_ATTRIBUTES of a global secondary index that
+// does not project every attribute.
+func checkIndexSelect(spec *table.IndexSpec, mode *string) error {
+	if spec != nil && spec.Global && mode != nil && *mode == selectAll && spec.Projection.Type != table.ProjectAll {
+		return value.Invalid(msgIndexSelect + spec.Name + msgIndexSelectTail)
+	}
 
 	return nil
 }

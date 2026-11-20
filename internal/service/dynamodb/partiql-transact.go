@@ -14,10 +14,14 @@ import (
 
 // The messages ExecuteTransaction is refused with.
 const (
-	msgTxEmpty     = "ExecutePartiQLTransaction can not have empty statement."
-	msgTxTooMany   = "Member must have length less than or equal to 100"
-	msgTxMixed     = "ExecuteTransaction API does not support both read and write operations in the same request."
-	msgTxFailed    = "Validation failed in TransactStatements["
+	msgTxEmpty   = "ExecutePartiQLTransaction can not have empty statement."
+	msgTxTooMany = "Member must have length less than or equal to 100"
+	msgTxMixed   = "ExecuteTransaction API does not support both read and write operations in the same request."
+	msgTxFailed  = "Validation failed in TransactStatements["
+	// msgTxReturnValues starts the answer to a statement's unknown
+	// ReturnValuesOnConditionCheckFailure; the member follows.
+	msgTxReturnValues = "No enum constant software.amazon.awssdk.services.dynamodb.model." +
+		"ReturnValuesOnConditionCheckFailure."
 	msgTxReturning = "RETURNING clause is not supported in ExecuteTransaction."
 	msgTxSelectKey = "Select statements within ExecuteTransaction must specify the primary key in the where clause."
 	msgTxNotFound  = "Requested resource not found"
@@ -151,14 +155,18 @@ func (p *Provider) transactWrites(
 	for i, stmt := range stmts {
 		req := &in.TransactStatements[i]
 
-		returnOld, err := returnOnConditionFailure(req.ReturnValuesOnConditionCheckFailure)
-		if err != nil {
-			return nil, err
-		}
+		// DynamoDB Local reads the statement's ReturnValuesOnConditionCheckFailure
+		// last, after the statement compiles (probed, SQ-331), and names the
+		// failed enum of its SDK.
+		returnOld, enumErr := returnOnConditionFailure(req.ReturnValuesOnConditionCheckFailure)
 
 		w, err := c.compileWrite(stmt, req.Parameters, returnOld)
 		if err != nil {
 			return nil, txCompileError(i, len(stmts), err)
+		}
+
+		if enumErr != nil {
+			return nil, txFailed(i, msgTxReturnValues+*req.ReturnValuesOnConditionCheckFailure)
 		}
 
 		items[i] = w.transactItem()

@@ -32,40 +32,10 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 		return nil, err
 	}
 
-	hasExpr := in.FilterExpression != nil || in.ProjectionExpression != nil
-
-	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr,
-		in.FilterExpression != nil, "FilterExpression is null")
+	err = r.scanChecks(in)
 	if err != nil {
 		return nil, fmt.Errorf("scan: %w", err)
 	}
-
-	filter, err := x.condition(expression.FilterExpression, in.FilterExpression)
-	if err == nil {
-		r.projection, err = x.projection(in.ProjectionExpression)
-	}
-
-	if filter != nil {
-		r.filter = filter
-	}
-
-	if err == nil && in.AttributesToGet != nil {
-		err = r.attributesToGet(in.AttributesToGet)
-	}
-
-	if err == nil {
-		err = x.done()
-	}
-
-	if err == nil {
-		err = r.checkStart(in.ExclusiveStartKey)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("scan: %w", err)
-	}
-
-	r.decideFetch(topNames(r.projection))
 
 	pg, err := r.read(func(visit func(value.Item) bool) error {
 		return e.data.Scan(indexName(r.index), r.start, visit)
@@ -83,8 +53,69 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 	}, nil
 }
 
+// scanChecks makes the checks of a Scan that follow its target in DynamoDB
+// Local's order (probed, SQ-331): placeholders no expression can use, Limit,
+// the FilterExpression and ProjectionExpression, the placeholders no
+// expression used, the exclusive start key, Select, Segment and TotalSegments,
+// and last the legacy AttributesToGet.
+func (r *reader) scanChecks(in *api.ScanInput) error {
+	hasExpr := in.FilterExpression != nil || in.ProjectionExpression != nil
+
+	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr,
+		in.FilterExpression != nil, "FilterExpression is null")
+	if err != nil {
+		return err
+	}
+
+	r.limit, err = limitOf(in.Limit)
+	if err != nil {
+		return err
+	}
+
+	filter, err := x.condition(expression.FilterExpression, in.FilterExpression)
+	if err == nil {
+		r.projection, err = x.projection(in.ProjectionExpression)
+	}
+
+	if filter != nil {
+		r.filter = filter
+	}
+
+	if err == nil {
+		err = x.done()
+	}
+
+	if err == nil {
+		err = r.checkStart(in.ExclusiveStartKey)
+	}
+
+	if err == nil {
+		err = r.checkSelect(in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet))
+	}
+
+	if err == nil {
+		err = checkIndexSelect(r.index, in.Select)
+	}
+
+	if err == nil {
+		r.segment, r.segments, err = segmentsOf(in.Segment, in.TotalSegments)
+	}
+
+	if err == nil && in.AttributesToGet != nil {
+		err = r.attributesToGet(in.AttributesToGet)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	r.decideFetch(topNames(r.projection))
+
+	return nil
+}
+
 // scanTarget finds the table and index a Scan reads and makes the checks that
-// come before its expressions.
+// come before its expressions: the legacy filter and, last, ConsistentRead.
 func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEntry, *reader, error) {
 	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
@@ -116,18 +147,17 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, err
 	}
 
-	segment, segments, err := segmentsOf(in.Segment, in.TotalSegments)
+	r, err := newReader(e, spec, nil, in.ConsistentRead)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	r, err := newReader(e, spec, in.Limit, in.Select, projectionParam(in.ProjectionExpression, in.AttributesToGet),
-		in.ConsistentRead)
+	r.name, r.filter = name, legacy
+
+	err = r.checkConsistent()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	r.name, r.segment, r.segments, r.filter = name, segment, segments, legacy
 
 	return e, r, nil
 }

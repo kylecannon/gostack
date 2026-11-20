@@ -118,11 +118,10 @@ func (x *exprs) update(src *string) (*expression.UpdateExpr, error) {
 	return u, nil
 }
 
-// keyCondition parses a KeyConditionExpression against key.
-//
-//nolint:ireturn // as condition
-func (x *exprs) keyCondition(src string, key table.KeySchema) (expression.KeyCondition, error) {
-	kc, err := expression.ParseKeyCondition(src, key, x.subs, x.used)
+// keyConditionText parses a KeyConditionExpression, which the key schema holds
+// to its shape only after the request's placeholders are checked.
+func (x *exprs) keyConditionText(src string) (*expression.KeyText, error) {
+	kc, err := expression.ParseKeyConditionText(src, x.subs, x.used)
 	if err != nil {
 		return nil, fmt.Errorf("key condition: %w", err)
 	}
