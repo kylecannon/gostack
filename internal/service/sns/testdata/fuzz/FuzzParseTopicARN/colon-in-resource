@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws-cn:sns:cn-north-1:000000000000:topic:5f7c0d6e-\xff:")

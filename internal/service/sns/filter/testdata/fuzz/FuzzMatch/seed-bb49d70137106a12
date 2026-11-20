@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": [{\"anything-but\": [1, \"x\"]}]}")
+bool(true)
+string("{\"a\": 0}")

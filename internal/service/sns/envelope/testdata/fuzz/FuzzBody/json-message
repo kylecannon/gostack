@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"default\": \"hello\", \"sqs\": \"{\\\"nested\\\": [1, 2]}\"}")
+string("")
+bool(false)

@@ -207,3 +207,50 @@ func Test_Time_inStruct(t *testing.T) {
 	assert.True(t, decoded.Created.Equal(give.Created.Time))
 	assert.True(t, decoded.Whole.Equal(give.Whole.Time))
 }
+
+// Test_SnapshotTimes writes each time a snapshot can hold and reads it back:
+// one RFC 3339 can write keeps json/v2's own form, so an earlier snapshot
+// reads as it did, and any other is epoch seconds instead of failing the save.
+func Test_SnapshotTimes(t *testing.T) {
+	opts := json.JoinOptions(
+		json.WithMarshalers(protocol.SnapshotTimeMarshalers),
+		json.WithUnmarshalers(protocol.SnapshotTimeUnmarshalers),
+	)
+
+	tests := []struct {
+		name string
+		give time.Time
+		want string
+	}{
+		{name: "in range", give: time.Unix(1700000000, 0).UTC(), want: `"` + isoWhole + `"`},
+		{name: "past 9999", give: time.Unix(300000000000, 0), want: "300000000000"},
+		{name: "before 0", give: time.Unix(-100000000000, 500000000), want: "-99999999999.5"},
+		{
+			name: "9999 in UTC, 10000 east of it",
+			give: time.Date(9999, 12, 31, 23, 0, 0, 0, time.UTC).In(time.FixedZone("east", 2*60*60)),
+			want: "253402297200",
+		},
+		{
+			name: "an offset with seconds",
+			give: time.Date(1800, 1, 1, 0, 0, 0, 0, time.FixedZone("LMT", -28378)),
+			want: "-5364634022",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := json.Marshal(tt.give, opts)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+
+			var back time.Time
+			require.NoError(t, json.Unmarshal(got, &back, opts))
+			assert.True(t, tt.give.Equal(back), "read back %v", back)
+		})
+	}
+
+	t.Run("a number that is not epoch seconds", func(t *testing.T) {
+		var back time.Time
+		require.Error(t, json.Unmarshal([]byte("1e400"), &back, opts))
+	})
+}

@@ -1,6 +1,8 @@
 package persist
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -133,4 +136,58 @@ func Test_Engine_Immediate_OneFlusher(t *testing.T) {
 	}
 
 	assert.LessOrEqual(t, left, baseline-writers, "no goroutine is left behind")
+}
+
+// Test_Engine_TimedFlush_GaveWayServiceIsNotCountedAsFailed checks that one
+// flush judges each service on its own: a failed for real, and b, abandoned
+// when a caller's flush cancelled the timed one, gave way. b is not counted as
+// failed because a failed, and has no backoff.
+func Test_Engine_TimedFlush_GaveWayServiceIsNotCountedAsFailed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		e := New(quietConfig(dir, 10*time.Second))
+		errFull := errors.New("no space left on device")
+		gate := make(chan struct{})
+
+		a := &stateSnap{
+			state: "a", entered: make(chan struct{}, 1), gate: gate,
+			during: func() error { return errFull },
+		}
+		e.Register("a", a)
+		e.Register("b", &stateSnap{state: "b"})
+		e.MarkDirty("a")
+		e.MarkDirty("b")
+
+		<-a.entered // the timed flush, at 10 s, is inside a's Snapshot
+
+		ctx, cancel := context.WithCancel(t.Context())
+		finished := make(chan error, 1)
+
+		go func() { finished <- e.Flush(ctx) }()
+
+		synctest.Wait()
+		cancel() // the caller goes away, and the timed flush is cancelled
+		require.Error(t, <-finished)
+		close(gate) // a fails for real, and b is abandoned
+		synctest.Wait()
+
+		now := time.Now()
+
+		e.mu.Lock()
+		ta, tb := e.services["a"], e.services["b"]
+		assert.Equal(t, 1, ta.failures, "a failed for real")
+		assert.Equal(t, now.Add(10*time.Second), ta.retryAt, "a waits out its own backoff")
+		assert.True(t, ta.dirty)
+		assert.Zero(t, tb.failures, "b gave way and is not counted as failed")
+		assert.True(t, tb.retryAt.IsZero(), "b has no backoff")
+		assert.True(t, tb.dirty)
+		e.mu.Unlock()
+
+		// Both are saved PERSIST_FREQUENCY on.
+		time.Sleep(10*time.Second + time.Millisecond)
+		synctest.Wait()
+		assert.Equal(t, "a", readState(t, filepath.Join(dir, "a", "store.json")))
+		assert.Equal(t, "b", readState(t, filepath.Join(dir, "b", "store.json")))
+		require.NoError(t, e.Close(t.Context()))
+	})
 }

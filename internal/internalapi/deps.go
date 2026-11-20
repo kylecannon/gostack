@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/lifecycle"
 )
 
@@ -60,6 +61,12 @@ type Deps struct {
 	CompatPaths bool
 	// Debug mounts /_localstack/diagnose. It is DEBUG.
 	Debug bool
+	// Protocol adds the always-on protocol paths: routes that belong to a
+	// service's wire behavior, such as the SNS signing certificate under
+	// /_aws, not to developer tooling. They are mounted whatever CompatPaths
+	// says (docs/architecture.md, "Protocol and data-plane paths"). It may be
+	// nil.
+	Protocol func(chi.Router)
 
 	// OpenAPI is the canonical contract, served at /_gostack/openapi.yaml. The
 	// endpoint is not mounted when it is empty.

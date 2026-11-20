@@ -61,6 +61,15 @@ type Settings struct {
 	// SQSDisableMaxNumberOfMessageLimit is SQS_DISABLE_MAX_NUMBER_OF_MESSAGE_LIMIT:
 	// ReceiveMessage accepts a MaxNumberOfMessages above 10.
 	SQSDisableMaxNumberOfMessageLimit bool
+	// SNSCertURLHost is SNS_CERT_URL_HOST, trimmed: the host of the
+	// SigningCertURL in the messages SNS signs. Empty means LOCALSTACK_HOST.
+	SNSCertURLHost string
+	// SNSSESSenderAddress is SNS_SES_SENDER_ADDRESS, trimmed: the sender of the
+	// email SNS delivers. Empty means the default sender.
+	SNSSESSenderAddress string
+	// LegacySNSGCMPublishing is LEGACY_SNS_GCM_PUBLISHING: SNS publishes to GCM
+	// with the legacy server key instead of FCM's HTTP v1 API.
+	LegacySNSGCMPublishing bool
 	// FailFast is FAIL_FAST: a recovered panic answers 501 instead of 500.
 	FailFast bool
 	// IncludeStackTracesInHTTPResponse is INCLUDE_STACK_TRACES_IN_HTTP_RESPONSE.
@@ -179,6 +188,9 @@ func (s *Settings) values() map[string]any {
 		varSQSEnableMessageRetentionPeriod: s.SQSEnableMessageRetentionPeriod,
 		varSQSDelayPurgeRetry:              s.SQSDelayPurgeRetry,
 		varSQSDisableMaxMessageLimit:       s.SQSDisableMaxNumberOfMessageLimit,
+		varSNSCertURLHost:                  s.SNSCertURLHost,
+		varSNSSESSenderAddress:             s.SNSSESSenderAddress,
+		varLegacySNSGCMPublishing:          s.LegacySNSGCMPublishing,
 		varFailFast:                        s.FailFast,
 		varIncludeStackTraces:              s.IncludeStackTracesInHTTPResponse,
 		varEnableConfigUpdates:             s.EnableConfigUpdates,
@@ -227,12 +239,8 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		return nil, err
 	}
 	logLevel := cmpLogLevel(get(varLSLog), get(varLog))
-	dynamo, err := parseDynamoDB(get)
-	if err != nil {
-		return nil, err
-	}
 
-	return &Settings{
+	s := &Settings{
 		GatewayListen:                     uniqueHostPorts(listen),
 		LocalstackHost:                    localstackHost,
 		Services:                          parseServices(get(varServices)),
@@ -247,6 +255,9 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		SQSEnableMessageRetentionPeriod:   isTrue(get(varSQSEnableMessageRetentionPeriod)),
 		SQSDelayPurgeRetry:                isTrue(get(varSQSDelayPurgeRetry)),
 		SQSDisableMaxNumberOfMessageLimit: isTrue(get(varSQSDisableMaxMessageLimit)),
+		SNSCertURLHost:                    strings.TrimSpace(get(varSNSCertURLHost)),
+		SNSSESSenderAddress:               strings.TrimSpace(get(varSNSSESSenderAddress)),
+		LegacySNSGCMPublishing:            isTrue(get(varLegacySNSGCMPublishing)),
 		FailFast:                          isTrue(get(varFailFast)),
 		IncludeStackTracesInHTTPResponse:  isTrue(get(varIncludeStackTraces)),
 		EnableConfigUpdates:               isTrue(get(varEnableConfigUpdates)),
@@ -267,20 +278,14 @@ func buildSettings(get lookup, base baseline) (*Settings, error) {
 		ExtraCORSAllowedHeaders:           splitList(get(varExtraCORSAllowedHeaders)),
 		ExtraCORSExposeHeaders:            splitList(get(varExtraCORSExposeHeaders)),
 		ExtraCORSAllowedOrigins:           splitList(get(varExtraCORSAllowedOrigins)),
-		DynamoDBErrorProbability:          dynamo.errorProbability,
-		DynamoDBReadErrorProbability:      dynamo.readErrorProbability,
-		DynamoDBWriteErrorProbability:     dynamo.writeErrorProbability,
-		DynamoDBShareDB:                   dynamo.shareDB,
-		DynamoDBRemoveExpiredItems:        isTrue(get(varDynamoDBRemoveExpiredItems)),
-	}, nil
-}
+	}
 
-// dynamoDBSettings are the DYNAMODB_* values.
-type dynamoDBSettings struct {
-	errorProbability      float64
-	readErrorProbability  float64
-	writeErrorProbability float64
-	shareDB               int
+	err = parseDynamoDB(get, s)
+	if err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // parseDynamoDB reads the DYNAMODB_* settings as LocalStack's config.py does
@@ -289,21 +294,22 @@ type dynamoDBSettings struct {
 // Python's float() or int() refuses, and read what they accept: underscores
 // between digits, inf and nan, and surrounding white space. The share value is
 // not stripped first, so one of white space alone is refused, as int() does.
-func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
-	var out dynamoDBSettings
+// It sets the values it reads in out.
+func parseDynamoDB(get lookup, out *Settings) error {
+	out.DynamoDBRemoveExpiredItems = isTrue(get(varDynamoDBRemoveExpiredItems))
 
 	for _, f := range []struct {
 		name string
 		to   *float64
 	}{
-		{varDynamoDBErrorProbability, &out.errorProbability},
-		{varDynamoDBReadErrorProbability, &out.readErrorProbability},
-		{varDynamoDBWriteErrorProbability, &out.writeErrorProbability},
+		{varDynamoDBErrorProbability, &out.DynamoDBErrorProbability},
+		{varDynamoDBReadErrorProbability, &out.DynamoDBReadErrorProbability},
+		{varDynamoDBWriteErrorProbability, &out.DynamoDBWriteErrorProbability},
 	} {
 		if value := strings.TrimSpace(get(f.name)); value != "" {
 			parsed, ok := protocol.ParsePyFloat(value)
 			if !ok {
-				return out, fmt.Errorf("%s: %q is not a number", f.name, value)
+				return fmt.Errorf("%s: %q is not a number", f.name, value)
 			}
 
 			*f.to = parsed
@@ -313,13 +319,13 @@ func parseDynamoDB(get lookup) (dynamoDBSettings, error) {
 	if value := get(varDynamoDBShareDB); value != "" {
 		parsed, ok := protocol.ParsePyInt(value)
 		if !ok {
-			return out, fmt.Errorf("%s: %q is not an integer", varDynamoDBShareDB, value)
+			return fmt.Errorf("%s: %q is not an integer", varDynamoDBShareDB, value)
 		}
 
-		out.shareDB = int(parsed)
+		out.DynamoDBShareDB = int(parsed)
 	}
 
-	return out, nil
+	return nil
 }
 
 // parseGatewayListen parses the comma-separated GATEWAY_LISTEN. The host default

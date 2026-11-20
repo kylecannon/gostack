@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": {\"b\": [{\"exists\": false}]}}")
+bool(true)
+string("{\"object\": {\"nested\": \"string.value\"}, \"object.nested\": \"other\"}")

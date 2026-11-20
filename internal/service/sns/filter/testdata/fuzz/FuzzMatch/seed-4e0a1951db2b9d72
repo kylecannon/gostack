@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"attr1\": [null, {\"anything-but\": \"whatever\"}]}")
+bool(false)
+string("{\"attr1\": {\"DataType\": \"String\", \"StringValue\": \"other\"}}")

@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/internalapi"
 	"github.com/kylecannon/gostack/internal/lifecycle"
 	"github.com/stretchr/testify/require"
@@ -469,5 +471,36 @@ func Test_Compat_killSwitch(t *testing.T) {
 		require.Equal(t, http.StatusOK, h.do(t, http.MethodGet, "/_gostack/health", "").status)
 		require.Equal(t, http.StatusOK, h.do(t, http.MethodGet, "/_gostack/info", "").status)
 		require.Equal(t, http.StatusOK, h.do(t, http.MethodGet, "/_gostack/config", "").status)
+	})
+}
+
+// Test_Protocol_survivesKillSwitch: the paths of Deps.Protocol are protocol
+// paths, not developer aliases, so CompatPaths=false leaves them mounted, and a
+// nil Protocol mounts nothing.
+func Test_Protocol_survivesKillSwitch(t *testing.T) {
+	const path = "/_aws/sns/cert.pem"
+
+	protocol := func(r chi.Router) {
+		r.Get(path, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "cert") })
+	}
+
+	for _, compat := range []bool{true, false} {
+		t.Run("CompatPaths="+strconv.FormatBool(compat), func(t *testing.T) {
+			h := newHarness(t, func(d *internalapi.Deps) {
+				d.CompatPaths = compat
+				d.Protocol = protocol
+			})
+
+			got := h.do(t, http.MethodGet, path, "")
+
+			require.Equal(t, http.StatusOK, got.status)
+			require.Equal(t, "cert", string(got.body))
+		})
+	}
+
+	t.Run("without Protocol the path is not there", func(t *testing.T) {
+		h := newHarness(t, nil)
+
+		require.Equal(t, http.StatusNotFound, h.do(t, http.MethodGet, path, "").status)
 	})
 }

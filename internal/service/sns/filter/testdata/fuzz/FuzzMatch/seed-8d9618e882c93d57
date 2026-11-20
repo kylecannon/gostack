@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": [null]}")
+bool(true)
+string("{\"a\": [null, 1]}")

@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"source\": [\"a\", \"b\", \"c\", \"d\"], \"$or\": [{\"metricName\": [\"1\", \"2\", \"3\", \"4\", \"5\", \"6\"]}, {\"metricType\": [\"1\", \"2\", \"3\", \"4\"], \"$or\": [{\"metricId\": [1, 2, 3, 4]}, {\"spaceId\": [1, 2, 3, 4]}]}]}")
+bool(false)
+string("{}")

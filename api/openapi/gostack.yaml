@@ -369,6 +369,147 @@ paths:
                   ExpiredItems:
                     type: integer
                     description: How many expired items the call removed.
+  /_gostack/services/sns/platform-endpoint-messages:
+    get:
+      operationId: listSnsPlatformEndpointMessages
+      summary: List what SNS recorded for platform endpoints instead of sending.
+      description: >-
+        The messages published to platform endpoints (directly, or through a topic
+        with application subscribers), by endpoint ARN, in the order recorded. The
+        endpointArn parameter names one endpoint and, with its account and region,
+        the scope; without it the account and region parameters name the scope
+        (the default account, us-east-1). LocalStack serves the same call at
+        /_aws/sns/platform-endpoint-messages, unless GOSTACK_COMPAT_PATHS=0.
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SnsAccountId'
+        - $ref: '#/components/parameters/SnsRegion'
+        - $ref: '#/components/parameters/SnsEndpointArn'
+      responses:
+        '200':
+          description: The recorded messages, with the region they were listed from.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsPlatformEndpointMessagesResponse'
+        '400':
+          description: The endpointArn is not an ARN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsDeveloperError'
+    delete:
+      operationId: deleteSnsPlatformEndpointMessages
+      summary: Discard the recorded messages of platform endpoints.
+      description: The one endpoint the endpointArn names, or every endpoint of the scope.
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SnsAccountId'
+        - $ref: '#/components/parameters/SnsRegion'
+        - $ref: '#/components/parameters/SnsEndpointArn'
+      responses:
+        '204':
+          description: The messages were discarded.
+        '400':
+          description: The endpointArn is not an ARN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsDeveloperError'
+  /_gostack/services/sns/sms-messages:
+    get:
+      operationId: listSnsSmsMessages
+      summary: List the SMS messages SNS recorded instead of sending.
+      description: >-
+        The messages published to phone numbers (directly, or through a topic with
+        sms subscribers), grouped by number in the order of each number's first
+        message. The phoneNumber parameter keeps one number. LocalStack serves the
+        same call at /_aws/sns/sms-messages, unless GOSTACK_COMPAT_PATHS=0.
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SnsAccountId'
+        - $ref: '#/components/parameters/SnsRegion'
+        - $ref: '#/components/parameters/SnsPhoneNumber'
+      responses:
+        '200':
+          description: The recorded messages, with the region they were listed from.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsSmsMessagesResponse'
+    delete:
+      operationId: deleteSnsSmsMessages
+      summary: Discard the recorded SMS messages.
+      description: The one number the phoneNumber names, or every number of the scope.
+      tags: [gostack]
+      parameters:
+        - $ref: '#/components/parameters/SnsAccountId'
+        - $ref: '#/components/parameters/SnsRegion'
+        - $ref: '#/components/parameters/SnsPhoneNumber'
+      responses:
+        '204':
+          description: The messages were discarded.
+  /_gostack/services/sns/phone-opt-outs:
+    post:
+      operationId: optOutSnsPhoneNumber
+      summary: Put a phone number on an account's SMS opt-out list.
+      description: >-
+        What a recipient's reply of STOP does on AWS: CheckIfPhoneNumberIsOptedOut
+        answers true for the number afterwards, and OptInPhoneNumber takes it off.
+        LocalStack serves the same call at /_aws/sns/phone-opt-outs, unless
+        GOSTACK_COMPAT_PATHS=0.
+      tags: [gostack]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SnsPhoneOptOutRequest'
+      responses:
+        '200':
+          description: The number is opted out. The body is empty.
+        '400':
+          description: The body is not a JSON object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsDeveloperError'
+  /_gostack/services/sns/subscription-tokens/{subscription_arn}:
+    get:
+      operationId: getSnsSubscriptionToken
+      summary: The confirmation token of an SNS subscription.
+      description: >-
+        Lets a test confirm a subscription whose confirmation message it cannot
+        receive. The ARN is the rest of the path, with its own colons.
+        LocalStack serves the same call at /_aws/sns/subscription-tokens/{subscription_arn},
+        unless GOSTACK_COMPAT_PATHS=0.
+      tags: [gostack]
+      parameters:
+        - name: subscription_arn
+          in: path
+          required: true
+          description: The subscription ARN.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The token of the subscription.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsSubscriptionToken'
+        '400':
+          description: The subscription ARN is not an ARN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsSubscriptionTokenError'
+        '404':
+          description: No subscription has the ARN.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnsSubscriptionTokenError'
 components:
   parameters:
     SqsQueueUrl:
@@ -412,6 +553,34 @@ components:
       name: queue_name
       in: path
       required: true
+      schema:
+        type: string
+    SnsAccountId:
+      name: accountId
+      in: query
+      required: false
+      description: The account whose recorded messages are meant. Defaults to 000000000000.
+      schema:
+        type: string
+    SnsRegion:
+      name: region
+      in: query
+      required: false
+      description: The region whose recorded messages are meant. Defaults to us-east-1.
+      schema:
+        type: string
+    SnsEndpointArn:
+      name: endpointArn
+      in: query
+      required: false
+      description: The platform endpoint ARN. Its account and region are the scope.
+      schema:
+        type: string
+    SnsPhoneNumber:
+      name: phoneNumber
+      in: query
+      required: false
+      description: The phone number, as it was published to.
       schema:
         type: string
   schemas:
@@ -605,3 +774,107 @@ components:
                   type: string
             required: [state, implemented, total, operations]
       required: [services]
+    SnsPlatformEndpointMessagesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        region:
+          type: string
+        platform_endpoint_messages:
+          type: object
+          description: The messages by endpoint ARN.
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/SnsPlatformEndpointMessage'
+      required: [region, platform_endpoint_messages]
+    SnsPlatformEndpointMessage:
+      type: object
+      additionalProperties: false
+      properties:
+        TargetArn:
+          type: string
+        TopicArn:
+          type: string
+          description: Empty for a message published to the endpoint directly.
+        Message:
+          type: string
+          description: The body of the endpoint's platform. A MessageStructure=json message is the JSON text of that body.
+        MessageAttributes:
+          type: [object, 'null']
+        MessageStructure:
+          type: [string, 'null']
+        Subject:
+          type: [string, 'null']
+        MessageId:
+          type: string
+          description: Absent from a message that came through a topic.
+      required: [TargetArn, TopicArn, Message]
+    SnsSmsMessagesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        region:
+          type: string
+        sms_messages:
+          type: object
+          description: The messages by phone number.
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/SnsSmsMessage'
+      required: [region, sms_messages]
+    SnsSmsMessage:
+      type: object
+      additionalProperties: false
+      properties:
+        PhoneNumber:
+          type: string
+        TopicArn:
+          type: [string, 'null']
+        SubscriptionArn:
+          type: [string, 'null']
+        MessageId:
+          type: string
+        Message:
+          type: string
+        MessageAttributes:
+          type: [object, 'null']
+        MessageStructure:
+          type: [string, 'null']
+        Subject:
+          type: [string, 'null']
+      required: [PhoneNumber, MessageId, Message]
+    SnsPhoneOptOutRequest:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+        accountId:
+          type: string
+          description: Defaults to 000000000000.
+    SnsDeveloperError:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+      required: [error]
+    SnsSubscriptionToken:
+      type: object
+      additionalProperties: false
+      properties:
+        subscription_token:
+          type: string
+        subscription_arn:
+          type: string
+      required: [subscription_token, subscription_arn]
+    SnsSubscriptionTokenError:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+        subscription_arn:
+          type: string
+      required: [error, subscription_arn]

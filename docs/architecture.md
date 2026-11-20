@@ -734,6 +734,64 @@ calls running are cancelled, and `Enqueue` refuses every later call. It waits
 dropped, refused, or cancelled and not answered with a 2xx. A cancelled call
 whose handler still answers it with a 2xx was served and is not counted.
 
+### SNS delivery (`internal/service/sns/lanes.go`)
+
+SNS delivers through lanes of its own, one per destination: a subscribed
+queue, or a dead-letter queue. A destination's deliveries are sent one at a
+time, in the order they entered its lane, for a standard queue as for a FIFO
+queue.
+
+- **Order.** A publish adds its deliveries to their lanes under the topic's
+  lock, and a FIFO topic's under its FIFO lock as well, so the deliveries to
+  one queue keep publish order. Nothing is sent under either lock: the
+  publish starts its lanes once it has let go of both.
+- **No bound.** A lane holds any number of deliveries, as LocalStack's
+  executor queue does. A publish adds its deliveries and answers without
+  waiting for any of them, and no delivery is refused or dropped for lack of
+  room while the server runs. The cost is memory: every delivery waiting for
+  a slow or stuck destination stays in its lane, body included, until the
+  destination answers, and nothing caps that. Publish answers 200 with its
+  MessageId whatever happens to the deliveries.
+- **Failure.** A delivery the destination refuses (the queue is gone, or the
+  send fails) goes to the tail of its subscription's dead-letter queue's lane,
+  or is dropped and counted in `Dropped` when it has none. A dead-letter
+  delivery that fails is dropped, never sent to another dead-letter queue, so
+  two queues that are each other's dead-letter queue end with one drop per
+  delivery. A FIFO group's failures reach the dead-letter queue in the order
+  they failed, which is publish order. Failed deliveries are logged once per
+  destination every 5 s, with counts.
+- **No idle work.** A lane has no goroutine. Its head is a `SendMessage`
+  queued on the in-process client, and the answer sends the next; an empty
+  lane is gone. A lane with work does not always have a call in the client: a
+  parked lane waits for room in the client's queue (`inproc.MaxQueued`
+  calls), which the next answer gives to the parked lanes in the order they
+  were parked before its own lane sends again. A stuck destination holds one
+  client worker; the others serve every other lane.
+- **Shutdown.** SNS has no `Shutdown` function: nothing waits for room, so
+  nothing needs letting go. While any delivery is in a lane, the lanes hold
+  one count in the hub's pending count (`inproc.Client.Hold`), so `Hub.Drain`
+  waits for a parked lane, or deliveries queued behind a head, as for a
+  queued call, until the lanes are empty or the drain's deadline. A
+  dead-letter delivery never fails over to another, so the chain of calls a
+  lane queues is finite. Once the drain cuts the client, a refused head parks
+  or is cut and queues nothing more. `Close` does not wait: it refuses every
+  later delivery, stops the client, counts each delivery still in a lane
+  once, as dropped, and logs the per-destination counts and then one line,
+  `SNS deliveries dropped`, with `count`, every delivery SNS lost since the
+  process started, and `cut_at_close`, the ones Close cut. The hub's
+  `in-process calls cut at shutdown` line counts calls, not deliveries, and
+  the two counts measure different things: a lane has one call in the client
+  however many deliveries wait behind it, and after the cut every refused
+  call counts in the hub's line, a dead-letter attempt included. Either count
+  can be the larger. A slow destination at shutdown is where the
+  missing bound shows: what it had not taken by the drain's deadline is cut.
+- **Other transports.** A lane meets its transport in one function,
+  `lanes.send`, and takes the answer in `lanes.answered`. An HTTP
+  destination's head would be sent on a goroutine that lives for that send,
+  with its own timeout and retries, and answer the same way. The order and
+  the absent bound stay as they are. `inflight` must go on counting only the
+  in-process client's calls, since a refused head parks or is cut by it.
+
 ### Body store (`internal/blob`)
 
 S3's object and part bodies live behind `blob.Store` (`Create`, `Open`,
@@ -1124,9 +1182,20 @@ cites the lines.
   doubles the wait, up to max(30 s, `PERSIST_FREQUENCY`). A change does not
   bring a pending retry forward. A successful save resets the wait, so with
   `PERSIST_FREQUENCY` zero a change is saved at once again.
-- Of a run of failed saves the log shows the first in full, each one whose error
-  differs from the one before, every tenth with the count, and
-  `save recovered after N failures` when a save succeeds.
+- The wait belongs to the service whose save failed. A service in its backoff
+  is left dirty by the timer's flush, which saves the others when
+  `PERSIST_FREQUENCY` after their change has passed, and the timer is armed for
+  the earliest of the dirty services' times, so a service that keeps failing
+  widens another's loss window by no more than the rest of an attempt already
+  in flight: `PERSIST_FREQUENCY` plus that. A retry that comes due while
+  another save is under way, or while a load or flush by hand holds the timer
+  back, is tried when that ends. A flush by
+  hand, which `Stop` and `Close` end with, tries every dirty service whatever
+  its wait.
+- Of a service's run of failed saves the log shows the first in full, each one
+  whose error differs from the one before, every tenth with the count, and
+  `save recovered after N failures` when a save succeeds, each line with the
+  service's name.
 
 **Loading and unloadable files:**
 
@@ -1247,7 +1316,7 @@ is untouched.
   per-file path, an asset or a directory that cannot be opened (`EACCES`,
   `EMFILE`, `ENFILE`, `EINTR`) fails that save before its rename and keeps its
   ids pending for the next one; nothing was written back, so nothing was lost.
-  The flush counts as failed and is retried with the backoff. A path that is
+  That service's save counts as failed and is retried with the backoff. A path that is
   gone (`ENOENT`) is skipped: it is an asset `Remove` or a save deleted after
   the sync took its id, which the sync cannot tell from one something else
   deleted, and no write of gostack's is lost either way. A snapshot that names
@@ -1339,11 +1408,11 @@ is untouched.
   returns. A timed save still in its `Snapshot` when `Close` releases the
   assets fails on the released assets, which counts as giving way and is not
   logged as a failed flush. A flush is
-  judged by what its services failed with, never by its context: one whose
-  every unsaved service gave way to a cancellation counts as no failure; one
-  with a real error, such as `ENOSPC`, counts with the backoff even when its
-  context was cancelled too; one that saved every service ends a run of
-  failures whatever its context did. A cancelled save does not log its queued
+  judged by what each of its services failed with, never by its context: a
+  service that gave way to a cancellation counts as no failure; one with a real
+  error, such as `ENOSPC`, counts with its own backoff even when the context was
+  cancelled too; one that saved ends its run of failures whatever the context
+  did. A cancelled save does not log its queued
   removals as stuck.
 - `POST /_gostack/state/load` drains its own removals: when a `Restore` queued
   the removal of bodies the loaded state does not name, the load marks the

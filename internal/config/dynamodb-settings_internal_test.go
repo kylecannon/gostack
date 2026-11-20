@@ -52,7 +52,8 @@ func Test_parseDynamoDB_probability(t *testing.T) {
 			for _, name := range []string{
 				varDynamoDBErrorProbability, varDynamoDBReadErrorProbability, varDynamoDBWriteErrorProbability,
 			} {
-				got, err := parseDynamoDB(dynamoLookup(name, tt.give))
+				got := &Settings{}
+				err := parseDynamoDB(dynamoLookup(name, tt.give), got)
 
 				if tt.wantErr {
 					require.ErrorContains(t, err, name)
@@ -66,11 +67,11 @@ func Test_parseDynamoDB_probability(t *testing.T) {
 
 				switch name {
 				case varDynamoDBErrorProbability:
-					have = got.errorProbability
+					have = got.DynamoDBErrorProbability
 				case varDynamoDBReadErrorProbability:
-					have = got.readErrorProbability
+					have = got.DynamoDBReadErrorProbability
 				default:
-					have = got.writeErrorProbability
+					have = got.DynamoDBWriteErrorProbability
 				}
 
 				if math.IsNaN(tt.want) {
@@ -109,7 +110,8 @@ func Test_parseDynamoDB_shareDB(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseDynamoDB(dynamoLookup(varDynamoDBShareDB, tt.give))
+			got := &Settings{}
+			err := parseDynamoDB(dynamoLookup(varDynamoDBShareDB, tt.give), got)
 
 			if tt.wantErr {
 				require.ErrorContains(t, err, varDynamoDBShareDB)
@@ -118,7 +120,7 @@ func Test_parseDynamoDB_shareDB(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, tt.want, got.shareDB)
+			require.Equal(t, tt.want, got.DynamoDBShareDB)
 		})
 	}
 }
