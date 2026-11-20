@@ -751,10 +751,10 @@ queue.
   waiting for any of them, and no delivery is refused or dropped for lack of
   room while the server runs. The cost is memory: every delivery waiting for
   a slow or stuck destination stays in its lane, body included, until the
-  destination answers, and nothing caps that. A delivery to an HTTP endpoint
-  that has a dead-letter queue also holds its dead-letter call, built when
-  the message was published, so it costs 1.5 to 8 times the message
-  (SQ-327 owns reducing that). Publish answers 200 with its
+  destination answers, and nothing caps that. A waiting delivery holds one
+  body: its dead-letter call is built only if the delivery fails, so a
+  dead-letter queue adds nothing to the memory of a delivery that waits.
+  Publish answers 200 with its
   MessageId whatever happens to the deliveries.
 - **Failure.** A delivery the destination refuses (the queue is gone, or the
   send fails) goes to the tail of its subscription's dead-letter queue's lane,

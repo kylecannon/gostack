@@ -63,7 +63,9 @@ func Test_lanes_idleAcrossDeadLetter(t *testing.T) {
 
 	topic, deliveries := laneFixture(1, 1)
 	deliveries[0].call.Body = []byte(`"primary"`)
-	deliveries[0].dlq = &inproc.Call{Service: sqsService, Target: sqsSendMessage, Lane: "dlq", Body: []byte(`"dead"`)}
+	deliveries[0].dlq = func() inproc.Call {
+		return inproc.Call{Service: sqsService, Target: sqsSendMessage, Lane: "dlq", Body: []byte(`"dead"`)}
+	}
 
 	p.lanes.dispatch(p.queue(topic, deliveries))
 

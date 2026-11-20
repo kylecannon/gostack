@@ -26,6 +26,33 @@ func (p *Provider) SetIdleConnTimeout(d time.Duration) {
 	p.lanes.poster.transport.IdleConnTimeout = d
 }
 
+// LockWaits takes and lets go of the lanes lock, pausing between takes, until
+// stop is closed, and returns how long each take waited: the burst benchmark's
+// measure of what holding the lock costs everything else that needs it.
+func (p *Provider) LockWaits(stop <-chan struct{}, pause time.Duration) []time.Duration {
+	var waits []time.Duration
+
+	for {
+		select {
+		case <-stop:
+			return waits
+		default:
+		}
+
+		start := time.Now()
+
+		p.lanes.mu.Lock()
+
+		waited := time.Since(start)
+
+		p.lanes.mu.Unlock()
+
+		waits = append(waits, waited)
+
+		time.Sleep(pause)
+	}
+}
+
 // CutCalls stops the in-process client as a shutdown's drain does at its
 // deadline: the calls queued in it are dropped without an answer.
 func (p *Provider) CutCalls() {
