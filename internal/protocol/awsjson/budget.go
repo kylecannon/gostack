@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"math"
 	"net/http"
 	"reflect"
 	"sync"
@@ -34,29 +35,78 @@ var ErrTooLarge = &awserr.Error{
 // Decoding can run twice (DecodeLenient's strict pass, then the lenient one),
 // so one pass is held to half the budget.
 //
-// When hold is not nil, a body that could decode into more than
-// protocol.FreeDecode is walked too, and what both passes would hold is charged
-// to hold before decoding. When hold refuses, DecodeWithin returns
-// protocol.ThrottledJSON.
+// When hold is not nil, what both passes of a body that could decode into more
+// than protocol.FreeDecode would hold is charged to hold before decoding. When
+// hold refuses, DecodeWithin returns protocol.ThrottledJSON.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
 	bound := decodePasses * int64(len(body)) * p.perByte
 	if bound > budget || (hold != nil && bound > protocol.FreeDecode) {
-		cost, over := walkCost(body, p, budget/decodePasses)
-		if over {
-			return nil, false, ErrTooLarge
-		}
-
-		if hold != nil && decodePasses*cost > protocol.FreeDecode {
-			_, err := hold.HoldDecode(decodePasses * cost)
-			if err != nil {
-				return nil, false, protocol.ThrottledJSON()
-			}
+		err := chargeDecode(body, p, budget, hold)
+		if err != nil {
+			return nil, false, err
 		}
 	}
 
 	return DecodeLenient[T](body)
+}
+
+// chargeDecode refuses body with ErrTooLarge when decoding it as p plans it
+// would pass budget, and otherwise charges what both passes hold past
+// protocol.FreeDecode to hold, when there is one.
+func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder) *awserr.Error {
+	unwalked := int64(math.MaxInt64)
+	if hold != nil {
+		unwalked = protocol.FreeDecode
+	}
+
+	cost, err := decodeCost(body, p, budget, unwalked)
+	if err != nil || hold == nil || cost <= protocol.FreeDecode {
+		return err
+	}
+
+	_, herr := hold.HoldDecode(cost)
+	if herr != nil {
+		return protocol.ThrottledJSON()
+	}
+
+	return nil
+}
+
+// decodeCost is what both passes of decoding body as p plans it hold at most,
+// or ErrTooLarge when that passes budget.
+//
+// It first bounds the cost from the body's shape without reading it as json
+// (structureUnits): its text costs at most its bytes, and only the separators
+// amplify. A body that bound already admits is not walked: one under the
+// budget whose separators cost at most unwalked: any, when nothing is charged,
+// and protocol.FreeDecode when the bound is charged, so the charge is at
+// most FreeDecode beyond the body's own bytes. Any other body is walked token by
+// token (walkCost), which is as costly as decoding it.
+func decodeCost(body []byte, p *plan, budget, unwalked int64) (int64, *awserr.Error) {
+	structure := decodePasses * structureUnits(body) * p.perUnit
+	bound := decodePasses*int64(len(body)) + structure
+
+	if bound <= budget && structure <= unwalked {
+		return bound, nil
+	}
+
+	cost, over := walkCost(body, p, budget/decodePasses)
+	if over {
+		return 0, ErrTooLarge
+	}
+
+	return decodePasses * cost, nil
+}
+
+// structureUnits is how many places in body a value can begin at: after a
+// comma (the next element, or the next member's name), after a colon (a
+// member's value), after an opening bracket (an array's first element), and the
+// body's own value. Separators inside strings are counted too, which only
+// raises the bound.
+func structureUnits(body []byte) int64 {
+	return int64(bytes.Count(body, []byte{','}) + bytes.Count(body, []byte{':'}) + bytes.Count(body, []byte{'['}) + 1)
 }
 
 // What one pass of decoding allocates, beyond the space its container gives a
@@ -98,6 +148,11 @@ type plan struct {
 	// perByte is the most a byte of body can cost anywhere in the type: a
 	// body of n bytes cannot cost more than n times it.
 	perByte int64
+	// perUnit is the most the walk charges at one place a value can begin
+	// (structureUnits), beyond the text it reads there: the element or the map
+	// entry, what it points to, and for a value of type any its closing token
+	// and its member's name as well.
+	perUnit int64
 }
 
 var plans sync.Map // reflect.Type -> *plan
@@ -137,9 +192,11 @@ func planOf(t reflect.Type) *plan {
 
 	for _, q := range built {
 		p.perByte = max(p.perByte, q.ownPerByte())
+		p.perUnit = max(p.perUnit, q.unitCost())
 	}
 
 	p.perByte = max(p.perByte, 1)
+	p.perUnit = max(p.perUnit, p.valueCost())
 	plans.Store(t, p)
 
 	return p
@@ -169,6 +226,63 @@ func (p *plan) ownPerByte() int64 {
 		return 1
 	}
 }
+
+// unitCost is the most the walk charges at one place a value of this kind
+// holds another, beyond its text: an element after its opening bracket or a
+// comma, a map entry or a member after its colon. Inside a value of type any,
+// a colon carries the member's name, its value and the value's closing token.
+func (p *plan) unitCost() int64 {
+	switch p.kind {
+	case kindSlice:
+		return appendCost*p.size + p.elem.valueCost()
+	case kindMap:
+		return 2*p.size + mapEntryCost + p.elem.valueCost()
+	case kindStruct:
+		var most int64
+		for _, f := range p.fields {
+			most = max(most, f.valueCost())
+		}
+
+		return most
+	case kindAny:
+		return anyUnitCost
+	default:
+		return 0
+	}
+}
+
+// valueCost is what the walk charges where a value of this kind begins: what
+// a chain of pointers points to, and for a value of type any its own token and
+// its closing one. Containers charge at the places their members begin.
+func (p *plan) valueCost() int64 {
+	var cost int64
+
+	for range maxPointerChain {
+		switch p.kind {
+		case kindPointer:
+			cost += p.size
+			p = p.elem
+		case kindAny:
+			return cost + anyUnitCost
+		default:
+			return cost
+		}
+	}
+
+	return unboundedUnit
+}
+
+const (
+	// anyUnitCost is three tokens of a value of type any: a member's name, its
+	// value, and the value's closing token.
+	anyUnitCost = 3 * anyValueCost
+	// maxPointerChain is longer than any chain of pointers in the API; a
+	// longer one makes every body walked (unboundedUnit).
+	maxPointerChain = 8
+	// unboundedUnit stands in for a longer chain: large enough that a body of
+	// such a type is walked.
+	unboundedUnit = 1 << 24
+)
 
 func ceilDiv(a, b int64) int64 {
 	return (a + b - 1) / b

@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -156,4 +157,77 @@ func receiverName(expr ast.Expr) string {
 	}
 
 	return reflect.TypeOf(expr).String()
+}
+
+// boundShapes holds every kind the walk charges: lists of structures and of
+// pointers, maps, untyped values, nesting through a pointer, text and a
+// timestamp.
+type boundShapes struct {
+	Entries []wideEntry           `json:"Entries"`
+	Ptrs    []*wideEntry          `json:"Ptrs"`
+	ByName  map[string]*wideEntry `json:"ByName"`
+	Any     any                   `json:"Any"`
+	Anys    []any                 `json:"Anys"`
+	AnyMap  map[string]any        `json:"AnyMap"`
+	Nested  *boundShapes          `json:"Nested"`
+	Lists   [][]string            `json:"Lists"`
+	Blob    []byte                `json:"Blob"`
+	When    *protocol.Time        `json:"When"`
+	Stamped *stampedWide          `json:"Stamped"`
+	List    wideList              `json:"List"`
+}
+
+// FuzzStructureBound: the bound decodeCost takes without walking a body is
+// never below what the walk charges for it, for any body and any of the types
+// the walk plans differently.
+func FuzzStructureBound(f *testing.F) {
+	for _, seed := range []string{
+		`{"Entries":[{},{},{}],"Ptrs":[{},{},null],"ByName":{"a":{},"b":{"Id":"x"}}}`,
+		`{"Any":{"a":[1,[2,[3,{}]]],"b":{"c":"d"}},"Anys":[{},[],"x",{"k":[]}],"AnyMap":{"k":{"j":[]}}}`,
+		`{"Nested":{"Nested":{"Entries":[{},{}],"Lists":[[],["a"],[]]}},"Blob":"aGk=","When":1}`,
+		`{"Stamped":{"Entries":[{},{}],"At":1},"List":[{},{},{}]}`,
+		`[{},{},{},{}]`, `{"a":1,"b":[[[[]]]]}`, `{"Entries":[{},{},`, `{"Any":[[[[[[`,
+		`{"Entries":[{"Id":"a,b:c[d"},{}]}`, `{"ByName":{"a":{},"b\"":{}}}`,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	types := []reflect.Type{
+		reflect.TypeFor[boundShapes](), reflect.TypeFor[[]wideEntry](), reflect.TypeFor[map[string]any](),
+		reflect.TypeFor[any](), reflect.TypeFor[stampedWide](), reflect.TypeFor[wideList](), reflect.TypeFor[[]*any](),
+	}
+
+	f.Fuzz(func(t *testing.T, body []byte) {
+		for _, typ := range types {
+			p := planOf(typ)
+			walked, _ := walkCost(body, p, math.MaxInt64)
+			bound := decodePasses*int64(len(body)) + decodePasses*structureUnits(body)*p.perUnit
+
+			require.GreaterOrEqual(t, bound, decodePasses*walked, "%s: %q", typ, body)
+		}
+	})
+}
+
+// Test_DecodeCost_TextIsNotWalked: a body whose text, not its structure,
+// passes protocol.FreeDecode is charged its bound without a walk, so a large
+// message costs one count of its separators, not a second reading of it as
+// json; a dense body is still walked and charged what the walk finds.
+func Test_DecodeCost_TextIsNotWalked(t *testing.T) {
+	p := planOf(reflect.TypeFor[boundShapes]())
+
+	large := []byte(`{"Entries":[{"Id":"a","Body":"` + strings.Repeat("m", 2<<20) + `"}]}`)
+	cost, err := decodeCost(large, p, protocol.DecodeBudget(len(large)), protocol.FreeDecode)
+	require.Nil(t, err)
+	assert.Equal(t, decodePasses*(int64(len(large))+structureUnits(large)*p.perUnit), cost, "the bound, unwalked")
+
+	dense := []byte(`{"Entries":[` + strings.Repeat(`{},`, 50_000) + `{}]}`)
+	walked, over := walkCost(dense, p, math.MaxInt64)
+	require.False(t, over)
+
+	cost, err = decodeCost(dense, p, protocol.DecodeBudget(len(dense)), protocol.FreeDecode)
+	require.Nil(t, err)
+	assert.Equal(t, decodePasses*walked, cost, "the walk's own charge")
+
+	_, err = decodeCost(dense, p, protocol.DecodeSlack/8, math.MaxInt64)
+	assert.Equal(t, ErrTooLarge, err, "refused past the budget")
 }
