@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go/build"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/config"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/stretchr/testify/require"
@@ -30,8 +32,65 @@ type parityTables struct {
 	DeclaredAhead []string            `json:"declared_ahead"`
 	DependsOn     map[string][]string `json:"depends_on"`
 	EveryService  string              `json:"every_service"`
-	RoutingReach  []string            `json:"routing_reach"`
-	TestDirs      []string            `json:"test_dirs"`
+	// GatewayNamespaces are the path prefixes the gateway keeps for its own
+	// endpoints, which a Mount confined to them does not reach other services
+	// through.
+	GatewayNamespaces []string `json:"gateway_namespaces"`
+	RoutingReach      []string `json:"routing_reach"`
+	TestDirs          []string `json:"test_dirs"`
+}
+
+// Test_reachesOtherServices: a Mount is a routing hook unless every route it
+// adds is under one of the gateway's own namespaces. It tells the two kinds
+// apart, and every other hook reaches regardless of its paths.
+func Test_reachesOtherServices(t *testing.T) {
+	namespaces := []string{"/_aws/", "/_gostack/", "/_localstack/"}
+	noop := func(http.ResponseWriter, *http.Request) {}
+
+	tests := []struct {
+		name string
+		reg  service.Registration
+		want bool
+	}{
+		{name: "no hook", reg: service.Registration{}, want: false},
+		{
+			name: "a Mount with routes under the namespaces only",
+			reg: service.Registration{Mount: func(r chi.Router) {
+				r.Delete("/_gostack/dynamodb/expired", noop)
+				r.Delete("/_aws/dynamodb/expired", noop)
+				r.Get("/_localstack/thing/{id}", noop)
+			}},
+			want: false,
+		},
+		{name: "a Mount that adds no route", reg: service.Registration{Mount: func(chi.Router) {}}, want: false},
+		{
+			name: "a Mount with a route an AWS call can match",
+			reg: service.Registration{Mount: func(r chi.Router) {
+				r.Get("/{account:[0-9]{12}}/{queue}", noop)
+			}},
+			want: true,
+		},
+		{
+			name: "a Mount with one route outside the namespaces among others inside",
+			reg: service.Registration{Mount: func(r chi.Router) {
+				r.Delete("/_gostack/dynamodb/expired", noop)
+				r.Get("/queue/{name}", noop)
+			}},
+			want: true,
+		},
+		{
+			name: "a Mount whose route only starts like a namespace",
+			reg:  service.Registration{Mount: func(r chi.Router) { r.Get("/_gostackish/x", noop) }},
+			want: true,
+		},
+		{name: "ClaimHost", reg: service.Registration{ClaimHost: func(string) bool { return false }}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, reachesOtherServices(&tt.reg, namespaces))
+		})
+	}
 }
 
 // Test_parityTables holds the tables in parity/ledger.py to the code. Parity
@@ -65,7 +124,23 @@ func Test_parityTables(t *testing.T) {
 	known := slices.Concat(services, apis)
 
 	t.Run("ROUTING_REACH lists every service with a hook on other services' requests", func(t *testing.T) {
-		require.ElementsMatch(t, routingReach(t), tables.RoutingReach, "ROUTING_REACH in parity/ledger.py")
+		reach := routingReach(t, tables.GatewayNamespaces)
+		require.ElementsMatch(t, reach, tables.RoutingReach, "ROUTING_REACH in parity/ledger.py")
+	})
+
+	t.Run("a Mount confined to the gateway's namespaces is no routing hook, and any other is", func(t *testing.T) {
+		namespaces := tables.GatewayNamespaces
+		require.NotEmpty(t, namespaces, "GATEWAY_NAMESPACES in parity/ledger.py")
+
+		regs := buildRegistrations(t)
+		reach := map[string]bool{}
+
+		for i := range regs {
+			reach[regs[i].Metadata.Name] = reachesOtherServices(&regs[i], namespaces)
+		}
+
+		require.False(t, reach["dynamodb"], "dynamodb mounts DELETE routes under /_gostack and /_aws only")
+		require.True(t, reach["sqs"], "sqs mounts queue-URL paths an AWS call can match")
 	})
 
 	t.Run("internal/api/<svc> is imported by internal/service/<svc> alone", func(t *testing.T) {
@@ -274,8 +349,9 @@ func buildRegistrations(t *testing.T) []service.Registration {
 }
 
 // routingReach lists the services registrations() gives a hook that runs on
-// requests meant for any service.
-func routingReach(t *testing.T) []string {
+// requests meant for any service. namespaces are the paths the gateway keeps
+// for itself, from GATEWAY_NAMESPACES in parity/ledger.py.
+func routingReach(t *testing.T, namespaces []string) []string {
 	t.Helper()
 
 	regs := buildRegistrations(t)
@@ -283,13 +359,46 @@ func routingReach(t *testing.T) []string {
 	var reach []string
 
 	for i := range regs {
-		reg := &regs[i]
-		if reg.Mount != nil || reg.ClaimHost != nil || reg.Claim != nil || reg.Fallback != nil || reg.Preprocess != nil {
-			reach = append(reach, reg.Metadata.Name)
+		if reachesOtherServices(&regs[i], namespaces) {
+			reach = append(reach, regs[i].Metadata.Name)
 		}
 	}
 
 	return reach
+}
+
+// reachesOtherServices reports whether reg sets a hook that sees requests meant
+// for another service. A Mount does unless every route it adds is under one of
+// namespaces: the gateway answers those paths itself, so no AWS call is made to
+// them and no other service's suite can meet the route.
+func reachesOtherServices(reg *service.Registration, namespaces []string) bool {
+	if reg.ClaimHost != nil || reg.Claim != nil || reg.Fallback != nil || reg.Preprocess != nil {
+		return true
+	}
+
+	return reg.Mount != nil && !mountConfined(reg.Mount, namespaces)
+}
+
+// mountConfined reports whether every route mount adds is under one of
+// namespaces. A mount that adds no route is confined.
+func mountConfined(mount func(chi.Router), namespaces []string) bool {
+	router := chi.NewRouter()
+	mount(router)
+
+	confined := true
+
+	err := chi.Walk(router, func(_, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !slices.ContainsFunc(namespaces, func(ns string) bool { return strings.HasPrefix(route, ns) }) {
+			confined = false
+		}
+
+		return nil
+	})
+	if err != nil {
+		return false
+	}
+
+	return confined
 }
 
 // strayAPIImports lists every import of internal/api/<svc> by a package

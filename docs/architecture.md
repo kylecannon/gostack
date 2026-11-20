@@ -589,7 +589,11 @@ change, the import and its `registrations()` line, and nothing else shared: the
 service's settings mapping is a pure `func(*config.Settings) T` in its own
 `cmd/gostack/settings-<svc>.go`, which `liveSettings` wraps on the
 registration line, and parity selection reads a change to that file as a change
-to `<svc>` and its dependents, not to every service. The selection tables in
+to `<svc>` and its dependents, not to every service. The exception is a service
+whose provider another one is handed: DynamoDB adds a third line, the `ddb :=
+dynamodb.New(...)` that `dynamodbstreams.New(ddb)` takes, ahead of the list.
+It is code outside the list, so parity selection reads a change to that line,
+and any other like it, as a change to every service. The selection tables in
 `parity/ledger.py` are seeded for `dynamodb`, `dynamodbstreams`, `sns`, `kms`,
 `secretsmanager` and `ssm`: their source and API paths follow from the service
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
@@ -602,7 +606,11 @@ holds a non-test `.go` file: ledger rows alone (a LocalStack baseline) do not co
 service is selected by nothing, as a dependent or otherwise. A registration that sets `Mount`, `ClaimHost`, `Claim`, `Fallback` or
 `Preprocess` sees other services' requests, so a change to that service
 selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
-`Test_parityTables` holds it to `registrations()`.
+`Test_parityTables` holds it to `registrations()`. A `Mount` whose every route
+is under the gateway's own namespaces, `GATEWAY_NAMESPACES` in the same file
+(`/_gostack/`, `/_aws/` and `/_localstack/`), is the exception: no AWS call is
+made to those paths, so DynamoDB's two developer `DELETE` routes leave it out
+of `ROUTING_REACH`, while SQS's queue-URL paths keep it in.
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
@@ -653,7 +661,15 @@ One exception: `dynamodbstreams` reads DynamoDB's streams through the
 `dynamodb.Streams` interface, which `registrations()` wires by handing it the
 DynamoDB provider. A stream's records are DynamoDB's state, appended by the
 table engine under the table's write lock in the order the writes applied, and
-DynamoDB's API has no call that hands them over. DynamoDB Streams keeps no
+DynamoDB's API has no call that hands them over. The interface hands out each
+stream as a `StreamInfo` whose shard is the read side of `stream.Log`
+(`dynamodb.StreamShard`: `Created`, `Bounds`, `SequenceNumber`,
+`ParseSequenceNumber`, `Position`, `Read`), never the log itself, and declares
+the records' snapshot (`StreamSnapshotter`), which `PERSIST_DYNAMODBSTREAMS`
+saves under DynamoDB Streams' own name. Beside `dynamodb` the service imports
+two of DynamoDB's packages: `dynamodb/stream` for the `Record` and `Page` a read
+returns and the errors it names, and `dynamodb/value` for the `Item` a record
+holds and the `ValidationException` both services answer alike. DynamoDB Streams keeps no
 state of its own: its iterators carry their position, issue time and shard.
 Each shard keeps records for 24 hours, on a timer armed only while it holds
 records, and at most 256 MiB of them, each counted as its `SizeBytes` plus 256
@@ -1517,7 +1533,7 @@ Kinesis. The state is two files, LocalStack's split:
 ### DynamoDB (`internal/service/dynamodb`)
 
 LocalStack runs Amazon's DynamoDB Local behind its provider. gostack runs no
-JVM: the engine is Go, in four packages under `internal/service/dynamodb`, and
+JVM: the engine is Go, in five packages under `internal/service/dynamodb`, and
 the handlers beside them take LocalStack's provider (`provider.py`,
 `utils.py`, `models.py` at 8b9a79f) for what it adds over the engine. What it
 answers differently, and the 21 operations at 501, are in `docs/compat.md`,
