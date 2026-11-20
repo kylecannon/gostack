@@ -84,12 +84,27 @@ func Test_InFlight_InternalCallsAreNotCharged(t *testing.T) {
 		Body: []byte(big),
 	})
 
-	received := s.do(t, inproc.Call{
-		Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
-		Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
-			`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":2}`),
-	})
-	assert.Contains(t, string(received.Body), "ObjectCreated:Put", "the put's notification reached the queue")
+	// S3 queues the notification and answers the put without waiting for it,
+	// so it can reach the queue after the SendMessage, and a receive can
+	// answer with the test event and the big message alone. Receive until it
+	// is there: a received message stays hidden, so each receive returns only
+	// what came after.
+	var received strings.Builder
+
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		resp := s.do(t, inproc.Call{
+			Account: account, Region: region, Service: sqsService, Target: "AmazonSQS.ReceiveMessage",
+			Body: []byte(`{"QueueUrl":"http://` + localstackHost + `/` + account +
+				`/events","MaxNumberOfMessages":10,"WaitTimeSeconds":1}`),
+		})
+		received.Write(resp.Body)
+
+		if strings.Contains(received.String(), "ObjectCreated:Put") {
+			break
+		}
+	}
+
+	assert.Contains(t, received.String(), "ObjectCreated:Put", "the put's notification reached the queue")
 
 	_, after := protocol.InFlight()
 	assert.Equal(t, held, after, "internal calls charge nothing")
