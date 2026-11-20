@@ -12,7 +12,6 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
-	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 )
@@ -2480,7 +2479,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 		}
 	}
 	if protocol.OverBody(len(body)) {
-		return nil, query.MalformedQueryString()
+		return nil, protocol.BodyTooLarge()
 	}
 	if !utf8.Valid(body) {
 		return nil, errBodyNotUTF8
@@ -2496,7 +2495,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
 	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
 	if err == awsjson.ErrTooLarge {
-		return nil, query.MalformedQueryString()
+		return nil, protocol.BodyTooLarge()
 	}
 	if lenient {
 		rc.Request.Body = io.NopCloser(bytes.NewReader(body))
