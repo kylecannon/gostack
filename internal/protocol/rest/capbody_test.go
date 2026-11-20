@@ -2,7 +2,10 @@ package rest_test
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -12,6 +15,11 @@ import (
 )
 
 const defaultCap = int(protocol.DefaultMaxBody)
+
+// capOf is rest.CapBody of a request whose body is body.
+func capOf(body io.Reader) io.Reader {
+	return rest.CapBody(httptest.NewRequestWithContext(context.Background(), http.MethodPut, "/", body))
+}
 
 // Test_CapBody: a body of up to the default cap reads whole, and one byte more
 // fails with ErrBodyTooLarge, where io.LimitReader would end it as if complete.
@@ -34,7 +42,7 @@ func Test_CapBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := io.ReadAll(rest.CapBody(bytes.NewReader(make([]byte, tt.giveLen))))
+			got, err := io.ReadAll(capOf(bytes.NewReader(make([]byte, tt.giveLen))))
 
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
@@ -55,16 +63,16 @@ func TestCapBodyFollowsSetMaxBody(t *testing.T) {
 
 	protocol.SetMaxBody(10)
 
-	got, err := io.ReadAll(rest.CapBody(bytes.NewReader(make([]byte, 10))))
+	got, err := io.ReadAll(capOf(bytes.NewReader(make([]byte, 10))))
 	require.NoError(t, err)
 	assert.Len(t, got, 10)
 
-	_, err = io.ReadAll(rest.CapBody(bytes.NewReader(make([]byte, 11))))
+	_, err = io.ReadAll(capOf(bytes.NewReader(make([]byte, 11))))
 	require.ErrorIs(t, err, rest.ErrBodyTooLarge)
 
 	protocol.SetMaxBody(0)
 
-	got, err = io.ReadAll(rest.CapBody(bytes.NewReader(make([]byte, defaultCap+1))))
+	got, err = io.ReadAll(capOf(bytes.NewReader(make([]byte, defaultCap+1))))
 	require.NoError(t, err)
 	assert.Len(t, got, defaultCap+1)
 }

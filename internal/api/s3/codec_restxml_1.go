@@ -125,10 +125,10 @@ func (v *AccessControlPolicy) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 Grant
 				e1.decodeXML(d)
-				v.Grants = append(v.Grants, e1)
+				v.Grants = restxml.Append(d, v.Grants, e1)
 			}
 		case "Owner":
-			v.Owner = &Owner{}
+			v.Owner = restxml.New[Owner](d)
 			v.Owner.decodeXML(d)
 		default:
 			d.Skip()
@@ -207,7 +207,7 @@ func (v *AnalyticsAndOperator) decodeXML(d *restxml.Decoder) {
 		case "Tag":
 			var e1 Tag
 			e1.decodeXML(d)
-			v.Tags = append(v.Tags, e1)
+			v.Tags = restxml.Append(d, v.Tags, e1)
 		default:
 			d.Skip()
 		}
@@ -238,10 +238,10 @@ func (v *AnalyticsConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Id":
 			v.Id = d.String()
 		case "Filter":
-			v.Filter = &AnalyticsFilter{}
+			v.Filter = restxml.New[AnalyticsFilter](d)
 			v.Filter.decodeXML(d)
 		case "StorageClassAnalysis":
-			v.StorageClassAnalysis = &StorageClassAnalysis{}
+			v.StorageClassAnalysis = restxml.New[StorageClassAnalysis](d)
 			v.StorageClassAnalysis.decodeXML(d)
 		default:
 			d.Skip()
@@ -276,7 +276,7 @@ func (v *AnalyticsExportDestination) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "S3BucketDestination":
-			v.S3BucketDestination = &AnalyticsS3BucketDestination{}
+			v.S3BucketDestination = restxml.New[AnalyticsS3BucketDestination](d)
 			v.S3BucketDestination.decodeXML(d)
 		default:
 			d.Skip()
@@ -305,10 +305,10 @@ func (v *AnalyticsFilter) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
-			v.Tag = &Tag{}
+			v.Tag = restxml.New[Tag](d)
 			v.Tag.decodeXML(d)
 		case "And":
-			v.And = &AnalyticsAndOperator{}
+			v.And = restxml.New[AnalyticsAndOperator](d)
 			v.And.decodeXML(d)
 		default:
 			d.Skip()
@@ -424,7 +424,7 @@ func (v *BlockedEncryptionTypes) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.EncryptionType = append(v.EncryptionType, e1)
+			v.EncryptionType = restxml.Append(d, v.EncryptionType, e1)
 		default:
 			d.Skip()
 		}
@@ -493,7 +493,7 @@ func (v *BucketLifecycleConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Rule":
 			var e1 LifecycleRule
 			e1.decodeXML(d)
-			v.Rules = append(v.Rules, e1)
+			v.Rules = restxml.Append(d, v.Rules, e1)
 		default:
 			d.Skip()
 		}
@@ -509,7 +509,7 @@ func (v *BucketLoggingStatus) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "LoggingEnabled":
-			v.LoggingEnabled = &LoggingEnabled{}
+			v.LoggingEnabled = restxml.New[LoggingEnabled](d)
 			v.LoggingEnabled.decodeXML(d)
 		default:
 			d.Skip()
@@ -536,7 +536,7 @@ func (v *CORSConfiguration) decodeXML(d *restxml.Decoder) {
 		case "CORSRule":
 			var e1 CORSRule
 			e1.decodeXML(d)
-			v.CORSRules = append(v.CORSRules, e1)
+			v.CORSRules = restxml.Append(d, v.CORSRules, e1)
 		default:
 			d.Skip()
 		}
@@ -558,25 +558,25 @@ func (v *CORSRule) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.AllowedHeaders = append(v.AllowedHeaders, e1)
+			v.AllowedHeaders = restxml.Append(d, v.AllowedHeaders, e1)
 		case "AllowedMethod":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.AllowedMethods = append(v.AllowedMethods, e1)
+			v.AllowedMethods = restxml.Append(d, v.AllowedMethods, e1)
 		case "AllowedOrigin":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.AllowedOrigins = append(v.AllowedOrigins, e1)
+			v.AllowedOrigins = restxml.Append(d, v.AllowedOrigins, e1)
 		case "ExposeHeader":
 			var e1 string
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.ExposeHeaders = append(v.ExposeHeaders, e1)
+			v.ExposeHeaders = restxml.Append(d, v.ExposeHeaders, e1)
 		case "MaxAgeSeconds":
 			v.MaxAgeSeconds = d.Int32()
 		default:
@@ -824,7 +824,7 @@ func (v *CompletedMultipartUpload) decodeXML(d *restxml.Decoder) {
 		case "Part":
 			var e1 CompletedPart
 			e1.decodeXML(d)
-			v.Parts = append(v.Parts, e1)
+			v.Parts = restxml.Append(d, v.Parts, e1)
 		default:
 			d.Skip()
 		}
@@ -1050,10 +1050,10 @@ func (v *CreateBucketConfiguration) decodeXML(d *restxml.Decoder) {
 		case "LocationConstraint":
 			v.LocationConstraint = d.String()
 		case "Location":
-			v.Location = &LocationInfo{}
+			v.Location = restxml.New[LocationInfo](d)
 			v.Location.decodeXML(d)
 		case "Bucket":
-			v.Bucket = &BucketInfo{}
+			v.Bucket = restxml.New[BucketInfo](d)
 			v.Bucket.decodeXML(d)
 		case "Tags":
 			if v.Tags == nil {
@@ -1065,7 +1065,7 @@ func (v *CreateBucketConfiguration) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 Tag
 				e1.decodeXML(d)
-				v.Tags = append(v.Tags, e1)
+				v.Tags = restxml.Append(d, v.Tags, e1)
 			}
 		default:
 			d.Skip()
@@ -1341,7 +1341,7 @@ func (v *Delete) decodeXML(d *restxml.Decoder) {
 		case "Object":
 			var e1 ObjectIdentifier
 			e1.decodeXML(d)
-			v.Objects = append(v.Objects, e1)
+			v.Objects = restxml.Append(d, v.Objects, e1)
 		case "Quiet":
 			v.Quiet = d.Bool()
 		default:
@@ -1948,16 +1948,16 @@ func (v *Destination) decodeXML(d *restxml.Decoder) {
 		case "StorageClass":
 			v.StorageClass = d.String()
 		case "AccessControlTranslation":
-			v.AccessControlTranslation = &AccessControlTranslation{}
+			v.AccessControlTranslation = restxml.New[AccessControlTranslation](d)
 			v.AccessControlTranslation.decodeXML(d)
 		case "EncryptionConfiguration":
-			v.EncryptionConfiguration = &EncryptionConfiguration{}
+			v.EncryptionConfiguration = restxml.New[EncryptionConfiguration](d)
 			v.EncryptionConfiguration.decodeXML(d)
 		case "ReplicationTime":
-			v.ReplicationTime = &ReplicationTime{}
+			v.ReplicationTime = restxml.New[ReplicationTime](d)
 			v.ReplicationTime.decodeXML(d)
 		case "Metrics":
-			v.Metrics = &Metrics{}
+			v.Metrics = restxml.New[Metrics](d)
 			v.Metrics.decodeXML(d)
 		default:
 			d.Skip()
@@ -2683,17 +2683,17 @@ func (v *GetBucketNotificationConfigurationOutput) decodeXML(d *restxml.Decoder)
 		case "TopicConfiguration":
 			var e1 TopicConfiguration
 			e1.decodeXML(d)
-			v.TopicConfigurations = append(v.TopicConfigurations, e1)
+			v.TopicConfigurations = restxml.Append(d, v.TopicConfigurations, e1)
 		case "QueueConfiguration":
 			var e1 QueueConfiguration
 			e1.decodeXML(d)
-			v.QueueConfigurations = append(v.QueueConfigurations, e1)
+			v.QueueConfigurations = restxml.Append(d, v.QueueConfigurations, e1)
 		case "CloudFunctionConfiguration":
 			var e1 LambdaFunctionConfiguration
 			e1.decodeXML(d)
-			v.LambdaFunctionConfigurations = append(v.LambdaFunctionConfigurations, e1)
+			v.LambdaFunctionConfigurations = restxml.Append(d, v.LambdaFunctionConfigurations, e1)
 		case "EventBridgeConfiguration":
-			v.EventBridgeConfiguration = &EventBridgeConfiguration{}
+			v.EventBridgeConfiguration = restxml.New[EventBridgeConfiguration](d)
 			v.EventBridgeConfiguration.decodeXML(d)
 		default:
 			d.Skip()
@@ -2755,13 +2755,13 @@ func (v *GetBucketNotificationOutput) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "TopicConfiguration":
-			v.TopicConfiguration = &TopicConfigurationDeprecated{}
+			v.TopicConfiguration = restxml.New[TopicConfigurationDeprecated](d)
 			v.TopicConfiguration.decodeXML(d)
 		case "QueueConfiguration":
-			v.QueueConfiguration = &QueueConfigurationDeprecated{}
+			v.QueueConfiguration = restxml.New[QueueConfigurationDeprecated](d)
 			v.QueueConfiguration.decodeXML(d)
 		case "CloudFunctionConfiguration":
-			v.CloudFunctionConfiguration = &CloudFunctionConfiguration{}
+			v.CloudFunctionConfiguration = restxml.New[CloudFunctionConfiguration](d)
 			v.CloudFunctionConfiguration.decodeXML(d)
 		default:
 			d.Skip()

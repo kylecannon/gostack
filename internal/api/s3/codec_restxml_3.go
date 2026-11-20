@@ -96,7 +96,7 @@ func (v *OutputLocation) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "S3":
-			v.S3 = &S3Location{}
+			v.S3 = restxml.New[S3Location](d)
 			v.S3.decodeXML(d)
 		default:
 			d.Skip()
@@ -113,10 +113,10 @@ func (v *OutputSerialization) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "CSV":
-			v.CSV = &CSVOutput{}
+			v.CSV = restxml.New[CSVOutput](d)
 			v.CSV.decodeXML(d)
 		case "JSON":
-			v.JSON = &JSONOutput{}
+			v.JSON = restxml.New[JSONOutput](d)
 			v.JSON.decodeXML(d)
 		default:
 			d.Skip()
@@ -164,7 +164,7 @@ func (v *OwnershipControls) decodeXML(d *restxml.Decoder) {
 		case "Rule":
 			var e1 OwnershipControlsRule
 			e1.decodeXML(d)
-			v.Rules = append(v.Rules, e1)
+			v.Rules = restxml.Append(d, v.Rules, e1)
 		default:
 			d.Skip()
 		}
@@ -1303,9 +1303,9 @@ func (v *QueueConfiguration) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.Events = append(v.Events, e1)
+			v.Events = restxml.Append(d, v.Events, e1)
 		case "Filter":
-			v.Filter = &NotificationConfigurationFilter{}
+			v.Filter = restxml.New[NotificationConfigurationFilter](d)
 			v.Filter.decodeXML(d)
 		default:
 			d.Skip()
@@ -1551,7 +1551,7 @@ func (v *ReplicationConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Rule":
 			var e1 ReplicationRule
 			e1.decodeXML(d)
-			v.Rules = append(v.Rules, e1)
+			v.Rules = restxml.Append(d, v.Rules, e1)
 		default:
 			d.Skip()
 		}
@@ -1594,21 +1594,21 @@ func (v *ReplicationRule) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Filter":
-			v.Filter = &ReplicationRuleFilter{}
+			v.Filter = restxml.New[ReplicationRuleFilter](d)
 			v.Filter.decodeXML(d)
 		case "Status":
 			v.Status = d.String()
 		case "SourceSelectionCriteria":
-			v.SourceSelectionCriteria = &SourceSelectionCriteria{}
+			v.SourceSelectionCriteria = restxml.New[SourceSelectionCriteria](d)
 			v.SourceSelectionCriteria.decodeXML(d)
 		case "ExistingObjectReplication":
-			v.ExistingObjectReplication = &ExistingObjectReplication{}
+			v.ExistingObjectReplication = restxml.New[ExistingObjectReplication](d)
 			v.ExistingObjectReplication.decodeXML(d)
 		case "Destination":
-			v.Destination = &Destination{}
+			v.Destination = restxml.New[Destination](d)
 			v.Destination.decodeXML(d)
 		case "DeleteMarkerReplication":
-			v.DeleteMarkerReplication = &DeleteMarkerReplication{}
+			v.DeleteMarkerReplication = restxml.New[DeleteMarkerReplication](d)
 			v.DeleteMarkerReplication.decodeXML(d)
 		default:
 			d.Skip()
@@ -1671,7 +1671,7 @@ func (v *ReplicationRuleAndOperator) decodeXML(d *restxml.Decoder) {
 		case "Tag":
 			var e1 Tag
 			e1.decodeXML(d)
-			v.Tags = append(v.Tags, e1)
+			v.Tags = restxml.Append(d, v.Tags, e1)
 		default:
 			d.Skip()
 		}
@@ -1702,10 +1702,10 @@ func (v *ReplicationRuleFilter) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Tag":
-			v.Tag = &Tag{}
+			v.Tag = restxml.New[Tag](d)
 			v.Tag.decodeXML(d)
 		case "And":
-			v.And = &ReplicationRuleAndOperator{}
+			v.And = restxml.New[ReplicationRuleAndOperator](d)
 			v.And.decodeXML(d)
 		default:
 			d.Skip()
@@ -1742,7 +1742,7 @@ func (v *ReplicationTime) decodeXML(d *restxml.Decoder) {
 		case "Status":
 			v.Status = d.String()
 		case "Time":
-			v.Time = &ReplicationTimeValue{}
+			v.Time = restxml.New[ReplicationTimeValue](d)
 			v.Time.decodeXML(d)
 		default:
 			d.Skip()
@@ -1865,7 +1865,7 @@ func (v *RestoreRequest) decodeXML(d *restxml.Decoder) {
 		case "Days":
 			v.Days = d.Int32()
 		case "GlacierJobParameters":
-			v.GlacierJobParameters = &GlacierJobParameters{}
+			v.GlacierJobParameters = restxml.New[GlacierJobParameters](d)
 			v.GlacierJobParameters.decodeXML(d)
 		case "Type":
 			v.Type = d.String()
@@ -1874,10 +1874,10 @@ func (v *RestoreRequest) decodeXML(d *restxml.Decoder) {
 		case "Description":
 			v.Description = d.String()
 		case "SelectParameters":
-			v.SelectParameters = &SelectParameters{}
+			v.SelectParameters = restxml.New[SelectParameters](d)
 			v.SelectParameters.decodeXML(d)
 		case "OutputLocation":
-			v.OutputLocation = &OutputLocation{}
+			v.OutputLocation = restxml.New[OutputLocation](d)
 			v.OutputLocation.decodeXML(d)
 		default:
 			d.Skip()
@@ -1905,10 +1905,10 @@ func (v *RoutingRule) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Condition":
-			v.Condition = &Condition{}
+			v.Condition = restxml.New[Condition](d)
 			v.Condition.decodeXML(d)
 		case "Redirect":
-			v.Redirect = &Redirect{}
+			v.Redirect = restxml.New[Redirect](d)
 			v.Redirect.decodeXML(d)
 		default:
 			d.Skip()
@@ -1940,7 +1940,7 @@ func (v *Rule) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Expiration":
-			v.Expiration = &LifecycleExpiration{}
+			v.Expiration = restxml.New[LifecycleExpiration](d)
 			v.Expiration.decodeXML(d)
 		case "ID":
 			v.ID = d.String()
@@ -1949,16 +1949,16 @@ func (v *Rule) decodeXML(d *restxml.Decoder) {
 		case "Status":
 			v.Status = d.String()
 		case "Transition":
-			v.Transition = &Transition{}
+			v.Transition = restxml.New[Transition](d)
 			v.Transition.decodeXML(d)
 		case "NoncurrentVersionTransition":
-			v.NoncurrentVersionTransition = &NoncurrentVersionTransition{}
+			v.NoncurrentVersionTransition = restxml.New[NoncurrentVersionTransition](d)
 			v.NoncurrentVersionTransition.decodeXML(d)
 		case "NoncurrentVersionExpiration":
-			v.NoncurrentVersionExpiration = &NoncurrentVersionExpiration{}
+			v.NoncurrentVersionExpiration = restxml.New[NoncurrentVersionExpiration](d)
 			v.NoncurrentVersionExpiration.decodeXML(d)
 		case "AbortIncompleteMultipartUpload":
-			v.AbortIncompleteMultipartUpload = &AbortIncompleteMultipartUpload{}
+			v.AbortIncompleteMultipartUpload = restxml.New[AbortIncompleteMultipartUpload](d)
 			v.AbortIncompleteMultipartUpload.decodeXML(d)
 		default:
 			d.Skip()
@@ -2016,7 +2016,7 @@ func (v *S3KeyFilter) decodeXML(d *restxml.Decoder) {
 		case "FilterRule":
 			var e1 FilterRule
 			e1.decodeXML(d)
-			v.FilterRules = append(v.FilterRules, e1)
+			v.FilterRules = restxml.Append(d, v.FilterRules, e1)
 		default:
 			d.Skip()
 		}
@@ -2046,7 +2046,7 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 		case "Prefix":
 			v.Prefix = d.String()
 		case "Encryption":
-			v.Encryption = &Encryption{}
+			v.Encryption = restxml.New[Encryption](d)
 			v.Encryption.decodeXML(d)
 		case "CannedACL":
 			v.CannedACL = d.String()
@@ -2060,10 +2060,10 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 Grant
 				e1.decodeXML(d)
-				v.AccessControlList = append(v.AccessControlList, e1)
+				v.AccessControlList = restxml.Append(d, v.AccessControlList, e1)
 			}
 		case "Tagging":
-			v.Tagging = &Tagging{}
+			v.Tagging = restxml.New[Tagging](d)
 			v.Tagging.decodeXML(d)
 		case "UserMetadata":
 			if v.UserMetadata == nil {
@@ -2075,7 +2075,7 @@ func (v *S3Location) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 MetadataEntry
 				e1.decodeXML(d)
-				v.UserMetadata = append(v.UserMetadata, e1)
+				v.UserMetadata = restxml.Append(d, v.UserMetadata, e1)
 			}
 		case "StorageClass":
 			v.StorageClass = d.String()
@@ -2252,16 +2252,16 @@ func (v *SelectObjectContentInput) decodeXML(d *restxml.Decoder) {
 		case "ExpressionType":
 			v.ExpressionType = d.String()
 		case "RequestProgress":
-			v.RequestProgress = &RequestProgress{}
+			v.RequestProgress = restxml.New[RequestProgress](d)
 			v.RequestProgress.decodeXML(d)
 		case "InputSerialization":
-			v.InputSerialization = &InputSerialization{}
+			v.InputSerialization = restxml.New[InputSerialization](d)
 			v.InputSerialization.decodeXML(d)
 		case "OutputSerialization":
-			v.OutputSerialization = &OutputSerialization{}
+			v.OutputSerialization = restxml.New[OutputSerialization](d)
 			v.OutputSerialization.decodeXML(d)
 		case "ScanRange":
-			v.ScanRange = &ScanRange{}
+			v.ScanRange = restxml.New[ScanRange](d)
 			v.ScanRange.decodeXML(d)
 		default:
 			d.Skip()
@@ -2283,14 +2283,14 @@ func (v *SelectParameters) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "InputSerialization":
-			v.InputSerialization = &InputSerialization{}
+			v.InputSerialization = restxml.New[InputSerialization](d)
 			v.InputSerialization.decodeXML(d)
 		case "ExpressionType":
 			v.ExpressionType = d.String()
 		case "Expression":
 			v.Expression = d.String()
 		case "OutputSerialization":
-			v.OutputSerialization = &OutputSerialization{}
+			v.OutputSerialization = restxml.New[OutputSerialization](d)
 			v.OutputSerialization.decodeXML(d)
 		default:
 			d.Skip()
@@ -2338,7 +2338,7 @@ func (v *ServerSideEncryptionConfiguration) decodeXML(d *restxml.Decoder) {
 		case "Rule":
 			var e1 ServerSideEncryptionRule
 			e1.decodeXML(d)
-			v.Rules = append(v.Rules, e1)
+			v.Rules = restxml.Append(d, v.Rules, e1)
 		default:
 			d.Skip()
 		}
@@ -2364,12 +2364,12 @@ func (v *ServerSideEncryptionRule) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "ApplyServerSideEncryptionByDefault":
-			v.ApplyServerSideEncryptionByDefault = &ServerSideEncryptionByDefault{}
+			v.ApplyServerSideEncryptionByDefault = restxml.New[ServerSideEncryptionByDefault](d)
 			v.ApplyServerSideEncryptionByDefault.decodeXML(d)
 		case "BucketKeyEnabled":
 			v.BucketKeyEnabled = d.Bool()
 		case "BlockedEncryptionTypes":
-			v.BlockedEncryptionTypes = &BlockedEncryptionTypes{}
+			v.BlockedEncryptionTypes = restxml.New[BlockedEncryptionTypes](d)
 			v.BlockedEncryptionTypes.decodeXML(d)
 		default:
 			d.Skip()
@@ -2466,10 +2466,10 @@ func (v *SourceSelectionCriteria) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "SseKmsEncryptedObjects":
-			v.SseKmsEncryptedObjects = &SseKmsEncryptedObjects{}
+			v.SseKmsEncryptedObjects = restxml.New[SseKmsEncryptedObjects](d)
 			v.SseKmsEncryptedObjects.decodeXML(d)
 		case "ReplicaModifications":
-			v.ReplicaModifications = &ReplicaModifications{}
+			v.ReplicaModifications = restxml.New[ReplicaModifications](d)
 			v.ReplicaModifications.decodeXML(d)
 		default:
 			d.Skip()
@@ -2549,7 +2549,7 @@ func (v *StorageClassAnalysis) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "DataExport":
-			v.DataExport = &StorageClassAnalysisDataExport{}
+			v.DataExport = restxml.New[StorageClassAnalysisDataExport](d)
 			v.DataExport.decodeXML(d)
 		default:
 			d.Skip()
@@ -2578,7 +2578,7 @@ func (v *StorageClassAnalysisDataExport) decodeXML(d *restxml.Decoder) {
 		case "OutputSchemaVersion":
 			v.OutputSchemaVersion = d.String()
 		case "Destination":
-			v.Destination = &AnalyticsExportDestination{}
+			v.Destination = restxml.New[AnalyticsExportDestination](d)
 			v.Destination.decodeXML(d)
 		default:
 			d.Skip()
@@ -2646,7 +2646,7 @@ func (v *Tagging) decodeXML(d *restxml.Decoder) {
 				}
 				var e1 Tag
 				e1.decodeXML(d)
-				v.TagSet = append(v.TagSet, e1)
+				v.TagSet = restxml.Append(d, v.TagSet, e1)
 			}
 		default:
 			d.Skip()
@@ -2663,7 +2663,7 @@ func (v *TargetGrant) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "Grantee":
-			v.Grantee = &Grantee{}
+			v.Grantee = restxml.New[Grantee](d)
 			v.Grantee.decodeXML(d)
 		case "Permission":
 			v.Permission = d.String()
@@ -2696,10 +2696,10 @@ func (v *TargetObjectKeyFormat) decodeXML(d *restxml.Decoder) {
 		}
 		switch name {
 		case "SimplePrefix":
-			v.SimplePrefix = &SimplePrefix{}
+			v.SimplePrefix = restxml.New[SimplePrefix](d)
 			v.SimplePrefix.decodeXML(d)
 		case "PartitionedPrefix":
-			v.PartitionedPrefix = &PartitionedPrefix{}
+			v.PartitionedPrefix = restxml.New[PartitionedPrefix](d)
 			v.PartitionedPrefix.decodeXML(d)
 		default:
 			d.Skip()
@@ -2768,9 +2768,9 @@ func (v *TopicConfiguration) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.Events = append(v.Events, e1)
+			v.Events = restxml.Append(d, v.Events, e1)
 		case "Filter":
-			v.Filter = &NotificationConfigurationFilter{}
+			v.Filter = restxml.New[NotificationConfigurationFilter](d)
 			v.Filter.decodeXML(d)
 		default:
 			d.Skip()
@@ -2812,7 +2812,7 @@ func (v *TopicConfigurationDeprecated) decodeXML(d *restxml.Decoder) {
 			if x := d.String(); x != nil {
 				e1 = *x
 			}
-			v.Events = append(v.Events, e1)
+			v.Events = restxml.Append(d, v.Events, e1)
 		case "Topic":
 			v.Topic = d.String()
 		default:

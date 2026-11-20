@@ -55,7 +55,7 @@ func (v *XmlEmptyMapsInput) decodeXML(d *restxml.Decoder) {
 					}
 				}
 				if k1 != nil {
-					v.MyMap[*k1] = e1
+					restxml.Put(d, v.MyMap, *k1, e1)
 				}
 			}
 		default:

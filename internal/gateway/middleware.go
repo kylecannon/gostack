@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
 	"github.com/kylecannon/gostack/internal/service"
@@ -42,7 +43,8 @@ type claim struct {
 // call is what the recovery middleware, which sits outside service detection,
 // learns about the request being served. serveAWS fills it in.
 type call struct {
-	rc *request.Context
+	rc     *request.Context
+	charge protocol.Charge
 }
 
 // Record tells the recovery middleware which call r is, so that a panic is
@@ -58,10 +60,13 @@ func Record(r *http.Request, rc *request.Context) {
 	}
 }
 
-// IsInternal reports whether ctx belongs to a call that a service made to
-// another one: one served through InternalHandler, which nothing outside the
-// process can reach, or one marked by the x-localstack-data header.
-func IsInternal(ctx context.Context) bool {
+// ServedAsInternal reports whether the gateway serves ctx's call as one a
+// service made to another while it is stopping: one served through
+// InternalHandler, which nothing outside the process can reach, or one marked
+// by the x-localstack-data header. Any client can send the header, so this is
+// never grounds to exempt a request from a memory bound; request.IsInternal,
+// which no header sets, is.
+func ServedAsInternal(ctx context.Context) bool {
 	internal, _ := ctx.Value(internalKey{}).(bool)
 
 	return internal
@@ -97,7 +102,7 @@ func (g *Gateway) shutdownGuard(next http.Handler) http.Handler {
 
 			return
 		case phaseStopping:
-			if !IsInternal(r.Context()) && !isDeveloperPath(r.URL.Path) {
+			if !ServedAsInternal(r.Context()) && !isDeveloperPath(r.URL.Path) {
 				g.refuse(w)
 
 				return
@@ -219,7 +224,9 @@ func (g *Gateway) owner(r *http.Request) *service.Registration {
 
 // decodeContent is root step 6: a gzip request body is decoded before anyone
 // reads it, unless the request's owner sets Registration.RawBody, as
-// LocalStack's ContentDecoder skips s3, which decodes its own.
+// LocalStack's ContentDecoder skips s3, which decodes its own. A body from a
+// listener is then metered against the in-flight bound (meterBody, at step 8)
+// until the handler returns.
 func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") && r.Body != nil && r.Body != http.NoBody &&
@@ -232,6 +239,20 @@ func (g *Gateway) decodeContent(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// meterBody meters the body of a request from a listener against the in-flight
+// bound (protocol.SetInFlight), after any gzip decoding, so the bound counts
+// decoded bytes. A body that states FreeBody bytes or fewer is never metered,
+// so a small request takes no lock and no atomic here. It returns nil when the
+// body is not metered or there is no bound.
+func meterBody(r *http.Request) *protocol.BodyMeter {
+	if r.Body == nil || r.Body == http.NoBody ||
+		(r.ContentLength >= 0 && r.ContentLength <= protocol.FreeBody) {
+		return nil
+	}
+
+	return protocol.NewBodyMeter(r.Context(), r.Body, r.ContentLength)
 }
 
 // rawBody reports whether the owner of r reads its body as sent.
@@ -301,11 +322,32 @@ func (g *Gateway) identify(header http.Header) {
 // its change first. That holds on a route a service mounts too, which marks its
 // own changes only once its handler returns. The mark comes before the log, so
 // a log that fails cannot lose it.
+//
+// It also puts the request's protocol.Charge on its context, with the body's
+// meter (meterBody), and gives back all it holds when the handler ends, by
+// returning, panicking or calling runtime.Goexit, whatever the handler did with
+// the body or built as its request.Context.
 func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &call{}
 		sw := &statusWriter{ResponseWriter: w}
 		returned := false
+
+		r = r.WithContext(protocol.WithCharge(context.WithValue(r.Context(), callKey{}, state), &state.charge))
+
+		// A request that one service makes to another through the gateway
+		// (inproc) carries request.MarkInternal, which no header or listener
+		// can set: its body and decoding were charged with the request that
+		// caused it.
+		if request.IsInternal(r.Context()) {
+			state.charge.ExemptDecode()
+		} else if meter := meterBody(r); meter != nil {
+			meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+			state.charge.Meter(meter)
+			r.Body = meter
+		}
+
+		defer state.charge.Release()
 
 		defer func() {
 			if returned {
@@ -317,7 +359,7 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 			g.recoverAbandoned(sw, r, state.rc, recover())
 		}()
 
-		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), callKey{}, state)))
+		next.ServeHTTP(sw, r)
 
 		returned = true
 	})
