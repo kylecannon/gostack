@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -291,33 +292,73 @@ func (g *Gateway) identify(header http.Header) {
 // is no status left to send, so the connection is aborted. A handler that
 // panics with http.ErrAbortHandler aborts the connection itself.
 //
-// Every panic is logged, http.ErrAbortHandler too, and a call that panics is
-// marked dirty when its operation changes state, whatever status it wrote: the
-// handler may have made its change before it panicked.
+// Every panic is logged, http.ErrAbortHandler too. A call whose handler did not
+// return, because it panicked or called runtime.Goexit, is marked dirty when its
+// operation changes state, whatever status it wrote: the handler may have made
+// its change first. That holds on a route a service mounts too, which marks its
+// own changes only once its handler returns. The mark comes before the log, so
+// a log that fails cannot lose it.
 func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &call{}
 		sw := &statusWriter{ResponseWriter: w}
+		returned := false
 
 		defer func() {
-			recovered := recover()
-			if recovered == nil {
+			if returned {
 				return
 			}
 
-			logPanic(r, state.rc, recovered)
-			sw.settlePanicked()
-
-			err, isError := recovered.(error)
-			if isError && errors.Is(err, http.ErrAbortHandler) {
-				panic(recovered)
-			}
-
-			g.answerPanic(sw, state.rc, recovered)
+			// recover is nil for a handler that called runtime.Goexit, which
+			// has no answer to send and goes on ending its goroutine.
+			g.recoverAbandoned(sw, r, state.rc, recover())
 		}()
 
 		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), callKey{}, state)))
+
+		returned = true
 	})
+}
+
+// recoverAbandoned settles a call whose handler did not return: it marks the
+// call dirty, then, for a panic, logs it and answers it.
+func (g *Gateway) recoverAbandoned(sw *statusWriter, r *http.Request, rc *request.Context, recovered any) {
+	g.markAbandoned(sw, rc)
+
+	if recovered == nil {
+		return
+	}
+
+	logPanic(r, rc, recovered)
+
+	err, isError := recovered.(error)
+	if isError && errors.Is(err, http.ErrAbortHandler) {
+		panic(recovered)
+	}
+
+	g.answerPanic(sw, rc, recovered)
+}
+
+// markAbandoned marks dirty a call whose handler did not return, when its
+// operation changes state, whatever status it wrote, unless the call has been
+// marked already. A call serveAWS serves is judged by its registration; one a
+// mounted route named with Record, by the registration of the service it names.
+func (g *Gateway) markAbandoned(sw *statusWriter, rc *request.Context) {
+	p := &sw.pending
+	if p.marked || rc == nil {
+		return
+	}
+
+	index := p.index
+	if p.rc != rc {
+		index = slices.IndexFunc(g.regs, func(reg service.Registration) bool { return reg.Metadata.Name == rc.Service })
+		if index < 0 {
+			return
+		}
+	}
+
+	p.armed = false
+	p.marked = g.markChanged(index, rc)
 }
 
 // logPanic logs a handler's panic with the service and operation of the call,
@@ -376,7 +417,8 @@ type statusWriter struct {
 
 	status int
 
-	// pending is the call serveAWS is serving, whose success marks state dirty.
+	// pending is the call serveAWS is serving, whose success marks state dirty,
+	// and whether it has been marked.
 	pending pendingMark
 }
 
@@ -389,6 +431,9 @@ type pendingMark struct {
 	rc    *request.Context
 	index int
 	armed bool
+	// marked records that the call marked state dirty, so that a handler
+	// that goes on to panic is not marked twice.
+	marked bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -458,18 +503,5 @@ func (w *statusWriter) settle() {
 	}
 
 	p.armed = false
-	p.g.markDirty(w, p.r, p.index, p.rc)
-}
-
-// settlePanicked is settle for a call whose handler panicked: it marks state
-// dirty when the operation changes state, whatever status the handler wrote,
-// since it may have made its change before it panicked.
-func (w *statusWriter) settlePanicked() {
-	p := &w.pending
-	if !p.armed {
-		return
-	}
-
-	p.armed = false
-	p.g.markChanged(p.index, p.rc)
+	p.marked = p.g.markDirty(w, p.r, p.index, p.rc)
 }

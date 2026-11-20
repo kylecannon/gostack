@@ -402,17 +402,24 @@ func (d *dirtyLog) list() []string {
 // SendMessage through the gateway's internal handler, to a service that makes
 // its change and then panics. The gateway answers it, and marks the service
 // dirty, since the change it made would otherwise stay unsaved until the next
-// write.
+// write. A handler that calls runtime.Goexit instead is marked too, and its
+// call fails with ErrAborted.
 func Test_Enqueue_AWriteWhoseHandlerPanicsIsMarkedDirty(t *testing.T) {
+	const panicLog = "ERROR panic while serving request"
+
 	tests := []struct {
 		name string
 		// giveStatus is the status the handler writes before it panics, or 0.
 		giveStatus int
+		// giveGoexit has the handler call runtime.Goexit instead of panicking.
+		giveGoexit bool
 		wantStatus int
 		wantErr    error
+		wantLog    []string
 	}{
-		{name: "before the status", wantStatus: http.StatusInternalServerError},
-		{name: "after the status", giveStatus: http.StatusOK, wantErr: inproc.ErrAborted},
+		{name: "before the status", wantStatus: http.StatusInternalServerError, wantLog: []string{panicLog}},
+		{name: "after the status", giveStatus: http.StatusOK, wantErr: inproc.ErrAborted, wantLog: []string{panicLog}},
+		{name: "a Goexit", giveGoexit: true, wantErr: inproc.ErrAborted},
 	}
 
 	for _, tt := range tests {
@@ -432,6 +439,10 @@ func Test_Enqueue_AWriteWhoseHandlerPanicsIsMarkedDirty(t *testing.T) {
 				Serve: func(w http.ResponseWriter, _ *request.Context) {
 					if tt.giveStatus != 0 {
 						w.WriteHeader(tt.giveStatus)
+					}
+
+					if tt.giveGoexit {
+						runtime.Goexit()
 					}
 
 					panic("the change was made")
@@ -462,7 +473,7 @@ func Test_Enqueue_AWriteWhoseHandlerPanicsIsMarkedDirty(t *testing.T) {
 			}
 
 			assert.Equal(t, []string{sqsService}, dirty.list(), "the write that panicked is marked")
-			assert.Equal(t, []string{"ERROR panic while serving request"}, log.list())
+			assert.Equal(t, tt.wantLog, log.list())
 		})
 	}
 }

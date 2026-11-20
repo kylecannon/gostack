@@ -1,11 +1,14 @@
 package gateway_test
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -209,7 +212,18 @@ func Test_Gateway_markDirty(t *testing.T) {
 		}
 	}
 	aborting := func(http.ResponseWriter, *request.Context) { panic(http.ErrAbortHandler) }
+	goexiting := func(http.ResponseWriter, *request.Context) { runtime.Goexit() }
 	custom := func(operation string) bool { return operation == "Purge" }
+	// A service that took the connection notes the status it sent, then panics.
+	notedThenPanics := func(code int) func(http.ResponseWriter, *request.Context) {
+		return func(w http.ResponseWriter, _ *request.Context) {
+			if noter, ok := w.(interface{ NoteStatus(code int) }); ok {
+				noter.NoteStatus(code)
+			}
+
+			panic("late")
+		}
+	}
 	// A service that takes the connection answers without calling WriteHeader,
 	// and tells the gateway the status it sent instead.
 	taken := func(code int) func(http.ResponseWriter, *request.Context) {
@@ -267,6 +281,19 @@ func Test_Gateway_markDirty(t *testing.T) {
 			name: "a handler that aborts with http.ErrAbortHandler", giveServe: aborting,
 			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
 		},
+		{
+			name: "a panic after a taken connection noted an error", giveServe: notedThenPanics(http.StatusBadRequest),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a panic after a taken connection noted a success", giveServe: notedThenPanics(http.StatusOK),
+			giveRequest: operation("SendMessage"), wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a Goexit in a write", giveServe: goexiting, giveRequest: operation("SendMessage"),
+			wantMarked: []string{nameSQS},
+		},
+		{name: "a Goexit in a read", giveServe: goexiting, giveRequest: operation("ListQueues")},
 		{name: "a panic in a read", giveServe: panicking, giveRequest: operation("ListQueues")},
 		{name: "a panic with no operation", giveServe: panicking, giveRequest: operation("")},
 		{
@@ -314,21 +341,126 @@ func Test_Gateway_markDirty(t *testing.T) {
 }
 
 // serveAborting serves r and takes a panic with http.ErrAbortHandler, the way
-// a gateway aborts a response it has started, as net/http's server does.
+// a gateway aborts a response it has started, as net/http's server does. It
+// serves on a goroutine of its own, as net/http does, so that a handler that
+// calls runtime.Goexit ends that goroutine and not the test's.
 func serveAborting(h http.Handler, r *http.Request) {
-	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			return
-		}
+	served := make(chan struct{})
 
-		err, isError := recovered.(error)
-		if !isError || !errors.Is(err, http.ErrAbortHandler) {
-			panic(recovered)
-		}
+	go func() {
+		defer close(served)
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+
+			err, isError := recovered.(error)
+			if !isError || !errors.Is(err, http.ErrAbortHandler) {
+				panic(recovered)
+			}
+		}()
+
+		h.ServeHTTP(httptest.NewRecorder(), r)
 	}()
 
-	h.ServeHTTP(httptest.NewRecorder(), r)
+	<-served
+}
+
+// Test_Gateway_markDirty_onAMountedRoute checks a call served by a route a
+// service mounts, such as an SQS queue URL, which names its call with Record
+// and marks its own change once it returns: when its handler panics or calls
+// runtime.Goexit it never gets there, so the gateway marks it.
+func Test_Gateway_markDirty_onAMountedRoute(t *testing.T) {
+	boom := func() { panic("boom") }
+
+	tests := []struct {
+		name          string
+		giveService   string
+		giveOperation string
+		giveServe     func()
+		wantMarked    []string
+	}{
+		{
+			name: "a panic in a write", giveService: nameSQS, giveOperation: opSendMessage, giveServe: boom,
+			wantMarked: []string{nameSQS},
+		},
+		{
+			name: "a Goexit in a write", giveService: nameSQS, giveOperation: opSendMessage,
+			giveServe: runtime.Goexit, wantMarked: []string{nameSQS},
+		},
+		{name: "a panic in a read", giveService: nameSQS, giveOperation: "ListQueues", giveServe: boom},
+		{name: "a panic in a call that names no operation", giveService: nameSQS, giveServe: boom},
+		{
+			name: "a panic for a service the gateway does not have", giveService: "nope",
+			giveOperation: opSendMessage, giveServe: boom,
+		},
+		// The service marks a call that returns, not the gateway.
+		{name: "a write that returns", giveService: nameSQS, giveOperation: opSendMessage, giveServe: func() {}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirty := &dirtyLog{}
+			reg := sqsRegistration(okServe)
+			reg.Mount = func(r chi.Router) {
+				r.Post("/{account}/{queue}", func(_ http.ResponseWriter, r *http.Request) {
+					gateway.Record(r, &request.Context{
+						Service: tt.giveService, Operation: tt.giveOperation, Protocol: protocol.KindQuery,
+					})
+
+					tt.giveServe()
+				})
+			}
+
+			g, err := gateway.New(newSettings().get, []service.Registration{reg}, nil, dirty)
+			require.NoError(t, err)
+
+			serveAborting(g.Handler(), newRequest(t, http.MethodPost, "http://localhost:4566/000000000000/my-queue", "",
+				map[string]string{headerAuth: signed("test", usEast1, nameSQS)}))
+
+			assert.Equal(t, tt.wantMarked, dirty.marked())
+		})
+	}
+}
+
+// panickingLog is a slog handler that panics on every record.
+type panickingLog struct{}
+
+func (panickingLog) Enabled(context.Context, slog.Level) bool { return true }
+
+func (panickingLog) Handle(context.Context, slog.Record) error { panic("the log failed") }
+
+func (l panickingLog) WithAttrs([]slog.Attr) slog.Handler { return l }
+
+func (l panickingLog) WithGroup(string) slog.Handler { return l }
+
+// Test_Gateway_markDirty_whenThePanicLogPanics checks the mark of a write that
+// panics comes before its log, so a log that fails cannot lose it.
+func Test_Gateway_markDirty_whenThePanicLogPanics(t *testing.T) {
+	previous := slog.Default()
+
+	slog.SetDefault(slog.New(panickingLog{}))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	dirty := &dirtyLog{}
+
+	g, err := gateway.New(newSettings().get,
+		[]service.Registration{sqsRegistration(func(http.ResponseWriter, *request.Context) { panic("boom") })},
+		nil, dirty)
+	require.NoError(t, err)
+
+	r := sendMessage(t)
+	served := make(chan any, 1)
+
+	go func() {
+		defer func() { served <- recover() }()
+
+		g.Handler().ServeHTTP(httptest.NewRecorder(), r)
+	}()
+
+	assert.Equal(t, "the log failed", <-served, "the log's own panic reaches the server")
+	assert.Equal(t, []string{nameSQS}, dirty.marked())
 }
 
 // Test_Gateway_markDirty_whenATakenResponseNotesItsStatus checks the mark

@@ -18,8 +18,12 @@
 // were queued, whichever account made them; calls in different lanes run at
 // once, up to MaxInFlight. A call's lane is the Lane its caller names, or else
 // its destination: a region, service, method, path and target. A handler that
-// panics or calls runtime.Goexit fails its call with ErrAborted, whichever of
-// the three made it.
+// panics fails its call with ErrAborted, whichever of the three made it. One
+// that calls runtime.Goexit fails a call Enqueue or Stream made the same way,
+// since each runs the handler on a goroutine of its own. Do runs the handler on
+// its caller's goroutine, so there Do never returns: the Goexit ends the
+// caller's goroutine, running its deferred calls, as if the caller had called
+// runtime.Goexit itself.
 //
 // A Hub is the handler every client of the process is bound to. Its Drain is
 // the shutdown's in-process phase: it waits for every queue to empty, until its
