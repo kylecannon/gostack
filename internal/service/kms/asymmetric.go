@@ -210,7 +210,7 @@ func (p *Provider) GetPublicKey(ctx context.Context, in *api.GetPublicKeyInput) 
 // LocalStack's order: the key in the caller's own account and region, enabled
 // or disabled, its usage, the algorithm, then the peer key. KeyId echoes the
 // request, as LocalStack and the aws.validated snapshot answer. Recipient is
-// answered 501, as Decrypt answers it.
+// answered 501: the envelope Decrypt answers is not wired here.
 func (p *Provider) DeriveSharedSecret(ctx context.Context, in *api.DeriveSharedSecretInput,
 ) (*api.DeriveSharedSecretOutput, error) {
 	rc, err := call(ctx)
