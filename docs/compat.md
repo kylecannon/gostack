@@ -75,6 +75,8 @@ S3 persists its buckets, objects, versions and uploads in progress, bodies inclu
 
 S3 writes acknowledged since the last save are lost at `docker stop` when the shutdown save takes longer than its window. It does when another writer has a lot of data unsynced on the same volume. Raise `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose `stop_grace_period`) raised to match, to widen the window, and lower `PERSIST_FREQUENCY` to leave less unsaved. Persistence with no volume mounted at `PERSIST_BASE_DIR` lands on the container's own overlay layer and takes the slower per-file sync path. The startup log names the filesystem and the sync path for each service (`persist: asset sync`). The window, the measurements and the filesystems that get each path are in `architecture.md`, Persistence, Assets.
 
+SSM persists every parameter with all its versions, labels and tags, and its maintenance windows. A `SecureString` is written as it is stored, `kms:<key id>:<plaintext>` with `alias/aws/ssm` as the default key id, so its plaintext is on disk in the clear. No KMS call encrypts it, as in LocalStack.
+
 ## Image and init
 
 | Variable | Effect |
@@ -155,6 +157,26 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 | A method no S3 operation takes, such as `PATCH /bucket` or `PATCH /bucket/key` | Crashes: `500 InternalError`, "Unable to find operation for request to service s3" | `405 MethodNotAllowed`, "The specified method is not allowed against this resource.", in S3's error XML with `Method` and `ResourceType` (`BUCKET` or `OBJECT`). A method token chi does not know reaches S3 too. | AWS's recorded 405s carry the same members (`test_s3.snapshot.json`, the website 405 pages). `TestMethodsNoOperationTakesAnswer405` |
 | `x-amz-object-lock-retain-until-date` in a response | Written with `.000Z` | Matches | LocalStack's serializer, `_timestamp_iso8601`. `TestRetainUntilHeaderCarriesMilliseconds` |
 
+## Request nesting limits
+
+How deeply a request body may nest before gostack refuses it. Each bound sits
+far above any real request: the deepest legitimate nesting found is a DynamoDB
+item, which AWS caps at 32 levels of `M` or `L` (about 67 json levels with the
+request around it), and the deepest S3 document nests eight elements. A body at
+the 16 MiB cap built to nest as deeply as its syntax allows is answered in
+under 0.5 s on every protocol, and the process keeps serving.
+
+| Protocol | Bound | Over it | LocalStack |
+|---|---|---|---|
+| json 1.0, json 1.1, rest-json | 10,000 levels of arrays and objects: the limit of Go's `encoding/json/v2`, which every json body meets in `awsjson.Decode`. A recursive member (DynamoDB's `AttributeValue`) counts two levels per `M` or `L`. | `400 SerializationException` | `500`, "An unknown error occurred when trying to parse the request" |
+| rest-xml (S3) | 64 elements, `restxml.MaxDepth` | `400 MalformedXML`. The decoder stops at the 65th open element without reading the rest, so a client still sending the body may see the connection close instead of the answer. | `500 InternalError` |
+| query (SQS, STS, SNS) | The input shape. Generated decoding walks the operation's input shape and looks up the keys it expects, so a key nested deeper than the shape is ignored. No query input holds itself, and the generator refuses one that does, since its decoding would recurse once per level of a key. | Ignored | `500 InternalError` |
+| Documents a service parses: S3 bucket and POST policies, SQS `Policy` and `RedrivePolicy`, STS SAML assertions | 10,000 levels, the limit of `encoding/json` and of `encoding/xml`'s `Unmarshal`. An S3 POST policy is also held to the 20 KiB of form fields before the file. | `PutBucketPolicy`: `400 MalformedPolicy`. `RedrivePolicy`: `400 InvalidParameterValue`. SAML: `400 InvalidIdentityToken`. A `Policy` is stored as sent, and a later `AddPermission` on that queue answers `500 InternalError`. | Not measured |
+
+`Test_Gateway_DeeplyNestedBodies`, `Test_Decode_NestingBound`,
+`Test_Decoder_NestedToTheBodyCap` and `Test_queryFile_RecursiveInput` pin these.
+DynamoDB's own 32-level limit belongs to its handler, which is not on `main`.
+
 ## S3 limits
 
 What S3 does not do, or does in part, so a client's expectations can be set.
@@ -218,6 +240,30 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 | `UpdateSecretVersionStage` with an invalid `MoveToVersionId` or `RemoveFromVersionId` | Changes stages, then refuses "Not a valid version" (47 of 500 seeds) | Refuses with no change. gostack takes the clean refusal. |
 | `UpdateSecretVersionStage` onto a version that already holds the stage | Lists the stage twice | Lists it once. gostack takes the single entry. |
 | A lookup by an ARN-shaped name that matches a stale record and a live replica | No such state: LocalStack cannot reset one region | With a stale record named `arn:aws:secretsmanager:n1` beside a live replica `n1`, `GetSecretValue arn:aws:secretsmanager:n1` answers the ARN-named secret before the primary-region reset and the plain one after it. Live and restarted state agree. This is gostack's own lookup order after a reset. |
+
+## SSM Parameter Store
+
+Parameter Store is moto behind LocalStack's provider, so most of these are moto's
+answers. The LocalStack column is what LocalStack 8b9a79f answered to the same
+request (SQ-266). An SSM operation gostack does not build answers
+`501 InternalFailure` and is listed in `/_gostack/services`.
+
+| Behavior | LocalStack | gostack | Why |
+|---|---|---|---|
+| `PutParameter` of a name that cleans to nothing: `/`, `//`, `""`, or an ARN that ends in `parameter/` | `200`, and a parameter named `""` is stored. `GetParameter /` and `GetParametersByPath /` then answer `500 InternalError`, "string index out of range". | `400 ValidationException` with the text a bad name gets: "Parameter name: can't be prefixed with "ssm" (case-insensitive). If formed as a path, it can consist of sub-paths divided by slash symbol; each sub-path can be formed as a mix of letters, numbers and the following 3 symbols .-_" | A crash and a stuck state are not copied. A parameter with no name cannot be restored, and the snapshot that held it was refused whole (SQ-269). |
+| Older `Filters` form of `DescribeParameters` (`Name`, `Type`, `KeyId`) | A parameter is listed once for each filter it passes, so a row that fails another filter comes back, and one row can come back twice. Name `/q` with Type `SecureString` over `/q/sec` (SecureString) and `/q/list` (StringList) lists `[/q/sec, /q/sec, /q/list]`; Type `SecureString` and Type `StringList` together list `[/q/sec, /q/list]`. | A parameter must pass every filter and is listed once: `[/q/sec]` for the first request and `[]` for the second. A filter with any other key passes nothing, as in LocalStack. | LocalStack's answer comes from a loop that appends a parameter for each filter it passes. A parameter that fails a filter is not a match. An application sees the difference. |
+| Entries of `DescribeParameters` | No `ARN` member | `ARN` is there | botocore `ParameterMetadata.ARN`. Seen only by a test that compares the key set. |
+| `DeleteMaintenanceWindow` | `{}` | `{"WindowId":"mw-..."}` | botocore `DeleteMaintenanceWindowResult.WindowId` |
+| `GetMaintenanceWindow` | Leaves out `CreatedDate`, `ModifiedDate` and `AllowUnassociatedTargets` | Returns them | botocore `GetMaintenanceWindowResult` |
+| Maintenance window operations after `CreateMaintenanceWindow` | `RegisterTargetWithMaintenanceWindow`, `DescribeMaintenanceWindowTargets` and `DescribeMaintenanceWindowTasks` answer `200` | They answer `501 InternalFailure`, with every other operation on targets, tasks and executions. `CreateMaintenanceWindow`, `GetMaintenanceWindow`, `DescribeMaintenanceWindows`, `DeleteMaintenanceWindow` and the tag operations on a window are built. | Windows are here so `GetMaintenanceWindow` of an id that does not exist answers `DoesNotExistException`. A window with no targets or tasks is all gostack keeps of one. |
+| The eleventh label on a version | `ParameterVersionLabelLimitExceeded`, "An error occurred (ParameterVersionLabelLimitExceeded) when calling the LabelParameterVersion operation: A parameter version can have maximum 10 labels.Move one or more labels to another version and try again." | The same code and status, and the text "A parameter version can have maximum 10 labels. Move one or more labels to another version and try again." | LocalStack's text is moto's own error wrapped in a second error text, with no space after `labels.`. Only a test that matches the text sees it. |
+| `NextToken` that is not a number (`abc`) or is negative (`-1`) | `abc`: `500 InternalError`, "invalid literal for int() with base 10". `-1`: `200`, from a Python slice that counts from the end of the list. `GetParametersByPath` answers the last parameter on 3 parameters and an empty page on 12, and `GetParameterHistory` the last version; `DescribeParameters` slices `result[token:]`, so on 12 parameters `-1` answers the last one and `-5` the last five. | `400 InvalidNextToken`, "The specified token isn't valid." | A crash is not copied. AWS documents `InvalidNextToken` for a token that is not valid, and a negative offset is not one the service gave out (botocore `InvalidNextToken`). |
+| The cost of a page when the store is written between pages | moto cuts every page from a list it builds for the call, so each page costs the store. | A page that ends full leaves a cursor, and the next page starts there. A `PutParameter` that is refused, and one that makes a parameter, keep the cursors: with 100,000 parameters and one of them before every page, a whole walk takes 0.23 s and 0.24 s for `GetParametersByPath`, against 0.20 s with no write. Every other write drops them: a page after an overwrite, a delete, a tag, a label or a window walks from the start, and a whole walk of 100,000 parameters with an overwrite before every page takes about 8 s for `GetParametersByPath` and 8 s for `DescribeParameters` (13.8 s and 6.0 s on a busier machine, SQ-277). The pages are the same ones; only the time differs. | A cursor counts the matches before its place. A new parameter takes the last place and moves none of them, and a refused put changes nothing; an overwrite can change what a filter matches, and a delete moves every place after it. |
+| A `Tier` filter in `DescribeParameters` | Matches nothing, whatever the tier (moto compares `None`) | Matches the parameters whose tier is one of the values; `Standard`, `Advanced` and `Intelligent-Tiering` are the values, and `Equals` and `BeginsWith` the options | The documented filter. moto's answer is a defect. |
+| `GetParameters` order | The found parameters come back in the order of a Python set. The order is fixed within one process, from its string hash, and is not the order of the request: three requests that named `/o/a`, `/o/b`, `/o/c` and `/o/d` in three different orders all got `[/o/d, /o/a, /o/b, /o/c]`. A new process can give another order. | The found parameters come back in the order of the request, once each | The echo of the spelling a request used, which `test_put_parameters` expects, needs an order a request can rely on. |
+| `PolicyText` and `PolicyType` in `DescribeParameters` and `GetParameterHistory` | A JSON object: moto passes the parsed policy through | The policy as a JSON string | botocore's shape is a string and the generated types hold one. A client reading the member as an object sees the difference. |
+| A tag with no `Key`, no `Value` or an empty `Key`, on `PutParameter`, `AddTagsToResource` and `CreateMaintenanceWindow`; an empty key in the `TagKeys` of `RemoveTagsFromResource` | No `Key`: `500 InternalError`, "exception while calling ssm.PutParameter: 'Key'". No `Value`: the same, with `'Value'`. An empty `Key`: `200`, and the tag is stored and listed as `{"Key":"","Value":"v"}`. | `400 ValidationException`, "1 validation error detected: Value null at 'tags.1.member.key' failed to satisfy constraint: Member must not be null" for a missing `Key`, the same for `value` when `Value` is missing, and "Value '' at 'tags.1.member.key' failed to satisfy constraint: Member must have length greater than or equal to 1" for an empty one, one failure for each, and nothing is changed. For an empty key in `TagKeys`: "Value '' at 'tagKeys.2.member' failed to satisfy constraint: Member must have length greater than or equal to 1", the number being its place in the list. | botocore `Tag` requires `Key` and `Value`, `TagKey` is at least 1 character, and `KeyList` is a list of `TagKey`, so AWS cannot hold a tag with no key. The member names and the list element rendering are gostack's own spelling of the constraint text (the STS row above uses the same); no AWS answer to these is recorded. |
+| Public parameters under `/aws/service/` | `GetParameter` answers the AMI, region and service lists moto bundles | `ParameterNotFound` | No test reads one, and the lists are data gostack does not ship. |
 
 ## Accepted LocalStack-only behavior
 
