@@ -141,7 +141,8 @@ func Test_Engine_Immediate_OneFlusher(t *testing.T) {
 // Test_Engine_TimedFlush_GaveWayServiceIsNotCountedAsFailed checks that one
 // flush judges each service on its own: a failed for real, and b, abandoned
 // when a caller's flush cancelled the timed one, gave way. b is not counted as
-// failed because a failed, and has no backoff.
+// failed because a failed, and has no backoff. b follows a, so the caller's
+// flush cannot save it beside the timed one, which has begun a's save.
 func Test_Engine_TimedFlush_GaveWayServiceIsNotCountedAsFailed(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
@@ -154,7 +155,7 @@ func Test_Engine_TimedFlush_GaveWayServiceIsNotCountedAsFailed(t *testing.T) {
 			during: func() error { return errFull },
 		}
 		e.Register("a", a)
-		e.Register("b", &stateSnap{state: "b"})
+		e.Register("b", followingSnap{stateSnap: &stateSnap{state: "b"}, leader: "a"})
 		e.MarkDirty("a")
 		e.MarkDirty("b")
 
