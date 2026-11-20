@@ -328,6 +328,10 @@ func shutDown(ctx context.Context, gw *gateway.Gateway, proc *lifecycle.Process,
 		defer close(done)
 
 		gw.BeginShutdown()
+		// Serve may have begun the shutdown (a listener failed), and then
+		// BeginShutdown returned at once: the hooks still run after the services
+		// have let go.
+		<-gw.Released()
 		proc.Shutdown(ctx)
 	}()
 
