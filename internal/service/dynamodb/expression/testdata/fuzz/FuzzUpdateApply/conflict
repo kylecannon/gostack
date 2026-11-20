@@ -1,0 +1,2 @@
+go test fuzz v1
+string("SET b.x = :s, b[0] = :s")

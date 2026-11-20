@@ -60,6 +60,20 @@ change applies from the next one.
 |---|---|
 | `S3_SKIP_SIGNATURE_VALIDATION` | Defaults to `1`. `0` checks a presigned URL's signature, its expiry, the 7-day limit on `X-Amz-Expires` and the `x-amz-*` headers it did not sign. A missing presign parameter is refused, and the headers a presigned query carries move into the request, whatever the setting. Every access key signs with the secret `test`; LocalStack's internal keys sign with `__internal_call__`. |
 
+## DynamoDB
+
+| Variable | Effect |
+|---|---|
+| `DYNAMODB_ERROR_PROBABILITY` | A number from 0 to 1: the chance that an item read or write (`GetItem`, `Query`, `Scan`, `BatchGetItem`, `TransactGetItems`, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, `TransactWriteItems`) answers `400 ProvisionedThroughputExceededException`. One draw per request, except `BatchWriteItem`, which draws once per write request and returns each throttled one in `UnprocessedItems`; LocalStack draws the same way. |
+| `DYNAMODB_READ_ERROR_PROBABILITY`, `DYNAMODB_WRITE_ERROR_PROBABILITY` | The same for the reads alone or the writes alone, tested before the general one. |
+| `DYNAMODB_SHARE_DB` | An integer; any but `0` puts every account's and region's tables in one namespace, as DynamoDB Local's shared database does. ARNs still carry the caller's account and region. |
+
+A probability or `DYNAMODB_SHARE_DB` that does not parse as a number refuses
+start, as LocalStack's `config.py` does. DynamoDB Local's own JVM settings
+(`DYNAMODB_HEAP_SIZE`, `DYNAMODB_LOCAL_PORT`, `DYNAMODB_IN_MEMORY`,
+`DYNAMODB_DELAY_TRANSIENT_STATUSES`, `DYNAMODB_OPTIMIZE_DB_BEFORE_STARTUP`,
+`DYNAMODB_CORS`) are ignored: gostack runs no DynamoDB Local.
+
 ## Persistence
 
 | Variable | Effect |
@@ -131,6 +145,7 @@ nothing, gostack follows AWS, and these rows are the places it does.
 | `ListObjects` (v1) `IsTruncated` | Looks ahead: true only when a further key or prefix follows the page | The same. A page that ends the listing exactly is not truncated, and `NextMarker` is set only with a delimiter. SQ-143 found no difference. | `ListObjects` API reference: `IsTruncated` is true when the results exceed `MaxKeys` and `NextMarker` is returned only with a delimiter |
 | A non-streaming request body over `GOSTACK_MAX_REQUEST_BODY` (16 MiB by default), such as an XML configuration document | No limit; reads it whole | `400 MaxMessageLengthExceeded`: "Your request was too big.", in S3's error XML. The reader stops at the limit and fails with `rest.ErrBodyTooLarge`, which the generated S3 reader answers this way. A body of exactly the limit reads. `GOSTACK_MAX_REQUEST_BODY=0` removes the limit, as in LocalStack. A streamed payload (`PutObject`, `UploadPart`) has no limit. `TestXMLBodyOverMaxBodyAnswersMaxMessageLengthExceeded` pins it. | S3 Error Responses: `MaxMessageLengthExceeded`, 400, "Your request was too big." AWS documents no size limit for a configuration document; the cap is gostack's, to keep a body from filling memory. |
 | A presigned URL whose `X-Amz-Credential` does not parse, such as one containing `;` or `%zz` | Not recorded | `400 AuthorizationQueryParametersError`: "Error parsing the X-Amz-Credential parameter; the Credential is mal-formed; expecting "<YOUR-AKID>/YYYYMMDD/REGION/SERVICE/aws4_request"." Checked whether or not signatures are, by `readV4Params` with `account.ParseScope`. | S3 Error Responses: `AuthorizationQueryParametersError`, 400; the wording is the one AWS uses for a credential that is not `<AKID>/<date>/<region>/<service>/aws4_request` |
+| DynamoDB `DescribeEndpoints` | `400 UnknownOperationException`, from DynamoDB Local | `200` with one endpoint: `Address` is `LOCALSTACK_HOST`, `CachePeriodInMinutes` 1440 | `DescribeEndpoints` API reference: the response is a list of `Endpoint` with `Address` and `CachePeriodInMinutes` |
 
 ### S3 versioning and Object Lock
 
@@ -210,6 +225,50 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
   message as Python's `str()` writes it: an object keeps the policy's key
   order, and a float is written as Python's `repr` does (`1000000.0`, `1e+16`).
 
+## DynamoDB until KMS
+
+A table created or updated with `SSESpecification` enabled and no
+`KMSMasterKeyId` has no `KMSMasterKeyArn` in its `SSEDescription`. LocalStack
+creates a KMS key for the table and reports its ARN; gostack does that once it
+serves KMS. A table given a `KMSMasterKeyId` reports it as an ARN in the
+caller's account and region, as LocalStack does.
+
+## DynamoDB expressions and reads
+
+- A request with two or more malformed `ExpressionAttributeNames` or
+  `ExpressionAttributeValues` keys: gostack names the first in sorted order,
+  LocalStack the first in the request's JSON order. The decoded request map
+  keeps no order. With one bad key the answers are the same.
+- `Scan` with `Segment` and `TotalSegments` puts an item in the segment that
+  the FNV hash of its partition key picks. Every item is in exactly one
+  segment, as in LocalStack, but which segment holds a given item differs
+  from DynamoDB Local's hash.
+- Arithmetic in an update expression stores its result in canonical form:
+  `1.5 + 1.5` is `3` and a result of zero is `0`, where DynamoDB Local in the
+  LocalStack image writes `3.0` and `0.0`. AWS trims trailing zeroes from
+  numbers (the data types page of the developer guide).
+- `ReturnItemCollectionMetrics` is accepted and never answered, as the
+  LocalStack image does on every write.
+- A `Query` asking `Select` `ALL_ATTRIBUTES` on a global index whose projection
+  is not `ALL`: LocalStack's message names the index `id-index` whatever it is
+  called; gostack names the index of the request. No snapshot pins the text.
+
+## DynamoDB batches and transactions
+
+The LocalStack column is the LocalStack 8b9a79f image, probed in SQ-293 and
+SQ-302 (`verification/SQ-293`, `verification/SQ-302`).
+
+| Behavior | AWS | LocalStack | gostack |
+|---|---|---|---|
+| Consumed capacity of a transaction | The developer guide's rule for transactions: each action costs twice what it costs alone, two write units per 1 KB written and two read units per 4 KB checked | DynamoDB Local collapses equal per-action amounts, so several equal writes can report less than twice their units | Twice each action's own units, index units included, summed per table (`transactCapacity`) |
+| `BatchWriteItem` with no `RequestItems`, `TransactWriteItems` or `TransactGetItems` with no `TransactItems` | `400 ValidationException`: the member is required | `500 InternalError` from a Python `NoneType` error (`BatchGetItem` with no `RequestItems` answers 400) | `400 ValidationException`: `BatchWriteItem cannot have a null or no requests set`, or `Value null at 'transactItems' failed to satisfy constraint: Member must not be null` |
+| A `BatchWriteItem` request throttled by `DYNAMODB_*ERROR_PROBABILITY` | An item in `UnprocessedItems` was not written | Returned in `UnprocessedItems` and written anyway: the provider still forwards the whole batch | Returned in `UnprocessedItems` and not written |
+| `{"N": "1"}` and `{"N": "1.0"}` as keys of one table | One number: the data types page trims leading and trailing zeroes, so they name one item | `BatchWriteItem` and `TransactGetItems` call them duplicates; `TransactWriteItems` and `BatchGetItem` treat them as two items and answer 200 | One key everywhere: each operation reports its duplicate error |
+| A `ClientRequestToken` reused more than 10 minutes after its transaction | The `TransactWriteItems` reference: after 10 minutes the request runs as a new one | Answers 200 and writes nothing, for the same request or a different one | Runs as a new transaction and writes |
+| A transaction that repeats an item | No recorded answer | Checks the values and expression syntax of every action first. Then, when a repeated action fails on its own (a condition, a key type, an update that cannot apply, an item too large), that failure, as `TransactionCanceledException` with reasons or a plain `ValidationException`; only when they pass, the duplicate error. A failing condition on another item still answers the duplicate error. | The duplicate error, checked action by action, so it also comes before a syntax error in a later action. Matching the image would need the duplicate check to wait for execution (SQ-302 ruling). |
+| One batch naming a table by name and by ARN | No recorded answer | `BatchGetItem` returns the item once but reports capacity twice; `BatchWriteItem` reports one write's capacity for two puts | Both entries are one table: `BatchGetItem` returns the item once per entry, and capacity sums both |
+| A reused `ClientRequestToken` on a different request that also fails validation | No recorded answer | Checks the values and expression syntax of every action, then the token (`IdempotentParameterMismatchException`), then table names, lookup, keys and duplicates | Checks each action in order, names, lookup and keys included, before the token, so a missing table or a bad key answers its own error first. Matching needs the validation split in two passes (SQ-302 ruling). |
+| Order of `ConsumedCapacity` and of the first error across tables in a batch | No recorded answer | Java hash order of the table names; two names in one hash bucket keep the request's order | Java hash order; two names in one bucket go in sorted order, because `RequestItems` decodes into a Go map that keeps no request order |
 ## Secrets Manager
 
 | Behavior | LocalStack | gostack |
