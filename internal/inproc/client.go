@@ -47,6 +47,11 @@ var (
 	// ErrAborted is the error of a call whose handler panicked, which is how the
 	// gateway aborts a response it has already started.
 	ErrAborted = errors.New("inproc: the handler aborted the response")
+
+	// errExited is the error of a call whose handler called runtime.Goexit. That
+	// ends the goroutine the handler runs on, as a panic would, but no recover
+	// sees it: the call is answered from a deferred function instead.
+	errExited = fmt.Errorf("%w: the handler called runtime.Goexit", ErrAborted)
 )
 
 // Call is one request to a service of the same process. Its zero values make

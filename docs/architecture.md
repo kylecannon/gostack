@@ -944,7 +944,16 @@ cites the lines.
 **Behavior:**
 
 - After any successful request whose operation does not start with Get, Head,
-  Query, List or Describe, the service is marked dirty.
+  Query, List, Describe or Receive, the service is marked dirty. A service may
+  set its own rule (`Registration.Mutating`). A request with such an operation
+  whose handler does not return, because it panics or calls `runtime.Goexit`,
+  is marked too, whatever status it wrote, since the handler may have made its
+  change first. This includes a route a service mounts, such as an SQS queue
+  URL, which names its call with `gateway.Record`. On a call the gateway
+  routes itself, one answered with a 4xx or 5xx whose handler returns is not
+  marked. A mounted route marks its own call once its handler returns, by its
+  own rule: the SQS queue URL marks a write it served whatever the status, so a
+  SendMessage it answers with a 400 is marked.
 - A flush timer is armed only when a service is dirty. At most one flush runs
   or waits at a time: a change made during a flush is saved by the flush that
   one schedules when it ends.

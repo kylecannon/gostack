@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -47,7 +48,10 @@ type call struct {
 // Record tells the recovery middleware which call r is, so that a panic is
 // answered in the protocol of the service. The gateway does it for the calls it
 // routes itself; a handler mounted by a service, which builds its own
-// request.Context, does it with the request it was given.
+// request.Context, does it with the request it was given. On a mounted route
+// it also decides the dirty mark of a handler that panics or calls
+// runtime.Goexit: the call is judged by the operation Record names, and a
+// route that never calls Record is not marked.
 func Record(r *http.Request, rc *request.Context) {
 	if state, ok := r.Context().Value(callKey{}).(*call); ok {
 		state.rc = rc
@@ -288,34 +292,104 @@ func (g *Gateway) identify(header http.Header) {
 // recoverPanic is root step 8, the innermost. A panic in a handler becomes a 500
 // InternalError in the protocol of the service being called, or a 501 under
 // FAIL_FAST, and the process keeps running. Once the response has started there
-// is no status left to send, so the connection is aborted.
+// is no status left to send, so the connection is aborted. A handler that
+// panics with http.ErrAbortHandler aborts the connection itself.
+//
+// Every panic is logged, http.ErrAbortHandler too. A call whose handler did not
+// return, because it panicked or called runtime.Goexit, is marked dirty when its
+// operation changes state, whatever status it wrote: the handler may have made
+// its change first. That holds on a route a service mounts too, which marks its
+// own changes only once its handler returns. The mark comes before the log, so
+// a log that fails cannot lose it.
 func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &call{}
 		sw := &statusWriter{ResponseWriter: w}
+		returned := false
 
 		defer func() {
-			recovered := recover()
-			if recovered == nil {
+			if returned {
 				return
 			}
 
-			err, isError := recovered.(error)
-			if isError && errors.Is(err, http.ErrAbortHandler) {
-				panic(recovered)
-			}
-
-			g.answerPanic(sw, r, state.rc, recovered)
+			// recover is nil for a handler that called runtime.Goexit, which
+			// has no answer to send and goes on ending its goroutine.
+			g.recoverAbandoned(sw, r, state.rc, recover())
 		}()
 
 		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), callKey{}, state)))
+
+		returned = true
 	})
 }
 
-func (g *Gateway) answerPanic(w *statusWriter, r *http.Request, rc *request.Context, recovered any) {
-	slog.ErrorContext(r.Context(), "panic while serving request",
-		"method", r.Method, "path", r.URL.Path, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+// recoverAbandoned settles a call whose handler did not return: it marks the
+// call dirty, then, for a panic, logs it and answers it.
+func (g *Gateway) recoverAbandoned(sw *statusWriter, r *http.Request, rc *request.Context, recovered any) {
+	g.markAbandoned(sw, rc)
 
+	if recovered == nil {
+		return
+	}
+
+	logPanic(r, rc, recovered)
+
+	err, isError := recovered.(error)
+	if isError && errors.Is(err, http.ErrAbortHandler) {
+		panic(recovered)
+	}
+
+	g.answerPanic(sw, rc, recovered)
+}
+
+// markAbandoned marks dirty a call whose handler did not return, when its
+// operation changes state, whatever status it wrote, unless the call has been
+// marked already. A call serveAWS serves is judged as the call serveAWS gave
+// it, whatever its Serve later named with Record. A call on a route a service
+// mounts, where serveAWS armed nothing, is judged by the registration of the
+// service rc names; with no rc, it is not marked.
+func (g *Gateway) markAbandoned(sw *statusWriter, rc *request.Context) {
+	p := &sw.pending
+	if p.marked {
+		return
+	}
+
+	index := p.index
+	if p.rc != nil {
+		rc = p.rc
+	} else {
+		if rc == nil {
+			return
+		}
+
+		index = slices.IndexFunc(g.regs, func(reg service.Registration) bool { return reg.Metadata.Name == rc.Service })
+		if index < 0 {
+			return
+		}
+	}
+
+	p.marked = g.markChanged(index, rc)
+}
+
+// logPanic logs a handler's panic with the service and operation of the call,
+// when the gateway has learned them.
+func logPanic(r *http.Request, rc *request.Context, recovered any) {
+	attrs := []any{"method", r.Method, "path", r.URL.Path}
+
+	if rc != nil {
+		attrs = append(attrs, "service", rc.Service)
+
+		if rc.Operation != "" {
+			attrs = append(attrs, "operation", rc.Operation)
+		}
+	}
+
+	attrs = append(attrs, "panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+
+	slog.ErrorContext(r.Context(), "panic while serving request", attrs...)
+}
+
+func (g *Gateway) answerPanic(w *statusWriter, rc *request.Context, recovered any) {
 	if w.status != 0 {
 		panic(http.ErrAbortHandler)
 	}
@@ -353,7 +427,8 @@ type statusWriter struct {
 
 	status int
 
-	// pending is the call serveAWS is serving, whose success marks state dirty.
+	// pending is the call serveAWS is serving, whose success marks state dirty,
+	// and whether it has been marked.
 	pending pendingMark
 }
 
@@ -366,6 +441,9 @@ type pendingMark struct {
 	rc    *request.Context
 	index int
 	armed bool
+	// marked records that the call marked state dirty, so that a handler
+	// that goes on to panic is not marked twice.
+	marked bool
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -435,5 +513,5 @@ func (w *statusWriter) settle() {
 	}
 
 	p.armed = false
-	p.g.markDirty(w, p.r, p.index, p.rc)
+	p.marked = p.g.markDirty(w, p.r, p.index, p.rc)
 }

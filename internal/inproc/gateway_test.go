@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -15,10 +16,13 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/inproc"
+	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
 	"github.com/kylecannon/gostack/internal/service/sqs"
@@ -371,5 +375,105 @@ func Test_Do_ServesCallsAtOnceThroughTheGateway(t *testing.T) {
 			Body: []byte(`{"QueueUrl":"http://sqs.` + region + `.` + localstackHost + `/` + account + `/` + name + `"}`),
 		})
 		assert.Contains(t, string(got.Body), `"Body":"`+name+`"`)
+	}
+}
+
+// dirtyLog is a gateway.Dirtier that keeps the names it is given.
+type dirtyLog struct {
+	mu     sync.Mutex
+	marked []string
+}
+
+func (d *dirtyLog) MarkDirty(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.marked = append(d.marked, name)
+}
+
+func (d *dirtyLog) list() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return append([]string(nil), d.marked...)
+}
+
+// Test_Enqueue_AWriteWhoseHandlerPanicsIsMarkedDirty queues an SQS
+// SendMessage through the gateway's internal handler, to a service that makes
+// its change and then panics. The gateway answers it, and marks the service
+// dirty, since the change it made would otherwise stay unsaved until the next
+// write. A handler that calls runtime.Goexit instead is marked too, and its
+// call fails with ErrAborted.
+func Test_Enqueue_AWriteWhoseHandlerPanicsIsMarkedDirty(t *testing.T) {
+	const panicLog = "ERROR panic while serving request"
+
+	tests := []struct {
+		name string
+		// giveStatus is the status the handler writes before it panics, or 0.
+		giveStatus int
+		// giveGoexit has the handler call runtime.Goexit instead of panicking.
+		giveGoexit bool
+		wantStatus int
+		wantErr    error
+		wantLog    []string
+	}{
+		{name: "before the status", wantStatus: http.StatusInternalServerError, wantLog: []string{panicLog}},
+		{name: "after the status", giveStatus: http.StatusOK, wantErr: inproc.ErrAborted, wantLog: []string{panicLog}},
+		{name: "a Goexit", giveGoexit: true, wantErr: inproc.ErrAborted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &records{}
+			previous := slog.Default()
+
+			slog.SetDefault(slog.New(log))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+
+			dirty := &dirtyLog{}
+			reg := service.Registration{
+				Metadata: service.Metadata{
+					Name: sqsService, SigningName: sqsService, TargetPrefix: "AmazonSQS", EndpointPrefix: sqsService,
+					APIVersion: "2012-11-05", Protocols: []protocol.Kind{protocol.KindJSON, protocol.KindQuery},
+				},
+				Serve: func(w http.ResponseWriter, _ *request.Context) {
+					if tt.giveStatus != 0 {
+						w.WriteHeader(tt.giveStatus)
+					}
+
+					if tt.giveGoexit {
+						runtime.Goexit()
+					}
+
+					panic("the change was made")
+				},
+			}
+
+			gw, err := gateway.New(
+				func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
+				[]service.Registration{reg}, nil, dirty)
+			require.NoError(t, err)
+
+			client := inproc.New()
+			t.Cleanup(client.Close)
+			client.Bind(gw.InternalHandler())
+
+			answers := make(chan answer, 1)
+
+			require.True(t, client.Enqueue(sqsCall("{}"), func(resp inproc.Response, err error) {
+				answers <- answer{status: resp.Status, err: err}
+			}))
+
+			select {
+			case got := <-answers:
+				assert.Equal(t, tt.wantStatus, got.status)
+				require.ErrorIs(t, got.err, tt.wantErr)
+			case <-time.After(bound):
+				require.FailNow(t, "the call was never answered")
+			}
+
+			assert.Equal(t, []string{sqsService}, dirty.list(), "the write that panicked is marked")
+			assert.Equal(t, tt.wantLog, log.list())
+		})
 	}
 }
