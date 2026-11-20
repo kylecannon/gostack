@@ -25,8 +25,9 @@ const mainSymbol = "main.main"
 // reflection at all. bytes.(*Buffer).UnreadRune was one, through
 // io.RuneScanner, and a fmt.Sscanf anywhere in the binary kept it. Neither of
 // these is named by any interface declaration in the standard library
-// (go doc bytes.Buffer.Truncate, math/big.Int.ModSqrt; grep of GOROOT/src for
-// an interface method of either name finds none).
+// (go doc bytes.Buffer.Truncate, math/big.Int.Binomial; grep of GOROOT/src for
+// an interface method of either name finds none). math/big.Int.ModSqrt was the
+// second until KMS: crypto/elliptic.UnmarshalCompressed calls it.
 //
 // They are rarely used methods, of two standard packages that are in the
 // binary through other dependencies: a dependency that starts calling one is
@@ -35,7 +36,7 @@ const mainSymbol = "main.main"
 // one of them present fails it.
 var prunedMethods = []string{
 	"bytes.(*Buffer).Truncate",
-	"math/big.(*Int).ModSqrt",
+	"math/big.(*Int).Binomial",
 }
 
 // Test_gostack_binaryPrunesMethods enforces the rule of docs/standards.md that

@@ -63,7 +63,15 @@ type client struct{ endpoint string }
 
 // workloads and agenticWorkloads are what this program can run.
 var (
-	workloads        = []workload{sqsWorkload{}, objectsWorkload{}, listingWorkload{}, multipartWorkload{}}
+	workloads = []workload{
+		sqsWorkload{},
+		objectsWorkload{},
+		listingWorkload{},
+		multipartWorkload{},
+		cryptWorkload{},
+		dataKeyWorkload{},
+		signWorkload{},
+	}
 	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )
 

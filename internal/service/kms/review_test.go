@@ -1,0 +1,146 @@
+package kms_test
+
+import (
+	"maps"
+	"net/http"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+const (
+	opGenerateDataKey     = "GenerateDataKey"
+	opGenerateDataKeyPair = "GenerateDataKeyPair"
+	opReEncrypt           = "ReEncrypt"
+	fieldRecipient        = "Recipient"
+	fieldAttestation      = "AttestationDocument"
+	fieldPrivateKey       = "PrivateKeyPlaintext"
+)
+
+// recipient is a RecipientInfo whose attestation document holds no key.
+func recipient() map[string]any {
+	return map[string]any{fieldAttestation: b64([]byte("junk"))}
+}
+
+// Test_Recipient_withoutKey holds LocalStack's answer to a Recipient whose
+// attestation document holds no public key
+// (test_decrypt_recipient_invalid_attestation): the recipient is ignored and
+// the call answers as it would without one, with no CiphertextForRecipient.
+func Test_Recipient_withoutKey(t *testing.T) {
+	s := newStack(t)
+	id := keyID(t, s.createKey(nil))
+	blob := blobOf(t, s.ok("Encrypt", map[string]any{fieldKeyID: id, fieldPlaintext: b64([]byte("x"))}),
+		fieldCiphertextBlob)
+
+	calls := []struct {
+		operation string
+		input     map[string]any
+	}{
+		{opGenerateDataKey, map[string]any{fieldKeyID: id}},
+		{opGenerateDataKey, map[string]any{fieldKeyID: id, fieldNumberOfBytes: 16}},
+		{opGenerateDataKeyPair, map[string]any{fieldKeyID: id, fieldKeyPairSpec: eccP256}},
+		{"GenerateRandom", map[string]any{fieldNumberOfBytes: 32}},
+		{opDecrypt, map[string]any{fieldCiphertextBlob: b64(blob)}},
+	}
+
+	for _, c := range calls {
+		t.Run(c.operation, func(t *testing.T) {
+			input := map[string]any{fieldRecipient: recipient()}
+			maps.Copy(input, c.input)
+
+			r := s.call(usEast1, c.operation, input)
+			require.Equal(t, http.StatusOK, r.status, "%v", r.body)
+			require.NotContains(t, r.body, fieldCiphertextForRecipient)
+
+			if c.operation == opGenerateDataKeyPair {
+				require.Contains(t, r.body, fieldPrivateKey)
+			} else {
+				require.Contains(t, r.body, fieldPlaintext)
+			}
+		})
+	}
+
+	t.Run("a missing key is still the lookup's error", func(t *testing.T) {
+		for _, operation := range []string{opGenerateDataKey, opGenerateDataKeyPair} {
+			r := s.call(usEast1, operation, map[string]any{
+				fieldKeyID: "6a1b2c3d-0000-4000-8000-000000000000", fieldKeyPairSpec: eccP256,
+				fieldRecipient: recipient(),
+			})
+			require.Equal(t, "NotFoundException", r.errorCode(), "%s: %v", operation, r.body)
+		}
+	})
+
+	t.Run("without a Recipient the calls still answer", func(t *testing.T) {
+		require.Contains(t, s.ok(opGenerateDataKey, map[string]any{fieldKeyID: id}), fieldPlaintext)
+		require.Contains(t, s.ok(opGenerateDataKeyPair, map[string]any{fieldKeyID: id, fieldKeyPairSpec: eccP256}),
+			fieldPrivateKey)
+		require.Contains(t, s.ok("GenerateRandom", map[string]any{fieldNumberOfBytes: 8}), fieldPlaintext)
+	})
+
+	// The WithoutPlaintext operations have no Recipient member: the image
+	// ignores the unknown member, and so does the decoder here.
+	t.Run("the WithoutPlaintext operations have no Recipient", func(t *testing.T) {
+		out := s.ok("GenerateDataKeyWithoutPlaintext", map[string]any{fieldKeyID: id, fieldRecipient: recipient()})
+		require.NotContains(t, out, fieldPlaintext)
+
+		out = s.ok("GenerateDataKeyPairWithoutPlaintext", map[string]any{
+			fieldKeyID: id, fieldKeyPairSpec: eccP256, fieldRecipient: recipient(),
+		})
+		require.NotContains(t, out, fieldPrivateKey)
+	})
+}
+
+// forgedBlob is a blob in LocalStack's layout whose id field is name, padded
+// with NULs to the 36 bytes, so the key id Parse reads is name.
+func forgedBlob(name string) []byte {
+	blob := make([]byte, headerLen+16)
+	copy(blob, name)
+
+	return blob
+}
+
+// Test_Decrypt_forgedBlobMakesNothing holds that a blob naming an AWS managed
+// alias is a blob naming no key: it must not make the alias and its key.
+func Test_Decrypt_forgedBlobMakesNothing(t *testing.T) {
+	s := newStack(t)
+	id := keyID(t, s.createKey(nil))
+	blob := blobOf(t, s.ok("Encrypt", map[string]any{fieldKeyID: id, fieldPlaintext: b64([]byte("x"))}),
+		fieldCiphertextBlob)
+
+	aliases := s.ok("ListAliases", nil)
+	keys := s.ok("ListKeys", nil)
+	changes := s.changes.Load()
+
+	// The ARN forms do not parse as key ARNs (no account), so they once fell
+	// through to the alias lookup; the last fills the 36 bytes, with no padding.
+	for _, name := range []string{
+		"alias/aws/ssm", aliasS3, "alias/mine",
+		"arn::alias/aws/ssm", "arn:aws:kms:us-west-2::alias/aws/es", "arn:aws:kms:us-east-1::alias/aws/s3",
+		"arn:aws:kms:us-east-1:::alias/aws/s3",
+	} {
+		forged := b64(forgedBlob(name))
+
+		for _, c := range []struct {
+			operation string
+			input     map[string]any
+		}{
+			{opDecrypt, map[string]any{fieldCiphertextBlob: forged}},
+			{opReEncrypt, map[string]any{fieldCiphertextBlob: forged, fieldDestinationKeyID: id}},
+		} {
+			t.Run(c.operation+" "+name, func(t *testing.T) {
+				r := s.call(usEast1, c.operation, c.input)
+				require.Equal(t, http.StatusBadRequest, r.status, "%v", r.body)
+				require.Equal(t, "NotFoundException", r.errorCode())
+			})
+		}
+	}
+
+	t.Run("a real blob still names its key", func(t *testing.T) {
+		out := s.ok(opDecrypt, map[string]any{fieldCiphertextBlob: b64(blob)})
+		require.Equal(t, b64([]byte("x")), out[fieldPlaintext])
+	})
+
+	require.Equal(t, aliases, s.ok("ListAliases", nil), "a forged blob made an alias")
+	require.Equal(t, keys, s.ok("ListKeys", nil), "a forged blob made a key")
+	require.Equal(t, changes, s.changes.Load(), "a forged blob marked the service changed")
+}
