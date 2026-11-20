@@ -285,7 +285,8 @@ func (e *Engine) MarkDirty(service string) {
 // Flush writes every dirty service. It clears a service's dirty bit before it
 // takes the snapshot, and sets it again if the snapshot or the write fails, so
 // a change made during the flush is kept for the next one. Flush attempts every
-// dirty service and returns the errors joined, with an [ErrUnsafe] error for
+// dirty service, a [Follower] only right after its leader's save (see
+// takeDirty), and returns the errors joined, with an [ErrUnsafe] error for
 // each service it does not save. It waits for a running flush or load only
 // until ctx ends.
 func (e *Engine) Flush(ctx context.Context) error {
