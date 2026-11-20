@@ -300,6 +300,10 @@ func endpointCall(endpoint string) inproc.Call {
 // nil without one. It holds body, which the delivery holds already, and builds
 // the call, an escaped copy, only when the delivery fails.
 func deadLetterCall(s *subscriber, body []byte) func() inproc.Call {
+	if s.dlq == "" {
+		return nil
+	}
+
 	if _, ok := parseARN(s.dlq); !ok {
 		return nil
 	}

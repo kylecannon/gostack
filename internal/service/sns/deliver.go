@@ -339,8 +339,10 @@ func (p *Provider) deliveryOf(s *subscriber, m *outgoing, version, trace string)
 	call, span := sendCall(queue, s.endpoint, m.topicARN, &params)
 	d := delivery{sub: s.sub, call: call}
 
-	if _, ok := parseARN(s.dlq); ok {
-		d.dlq = span.deadLetter(call.Body, s.dlq, s.arn)
+	if s.dlq != "" {
+		if _, ok := parseARN(s.dlq); ok {
+			d.dlq = span.deadLetter(call.Body, s.dlq, s.arn)
+		}
 	}
 
 	return d, true
