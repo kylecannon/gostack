@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"k\": [{\"anything-but\": {\"prefix\": \"ab\"}}]}")
+bool(false)
+string("{\"n\": {\"DataType\": \"String\", \"StringValue\": \"x\"}, \"k\": {\"DataType\": \"String\", \"StringValue\": \"a\"}}")

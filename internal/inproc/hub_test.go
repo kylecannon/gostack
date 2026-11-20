@@ -283,3 +283,47 @@ func Test_Hub_DrainCountsOnlyTheCallsItCut(t *testing.T) {
 		client.Close()
 	})
 }
+
+// Test_Client_Hold: work a client holds counts in its hub's pending count until
+// released, so Drain waits for it, and a second release counts nothing.
+func Test_Client_Hold(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		hub := inproc.NewHub(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		client := inproc.New()
+		client.Bind(hub)
+
+		release := client.Hold()
+		other := client.Hold()
+
+		other()
+		other()
+
+		drained := make(chan struct{})
+
+		go func() {
+			defer close(drained)
+
+			hub.Drain(context.Background())
+		}()
+
+		synctest.Wait()
+
+		select {
+		case <-drained:
+			t.Fatal("Drain returned while the client held work")
+		default:
+		}
+
+		// The held work queues its call, then lets go.
+		require.True(t, client.Enqueue(sqsCall("held"), nil))
+		release()
+		<-drained
+
+		assert.Zero(t, hub.Cut())
+		assert.NotNil(t, inproc.New().Hold(), "a client with no hub holds nothing")
+
+		client.Close()
+	})
+}

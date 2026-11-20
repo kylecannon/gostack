@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	s3api "github.com/kylecannon/gostack/internal/api/s3"
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
 // snapshotVersion is the version of the snapshot envelope: {"v":1,"data":...}.
@@ -31,10 +32,12 @@ const rawPrefix = "\x00b64:"
 
 // snapshotOptions are the json settings of a snapshot, on both sides of it. A
 // map is written in key order, so the same state gives the same bytes, and
-// every string goes through as the bytes it is.
+// every string goes through as the bytes it is. So does a time RFC 3339
+// cannot write, such as a retain-until date past year 9999.
 var snapshotOptions = json.JoinOptions(
 	json.Deterministic(true),
 	json.WithMarshalers(json.JoinMarshalers(
+		protocol.SnapshotTimeMarshalers,
 		json.MarshalToFunc(marshalString),
 		json.MarshalToFunc(marshalKeys[string]),
 		json.MarshalToFunc(marshalKeys[*s3api.InventoryConfiguration]),
@@ -43,6 +46,7 @@ var snapshotOptions = json.JoinOptions(
 		json.MarshalToFunc(marshalKeys[*s3api.IntelligentTieringConfiguration]),
 	)),
 	json.WithUnmarshalers(json.JoinUnmarshalers(
+		protocol.SnapshotTimeUnmarshalers,
 		json.UnmarshalFromFunc(unmarshalString),
 		json.UnmarshalFromFunc(unmarshalKeys[string]),
 		json.UnmarshalFromFunc(unmarshalKeys[*s3api.InventoryConfiguration]),

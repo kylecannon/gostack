@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"a\": [{\"equals-ignore-case\": \"X\"}]}")
+bool(true)
+string("{\"a\": 1.0, \"b\": true}")

@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"k\": [{\"equals-ignore-case\": \"HeLLo\"}]}")
+bool(false)
+string("{\"k\": {\"DataType\": \"String\", \"StringValue\": \"hello\"}}")

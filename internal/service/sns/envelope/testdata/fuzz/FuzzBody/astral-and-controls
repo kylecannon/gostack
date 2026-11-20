@@ -1,0 +1,4 @@
+go test fuzz v1
+string("\U0001f600\x7f\x1f </script>&amp;\"\\")
+string("\xed\xa0\x80 lone surrogate bytes")
+bool(true)

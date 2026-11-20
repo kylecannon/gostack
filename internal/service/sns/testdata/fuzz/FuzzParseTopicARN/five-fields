@@ -1,0 +1,2 @@
+go test fuzz v1
+string("arn:aws:sns:us-east-1:000000000000")

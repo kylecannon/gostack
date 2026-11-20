@@ -1,0 +1,4 @@
+go test fuzz v1
+string("{\"k\": [{\"anything-but\": {\"prefix\": \"ab\"}}]}")
+bool(false)
+string("{\"k\": {\"DataType\": \"String.Array\", \"StringValue\": \"[5, true, {\\\"a\\\": 1}, [1]]\"}}")
