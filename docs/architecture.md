@@ -1306,11 +1306,12 @@ Kinesis. The state is two files, LocalStack's split:
   The bound is about 56 ms of lock per 1,000,000 items (Apple M1 Max).
   Snapshot and restore of one table of 1,000,000 items of about 100 bytes
   (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
-  `-benchtime 1x -count 6` on that machine: snapshot 0.55 s allocating 92 MiB;
-  restore 2.45 s allocating 1.25 GiB, against 1.21 GiB the restored state holds
+  `-benchtime 1x -count 6` on that machine: snapshot 0.57 s allocating 46 MiB;
+  restore 2.23 s allocating 1.24 GiB, against 1.20 GiB the restored state holds
   (`held-B`). Restore allocates no more than the state it builds plus the file
   once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
-  this shape.
+  this shape. `bin/gostack` loading that file, saving once and shutting down
+  peaks at 1.46 GB resident (`/usr/bin/time -l`).
 
 **Format:**
 
