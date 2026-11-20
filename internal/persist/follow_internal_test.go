@@ -117,7 +117,7 @@ func Test_Engine_Load_RestoresALeaderBeforeItsFollower(t *testing.T) {
 // Test_Engine_Flush_SavesAFollowerWithItsLeader: a flush that saves the
 // leader saves its follower right after it although only the leader is
 // dirty, as DynamoDB Streams' file must be of the cut DynamoDB's save took. A
-// flush of the follower alone saves the follower alone.
+// dirty follower is never saved alone: it takes its clean leader with it.
 func Test_Engine_Flush_SavesAFollowerWithItsLeader(t *testing.T) {
 	log := &orderLog{}
 	e := New(quietConfig(t.TempDir(), time.Hour))
@@ -132,5 +132,5 @@ func Test_Engine_Flush_SavesAFollowerWithItsLeader(t *testing.T) {
 	log.seen = nil
 	e.MarkDirty(follower)
 	require.NoError(t, e.Flush(t.Context()))
-	require.Equal(t, []string{follower}, log.seen)
+	require.Equal(t, []string{leader, follower}, log.seen)
 }

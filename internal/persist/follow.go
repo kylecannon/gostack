@@ -2,14 +2,25 @@ package persist
 
 // Follower is a Snapshotter whose Restore reads the state another service's
 // Restore put back, as DynamoDB Streams' records go back into the shards of
-// DynamoDB's restored tables. Load restores the followed service first, and a
-// flush that saves the followed service saves the follower right after it,
-// whether or not the follower changed, so the two files are taken as close
-// together as the engine can take them and the follower's is never the older
-// of the two.
+// DynamoDB's restored tables. Load restores the followed service, its leader,
+// first. A flush saves the follower only right after it renamed its leader's
+// snapshot into place, whether or not the follower changed, so the follower's
+// file is never of a later moment than its leader's file on disk. When the
+// leader is not saved (its backoff, a failure, or it is not persisted) the
+// follower is not saved and stays dirty; when the follower is in its own
+// backoff the leader is saved alone, and the follower's file is the older of
+// the two until both are saved again.
 type Follower interface {
 	// Follows names the service this one follows.
 	Follows() string
+}
+
+// Committer is a Snapshotter told when the snapshot it last took is on disk:
+// a flush calls Committed once it has renamed every state file of that
+// snapshot into place, before it saves the service's followers. A snapshot
+// that fails, or whose rename does not finish, is not committed.
+type Committer interface {
+	Committed()
 }
 
 // follows is the service s follows, "" for none.

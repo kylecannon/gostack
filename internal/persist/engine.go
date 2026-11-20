@@ -597,7 +597,11 @@ func (e *Engine) scheduleLocked() {
 // services, of PERSIST_FREQUENCY from now or, for a service in its backoff, its
 // retryAt. A retryAt is the service's own time, which another service's save
 // does not move. Once it has passed, the service is due now: its timer ran past
-// it while another service's save was under way, or gave way to a waiter.
+// it while another service's save was under way, or gave way to a waiter. A
+// [Follower] is saved only with its leader, so it is due no sooner than its
+// leader would be, and never when its leader is not saved at all; otherwise a
+// dirty follower whose leader is in its backoff would fire the timer for a
+// flush that takes nothing, with no wait at PERSIST_FREQUENCY 0.
 func (e *Engine) nextDueLocked(now time.Time) time.Time {
 	var at time.Time
 
@@ -606,9 +610,15 @@ func (e *Engine) nextDueLocked(now time.Time) time.Time {
 			continue
 		}
 
-		due := now.Add(e.freq)
-		if !t.retryAt.IsZero() {
-			due = later(t.retryAt, now)
+		due := e.dueLocked(t, now)
+
+		if leader := follows(t.snap); leader != "" {
+			l, ok := e.services[leader]
+			if !ok || l.unsafe != nil {
+				continue
+			}
+
+			due = later(due, e.dueLocked(l, now))
 		}
 
 		if at.IsZero() || due.Before(at) {
@@ -617,6 +627,16 @@ func (e *Engine) nextDueLocked(now time.Time) time.Time {
 	}
 
 	return at
+}
+
+// dueLocked is when t's service would be due if it were dirty:
+// PERSIST_FREQUENCY from now, or in its backoff its retryAt.
+func (e *Engine) dueLocked(t *tracked, now time.Time) time.Time {
+	if t.retryAt.IsZero() {
+		return now.Add(e.freq)
+	}
+
+	return later(t.retryAt, now)
 }
 
 // later is the later of two times.
@@ -837,15 +857,16 @@ func (e *Engine) redirtyLocked(u unsaved) {
 	}
 }
 
-// takeDirty clears the dirty bit of every dirty service and returns the safe
-// ones in name order; writeAll puts them in saveOrder. A follower of a dirty
-// service is taken with it, dirty or not, so a flush that saves the leader
-// saves the follower right after it and the two files are of one moment:
-// DynamoDB Streams writes the records up to the cut DynamoDB's save took, and
-// a streams file left behind that cut would restore none. A flush byTimer
-// leaves a service still in its backoff dirty, for the timer to arm again; one
-// byHand takes it. It also cancels the armed timer, because the services it
-// was armed for are now in the caller's hands.
+// takeDirty clears the dirty bit of each service it takes and returns the safe
+// ones in name order; writeAll puts them in saveOrder. A flush byTimer leaves a
+// service still in its backoff dirty, for the timer to arm again; one byHand
+// takes it. A [Follower] is taken only with its leader, and then whether or
+// not it is dirty, unless the flush is byTimer and the follower is in its own
+// backoff: the leader is then taken alone. A follower whose leader is not
+// taken stays dirty. A dirty follower that is due takes its clean leader with
+// it, so a follower whose save failed after its leader's is saved again, with
+// its leader, rather than never. It also cancels the armed timer, because the
+// services it was armed for are now in the caller's hands.
 func (e *Engine) takeDirty(by flushBy) []pendingService {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -853,37 +874,70 @@ func (e *Engine) takeDirty(by flushBy) []pendingService {
 	e.disarmLocked()
 	e.dirtyAgain = false
 
-	var pending []pendingService
-
 	now := time.Now()
+	due := func(t *tracked) bool { return by == byHand || !now.Before(t.retryAt) }
 
-	saved := make(map[string]bool, len(e.services))
+	// wanted are the dirty services and the leaders of the due dirty followers.
+	wanted := make(map[string]bool, len(e.services))
+
 	for name, t := range e.services {
-		saved[name] = t.dirty && t.unsafe == nil
+		if t.dirty && t.unsafe == nil {
+			wanted[name] = true
+
+			if leader := follows(t.snap); leader != "" && due(t) {
+				wanted[leader] = true
+			}
+		}
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(e.services)) {
+	var pending []pendingService
+
+	taken := make(map[string]bool, len(e.services))
+
+	for _, name := range e.leadersFirstLocked() {
 		t := e.services[name]
-		if !t.dirty && !saved[follows(t.snap)] {
-			continue
+
+		take := wanted[name]
+		if leader := follows(t.snap); leader != "" {
+			take = taken[leader]
 		}
 
-		if by == byTimer && t.unsafe == nil && now.Before(t.retryAt) {
+		switch {
+		case !take:
+			e.dirtyAgain = e.dirtyAgain || t.dirty
+		case t.unsafe != nil:
+			t.dirty = false
+		case !due(t):
 			e.dirtyAgain = true
-
-			continue
-		}
-
-		t.dirty = false
-
-		if t.unsafe == nil {
+		default:
+			t.dirty = false
+			taken[name] = true
 			pending = append(pending, pendingService{name: name, snap: t.snap, assets: t.assets, took: t.took})
 		}
 	}
 
+	slices.SortFunc(pending, func(a, b pendingService) int { return strings.Compare(a.name, b.name) })
+
 	e.flushing = len(pending) > 0
 
 	return pending
+}
+
+// leadersFirstLocked is the service names, the ones that follow no service
+// first, each part in name order. A follower's leader is not a follower itself.
+func (e *Engine) leadersFirstLocked() []string {
+	names := slices.Sorted(maps.Keys(e.services))
+	rank := func(name string) int {
+		if follows(e.services[name].snap) != "" {
+			return 1
+		}
+
+		return 0
+	}
+
+	slices.SortStableFunc(names, func(a, b string) int { return cmp.Compare(rank(a), rank(b)) })
+
+	return names
 }
 
 // backoff is the wait after a service's failures-th failed save in a row:
@@ -940,7 +994,7 @@ func (e *Engine) writeAll(ctx context.Context, pending []pendingService) ([]unsa
 
 	defer func() { _ = root.Close() }()
 
-	run := flushRun{e: e, root: root}
+	run := flushRun{e: e, root: root, committed: map[string]bool{}, deferred: map[string]bool{}}
 	deferred := run.firstPass(ctx, saveOrder(pending))
 	run.secondPass(ctx, deferred)
 
@@ -972,9 +1026,10 @@ func unsavedAll(pending []pendingService, err error) ([]unsaved, error) {
 //
 // A [Follower] then moves to right after the service it follows when both are
 // pending, a declared order rather than a name sort: dynamodbstreams is saved
-// straight after dynamodb (takeDirty takes it whenever dynamodb is taken), so
+// straight after dynamodb's rename (takeDirty takes it only with dynamodb), so
 // the streams file holds the records of the cut the table file holds, and
-// only a kill between the two leaves it the older one.
+// only a kill between the two, or a failed streams save, leaves it the older
+// one.
 //
 // A service whose assets have failed or been released sorts with the pending
 // ones; its save fails in firstPass, which reports why.
@@ -1010,6 +1065,9 @@ type flushRun struct {
 	errs   []error
 	// ended is true once the end of ctx is in errs.
 	ended bool
+	// committed are the services whose snapshot this flush renamed into place,
+	// and deferred the ones it deferred to the second pass.
+	committed, deferred map[string]bool
 }
 
 // staged is one service's save between its snapshot and its rename.
@@ -1019,10 +1077,20 @@ type staged struct {
 	removed []string
 	// writers hold the snapshot in temp files that are not renamed yet.
 	writers []*stateWriter
+	// late is a follower whose leader was deferred: the second pass takes its
+	// snapshot once the leader's is renamed.
+	late bool
 }
 
+// errLeaderUnsaved is why a [Follower] is not saved: its leader's save in the
+// same flush did not end in a rename.
+var errLeaderUnsaved = errors.New("its leader was not saved in this flush")
+
 // firstPass snapshots each service and renames the ones with nothing to sync.
-// It returns the services deferred to the second pass.
+// It returns the services deferred to the second pass. A [Follower] is saved
+// only after its leader's snapshot is renamed in the same flush: it goes to
+// the second pass behind a deferred leader, and gives way, dirty again with no
+// backoff, when its leader failed.
 func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*staged {
 	var deferred []*staged
 
@@ -1033,6 +1101,17 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 			break
 		}
 
+		if leader := follows(p.snap); leader != "" && !r.committed[leader] {
+			if r.deferred[leader] {
+				r.deferred[p.name] = true
+				deferred = append(deferred, &staged{p: p, removed: p.assets.begin(), late: true})
+			} else {
+				r.giveWay(p)
+			}
+
+			continue
+		}
+
 		s := &staged{p: p, removed: p.assets.begin()}
 
 		err := r.e.snapshot(r.root, s)
@@ -1041,6 +1120,7 @@ func (r *flushRun) firstPass(ctx context.Context, pending []pendingService) []*s
 
 			due, err = p.assets.syncDue()
 			if err == nil && due {
+				r.deferred[p.name] = true
 				deferred = append(deferred, s)
 
 				continue
@@ -1070,7 +1150,23 @@ func (r *flushRun) secondPass(ctx context.Context, deferred []*staged) {
 			return
 		}
 
-		err := s.p.assets.sync(ctx)
+		var err error
+
+		if s.late {
+			if !r.committed[follows(s.p.snap)] {
+				finishSave(s, errLeaderUnsaved)
+				r.giveWay(s.p)
+
+				continue
+			}
+
+			err = r.e.snapshot(r.root, s)
+		}
+
+		if err == nil {
+			err = s.p.assets.sync(ctx)
+		}
+
 		if err == nil {
 			err = r.e.rename(ctx, r.root, s)
 		}
@@ -1079,11 +1175,24 @@ func (r *flushRun) secondPass(ctx context.Context, deferred []*staged) {
 	}
 }
 
-// end ends one service's save with err and records what it failed with.
+// giveWay records a follower that is not saved because its leader was not: it
+// failed at nothing of its own, so it is dirty again with no backoff.
+func (r *flushRun) giveWay(p pendingService) {
+	r.failed = append(r.failed, unsaved{pendingService: p, err: errLeaderUnsaved, gaveWay: true})
+}
+
+// end ends one service's save with err and records what it failed with. A
+// save that ended in its rename is committed, and a [Committer] is told so.
 func (r *flushRun) end(s *staged, err error) {
 	finishSave(s, err)
 
 	if err == nil {
+		r.committed[s.p.name] = true
+
+		if c, ok := s.p.snap.(Committer); ok {
+			c.Committed()
+		}
+
 		return
 	}
 
