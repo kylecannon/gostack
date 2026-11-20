@@ -64,7 +64,7 @@ func (s *stack) importParams(id, algorithm string) importParams {
 }
 
 // wrap is material wrapped as a client wraps it for params' algorithm.
-func (p importParams) wrap(t *testing.T, material []byte) []byte {
+func (p importParams) wrap(t testing.TB, material []byte) []byte {
 	t.Helper()
 
 	h := sha256.New
@@ -92,7 +92,7 @@ func (p importParams) wrap(t *testing.T, material []byte) []byte {
 // wrapPadded is a client's RFC 5649 wrap, written apart from the service's
 // unwrap: the alternative initial value, zero padding, then RFC 3394's six
 // rounds, which for one semiblock are a single AES encryption.
-func wrapPadded(t *testing.T, kek, key []byte) []byte {
+func wrapPadded(t testing.TB, kek, key []byte) []byte {
 	t.Helper()
 
 	block, err := aes.NewCipher(kek)
