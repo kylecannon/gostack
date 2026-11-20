@@ -194,20 +194,32 @@ func (ls *lanes) post(l *lane) {
 	ls.posting++
 	ls.poster.running.Add(1)
 
-	go ls.runPost(l, l.jobs[0].post)
+	go ls.runPost(l, l.jobs[0])
 }
 
-// runPost makes one HTTP delivery, with no lock held, and answers it. A panic
-// is logged, and one in the send fails the delivery, so the lane goes on.
-func (ls *lanes) runPost(l *lane, p *post) {
+// runPost makes one HTTP delivery, j, with no lock held, and answers it. A
+// panic is logged, and one in the send fails the delivery, so the lane goes
+// on. When the send fails and j has a dead-letter queue, the dead-letter call
+// is built here, with no lock held: it is the costly step of a failure, an
+// escaped copy of the body, and the lanes lock is every publish's. posted
+// only adds it to its lane.
+func (ls *lanes) runPost(l *lane, j *job) {
 	defer ls.poster.running.Done()
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("SNS HTTP delivery panicked", "endpoint", p.url, "panic", r)
+			slog.Error("SNS HTTP delivery panicked", "endpoint", j.post.url, "panic", r)
 		}
 	}()
 
-	ls.posted(l, ls.poster.sendRecovered(p))
+	err := ls.poster.sendRecovered(j.post)
+
+	// A poster that was cut is Close's, which drops what it cuts.
+	var dead *inproc.Call
+	if err != nil && ls.poster.ctx.Err() == nil {
+		dead = deadLetterOf(j)
+	}
+
+	ls.posted(l, err, dead)
 }
 
 // sendRecovered is send, with a panic made its error.
@@ -223,7 +235,9 @@ func (ps *poster) sendRecovered(p *post) (err error) {
 
 // posted is the answer to l's head, an HTTP delivery: the head leaves the
 // lane, failed when err is not nil, and the next waiting HTTP delivery starts.
-func (ls *lanes) posted(l *lane, err error) {
+// dead is the dead-letter call runPost built for a failed head, nil without
+// one.
+func (ls *lanes) posted(l *lane, err error, dead *inproc.Call) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
@@ -241,7 +255,7 @@ func (ls *lanes) posted(l *lane, err error) {
 		failure = err.Error
 	}
 
-	ls.finish(l, failure)
+	ls.finish(l, failure, dead)
 }
 
 // cutPosts cuts the HTTP deliveries in flight at once, each of which answers
