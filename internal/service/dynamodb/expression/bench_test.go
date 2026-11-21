@@ -98,6 +98,32 @@ func BenchmarkParseKeyCondition(b *testing.B) {
 	}
 }
 
+// BenchmarkParseUpdate measures ParseUpdate by the number of paths a REMOVE
+// names, up to the 700 or so that fit the 4 KiB expression cap; the overlap
+// check is the part that grows with it.
+func BenchmarkParseUpdate(b *testing.B) {
+	for _, terms := range []int{1, 10, 100, 700} {
+		paths := make([]string, terms)
+		for i := range paths {
+			paths[i] = "a" + strconv.Itoa(i)
+		}
+
+		src := "REMOVE " + strings.Join(paths, ", ")
+
+		b.Run("terms="+strconv.Itoa(terms), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(src)))
+
+			for b.Loop() {
+				_, err := expression.ParseUpdate(src, expression.Substitutions{}, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkProjection(b *testing.B) {
 	for _, terms := range benchTerms {
 		paths := make([]string, terms)

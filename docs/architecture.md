@@ -172,7 +172,12 @@ The server is `net/http` with `github.com/go-chi/chi/v5` for routing and
 middleware composition. fasthttp stays out: it has no HTTP/2, and its request
 type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
-decoding, and an oversized one answers `MalformedQueryString` (400).
+decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
+services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
+query form whose Action is in the URL or whose path is an SQS queue URL. A form
+that carries its Action in the body answers `MissingAction` (400) with a SigV4
+`Authorization` header and 404 without one: the gateway reads it to find the
+Action and drops the read error.
 
 ### How chi is used
 
@@ -2066,6 +2071,53 @@ and SubjectPublicKeyInfo DER, which `crypto/x509` cannot. RFC 5649 key wrap
 (`keywrap.go`, for `ImportKeyMaterial`) and LocalStack's CMS envelope for a
 `Recipient` (`envelope.go`) are written in the package against published test
 vectors.
+
+### SNS (`internal/service/sns`)
+
+LocalStack implements SNS itself, with no moto (`localstack-core/localstack/services/sns/`
+at 8b9a79f). gostack ports its 36 operations; the other 6 of the API's 42 (the
+SMS sandbox and `ListOriginationNumbers`) answer 501 through the generated
+`Unimplemented`, and `GET /_gostack/services` reports 36 of 42
+(`Test_implemented`). What it answers differently is in `docs/compat.md`, the
+SNS sections.
+
+| Package | Holds |
+|---|---|
+| `filter` | Filter policies: the JSON check, the parse on a scope (`MessageAttributes` or `MessageBody`) and the match. A parsed `Policy` is not saved; persistence keeps the policy text and parses it again. |
+| `envelope` | The JSON body a subscriber receives, its signature (SignatureVersion 1 and 2) and the `Signer`, which holds the process's one key pair and serves its certificate. |
+
+**State.** A `State` per account and region in a `store.Bundle` holds the
+topics, the subscriptions with their confirmation tokens and filter policy
+text, the platform applications and endpoints, the SMS attributes and the
+messages recorded for endpoints and phone numbers. An `AccountState` per account
+holds what LocalStack keeps across regions: tags and opted-out numbers. A
+`Topic` keeps an index of its subscriptions, sorted by creation, under its own
+lock; a FIFO topic keeps its ordering lock and its deduplication window.
+Persistence is under "Persistence", SNS.
+
+**Publish.** `Publish` and `PublishBatch` check the request, then fan the
+message out (`fanOut` in `deliver.go`):
+
+1. The topic's confirmed SQS, HTTP and HTTPS subscriptions are read, each
+   under its lock, into a snapshot. Messages to platform endpoints and phone
+   numbers are recorded, not sent.
+2. Each subscription's filter policy is matched against the message's
+   attributes or its body, on the scope the subscription names. The body is
+   parsed once a publish, for every subscription that filters on it.
+3. A matching subscription gets the raw message or the envelope. The envelope
+   is signed once a publish for each content (`envelopeFor`): a
+   `MessageStructure=json` message can give each protocol its own, and every
+   subscriber of the same content shares one signature, since only
+   `UnsubscribeURL` differs and it is not signed.
+4. The deliveries are added to their lanes under the topic's lock, and a FIFO
+   topic's under its FIFO lock as well, after the deduplication check
+   (`publishFIFO`). The publish lets go of both and only then starts the
+   lanes (`lanes.dispatch`), and answers 200 without waiting for any delivery.
+
+The lanes, the in-process calls to SQS, the dead-letter path and the drain at
+shutdown are under "SNS delivery"; the outbound HTTP client under "SNS delivery
+to HTTP and HTTPS". The system bench loads this path through `sns/publish`
+(`bench/doc.go`, "The SNS matrix").
 
 ## Dependencies
 

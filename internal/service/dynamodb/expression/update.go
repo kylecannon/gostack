@@ -257,23 +257,17 @@ func updateResolveNames(p *updateParser, names map[string]string, used map[strin
 
 // updateCheckOverlap refuses two action paths where one is a prefix of the
 // other (overlap) or where one names a map key and the other a list index at
-// the same step (conflict).
+// the same step (conflict), naming the pair DynamoDB Local does.
 func updateCheckOverlap(paths []Path) error {
-	for j := range paths {
-		for i := range j {
-			prefix, conflict := comparePaths(paths[i], paths[j])
-
-			switch {
-			case conflict:
-				return value.Invalid(msgUpdateConflict + updatePathPair(paths[i], paths[j]))
-			case prefix:
-				return value.Invalid(msgUpdateOverlap + updatePathPair(paths[i], paths[j]))
-			default:
-			}
-		}
+	c := findPathClash(paths)
+	switch {
+	case c == nil:
+		return nil
+	case c.conflict:
+		return value.Invalid(msgUpdateConflict + updatePathPair(c.one, c.two))
+	default:
+		return value.Invalid(msgUpdateOverlap + updatePathPair(c.one, c.two))
 	}
-
-	return nil
 }
 
 func updatePathPair(a, b Path) string {

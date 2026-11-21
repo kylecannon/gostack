@@ -420,8 +420,9 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 
 		aliases[alias] = struct{}{}
 
-		// DynamoDB Local names the later of two overlapping paths first
-		// (verification/SQ-229 probe6), so the check sees them reversed.
+		// DynamoDB Local adds a SELECT's paths to its overlap trie first to
+		// last, which ParseProjection does last to first (SQ-229 probe6,
+		// SQ-333), so the check is given them reversed.
 		full[len(paths)-1-i] = whole.path(path)
 		nested = nested || len(path) > 1
 

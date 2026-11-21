@@ -391,24 +391,6 @@ func (r *resolver) distinct(name string, ops []*operand) error {
 	return nil
 }
 
-// comparePaths reports whether a and b agree on every step they share, one
-// being the other or leading into it, and whether they part at a step where
-// one names a map key and the other a list index.
-func comparePaths(a, b Path) (bool, bool) {
-	for k := range min(len(a), len(b)) {
-		x, y := a[k], b[k]
-		if (x.Name == "") != (y.Name == "") {
-			return false, true
-		}
-
-		if x != y {
-			return false, false
-		}
-	}
-
-	return true, false
-}
-
 func samePath(a, b Path) bool {
 	if len(a) != len(b) {
 		return false
