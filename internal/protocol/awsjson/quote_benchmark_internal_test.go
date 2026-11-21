@@ -8,7 +8,8 @@ import (
 
 // quoteTexts are the kinds of text a string quotes differently: plain ASCII,
 // ASCII with a newline per line, two-byte Latin among ASCII, three-byte CJK,
-// four-byte emoji, json text with its quotes escaped, and nothing but quotes.
+// four-byte emoji, json text with its quotes escaped, nothing but quotes, and
+// one two-byte letter after every 17 ASCII bytes, as in French or German prose.
 var quoteTexts = []struct{ name, unit string }{
 	{"ascii", "abcdefghijklmnopqrstuvwxyz012345"},
 	{"lines", "line of log text here\n"},
@@ -17,6 +18,7 @@ var quoteTexts = []struct{ name, unit string }{
 	{"emoji", "\U0001f389\U0001f680\u2728"},
 	{"json", `{"k":"v","n":1},`},
 	{"quotes", `"`},
+	{"accents", "Le thé est chaud, "},
 }
 
 // BenchmarkAppendQuote quotes each kind of text at 256 B, 64 KiB and 1 MiB,

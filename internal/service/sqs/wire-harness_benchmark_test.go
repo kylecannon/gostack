@@ -80,8 +80,9 @@ type benchText struct {
 
 // benchTexts are the bodies that quote differently in json: two-byte Latin
 // among ASCII, three-byte CJK, four-byte emoji, json text, a third of it
-// escaped quotes, Vietnamese, CJK and ASCII alternating, and pretty-printed
-// json, escaped quotes among newlines.
+// escaped quotes, Vietnamese, CJK and ASCII alternating, pretty-printed json,
+// escaped quotes among newlines, and accents, one two-byte letter after every
+// 17 ASCII bytes, as in French or German prose.
 var benchTexts = []benchText{
 	{"latin", "caf\u00e9 na\u00efve "},
 	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
@@ -90,6 +91,7 @@ var benchTexts = []benchText{
 	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
 	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
 	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
+	{"accents", "Le thé est chaud, "},
 }
 
 // body is n bytes of the text: whole units, then ASCII to make up the size.
