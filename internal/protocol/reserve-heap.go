@@ -15,6 +15,14 @@ import (
 // container limit", has the measurements it is set from.
 const HeapSlack = 48 << 20
 
+// HeapKeeper is a DecodeHolder that keeps a decoding's heap reservation
+// (ReserveHeap) until its request is answered, so that what the handler builds
+// from the decoded value stays counted while it works: KeepHeap takes the
+// reservation's release, to run then.
+type HeapKeeper interface {
+	KeepHeap(release func())
+}
+
 // heap is what ReserveHeap has reserved, and the samples it reads the heap
 // with. Reading and reserving are one step under mu, so that requests decoded
 // at once each see what the others reserved. collecting lets one request at a

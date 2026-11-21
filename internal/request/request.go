@@ -84,6 +84,21 @@ func (rc *Context) HoldDecode(cost int64) (int64, error) {
 	return covered, nil
 }
 
+// KeepHeap is protocol.HeapKeeper: the request's protocol.Charge keeps the
+// heap reservation until the gateway releases it, when the handler returns. A
+// Context whose request carries none releases it at once, when it is decoded.
+func (rc *Context) KeepHeap(release func()) {
+	if rc.Request != nil {
+		if c := protocol.ChargeOf(rc.Request.Context()); c != nil {
+			c.KeepHeap(release)
+
+			return
+		}
+	}
+
+	release()
+}
+
 // ReleaseDecode gives back what HoldDecode charged to this Context's own hold,
 // for a request that carries no protocol.Charge. What a request with one holds
 // is given back by protocol.ReleaseBody, and by the gateway when the handler

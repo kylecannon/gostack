@@ -101,3 +101,37 @@ func Test_ReserveHeap_CollectsWhenOnlyGarbageStandsInTheWay(t *testing.T) {
 
 	release()
 }
+
+// Test_Charge_KeepsTheHeapUntilTheRequestIsReleased: a reservation kept by a
+// request's Charge stays reserved after decoding, while the handler works on
+// the value, and is given back when the gateway releases the request.
+func Test_Charge_KeepsTheHeapUntilTheRequestIsReleased(t *testing.T) {
+	const objects = 20 << 20
+
+	fakeHeap(t, objects, objects)
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	debug.SetMemoryLimit(bound + HeapSlack + objects + 100<<20)
+
+	var c Charge
+
+	var keeper HeapKeeper = &c
+
+	for range 2 {
+		release, ok := ReserveHeap(40 << 20)
+		require.True(t, ok)
+		keeper.KeepHeap(release)
+	}
+
+	assert.Equal(t, int64(80<<20), heap.reserved, "both stay reserved past decoding")
+
+	_, ok := ReserveHeap(40 << 20)
+	assert.False(t, ok, "what the request keeps is not room for another")
+
+	c.Release()
+
+	assert.Zero(t, heap.reserved, "the request's release gives both back")
+}

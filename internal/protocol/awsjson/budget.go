@@ -44,7 +44,9 @@ var ErrTooLarge = &awserr.Error{
 // factor decodes (DynamoDB's). It is not charged to hold: it is decoded only
 // when protocol.ReserveHeap has room under the Go memory limit for the heap the
 // walk bounds it to keep (walker.heap), and refused with ErrTooLarge otherwise,
-// as it is at protocol.DecodeFactor. The room is reserved until it is decoded.
+// as it is at protocol.DecodeFactor. The room is reserved until the request is
+// answered when hold is a protocol.HeapKeeper, and until it is decoded
+// otherwise.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
@@ -55,7 +57,9 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 			return nil, false, err
 		}
 
-		if release != nil {
+		if keeper, ok := hold.(protocol.HeapKeeper); ok && release != nil {
+			keeper.KeepHeap(release)
+		} else if release != nil {
 			defer release()
 		}
 	}

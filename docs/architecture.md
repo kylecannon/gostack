@@ -375,14 +375,8 @@ How each piece is bounded, and why this way:
   The plan follows the reader that arms the meter: json and xml plan twice
   the body (`protocol.TextDecode`: json decodes twice, xml charges its text
   twice) plus `FreeBody` for structure; a query form plans nothing, since its
-  pairs cost less than `FreeDecode`. A service that declares
-  `Registration.DecodeUnit` (DynamoDB) has the commas and opening brackets in
-  the body's first `FreeBody` bytes counted as it is read, and the plan adds
-  that density times the body's length times the unit, so a body dense with
-  elements is admitted with the room it will need and a body of text is not.
-  The gateway hands the unit to the request's meter at dispatch
-  (`Charge.PlanUnit`). A body whose decoding passes its plan, one
-  dense with elements that the sample did not show, charges the rest in steps as it decodes. A body of
+  pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
+  dense with elements, charges the rest in steps as it decodes. A body of
   unknown length (chunked or gzip) is charged in doubling steps of what has
   arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
   ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
@@ -440,7 +434,7 @@ it would be refused (1.09 of 16 MiB).
 
 Every DynamoDB operation that takes an `AttributeValue` (a 160-byte
 structure however few bytes it takes on the wire) declares
-`DecodeFactor` 256 and `DecodeUnit` 1,700 in
+`DecodeFactor` 256 in
 `internal/service/dynamodb/provider.go`. The rule is that every request
 AWS accepts by size is admitted: an item up to 400 KB, a `BatchWriteItem` of 25
 items in 16 MiB, a `TransactWriteItems` of 100 actions in 4 MB. Charged is
@@ -483,127 +477,56 @@ answered by the handler as any key of the wrong shape
 `dynamodbstreams` takes only strings of at most 2,048 bytes and a limit, so it
 keeps the default factor.
 
-A fixed factor says what a body may cost, not what it is admitted with. The
-pool admits a body with the room its decoding is planned to hold, and past
-`DecodeFactor` x length that would be the whole of a request's share for every
-body over 190 KB. So the plan is shaped by the body: the unit is the most
-an element costs (1,700, over the 1,638 measured) and the density is
-counted in the body's first 64 KiB, outside json strings: quotes and
-backslashes are followed across reads, so a string of comma separated values
-decodes to its text and is counted as text, whatever it holds. A body of
-strings is planned twice its length as before (a 65,537-byte string of CSV is
-planned 2x, not the 26 MiB its commas would plan, and a client that stops after
-64 KiB + 1 of it holds 100 KB and not 41 MiB: `Test_decodeBudget_aStringOfCommasIsPlannedAsText`);
-a body of numbers, nests or records is planned what it will need, up to what one
-request may be charged (48 MiB by default). Before this,
-32 clients sending a 1 MB `BatchWriteItem` of 25 items with a list of 60
-records each, which decodes into 8.5 MiB charged, were admitted with about
-3 MiB each, held the pool between them and waited for the rest from one
-another: `Test_decodeBudget_aBurstOfDenseBodiesIsServed` fails that way with
-the unit removed, and the review that found it measured 27 or 28 of 32
-throttled at the 5 s wait for a body that charged 15.5 MiB. Now all 32 are
-served in 0.07 to 0.27 s, as the pool admits as many as fit and the others
-wait their turn holding nothing.
+A body charged within `protocol.DecodeBudget`, twice its length plus 16 MiB as
+for every other service, is admitted, charged and throttled exactly as before
+DynamoDB declared its factor: the pool plans it twice its length and it
+charges the rest in steps as it decodes. So 32 clients at once sending a
+1 MB `BatchWriteItem` that decodes into 8.5 MiB charged, together over the
+64 MiB bound, are each served or throttled at the wait, as before
+(`Test_decodeBudget_aBurstOfDenseBodiesIsServedOrThrottled`), and nothing
+served before this budget is refused, throttled longer or slowed by it.
 
-Density that is not in the first 64 KiB is not planned for, and is not
-refused for it. A body planned too little (the first item's text is 70 KB, or
-every item's is 66 KB, and the records come after) finds what it needs when it
-has decoded far enough to know, and `DecodeHold.Cover` takes the difference at
-once when the pool has it. When it does not, the body gives back what it was
-planned and waits for all it needs, holding only its own bytes
-(`bodyPool.regrow`). Waiting for more while keeping what it held made a burst
-of such bodies wait on one another: each held a little of what the others
-needed, until the 5 s wait ended and most were throttled. Now 32 clients
-sending a 1 MB `BatchWriteItem` whose first 64 KiB are text, and 32 sending
-25 x (66 KB text + 60 records), are all served
-(`Test_decodeBudget_aBurstOfDenseBodiesIsServed`). The wait is a queue in order,
-bodies that hold part of the pool first, so one that cannot be served until
-another is done is throttled at the wait at worst, and the others are served.
-The protection against a client that states a length it does not send is
-unchanged: it holds what it was planned for until the idle timeout, which for a
-body whose first 64 KiB are dense is up to 48 MiB (below, Residuals).
+A body charged past `DecodeBudget`, which every other service refuses, is not
+charged to the pool. It is decoded only when the heap it keeps fits under the
+Go memory limit, and refused with the decode budget's answer (`400
+SerializationException`, "decodes into more than gostack allows") otherwise:
 
-The per-separator charge depends on the shape. A list of one-entry maps,
-`{"M":{"a":{"N":"1"}}}`, is charged 2,376 per comma (108 per byte of body), over
-the unit of 1,700 a body is planned with; a list of two-entry maps 1,576 per
-separator (88 per byte). Such a body is planned 72% of what it needs and takes
-the rest as it decodes, as above, and it is within the factor of 256, so it is
-served. The unit is what plans room, not a limit; `DecodeFactor` is the limit.
+1. The walk that charges the body also bounds the heap its decoded value
+   keeps (`awsjson`'s `walker.heap`, `internal/protocol/awsjson/heap.go`), by
+   construction from how the Go runtime lays out what `encoding/json/v2`
+   allocates: each allocation at its size class (tiny blocks, the malloc
+   header, whole pages past 32 KiB); a slice's array at the capacity
+   `growslice` grew it to, one element at a time; a map's header, its groups
+   of eight slots (or its tables at three slots an entry, a quarter for the
+   size class, and each table's own structure) and its entries over 128
+   bytes out of line; a string's text; a pointer's value. The peak adds the
+   array or table a value is grown from while the maps around it hold the
+   key and value they decode each entry into. A ratio from one shape is not
+   used: the measured cost-to-live ratio runs 1.9 to 7.6 by shape.
+2. `protocol.ReserveHeap` reserves that bound when the heap's objects now
+   (`/memory/classes/heap/objects:bytes`, never below what is live), what
+   other decodes have reserved and the bound fit the Go memory limit less the
+   in-flight bound (64 MiB, which every body and decode the pool admits stays
+   under) and `protocol.HeapSlack` (48 MiB: the runtime's own structures and
+   stacks, the spans' unused room and what a handler builds). When only
+   garbage stands in the way (`/gc/heap/live:bytes` would fit), one request
+   at a time runs a collection and reads again. Reading and reserving are one
+   step under a lock, so decodes at once each see the others' reservations.
+3. The reservation is kept until the request is answered
+   (`protocol.HeapKeeper`, the request's `Charge`), so what the handler builds
+   from the value stays counted while it works.
+4. With no Go memory limit (no container limit and no `GOMEMLIMIT`) such a
+   body is refused, as it was before: nothing proves it fits.
 
-Memory is what a legal dense body needs, and the plan does not reduce it. A
-16 MiB body of numbers decodes into 1.6 million 160-byte values, about
-256 MB live and about 1.5 GB of RSS once the collector has run behind it. 64
-such bodies sent at once to a fresh process (a `Scan` filter, so nothing is
-stored): the pool admits one at a time, 3 are served and 61 are throttled at
-the 5 s wait, and the process peaks at 1.5 GB RSS (1.1 GB with
-`GOMEMLIMIT=400MiB`); lists nested to the limit, 4 served and 60 throttled at
-1.0 GB; 16 MiB of strings, 33 served and 31 throttled at 368 MiB, as strings
-cost no more than twice their length. So the 512 MiB container the in-flight
-bound is sized for serves ordinary DynamoDB requests and dense ones up to a
-few MB; a deployment that expects 16 MiB of small values needs about 2 GB. The
-items such a body stores are the same size again (an item of 130,000 numbers
-is 21 MB in a table), which is the table's, not the request's.
-
-Memory under a container limit. The pool counts charge and not heap, and one
-legal body is charged at most 48 MiB however much it keeps. Measured on the
-body of `BatchWriteItem` of 25 items x 64,000 numbers (15.26 MiB, to a table
-that does not exist, so it is decoded and refused): decoding allocates 1,482 MiB
-in 1.6 million allocations and keeps 329 MiB live after a collection, because
-`encoding/json/v2` grows a slice of 160-byte `AttributeValue` by a quarter at a
-time, five times its final size in all. Three things keep that from ending the
-process under `docker run --memory`:
-
-1. The Go memory limit follows the container's (above). Without it, two of
-   the bodies at once were killed (exit 137) at `--memory 512m --memory-swap
-   512m`, as the review of SQ-298 found.
-2. A decode that would keep more of the heap at its peak than the Go memory
-   limit allows is refused, as a last resort for a body that cannot fit, with
-   the decode budget's answer (`400 SerializationException`, "decodes into more
-   than gostack allows"), not decoded: `protocol.OverMemory`, asked by
-   `awsjson`'s `chargeDecode`. Its cost is charged at 8 bytes for each byte of
-   heap, and the cost of the body's largest list is charged again, because a
-   list grown by `append` holds the slice it grew from beside the one it grew
-   into. That is 7.6 to 1 for a body of many short lists (a `{"N":"1"}` is
-   charged 1,638 and keeps 216) and 4.4 to 1 for one long list, which is what
-   the measurements below separate: the same 1.6 million numbers, 25 lists of
-   64,000 in a `BatchWriteItem` keep 329 MiB live and are served in a 512 MiB
-   container, and one list of them in a `Scan` filter peaks over 540 MiB and
-   killed it (it was killed at `--memory 512m --memory-swap 512m` with the
-   limit alone). The refusal costs nothing without a limit: a process with no
-   container limit and no `GOMEMLIMIT` refuses nothing. In a 2 GiB container
-   none the 16 MiB cap admits is refused. AWS has no such refusal
-   (docs/compat.md, Request memory limits).
-3. The pool admits one such body at a time, as before (48 MiB of room for
-   each), so the heaps of two never add.
-
-Measured on the built image (`make image`, the tree at SQ-449's commit), the
-body sent 1, 2, 8 and 64 at once, each rung on a fresh container; "served"
-is a decode that reached the table check, so `ResourceNotFoundException` for
-the missing table, and every request was answered. No container was
-OOM-killed (`oom_kill 0`, exit code 0, the health check answered after each
-rung). Peak is the cgroup's `memory.peak`, in MiB.
-
-| container | body | 1 | 2 | 8 | 64 | peak |
-| --- | --- | --- | --- | --- | --- | --- |
-| 512 MiB, swap on and off | `BatchWriteItem` 25 x 64,000 numbers, 15.26 MiB | served | served | served | 10 served, 54 throttled | 398 to 420 |
-| 512 MiB, swap on and off | `Scan` filter of 1.6 million numbers, 15.26 MiB | refused | refused | refused | 31 to 33 refused, rest throttled | 43 to 93 |
-| 512 MiB, swap on and off | `Scan` filter of 330,000 strings, 14.16 MiB | served | | served | 24 to 27 served, rest throttled | 259 to 331 |
-| 256 MiB, no swap | `BatchWriteItem` 25 x 64,000 numbers | refused | refused | refused | 31 refused, 33 throttled | 42 to 93 |
-| 256 MiB, no swap | `Scan` filter of 1.6 million numbers | refused | refused | refused | 28 refused, 36 throttled | 43 to 87 |
-| 256 MiB, no swap | `Scan` filter of 330,000 strings | served | | served | 23 served, 41 throttled | 223 to 243 |
-
-The 256 MiB container (limit 217 MiB) cannot hold the 329 MiB the batch
-keeps live, so it refuses it; the strings body peaks within 13 MiB of the
-container's limit and is not killed. A client that sends while it reads sees
-a throttle answered before its body is all sent as a broken pipe.
-
-The decoder's waste, the slice growth above, is not cut: `encoding/json/v2`
-grows the slice and a type's own `UnmarshalJSONFrom` could size it, but
-`AttributeValue` is generated, and a per-type unmarshaler added to the decode
-options costs a lookup for every value of every DynamoDB request, which the
-benchmark gate would count. The packed item storage that makes a stored item
-smaller (SQ-442) decodes straight into its compact form and removes the
-160 bytes as well.
+`Test_heapEstimate_coversLiveHeap` decodes the shapes that broke the earlier
+budgets (lists of one-entry maps, empty maps and strings, chains of maps and
+lists 31 deep, 2,400 attributes an item, string and number sets, binary) and
+24 random nests of every kind of `AttributeValue` into the generated
+`BatchWriteItemInput`, and holds the bound at or above the heap measured live
+after decoding for every one: the estimate runs 1.01 (lists 31 deep) to 2.02
+(string and number sets) times what is live. `Fuzz_heapEstimate_coversLiveHeap`
+is the same property from a fuzzed seed and size. The test measures what is
+live after decoding; the growth peak is bounded by construction, not by it.
 
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.
