@@ -76,15 +76,24 @@ func (c *Charge) ReleaseDecode() {
 
 // KeepHeap is HeapKeeper: release, a heap reservation's, runs when the request
 // is released (Release).
-func (c *Charge) KeepHeap(release func()) {
+func (c *Charge) KeepHeap(release func()) bool {
 	c.heap = append(c.heap, release)
+
+	return true
+}
+
+// ReleasePool is HeapKeeper: it gives back what the request's body and its
+// decoding hold of the in-flight bound, and keeps the heap reservations until
+// Release.
+func (c *Charge) ReleasePool() {
+	c.ReleaseBody()
+	c.ReleaseDecode()
 }
 
 // Release gives back everything the request holds. The gateway calls it when
 // the handler returns.
 func (c *Charge) Release() {
-	c.ReleaseBody()
-	c.ReleaseDecode()
+	c.ReleasePool()
 
 	for _, release := range c.heap {
 		release()

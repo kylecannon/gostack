@@ -44,23 +44,35 @@ var ErrTooLarge = &awserr.Error{
 // factor decodes (DynamoDB's). It is not charged to hold: it is decoded only
 // when protocol.ReserveHeap has room under the Go memory limit for the heap the
 // walk bounds it to keep (walker.heap), and refused with ErrTooLarge otherwise,
-// as it is at protocol.DecodeFactor. The room is reserved until the request is
-// answered when hold is a protocol.HeapKeeper, and until it is decoded
-// otherwise.
+// as it is at protocol.DecodeFactor. The walk passes DecodeBudget where it
+// would stop at protocol.DecodeFactor; from there the body's own bytes are a
+// heap reservation and no longer hold the in-flight bound, when hold is a
+// protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
+// holds the bound no longer than one refused there. Each reservation lasts
+// until the request is answered when hold keeps it (HeapKeeper.KeepHeap), and
+// until the body is decoded otherwise.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
 	bound := decodePasses * int64(len(body)) * p.perByte
 	if bound > budget || (hold != nil && bound > protocol.FreeDecode) {
-		release, err := chargeDecode(body, p, budget, hold)
-		if err != nil {
-			return nil, false, err
+		var reserved []func()
+
+		defer func() {
+			for _, release := range reserved {
+				release()
+			}
+		}()
+
+		keep := func(release func()) {
+			if keeper, ok := hold.(protocol.HeapKeeper); !ok || !keeper.KeepHeap(release) {
+				reserved = append(reserved, release)
+			}
 		}
 
-		if keeper, ok := hold.(protocol.HeapKeeper); ok && release != nil {
-			keeper.KeepHeap(release)
-		} else if release != nil {
-			defer release()
+		err := chargeDecode(body, p, budget, hold, keep)
+		if err != nil {
+			return nil, false, err
 		}
 	}
 
@@ -70,36 +82,72 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 // chargeDecode refuses body with ErrTooLarge when decoding it as p plans it
 // would pass budget, and otherwise charges what both passes hold past
 // protocol.FreeDecode to hold, when there is one. A body charged past
-// protocol.DecodeBudget reserves heap instead (DecodeWithin); release gives the
-// reservation back.
-func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder) (release func(), err *awserr.Error) {
+// protocol.DecodeBudget reserves heap instead (DecodeWithin), first for its
+// own bytes once the walk passes DecodeBudget (moveBody), then for what the
+// walk bounds decoding it to keep; keep takes each reservation's release.
+func chargeDecode(
+	body []byte, p *plan, budget int64, hold protocol.DecodeHolder, keep func(release func()),
+) *awserr.Error {
 	unwalked := int64(math.MaxInt64)
 	if hold != nil {
 		unwalked = protocol.FreeDecode
 	}
 
-	cost, heap, err := decodeCost(body, p, budget, unwalked)
+	var move func() error
+	if hold != nil && budget > protocol.DecodeBudget(len(body)) {
+		move = func() error { return moveBody(body, hold, keep) }
+	}
+
+	cost, heap, err := decodeCost(body, p, budget, unwalked, move)
 	if err != nil || hold == nil || cost <= protocol.FreeDecode {
-		return nil, err
+		return err
 	}
 
 	// With a hold, a body is walked unless its separators cost at most
-	// FreeDecode, so one charged past DecodeBudget has its heap bounded.
+	// FreeDecode, so one charged past DecodeBudget has its heap bounded, and
+	// the walk moved its bytes at DecodeBudget.
 	if cost > protocol.DecodeBudget(len(body)) {
 		release, ok := protocol.ReserveHeap(heap + allocSize(p.heapSize))
 		if !ok {
-			return nil, ErrTooLarge
+			return ErrTooLarge
 		}
 
-		return release, nil
+		keep(release)
+
+		return nil
 	}
 
 	_, herr := hold.HoldDecode(cost)
 	if herr != nil {
-		return nil, protocol.ThrottledJSON()
+		return protocol.ThrottledJSON()
 	}
 
-	return nil, nil
+	return nil
+}
+
+// errNoRoom stops a walk whose body found no room on the heap (moveBody).
+var errNoRoom = errors.New("no room for the body on the heap")
+
+// moveBody runs when the walk of body passes protocol.DecodeBudget, where it
+// would stop for a service without its own factor. It reserves the body's own
+// bytes on the heap (protocol.ReserveHeap) and, when hold is a
+// protocol.HeapKeeper, gives back what the body and its decoding hold of the
+// in-flight bound, so that the room other requests' bodies wait for is free
+// again as soon as it would be were the body refused. It fails with errNoRoom,
+// holding what it held, when the heap has no room.
+func moveBody(body []byte, hold protocol.DecodeHolder, keep func(release func())) error {
+	release, ok := protocol.ReserveHeap(int64(len(body)))
+	if !ok {
+		return errNoRoom
+	}
+
+	keep(release)
+
+	if keeper, ok := hold.(protocol.HeapKeeper); ok {
+		keeper.ReleasePool()
+	}
+
+	return nil
 }
 
 // decodeCost is what both passes of decoding body as p plans it hold at most,
@@ -113,8 +161,10 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 // budget whose separators cost at most unwalked: any, when nothing is charged,
 // and protocol.FreeDecode when the bound is charged, so the charge is at
 // most FreeDecode beyond the body's own bytes. Any other body is walked token by
-// token (walkCost), which is as costly as decoding it.
-func decodeCost(body []byte, p *plan, budget, unwalked int64) (cost, heap int64, err *awserr.Error) {
+// token (walkCost), which is as costly as decoding it. When move is not nil,
+// the walk runs it once its cost passes protocol.DecodeBudget (moveBody), and
+// a move that fails is ErrTooLarge too.
+func decodeCost(body []byte, p *plan, budget, unwalked int64, move func() error) (cost, heap int64, err *awserr.Error) {
 	structure := decodePasses * structureUnits(body) * p.perUnit
 	bound := decodePasses*int64(len(body)) + structure
 
@@ -122,7 +172,12 @@ func decodeCost(body []byte, p *plan, budget, unwalked int64) (cost, heap int64,
 		return bound, 0, nil
 	}
 
-	walked, heap, over := walkCost(body, p, budget/decodePasses)
+	w := walker{dec: newWalkDecoder(body), limit: budget / decodePasses}
+	if move != nil {
+		w.mark, w.move = protocol.DecodeBudget(len(body))/decodePasses, move
+	}
+
+	walked, heap, over := w.walk(p)
 	if over {
 		return 0, 0, ErrTooLarge
 	}
@@ -418,7 +473,14 @@ var errOverBudget = errors.New("over budget")
 func walkCost(body []byte, p *plan, budget int64) (cost, heap int64, over bool) {
 	w := walker{dec: newWalkDecoder(body), limit: budget}
 
-	if errors.Is(w.value(p), errOverBudget) {
+	return w.walk(p)
+}
+
+// walk is walkCost for a walker already set up; a walk whose move fails
+// (walker.mark) reports over.
+func (w *walker) walk(p *plan) (cost, heap int64, over bool) {
+	err := w.value(p)
+	if errors.Is(err, errOverBudget) || errors.Is(err, errNoRoom) {
 		return 0, 0, true
 	}
 
@@ -436,18 +498,28 @@ func newWalkDecoder(body []byte) *jsontext.Decoder {
 // a slice's array at the capacity it grew to, a map's header, groups and out of
 // line entries. peak is the most decoding holds at once beyond that: the array
 // a slice or a map's table is grown from, while the maps it is inside hold the
-// key and value they decode each entry into (open).
+// key and value they decode each entry into (open). move, when set, runs once
+// the cost passes mark, within the limit.
 type walker struct {
 	dec              *jsontext.Decoder
 	cost, limit      int64
 	heap, peak, open int64
 	name             []byte
+	mark             int64
+	move             func() error
 }
 
 func (w *walker) charge(n int64) error {
 	w.cost += n
 	if w.cost > w.limit {
 		return errOverBudget
+	}
+
+	if w.move != nil && w.cost > w.mark {
+		move := w.move
+		w.move = nil
+
+		return move()
 	}
 
 	return nil
@@ -465,7 +537,7 @@ func (w *walker) value(p *plan) error {
 	case p.kind == kindText && kind != '{' && kind != '[' && kind != 'n':
 		v, err := w.dec.ReadValue()
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
 		}
 
 		// The lenient readers keep a number or a bool sent for a string as its
@@ -492,7 +564,7 @@ func (w *walker) value(p *plan) error {
 	case p.kind == kindSlice && kind == '[':
 		return w.array(p)
 	default:
-		return w.dec.SkipValue() //nolint:wrapcheck // only errOverBudget is looked at
+		return w.dec.SkipValue() //nolint:wrapcheck // only the walk's own errors are looked at
 	}
 }
 
@@ -501,7 +573,7 @@ func (w *walker) value(p *plan) error {
 func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 	_, err := w.dec.ReadToken()
 	if err != nil {
-		return err //nolint:wrapcheck // only errOverBudget is looked at
+		return err //nolint:wrapcheck // only the walk's own errors are looked at
 	}
 
 	for w.dec.PeekKind() == '"' {
@@ -509,14 +581,14 @@ func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 
 		raw, err = w.dec.ReadValue()
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
 		}
 
 		name := raw[1 : len(raw)-1]
 		if bytes.IndexByte(name, '\\') >= 0 {
 			w.name, err = jsontext.AppendUnquote(w.name[:0], raw)
 			if err != nil {
-				return err //nolint:wrapcheck // only errOverBudget is looked at
+				return err //nolint:wrapcheck // only the walk's own errors are looked at
 			}
 
 			name = w.name
@@ -542,13 +614,13 @@ func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 
 	_, err = w.dec.ReadToken()
 
-	return err //nolint:wrapcheck // only errOverBudget is looked at
+	return err //nolint:wrapcheck // only the walk's own errors are looked at
 }
 
 func (w *walker) array(p *plan) error {
 	_, err := w.dec.ReadToken()
 	if err != nil {
-		return err //nolint:wrapcheck // only errOverBudget is looked at
+		return err //nolint:wrapcheck // only the walk's own errors are looked at
 	}
 
 	var elements int64
@@ -574,7 +646,7 @@ func (w *walker) array(p *plan) error {
 
 	_, err = w.dec.ReadToken()
 
-	return err //nolint:wrapcheck // only errOverBudget is looked at
+	return err //nolint:wrapcheck // only the walk's own errors are looked at
 }
 
 // mapValue walks a map: each entry costs both copies of its key and value, a
@@ -622,7 +694,7 @@ func (w *walker) anyValue() error {
 		}
 
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
 		}
 
 		err = w.charge(anyValueCost + int64(len(text)))
