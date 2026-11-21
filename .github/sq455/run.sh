@@ -1,29 +1,24 @@
 #!/usr/bin/env bash
-# SQ-455 scratch measurement. Never merged. Builds the arms of the sqs
+# SQ-455/SQ-458 scratch measurement. Never merged. Builds the arms of the sqs
 # benchmark binary and runs them interleaved, ROUNDS rounds, each run relinked
 # with a new -randlayout seed, the way `make bench-ab` does.
-#   base     c473142 (PR #49's base)
-#   head     8caa5f1 (PR #49's head)
-#   errfield base + formReader.err stored (gateway/dispatch.go only)
-#   errvar   base + head's query/form.go (ErrFormCut error vars) only
-#   basepad  base + an unrelated awserr error var that only init reads:
-#            runtime.mheap_ and the runtime's other bss lands 32 bytes on, at
-#            mod 64 = 32, as in head
-#   headpad  head + the same var: runtime.mheap_ back at mod 64 = 0, as in base
-#   baseframe16 base + 16 unused bytes in formReader: serveAWS frame 0x250, as head
-#   headframe48 head + 48 unused bytes in formReader: serveAWS frame 0x280 (base + 64)
-#   headframe32 head + 32 unused bytes in formReader: serveAWS frame 0x270 (base + 48)
+#   base        b15da1d (main)
+#   baseframe16 base + 16 unused bytes in formReader: serveAWS frame 0x250
+#   new         base + sq458.patch (SQ-458: generated json encoders that quote
+#               strings in runs)
+#   newframe16  new + the same 16 unused bytes in formReader
+# Wanted: new and newframe16 flat on AMD Zen 3/4, where base and baseframe16
+# differ; new not slower than base on any row on any CPU.
 set -euo pipefail
 
 ROUNDS=${ROUNDS:-10}
-BASE_SHA=c473142e5808d1eca22aff9fe177091b44b3b501
-HEAD_SHA=8caa5f16c6731c5adbddeff233ceea58ed9c73e3
+BASE_SHA=b15da1dc172713bc7e2b071fa0f30d76d31b517a
 REPO=${REPO:-$PWD}
 PATCHES=${PATCHES:-$REPO/.github/sq455}
 W=$RUNNER_TEMP/sq455
 OUT=$W/out
 BENCH='^BenchmarkReceiveMessage$/^proto=(json|query)$/^queue=standard$/^max=1$/^payload=(256B|64KiB|1MiB)$'
-read -r -a ARMS <<<"${ARMS:-base head baseframe16 headframe48 headframe32}"
+read -r -a ARMS <<<"${ARMS:-base baseframe16 new newframe16}"
 N=${#ARMS[@]}
 
 mkdir -p "$W" "$OUT/prof" "$OUT/bin"
@@ -37,18 +32,15 @@ mkdir -p "$W" "$OUT/prof" "$OUT/bin"
 	go version
 } | tee "$OUT/host.txt"
 
-git -C "$REPO" fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+git -C "$REPO" fetch --no-tags origin "$BASE_SHA"
 
 for arm in "${ARMS[@]}"; do
 	mkdir -p "$W/$arm"
+	git -C "$REPO" archive "$BASE_SHA" | tar -x -C "$W/$arm"
 	case $arm in
-		head*) git -C "$REPO" archive "$HEAD_SHA" | tar -x -C "$W/$arm" ;;
-		*) git -C "$REPO" archive "$BASE_SHA" | tar -x -C "$W/$arm" ;;
+		new*) (cd "$W/$arm" && git apply "$PATCHES/sq458.patch") ;;
 	esac
 	case $arm in
-		errfield) (cd "$W/$arm" && git apply -p2 "$PATCHES/errfield.patch") ;;
-		errvar) (cd "$W/$arm" && git apply -p2 "$PATCHES/errvar.patch") ;;
-		*pad) cp "$PATCHES/sq455pad.go.txt" "$W/$arm/internal/awserr/sq455pad.go" ;;
 		*frame*) perl -0pi -e "s/(\tvals url.Values\n)/\$1\t_    [${arm##*frame}]byte\n/" "$W/$arm/internal/gateway/dispatch.go" ;;
 	esac
 done
@@ -80,8 +72,13 @@ for r in $(seq 1 "$ROUNDS"); do
 	done
 done
 
-for arm in "${ARMS[@]:1}"; do
-	echo "== ${ARMS[0]} vs $arm" | tee -a "$OUT/benchstat.txt"
-	benchstat "${ARMS[0]}=$OUT/${ARMS[0]}.txt" "$arm=$OUT/$arm.txt" | tee -a "$OUT/benchstat.txt"
-done
+compare() { # a b
+	echo "== $1 vs $2" | tee -a "$OUT/benchstat.txt"
+	benchstat "$1=$OUT/$1.txt" "$2=$OUT/$2.txt" | tee -a "$OUT/benchstat.txt"
+}
+
+compare base baseframe16
+compare new newframe16
+compare base new
+compare baseframe16 newframe16
 cat "$OUT/layout.txt" "$OUT/benchstat.txt" >>"$GITHUB_STEP_SUMMARY"
