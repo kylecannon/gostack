@@ -3,6 +3,7 @@ package protocol
 import (
 	"context"
 	"math"
+	"slices"
 )
 
 // Charge is what one request holds against the in-flight bound (SetInFlight):
@@ -90,12 +91,14 @@ func (c *Charge) ReleasePool() {
 	c.ReleaseDecode()
 }
 
-// Release gives back everything the request holds. The gateway calls it when
-// the handler returns.
+// Release gives back everything the request holds, its heap reservations last
+// kept first, so that a body's dense lane (TakeDenseLane), kept before the
+// estimate of its decoding, is free only once nothing of it is reserved. The
+// gateway calls it when the handler returns.
 func (c *Charge) Release() {
 	c.ReleasePool()
 
-	for _, release := range c.heap {
+	for _, release := range slices.Backward(c.heap) {
 		release()
 	}
 

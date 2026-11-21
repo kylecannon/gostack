@@ -489,13 +489,27 @@ served before this budget is refused, throttled longer or slowed by it.
 A body charged past `DecodeBudget`, which every other service refuses, holds
 the pool only as long as a refused one does. Its walk passes `DecodeBudget`
 at the point where every other service's walk stops and refuses it; there
-the body's own bytes are reserved on the heap (`protocol.ReserveHeap` of its
-length, kept until the request is answered) and the request gives back what
+the body takes the process's one dense lane, its own bytes are reserved on
+the heap (`protocol.TakeDenseLane`: the lane and `protocol.ReserveHeap` of its
+length, both kept until the request is answered) and the request gives back what
 its body and its planned decoding hold of the pool (`awsjson`'s `moveBody`,
 `protocol.HeapKeeper.ReleasePool`), so a smaller request waiting for the pool
-is admitted as soon as it would be were the body refused. A body whose bytes
-find no room is refused there, holding the pool until it is answered as a
-refused body does. The heap's objects count the body too while it is live,
+is admitted as soon as it would be were the body refused. A body that finds
+the lane taken by another, or no room for its bytes, is refused there at
+once, holding the pool until it is answered as a refused body does: nothing
+waits for the lane, so no dense body sits on the heap queued behind another.
+Without the lane, 64 dense senders put about 30 bodies of 10 MB on the heap
+at once (two at a time on the pool) and a 300 KiB `PutItem` on another
+connection took up to 1.5 s longer than without the gain. One lane is a
+constant, not a setting; it is freed with the body's reservation, after the
+decode's (`Charge.Release` gives reservations back last kept first), on
+every path: answered, refused after the move, a body that is not valid
+json, a client gone, a handler that panics
+(`Test_DecodeWithin_TheLaneIsFreeAfterEveryPath`,
+`Test_Charge_FreesTheLaneLastAndOnAPanic`). So two dense bodies at once get
+one served and one the answer every other service gives
+(`Test_DecodeWithin_OneDenseBodyAtATime`), and which one is served varies
+from run to run. The heap's objects count the body too while it is live,
 so the reservation counts it twice, which only refuses earlier. The rest of
 the walk and the decode then run on the heap alone. The body is decoded only
 when the heap it keeps fits under the Go memory limit, and refused with the
@@ -529,7 +543,8 @@ than gostack allows") otherwise:
    `Test_Charge_AccountingStaysExact` runs the pool's accounting stress with
    the move, a refused move and a client gone between the move and the
    decode, and holds the pool within its bound, a moved body at none of it,
-   and the pool and the reservations at zero at the end.
+   the lane at one holder, and the pool, the reservations and the lane at
+   zero at the end.
 4. With no Go memory limit (no container limit and no `GOMEMLIMIT`) such a
    body is refused, as it was before: nothing proves it fits.
 

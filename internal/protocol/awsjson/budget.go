@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -48,7 +49,9 @@ var ErrTooLarge = &awserr.Error{
 // would stop at protocol.DecodeFactor; from there the body's own bytes are a
 // heap reservation and no longer hold the in-flight bound, when hold is a
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
-// holds the bound no longer than one refused there. Each reservation lasts
+// holds the bound no longer than one refused there. One body at a time is
+// past the budget (protocol.TakeDenseLane): another that passes it meanwhile is
+// refused with ErrTooLarge where its walk passes it. Each reservation lasts
 // until the request is answered when hold keeps it (HeapKeeper.KeepHeap), and
 // until the body is decoded otherwise.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
@@ -59,7 +62,7 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 		var reserved []func()
 
 		defer func() {
-			for _, release := range reserved {
+			for _, release := range slices.Backward(reserved) {
 				release()
 			}
 		}()
@@ -125,18 +128,21 @@ func chargeDecode(
 	return nil
 }
 
-// errNoRoom stops a walk whose body found no room on the heap (moveBody).
+// errNoRoom stops a walk whose body found no room on the heap, or found the
+// dense lane taken (moveBody).
 var errNoRoom = errors.New("no room for the body on the heap")
 
 // moveBody runs when the walk of body passes protocol.DecodeBudget, where it
-// would stop for a service without its own factor. It reserves the body's own
-// bytes on the heap (protocol.ReserveHeap) and, when hold is a
-// protocol.HeapKeeper, gives back what the body and its decoding hold of the
-// in-flight bound, so that the room other requests' bodies wait for is free
-// again as soon as it would be were the body refused. It fails with errNoRoom,
-// holding what it held, when the heap has no room.
+// would stop for a service without its own factor. It takes the dense lane
+// with the body's own bytes reserved on the heap (protocol.TakeDenseLane), so
+// that the lane is held until the reservation is given back, and, when hold
+// is a protocol.HeapKeeper, gives back what the body and its decoding hold of
+// the in-flight bound, so that the room other requests' bodies wait for is
+// free again as soon as it would be were the body refused. It fails with
+// errNoRoom, holding what it held, when another body has the lane or the heap
+// has no room: the answer at protocol.DecodeFactor, without waiting.
 func moveBody(body []byte, hold protocol.DecodeHolder, keep func(release func())) error {
-	release, ok := protocol.ReserveHeap(int64(len(body)))
+	release, ok := protocol.TakeDenseLane(int64(len(body)))
 	if !ok {
 		return errNoRoom
 	}

@@ -51,6 +51,20 @@ func (b *patternBody) Read(p []byte) (int, error) {
 // requests.
 type accountingTally struct {
 	bad, busy, served, most, moved, refusedMove, heldAfterMove atomic.Int64
+	lanes, mostLanes                                           atomic.Int64
+}
+
+// holdLane counts a request that took the dense lane, and the most that held
+// it at once.
+func (a *accountingTally) holdLane() {
+	held := a.lanes.Add(1)
+
+	for {
+		seen := a.mostLanes.Load()
+		if held <= seen || a.mostLanes.CompareAndSwap(seen, held) {
+			return
+		}
+	}
 }
 
 // observe samples the pool after a step of request c, whose meter is m.
@@ -71,11 +85,13 @@ func (a *accountingTally) observe(c *Charge, m *BodyMeter) {
 // heap path: 64 clients drive the body meter, the decode hold and both queues
 // with cancels, timeouts, lying lengths and double releases, under four
 // settings of the cap and the bound. Half the bodies read in full take the
-// path of one decoded past DecodeBudget (awsjson's moveBody): reserve the
-// body's bytes on the heap, give back the pool, sometimes lose the client
-// before the walk, then reserve the walk's estimate; a move the heap refuses
-// keeps the pool until the request is released. The pool never passes its
-// bound, a moved body holds none of it, and the pool and the heap end empty.
+// path of one decoded past DecodeBudget (awsjson's moveBody): take the dense
+// lane with the body's bytes reserved on the heap (TakeDenseLane), give back
+// the pool, sometimes lose the client before the walk, then reserve the walk's
+// estimate; a move refused, for the lane or the heap, keeps the pool until the
+// request is released. The pool never passes its bound, a moved body holds
+// none of it, no two requests hold the lane at once, and the pool, the heap
+// and the lane end empty.
 func Test_Charge_AccountingStaysExact(t *testing.T) {
 	old, oldWait, oldMax := inFlight.Load(), bodyWait.Load(), MaxBody()
 	oldLimit := debug.SetMemoryLimit(-1)
@@ -139,6 +155,8 @@ func Test_Charge_AccountingStaysExact(t *testing.T) {
 			assert.Empty(t, pool.starting)
 			assert.Positive(t, tally.moved.Load(), "some bodies are moved")
 			assert.Positive(t, tally.refusedMove.Load(), "some moves are refused")
+			assert.Equal(t, int64(1), tally.mostLanes.Load(), "one request at a time holds the lane")
+			assert.False(t, denseLane.Load(), "the lane ends free")
 		})
 	}
 }
@@ -254,7 +272,7 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 		move = math.MaxInt64 / 4 // a body the heap never has room for
 	}
 
-	release, ok := ReserveHeap(move)
+	release, ok := TakeDenseLane(move)
 	if !ok {
 		tally.refusedMove.Add(1)
 
@@ -262,7 +280,11 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 	}
 
 	tally.moved.Add(1)
-	c.KeepHeap(release)
+	tally.holdLane()
+	c.KeepHeap(func() {
+		tally.lanes.Add(-1)
+		release()
+	})
 	c.ReleasePool()
 
 	if m.held != 0 || c.decode.held != 0 {

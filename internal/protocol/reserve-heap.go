@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"sync"
+	"sync/atomic"
 )
 
 // HeapSlack is what ReserveHeap leaves under the Go memory limit beyond the
@@ -94,6 +95,40 @@ func ReserveHeap(estimate int64) (release func(), ok bool) {
 		heap.mu.Lock()
 		heap.reserved -= estimate
 		heap.mu.Unlock()
+	}, true
+}
+
+// denseLane is held by the one body at a time that is decoded past
+// DecodeBudget (TakeDenseLane).
+var denseLane atomic.Bool
+
+// TakeDenseLane is ReserveHeap(n) for a body whose decoding passes
+// DecodeBudget, the only kind of body decoded off the in-flight bound: such a
+// body first takes the process's one dense lane, so at most one of them is on
+// the heap at a time and none waits for another. It reports false, holding
+// nothing, when another body has the lane or the heap has no room for n; the
+// decoder then answers as a service at DecodeFactor does. Otherwise release
+// gives back the reservation and then the lane; it runs once however often it
+// is called.
+func TakeDenseLane(n int64) (release func(), ok bool) {
+	if !denseLane.CompareAndSwap(false, true) {
+		return nil, false
+	}
+
+	reserved, ok := ReserveHeap(n)
+	if !ok {
+		denseLane.Store(false)
+
+		return nil, false
+	}
+
+	var once sync.Once
+
+	return func() {
+		once.Do(func() {
+			reserved()
+			denseLane.Store(false)
+		})
 	}, true
 }
 

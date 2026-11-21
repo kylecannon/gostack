@@ -135,3 +135,86 @@ func Test_Charge_KeepsTheHeapUntilTheRequestIsReleased(t *testing.T) {
 
 	assert.Zero(t, heap.reserved, "the request's release gives both back")
 }
+
+// Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits: the lane is taken with a
+// heap reservation and refused at once while it is held; a body the heap has
+// no room for leaves the lane free; the release gives back the reservation and
+// the lane, once, so that a second call cannot free the lane another body has
+// taken since.
+func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
+	const objects = 20 << 20
+
+	fakeHeap(t, objects, objects)
+
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	room := int64(100 << 20)
+	debug.SetMemoryLimit(bound + HeapSlack + objects + room)
+
+	release, ok := TakeDenseLane(room / 4)
+	require.True(t, ok, "the lane is free and the heap has room")
+	assert.Equal(t, room/4, heap.reserved)
+
+	_, ok = TakeDenseLane(1)
+	assert.False(t, ok, "the lane is taken")
+	assert.Equal(t, room/4, heap.reserved, "a refused body reserves nothing")
+
+	release()
+	assert.Zero(t, heap.reserved)
+	assert.False(t, denseLane.Load(), "the release frees the lane")
+
+	_, ok = TakeDenseLane(room + 1)
+	assert.False(t, ok, "no room on the heap")
+	assert.False(t, denseLane.Load(), "a body with no room leaves the lane free")
+
+	next, ok := TakeDenseLane(1)
+	require.True(t, ok)
+
+	release()
+	assert.True(t, denseLane.Load(), "a second release frees nothing")
+	assert.Equal(t, int64(1), heap.reserved, "nor gives back another body's reservation")
+
+	next()
+	assert.False(t, denseLane.Load())
+	assert.Zero(t, heap.reserved)
+}
+
+// Test_Charge_FreesTheLaneLastAndOnAPanic: a request's Charge gives back its
+// heap reservations last kept first, so the lane kept with the body's bytes is
+// free only after the estimate kept after it, and the gateway's deferred
+// Release frees the lane of a handler that panics.
+func Test_Charge_FreesTheLaneLastAndOnAPanic(t *testing.T) {
+	fakeHeap(t, 0, 0)
+	debug.SetMemoryLimit(1 << 40)
+
+	var order []string
+
+	c := &Charge{}
+
+	lane, ok := TakeDenseLane(1)
+	require.True(t, ok)
+	c.KeepHeap(func() {
+		order = append(order, "lane")
+		lane()
+	})
+
+	estimate, ok := ReserveHeap(1)
+	require.True(t, ok)
+	c.KeepHeap(func() {
+		order = append(order, "estimate")
+		estimate()
+	})
+
+	assert.Panics(t, func() {
+		defer c.Release()
+
+		panic("a handler panics")
+	})
+
+	assert.Equal(t, []string{"estimate", "lane"}, order)
+	assert.False(t, denseLane.Load(), "the lane is free")
+	assert.Zero(t, heap.reserved)
+}

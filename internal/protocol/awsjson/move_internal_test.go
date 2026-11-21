@@ -19,6 +19,13 @@ type denseValue struct {
 	S *string       `json:"S,omitempty"`
 }
 
+// What a recordingHold records.
+const (
+	stepHold        = "hold"
+	stepKeep        = "keep"
+	stepReleasePool = "release pool"
+)
+
 // recordingHold is a protocol.HeapKeeper that records what a decoder asks of
 // it, in order, and keeps the reservations it is given.
 type recordingHold struct {
@@ -27,20 +34,20 @@ type recordingHold struct {
 }
 
 func (h *recordingHold) HoldDecode(int64) (int64, error) {
-	h.steps = append(h.steps, "hold")
+	h.steps = append(h.steps, stepHold)
 
 	return math.MaxInt64, nil
 }
 
 func (h *recordingHold) KeepHeap(release func()) bool {
-	h.steps = append(h.steps, "keep")
+	h.steps = append(h.steps, stepKeep)
 	h.kept = append(h.kept, release)
 
 	return true
 }
 
 func (h *recordingHold) ReleasePool() {
-	h.steps = append(h.steps, "release pool")
+	h.steps = append(h.steps, stepReleasePool)
 }
 
 func (h *recordingHold) release() {
@@ -86,7 +93,7 @@ func Test_DecodeWithin_PastTheBudgetMovesTheBodyOffThePool(t *testing.T) {
 	v, _, err := DecodeWithin[denseValue](body, budget, hold)
 	require.Nil(t, err)
 	assert.Len(t, v.L, 300_000)
-	assert.Equal(t, []string{"keep", "release pool", "keep"}, hold.steps,
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, hold.steps,
 		"the body's bytes are kept on the heap and the pool given back before the estimate is reserved")
 
 	within := denseBody(100_000)
@@ -100,7 +107,7 @@ func Test_DecodeWithin_PastTheBudgetMovesTheBodyOffThePool(t *testing.T) {
 
 	_, _, err = DecodeWithin[denseValue](within, budget, hold)
 	require.Nil(t, err)
-	assert.Equal(t, []string{"hold"}, hold.steps, "a body within DecodeBudget is charged to the pool only")
+	assert.Equal(t, []string{stepHold}, hold.steps, "a body within DecodeBudget is charged to the pool only")
 }
 
 // Test_DecodeWithin_ARefusedMoveIsMainsAnswer: a body past DecodeBudget whose
@@ -130,4 +137,102 @@ func Test_DecodeWithin_ARefusedMoveIsMainsAnswer(t *testing.T) {
 	_, _, err = DecodeWithin[denseValue](body, protocol.DecodeBudget(len(body)), hold)
 	assert.Same(t, ErrTooLarge, err)
 	assert.Empty(t, hold.steps, "at DecodeFactor nothing is moved")
+}
+
+// requireLaneFree fails unless the dense lane is free now.
+func requireLaneFree(t *testing.T) {
+	t.Helper()
+
+	release, ok := protocol.TakeDenseLane(0)
+	require.True(t, ok, "the dense lane is free")
+	release()
+}
+
+// plainHold is a protocol.DecodeHolder that keeps nothing: DecodeWithin gives
+// back its reservations once the body is decoded.
+type plainHold struct{}
+
+func (plainHold) HoldDecode(int64) (int64, error) { return math.MaxInt64, nil }
+
+// Test_DecodeWithin_OneDenseBodyAtATime: while one body decoded past
+// DecodeBudget keeps its reservations, a second one is answered as a service
+// at protocol.DecodeFactor answers it, ErrTooLarge, at once and holding
+// nothing; once the first request is released, a third is served. Only a
+// body whose walk passes DecodeBudget reserves heap, so only one taking the
+// lane does: a body not walked costs at most FreeDecode past its own bytes
+// twice, under DecodeSlack.
+func Test_DecodeWithin_OneDenseBodyAtATime(t *testing.T) {
+	withMemoryLimit(t, 8<<30)
+	require.Less(t, int64(protocol.FreeDecode), int64(protocol.DecodeSlack),
+		"a body that is not walked is within DecodeBudget")
+
+	body := denseBody(300_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+
+	first := &recordingHold{}
+	t.Cleanup(first.release)
+
+	_, _, err := DecodeWithin[denseValue](body, budget, first)
+	require.Nil(t, err)
+	require.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, first.steps)
+
+	second := &recordingHold{}
+	t.Cleanup(second.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, second)
+	assert.Same(t, ErrTooLarge, err, "the lane is taken: main's answer")
+	assert.Empty(t, second.steps, "nothing is reserved and the pool is kept")
+
+	first.release()
+
+	third := &recordingHold{}
+	t.Cleanup(third.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, third)
+	require.Nil(t, err, "the lane is free again")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, third.steps)
+
+	third.release()
+	requireLaneFree(t)
+}
+
+// Test_DecodeWithin_TheLaneIsFreeAfterEveryPath: a body that took the dense
+// lane gives it back with its reservations whatever happens after the move: a
+// walk that then passes the service's budget, a body that is not valid json,
+// and a holder that keeps nothing, decoded or refused.
+func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
+	withMemoryLimit(t, 8<<30)
+
+	body := denseBody(300_000)
+
+	hold := &recordingHold{}
+	t.Cleanup(hold.release)
+
+	_, _, err := DecodeWithin[denseValue](body, protocol.DecodeBudgetAt(len(body), 3), hold)
+	assert.Same(t, ErrTooLarge, err, "past the service's own budget after the move")
+	assert.Equal(t, []string{stepKeep, stepReleasePool}, hold.steps)
+
+	hold.release()
+	requireLaneFree(t)
+
+	broken := body[:len(body)-2]
+	budget := protocol.DecodeBudgetAt(len(broken), 256)
+
+	hold = &recordingHold{}
+	t.Cleanup(hold.release)
+
+	_, _, err = DecodeWithin[denseValue](broken, budget, hold)
+	require.NotNil(t, err, "not valid json")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, hold.steps)
+
+	hold.release()
+	requireLaneFree(t)
+
+	_, _, err = DecodeWithin[denseValue](body, protocol.DecodeBudgetAt(len(body), 256), plainHold{})
+	require.Nil(t, err)
+	requireLaneFree(t)
+
+	_, _, err = DecodeWithin[denseValue](broken, budget, plainHold{})
+	require.NotNil(t, err)
+	requireLaneFree(t)
 }
