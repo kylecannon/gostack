@@ -63,7 +63,7 @@ func Test_lanes_httpDeadLetterBuiltOutsideLock(t *testing.T) {
 		dead     atomic.Int64
 	)
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +106,7 @@ func Test_lanes_queueDeadLetterBuiltOutsideLock(t *testing.T) {
 		dead     atomic.Int64
 	)
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +149,7 @@ func Test_lanes_queueDeadLetterBuiltOutsideLock(t *testing.T) {
 func Test_lanes_httpDeadLetterNotBuiltWhenDelivered(t *testing.T) {
 	var built atomic.Int64
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
@@ -175,7 +175,7 @@ func Test_lanes_httpDeadLetterNotBuiltWhenDelivered(t *testing.T) {
 // while it is built drops its delivery, and the lane goes on with the next
 // delivery, as it does for a send that panics.
 func Test_lanes_httpDeadLetterPanicDropsDelivery(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))

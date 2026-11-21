@@ -25,7 +25,7 @@ func laneCall(lane, body string) inproc.Call {
 // handed to the client counts in the hub's pending count, so Hub.Drain waits
 // for it instead of returning at once.
 func Test_lanes_drainSeesQueuedDeliveries(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 
 	var served atomic.Int64
 
@@ -69,7 +69,7 @@ func Test_lanes_drainSeesQueuedDeliveries(t *testing.T) {
 // returns once both lanes are empty, before its deadline, and not while they
 // still hold deliveries.
 func Test_lanes_drainWaitsForDeadLetters(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 
 	hub := inproc.NewHub(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -123,7 +123,7 @@ func Test_lanes_drainWaitsForDeadLetters(t *testing.T) {
 func Test_lanes_oneLaneHoldsAny(t *testing.T) {
 	const n = 10_000
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	release := make(chan struct{})
@@ -208,7 +208,7 @@ func Test_lanes_oneLaneHoldsAny(t *testing.T) {
 func Test_lanes_parkedLanesTakeTheirTurn(t *testing.T) {
 	const destinations, each = 5000, 5
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	release := make(chan struct{})
@@ -276,7 +276,7 @@ func (panicError) Error() string { panic("answered: injected panic") }
 func Test_lanes_answeredPanicKeepsLaneGoing(t *testing.T) {
 	const n = 3
 
-	p := New(nil)
+	p := New(nil, nil)
 
 	var served atomic.Int64
 

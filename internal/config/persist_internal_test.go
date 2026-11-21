@@ -15,6 +15,7 @@ const (
 	persistCognitoOn         = "PERSIST_COGNITO=1"
 	persistSSMOn             = "PERSIST_SSM=1"
 	dataDir                  = "/data"
+	serviceSNS               = "sns"
 )
 
 func Test_parsePersist(t *testing.T) {
@@ -42,7 +43,7 @@ func Test_parsePersist(t *testing.T) {
 			name:         "every value form is accepted case-insensitively",
 			give:         []string{"PERSIST_S3=TRUE", "PERSIST_SQS=0", "PERSIST_SNS=False", "PERSIST_SES=1"},
 			wantDefault:  true,
-			wantServices: map[string]bool{"s3": true, serviceSQS: false, "sns": false, "ses": true},
+			wantServices: map[string]bool{"s3": true, serviceSQS: false, serviceSNS: false, "ses": true},
 			wantFormats:  []string{formatJSON},
 			wantFreq:     10 * time.Second,
 			wantBaseDir:  DefaultPersistBaseDir,
@@ -102,6 +103,19 @@ func Test_parsePersist(t *testing.T) {
 			wantFreq:    10 * time.Second,
 			wantBaseDir: DefaultPersistBaseDir,
 			wantConfig:  true,
+		},
+		{
+			// LocalStack's API_DEPENDENCIES has no sns entry (bootstrap.py:60-75):
+			// SNS delivers to SQS, but SQS is not a mandatory dependency, so
+			// PERSIST_SNS=1 persists SNS alone and SQS takes PERSIST_SQS.
+			name:         "PERSIST_SNS enables SNS alone",
+			give:         []string{persistDefaultOff, "PERSIST_SNS=1"},
+			wantDefault:  false,
+			wantServices: map[string]bool{serviceSNS: true},
+			wantFormats:  []string{formatJSON},
+			wantFreq:     10 * time.Second,
+			wantBaseDir:  DefaultPersistBaseDir,
+			wantConfig:   true,
 		},
 		{
 			name:         "a disabled service does not enable its dependencies",
