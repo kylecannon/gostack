@@ -468,9 +468,8 @@ caller's account and region, as LocalStack does.
   gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
   through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
   key, `l[1]`, which holds one value in both. When the paths share a key the
-  image keeps one path by an order gostack does not reproduce (it fits 101 of
-  the 102 two-path statements probed, and is not a rule we know), and
-  gostack keeps the first in name order that the item holds, with what that
+  image keeps one path by an order gostack does not reproduce (no rule we
+  know fits every statement probed), and gostack keeps the first in name order that the item holds, with what that
   path names and nothing of the others; either way the answer is a path the
   statement names, never a value of a path it does not. An attribute named by
   the key itself (`"l[1]"`) keeps it in both. A statement with one path, or

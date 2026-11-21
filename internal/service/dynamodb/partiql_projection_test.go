@@ -435,13 +435,12 @@ func cutList(n string) string {
 
 // Test_partiql_cutPathsFloor: when two paths through the same index of
 // different lists take one key, the image keeps one of them by an order gostack
-// does not reproduce (101 of the 102 statements probed fit the top-level name
-// with the lower (String.hashCode()+1)&15, the later path on a tie; the row that
-// does not is beta with b, verification/SQ-470 r2cut-cand.log, r3-cand.log).
-// gostack keeps the first in name order. What the two share, and what this
-// holds them to, is that the answer is one named path's value, whole, and
-// nothing of the other: never a value of a path the statement does not name.
-// The rows are statements the image answered, in either order of the paths.
+// does not reproduce (no rule fits every statement probed, verification/SQ-470
+// r2cut-cand.log, r3-cand.log); gostack keeps the first in name order. What the
+// two share, and what this holds them to, is that the answer is one named
+// path's value, whole, and nothing of the other: never a value of a path the
+// statement does not name. The rows are 11 statements the image answered, and
+// the test does not assert which of the two paths it kept.
 func Test_partiql_cutPathsFloor(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pord"))
@@ -465,23 +464,24 @@ func Test_partiql_cutPathsFloor(t *testing.T) {
 
 	for _, c := range [][2]path{
 		{{"a", "x"}, {"p", "y"}},
+		{{"p", "x"}, {"a", "y"}},
 		{{"a", "x"}, {"o", "y"}},
 		{{"n", "x"}, {"o", "y"}},
 		{{"o", "x"}, {"p", "y"}},
 		{{"x9", "x"}, {"x10", "y"}},
 		{{"zz", "x"}, {"x9", "y"}},
 		{{"aa", "x"}, {"zz", "y"}},
+		{{"zz", "x"}, {"aa", "y"}},
 		{{"aa", "x"}, {"p", "y"}},
+		{{"p", "x"}, {"aa", "y"}},
 	} {
-		for _, order := range [][2]path{c, {c[1], c[0]}} {
-			sel := text(order[0]) + ", " + text(order[1])
+		sel := text(c[0]) + ", " + text(c[1])
 
-			t.Run(sel, func(t *testing.T) {
-				got := s.call(t, usEast1, opStatement, stmt("SELECT "+sel+" FROM pord WHERE id = `a`"))
-				require.Equal(t, http.StatusOK, got.status, got.body)
-				require.Contains(t, []string{answer(order[0]), answer(order[1])}, got.body)
-			})
-		}
+		t.Run(sel, func(t *testing.T) {
+			got := s.call(t, usEast1, opStatement, stmt("SELECT "+sel+" FROM pord WHERE id = `a`"))
+			require.Equal(t, http.StatusOK, got.status, got.body)
+			require.Contains(t, []string{answer(c[0]), answer(c[1])}, got.body)
+		})
 	}
 }
 
