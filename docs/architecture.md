@@ -510,7 +510,27 @@ stay with the request until it is answered, and a client that reads its
 answer slowly keeps no other dense body off the lane
 (`Test_DecodeWithin_TheLaneIsFreeAfterEveryPath`,
 `Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered`). One lane is a
-constant, not a setting. Two dense bodies decoded at once get one served and
+constant, not a setting.
+
+The lane is taken only while no request waits for the in-flight bound
+(`protocol.BodiesWait`, either queue); otherwise the body is refused there
+as every other service refuses it (`Test_DecodeWithin_NoDenseBodyWhileABodyWaits`).
+The pool is strict FIFO, and dense senders' bodies are admitted with about
+42 of its 64 MiB, so they pass one at a time and a smaller request behind
+them waits for the queue to drain. A dense decode beside that drain (290 to
+356 MB of heap at 512 MiB against main's 66 MB, and twice the collector's
+CPU) or a walk to the end of a body then refused (37 to 41 ms against 4 ms)
+slowed the drain, and with it a 300 KiB `PutItem` on another connection, by
+about 0.2 s (SQ-474). Under such load a dense body is answered as on main;
+one that reaches a server with nothing queued is still served. At the same
+point a body is refused, before the pool is given back, when its bytes and
+the heap its walk is projected to end at could not fit even after a
+collection (`protocol.HeapCouldFit`, what the last collection found live,
+what is reserved and the projection against the room `ReserveHeap` weighs);
+the projection scales the heap the walk bounded so far by the bytes not yet
+read (`Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark`). It
+only refuses earlier: a body it admits is still reserved for its walked
+bound at the end, so the bound below still covers what decoding keeps. Two dense bodies decoded at once get one served and
 one the answer every other service gives
 (`Test_DecodeWithin_OneDenseBodyAtATime`), and which one is served varies
 from run to run. The heap's objects count the body too while it is live,
