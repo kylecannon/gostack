@@ -174,10 +174,22 @@ type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
 decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
 services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
-query form whose Action is in the URL or whose path is an SQS queue URL. A form
-that carries its Action in the body answers `MissingAction` (400) with a SigV4
-`Authorization` header and 404 without one: the gateway reads it to find the
-Action and drops the read error.
+query form, wherever its Action is. A form that carries its Action in the body
+is read by the gateway to find the Action. When that read fails (the body is over
+the cap, cannot be read, holds more pairs than the decode budget allows, or finds
+no room under the in-flight bound), the Action may be lost, and the answer is
+`MalformedQueryString`, or `Throttling` for no room. The service the signing scope
+names writes it, so its namespace and its `Accept` handling apply: the generated
+`serve` reads the form (`query.CutFormAnswer`) before it answers `MissingAction`.
+Only when no service can be named does the gateway write it, in the query protocol
+with no namespace, as the last step of `refuseUnclaimed`: after an unregistered
+service's 501, a preflight's 200 and an internal path's 404, and not for the
+`dynamodb` scope, which DynamoDB and DynamoDB Streams share and which keeps the
+404. A scope one json service holds (KMS, SSM, Secrets Manager) names that
+service, whose generated `serve` answers `400 InvalidAction` in
+`application/x-amz-json-1.1`. Text that is only not
+UTF-8 loses no pair (`query.ErrFormCut` is not wrapped), so it answers as any form
+with no Action does.
 
 ### How chi is used
 
