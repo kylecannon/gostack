@@ -257,6 +257,8 @@ func flushAllocs(ctx context.Context, t *testing.T) float64 {
 	t.Helper()
 
 	e := New(quietConfig(t.TempDir(), time.Hour))
+	// A Flush that a loaded machine drags past the watch's bound is not in time.
+	e.watchAfter = time.Hour
 	e.Register("svc", &stateSnap{state: "x"})
 
 	least := math.Inf(1)
