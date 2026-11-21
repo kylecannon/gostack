@@ -210,6 +210,113 @@ func Test_Enqueue_RefusesACallPastTheBound(t *testing.T) {
 	assert.True(t, client.Idle())
 }
 
+// Test_Unbounded_HoldsEveryWaitingCallAndKeepsDestinationsApart fills one slow
+// destination's lane with more waiting calls than MaxQueued: a client made by
+// NewUnbounded takes every one, another destination is served meanwhile, and
+// once the slow one is let go every call is answered, in the order it was
+// queued.
+func Test_Unbounded_HoldsEveryWaitingCallAndKeepsDestinationsApart(t *testing.T) {
+	const backlog = inproc.MaxQueued + 500
+
+	release := make(chan struct{})
+
+	var (
+		mu     sync.Mutex
+		served []int
+	)
+
+	client := inproc.NewUnbounded()
+	t.Cleanup(client.Close)
+	client.Bind(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/slow" {
+			return
+		}
+
+		<-release
+
+		body, _ := io.ReadAll(r.Body)
+		n, err := strconv.Atoi(string(body))
+		assert.NoError(t, err)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		served = append(served, n)
+	}))
+
+	var slowAnswered, fastAnswered atomic.Int32
+
+	for i := range backlog {
+		call := sqsCall(strconv.Itoa(i))
+		call.Path = "/slow"
+
+		require.True(t, client.Enqueue(call, func(inproc.Response, error) { slowAnswered.Add(1) }),
+			"call %d waits, as there is no bound", i)
+	}
+
+	const fast = 20
+
+	for i := range fast {
+		call := sqsCall(strconv.Itoa(i))
+		call.Path = "/fast"
+
+		require.True(t, client.Enqueue(call, func(inproc.Response, error) { fastAnswered.Add(1) }))
+	}
+
+	require.Eventually(t, func() bool { return fastAnswered.Load() == fast }, 10*time.Second, time.Millisecond,
+		"the other destination is served while the slow one holds %d calls", backlog)
+	assert.Zero(t, slowAnswered.Load())
+
+	close(release)
+
+	require.Eventually(t, func() bool { return slowAnswered.Load() == backlog }, 30*time.Second, time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	want := make([]int, backlog)
+	for i := range want {
+		want[i] = i
+	}
+
+	assert.Equal(t, want, served, "no call was dropped, and the lane kept the order")
+}
+
+// A backlog past MaxQueued in an unbounded client is cut at the drain's
+// deadline and counted, whole: the hub's warning carries every call it did not
+// serve, none lost between the bound and the shutdown.
+func Test_Unbounded_DrainCountsTheWholeBacklogItCuts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const backlog = inproc.MaxQueued + 1000
+
+		log := captureLog(t)
+		stuck := make(chan struct{})
+
+		hub := inproc.NewHub(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-stuck }))
+
+		client := inproc.NewUnbounded()
+		client.Bind(hub)
+
+		for i := range backlog {
+			require.True(t, client.Enqueue(laneCall(0, i), nil))
+		}
+
+		synctest.Wait()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		cut := hub.Drain(ctx)
+
+		assert.Equal(t, backlog, cut, "the call running and every call waiting were cut")
+		assert.Contains(t, log.String(), "in-process calls cut at shutdown")
+		assert.Contains(t, log.String(), "count="+strconv.Itoa(backlog))
+
+		close(stuck)
+		client.Close()
+	})
+}
+
 func Test_Close_DropsQueuedCallsCancelsTheOneInFlightAndRefusesMore(t *testing.T) {
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
