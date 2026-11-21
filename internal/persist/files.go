@@ -214,31 +214,47 @@ func moveAside(root *os.Root, file string, at time.Time) (string, error) {
 // crash between creating and renaming one leaves behind. A temp name that is a
 // link is removed as a link; its target is untouched.
 func removeTemps(root *os.Root, dir, name string) error {
+	_, err := sweepTemps(root, dir, name, "")
+
+	return err
+}
+
+// sweepTemps is removeTemps that also reports whether the listing it reads held
+// an entry called seek, with no read of its own; an empty seek is never found.
+// It reports what the listing held when it ended, a failure included.
+func sweepTemps(root *os.Root, dir, name, seek string) (bool, error) {
 	d, err := root.Open(dir)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", dir, err)
+		return false, fmt.Errorf("open %s: %w", dir, err)
 	}
 
 	entries, err := d.ReadDir(-1)
 	_ = d.Close()
 
 	if err != nil {
-		return fmt.Errorf("read %s: %w", dir, err)
+		return false, fmt.Errorf("read %s: %w", dir, err)
 	}
 
+	var (
+		found  bool
+		temp   = name + tempSuffix
+		prefix = temp + "-"
+	)
+
 	for _, entry := range entries {
-		temp := name + tempSuffix
-		if entry.Name() != temp && !strings.HasPrefix(entry.Name(), temp+"-") {
+		found = found || seek != "" && entry.Name() == seek
+
+		if entry.Name() != temp && !strings.HasPrefix(entry.Name(), prefix) {
 			continue
 		}
 
 		err = removeIfPresent(root, dir+"/"+entry.Name())
 		if err != nil {
-			return err
+			return found, err
 		}
 	}
 
-	return nil
+	return found, nil
 }
 
 // removeFile deletes file and its temp files. A file that is already gone is not

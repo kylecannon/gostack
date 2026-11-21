@@ -1568,7 +1568,19 @@ is untouched.
   the marker after it renames the snapshot, unless the service has changed
   since the snapshot was taken: the change is lost if the process is killed, so
   the marker stays and the next save that finds the service unchanged removes
-  it. A shutdown whose saves all complete leaves none. The startup `Load` logs
+  it. A save looks for the marker in the listing of the service's directory
+  that it reads anyway to remove the temp files of its state file, and looks
+  by itself only when a link leads the state file to another directory. A
+  flush in time allocates nothing for the marker (SQ-461): a request marks
+  nothing, a flush whose context has no deadline arms no marking at its
+  deadline and shares no budget between its rounds, and a flush with one pays
+  for the arming alone. Such a flush marks when it ends, so a `Snapshot` that
+  outlasts a deadline it was never given is marked after it returns, and each
+  round of it has the whole budget. `BenchmarkSavePendingAssets/pending=100` on
+  tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
+  marker; the first version of the marker took 174, and PR #56's benchmark gate
+  read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).
+  A shutdown whose saves all complete leaves none. The startup `Load` logs
   one warning for the services that have a marker, at warn: `persist: a save
   was abandoned at its deadline before this start, so what changed after the
   last completed save is lost` with `services=[s3]` and

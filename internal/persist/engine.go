@@ -379,8 +379,12 @@ func (e *Engine) Flush(ctx context.Context) error {
 		return nil
 	}
 
-	// The rounds of markers this call runs share one budget (see markAllowance).
-	ctx = withMarkAllowance(ctx)
+	// The rounds of markers this call runs share one budget (see markAllowance),
+	// which a ctx with no deadline does not make: it costs two allocations, and
+	// such a flush marks only when it ends (see hasDeadline).
+	if hasDeadline(ctx) {
+		ctx = withMarkAllowance(ctx)
+	}
 
 	shared, err := e.acquire(ctx, lend)
 	if err != nil {
@@ -1562,7 +1566,8 @@ type flushRun struct {
 	holding map[string]pendingService
 	// lost is what each service the flush did not save failed with, by name. It
 	// is written and read under mu, since the marking at a deadline (see
-	// markAtDeadline) reads it while the flush runs.
+	// markAtDeadline) reads it while the flush runs. The first loss makes it, so
+	// a flush that saves everything allocates none.
 	lost map[string]unsaved
 	// ended is true once the end of ctx is in errs.
 	ended bool
@@ -1584,7 +1589,7 @@ type flushRun struct {
 func newFlushRun(e *Engine, by flushBy) *flushRun {
 	return &flushRun{
 		e: e, by: by, committed: map[string]bool{}, deferred: map[string]bool{},
-		holding: map[string]pendingService{}, followed: map[string]Leader{}, lost: map[string]unsaved{},
+		holding: map[string]pendingService{}, followed: map[string]Leader{},
 	}
 }
 
@@ -1663,6 +1668,10 @@ func (r *flushRun) settle(name string, u *unsaved) bool {
 	}
 
 	if u != nil {
+		if r.lost == nil {
+			r.lost = map[string]unsaved{}
+		}
+
 		r.lost[name] = *u
 	}
 
@@ -2153,6 +2162,11 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 
 	dirs := []string{s.p.name}
 
+	// listed is true when a listing of the service's directory, which the sweep
+	// of a writer's temp files reads after its rename, is the answer to whether
+	// the service has a marker (see clearAbandoned); marked is that answer.
+	var listed, marked bool
+
 	for i, w := range s.writers {
 		err := w.commit()
 		if err != nil {
@@ -2161,22 +2175,31 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 			return err
 		}
 
-		err = removeTemps(root, dirOf(w.target), baseOf(w.target))
+		dir := dirOf(w.target)
+
+		seen, err := sweepTemps(root, dir, baseOf(w.target), abandonedFile)
 		if err != nil {
 			s.writers = s.writers[i+1:]
 
 			return err
 		}
 
-		if !slices.Contains(dirs, dirOf(w.target)) {
-			dirs = append(dirs, dirOf(w.target))
+		if dir == s.p.name {
+			listed, marked = true, marked || seen
+		}
+
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
 		}
 	}
 
 	s.writers = nil
 
 	// A completed save ends the loss an abandoned one left (see abandonedFile).
-	e.clearAbandoned(root, s.p.name)
+	// A save with no listing of the directory looks for the marker itself.
+	if marked || !listed {
+		e.clearAbandoned(root, s.p.name)
+	}
 
 	// Formats that are no longer listed go only after the listed ones are safe.
 	for _, f := range knownFormats {

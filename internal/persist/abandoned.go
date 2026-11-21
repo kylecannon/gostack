@@ -80,6 +80,18 @@ func (a *markAllowance) spend(d time.Duration) {
 // markAllowanceKey is the context key under which a Flush keeps its markAllowance.
 type markAllowanceKey struct{}
 
+// hasDeadline reports whether ctx can end at a deadline: only a ctx with one
+// does, short of a caller that cancels one with a deadline's cause. A flush with
+// a ctx that has none does not pay, in its allocations, for marking it will not
+// need: Flush makes it no allowance, so each of its rounds has the whole budget
+// (see allowanceOf), and markAtDeadline arms nothing, so it marks when it ends
+// (see logAbandoned and markWaiting) and not when its ctx does.
+func hasDeadline(ctx context.Context) bool {
+	_, ok := ctx.Deadline()
+
+	return ok
+}
+
 // withMarkAllowance returns ctx with an allowance for the rounds of one flush,
 // or ctx when it has one.
 func withMarkAllowance(ctx context.Context) context.Context {
@@ -362,12 +374,13 @@ func (m *marker) sync(root *os.Root, fsync func(*os.File) error) error {
 // calls once its flush has ended, waiting for a marking that has begun.
 //
 // The flush by the timer arms none: the Flush that lends it a deadline marks
-// what it holds. A service that saves anyway, as one whose Snapshot returns
+// what it holds. Nor does a flush whose ctx has no deadline (see hasDeadline),
+// which marks when it ends instead. A service that saves anyway, as one whose Snapshot returns
 // after the deadline does, has its marker removed by that save (see
 // clearAbandoned); a marker written while the save renames is at worst one
 // warning too many.
 func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) (end func()) {
-	if run.by == byTimer {
+	if run.by == byTimer || !hasDeadline(ctx) {
 		return func() {}
 	}
 
