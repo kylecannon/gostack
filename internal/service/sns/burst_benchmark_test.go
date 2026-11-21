@@ -34,12 +34,13 @@ import (
 //
 // A dead-letter call built while the lock is held shows in all four.
 //
-// The cells are sized to reach 50 iterations in the benchmark job's 500 ms
-// (docs/standards.md, Benchmarks): 64 lanes of 16 deliveries took 12 ms an
-// operation over SQS and 22 to 771 ms over HTTP, 1 to 44 iterations. A burst
-// over HTTP costs a connection and a POST each, so it runs fewer lanes, and
-// still takes 17 to 20 ms at 256 KiB (25 to 34 iterations): that cell is left
-// out, and the burst at 256 KiB is the SQS one.
+// The cells are sized to take at most 10 ms an operation (docs/standards.md,
+// Benchmarks): 64 lanes of 16 deliveries took 12 ms over SQS and 22 to 771 ms
+// over HTTP. A burst over HTTP costs a connection and a POST each, so it runs
+// fewer lanes, and still takes 17 to 20 ms at 256 KiB: that cell is left out,
+// and the burst at 256 KiB is the SQS one. As kept, SQS 16 lanes of 4 took
+// 3.3 ms at 32 KiB and 3.3 ms at 256 KiB, and HTTP 8 lanes of 2 at 32 KiB 6.9
+// ms, each the slowest of three runs.
 //
 //	BenchmarkBurst/protocol=sqs/lanes=16/perlane=4/payload=256KiB
 func BenchmarkBurst(b *testing.B) {

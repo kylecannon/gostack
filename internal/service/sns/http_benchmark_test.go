@@ -20,12 +20,15 @@ import (
 // last endpoint has answered. The endpoints are paths of one local server
 // that reads each body and answers 200, so each subscriber is its own lane.
 //
-// As for BenchmarkPublish, a cell runs only when it reaches 50 iterations in
-// 500 ms with room to spare: one subscriber at 256 B and 256 KiB, ten at
-// 256 KiB raw, and 100 at 256 B and at 16 KiB raw (99 to 249 iterations). A
-// 100-subscriber publish at 256 KiB took 11 to 40 ms, and the envelope cells
-// left out, 10 at 256 KiB and 100 at 16 KiB, ran 61 to 105 iterations, as each
-// writes and signs a body for every subscriber.
+// As for BenchmarkPublish, a cell is gated only when an operation takes at
+// most 10 ms (docs/standards.md, Benchmarks): one subscriber at 256 B and
+// 256 KiB, ten at 256 KiB raw, and 100 at 256 B and at 16 KiB raw. In three
+// runs the slowest of them, 100 at 16 KiB raw, took 8 ms (at least 92
+// iterations), the others 0.1 to 4.4 ms. A 100-subscriber publish at 256 KiB
+// took 11 to 40 ms, and the envelope cells left out, 10 at 256 KiB and 100 at
+// 16 KiB, ran 61 to 105 iterations (5 to 8 ms) when they were last measured:
+// each writes and signs a body for every subscriber, so its time moves the
+// most with the machine's load.
 //
 //	BenchmarkPublishHTTP/subscribers=100/delivery=raw/payload=16KiB
 

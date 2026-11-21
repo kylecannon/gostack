@@ -376,9 +376,20 @@ func Test_Provider_PublishBatch_empty_message(t *testing.T) {
 	require.Len(t, out.Successful, 3)
 	assert.Empty(t, out.Failed.Entries)
 
-	got := make([]string, 0, 3)
+	assert.ElementsMatch(t, []string{"beta", "", "gamma"}, envelopeMessages(t, enveloped, 3))
 
-	for _, m := range enveloped.await(3) {
+	msgs := raw.await(2)
+	assert.ElementsMatch(t, []string{"beta", "gamma"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, raw.receive(0), "SQS refused the empty body of a raw delivery")
+}
+
+// envelopeMessages is the Message member of each envelope the queue holds.
+func envelopeMessages(t *testing.T, q *queue, n int) []string {
+	t.Helper()
+
+	got := make([]string, 0, n)
+
+	for _, m := range q.await(n) {
 		var env struct {
 			Message string `json:"Message"`
 		}
@@ -388,11 +399,66 @@ func Test_Provider_PublishBatch_empty_message(t *testing.T) {
 		got = append(got, env.Message)
 	}
 
-	assert.ElementsMatch(t, []string{"beta", "", "gamma"}, got)
+	return got
+}
 
-	msgs := raw.await(2)
-	assert.ElementsMatch(t, []string{"beta", "gamma"}, []string{msgs[0].Body, msgs[1].Body})
-	assert.Empty(t, raw.receive(0), "SQS refused the empty body of a raw delivery")
+// Test_Provider_PublishBatch_empty_message_fifo: on a FIFO topic an entry with
+// an empty Message is Successful with a sequence number, as on the image
+// (cases fifo 1 and fifo 4): the envelope carries "Message": "" and a raw SQS
+// delivery is refused, while the entry beside it is delivered in order.
+func Test_Provider_PublishBatch_empty_message_fifo(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+	fifoQueue := map[string]string{attrFifoQueue: textTrue}
+	raw := s.createQueue(account, region, "raw.fifo", fifoQueue)
+	enveloped := s.createQueue(account, region, "enveloped.fifo", fifoQueue)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	only := s.publishBatch(batch(topic, entry(1, "a", "", paramGroup, "g", paramDedup, "d1"))...)
+
+	require.Len(t, only.Successful, 1)
+	assert.NotEmpty(t, only.Successful[0].SequenceNumber, "fifo 1: the empty entry takes a sequence number")
+	assert.Equal(t, []string{""}, envelopeMessages(t, enveloped, 1), "fifo 1: the envelope carries an empty Message")
+	assert.Empty(t, raw.receive(0), "fifo 1: SQS refuses the raw delivery's empty body")
+
+	pair := s.publishBatch(batch(topic,
+		entry(1, "a", "", paramGroup, "g", paramDedup, "d2"),
+		entry(2, "b", "two", paramGroup, "g", paramDedup, "d3"),
+	)...)
+
+	require.Len(t, pair.Successful, 2)
+	assert.Empty(t, pair.Failed.Entries)
+	assert.Equal(t, []string{"", "two"}, envelopeMessages(t, enveloped, 2), "fifo 4: both arrive, in entry order")
+
+	msgs := raw.await(1)
+	assert.Equal(t, "two", msgs[0].Body, "fifo 4: the raw queue gets the good entry only")
+	assert.Empty(t, raw.receive(0))
+}
+
+// Test_Provider_PublishBatch_empty_entry_beside_a_full_one: a 262,144-byte
+// entry and an empty entry with no attribute is a 200 that publishes both
+// (image case std 9); the validation table pins the 400 once the empty entry
+// carries an attribute.
+func Test_Provider_PublishBatch_empty_entry_beside_a_full_one(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	raw := s.createQueue(account, region, "raw", nil)
+	enveloped := s.createQueue(account, region, "enveloped", nil)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	big := strings.Repeat("a", 262144)
+	out := s.publishBatch(batch(topic, entry(1, "a", big), entry(2, "b", ""))...)
+
+	require.Len(t, out.Successful, 2)
+	assert.Empty(t, out.Failed.Entries)
+
+	assert.ElementsMatch(t, []string{big, ""}, envelopeMessages(t, enveloped, 2))
+
+	msgs := raw.await(1)
+	assert.Equal(t, big, msgs[0].Body, "the raw queue gets the full entry; SQS refuses the empty one")
+	assert.Empty(t, raw.receive(0))
 }
 
 // Test_Provider_PublishBatch_fifo publishes a batch whose third entry repeats

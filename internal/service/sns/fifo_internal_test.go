@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -169,6 +170,76 @@ func Test_fifoTopic_build_keeps_the_window_on_the_monotonic_clock(t *testing.T) 
 
 	assert.True(t, at.Equal(saved), "the id is as old as it was saved")
 	assert.Contains(t, at.String(), " m=", "its time carries a monotonic reading")
+}
+
+// Test_fifoTopic_save_writes_the_age_not_the_wall_time: an id's saved time is
+// now less its age on the monotonic clock. A wall clock that stepped back
+// after the id was taken does not change that age, so a restore a minute later
+// still places the id a minute and a half old, not hours old or in the future.
+func Test_fifoTopic_save_writes_the_age_not_the_wall_time(t *testing.T) {
+	const (
+		age  = time.Minute + 30*time.Second
+		step = 3 * time.Hour
+	)
+
+	taken := time.Now()
+	now := taken.Add(age)
+	// The wall clock is set back after the id is taken, so the wall time of
+	// now and taken are 3 hours - age apart, and the monotonic ones age apart.
+	now = stepWallBack(t, now, step)
+
+	f := &fifoTopic{
+		seen:  map[string]published{"k": {id: "m", sequence: "1", at: taken}},
+		order: []string{"k"},
+	}
+
+	window := f.save(now)
+
+	require.Len(t, window, 1)
+	assert.Equal(t, now.Add(-age).UnixNano(), window[0].At.UnixNano(),
+		"the entry is as old as it was on the monotonic clock, counted back from now's wall time")
+
+	// A file holds the wall time alone.
+	window[0].At = window[0].At.Round(0)
+
+	var restored fifoTopic
+
+	later := now.Add(time.Minute)
+
+	require.NoError(t, restored.build(window, later))
+
+	assert.Equal(t, age+time.Minute, later.Sub(restored.seen["k"].at), "the restored id keeps its age")
+}
+
+// timeLayout mirrors time.Time's fields, in order.
+type timeLayout struct {
+	wall uint64
+	ext  int64
+	loc  *time.Location
+}
+
+// stepWallBack is t with its wall clock reading moved back by a whole number
+// of seconds and its monotonic reading kept, as when the system clock is set
+// back while the process runs. It reads time.Time's layout, and fails the test
+// if that is not what it finds, so a changed layout cannot pass it silently.
+func stepWallBack(t *testing.T, at time.Time, d time.Duration) time.Time {
+	t.Helper()
+
+	const (
+		hasMonotonic = 1 << 63
+		secondsShift = 30
+	)
+
+	layout := (*timeLayout)(unsafe.Pointer(&at))
+	require.NotZero(t, layout.wall&hasMonotonic, "the time carries a monotonic reading")
+
+	before := at
+	layout.wall -= uint64(d/time.Second) << secondsShift
+
+	require.Equal(t, time.Duration(0), before.Sub(at), "the monotonic reading is untouched")
+	require.Equal(t, d, before.Round(0).Sub(at.Round(0)), "the wall reading moved back by d")
+
+	return at
 }
 
 // liveHeap is the bytes of heap in use once the collector has run.
