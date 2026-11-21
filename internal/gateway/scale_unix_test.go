@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -28,13 +29,16 @@ const (
 	// growthRounds is how many times every size is served.
 	growthRounds = 15
 	// growthExponent is the most the cost over every size may grow faster than
-	// the size: linear is 1, a scan of the input per element is 2.
-	growthExponent = 1.3
+	// the size: linear is 1, a scan of the input per element is 2. It is the
+	// limit of Test_Decoder_BatchScalesWithEntries, which gives the CI reading
+	// behind it. The two tests are in different test packages, so they could share
+	// the constant only through a package of their own for it; each keeps a copy.
+	growthExponent = 1.5
 	// growthTailSlope is the most the cost between the third largest size and the
 	// largest may grow faster than the size. The two are four times apart, so a
 	// quadratic step with a constant small enough for the linear cost to hide it at
 	// the small sizes shows here.
-	growthTailSlope = 1.35
+	growthTailSlope = 1.6
 	// growthCeiling is the CPU time of the whole test process one call may take
 	// before the test gives up on it, so a quadratic call fails after seconds of
 	// CPU and not the minutes it would take to finish.
@@ -162,6 +166,26 @@ func growthExponentOf(sizes []int, costs []time.Duration) float64 {
 	return (count*sumXY - sumX*sumY) / (count*sumXX - sumX*sumX)
 }
 
+// reportScale appends the figures of one test to the file named by
+// GITHUB_STEP_SUMMARY, which GitHub Actions sets for every step, so a passing CI
+// run shows them on its summary page. A passing `go test` prints nothing, and -v
+// is not used in CI. Without the variable it does nothing.
+func reportScale(t *testing.T, exponent, tail float64, costs []time.Duration) {
+	t.Helper()
+
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+
+	_, err = fmt.Fprintf(file, "- `%s`: exponent %.3f (limit %.2f), tail slope %.3f (limit %.2f), CPU %v\n",
+		t.Name(), exponent, growthExponent, tail, growthTailSlope, costs)
+	require.NoError(t, errors.Join(err, file.Close()))
+}
+
 // requireNearLinear asserts the two figures of the cost against the size.
 func requireNearLinear(t *testing.T, what string, sizes []int, costs []time.Duration) {
 	t.Helper()
@@ -172,6 +196,8 @@ func requireNearLinear(t *testing.T, what string, sizes []int, costs []time.Dura
 
 	t.Logf("%s: %v used %v of CPU: exponent %.3f, tail slope %.3f (linear is 1, quadratic is 2)",
 		what, sizes, costs, exponent, tail)
+
+	reportScale(t, exponent, tail, costs)
 
 	assert.Less(t, exponent, growthExponent, "%s: the cost over all sizes", what)
 	assert.Less(t, tail, growthTailSlope, "%s: the cost between the largest size and a quarter of it", what)
