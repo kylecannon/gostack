@@ -72,6 +72,17 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name: "v2 max in the process's own cgroup passes to the mount's root",
+			files: map[string]string{
+				"sys/fs/cgroup/system.slice/gostack.service/memory.max": "max\n",
+				rootFile:   container512,
+				procCgroup: "0::/system.slice/gostack.service\n",
+			},
+			wantLimit:  512 << 20,
+			wantSource: rootMemory,
+			wantOK:     true,
+		},
+		{
 			name:       "v1",
 			files:      map[string]string{"sys/fs/cgroup/memory/memory.limit_in_bytes": container512},
 			wantLimit:  512 << 20,
@@ -152,6 +163,10 @@ func Test_setMemoryLimit(t *testing.T) {
 		{"GOMEMLIMIT wins", map[string]string{"GOMEMLIMIT": "300MiB"}, root, 0, false},
 		{"GOMEMLIMIT=off wins too", map[string]string{"GOMEMLIMIT": "off"}, root, 0, false},
 		{"no container limit", nil, cgroupRoot(t, nil), 0, false},
+		// 85% of 99 bytes rounds to 0, which the runtime would take as a limit
+		// of nothing.
+		{"a limit too small to keep", nil, cgroupRoot(t, map[string]string{rootFile: "99\n"}), 0, false},
+		{"the smallest limit kept", nil, cgroupRoot(t, map[string]string{rootFile: "100\n"}), 85, true},
 	}
 
 	for _, tt := range tests {

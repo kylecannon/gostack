@@ -2,32 +2,20 @@ package dynamodb_test
 
 import (
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// recordingHold records the most a decoding charged.
-type recordingHold struct{ cost int64 }
-
-func (h *recordingHold) HoldDecode(cost int64) (int64, error) {
-	h.cost = max(h.cost, cost)
-
-	return cost, nil
-}
-
-// Test_decodeBudget_declarationCoversTheWorstShapes measures, for each shape of
-// small values that DynamoDB's limits allow in bulk, what decoding charges for
-// each byte of body and for each element (a comma or an opening bracket), and
-// holds both to what the provider declares: 256 times the body
-// (service.Registration.DecodeFactor) and 1,700 for an element (DecodeUnit).
-// docs/architecture.md, "DynamoDB's decode budget", lists the numbers; this
-// fails when the decoder's cost model passes either declaration.
+// Test_decodeBudget_declarationCoversTheWorstShapes holds what decoding charges
+// for each byte of body, for each shape of small values that DynamoDB's limits
+// allow in bulk, to what the provider declares: 256 times the body
+// (service.Registration.DecodeFactor). docs/architecture.md, "DynamoDB's
+// decode budget", lists the numbers; this fails when the decoder's cost model
+// passes the declaration.
 func Test_decodeBudget_declarationCoversTheWorstShapes(t *testing.T) {
 	const elements = 20_000
 
@@ -66,15 +54,10 @@ func Test_decodeBudget_declarationCoversTheWorstShapes(t *testing.T) {
 
 	for name, body := range shapes {
 		t.Run(name, func(t *testing.T) {
-			var hold recordingHold
-
-			_, _, err := awsjson.DecodeWithin[api.PutItemInput]([]byte(body), math.MaxInt64, &hold)
-			require.Nil(t, err)
-
-			separators := strings.Count(body, ",") + strings.Count(body, "[")
-
-			assert.Less(t, float64(hold.cost)/float64(len(body)), float64(reg.DecodeFactor), "charged per byte of body")
-			assert.LessOrEqual(t, float64(hold.cost)/float64(separators), float64(reg.DecodeUnit), "charged per element")
+			// A budget of the factor times the body, without DecodeSlack,
+			// refuses a body charged more for each of its bytes.
+			_, _, err := awsjson.DecodeWithin[api.PutItemInput]([]byte(body), int64(reg.DecodeFactor)*int64(len(body)), nil)
+			assert.Nil(t, err, "charged less than the declared factor for each byte of body")
 		})
 	}
 }

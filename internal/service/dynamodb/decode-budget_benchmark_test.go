@@ -86,6 +86,7 @@ func convoyBatchToMissing(worker int) string {
 func BenchmarkDecodeBudget(b *testing.B) {
 	// The wait is long so that a cell that serves its workers one after another
 	// is measured and not throttled.
+	roomyMemoryLimit(b)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 	protocol.SetBodyWait(5 * time.Minute)
 	b.Cleanup(func() {

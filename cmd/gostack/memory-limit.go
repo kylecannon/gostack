@@ -45,7 +45,13 @@ func setMemoryLimit(getenv func(string) string, root string, set func(int64) int
 		return
 	}
 
+	// A limit under percent bytes would round to zero, which the runtime
+	// takes as a limit of nothing; it is no limit anyone could run under.
 	soft := limit / percent * memoryLimitPercent
+	if soft <= 0 {
+		return
+	}
+
 	set(soft)
 
 	slog.Info("gostack set the Go memory limit from the container's memory limit",
@@ -53,13 +59,14 @@ func setMemoryLimit(getenv func(string) string, root string, set func(int64) int
 }
 
 // cgroupMemoryLimit returns the memory limit in bytes of the cgroup this
-// process runs in, read below root, and the file it came from. It reports false
-// when no limit is set, when the file says max, and when there is no cgroup
-// file to read. cgroup v2's memory.max is looked for in the process's own
-// cgroup first (/proc/self/cgroup) and then at the mount's root, which is the
-// container's own cgroup when it has a namespace of its own; cgroup v1's
-// memory.limit_in_bytes the same way. The limits of the cgroups above it are
-// not read.
+// process runs in, read below root, and the file it came from. cgroup v2's
+// memory.max is looked for in the process's own cgroup first
+// (/proc/self/cgroup) and then at the mount's root, which is the container's
+// own cgroup when it has a namespace of its own; cgroup v1's
+// memory.limit_in_bytes the same way. The first of them that sets a limit
+// gives it: a file that says max, or no limit, or is missing, passes to the
+// next. It reports false when none sets one. The limits of the cgroups between
+// the process's own and the mount's root are not read.
 func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 	fsys, err := os.OpenRoot(root)
 	if err != nil {
@@ -85,8 +92,9 @@ func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 		}
 
 		limit, ok = parseCgroupLimit(string(text))
-
-		return limit, "/" + file, ok
+		if ok {
+			return limit, "/" + file, true
+		}
 	}
 
 	return 0, "", false

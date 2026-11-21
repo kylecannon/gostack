@@ -221,14 +221,14 @@ func Test_DecodeCost_TextIsNotWalked(t *testing.T) {
 	assert.Equal(t, decodePasses*(int64(len(large))+structureUnits(large)*p.perUnit), cost, "the bound, unwalked")
 
 	dense := []byte(`{"Entries":[` + strings.Repeat(`{},`, 50_000) + `{}]}`)
-	walked, largest, over := walkCost(dense, p, math.MaxInt64)
+	walked, heap, over := walkCost(dense, p, math.MaxInt64)
 	require.False(t, over)
 
-	cost, costLargest, err := decodeCost(dense, p, protocol.DecodeBudget(len(dense)), protocol.FreeDecode)
+	cost, costHeap, err := decodeCost(dense, p, protocol.DecodeBudget(len(dense)), protocol.FreeDecode)
 	require.Nil(t, err)
 	assert.Equal(t, decodePasses*walked, cost, "the walk's own charge")
-	assert.Equal(t, decodePasses*largest, costLargest, "and the most its list holds of it")
-	assert.Positive(t, costLargest)
+	assert.Equal(t, heap, costHeap, "and the heap one pass keeps at its peak")
+	assert.Positive(t, costHeap)
 
 	_, _, err = decodeCost(dense, p, protocol.DecodeSlack/8, math.MaxInt64)
 	assert.Equal(t, ErrTooLarge, err, "refused past the budget")

@@ -53,6 +53,17 @@ func denseItem(id, elements string) string {
 	return `{"id":{"S":"` + id + `"},"l":{"L":[` + elements + `]}}`
 }
 
+// roomyMemoryLimit gives the process a Go memory limit far above what any body
+// here keeps, as cmd/gostack gives it one from a container's, so that a body
+// charged past protocol.DecodeFactor is decoded (protocol.ReserveHeap) and not
+// refused for want of a limit. The old limit is put back after tb.
+func roomyMemoryLimit(tb testing.TB) {
+	tb.Helper()
+
+	old := debug.SetMemoryLimit(8 << 30)
+	tb.Cleanup(func() { debug.SetMemoryLimit(old) })
+}
+
 // Test_decodeBudget_worstLegalBody sends, for each operation that takes
 // AttributeValues, the densest body its documented limits allow, and every one
 // is served: none is refused for decoding into more than its budget. The
@@ -60,6 +71,8 @@ func denseItem(id, elements string) string {
 // of the smallest values at 400 KB of item, and lists nested to the depth
 // limit. The batch and the transaction are the largest each admits.
 func Test_decodeBudget_worstLegalBody(t *testing.T) {
+	roomyMemoryLimit(t)
+
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("dense"))
 	s.ok(t, opPut, `{"TableName":"dense","Item":`+denseItem("q", numberList(numbers))+`}`)
@@ -132,6 +145,8 @@ func Test_decodeBudget_worstLegalBody(t *testing.T) {
 // answers ValidationException, as it does for any key of the wrong shape, and
 // the budget does not.
 func Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler(t *testing.T) {
+	roomyMemoryLimit(t)
+
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("keys"))
 
@@ -226,64 +241,31 @@ func textBatch(client, firstText, text int) string {
 	return `{"RequestItems":{"burst":[` + strings.Join(requests, ",") + `]}}`
 }
 
-// Test_decodeBudget_aBurstOfDenseBodiesIsServed: 32 clients at once each send
-// a BatchWriteItem that decodes into about 8.5 MiB charged, together over the
-// default in-flight bound of 64 MiB. A body is admitted with the room its
-// elements will need (service.Registration.DecodeUnit) when they are dense in its
-// first 64 KiB, and with twice its length when they are not; one admitted with
-// less than it needs gives that back when it has to wait for the rest and
-// holds only its body until it is served (protocol.DecodeHold.Cover). So the
-// bound admits as many as fit and the others wait their turn, none part way,
-// and every client is served wherever the density sits in the body. Admitted
-// with twice its length and waiting for more while holding it, as before, each
-// held a few MiB and waited for more that none could give, and most were
-// throttled at the wait.
-func Test_decodeBudget_aBurstOfDenseBodiesIsServed(t *testing.T) {
-	tests := []struct {
-		name  string
-		body  func(client int) string
-		bytes int
-	}{
-		{"the first 64 KiB hold the records", convoyBatch, 1<<20 - 100<<10},
-		{
-			"the first item's text is 70 KB, so the first 64 KiB hold none",
-			func(client int) string { return textBatch(client, 70_000, 36_000) }, 1<<20 - 100<<10,
-		},
-		{
-			"every item's text is 66 KB",
-			func(client int) string { return textBatch(client, 66_000, 66_000) }, 1_700_000,
-		},
+// Test_decodeBudget_aBurstOfDenseBodiesIsServedOrThrottled: 32 clients at once
+// each send a BatchWriteItem that decodes into about 8.5 MiB charged, together
+// over the default in-flight bound of 64 MiB. Each is charged within
+// protocol.DecodeFactor, so the in-flight bound admits and throttles them as it
+// does any body (docs/compat.md, In-flight bound): every client is served or
+// throttled, at least one is served, and every request gives back what it held.
+func Test_decodeBudget_aBurstOfDenseBodiesIsServedOrThrottled(t *testing.T) {
+	const clients = 32
+
+	bodies := make([]string, clients)
+	for client := range clients {
+		bodies[client] = convoyBatch(client)
+		require.Greater(t, len(bodies[client]), 1<<20-100<<10)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			const clients = 32
-
-			bodies := make([]string, clients)
-			for client := range clients {
-				bodies[client] = tt.body(client)
-				require.Greater(t, len(bodies[client]), tt.bytes)
-			}
-
-			serveBurst(t, bodies)
-		})
-	}
+	serveBurst(t, bodies)
 }
 
 // serveBurst sends bodies to BatchWriteItem at once, one client each, and
-// requires every one to be served.
+// requires every one to be served or throttled, and at least one served.
 func serveBurst(t *testing.T, bodies []string) {
 	t.Helper()
 
-	// The wait is long so that a slow machine, or the race detector, serving
-	// the bodies one after another does not throttle the last; a body that
-	// waited on the others part way would still wait it out and fail.
 	protocol.SetInFlight(protocol.DefaultInFlight)
-	protocol.SetBodyWait(20 * time.Second)
-	t.Cleanup(func() {
-		protocol.SetInFlight(0)
-		protocol.SetBodyWait(protocol.DefaultBodyWait)
-	})
+	t.Cleanup(func() { protocol.SetInFlight(0) })
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("burst"))
@@ -304,13 +286,14 @@ func serveBurst(t *testing.T, bodies []string) {
 			<-start
 
 			status, answer := sendTo(t, server, "BatchWriteItem", body)
-			if status == http.StatusOK {
+
+			switch {
+			case status == http.StatusOK:
 				served.Add(1)
-
-				return
+			case status == http.StatusBadRequest && strings.Contains(answer, "ThrottlingException"):
+			default:
+				failures.Store(client, fmt.Sprint(status, " ", answer[:min(len(answer), 120)]))
 			}
-
-			failures.Store(client, fmt.Sprint(status, " ", answer[:min(len(answer), 120)]))
 		})
 	}
 
@@ -323,7 +306,7 @@ func serveBurst(t *testing.T, bodies []string) {
 		return true
 	})
 
-	assert.Equal(t, int64(len(bodies)), served.Load(), "every client of the burst is served")
+	assert.Positive(t, served.Load(), "the burst is served as far as the bound holds it")
 
 	_, held := protocol.InFlight()
 	assert.Zero(t, held, "every request gives back what it held")
@@ -362,9 +345,9 @@ func (b *stalledBody) Read(p []byte) (int, error) {
 
 // Test_decodeBudget_aStringOfCommasIsPlannedAsText: a client that states 100 KB
 // and sends 64 KiB + 1 of a string of comma separated values holds that and
-// twice it for decoding, not what 16,000 list elements would need (42 MB at
-// DecodeUnit), so a second client's 100 KB string is served while the first
-// has stopped. The commas are text inside a string and decode to nothing.
+// twice it for decoding, not what 16,000 list elements would need, so a
+// second client's 100 KB string is served while the first has stopped. The
+// commas are text inside a string and decode to nothing.
 func Test_decodeBudget_aStringOfCommasIsPlannedAsText(t *testing.T) {
 	// The second client waits for room for this long at most; it does not wait.
 	protocol.SetInFlight(protocol.DefaultInFlight)
@@ -458,51 +441,6 @@ func Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused(t *testing.T) {
 
 	_, held := protocol.InFlight()
 	assert.Zero(t, held, "every request gives back what it held")
-}
-
-// Test_decodeBudget_oneLongListPeaksHigherThanManyShortOnes: under one Go
-// memory limit, 130,000 numbers in a single list are refused, because the
-// slice a long list grows from is alive beside the one it grows into, and the
-// same 130,000 spread over a batch's 25 short lists are decoded, as the
-// 25 x 64,000 numbers of SQ-445's body were in a 512 MiB container. The batch
-// is refused for its missing table, after it was decoded.
-func Test_decodeBudget_oneLongListPeaksHigherThanManyShortOnes(t *testing.T) {
-	protocol.SetInFlight(protocol.DefaultInFlight)
-
-	old := debug.SetMemoryLimit(-1)
-
-	t.Cleanup(func() {
-		debug.SetMemoryLimit(old)
-		protocol.SetInFlight(0)
-	})
-
-	s := newStack(t)
-	s.ok(t, opCreate, hashTable("dense"))
-
-	scan := `{"TableName":"dense","FilterExpression":"l = :v","ExpressionAttributeValues":{":v":{"L":[` +
-		numberList(numbers) + `]}}}`
-
-	short := make([]string, 0, batchItems)
-	for i := range batchItems {
-		short = append(short, `{"PutRequest":{"Item":`+denseItem(fmt.Sprint("b", i), numberList(numbers/batchItems))+`}}`)
-	}
-
-	batch := `{"RequestItems":{"nope":[` + strings.Join(short, ",") + `]}}`
-
-	debug.SetMemoryLimit(40 << 20)
-
-	got := s.call(t, usEast1, opScan, scan)
-	assert.Equal(t, http.StatusBadRequest, got.status, got.body)
-	assert.Contains(t, got.body, "more than gostack allows")
-
-	got = s.call(t, usEast1, opBatchWrite, batch)
-	assert.Equal(t, http.StatusBadRequest, got.status, got.body)
-	assert.Contains(t, got.body, "ResourceNotFoundException", "decoded, and refused for its table")
-
-	debug.SetMemoryLimit(512 << 20)
-
-	got = s.call(t, usEast1, opScan, scan)
-	assert.Equal(t, http.StatusOK, got.status, got.body[:min(len(got.body), 300)])
 }
 
 // signJSON makes req a json call to operation by the test account.

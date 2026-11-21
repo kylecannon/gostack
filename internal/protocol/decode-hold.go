@@ -30,9 +30,8 @@ type DecodeHolder interface {
 // DecodeHold is what decoding one request holds against the in-flight bound
 // past FreeDecode, charged in steps of decodeChunk from the same pool as the
 // request bodies and waiting in the same queue, ahead of bodies that hold
-// nothing yet. When it has to wait for more than it holds, it gives back what
-// it holds and waits for all it needs (bodyPool.regrow). Its zero value holds
-// nothing. It is used on the request's own goroutine.
+// nothing yet. Its zero value holds nothing. It is used on the request's own
+// goroutine.
 type DecodeHold struct {
 	pool *bodyPool
 	held int64
@@ -70,12 +69,9 @@ func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 
 	want := min((cost-FreeDecode+decodeChunk-1)/decodeChunk*decodeChunk, h.room)
 	if want > h.held {
-		// What it held when it had to wait is given back (bodyPool.regrow),
-		// so a body that was planned too little, whose density was not in the
-		// first FreeBody bytes, waits holding only its own bytes.
-		err := h.pool.regrow(ctx, h.held, want)
+		err := h.pool.acquire(ctx, want-h.held, &h.pool.growing)
 		if err != nil {
-			h.held, h.err = 0, err
+			h.err = err
 
 			return 0, err
 		}
