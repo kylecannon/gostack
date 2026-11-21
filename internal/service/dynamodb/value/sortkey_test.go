@@ -4,12 +4,9 @@ import (
 	"cmp"
 	"math/rand/v2"
 	"strings"
-	"testing"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func sv(v string) api.AttributeValue   { return api.AttributeValue{S: &v} }
@@ -35,27 +32,6 @@ var numberForms = []string{
 // valueOrder is -1, 0 or 1: how Compare orders a and b.
 func valueOrder(a, b *api.AttributeValue) int {
 	return cmp.Compare(value.Compare(a, b), 0)
-}
-
-// keyOrder is -1, 0 or 1: how the sort keys of a and b order.
-func keyOrder(a, b *api.AttributeValue) int {
-	return strings.Compare(value.SortKey(a), value.SortKey(b))
-}
-
-func Test_SortKey_ordersAsCompare(t *testing.T) {
-	forms := make([]api.AttributeValue, 0, len(numberForms))
-
-	for _, text := range numberForms {
-		n, err := value.ParseNumber(text)
-		require.NoError(t, err, text)
-		forms = append(forms, numv(n.String()))
-	}
-
-	for _, a := range forms {
-		for _, b := range forms {
-			assert.Equal(t, valueOrder(&a, &b), keyOrder(&a, &b), "%s against %s", *a.N, *b.N)
-		}
-	}
 }
 
 // randomNumber is a canonical number of up to 38 digits drawn from a small
@@ -115,62 +91,4 @@ func randomBinary(r *rand.Rand) api.AttributeValue {
 	}
 
 	return bv(b)
-}
-
-func Test_SortKey_ordersRandomKeysAsCompare(t *testing.T) {
-	kinds := []struct {
-		name string
-		gen  func(*rand.Rand) api.AttributeValue
-	}{{"S", randomString}, {"N", randomNumber}, {"B", randomBinary}}
-
-	for _, kind := range kinds {
-		t.Run(kind.name, func(t *testing.T) {
-			// Each kind draws from its own sequence, so a failure replays.
-			r, gen := rand.New(rand.NewPCG(405, 405)), kind.gen
-
-			for range 20000 {
-				a, b := gen(r), gen(r)
-
-				want := valueOrder(&a, &b)
-				require.Equal(t, want, keyOrder(&a, &b), "%+v against %+v", a, b)
-
-				if want == 0 {
-					assert.Equal(t, value.SortKey(&a), value.SortKey(&b))
-				}
-			}
-		})
-	}
-}
-
-func Test_SortKey_typesOrderByName(t *testing.T) {
-	a, b, c := sv("x"), numv("1"), bv([]byte("x"))
-
-	for _, pair := range [][2]api.AttributeValue{{a, b}, {b, c}, {a, c}, {b, a}, {c, b}, {c, a}} {
-		x, y := pair[0], pair[1]
-		assert.Equal(t, valueOrder(&x, &y), keyOrder(&x, &y))
-	}
-
-	assert.Empty(t, value.SortKey(&api.AttributeValue{}))
-	assert.NotEmpty(t, value.SortKey(new(sv(""))))
-}
-
-func Test_SortKeyHasPrefix(t *testing.T) {
-	for _, tt := range []struct {
-		give, prefix api.AttributeValue
-		want         bool
-	}{
-		{sv("abc"), sv("ab"), true},
-		{sv("abc"), sv("abc"), true},
-		{sv("ab"), sv("abc"), false},
-		{sv("abc"), sv(""), true},
-		{sv("abc"), sv("b"), false},
-		{bv([]byte{1, 2, 3}), bv([]byte{1, 2}), true},
-		{bv([]byte{1, 2}), bv([]byte{1, 2, 3}), false},
-		{sv("abc"), bv([]byte("ab")), false},
-		{numv("12"), numv("1"), false},
-		{numv("12"), numv("12"), false},
-	} {
-		assert.Equal(t, tt.want, value.SortKeyHasPrefix(value.SortKey(&tt.give), value.SortKey(&tt.prefix)),
-			"%+v begins with %+v", tt.give, tt.prefix)
-	}
 }

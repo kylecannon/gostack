@@ -31,7 +31,12 @@ func Test_SortKeyUntyped_ordersRandomKeysAsCompare(t *testing.T) {
 			for range 20000 {
 				a, b := gen(r), gen(r)
 
-				require.Equal(t, valueOrder(&a, &b), untypedOrder(&a, &b), "%+v against %+v", a, b)
+				want := valueOrder(&a, &b)
+				require.Equal(t, want, untypedOrder(&a, &b), "%+v against %+v", a, b)
+
+				if want == 0 {
+					assert.Equal(t, value.SortKeyUntyped(&a), value.SortKeyUntyped(&b))
+				}
 			}
 		})
 	}
@@ -101,10 +106,4 @@ func Test_SortKeyUntyped_scalarsAndOthers(t *testing.T) {
 	assert.Equal(t, string([]byte{0x01}), value.SortKeyUntyped(new(numv("0"))), "zero is one byte")
 	assert.Empty(t, value.SortKeyUntyped(new(bv(nil))))
 	assert.Empty(t, value.SortKeyUntyped(&api.AttributeValue{}))
-}
-
-func Test_SortKey_isTheUntypedKeyUnderItsLetter(t *testing.T) {
-	for _, v := range []api.AttributeValue{sv("ab"), bv([]byte{1, 2}), numv("12.5"), numv("-3")} {
-		assert.Equal(t, value.Type(&v)+value.SortKeyUntyped(&v), value.SortKey(&v), "%+v", v)
-	}
 }

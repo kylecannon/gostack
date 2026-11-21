@@ -61,18 +61,6 @@ func SortKeyUntyped(v *api.AttributeValue) string {
 	}
 }
 
-// SortKey is SortKeyUntyped with the type's letter first, so that the keys of
-// values of different types order by their letters, as Compare orders the
-// types by name. A value that is not an S, N or B has the empty key.
-func SortKey(v *api.AttributeValue) string {
-	switch {
-	case v.S != nil, v.B != nil, v.N != nil:
-		return Type(v) + SortKeyUntyped(v)
-	default:
-		return ""
-	}
-}
-
 // appendNumberKey appends the key of the number in text to dst. Text that is
 // not a number is read as zero, as Compare reads it.
 func appendNumberKey(dst []byte, text string) []byte {
@@ -112,15 +100,4 @@ func appendNumberKey(dst []byte, text string) []byte {
 	}
 
 	return append(dst, sortEnd)
-}
-
-// SortKeyHasPrefix reports whether the sort key k is that of a string or a
-// binary that begins with the one whose sort key is prefix, which is what
-// begins_with asks of a range key. A number has no such prefix.
-func SortKeyHasPrefix(k, prefix string) bool {
-	if len(prefix) == 0 || prefix[0] == TypeN[0] || len(k) < len(prefix) {
-		return false
-	}
-
-	return k[:len(prefix)] == prefix
 }
