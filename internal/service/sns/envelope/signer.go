@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,7 +31,8 @@ const (
 
 // Signer holds the RSA key that signs envelopes and the certificate that
 // verifies them. The zero value is ready to use: the pair is generated on
-// first use and lives as long as the Signer.
+// first use, or in the background once Warm is called, and lives as long as
+// the Signer.
 //
 // LocalStack ships no fixed pair: services/sns/certificate.py generates an
 // RSA-2048 key and a self-signed certificate each time the process starts.
@@ -38,9 +40,14 @@ const (
 // a restart no longer verifies against the certificate served after it.
 type Signer struct {
 	once sync.Once
-	key  *rsa.PrivateKey
-	pem  []byte
-	err  error
+	warm sync.Once
+	// started and ready are set when generation begins and when it ends.
+	started, ready atomic.Bool
+	// gen makes the pair; nil is generate. Only a test sets it.
+	gen func() (*rsa.PrivateKey, []byte, error)
+	key *rsa.PrivateKey
+	pem []byte
+	err error
 }
 
 var _ http.Handler = (*Signer)(nil)
@@ -82,9 +89,32 @@ func (s *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Warm starts making the key pair in a background goroutine and returns at
+// once. Only the first call starts it; a signature or a certificate request
+// that needs the pair before it is ready waits for the same generation.
+func (s *Signer) Warm() {
+	s.warm.Do(func() {
+		go func() { _ = s.init() }()
+	})
+}
+
+// Started reports whether the pair has been asked for, by Warm or by use.
+func (s *Signer) Started() bool { return s.started.Load() }
+
+// Ready reports whether the pair has been made.
+func (s *Signer) Ready() bool { return s.ready.Load() }
+
 func (s *Signer) init() error {
 	s.once.Do(func() {
-		s.key, s.pem, s.err = generate()
+		s.started.Store(true)
+
+		gen := s.gen
+		if gen == nil {
+			gen = generate
+		}
+
+		s.key, s.pem, s.err = gen()
+		s.ready.Store(true)
 	})
 
 	return s.err

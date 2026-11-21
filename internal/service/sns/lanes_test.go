@@ -249,6 +249,10 @@ func Test_Provider_goroutines(t *testing.T) {
 	q := s.createQueue(account, region, "q", nil)
 	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
 
+	// CreateTopic starts the signing key in a goroutine of its own; a baseline
+	// taken while it runs would let one leaked goroutine pass.
+	require.Eventually(t, s.sns.SignerReady, keyWait, time.Millisecond)
+
 	s.publish(paramTopicArn, topic, paramMessage, "warm")
 	q.await(1)
 

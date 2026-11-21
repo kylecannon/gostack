@@ -58,3 +58,9 @@ func (p *Provider) LockWaits(stop <-chan struct{}, pause time.Duration) []time.D
 func (p *Provider) CutCalls() {
 	p.client.Close()
 }
+
+// SignerStarted reports whether the signing key has been asked for.
+func (p *Provider) SignerStarted() bool { return p.signer.Started() }
+
+// SignerReady reports whether the signing key has been made.
+func (p *Provider) SignerReady() bool { return p.signer.Ready() }
