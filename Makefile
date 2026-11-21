@@ -184,8 +184,8 @@ gen-check: gen
 # renders the same page and fails when docs/features.md differs; it changes no
 # file.
 define run-features
-facts=$$(mktemp) && trap 'rm -f "$$facts"' EXIT && \
-GOSTACK_FEATURES_FACTS="$$facts" go test -race -count=1 -run '^Test_featureFacts$$' ./cmd/gostack >/dev/null && \
+facts=$$(mktemp) && log=$$(mktemp) && trap 'rm -f "$$facts" "$$log"' EXIT && \
+{ GOSTACK_FEATURES_FACTS="$$facts" go test -race -count=1 -run '^Test_featureFacts$$' ./cmd/gostack >"$$log" 2>&1 || { cat "$$log" >&2; exit 1; }; } && \
 python3 parity/features.py $(1) --facts "$$facts"
 endef
 

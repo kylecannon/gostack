@@ -213,9 +213,9 @@ def render(commit: str, services: list[dict], facts: dict[str, dict], rows: dict
             out += [f"Parity: [row in parity.md](parity.md#{name}).", ""]
         links = compat_by_service[name]
         if links:
-            out += ["Known differences: " + ", ".join(f"[{text}](compat.md#{anchor})" for text, anchor in links) + ".", ""]
+            out += ["Settings and known differences in compat.md: " + ", ".join(f"[{text}](compat.md#{anchor})" for text, anchor in links) + ".", ""]
         else:
-            out += ["Known differences: none recorded in compat.md.", ""]
+            out += ["Settings and known differences in compat.md: none recorded.", ""]
         if fact["implemented"] is None:
             out += [f"The operations this service implements are unknown; its API has {len(fact['operations'])}.", ""]
             continue

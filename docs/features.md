@@ -83,7 +83,7 @@ Persistence: `PERSIST_DYNAMODB`: yes.
 
 Parity: [row in parity.md](parity.md#dynamodb).
 
-Known differences: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB until KMS](compat.md#dynamodb-until-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
+Settings and known differences in compat.md: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB until KMS](compat.md#dynamodb-until-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
 
 **Implemented (36)**
 
@@ -125,7 +125,7 @@ Persistence: `PERSIST_DYNAMODBSTREAMS`: yes.
 
 Parity: [row in parity.md](parity.md#dynamodbstreams).
 
-Known differences: [DynamoDB Streams](compat.md#dynamodb-streams).
+Settings and known differences in compat.md: [DynamoDB Streams](compat.md#dynamodb-streams).
 
 **Implemented (4)**
 
@@ -145,7 +145,7 @@ Persistence: `PERSIST_KMS`: yes.
 
 Parity: [row in parity.md](parity.md#kms).
 
-Known differences: [KMS](compat.md#kms).
+Settings and known differences in compat.md: [KMS](compat.md#kms).
 
 **Implemented (45)**
 
@@ -193,7 +193,7 @@ Persistence: `PERSIST_S3`: yes.
 
 Parity: [row in parity.md](parity.md#s3).
 
-Known differences: [S3](compat.md#s3), [S3 versioning and Object Lock](compat.md#s3-versioning-and-object-lock), [S3 default encryption](compat.md#s3-default-encryption), [S3 where AWS is unverified](compat.md#s3-where-aws-is-unverified), [S3 limits](compat.md#s3-limits), [S3 wire details](compat.md#s3-wire-details).
+Settings and known differences in compat.md: [S3](compat.md#s3), [S3 versioning and Object Lock](compat.md#s3-versioning-and-object-lock), [S3 default encryption](compat.md#s3-default-encryption), [S3 where AWS is unverified](compat.md#s3-where-aws-is-unverified), [S3 limits](compat.md#s3-limits), [S3 wire details](compat.md#s3-wire-details).
 
 **Implemented (90)**
 
@@ -230,7 +230,7 @@ Persistence: `PERSIST_SECRETSMANAGER`: yes.
 
 Parity: [row in parity.md](parity.md#secretsmanager).
 
-Known differences: [Secrets Manager](compat.md#secrets-manager).
+Settings and known differences in compat.md: [Secrets Manager](compat.md#secrets-manager).
 
 **Implemented (23)**
 
@@ -264,7 +264,7 @@ Persistence: `PERSIST_SNS`: yes.
 
 Parity: [row in parity.md](parity.md#sns).
 
-Known differences: [SNS topics, signing and parity](compat.md#sns-topics-signing-and-parity), [SNS platform applications, endpoints and SMS](compat.md#sns-platform-applications-endpoints-and-sms), [SNS delivery](compat.md#sns-delivery).
+Settings and known differences in compat.md: [SNS topics, signing and parity](compat.md#sns-topics-signing-and-parity), [SNS platform applications, endpoints and SMS](compat.md#sns-platform-applications-endpoints-and-sms), [SNS delivery](compat.md#sns-delivery).
 
 **Implemented (36)**
 
@@ -301,7 +301,7 @@ Persistence: `PERSIST_SQS`: yes.
 
 Parity: [row in parity.md](parity.md#sqs).
 
-Known differences: [SQS](compat.md#sqs).
+Settings and known differences in compat.md: [SQS](compat.md#sqs).
 
 **Implemented (23)**
 
@@ -333,7 +333,7 @@ Persistence: `PERSIST_SSM`: yes.
 
 Parity: [row in parity.md](parity.md#ssm).
 
-Known differences: [SSM Parameter Store](compat.md#ssm-parameter-store).
+Settings and known differences in compat.md: [SSM Parameter Store](compat.md#ssm-parameter-store).
 
 **Implemented (17)**
 
@@ -378,7 +378,7 @@ Persistence: `PERSIST_STS`: no.
 
 Parity: [row in parity.md](parity.md#sts).
 
-Known differences: none recorded in compat.md.
+Settings and known differences in compat.md: none recorded.
 
 **Implemented (7)**
 
