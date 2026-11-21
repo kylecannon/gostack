@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# SQ-458 round-2 scratch measurement. Never merged. Builds the arms of the sqs
+# SQ-458 round-3 scratch measurement. Never merged. Builds the arms of the sqs
 # and dynamodb benchmark binaries and runs them interleaved, ROUNDS rounds,
 # each run relinked with a new -randlayout seed, the way `make bench-ab` does.
-#   base        6220cf0 (main) + bench.patch (the text rows of the matrix)
+#   base        36aef93 (main) + bench.patch (the text rows of the matrix,
+#               Vietnamese, CJK/ASCII alternating and pretty-printed json
+#               included)
 #   baseframe16 base + 16 unused bytes in formReader: serveAWS frame +0x10
-#   new         6220cf0 + sq458.patch (SQ-458 after review SQ-463: generated
-#               json encoders, quoting in runs, text rows included)
+#   new         36aef93 + sq458.patch (SQ-458 after review SQ-471: the word
+#               scan checks UTF-8 first bytes in place; text rows included)
 #   newframe16  new + the same 16 unused bytes in formReader
-# Wanted: new and newframe16 flat on AMD Zen 3/4; new within 10% of base on
-# every row, the new non-ASCII and escape-dense text rows included.
+# Wanted: new and newframe16 within 5% on every row and runner; new no
+# slower than base on any row, the new text rows included.
 set -euo pipefail
 
 ROUNDS=${ROUNDS:-8}
-BASE_SHA=6220cf077ae9093f6076cd5147ca2246905a8d63
+BASE_SHA=36aef933dff29f9f63d6fd1fd3feb47fa3410cdb
 REPO=${REPO:-$PWD}
 PATCHES=${PATCHES:-$REPO/.github/sq455}
 W=$RUNNER_TEMP/sq455

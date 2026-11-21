@@ -437,7 +437,7 @@ index 180c70b..128d0cd 100644
  
  // shapeName is the Go name of a shape, which a type, its constructor and every
 diff --git a/docs/architecture.md b/docs/architecture.md
-index 3e45fd5..0a221b1 100644
+index 2a37a24..caf174b 100644
 --- a/docs/architecture.md
 +++ b/docs/architecture.md
 @@ -475,7 +475,20 @@ written by hand.
@@ -22990,10 +22990,10 @@ index c6698f8..dba63e3 100644
 +}
 diff --git a/internal/protocol/awsjson/quote.go b/internal/protocol/awsjson/quote.go
 new file mode 100644
-index 0000000..d5054f8
+index 0000000..6f429d5
 --- /dev/null
 +++ b/internal/protocol/awsjson/quote.go
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,439 @@
 +package awsjson
 +
 +import (
@@ -23008,13 +23008,7 @@ index 0000000..d5054f8
 +	byteBits  = 8
 +	ones      = 0x0101010101010101
 +	highs     = 0x8080808080808080
-+
-+	// twoByteLow and twoByteHigh bound the first byte of a valid two-byte
-+	// UTF-8 sequence, and a continuation byte is 0b10xxxxxx.
-+	twoByteLow       = 0xc2
-+	twoByteHigh      = 0xdf
-+	continuationMask = 0xc0
-+	continuation     = 0x80
++	lows      = 0x7f7f7f7f7f7f7f7f
 +
 +	// escapeLenShift puts an escape's length in the top byte of its word.
 +	escapeLenShift = 56
@@ -23029,72 +23023,241 @@ index 0000000..d5054f8
 +// v2 quotes a byte per loop turn, and that loop keeps three values on the
 +// stack, so its cost moves with the stack pointer's place in a cache line: on
 +// AMD Zen 3 and 4 a 16-byte change in a caller's frame moved a 1 MiB
-+// ReceiveMessage by 38% (SQ-455). This tests eight bytes per turn for one to
-+// escape or to check as UTF-8, and copies each clean run whole. Text that is
-+// not ASCII is checked a stretch at a time, escapes next to each other are
-+// written without going back to the word test, and a short run or an escape
-+// is written with one eight-byte store, so text dense with either costs no
-+// more than v2's loop.
++// ReceiveMessage by 38% (SQ-455). Here scan does the work a word at a time
++// and calls nothing, so that it keeps its values in registers; it stops for
++// the few things that need a call, which appendQuote does before it goes on.
 +func appendQuote(dst []byte, s string) ([]byte, bool) {
-+	// The text and its quotes, and a word of room for the stores.
-+	dst = slices.Grow(dst, len(s)+len(`""`)+wordBytes)
++	dst = slices.Grow(dst, len(s)+len(`""`)+wordReserve)
 +	dst = append(dst, '"')
-+	start, i := 0, 0
++
++	var cur cursor
 +
 +	for {
++		var stop int
++
++		dst, cur, stop = scan(dst, s, cur)
++
++		switch stop {
++		case stopRoom:
++			dst = slices.Grow(dst, len(s)-cur.start+wordReserve)
++		case stopRun:
++			// at is a byte to escape in the word at w, after a long run or
++			// at the end of s. The continuation bytes from at on are
++			// counted again when scan goes on from there.
++			cur.balance -= balanceOf(wordFrom(s, cur.w, cur.at))
++			dst = append(dst, s[cur.start:cur.at]...)
++			dst = appendEscape(dst, s[cur.at])
++			cur.w, cur.start = cur.at+1, cur.at+1
++		case stopFirst:
++			// at starts an invalid sequence, or one that s ends within four
++			// bytes of. scan counted what at calls for, and counts the
++			// continuation bytes after it again when it goes on from there.
++			if _, n := utf8.DecodeRuneInString(s[cur.at:]); n == 1 {
++				return dst, false
++			}
++
++			cur.balance -= balanceOf(wordFrom(s, cur.w, cur.at+1))
++			cur.w = cur.at + 1
++		case stopHigh:
++			// The word at w holds nothing but bytes of 0x80 or more, so it is
++			// most likely inside a stretch of text in another script, which
++			// is checked whole from its first sequence that starts in the
++			// word. The continuation bytes before that one belong to the
++			// sequence before.
++			x := load64(s[cur.w:])
++
++			first := x & (x << 1) & highs
++			if first == 0 {
++				return dst, false
++			}
++
++			j := cur.w + bits.TrailingZeros64(first)/byteBits
++			k := j + highRun(s[j:])
++
++			if !utf8.ValidString(s[j:k]) {
++				return dst, false
++			}
++
++			cur.balance += j - cur.w
++			cur.w = k
++		case stopEnd:
++			// Each first byte checked that its continuation bytes follow it,
++			// so the text is valid when no other continuation byte is left.
++			if cur.balance != 0 {
++				return dst, false
++			}
++
++			dst = append(dst, s[cur.start:]...)
++
++			return append(dst, '"'), true
++		default:
++			return dst, false
++		}
++	}
++}
++
++// cursor is where appendQuote is in s: w is the word scan tests next, at the
++// byte it stopped at, start where the run not yet copied begins, and balance
++// counts the continuation bytes seen less those that follow a valid first
++// byte. scan keeps it in four registers.
++type cursor struct{ w, at, start, balance int }
++
++// What scan stopped for.
++const (
++	stopEnd   = iota // s is done.
++	stopFirst        // a first byte scan did not find valid.
++	stopRoom         // dst needs room for the rest of s.
++	stopRun          // a byte to escape follows a run too long to copy here.
++	stopHigh         // a word of bytes of 0x80 or more.
++)
++
++// maxRun is the longest run before an escape that scan copies itself, with
++// four eight-byte stores; past it, appendQuote's copy call costs less.
++const maxRun = 4 * wordBytes
++
++// wordReserve is the room in dst, past what the rest of s takes as it is,
++// that scan needs to write the escapes of one word: each adds at most five
++// bytes, and each run and escape is written with eight-byte stores that may
++// reach seven bytes past it.
++const wordReserve = 2 * wordBytes * wordBytes
++
++// scan appends s from cur on to dst, as appendQuote does, until it is done or
++// must stop for a call, and returns where it stopped and what for. It tests
++// eight bytes per turn and copies each clean run whole.
++// In a word that holds a byte to escape or a first byte of a UTF-8 sequence,
++// it visits only those: an escape is written with one eight-byte store, and
++// so is a short run before it, and a sequence is checked from one four-byte
++// load and a table entry, so text dense with either costs a few operations
++// per such byte, where v2 spends a loop turn on every byte.
++func scan(dst []byte, s string, cur cursor) ([]byte, cursor, int) {
++	w, start, balance := cur.w, cur.start, cur.balance
++
++	for {
++		if len(s)-w >= wordBytes && specials(load64(s[w:])) == 0 {
++			w = cleanWords(s, w+wordBytes)
++		}
++
++		if w >= len(s) {
++			return dst, cursor{w, w, start, balance}, stopEnd
++		}
++
++		if cap(dst)-len(dst) < len(s)-start+wordReserve {
++			return dst, cursor{w, w, start, balance}, stopRoom
++		}
++
 +		var x uint64
-+		if len(s)-i >= wordBytes {
-+			x = load64(s[i:])
++		if len(s)-w >= wordBytes {
++			if x = load64(s[w:]); x&highs == highs {
++				return dst, cursor{w, w, start, balance}, stopHigh
++			}
 +		} else {
-+			x = loadTail(s[i:])
++			x = loadTail(s[w:])
 +		}
 +
-+		m := specials(x)
-+		if m == 0 {
-+			i += wordBytes
++		balance += balanceOf(x)
 +
-+			continue
-+		}
++		// The zero bytes that loadTail adds past the end are not marked.
++		for m := marks(x) & firstBytes(len(s)-w); m != 0; m &= m - 1 {
++			j := w + bits.TrailingZeros64(m)/byteBits
 +
-+		// Past the end, the word holds zero bytes, which specials marks.
-+		if i += bits.TrailingZeros64(m) / byteBits; i >= len(s) {
-+			break
-+		}
-+
-+		c := s[i]
-+		if c >= utf8.RuneSelf {
-+			// A lone two-byte character, the common case in Latin text, is
-+			// checked in place.
-+			if len(s)-i > 2 && c-twoByteLow <= twoByteHigh-twoByteLow &&
-+				s[i+1]&continuationMask == continuation && s[i+2] < utf8.RuneSelf {
-+				i += 2
++			c := s[j]
++			if c >= utf8.RuneSelf {
++				// appendQuote checks a sequence that s may end within.
++				if len(s)-j < runeMax || badFirst(load32(s[j:]), c) {
++					return dst, cursor{w, j, start, balance}, stopFirst
++				}
 +
 +				continue
 +			}
 +
-+			n := multiByteRun(s[i:])
-+			if n == 0 {
-+				return dst, false
++			// A short run is copied with one store or four, which read and
++			// write up to a word or four from its start: s holds that many
++			// bytes unless the run is near its end, and dst has the room scan
++			// keeps. appendQuote copies a longer run, or one near the end.
++			l, n := len(dst), j-start
++			switch {
++			case n <= wordBytes && len(s)-start >= wordBytes:
++				binary.LittleEndian.PutUint64(dst[l:l+wordBytes], load64(s[start:]))
++			case n <= maxRun && len(s)-start >= maxRun:
++				binary.LittleEndian.PutUint64(dst[l:l+wordBytes], load64(s[start:]))
++				binary.LittleEndian.PutUint64(dst[l+wordBytes:l+2*wordBytes], load64(s[start+wordBytes:]))
++				binary.LittleEndian.PutUint64(dst[l+2*wordBytes:l+3*wordBytes], load64(s[start+2*wordBytes:]))
++				binary.LittleEndian.PutUint64(dst[l+3*wordBytes:l+maxRun], load64(s[start+3*wordBytes:]))
++			default:
++				return dst, cursor{w, j, start, balance}, stopRun
 +			}
 +
-+			i += n
-+
-+			continue
++			e, l := escapes[c], l+n
++			binary.LittleEndian.PutUint64(dst[l:l+wordBytes], e)
++			dst = dst[:l+int(e>>escapeLenShift)]
++			start = j + 1
 +		}
 +
-+		dst, i = appendEscapes(dst, s, start, i)
-+		start = i
++		w += wordBytes
++	}
++}
++
++// firstBytes returns a mask of the first n bytes of a word, or of all of them
++// when n is a word or more.
++func firstBytes(n int) uint64 {
++	if n >= wordBytes {
++		return ^uint64(0)
 +	}
 +
-+	dst = append(dst, s[start:]...)
++	return 1<<(n*byteBits) - 1
++}
 +
-+	return append(dst, '"'), true
++// cleanWords returns the index of the first word from w on that holds a byte
++// specials marks, or of the part shorter than a word at the end. It is its
++// own function so that the loop over plain text keeps its few values in
++// registers, whatever scan around it has to keep on the stack.
++//
++//go:noinline
++func cleanWords(s string, w int) int {
++	for ; len(s)-w >= wordBytes; w += wordBytes {
++		if specials(load64(s[w:])) != 0 {
++			break
++		}
++	}
++
++	return w
++}
++
++// badFirst reports whether c, a byte of 0x80 or more, starts no valid UTF-8
++// sequence, from v, the four bytes from c on read little-endian.
++func badFirst(v uint32, c byte) bool {
++	l := &leads[c]
++
++	return byte(v>>byteBits)-l.lo > l.span || v&l.mask != l.want //nolint:gosec // takes the second byte of v on purpose
++}
++
++// wordFrom returns the word of s at w with the bytes before j set to zero.
++func wordFrom(s string, w, j int) uint64 {
++	var x uint64
++	if len(s)-w >= wordBytes {
++		x = load64(s[w:])
++	} else {
++		x = loadTail(s[w:])
++	}
++
++	shift := (j - w) * byteBits
++
++	return x >> shift << shift
++}
++
++// appendEscape appends the escape of the ASCII byte c.
++func appendEscape(dst []byte, c byte) []byte {
++	e := escapes[c]
++	var b [wordBytes]byte
++	binary.LittleEndian.PutUint64(b[:], e)
++
++	return append(dst, b[:e>>escapeLenShift]...)
 +}
 +
 +// specials returns x with the high bit set in each byte that json escapes or
 +// that is 0x80 or more, and no bit set below the lowest such byte. A borrow
-+// can also set the bits of the bytes above a match, never below one, so the
-+// lowest set bit is exact.
++// can also set the bits of the bytes above a match, never below one, so it
++// is zero exactly when no byte is special.
 +func specials(x uint64) uint64 {
 +	quote := x ^ (ones * '"')
 +	slash := x ^ (ones * '\\')
@@ -23105,47 +23268,46 @@ index 0000000..d5054f8
 +	return m & highs
 +}
 +
-+// appendEscapes appends s[start:i], a run with nothing to escape, then the
-+// escape of s[i] and of each byte right after it that json escapes. It returns
-+// the index after the last. A run of a word or less is copied with one
-+// eight-byte store, and so is each escape, which saves a copy call for each
-+// where escapes come close together.
-+func appendEscapes(dst []byte, s string, start, i int) ([]byte, int) {
-+	if l := len(dst); i-start <= wordBytes && len(s)-start >= wordBytes && cap(dst)-l >= wordBytes {
-+		binary.LittleEndian.PutUint64(dst[l:l+wordBytes], load64(s[start:]))
-+		dst = dst[:l+i-start]
-+	} else {
-+		dst = append(dst, s[start:i]...)
-+	}
++// marks returns x with the high bit set in each byte that json escapes and in
++// each of 0xc0 or more, which can start a UTF-8 sequence. Seven bits of each
++// byte are added to without a carry out of the byte, so no match sets a bit in
++// another.
++func marks(x uint64) uint64 {
++	quote := x ^ (ones * '"')
++	slash := x ^ (ones * '\\')
++	below := (x&lows + ones*(utf8.RuneSelf-' ')) | x
++	quote |= quote&lows + lows
++	slash |= slash&lows + lows
 +
-+	for ; i < len(s) && isEscaped(s[i]); i++ {
-+		if cap(dst)-len(dst) < wordBytes {
-+			dst = slices.Grow(dst, wordBytes)
-+		}
-+
-+		e, l := escapes[s[i]], len(dst)
-+		binary.LittleEndian.PutUint64(dst[l:l+wordBytes], e)
-+		dst = dst[:l+int(e>>escapeLenShift)]
-+	}
-+
-+	return dst, i
++	return (x&(x<<1) | ^below | ^quote | ^slash) & highs
 +}
 +
-+// isEscaped reports whether json escapes the ASCII byte c.
-+func isEscaped(c byte) bool {
-+	return c < ' ' || c == '"' || c == '\\'
++// balanceOf returns the number of continuation bytes in x, 0b10xxxxxx, less
++// the number that the bytes in x that can start a sequence call for: one
++// after 0b110xxxxx, two after 0b1110xxxx and three after 0b11110xxx. Each
++// first byte that scan finds valid has its continuation bytes after it, so s
++// is valid UTF-8 when the sum over its words is zero.
++func balanceOf(x uint64) int {
++	// A first byte's second, third and fourth bits, shifted to its top.
++	const second, third, fourth = 1, 2, 3
++
++	high := x & highs
++	first := high & (x << second)
++	three := first & (x << third)
++	four := three & (x << fourth)
++
++	const low = byteBits - 1
++
++	return sumBytes((high&^first)>>low) - sumBytes(first>>low+three>>low+four>>low)
 +}
 +
-+// multiByteRun returns the length of the run of bytes of 0x80 and above that
-+// starts s, or 0 when that run is not valid UTF-8. A multi-byte sequence holds
-+// no ASCII byte, so a string is valid UTF-8 exactly when each such run is.
-+func multiByteRun(s string) int {
++// highRun returns the length of the run of bytes of 0x80 and above that
++// starts s.
++func highRun(s string) int {
 +	n := 0
 +	for ; len(s)-n >= wordBytes; n += wordBytes {
 +		if m := ^load64(s[n:]) & highs; m != 0 {
-+			n += bits.TrailingZeros64(m) / byteBits
-+
-+			break
++			return n + bits.TrailingZeros64(m)/byteBits
 +		}
 +	}
 +
@@ -23153,19 +23315,84 @@ index 0000000..d5054f8
 +		n++
 +	}
 +
-+	if !utf8.ValidString(s[:n]) {
-+		return 0
++	return n
++}
++
++// runeMax is the length of the longest UTF-8 sequence.
++const runeMax = utf8.UTFMax
++
++// lead is how a byte of 0x80 or more starts a UTF-8 sequence, read
++// little-endian from that byte: the second byte is at least lo and at most
++// lo+span, which also rules out overlong forms, surrogates and code points
++// past U+10FFFF as unicode/utf8 does, and the bytes after it that mask selects
++// are want, continuation bytes.
++// A byte that starts no sequence has a want no value matches.
++type lead struct {
++	mask, want uint32
++	lo, span   byte
++}
++
++var leads = func() (t [256]lead) {
++	// The first bytes of two-, three- and four-byte sequences, the range
++	// of a continuation byte, and the narrower second-byte ranges that
++	// unicode/utf8 gives four first bytes.
++	const (
++		first2, first3, first4, firstMax = 0xc2, 0xe0, 0xf0, 0xf4
++		contLo, contHi                   = 0x80, 0xbf
++		e0Lo, edHi, f0Lo, f4Hi           = 0xa0, 0x9f, 0x90, 0x8f
++		surrogates                       = 0xed
++
++		// The top two bits of the third and fourth bytes, and what a
++		// continuation byte has there.
++		third, thirdWant          = 0x00c0_0000, 0x0080_0000
++		fourth, fourthWant        = 0xc0c0_0000, 0x8080_0000
++		noSequence         uint32 = 1
++	)
++
++	for c := utf8.RuneSelf; c < len(t); c++ {
++		lo, hi := byte(contLo), byte(contHi)
++
++		switch c {
++		case first3:
++			lo = e0Lo
++		case surrogates:
++			hi = edHi
++		case first4:
++			lo = f0Lo
++		case firstMax:
++			hi = f4Hi
++		default:
++		}
++
++		switch {
++		case c < first2 || c > firstMax:
++			t[c] = lead{want: noSequence}
++		case c < first3:
++			t[c] = lead{lo: lo, span: hi - lo}
++		case c < first4:
++			t[c] = lead{mask: third, want: thirdWant, lo: lo, span: hi - lo}
++		default:
++			t[c] = lead{mask: fourth, want: fourthWant, lo: lo, span: hi - lo}
++		}
 +	}
 +
-+	return n
++	return t
++}()
++
++// sumBytes returns the sum of the bytes of x, when it is below 256: the
++// multiplication adds each byte into the top one.
++func sumBytes(x uint64) int {
++	return int(x * ones >> escapeLenShift)
 +}
 +
 +// loadTail reads s, shorter than a word, followed by zero bytes.
 +func loadTail(s string) uint64 {
-+	var b [wordBytes]byte
-+	copy(b[:], s)
++	var x uint64
++	for i := len(s) - 1; i >= 0; i-- {
++		x = x<<byteBits | uint64(s[i])
++	}
 +
-+	return binary.LittleEndian.Uint64(b[:])
++	return x
 +}
 +
 +// load64 reads the first eight bytes of s little-endian, which the compiler
@@ -23175,6 +23402,13 @@ index 0000000..d5054f8
 +
 +	return uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24 |
 +		uint64(s[4])<<32 | uint64(s[5])<<40 | uint64(s[6])<<48 | uint64(s[7])<<56
++}
++
++// load32 reads the first four bytes of s little-endian as one load.
++func load32(s string) uint32 {
++	_ = s[3]
++
++	return uint32(s[0]) | uint32(s[1])<<8 | uint32(s[2])<<16 | uint32(s[3])<<24
 +}
 +
 +// escapes holds the json escape of each ASCII byte appendQuote escapes, in the
@@ -23699,7 +23933,7 @@ index deb9eec..b0cf421 100644
  func appendEpoch(buf []byte, t time.Time) []byte {
  	sec, nsec := t.Unix(), int64(t.Nanosecond())
 diff --git a/internal/service/dynamodb/items_benchmark_test.go b/internal/service/dynamodb/items_benchmark_test.go
-index 78560d0..509d589 100644
+index 78560d0..e7b6c78 100644
 --- a/internal/service/dynamodb/items_benchmark_test.go
 +++ b/internal/service/dynamodb/items_benchmark_test.go
 @@ -1,6 +1,7 @@
@@ -23726,7 +23960,7 @@ index 78560d0..509d589 100644
  
  var (
  	itemPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}, {"399KiB", 399 << 10}}
-@@ -27,6 +33,29 @@ var (
+@@ -27,6 +33,33 @@ var (
  
  const benchTable = "bench"
  
@@ -23738,12 +23972,16 @@ index 78560d0..509d589 100644
 +}
 +
 +// itemTexts are two-byte Latin among ASCII, three-byte CJK, four-byte emoji,
-+// and json text, a third of it escaped quotes.
++// json text, a third of it escaped quotes, Vietnamese, CJK and ASCII
++// alternating, and pretty-printed json, escaped quotes among newlines.
 +var itemTexts = []itemText{
 +	{"latin", "caf\u00e9 na\u00efve "},
 +	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
 +	{"emoji", "\U0001f389\U0001f680\u2728"},
 +	{"json", `{"k":"v","n":1},`},
++	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
++	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
++	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
 +}
 +
 +// itemTextPayloads are the sizes of the text cells.
@@ -23756,7 +23994,7 @@ index 78560d0..509d589 100644
  type itemPayload struct {
  	name string
  	size int
-@@ -58,8 +87,17 @@ func itemMatrixOn(
+@@ -58,8 +91,17 @@ func itemMatrixOn(
  
  // putBody is a PutItem body for the item keyed k-worker with a d of size bytes.
  func putBody(worker, size int) string {
@@ -23776,7 +24014,7 @@ index 78560d0..509d589 100644
  }
  
  // getBody is a GetItem body for the item keyed k-worker.
-@@ -135,4 +173,23 @@ func BenchmarkGetItem(b *testing.B) {
+@@ -135,4 +177,23 @@ func BenchmarkGetItem(b *testing.B) {
  			require.NoError(b, s.fanOut(b, opGet, workers, func(worker int) string { return bodies[worker] }))
  		}
  	})
@@ -23951,10 +24189,10 @@ index 3d991cc..8fac2a7 100644
  			}
  
 diff --git a/internal/service/sqs/wire-harness_benchmark_test.go b/internal/service/sqs/wire-harness_benchmark_test.go
-index d5b3a25..5e46b52 100644
+index d5b3a25..494e51a 100644
 --- a/internal/service/sqs/wire-harness_benchmark_test.go
 +++ b/internal/service/sqs/wire-harness_benchmark_test.go
-@@ -70,6 +70,33 @@ func benchBody(n int) string {
+@@ -70,6 +70,37 @@ func benchBody(n int) string {
  	return strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", n/36+1)[:n]
  }
  
@@ -23967,13 +24205,17 @@ index d5b3a25..5e46b52 100644
 +}
 +
 +// benchTexts are the bodies that quote differently in json: two-byte Latin
-+// among ASCII, three-byte CJK, four-byte emoji, and json text, a third of it
-+// escaped quotes.
++// among ASCII, three-byte CJK, four-byte emoji, json text, a third of it
++// escaped quotes, Vietnamese, CJK and ASCII alternating, and pretty-printed
++// json, escaped quotes among newlines.
 +var benchTexts = []benchText{
 +	{"latin", "caf\u00e9 na\u00efve "},
 +	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
 +	{"emoji", "\U0001f389\U0001f680\u2728"},
 +	{"json", `{"k":"v","n":1},`},
++	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
++	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
++	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
 +}
 +
 +// body is n bytes of the text: whole units, then ASCII to make up the size.
@@ -23988,7 +24230,7 @@ index d5b3a25..5e46b52 100644
  // benchEnv is the provider behind the real gateway.
  type benchEnv struct {
  	b        *testing.B
-@@ -158,8 +185,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
+@@ -158,8 +189,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
  // benchmark can have many messages in flight at once, as a busy queue has.
  func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, groups int) {
  	e.b.Helper()

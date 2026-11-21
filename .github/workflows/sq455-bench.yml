@@ -1,4 +1,4 @@
-# SQ-460 scratch measurement for PR #54. Lives only on scratch/sq455-bench and
+# SQ-458 scratch measurement (earlier: SQ-460, PR #54). Lives only on scratch/sq455-bench and
 # is deleted with it. It does not touch the bench gate.
 name: sq455-bench
 
@@ -16,7 +16,7 @@ defaults:
 jobs:
   measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

@@ -1,5 +1,5 @@
 diff --git a/internal/service/dynamodb/items_benchmark_test.go b/internal/service/dynamodb/items_benchmark_test.go
-index 78560d0..509d589 100644
+index 78560d0..e7b6c78 100644
 --- a/internal/service/dynamodb/items_benchmark_test.go
 +++ b/internal/service/dynamodb/items_benchmark_test.go
 @@ -1,6 +1,7 @@
@@ -26,7 +26,7 @@ index 78560d0..509d589 100644
  
  var (
  	itemPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}, {"399KiB", 399 << 10}}
-@@ -27,6 +33,29 @@ var (
+@@ -27,6 +33,33 @@ var (
  
  const benchTable = "bench"
  
@@ -38,12 +38,16 @@ index 78560d0..509d589 100644
 +}
 +
 +// itemTexts are two-byte Latin among ASCII, three-byte CJK, four-byte emoji,
-+// and json text, a third of it escaped quotes.
++// json text, a third of it escaped quotes, Vietnamese, CJK and ASCII
++// alternating, and pretty-printed json, escaped quotes among newlines.
 +var itemTexts = []itemText{
 +	{"latin", "caf\u00e9 na\u00efve "},
 +	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
 +	{"emoji", "\U0001f389\U0001f680\u2728"},
 +	{"json", `{"k":"v","n":1},`},
++	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
++	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
++	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
 +}
 +
 +// itemTextPayloads are the sizes of the text cells.
@@ -56,7 +60,7 @@ index 78560d0..509d589 100644
  type itemPayload struct {
  	name string
  	size int
-@@ -58,8 +87,17 @@ func itemMatrixOn(
+@@ -58,8 +91,17 @@ func itemMatrixOn(
  
  // putBody is a PutItem body for the item keyed k-worker with a d of size bytes.
  func putBody(worker, size int) string {
@@ -76,7 +80,7 @@ index 78560d0..509d589 100644
  }
  
  // getBody is a GetItem body for the item keyed k-worker.
-@@ -135,4 +173,23 @@ func BenchmarkGetItem(b *testing.B) {
+@@ -135,4 +177,23 @@ func BenchmarkGetItem(b *testing.B) {
  			require.NoError(b, s.fanOut(b, opGet, workers, func(worker int) string { return bodies[worker] }))
  		}
  	})
@@ -251,10 +255,10 @@ index 3d991cc..8fac2a7 100644
  			}
  
 diff --git a/internal/service/sqs/wire-harness_benchmark_test.go b/internal/service/sqs/wire-harness_benchmark_test.go
-index d5b3a25..5e46b52 100644
+index d5b3a25..494e51a 100644
 --- a/internal/service/sqs/wire-harness_benchmark_test.go
 +++ b/internal/service/sqs/wire-harness_benchmark_test.go
-@@ -70,6 +70,33 @@ func benchBody(n int) string {
+@@ -70,6 +70,37 @@ func benchBody(n int) string {
  	return strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", n/36+1)[:n]
  }
  
@@ -267,13 +271,17 @@ index d5b3a25..5e46b52 100644
 +}
 +
 +// benchTexts are the bodies that quote differently in json: two-byte Latin
-+// among ASCII, three-byte CJK, four-byte emoji, and json text, a third of it
-+// escaped quotes.
++// among ASCII, three-byte CJK, four-byte emoji, json text, a third of it
++// escaped quotes, Vietnamese, CJK and ASCII alternating, and pretty-printed
++// json, escaped quotes among newlines.
 +var benchTexts = []benchText{
 +	{"latin", "caf\u00e9 na\u00efve "},
 +	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
 +	{"emoji", "\U0001f389\U0001f680\u2728"},
 +	{"json", `{"k":"v","n":1},`},
++	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
++	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
++	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
 +}
 +
 +// body is n bytes of the text: whole units, then ASCII to make up the size.
@@ -288,7 +296,7 @@ index d5b3a25..5e46b52 100644
  // benchEnv is the provider behind the real gateway.
  type benchEnv struct {
  	b        *testing.B
-@@ -158,8 +185,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
+@@ -158,8 +189,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
  // benchmark can have many messages in flight at once, as a busy queue has.
  func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, groups int) {
  	e.b.Helper()
