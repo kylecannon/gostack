@@ -49,10 +49,11 @@ func Test_Apply_SiblingsShareOneCopy(t *testing.T) {
 // work, the bytes one Apply allocates, and not time: 788 KB fixed, where the
 // copy for each action alone is 103 MB and the walk for each action alone 161
 // MB, and the limit sits between at 4 MiB. Either defect restored fails it; a
-// regression under about 5 times the fixed cost does not.
-func Test_Apply_NestedSetsCopyTheirParentOnce(t *testing.T) {
-	t.Parallel()
-
+// regression under about 5 times the fixed cost does not. The bytes a benchmark
+// reports are the process's, so the test runs alone: Go runs the tests that call
+// t.Parallel after every other test of the package has finished, and none of
+// them is running while this one measures (SQ-456).
+func Test_Apply_NestedSetsCopyTheirParentOnce(t *testing.T) { //nolint:paralleltest // measures process allocations
 	const actions = 1000
 
 	sets := make([]string, actions)

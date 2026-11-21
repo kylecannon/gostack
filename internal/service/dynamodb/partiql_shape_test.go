@@ -41,12 +41,15 @@ func shapeHolder(n int) value.Item {
 // path costs the allocation of its alias; of the rest, the result of 10 paths
 // held takes 14 with the size and 15 without it, and of 30 paths 34 and 39
 // (SQ-452). Sized for the list's length, the result of a thousand paths costs
-// every item more than 100 KiB, and unsized costs it little (SQ-412).
+// every item more than 100 KiB, and unsized costs it little (SQ-412). A list
+// past shapeHintMax that the item holds all of costs what the map sized for it
+// does: 37 allocations besides the aliases for 33 paths, 68 for 64, where a map
+// that grew from small took 42 and 75 and 21% more bytes (SQ-456).
 func Test_shapeItem_allocations(t *testing.T) {
 	for _, tt := range []struct {
 		paths    int
 		wantRest float64
-	}{{10, 14}, {30, 34}} {
+	}{{10, 14}, {30, 34}, {33, 37}, {64, 68}} {
 		item := shapeHolder(tt.paths)
 		paths := shapePaths(t, "m.k", tt.paths)
 
@@ -61,6 +64,21 @@ func Test_shapeItem_allocations(t *testing.T) {
 
 		require.InDelta(t, tt.wantRest, shaped-aliases, 0, "allocations besides the aliases of %d held paths", tt.paths)
 	}
+
+	// 64 held: 14,296 bytes for the map sized for the list, 17,704 for one
+	// that grew.
+	full := testing.Benchmark(func(b *testing.B) {
+		item, paths := shapeHolder(64), shapePaths(b, "m.k", 64)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for b.Loop() {
+			_ = dynamodb.ShapeResult(item, paths)
+		}
+	})
+
+	require.Less(t, full.AllocedBytesPerOp(), int64(15<<10), "bytes of the result of 64 held of 64 paths")
 
 	wide := shapePaths(t, "m.k", 1000)
 	holder := shapeHolder(2)

@@ -1974,10 +1974,14 @@ expressions it compiles to no size: a `WHERE` that renders to 4,172
 characters, a `SELECT` of 700 attributes and an `UPDATE` of 600 `SET` actions
 are answered, where a request's expression is refused past 4,096 characters.
 `ExecuteStatement`, `BatchExecuteStatement` and `ExecuteTransaction` mark the
-context of the calls they make (`forStatement`), and every expression parse
-takes the `origin` that marks it (`newExprs`), so a call a caller sends keeps
-the limit and a new way to parse an expression has to say which it is. The
-count of 300 operators, which DynamoDB Local applies to an `UpdateExpression`
+context of the calls they make (`forStatement`), and every parse of a
+condition, filter, projection or update expression takes the `origin` that
+marks it (`newExprs`), so a call a caller sends keeps the limit and a new way
+to parse one of those has to say which it is. A key condition takes none: a
+statement's is `#n0 = :v0` and at most one range condition on placeholders,
+tens of characters, so it cannot reach the limit and has no statement form to
+exercise (`exprs.keyConditionText`, and `startFrom`'s parse of the same text).
+The count of 300 operators, which DynamoDB Local applies to an `UpdateExpression`
 and a condition alike, and the 100 operands of an `IN` hold for both.
 
 **Streams.** A table with a stream registers a `table.Observer`, which the
