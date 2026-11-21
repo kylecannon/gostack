@@ -18,6 +18,9 @@ import (
 	"github.com/kylecannon/gostack/internal/route"
 )
 
+// formMediaType is the content type of a query call's form body.
+const formMediaType = "application/x-www-form-urlencoded"
+
 const (
 	// The bits of a version 4 UUID, RFC 4122 variant: the version occupies the
 	// high nibble of byte 6, the variant the two high bits of byte 8.
@@ -50,7 +53,7 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		g.refuseDetection(w, r, err)
+		g.refuseDetection(w, r, err, form)
 
 		return
 	}
@@ -78,6 +81,10 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	rc.Request = r
 
 	Record(r, rc)
+
+	if form.refuseHiddenAction(w, rc) {
+		return
+	}
 
 	// net/http sends the end of a response only after this returns (no service
 	// flushes or declares the length of a write's response), so marking after
@@ -160,11 +167,16 @@ func defaultMutating(operation string) bool {
 	return true
 }
 
-// refuseDetection answers a request that no single service claims.
-func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error) {
+// refuseDetection answers a request that no single service claims. A form body
+// that could not be read hid the Action that would have named the service, so
+// no service is named and the answer is the query protocol's.
+func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error, form *formReader) {
 	var ambiguous *route.AmbiguousError
 
 	switch {
+	case errors.Is(err, route.ErrNoService) && form.unreadable():
+		rc := &request.Context{Protocol: protocol.KindQuery, RequestID: newRequestID(), Request: r}
+		writeFormError(w, rc, form.err)
 	case errors.Is(err, route.ErrNoService):
 		g.refuseUnclaimed(w, r)
 	case errors.As(err, &ambiguous), errors.Is(err, route.ErrProtocol):
@@ -217,17 +229,59 @@ type formReader struct {
 	hold protocol.DecodeHolder
 	done bool
 	vals url.Values
+	err  error
 }
 
 func (f *formReader) values() url.Values {
 	if !f.done {
 		f.done = true
 		// A request that cannot be read whole still has the parameters that
-		// read cleanly. The service answers the failure when it reads the form.
-		f.vals, _ = query.RequestFormHeld(f.r, f.hold)
+		// read cleanly. The service answers the failure when it reads the form,
+		// unless the failure took the Action with it: unreadable tells that.
+		f.vals, f.err = query.RequestFormHeld(f.r, f.hold)
 	}
 
 	return f.vals
+}
+
+// unreadable reports whether the form body of a request could not be read: it
+// is over the cap, fails mid-read, or the bodies in flight left it no room.
+// Then its pairs are not in values, the Action among them. A query string that
+// is not UTF-8 is not it: the pairs of a form that is only that are all there.
+func (f *formReader) unreadable() bool {
+	if f.err == nil || f.r.Body == nil || f.r.Body == http.NoBody {
+		return false
+	}
+
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.r.Header.Get("Content-Type"))), formMediaType)
+}
+
+// refuseHiddenAction answers the call in rc when it is a query call whose Action
+// is in a form body that could not be read, and reports whether it did. The
+// generated serve would answer it MissingAction, where a form that names its
+// Action in the URL answers the read error.
+func (f *formReader) refuseHiddenAction(w http.ResponseWriter, rc *request.Context) bool {
+	isQuery := rc.Protocol == protocol.KindQuery || rc.Protocol == protocol.KindEC2
+	if !isQuery || rc.Operation != "" || !f.unreadable() {
+		return false
+	}
+
+	writeFormError(w, rc, f.err)
+
+	return true
+}
+
+// writeFormError answers a call whose form body could not be read as the
+// generated services' readForm does: Throttling when the bodies in flight left
+// it no room, MalformedQueryString for any other failure.
+func writeFormError(w http.ResponseWriter, rc *request.Context, err error) {
+	if errors.Is(err, protocol.ErrBusy) {
+		writeAWSError(w, rc, protocol.ThrottledQuery())
+
+		return
+	}
+
+	writeAWSError(w, rc, query.MalformedQueryString())
 }
 
 // newRequestID returns a random UUID, version 4.

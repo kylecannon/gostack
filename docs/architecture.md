@@ -174,10 +174,10 @@ type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
 decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
 services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
-query form whose Action is in the URL or whose path is an SQS queue URL. A form
-that carries its Action in the body answers `MissingAction` (400) with a SigV4
-`Authorization` header and 404 without one: the gateway reads it to find the
-Action and drops the read error.
+query form, wherever its Action is. A form that carries its Action in the body
+is answered by the gateway, which reads it to find the Action: `MalformedQueryString`
+(400) in the protocol of the service the signing scope names, or in the query
+protocol when no service can be named.
 
 ### How chi is used
 
