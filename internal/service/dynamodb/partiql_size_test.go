@@ -15,8 +15,11 @@ import (
 // else: the SELECT list and the UPDATE actions of a statement run through a
 // ProjectionExpression and an UpdateExpression that no size limit holds, where
 // a request sent to the item operations is refused past 4,096 characters
-// (SQ-412). Every row below is what the LocalStack image answered, checked in a
-// differential of 1,256 statements against it with no difference.
+// (SQ-412). The rows are what the LocalStack image answered, except those of
+// Test_partiql_selectWideListGlobalIndex, which pin gostack's documented answer
+// where the image refuses. They were checked in a differential of 1,222
+// statements against the image, with a global index that projects some
+// attributes asked only for the ones it projects.
 
 // wideSizes are the lengths of a SELECT list the tests take. 602 distinct
 // top-level attributes was the first the read refused (SQ-417).
