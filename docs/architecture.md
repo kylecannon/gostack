@@ -1502,37 +1502,68 @@ is untouched.
   ids stay pending, and the next save fsyncs them again and flushes. A save
   whose deadline passes before the flush starts does not run it, and keeps its
   ids pending. Linux and the other systems are unchanged.
-- **An abandoned save is marked for the next start** (SQ-427). A save that runs
-  out of time loses every change since the last completed save, and the
-  process that abandoned it is on its way out. When a flush's deadline comes,
-  it writes `<base>/<service>/.gostack-save-abandoned` for each service it holds
-  and has not saved, at that moment and not when the work it is in returns: a
-  `Snapshot` cannot be cut short, and one that outlasts the deadline outlasts
-  the kill after it. A `Flush` that ends at its deadline waiting for the running
-  flush or a `Load` marks the dirty services nothing holds, and lends its
-  deadline to the timed flush, which marks the ones it holds. The markers of a
-  round are written one after the other, then fsynced with their directories
-  at once, and the round returns after 60 ms at the latest, which keeps the one
-  at `Close`, 100 ms before the kill, clear of it. For 8 services on an Apple M1
-  Max the last marker existed after 1.4 to 1.9 ms and the fsyncs ended after 82
-  to 102 ms. A service that has a marker is skipped, so the second round of a
-  shutdown costs a `lstat` each, 0.6 ms for 8. The marker is created with
-  `O_EXCL`, so a link planted at its path has nothing written through it, and
-  counts as the marker. A service whose save failed for a reason of its own is
-  not marked: the flush's warning names it and its cause apart from the services
-  the deadline cut, and the advice to raise `SHUTDOWN_TIMEOUT` is for those. A
-  save of the service that completes removes the marker, after it renames the
-  snapshot, so a service whose `Snapshot` returned after the deadline and then
-  saved ends with none; a shutdown whose saves all complete leaves none. The
-  startup `Load` logs one warning for the services that have a marker, at warn:
-  `persist: a save was abandoned at its deadline before this start, so what
-  changed after the last completed save is lost` with `services=[s3]` and
+- **An abandoned save is marked for the next start** (SQ-427, SQ-447). A save
+  that runs out of time loses every change since the last completed save, and
+  the process that abandoned it is on its way out. When a flush's deadline
+  comes, it writes `<base>/<service>/.gostack-save-abandoned` for every
+  service the deadline puts at risk, at that moment and not when the work it is
+  in returns: a `Snapshot` cannot be cut short, and one that outlasts the
+  deadline outlasts the kill after it. Those are the services the flush holds
+  and has not saved, every service that is dirty, one the flush saved earlier
+  and a request changed since included, and the services the flush by the
+  timer holds, since a `Flush` lends its deadline to that flush when it comes,
+  inside a `Snapshot` as much as while it waits for the flush. The `Flush`
+  writes those markers itself and does not return before they are written.
+  What the flush's end finds dirty is marked then, so a change made after the
+  deadline's round is named if the flush ends before the kill. A service that
+  another `Flush` holds has that call's deadline, and is marked for this one
+  only when it is dirty. A flush whose save of a service failed for a reason of
+  its own, and a `Follower` whose leader did, is not marked: the flush's warning
+  names it with its cause, apart from the services the deadline cut, and the
+  advice to raise `SHUTDOWN_TIMEOUT` is for those. A `Flush` that ends at its
+  deadline waiting for the running flush or a `Load` marks the services nothing
+  saved, and the ones the flush by the timer holds, before it returns.
+  A marker is written with `O_EXCL`, so a link planted at its path has
+  nothing written through it, and counts as the marker. A service that has one
+  is skipped, so a later round costs a `lstat` each.
+  The markers of a round are written one after the other, which is all a kill
+  needs, and then made durable, which a power cut needs. Each marker and its
+  directory gets `fsync(2)`, and in the macOS build one `F_FULLFSYNC` on the
+  base dir follows the last of them (see the macOS item above for why the
+  guarantee holds): Go's `File.Sync` is `F_FULLFSYNC`, one drive flush for each
+  marker and directory. For 8 services on the APFS volume of an Apple M1 Max
+  the last marker existed after 1.6 to 4.5 ms and the round was durable after
+  10 to 12 ms, where `File.Sync` of each took 35 to 76 ms
+  (`Test_Engine_MarkAbandonedOfEightServices`). A marker created and not yet
+  fsynced when the process is killed can be lost by a power cut, which loses
+  the warning and never state: the state files are saved and fsynced by the
+  save, not by the marker. The kill of the process alone loses no marker that
+  was written. The rounds of one flush share a budget of 60 ms, which keeps the
+  last flush, the one at `Close`, 100 ms before the kill, of which the caller's
+  own wait leaves 80 ms, clear of it: each round has what the earlier ones left,
+  and ends there if its fsyncs have not. Three rounds whose fsyncs each took
+  longer than the budget took 60.6 to 62.4 ms in all, over 8 runs, where a
+  budget for each round would take 180 ms
+  (`Test_Engine_MarkAbandonedRoundsShareOneBudget`). The round that is left
+  with no time writes nothing and logs the services it could not mark. The
+  fsyncs a round left unfinished go on while the process lives, with the base dir
+  open until the last has ended. A save of the service that completes removes
+  the marker after it renames the snapshot, unless the service has changed
+  since the snapshot was taken: the change is lost if the process is killed, so
+  the marker stays and the next save that finds the service unchanged removes
+  it. A shutdown whose saves all complete leaves none. The startup `Load` logs
+  one warning for the services that have a marker, at warn: `persist: a save
+  was abandoned at its deadline before this start, so what changed after the
+  last completed save is lost` with `services=[s3]` and
   `last_completed_save=[s3=2026-11-20T21:45:22Z]`, the modification time of the
   service's newest state file, or `never` when it has none. The marker stays
   until a save completes, so each start says so until then. A marker that cannot
-  be written or removed is logged and changes nothing else; a crash between a
-  completed save's rename and the removal, or a deadline that falls while a
-  save renames, leaves one warning too many, never one too few.
+  be written or removed is logged and changes nothing else. A crash between a
+  completed save's rename and the removal of the marker, or a deadline that
+  falls while a save renames, leaves one warning too many. Every service that
+  is held or dirty when a round runs is marked, within the round's time, so a
+  change made before the deadline's round is never one too few. One made after
+  the flush's last round, or while the budget was spent, is not marked.
 - Save order: a flush saves in two passes, each in the same order. Services
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last

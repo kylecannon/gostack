@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -14,31 +15,91 @@ import (
 // directory, beside its state files: <base>/<service>/.gostack-save-abandoned.
 // A save abandoned at its deadline loses every change since the last completed
 // save, and the process that abandoned it is on its way out, so nothing else
-// would tell the next one. The marker is written, and fsynced, from the moment
-// the save's context ends (see markAtDeadline), not when the work the save
-// cannot interrupt returns: a Snapshot that outlasts the deadline outlasts the
-// kill after it as well. The next save of the service that completes removes
-// it; a shutdown that saved everything leaves none. Its presence is the whole
-// signal, its content only for a person who finds it.
+// would tell the next one. The marker is written from the moment the save's
+// context ends (see markAtDeadline), not when the work the save cannot interrupt
+// returns: a Snapshot that outlasts the deadline outlasts the kill after it as
+// well. It is fsynced after, within the round's budget, so a marker created and
+// not yet fsynced when the process is killed can be lost by a power cut, which
+// loses the warning and never state. The next save of the service that
+// completes removes it, unless the service changed since that save took its
+// snapshot (see clearAbandoned); a shutdown that saved everything leaves none.
+// Its presence is the whole signal, its content only for a person who finds it.
 const abandonedFile = ".gostack-save-abandoned"
 
-// markBudget is the time a round of markers has. A round runs after a deadline,
-// and the last one, from the engine's Close, starts [lifecycle.CloseMargin]
-// (100 ms) before the supervisor's SIGKILL, of which the caller's own wait for a
-// Close leaves 80 ms, so no round may take longer. The engine keeps it in a
-// field, which tests replace.
+// markBudget is the time the marking rounds of one flush share (see
+// markAllowance). A flush marks in up to three rounds, and the last flush, from
+// the engine's Close, starts [lifecycle.CloseMargin] (100 ms) before the
+// supervisor's SIGKILL, of which the caller's own wait for a Close leaves 80 ms,
+// so the rounds together may not take longer. The engine keeps it in a field,
+// which tests replace.
 //
 // A round is two steps. The markers of every service are created and written
 // one after the other, which is all a kill needs: the kill of a process loses
-// no file it has written. Then they are fsynced at once, with their
-// directories, which a power cut needs and which is the slow part, since each
-// fsync is a drive flush on macOS. For 8 services on the APFS volume of an
-// Apple M1 Max the last marker existed after 1.4 to 1.9 ms and the fsyncs
-// ended after 82 to 102 ms (Test_Engine_MarkAbandonedOfEightServices measures
-// both). The budget ends the round either way, and the fsyncs it did not wait
-// for go on while the process lives. A round after the first costs one lstat
-// for each service that has a marker: 0.6 ms for 8.
+// no file it has written. Then they are made durable, which a power cut needs
+// and which is the slow part: each marker and its directory gets fsync(2), and
+// on macOS, where that leaves the data in the drive's cache, one F_FULLFSYNC on
+// the base dir follows (see markerSync). A marker created and not yet fsynced
+// when the process is killed can be lost by a power cut, which costs the warning
+// and never state. The budget ends the round either way, and the fsyncs it did
+// not wait for go on while the process lives. A round after the first costs one
+// lstat for each service that has a marker.
+//
+// Test_Engine_MarkAbandonedOfEightServices measures a round of 8 services: the
+// figures are in docs/architecture.md, Persistence, Assets.
 const markBudget = 60 * time.Millisecond
+
+// markAllowance is the time the marking rounds of one flush share: the one at
+// the deadline (see markAtDeadline), the one that ends the flush (see
+// logAbandoned), and the one a Flush that waited runs (see markWaiting). Each
+// round has what the ones before it left of markBudget, and spends the time it
+// took, so the three together take markBudget, not three times it. They do not
+// share the clock: a round that comes after the Snapshot the flush was inside
+// returned has the time the first did not use. A round with none left writes
+// nothing and logs what it could not mark. Flush makes one for its call.
+type markAllowance struct {
+	mu    sync.Mutex
+	spent time.Duration
+}
+
+// left returns what budget leaves after the rounds that have ended.
+func (a *markAllowance) left(budget time.Duration) time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return budget - a.spent
+}
+
+// spend records a round that took d.
+func (a *markAllowance) spend(d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.spent += d
+}
+
+// markAllowanceKey is the context key under which a Flush keeps its markAllowance.
+type markAllowanceKey struct{}
+
+// withMarkAllowance returns ctx with an allowance for the rounds of one flush,
+// or ctx when it has one.
+func withMarkAllowance(ctx context.Context) context.Context {
+	if ctx.Value(markAllowanceKey{}) != nil {
+		return ctx
+	}
+
+	return context.WithValue(ctx, markAllowanceKey{}, &markAllowance{})
+}
+
+// allowanceOf returns the allowance ctx carries, or a new one for a round that
+// is alone.
+func allowanceOf(ctx context.Context) *markAllowance {
+	a, ok := ctx.Value(markAllowanceKey{}).(*markAllowance)
+	if !ok {
+		return &markAllowance{}
+	}
+
+	return a
+}
 
 // abandonedPath is the marker of service, relative to the base dir.
 func abandonedPath(service string) string {
@@ -50,13 +111,17 @@ func abandonedPath(service string) string {
 // takes no deadline of the caller's and tries every service whatever one of
 // them fails with: a marker that cannot be written is logged, and the abandoned
 // save has already said so itself. It returns once every marker is written and
-// as many are fsynced as markBudget allows: a service that has a marker is
-// skipped, so a second round, such as the engine's Close after its Stop, costs
-// a lstat each, and one that has no time left writes none.
+// as many are fsynced as the allowance ctx's flush has left (see markAllowance):
+// a service that has a marker is skipped, so a second round, such as the one that
+// ends a flush, costs a lstat each, and one that has no time left writes none.
+// The root stays open until the fsyncs have ended, whether or not the round
+// waited for them: the goroutine that runs them closes it.
 func (e *Engine) markAbandoned(ctx context.Context, services []string) {
 	if len(services) == 0 {
 		return
 	}
+
+	allowance := allowanceOf(ctx)
 
 	root, err := os.OpenRoot(e.dir)
 	if err != nil {
@@ -66,33 +131,25 @@ func (e *Engine) markAbandoned(ctx context.Context, services []string) {
 		return
 	}
 
-	defer func() { _ = root.Close() }()
+	start := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), e.markBudget)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), allowance.left(e.markBudget))
+
+	defer func() {
+		cancel()
+		allowance.spend(time.Since(start))
+	}()
 
 	written, done := make(chan struct{}), make(chan struct{})
 
 	go func() {
 		defer close(done)
+		defer func() { _ = root.Close() }()
 
 		marked := e.writeMarkers(ctx, root, services)
 
 		close(written)
-
-		var wg sync.WaitGroup
-
-		for _, m := range marked {
-			wg.Go(func() {
-				err := m.sync(root)
-				if err != nil {
-					e.log.Warn("persist: the abandoned save could not be marked for the next start",
-						"service", m.service, "error", err)
-				}
-			})
-		}
-
-		wg.Wait()
+		e.syncMarkers(root, marked)
 	}()
 
 	select {
@@ -192,10 +249,83 @@ func writeAbandoned(ctx context.Context, root *os.Root, service string) (*marker
 	return &marker{service: service, f: f, madeDir: made}, nil
 }
 
-// sync fsyncs the marker and closes it, then fsyncs its directory, and the base
-// dir when the directory is new.
-func (m *marker) sync(root *os.Root) error {
-	err := m.f.Sync()
+// syncMarkers makes the markers durable: each one and its directory with sync,
+// all at once, and then, when the platform has one, the drive's cache with a
+// single flush on the base dir (see markerSync). A failure is logged, and the
+// flush is tried whatever the syncs said, since it is what makes the ones that
+// went through permanent.
+func (e *Engine) syncMarkers(root *os.Root, marked []*marker) {
+	if len(marked) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+
+	for _, m := range marked {
+		wg.Go(func() {
+			err := m.sync(root, e.markSync)
+			if err != nil {
+				e.log.Warn("persist: the abandoned save could not be marked for the next start",
+					"service", m.service, "error", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if e.markFlush == nil {
+		return
+	}
+
+	err := flushMarkers(root, e.markSync, e.markFlush)
+	if err != nil {
+		e.log.Warn("persist: the abandoned saves could not all be made durable for the next start",
+			"services", markedNames(marked), "error", err)
+	}
+}
+
+// markedNames is the services of marked.
+func markedNames(marked []*marker) []string {
+	names := make([]string, len(marked))
+	for i, m := range marked {
+		names[i] = m.service
+	}
+
+	return names
+}
+
+// flushMarkers flushes the drive's cache with flush on the base dir, after every
+// marker is synced with fsync. A filesystem with no drive flush answers ENOTSUP,
+// as an SMB mount does, and the base dir is synced instead, as flushDrive does.
+func flushMarkers(root *os.Root, fsync, flush func(*os.File) error) error {
+	dir, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open the base dir to flush the drive: %w", err)
+	}
+
+	err = flush(dir)
+	if errors.Is(err, syscall.ENOTSUP) {
+		err = fsync(dir)
+	}
+
+	if err != nil {
+		_ = dir.Close()
+
+		return fmt.Errorf("flush the drive: %w", err)
+	}
+
+	err = dir.Close()
+	if err != nil {
+		return fmt.Errorf("close the base dir after flushing the drive: %w", err)
+	}
+
+	return nil
+}
+
+// sync makes the marker durable with fsync and closes it, then does the same for
+// its directory, and for the base dir when the directory is new.
+func (m *marker) sync(root *os.Root, fsync func(*os.File) error) error {
+	err := fsync(m.f)
 	if err != nil {
 		_ = m.f.Close()
 
@@ -207,28 +337,40 @@ func (m *marker) sync(root *os.Root) error {
 		return fmt.Errorf("close the marker: %w", err)
 	}
 
-	err = syncDir(root, m.service)
+	err = syncDirWith(root, m.service, fsync)
 	if err != nil {
 		return err
 	}
 
 	if m.madeDir {
-		return syncDir(root, ".")
+		return syncDirWith(root, ".", fsync)
 	}
 
 	return nil
 }
 
 // markAtDeadline arranges that when ctx ends at a deadline (see ranOutOfTime)
-// the services run still holds, which are not saved, are marked at that moment,
-// whatever the flush is then inside: a Snapshot cannot be cut short, and the
-// markers written after it returns come after the kill (SQ-435). It returns a
-// function that ends it, which the caller calls once its flush has ended,
-// waiting for a marking that has begun. A service that saves anyway, as one
-// whose Snapshot returns after the deadline does, has its marker removed by
-// that save (see clearAbandoned); a marker written while the save renames is at
-// worst one warning too many.
+// the services the deadline puts at risk are marked at that moment, whatever the
+// flush is then inside: a Snapshot cannot be cut short, and the markers written
+// after it returns come after the kill (SQ-435). They are the ones run holds and
+// has not saved, the ones changed since (see unsavedLocked), and the ones the
+// flush by the timer holds, to which the deadline is lent here, not only when
+// the Flush waits for sem (see wait): a Flush inside its own Snapshot at its
+// deadline would otherwise leave those to the end of that Snapshot. It marks
+// them itself, so it does not return, nor the Flush with it, before the
+// markers are written. It returns a function that ends it, which the caller
+// calls once its flush has ended, waiting for a marking that has begun.
+//
+// The flush by the timer arms none: the Flush that lends it a deadline marks
+// what it holds. A service that saves anyway, as one whose Snapshot returns
+// after the deadline does, has its marker removed by that save (see
+// clearAbandoned); a marker written while the save renames is at worst one
+// warning too many.
 func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) (end func()) {
+	if run.by == byTimer {
+		return func() {}
+	}
+
 	done := make(chan struct{})
 
 	stop := context.AfterFunc(ctx, func() {
@@ -239,16 +381,14 @@ func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) (end func())
 		}
 
 		e.mu.Lock()
-		held := make([]string, 0, len(run.holding))
-
-		for name := range run.holding {
-			if e.services[name].owner == run {
-				held = append(held, name)
-			}
+		if e.timed != nil {
+			e.timed.lend(context.Cause(ctx))
 		}
+
+		names := e.unsavedLocked(ctx, run)
 		e.mu.Unlock()
 
-		e.markAbandoned(ctx, held)
+		e.markAbandoned(ctx, names)
 	})
 
 	return sync.OnceFunc(func() {
@@ -258,37 +398,88 @@ func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) (end func())
 	})
 }
 
-// markWaiting marks the services no flush has saved or holds, dirty and safe to
-// save, when a Flush's ctx ended at a deadline before the Flush could save them,
-// while it waited for the flush that held sem or for a Load. The services that
-// flush held are marked by its own end of ctx (see markAtDeadline), whose
-// deadline a Flush lends it when it waits (see wait).
+// markWaiting marks the services a Flush's ctx, ended at a deadline, left unsaved
+// when it ended waiting for the flush that held sem or for a Load, before it
+// could save them: the dirty ones nothing holds, and the ones the flush by the
+// timer holds, to which the deadline was lent by wait. They are marked before
+// the Flush returns.
 func (e *Engine) markWaiting(ctx context.Context, err error) {
 	if !ranOutOfTime(ctx, err) {
 		return
 	}
 
-	e.mu.Lock()
-	names := make([]string, 0, len(e.services))
+	e.markUnsaved(ctx, nil, nil)
+}
 
-	for name, t := range e.services {
-		if t.dirty && t.unsafe == nil {
-			names = append(names, name)
-		}
-	}
+// markUnsaved marks the services unsavedLocked returns for run, and cut besides:
+// the ones a flush's deadline cut, which are dirty again unless saving is off
+// for them.
+func (e *Engine) markUnsaved(ctx context.Context, run *flushRun, cut []string) {
+	e.mu.Lock()
+	names := append(e.unsavedLocked(ctx, run), cut...)
 	e.mu.Unlock()
 
 	e.markAbandoned(ctx, names)
 }
 
+// unsavedLocked returns the services a deadline of ctx puts at risk: the ones
+// whose save the flush run holds, and when run is a Flush's, or nil for a Flush
+// that is not running one, the ones the flush by the timer holds, since the
+// deadline is lent to it; and every service that is dirty, which a change since
+// its last save, or since the snapshot a save took, left unsaved. A service run
+// lost for a reason of its own is not one of them, though it is dirty again: its
+// warning names it, and a longer SHUTDOWN_TIMEOUT would not have saved it (see
+// logAbandoned). A flush by another caller that holds a service has its own
+// deadline, and is not marked for. The caller holds mu.
+func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
+	lends := run == nil || run.by == byHand
+	names := make([]string, 0, len(e.services))
+
+	for name, t := range e.services {
+		if t.unsafe != nil {
+			continue
+		}
+
+		held := t.owner != nil && (t.owner == run || lends && t.owner.by == byTimer)
+
+		if held || t.dirty && !run.lostToOwnFaultLocked(ctx, name) {
+			names = append(names, name)
+		}
+	}
+
+	return names
+}
+
 // clearAbandoned removes the marker of service once a save of it has renamed
 // its snapshot into place, so the directory sync that ends the save covers the
-// removal. The marker goes after the rename: a crash between the two leaves a
-// marker beside a good save, a warning too many, and the other order would
-// leave a save that was abandoned unmarked. A failure to remove it is logged and
-// no failure of the save, which is on disk.
+// removal, unless the service has changed since the save took its snapshot: that
+// change is lost if the process is killed, and the marker is still true. The
+// next save of the service that finds it unchanged removes it. The marker goes
+// after the rename: a crash between the two leaves a marker beside a good save,
+// a warning too many, and the other order would leave a save that was abandoned
+// unmarked. A failure to remove it is logged and no failure of the save, which
+// is on disk.
+//
+// The check and the removal are one step under mu, so a MarkDirty cannot come
+// between them and leave a dirty service with no marker. Only a marker that is
+// there takes mu, as the removal of one that is not has nothing to decide.
 func (e *Engine) clearAbandoned(root *os.Root, service string) {
-	err := removeIfPresent(root, abandonedPath(service))
+	_, err := root.Lstat(abandonedPath(service))
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+
+	e.mu.Lock()
+
+	if e.services[service].dirty {
+		e.mu.Unlock()
+
+		return
+	}
+
+	err = removeIfPresent(root, abandonedPath(service))
+	e.mu.Unlock()
+
 	if err != nil {
 		e.log.Warn("persist: the marker of an earlier abandoned save could not be removed; "+
 			"the next start warns again until a save removes it", "service", service, "error", err)

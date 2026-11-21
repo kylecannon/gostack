@@ -264,12 +264,18 @@ func removeIfPresent(root *os.Root, file string) error {
 // syncDir fsyncs the directory dir, so renames and removals in it survive a
 // crash.
 func syncDir(root *os.Root, dir string) error {
+	return syncDirWith(root, dir, syncFile)
+}
+
+// syncDirWith is syncDir with the sync it runs on the directory: [syncFile], or
+// a platform's own.
+func syncDirWith(root *os.Root, dir string, fsync func(*os.File) error) error {
 	d, err := root.Open(dir)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", dir, err)
 	}
 
-	err = d.Sync()
+	err = fsync(d)
 	if err != nil {
 		_ = d.Close()
 
