@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
@@ -36,6 +37,27 @@ const benchExtra = 1000
 type benchGateway struct {
 	b       *testing.B
 	handler http.Handler
+	// provider is set by newBenchGateway, which fill and fillSubscriptions
+	// need to wait for the signing key.
+	provider *sns.Provider
+}
+
+// awaitSigningKey waits until p has made its signing key, which the first
+// CreateTopic starts in the background, so that a benchmark's setup ends with
+// the key made and the timed calls do not share a core with it. A real
+// process does not wait: the key is made while the first calls run.
+func awaitSigningKey(b *testing.B, p *sns.Provider) {
+	b.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+
+	for !p.SignerReady() {
+		if time.Now().After(deadline) {
+			b.Fatal("the signing key was not made in 30 s")
+		}
+
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func newBenchGateway(b *testing.B) *benchGateway {
@@ -49,7 +71,7 @@ func newBenchGateway(b *testing.B) *benchGateway {
 		b.Fatal(err)
 	}
 
-	return &benchGateway{b: b, handler: g.Handler()}
+	return &benchGateway{b: b, handler: g.Handler(), provider: provider}
 }
 
 // call sends one action and returns its status and the start of its body.
@@ -100,6 +122,10 @@ func (g *benchGateway) fill(n int) {
 
 	for i := range n {
 		g.must(createForm("bench-" + strconv.Itoa(i)))
+	}
+
+	if n > 0 {
+		awaitSigningKey(g.b, g.provider)
 	}
 }
 
