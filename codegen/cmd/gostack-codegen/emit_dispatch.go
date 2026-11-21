@@ -423,12 +423,11 @@ func (g *generator) emitReaders(p *printer) {
 }
 
 // jsonOverBody is the Go expression for the answer to a json body over
-// protocol.MaxBody, or one that would decode into more than the call's budget.
-// A service that speaks the query protocol too (SQS) keeps the query
+// protocol.MaxBody. SQS (serviceOptions.QueryOverBody) keeps the query
 // protocol's MalformedQueryString, which its tests and docs/compat.md pin; any
 // other json service answers 413 RequestEntityTooLarge.
 func (g *generator) jsonOverBody() string {
-	if g.hasProtocol(protoQuery) {
+	if g.opts.QueryOverBody {
 		return "query.MalformedQueryString()"
 	}
 
@@ -443,12 +442,23 @@ func (g *generator) emitDecodeJSON(p *printer) {
 	p.f("// reading takes stays on the request: only that reading clamps an integer past the")
 	p.f("// int32 range, and a handler that refuses one echoes the text sent, which only the")
 	p.f("// body holds. Any other body is dropped once decoded. A body that would decode into")
-	p.f("// more than the call's budget is answered as a body over protocol.MaxBody.")
+
+	if g.opts.QueryOverBody {
+		p.f("// more than the call's budget is answered as a body over protocol.MaxBody.")
+	} else {
+		p.f("// more than the call's budget gets awsjson.ErrTooLarge. That is not the answer to a")
+		p.f("// body over protocol.MaxBody: the cap does not set the budget.")
+	}
+
 	p.f("func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {")
 	p.f("\tin, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)")
-	p.f("\tif err == awsjson.ErrTooLarge {")
-	p.f("\t\treturn nil, %s", g.jsonOverBody())
-	p.f("\t}")
+
+	if g.opts.QueryOverBody {
+		p.f("\tif err == awsjson.ErrTooLarge {")
+		p.f("\t\treturn nil, query.MalformedQueryString()")
+		p.f("\t}")
+	}
+
 	p.f("\tif lenient {")
 	p.f("\t\trc.Request.Body = io.NopCloser(bytes.NewReader(body))")
 	p.f("\t}")

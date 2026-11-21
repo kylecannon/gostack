@@ -290,12 +290,10 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 // reading takes stays on the request: only that reading clamps an integer past the
 // int32 range, and a handler that refuses one echoes the text sent, which only the
 // body holds. Any other body is dropped once decoded. A body that would decode into
-// more than the call's budget is answered as a body over protocol.MaxBody.
+// more than the call's budget gets awsjson.ErrTooLarge. That is not the answer to a
+// body over protocol.MaxBody: the cap does not set the budget.
 func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
 	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
-	if err == awsjson.ErrTooLarge {
-		return nil, protocol.BodyTooLarge()
-	}
 	if lenient {
 		rc.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
