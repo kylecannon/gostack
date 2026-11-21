@@ -80,6 +80,26 @@ func (p *Provider) runStatement(
 	return out, nil
 }
 
+// checkStatementTexts makes the check a batch and a transaction make of every
+// statement before it parses any: each is given and holds at most 8,192 bytes,
+// the first that is not refused for the whole call, so a long statement
+// anywhere answers before another's syntax error, and an empty one before a
+// later long one. empty is the message for a statement missing or empty.
+func checkStatementTexts(n int, text func(i int) *string, empty string) error {
+	for i := range n {
+		src := text(i)
+
+		switch {
+		case src == nil || *src == "":
+			return value.Invalid(empty)
+		case len(*src) > maxStatementBytes:
+			return value.Invalid(msgStatementLong)
+		}
+	}
+
+	return nil
+}
+
 // parseStatement parses a request's statement and checks it has a value for
 // each of its parameters. An EXISTS parses only where exists allows it, in a
 // transaction.
@@ -450,6 +470,18 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 	return &text, paths, nil
 }
 
+// wholePaths renders paths as a ProjectionExpression of the paths themselves.
+func wholePaths(paths []partiql.Path, r *render) *string {
+	texts := make([]string, len(paths))
+	for i, path := range paths {
+		texts[i] = r.path(path)
+	}
+
+	text := strings.Join(texts, ", ")
+
+	return &text
+}
+
 // shapeItems puts each projected path of items under its alias; with no
 // paths, items are as read. It never returns nil, so an empty result is [].
 func shapeItems(items []map[string]api.AttributeValue, paths []partiql.Path) []map[string]api.AttributeValue {
@@ -482,11 +514,21 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 
 	out := make(value.Item, size)
 
+	var cuts cutPaths
+
 	for _, path := range paths {
+		if i := indexCut(path); i > 0 {
+			cuts.add(path, i)
+
+			continue
+		}
+
 		if v, ok := lookupPath(item, path); ok {
 			out[path.Alias()] = v
 		}
 	}
+
+	cuts.put(out, item)
 
 	return out
 }

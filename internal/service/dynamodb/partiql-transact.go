@@ -63,11 +63,29 @@ func parseTransaction(reqs []api.ParameterizedStatement) ([]*partiql.Statement, 
 	default:
 	}
 
+	err := checkStatementTexts(len(reqs), func(i int) *string { return reqs[i].Statement }, msgTxEmpty)
+	if err != nil {
+		return nil, false, err
+	}
+
 	stmts := make([]*partiql.Statement, len(reqs))
 	reads := 0
 
+	// A transaction names the first statement whose parameters do not match,
+	// after it has parsed them all: a syntax error in a later statement is
+	// answered first.
+	mismatch := -1
+
 	for i := range reqs {
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, true)
+		if err != nil && messageOf(err) == partiql.MsgParamCount {
+			if mismatch < 0 {
+				mismatch = i
+			}
+
+			continue
+		}
+
 		if err != nil {
 			return nil, false, err
 		}
@@ -81,6 +99,10 @@ func parseTransaction(reqs []api.ParameterizedStatement) ([]*partiql.Statement, 
 		}
 
 		stmts[i] = stmt
+	}
+
+	if mismatch >= 0 {
+		return nil, false, txFailed(mismatch, partiql.MsgParamCount)
 	}
 
 	if reads > 0 && reads < len(stmts) {
@@ -101,7 +123,6 @@ func (p *Provider) transactReads(
 ) (*api.ExecuteTransactionOutput, error) {
 	c := p.caller(ctx)
 	gets := make([]api.TransactGetItem, len(stmts))
-	aliases := make([][]partiql.Path, len(stmts))
 
 	for i, stmt := range stmts {
 		read, err := c.compileRead(stmt, in.TransactStatements[i].Parameters, nil)
@@ -118,7 +139,6 @@ func (p *Provider) transactReads(
 			TableName: g.TableName, Key: g.Key, ProjectionExpression: g.ProjectionExpression,
 			ExpressionAttributeNames: g.ExpressionAttributeNames,
 		}}
-		aliases[i] = read.aliases
 	}
 
 	out, err := p.TransactGetItems(ctx, &api.TransactGetItemsInput{
@@ -126,10 +146,6 @@ func (p *Provider) transactReads(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transaction: %w", err)
-	}
-
-	for i := range out.Responses {
-		out.Responses[i].Item = shapeItem(out.Responses[i].Item, aliases[i])
 	}
 
 	return &api.ExecuteTransactionOutput{Responses: out.Responses, ConsumedCapacity: out.ConsumedCapacity}, nil

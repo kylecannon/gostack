@@ -105,6 +105,10 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 		err = r.attributesToGet(in.AttributesToGet)
 	}
 
+	if err == nil {
+		err = r.checkIndexProjects(topNames(r.projection))
+	}
+
 	if err != nil {
 		return err
 	}

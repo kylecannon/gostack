@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
@@ -18,6 +19,10 @@ const (
 	msgAttrTwice         = "Cannot have two attributes with the same name"
 	msgBatchAttrTwice    = "One or more parameter values were invalid: Duplicate value in attribute name: "
 	msgIndexNotProjected = "One or more parameter values were invalid: Global secondary index %s does not project [%s]"
+	// msgIndexFilterNotProjected is a Query's, which the image words with
+	// "Secondary index" alone.
+	msgIndexFilterNotProjected = "One or more parameter values were invalid: " +
+		"Secondary index %s does not project one or more filter attributes: [%s]"
 )
 
 // The request parameters the AttributesToGet messages name.
@@ -128,15 +133,10 @@ func projectionParam(src *string, names []string) string {
 	}
 }
 
-// attributesToGet sets the read's projection to AttributesToGet's, which a
-// global index must hold.
+// attributesToGet sets the read's projection to AttributesToGet's; a global
+// index must hold them (checkIndexProjects).
 func (r *reader) attributesToGet(names []string) error {
 	projection, err := attributesToGet(names, sameNameTwice)
-	if err != nil {
-		return err
-	}
-
-	err = r.checkIndexProjects(names)
 	if err != nil {
 		return err
 	}
@@ -146,21 +146,15 @@ func (r *reader) attributesToGet(names []string) error {
 	return nil
 }
 
-// checkIndexProjects refuses AttributesToGet names a global index read does
-// not hold, listed in Java's HashSet order as DynamoDB Local lists them.
+// checkIndexProjects refuses the top-level names of an AttributesToGet, a
+// ProjectionExpression or a SELECT list that a global index read does not
+// hold, listed in Java's HashSet order as DynamoDB Local lists them. A global
+// index holds the attributes it projects: AWS's Query and Scan pages say "If
+// you query or scan a global secondary index, you can only request attributes
+// that are projected into the index. Global secondary index queries cannot
+// fetch attributes from the parent table.".
 func (r *reader) checkIndexProjects(names []string) error {
-	if r.index == nil || !r.index.Global || r.index.Projection.Type == "" || r.index.Projection.Type == table.ProjectAll {
-		return nil
-	}
-
-	var missing []string
-
-	for _, name := range names {
-		if !r.holds(name) {
-			missing = append(missing, name)
-		}
-	}
-
+	missing := r.unheld(names)
 	if len(missing) == 0 {
 		return nil
 	}
@@ -168,4 +162,43 @@ func (r *reader) checkIndexProjects(names []string) error {
 	ordered := strings.Join(expression.JavaHashOrder(missing), ", ")
 
 	return value.Invalid(fmt.Sprintf(msgIndexNotProjected, r.index.Name, ordered))
+}
+
+// checkFilterProjected refuses a Query's filter that names an attribute a
+// global index does not hold. A statement's WHERE is left alone, as the image
+// leaves it (docs/compat.md).
+func (r *reader) checkFilterProjected() error {
+	if r.from == fromStatement {
+		return nil
+	}
+
+	missing := r.unheld(expression.Names(r.filter))
+	if len(missing) == 0 {
+		return nil
+	}
+
+	// The image lists these in name order, where it lists a projection's in
+	// Java's HashSet order.
+	slices.Sort(missing)
+
+	return value.Invalid(fmt.Sprintf(msgIndexFilterNotProjected, r.index.Name, strings.Join(missing, ", ")))
+}
+
+// unheld lists the names, each once, that a read of a global index that does
+// not project every attribute does not hold. It is nil for a read of the table
+// or of a local index, which fetches from the table.
+func (r *reader) unheld(names []string) []string {
+	if r.index == nil || !r.index.Global || r.index.Projection.Type == "" || r.index.Projection.Type == table.ProjectAll {
+		return nil
+	}
+
+	var missing []string
+
+	for _, name := range names {
+		if !r.holds(name) && !slices.Contains(missing, name) {
+			missing = append(missing, name)
+		}
+	}
+
+	return missing
 }

@@ -28,10 +28,9 @@ var errNotSingle = errors.New("not a single-item select")
 
 // readStatement is a single-item SELECT compiled to a GetItem.
 type readStatement struct {
-	table   string
-	key     value.Item
-	get     *api.GetItemInput
-	aliases []partiql.Path
+	table string
+	key   value.Item
+	get   *api.GetItemInput
 }
 
 // compileRead compiles a SELECT that reads one item by its full key and
@@ -79,13 +78,21 @@ func (c caller) compileRead(
 		return nil, errNotSingle
 	}
 
-	projected, aliases, err := projection(stmt.Projection, r)
+	projected, nested, err := projection(stmt.Projection, r)
 	if err != nil {
 		return nil, err
 	}
 
+	if nested != nil {
+		// A batch and a transaction answer the item the GetItem keeps, the
+		// paths below the top level in the structure they have there, where
+		// ExecuteStatement answers each under its alias (verification/SQ-439
+		// probe3).
+		projected = wholePaths(nested, r)
+	}
+
 	return &readStatement{
-		table: name, key: key, aliases: aliases,
+		table: name, key: key,
 		get: &api.GetItemInput{
 			TableName: &name, Key: key, ProjectionExpression: projected, ConsistentRead: consistent,
 			ExpressionAttributeNames: r.attributeNames(),
@@ -158,20 +165,21 @@ type parsedStatement struct {
 }
 
 // parseBatch parses a batch's statements and makes the checks on the whole
-// batch: no empty statement, at most 25, reads and writes not mixed.
+// batch: no empty or long statement, at most 25, reads and writes not mixed.
 func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 	if len(reqs) == 0 {
 		return nil, value.Invalid(msgStatementEmpty)
+	}
+
+	err := checkStatementTexts(len(reqs), func(i int) *string { return reqs[i].Statement }, msgStatementEmpty)
+	if err != nil {
+		return nil, err
 	}
 
 	out := make([]parsedStatement, len(reqs))
 	reads, writes := 0, 0
 
 	for i := range reqs {
-		if reqs[i].Statement == nil {
-			return nil, value.Invalid(msgStatementEmpty)
-		}
-
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, false)
 		if err != nil && messageOf(err) == partiql.MsgVariable {
 			// A batch names a lone name in its own words (verification/SQ-229
@@ -259,7 +267,7 @@ func (p *Provider) runBatch(ctx context.Context, b *batchStatement) api.BatchSta
 			return batchError(err, b.read.table)
 		}
 
-		return api.BatchStatementResponse{TableName: &b.read.table, Item: shapeItem(out.Item, b.read.aliases)}
+		return api.BatchStatementResponse{TableName: &b.read.table, Item: out.Item}
 	default:
 		item, _, err := p.runWrite(ctx, b.write, nil)
 		if err != nil {
