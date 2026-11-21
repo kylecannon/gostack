@@ -3,6 +3,7 @@ package dynamodb_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,6 +123,72 @@ func readCells(b *testing.B, s *stack, n, size int) {
 			}
 		}
 	}
+}
+
+// indexTable is readTable with two more global indexes on g that project less:
+// gkeys holds only the keys, and ginc adds d.
+const indexTable = `{"TableName":"bench","BillingMode":"PAY_PER_REQUEST",` +
+	`"KeySchema":[{"AttributeName":"pk","KeyType":"HASH"},{"AttributeName":"sk","KeyType":"RANGE"}],` +
+	`"AttributeDefinitions":[{"AttributeName":"pk","AttributeType":"S"},{"AttributeName":"sk","AttributeType":"N"},` +
+	`{"AttributeName":"g","AttributeType":"S"}],` +
+	`"GlobalSecondaryIndexes":[{"IndexName":"gkeys","KeySchema":[{"AttributeName":"g","KeyType":"HASH"}],` +
+	`"Projection":{"ProjectionType":"KEYS_ONLY"}},` +
+	`{"IndexName":"ginc","KeySchema":[{"AttributeName":"g","KeyType":"HASH"}],` +
+	`"Projection":{"ProjectionType":"INCLUDE","NonKeyAttributes":["d"]}}]}`
+
+// BenchmarkIndexProjection reads a global index that does not project every
+// attribute, with a ProjectionExpression the index holds and one it does not,
+// which is refused: the cost of the check that decides which.
+func BenchmarkIndexProjection(b *testing.B) {
+	const items = 100
+
+	s := newStack(b)
+	s.ok(b, opCreate, indexTable)
+
+	data := strings.Repeat("x", 100)
+	for i := range items {
+		s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
+			`"},"g":{"S":"G"},"d":{"S":"`+data+`"}}}`)
+	}
+
+	for _, op := range []string{opQuery, opScan} {
+		for _, c := range []struct{ index, held, refused string }{
+			{"gkeys", "pk, sk, g", "d"},
+			{"ginc", "pk, d", "x"},
+		} {
+			for _, outcome := range []struct{ name, projection string }{{"held", c.held}, {"refused", c.refused}} {
+				body := indexReadBody(op, c.index, outcome.projection)
+				name := fmt.Sprintf("op=%s/index=%s/projection=%s", op, c.index, outcome.name)
+
+				b.Run(name, func(b *testing.B) {
+					b.ReportAllocs()
+
+					for b.Loop() {
+						if outcome.name == "refused" {
+							got := s.call(b, usEast1, op, body+"}")
+							require.Equal(b, http.StatusBadRequest, got.status, got.body)
+
+							continue
+						}
+
+						require.NoError(b, s.readAll(b, op, body, items))
+					}
+				})
+			}
+		}
+	}
+}
+
+// indexReadBody is a Query or a Scan of index with a ProjectionExpression,
+// without its closing brace.
+func indexReadBody(op, index, projection string) string {
+	body := `{"TableName":"bench","IndexName":"` + index + `","ProjectionExpression":"` + projection + `"`
+
+	if op == opQuery {
+		body += `,"KeyConditionExpression":"g = :h","ExpressionAttributeValues":{":h":{"S":"G"}}`
+	}
+
+	return body
 }
 
 // readBody is the request of one cell without its closing brace, so a start

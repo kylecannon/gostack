@@ -441,19 +441,67 @@ caller's account and region, as LocalStack does.
 - An `AttributeUpdates` `ADD` or `DELETE` of a number set: gostack compares the
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
-- A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project, and a PartiQL `SELECT` of one with such
-  an attribute in its list, at any length: LocalStack answers "Global secondary
-  index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal on a `Query` and a
-  `Scan`.
-- `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
-  parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
-  not have empty statement." / "The statement was empty." and prefixes the
-  count message with "Validation failed in TransactStatements[i]: "; gostack's
-  texts differ. `BatchExecuteStatement` with an unknown
-  `ReturnValuesOnConditionCheckFailure` answers `500 InternalFailure` in the
-  image and `200` here with the statement answered.
+- A global index read that names an attribute the index does not project
+  (`ProjectionExpression`, `AttributesToGet`, a PartiQL `SELECT` list, and a
+  `Query` filter) is refused with the image's messages, as the Query and Scan
+  pages say ("you can only request attributes that are projected into the
+  index. Global secondary index queries cannot fetch attributes from the
+  parent table."). The attributes are listed in the image's order, which is
+  that of the `HashSet` it lists them from: by bucket of the set. Where two
+  names fall in one bucket the image lists them in the order the set was
+  filled, which gostack sorts by text, so a list of any length can order two
+  names differently (seen from five names, and at 15 and 18); the same names,
+  the same status. A `Query` filter lists them by name.
+- A filter on an attribute an index does not project, where the image does not
+  refuse it: a `Scan` of a global index and a statement's `WHERE` on one, which
+  the image evaluates against the table's item and gostack against the
+  index's, as the Query and Scan pages say a global index cannot fetch from
+  the table; a `Scan` or a statement's `WHERE` on a local index, which gostack
+  evaluates against the index's item as well, where the image evaluates the
+  table's; and a `Query` filter on a local index, which the image refuses
+  ("Secondary index X does not project one or more filter attributes") and
+  gostack answers.
+- A SELECT of paths in one list at different elements, as in `l[1][0],
+  l[2].z`: ExecuteStatement keys a path through an element past the first by
+  that element, and answers the elements the SELECT names together. The image
+  also drops a later such path from the answer (`l[1].p, l[2].q.r` answers
+  `l[1]` alone), and keys a path whose element comes after one that moved
+  back by its full path (`l[1][0], l[0]` answers `l[0]` and `l[1][0]`);
+  gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
+  through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
+  key, `l[1]`, which holds one value in both. When the paths share a key the
+  image keeps one path by an order gostack does not reproduce (no rule we
+  know fits every statement probed), and gostack keeps the first in name order that the item holds, with what that
+  path names and nothing of the others; either way the answer is a path the
+  statement names, never a value of a path it does not. An attribute named by
+  the key itself (`"l[1]"`) keeps it in both. A statement with one path, or
+  with all its paths in the first element they name, answers as the image
+  does.
+- A path step written `m['x']` (the image answers it as `m.x`), a projection
+  alias (`SELECT a AS z`, which the image refuses with "Aliasing is not
+  supported") and a block comment (`/* ... */`, which the image reads as white
+  space, where `--` comments are read by both): gostack's statement parser does
+  not read them, and answers "Statement wasn't well formed". None is new; all
+  are outside the projection work above. A statement with one of them in a
+  batch or a transaction is no kind for the check that refuses reads and writes
+  together, where the image counts it as the kind it is.
+- A statement in a batch or a transaction whose key is over 2,048 bytes (a hash
+  key) or 1,024 bytes (a range key): the image answers a batch statement's
+  `ValidationError` with no `TableName` and a transaction's with a
+  `CancellationReasons` entry for it; gostack names the table in the batch's
+  answer and answers the transaction with the message alone.
+- `EXISTS(...)` around an expression other than a `SELECT` (`EXISTS(garbage)`,
+  `EXISTS(NULL)`) inside `ExecuteTransaction`: the image answers "Unsupported
+  operation in transaction."; gostack answers "Statement wasn't well formed".
+  Outside a transaction both answer that EXISTS is only for
+  `ExecuteTransaction`.
+- `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
+  within ExecuteTransaction must specify the primary key in the where clause.";
+  the image answers "Reads on indices are not supported within transactions.".
+  `BatchExecuteStatement` with an unknown `ReturnValuesOnConditionCheckFailure`
+  answers a `500 InternalFailure` for a write in the image (a LocalStack
+  crash), `200` with the statement answered for a read; gostack answers the
+  statement's `ValidationError` for both.
 - A legacy filter or `Expected` with two or more invalid conditions: gostack
   names the first in attribute-name order, the image the first in the request's
   JSON order, which the decoded map does not keep. With one invalid condition
@@ -541,8 +589,15 @@ per stream (`internal/service/dynamodb/stream`). The LocalStack column is the
 
 | Behavior | LocalStack | gostack | Source |
 |---|---|---|---|
-| FIFO topic deduplication | None at the topic: every publish is delivered, and each FIFO queue deduplicates on its own | The topic deduplicates, as AWS does. A message whose deduplication id (`MessageDeduplicationId`, or with `ContentBasedDeduplication` the SHA-256 of the message) the topic took in the last 5 minutes is accepted, answers the first message's `MessageId` and `SequenceNumber`, and is not delivered again. Under `PERSIST_SNS` the window survives a restart. | `test_publish_to_fifo_topic_deduplication_on_topic_level` (`aws.validated`) |
+| FIFO topic deduplication | None at the topic: every publish is delivered, and each FIFO queue deduplicates on its own | The topic deduplicates, as AWS does. A message whose deduplication id (`MessageDeduplicationId`, or with `ContentBasedDeduplication` the SHA-256 of the message) the topic took in the last 5 minutes is accepted, answers the first message's `MessageId` and `SequenceNumber`, and is not delivered again. Under `PERSIST_SNS` the window survives a restart: a save writes the ids the window still holds, each as the time of the save less its age on the monotonic clock (so a wall clock that stepped since the id was taken does not change how old the saved id is), and a restored id is placed by how long ago its saved time was, on the monotonic clock, so a wall clock that steps back during the run does not stretch the window. No timer runs: an idle topic holds its window until its next publish or save. | `test_publish_to_fifo_topic_deduplication_on_topic_level` (`aws.validated`) |
 | Protocols delivered to | SQS, HTTP, HTTPS, Lambda, Firehose, email (through SES), application endpoints and SMS | SQS, HTTP and HTTPS are delivered. Application endpoints and SMS are recorded and never sent (next section). A `lambda`, `firehose`, `email` or `email-json` subscription is accepted and stored, and nothing is delivered to it until gostack has the service. | Story contract (US-5): Lambda, Firehose and SES are out of scope until their services exist |
+| `PublishBatch` with no entries | `500 InternalError`: "exception while calling sns.PublishBatch: object of type 'NoneType' has no len()" | `400 EmptyBatchRequest`: "The batch request doesn't contain any entries." | The `PublishBatch` API reference lists `EmptyBatchRequest` among its errors; LocalStack takes `len()` of the missing list. Run against the image in the SQ-278 review. |
+| A `PublishBatch` entry with no `Message` member | `500 InternalError` ("object of type 'NoneType' has no len()") for the whole call, and no entry is published | The entry alone is answered in `Failed`: `Code` `InvalidParameter`, `Message` "Invalid parameter: Empty message", `SenderFault` true. The other entries are published and the call answers `200`, with `Successful` empty when every entry failed. LocalStack's crash is not copied | The model marks `PublishBatchRequestEntry.Message` required; the `PublishBatch` reference: "The result of publishing each message is reported individually in the response." Image run in the SQ-464 review (case std 3). `Test_Provider_PublishBatch_missing_message` and `_only_missing_messages` pin it. |
+| A `PublishBatch` entry with `Message` empty | `200`, the entry `Successful`. A subscriber without raw delivery is sent the envelope with `"Message": ""`. A raw SQS subscriber gets nothing: SQS refuses the empty body ("The request must contain the parameter MessageBody", in the container log). The same on a FIFO topic | The same. An empty `Message` is taken as any other text, as it is for one space; only the raw SQS delivery is refused | No AWS page or snapshot covers it, so LocalStack's answer stands (orchestrator ruling after the SQ-464 review; image cases std 1, std 2, fifo 1 and fifo 4). `Test_Provider_PublishBatch_empty_message` pins std 1 and std 2, `Test_Provider_PublishBatch_empty_message_fifo` fifo 1 and fifo 4. |
+| A `PublishBatch` entry with `Message` empty and `MessageStructure` `json` | `400 InvalidParameter`: "Invalid parameter: Message Structure - JSON message body failed to parse" | The same, as for `Publish` | Image case std 4. `Test_Provider_PublishBatch_validation`, "empty message under json". |
+| A `PublishBatch` of one entry of 262,144 bytes and an empty entry that carries an attribute | `400 BatchRequestTooLong`: the empty entry's attribute name, type and value count in the total. Without the attribute the batch is `200` | The same | Image cases std 8 and std 9. `Test_Provider_PublishBatch_validation`, "batch too long with an empty entry's attribute", pins std 8; `Test_Provider_PublishBatch_empty_entry_beside_a_full_one` pins std 9. |
+| A `PublishBatch` entry to a FIFO topic with `MessageGroupId` empty | `200` with every entry `Successful`, and then nothing from that batch reaches a FIFO queue, the good entries included: the `SendMessageBatch` is refused ("The request must contain the parameter MessageGroupId", in the container log) | `400 InvalidParameter`: "Invalid parameter: The MessageGroupId parameter is required for FIFO topics", as for a missing group id | The `PublishBatchRequestEntry` API reference (`MessageGroupId`): "You must associate a non-empty MessageGroupId with a message. If you do not provide a MessageGroupId, the action fails." Image case fifo 3 (SQ-464 review). |
+| Field order of the JSON envelope a subscriber is sent | Python dict order: `Type`, `MessageId`, `TopicArn`, `Message`, `Timestamp`, `UnsubscribeURL`, `Subject`, `MessageAttributes`, `SignatureVersion`, `Signature`, `SigningCertURL`. On a FIFO topic the members are `Type`, `MessageId`, `TopicArn`, `Message`, `Timestamp`, `UnsubscribeURL`, `Subject`, `MessageAttributes`, then `SequenceNumber` last, with no signature members (image, SQ-464 review) | AWS's order: `Type`, `MessageId`, `SequenceNumber` (FIFO), `TopicArn`, `Subject`, `Message`, `Timestamp`, `SignatureVersion`, `Signature`, `SigningCertURL` (no signature fields on a FIFO topic), `UnsubscribeURL`, `MessageAttributes`, written sorted by name. The bytes within a member follow `json.dumps`. A JSON parser sees the same object | The SQS bodies of LocalStack's `aws.validated` snapshots and the AWS HTTP/HTTPS confirmation document (story log entry 2); the snapshot comparison parses the JSON, so no row depends on the order. The signature covers the fixed canonical string, not the bytes of the envelope. |
 
 **Signing.** gostack signs a delivered message with SignatureVersion 1
 (SHA1withRSA) or 2 (SHA256withRSA), PKCS #1 v1.5, under its own RSA-2048 key and

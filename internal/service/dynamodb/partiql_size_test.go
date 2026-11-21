@@ -189,10 +189,9 @@ func Test_partiql_selectWideListIndexes(t *testing.T) {
 }
 
 // Test_partiql_selectWideListGlobalIndex: a SELECT of 700 to 1,000 attributes
-// of a global index that does not project them all is read as it is at any
-// length. The image refuses an attribute the index does not project, "Global
-// secondary index g_keys does not project [...]", where gostack answers the
-// ones it does, as docs/compat.md says of a ProjectionExpression (SQ-412).
+// of a global index that does not project them all is refused at any length,
+// naming every attribute the index does not project, as the image does
+// ("Global secondary index g_keys does not project [...]", SQ-439).
 func Test_partiql_selectWideListGlobalIndex(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, indexedTable("pidx"))
@@ -210,15 +209,17 @@ func Test_partiql_selectWideListGlobalIndex(t *testing.T) {
 		for index, want := range map[string]int{"g_keys": 3, "g_incl": len(included)} {
 			got := s.call(t, usEast1, opStatement,
 				`{"Statement":`+jsonString("SELECT "+list+` FROM "pidx"."`+index+`" WHERE gk = 'g'`)+`}`)
-			require.Equal(t, http.StatusOK, got.status, "%s %d: %.300s", index, n, got.body)
+			require.Equal(t, http.StatusBadRequest, got.status, "%s %d: %.300s", index, n, got.body)
 
 			var out struct {
-				Items []map[string]any `json:"Items"`
+				Message string `json:"message"`
 			}
 
 			require.NoError(t, json.Unmarshal([]byte(got.body), &out), got.body)
-			require.Len(t, out.Items, 1, "%s %d", index, n)
-			require.Len(t, out.Items[0], want, "%s %d: %v", index, n, out.Items[0])
+
+			head := "One or more parameter values were invalid: Global secondary index " + index + " does not project ["
+			require.True(t, strings.HasPrefix(out.Message, head), "%s %d: %.300s", index, n, out.Message)
+			require.Equal(t, n-want, strings.Count(out.Message, ",")+1, "%s %d names the ones it does not project", index, n)
 		}
 	}
 }
