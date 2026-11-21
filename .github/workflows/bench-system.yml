@@ -103,7 +103,11 @@ jobs:
       # The base's result goes under base/ and the head's under head/. Each cell
       # runs five times a side, not the default three: compare fails a metric
       # whose ranges do not overlap, which three runs a side of pure noise do
-      # once in C(6,3) = 20 orderings and five once in C(10,5) = 252.
+      # once in C(6,3) = 20 orderings and five once in C(10,5) = 252. The time to
+      # the first signed SNS publish is not judged by ranges: a key generation
+      # spreads too widely for them. It keeps its own runs, -first-use-runs (30
+      # a side, not -reps), and fails on a rank-sum test of them (bench/doc.go,
+      # "The gate").
       - name: Measure the base and the head
         if: steps.base.outputs.image == 'true'
         working-directory: head
