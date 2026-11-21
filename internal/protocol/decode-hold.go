@@ -63,8 +63,9 @@ type DecodeHolder interface {
 // DecodeHold is what decoding one request holds against the in-flight bound
 // past FreeDecode, charged in steps of decodeChunk from the same pool as the
 // request bodies and waiting in the same queue, ahead of bodies that hold
-// nothing yet. Its zero value holds nothing. It is used on the request's own
-// goroutine.
+// nothing yet. When it has to wait for more than it holds, it gives back what
+// it holds and waits for all it needs (bodyPool.regrow). Its zero value holds
+// nothing. It is used on the request's own goroutine.
 type DecodeHold struct {
 	pool *bodyPool
 	held int64

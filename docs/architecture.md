@@ -543,6 +543,42 @@ few MB; a deployment that expects 16 MiB of small values needs about 2 GB. The
 items such a body stores are the same size again (an item of 130,000 numbers
 is 21 MB in a table), which is the table's, not the request's.
 
+Memory under a container limit. The pool counts charge and not heap, and one
+legal body is charged at most 48 MiB however much it keeps. Measured on the
+body of `BatchWriteItem` of 25 items x 64,000 numbers (15.26 MiB, to a table
+that does not exist, so it is decoded and refused): decoding allocates 1,482 MiB
+in 1.6 million allocations and keeps 329 MiB live after a collection, because
+`encoding/json/v2` grows a slice of 160-byte `AttributeValue` by a quarter at a
+time, five times its final size in all. Three things keep that from ending the
+process under `docker run --memory`:
+
+1. The Go memory limit follows the container's (above). On the built image at
+   `--memory 512m --memory-swap 512m`, the body sent 1, 2, 8 and 64 at once was
+   never killed, and the process peaked at 432 to 442 MiB of cgroup memory.
+   Without the limit two of them were killed (exit 137), as the review of
+   SQ-298 found.
+2. A decode whose cost passes twice the Go memory limit is refused with the
+   decode budget's answer (`400 SerializationException`, "decodes into more than
+   gostack allows"), not decoded: `protocol.ErrOverMemory`. The cost is charged
+   at 4 to 8 bytes for each byte the heap keeps (1,638 for a `{"N":"1"}` that
+   keeps 216; a `Scan` that holds its parameter twice about 4 to 1), and a decode
+   may keep half the limit. A 16 MiB `Scan` filter of numbers needs about
+   610 MiB, so with the limit alone it was killed at 512 MiB without swap and
+   ran into the container's limit and its swap with it. The refusal costs
+   nothing without a limit: a process with no container limit and no `GOMEMLIMIT`
+   refuses nothing. In a 512 MiB container (limit 435 MiB) bodies of numbers
+   over about 5 MB are refused; in 256 MiB (limit 217 MiB) over about 2.8 MB; in
+   2 GiB none the 16 MiB cap admits.
+3. The pool admits one such body at a time, as before (48 MiB of room for
+   each), so the heaps of two never add.
+
+The decoder's waste, the slice growth above, is not cut: `encoding/json/v2`
+grows the slice and a type's own `UnmarshalJSONFrom` could size it, but
+`AttributeValue` is generated, and a per-type unmarshaler added to the decode
+options costs a lookup for every value of every DynamoDB request, which the
+benchmark gate would count. The packed item storage that makes a stored item
+smaller removes the 160 bytes as well, and is its own ticket.
+
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.
 
