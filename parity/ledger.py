@@ -1362,7 +1362,8 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         # baseline-only service has none, and would otherwise drag the total down.
         counts["ls_pass_run"] = counts["ls_pass"] if counts["gs_run"] else 0
         totals.update(counts)
-        rows.append(format_row(service, counts))
+        # An anchor on the row, so docs/features.md can link to it: a table row has no heading.
+        rows.append(format_row(f'<a id="{service}"></a>{service}', counts))
     rows.append(format_row("**total**", totals, show_share_of=True))
 
     path.write_text(
@@ -1371,18 +1372,9 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         "gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tests "
         "that LocalStack passes that gostack also passes in the same runner. Tests LocalStack "
         "fails are recorded and not required. Excluded tests are listed with a reason in "
-        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n\n" + service_sections(sorted(by_service)),
+        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n",
         encoding="utf-8",
     )
-
-
-def service_sections(services: list[str]) -> str:
-    """One heading per service, so docs/features.md can link to a service by
-    anchor: a table row has none."""
-    sections = ["## Per service\n"]
-    for service in services:
-        sections.append(f"### {service}\n\nRows: [`parity/ledger/{service}.json`](../parity/ledger/{service}.json).\n")
-    return "\n".join(sections)
 
 
 def format_row(label: str, c: Counter, show_share_of: bool = False) -> str:

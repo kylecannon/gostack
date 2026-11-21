@@ -33,8 +33,9 @@ FILES ?=
 #   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout, listing passing ones in parity/demotions.yaml
 # Both runs merge into parity/ledger/<service>.json and rewrite docs/parity.md,
 # and then docs/features.md (make features), which states each service's status
-# from the ledger. A CI run, where CI is set, commits neither page: ci.yml's
-# features-check holds the committed one.
+# from the ledger. That refresh never changes the run's exit status: when it
+# fails, for want of go or a module cache, it prints one warning line. CI=true
+# skips it: ci.yml's features-check holds the committed page.
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
 PARITY_BASE ?= HEAD
@@ -218,13 +219,17 @@ toolchain:
 packages:
 	@scripts/go-packages.sh $(FILES)
 
+# The refresh of docs/features.md after a parity run: one warning line, and the
+# parity run's exit status, when it fails.
+FEATURES_REFRESH = @$(MAKE) --no-print-directory features >/dev/null 2>&1 || echo "warning: docs/features.md was not refreshed; run make features"
+
 parity:
 	parity/run.sh gostack
-	$(if $(CI),,$(MAKE) features)
+	$(if $(filter true,$(CI)),,$(FEATURES_REFRESH))
 
 parity-baseline:
 	parity/run.sh localstack
-	$(if $(CI),,$(MAKE) features)
+	$(if $(filter true,$(CI)),,$(FEATURES_REFRESH))
 
 # Runs the ledger's unit tests, then compares the working-tree ledger with the
 # one at PARITY_BASE (default HEAD; on a pull request CI passes the base parent
@@ -239,7 +244,7 @@ parity-check:
 # nothing (make takes a bare --dry-run for itself). LOCALSTACK_DIR picks the checkout.
 parity-prune:
 	python3 parity/ledger.py prune $(if $(LOCALSTACK_DIR),--localstack $(LOCALSTACK_DIR)) $(if $(DRY_RUN),--dry-run)
-	$(if $(or $(CI),$(DRY_RUN)),,$(MAKE) features)
+	$(if $(or $(filter true,$(CI)),$(DRY_RUN)),,$(FEATURES_REFRESH))
 
 image:
 	$(DOCKER) build -f docker/Dockerfile $(IMAGE_BUILD_ARGS) -t $(IMAGE) .

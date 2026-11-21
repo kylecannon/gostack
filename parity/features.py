@@ -7,11 +7,15 @@ in gostack, what is partial and what is not started.
 
 `make features` and `make features-check` run these with the facts file the Go
 test Test_featureFacts (cmd/gostack) writes: for every registered service, its
-operations, the ones it implements and whether PERSIST_<SERVICE> saves it. The
-rest is read from the repository: parity/features-services.json (the services
-of the pinned LocalStack checkout), parity/ledger/ (through ledger.py) and the
-headings of docs/parity.md and docs/compat.md, which the page links to and
+operations, the ones it implements and whether it has state PERSIST_<SERVICE>
+saves. The rest is read from the repository: parity/features-services.json (the
+service directories of the pinned LocalStack checkout), parity/ledger/ (through
+ledger.py) and docs/parity.md and docs/compat.md, which the page links to and
 never copies. Standard library only.
+
+The page states only what these inputs prove. Where they cannot tell, it says
+less: an unknown operation count is "unknown", never zero, and a service with no
+compat.md entry found is not said to have no differences.
 """
 
 from __future__ import annotations
@@ -32,15 +36,21 @@ PAGE = ROOT / "docs" / "features.md"
 PARITY_DOC = ledger.DOCS
 COMPAT_DOC = ROOT / "docs" / "compat.md"
 
-PARITY_DONE = "Parity done"
-IN_PROGRESS = "In progress"
 NOT_STARTED = "Not started"
-DEFERRED = "Deferred: engine-backed"
+IN_PROGRESS = "In progress"
+PARITY_DONE = "Parity done"
+COMPLETE = "Complete"
+
+# The marks a row of the summary carries beside its status.
+ENGINE_DEFERRED = "engine deferred"
+PROVIDERS_ONLY = "CloudFormation resource providers only"
 
 NOT_STARTED_REASON = "No code yet."
 HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t#]*$")
 FENCE = re.compile(r"^[ \t]*(```|~~~)")
+HTML_ANCHOR = re.compile(r"""<a\s+(?:id|name)="([^"]+)"\s*>""")
 FIRST_WORD = re.compile(r"^[A-Z][a-z0-9]*")
+DEPENDS_ON = re.compile(r"depends-on:([\w-]+)")
 
 
 class FeaturesError(Exception):
@@ -67,35 +77,110 @@ def slugs(markdown: str) -> list[tuple[int, str, str]]:
     return found
 
 
-def compat_links(services: list[dict], compat: str) -> dict[str, list[tuple[str, str]]]:
-    """For each service, the headings of docs/compat.md that name it: a
-    heading is the service's when it is, or starts with, one of the service's
-    `compat` titles and a space. A heading two services' titles both match
-    belongs to the one with the longer title, so "DynamoDB Streams" is not
-    also a DynamoDB entry."""
-    titles = [(title, service["name"]) for service in services for title in service.get("compat", [])]
-    links: dict[str, list[tuple[str, str]]] = {service["name"]: [] for service in services}
-    for level, text, anchor in slugs(compat):
-        if level not in (2, 3):
+def anchors(markdown: str) -> set[str]:
+    """Every anchor a link into the document can reach: its headings' and the
+    ids of its `<a id="...">` tags, which GitHub keeps."""
+    return {anchor for _, _, anchor in slugs(markdown)} | set(HTML_ANCHOR.findall(markdown))
+
+
+def compat_mentions(services: list[dict], compat: str) -> dict[str, list[tuple[str, str, bool]]]:
+    """For each service, the headings of docs/compat.md that hold a heading or
+    a table row naming it, as (text, anchor, own): the heading the line is, or
+    the nearest one above it, and whether a heading names it. A service is named by its `compat` titles, or by its name when it has
+    none, as a whole word in any case. A name inside a longer service's title is
+    that service's: "DynamoDB Streams" is not also a DynamoDB mention."""
+    terms = sorted(
+        ((title, entry["name"]) for entry in services for title in entry.get("compat", [entry["name"]])),
+        key=lambda term: -len(term[0]),
+    )
+    patterns = [(re.compile(rf"(?<![\w-]){re.escape(title)}(?![\w-])", re.IGNORECASE), owner) for title, owner in terms]
+    found: dict[str, list[tuple[str, str, bool]]] = {entry["name"]: [] for entry in services}
+    headings = iter(slugs(compat))
+    pending = next(headings, None)
+    current: tuple[str, str] | None = None
+    fenced = False
+    for line in compat.splitlines():
+        if FENCE.match(line):
+            fenced = not fenced
             continue
-        owners = [(title, name) for title, name in titles if text == title or text.startswith(title + " ")]
-        if owners:
-            links[max(owners, key=lambda owner: len(owner[0]))[1]].append((text, anchor))
-    return links
+        if fenced:
+            continue
+        match = HEADING.match(line)
+        if match and pending is not None:
+            current, pending = pending[1:], next(headings, None)
+        if current is None or not (match or line.startswith("|")):
+            continue
+        rest = line
+        for pattern, owner in patterns:
+            if pattern.search(rest):
+                known = found[owner]
+                at = next((i for i, (text, anchor, _) in enumerate(known) if (text, anchor) == current), None)
+                if at is None:
+                    known.append((*current, bool(match)))
+                elif match:
+                    known[at] = (*current, True)
+                rest = pattern.sub(" ", rest)
+    return found
 
 
-def status_of(registered: bool, deferred: bool, rows: list[dict]) -> str:
-    """A service with code is Parity done when it has a ledger in which
-    LocalStack passes something and every test LocalStack passes, gostack
-    passes; any other service with code is In progress. A service with no code
-    is Deferred when the list says it is engine-backed, and Not started
-    otherwise."""
-    if not registered:
-        return DEFERRED if deferred else NOT_STARTED
+def depends_on(row: dict) -> str | None:
+    match = DEPENDS_ON.fullmatch(row["reason"] or "") if row["localstack"] == "excluded" else None
+    return match.group(1) if match else None
+
+
+def missing_operations(fact: dict) -> list[str] | None:
+    """The operations of the service's API it does not implement, which answer
+    501; None when its implemented operations are not known."""
+    if fact["implemented"] is None:
+        return None
+    implemented = set(fact["implemented"])
+    return [operation for operation in fact["operations"] if operation not in implemented]
+
+
+def assess(fact: dict | None, rows: list[dict] | None, registered: set[str]) -> tuple[str, list[str]]:
+    """The status of a service and, for In progress, what keeps it there.
+
+    - Not started: no code.
+    - In progress: code, and any of: a test LocalStack passes that gostack does
+      not pass; an exclusion that depends on a service gostack now registers;
+      no ledger; no test LocalStack passes.
+    - Parity done: code, every test LocalStack passes also passes, and no such
+      exclusion.
+    - Complete: Parity done, and no operation answers 501.
+
+    A test LocalStack does not pass, or excluded, counts toward none of these.
+    A service whose implemented operations are not known is not Complete."""
+    if fact is None:
+        return NOT_STARTED, []
+    if rows is None:
+        return IN_PROGRESS, ["the service has no parity ledger"]
+    reasons = []
     passed = [row for row in rows if row["localstack"] == "pass"]
-    if passed and all(row["gostack"] == "pass" for row in passed):
-        return PARITY_DONE
-    return IN_PROGRESS
+    failing = [row for row in passed if row["gostack"] != "pass"]
+    if failing:
+        reasons.append(f"{len(failing)} of the {len(passed)} tests LocalStack passes do not pass on gostack")
+    if not passed:
+        reasons.append("the ledger holds no test LocalStack passes")
+    waiting = sorted({dep for row in rows if (dep := depends_on(row)) in registered})
+    if waiting:
+        count = sum(1 for row in rows if depends_on(row) in waiting)
+        reasons.append(f"{count} excluded {'test waits' if count == 1 else 'tests wait'} on {', '.join(waiting)}, which gostack now serves")
+    if reasons:
+        return IN_PROGRESS, reasons
+    missing = missing_operations(fact)
+    return (COMPLETE if missing == [] else PARITY_DONE), []
+
+
+def compat_lines(name: str, mentions: list[tuple[str, str, bool]]) -> list[str]:
+    def links(own: bool) -> str:
+        return ", ".join(f"[{text}](compat.md#{anchor})" for text, anchor, is_own in mentions if is_own == own)
+
+    lines = []
+    if any(own for *_, own in mentions):
+        lines += [f"Headings of [compat.md](compat.md) that name {name}: {links(True)}.", ""]
+    if any(not own for *_, own in mentions):
+        lines += [f"Other headings of compat.md with a table row under them that names {name}: {links(False)}.", ""]
+    return lines or [f"No heading or table row of [compat.md](compat.md) names {name}.", ""]
 
 
 def groups(operations: list[str]) -> list[tuple[str, list[str]]]:
@@ -118,10 +203,21 @@ def operation_lines(label: str, operations: list[str], empty: str) -> list[str]:
 
 def operations_cell(fact: dict | None) -> str:
     if fact is None:
-        return "none"
+        return "n/a"
     if fact["implemented"] is None:
         return f"unknown of {len(fact['operations'])}"
     return f"{len(fact['implemented'])} of {len(fact['operations'])}"
+
+
+def persist_variable(name: str) -> str:
+    return "PERSIST_" + name.upper().replace("-", "_")
+
+
+def lookup_name(entry: dict) -> str:
+    """The name the registered services and the ledger know the entry by: the
+    entry's `ledger` key when its directory is named otherwise (LocalStack's
+    configservice directory serves the config service)."""
+    return entry.get("ledger", entry["name"])
 
 
 def load_facts(path: Path) -> dict[str, dict]:
@@ -137,32 +233,51 @@ def load_services(path: Path) -> tuple[str, list[dict]]:
     return document["localstack_commit"], document["services"]
 
 
+def marks(entry: dict) -> list[str]:
+    found = []
+    if "deferred" in entry:
+        found.append(ENGINE_DEFERRED)
+    if entry.get("providers_only"):
+        found.append(PROVIDERS_ONLY)
+    return found
+
+
+def mark_sentences(entry: dict) -> list[str]:
+    name = entry["name"]
+    found = []
+    if "deferred" in entry:
+        found.append(entry["deferred"])
+    if entry.get("providers_only"):
+        found.append(f"LocalStack's `{name}` directory holds only CloudFormation resource providers.")
+    return found
+
+
 def render(commit: str, services: list[dict], facts: dict[str, dict], rows: dict[str, dict], parity: str, compat: str) -> str:
     """The text of docs/features.md. It raises FeaturesError when a registered
     service is missing from the list, or a parity link would not resolve."""
-    names = {service["name"] for service in services}
-    unlisted = sorted(set(facts) - names)
+    served = {lookup_name(entry) for entry in services if not entry.get("providers_only")}
+    unlisted = sorted(set(facts) - served)
     if unlisted:
         raise FeaturesError(f"registered but not in {SERVICES_FILE.name}: {', '.join(unlisted)}")
-    parity_anchors = {anchor for _, _, anchor in slugs(parity)}
+    parity_anchors = anchors(parity)
     ledger_rows: dict[str, list[dict]] = defaultdict(list)
     for nodeid, entry in rows.items():
         ledger_rows[ledger.service_of(nodeid)].append(entry)
-    compat_by_service = compat_links(services, compat)
+    mentions = compat_mentions(services, compat)
+    registered = set(facts)
 
     entries = []
     for service in services:
-        name = service["name"]
-        fact = facts.get(name)
-        status = status_of(fact is not None, "deferred" in service, ledger_rows.get(name, []))
-        has_ledger = name in ledger_rows
-        if has_ledger and name not in parity_anchors:
-            raise FeaturesError(f"{PARITY_DOC.name} has no heading {name!r} for the parity link")
-        entries.append((service, fact, status, has_ledger))
+        key = lookup_name(service)
+        fact = None if service.get("providers_only") else facts.get(key)
+        service_rows = None if service.get("providers_only") else ledger_rows.get(key)
+        if service_rows is not None and key not in parity_anchors:
+            raise FeaturesError(f"{PARITY_DOC.name} has no anchor {key!r} for the parity link")
+        status, reasons = assess(fact, service_rows, registered)
+        entries.append({"service": service, "key": key, "fact": fact, "rows": service_rows, "status": status, "reasons": reasons})
 
-    coded = [entry for entry in entries if entry[1] is not None]
-    deferred = [entry for entry in entries if entry[2] == DEFERRED]
-    not_started = [entry for entry in entries if entry[2] == NOT_STARTED]
+    coded = [entry for entry in entries if entry["fact"] is not None]
+    uncoded = [entry for entry in entries if entry["fact"] is None]
 
     out = [
         "# Features",
@@ -170,68 +285,81 @@ def render(commit: str, services: list[dict], facts: dict[str, dict], rows: dict
         "Generated by `parity/features.py`. Do not edit. Run `make features` to rewrite it; "
         "`make features-check` fails when it is stale.",
         "",
-        f"It lists the {len(services)} services of LocalStack Community at `{commit}` (`parity/features-services.json`) "
-        "and what gostack has built of each. Operation counts come from the registered services, the same source "
-        "as `GET /_gostack/services`. Parity and known differences are links: the numbers live in "
-        "[parity.md](parity.md) and the differences in [compat.md](compat.md).",
+        f"The services are the {len(services)} directories under `localstack-core/localstack/services` in LocalStack "
+        f"Community at `{commit}`, from `parity/features-services.json`. That is the directory list, not LocalStack's "
+        "provider list: a directory marked "
+        f"\"{PROVIDERS_ONLY}\" has no API of its own. Operation counts are what the registered services report to "
+        "`GET /_gostack/services`. Parity numbers are in [parity.md](parity.md) and known differences in "
+        "[compat.md](compat.md).",
         "",
         "## Legend",
         "",
         "| Status | Meaning |",
         "|---|---|",
-        f"| {PARITY_DONE} | The service has code and a parity ledger, and every test LocalStack passes, gostack passes. |",
-        f"| {IN_PROGRESS} | The service has code and is not Parity done. |",
         f"| {NOT_STARTED} | The service has no code. |",
-        f"| {DEFERRED} | The service has no code and needs a real engine, which is deferred. |",
+        f"| {IN_PROGRESS} | The service has code and any of: a test LocalStack passes that gostack does not pass; "
+        "an excluded test that waits on a service gostack now serves; no parity ledger; no test LocalStack passes. |",
+        f"| {PARITY_DONE} | The service has code, every test LocalStack passes also passes on gostack, and no excluded test "
+        "waits on a service gostack serves. Some operations may still answer 501. |",
+        f"| {COMPLETE} | {PARITY_DONE}, and no operation answers 501. |",
         "",
-        "An operation the service does not implement answers 501.",
+        "Excluded tests and tests LocalStack does not pass count toward no status. "
+        f"A service marked \"{ENGINE_DEFERRED}\" has its control-plane API in scope and its engine not "
+        "(`docs/architecture.md`, Scope); the mark stays once the service is built. "
+        "An operation a service does not implement answers 501.",
         "",
         "## Contents",
         "",
         "- [Summary](#summary)",
     ]
-    out += [f"- [{service['name']}](#{service['name']})" for service, *_ in coded]
-    out += ["- [Not started and deferred](#not-started-and-deferred)", "", "## Summary", ""]
-    out += ["| Service | Status | Operations | Parity | Section |", "|---|---|---:|---|---|"]
-    for service, fact, status, has_ledger in entries:
-        name = service["name"]
-        parity_cell = f"[row](parity.md#{name})" if has_ledger else "none"
-        section = f"[{name}](#{name})" if fact is not None else "[not started and deferred](#not-started-and-deferred)"
-        out.append(f"| {name} | {status} | {operations_cell(fact)} | {parity_cell} | {section} |")
+    out += [f"- [{entry['service']['name']}](#{entry['service']['name']})" for entry in coded]
+    out += ["- [Services with no code](#services-with-no-code)", "", "## Summary", ""]
+    out += ["| Service | Status | Operations | Excluded tests | Parity | Note |", "|---|---|---:|---:|---|---|"]
+    for entry in entries:
+        name, key = entry["service"]["name"], entry["key"]
+        target = f"#{name}" if entry["fact"] is not None else "#services-with-no-code"
+        has_ledger = entry["rows"] is not None
+        excluded = sum(1 for row in entry["rows"] or [] if row["localstack"] == "excluded")
+        excluded_cell = f"[{excluded}](parity.md#{key})" if has_ledger else "n/a"
+        parity_cell = f"[row](parity.md#{key})" if has_ledger else "no ledger"
+        out.append(
+            f"| [{name}]({target}) | {entry['status']} | {operations_cell(entry['fact'])} | {excluded_cell} "
+            f"| {parity_cell} | {'; '.join(marks(entry['service']))} |"
+        )
     out.append("")
 
     out += ["## Services with code", ""]
-    for service, fact, status, has_ledger in coded:
+    for entry in coded:
+        service, fact, key = entry["service"], entry["fact"], entry["key"]
         name = service["name"]
         out += [f"### {name}", ""]
-        out.append(f"Status: {status}. Operations implemented: {operations_cell(fact)}.")
+        out.append(f"Status: {entry['status']}. Operations implemented: {operations_cell(fact)}.")
         out.append("")
-        persist = "yes" if fact["persist"] else "no"
-        out.append(f"Persistence: `PERSIST_{name.upper()}`: {persist}.")
-        out.append("")
-        if has_ledger:
-            out += [f"Parity: [row in parity.md](parity.md#{name}).", ""]
-        links = compat_by_service[name]
-        if links:
-            out += ["Settings and known differences in compat.md: " + ", ".join(f"[{text}](compat.md#{anchor})" for text, anchor in links) + ".", ""]
+        if entry["reasons"]:
+            out += ["In progress because " + "; ".join(entry["reasons"]) + ".", ""]
+        if mark_sentences(service):
+            out += [" ".join(mark_sentences(service)), ""]
+        if entry["rows"] is not None:
+            out += [f"Parity: [{key} in parity.md](parity.md#{key}), which counts its excluded tests.", ""]
+        if fact["persist"]:
+            out += [f"Persistence: state saved when `{persist_variable(key)}` is on.", ""]
         else:
-            out += ["Settings and known differences in compat.md: none recorded.", ""]
-        if fact["implemented"] is None:
+            out += [f"Persistence: no snapshotter is registered, so `{persist_variable(key)}` saves nothing.", ""]
+        out += compat_lines(name, mentions[name])
+        missing = missing_operations(fact)
+        if missing is None:
             out += [f"The operations this service implements are unknown; its API has {len(fact['operations'])}.", ""]
             continue
-        implemented = set(fact["implemented"])
-        missing = [operation for operation in fact["operations"] if operation not in implemented]
         out += operation_lines("Implemented", fact["implemented"], "None.")
         out += operation_lines("Not implemented, answered 501", missing, "None.")
 
-    out += ["## Not started and deferred", ""]
-    out += ["### Deferred: engine-backed", ""]
-    out += [f"- {service['name']}: {service['deferred']}" for service, *_ in deferred] or ["None."]
-    out += ["", "### Not started", ""]
-    out += [
-        f"- {service['name']}: {NOT_STARTED_REASON}" + (f" {service['note']}" if "note" in service else "")
-        for service, *_ in not_started
-    ] or ["None."]
+    out += ["## Services with no code", ""]
+    for entry in uncoded:
+        service = entry["service"]
+        extra = mark_sentences(service)
+        out.append(f"- {service['name']}: {NOT_STARTED_REASON}" + (" " + " ".join(extra) if extra else ""))
+    if not uncoded:
+        out.append("None.")
     return "\n".join(out) + "\n"
 
 
