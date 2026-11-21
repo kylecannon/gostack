@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -111,6 +112,55 @@ func (c Config) mounted(path string) bool {
 	}
 
 	return procMounted(path)
+}
+
+// onRootFS reports that dir sits on the container's own root filesystem, so
+// that what is saved there is lost with the container: neither dir nor any
+// directory above it short of "/" is a mount point. A directory inside a
+// volume, such as /persisted-data/gostack, is not on it. It reports false when
+// it cannot tell, which is whenever MountDetector is nil and the host has no
+// /proc/self/mountinfo, as off Linux.
+func (c Config) onRootFS(dir string) bool {
+	if c.MountDetector == nil {
+		_, err := os.Stat(mountinfoPath)
+		if err != nil {
+			return false
+		}
+	}
+
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+
+	for p := resolveExisting(abs); p != filepath.Dir(p); p = filepath.Dir(p) {
+		if c.mounted(p) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// resolveExisting returns path with the links in it resolved, as far as it
+// exists. A link on the way is not a mount point, its target may be under one,
+// and /proc/self/mountinfo lists resolved paths. What is not made yet is kept
+// as it is.
+func resolveExisting(path string) string {
+	var rest []string
+
+	for p := path; ; p = filepath.Dir(p) {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+
+		if p == filepath.Dir(p) {
+			return path
+		}
+
+		rest = append([]string{filepath.Base(p)}, rest...)
+	}
 }
 
 // serviceEnabled reports whether the service named by name persists.

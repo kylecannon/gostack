@@ -1195,6 +1195,19 @@ Tests split along the same line:
   Kinesis, CloudWatch and SES assets).
 - Otherwise nothing persists and state is in-memory only.
 
+**Unmounted base directory.** When persistence selects a base directory, the
+first `Load` at startup logs one `WARN` naming it, `persist: the base dir is
+not on a mounted volume, so saved state will be lost with the container`, if
+neither the directory nor any directory above it short of `/` is a mount point
+in `/proc/self/mountinfo` (`Config.onRootFS`). A directory inside a volume
+(`/persisted-data/gostack`) does not warn, and neither does the
+`PERSISTENCE=1` state directory in gostack's image, whose `VOLUME
+/var/lib/localstack` makes `/var/lib/localstack` a mount. A path with a link
+is resolved first, as far as it exists. Where the check cannot tell, as off
+Linux with no `/proc/self/mountinfo`, it logs nothing. It warns once, not on a
+later `Load` from `POST /_gostack/state/load`, and changes nothing else:
+state is saved to the directory as before.
+
 **Configuration** is copied exactly from localstack-persist
 (`src/localstack_persist/config.py`, `state.py`); `internal/config/persist.go`
 cites the lines.
