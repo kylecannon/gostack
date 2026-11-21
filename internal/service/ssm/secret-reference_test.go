@@ -30,6 +30,12 @@ const (
 	keyARN          = "ARN"
 	fieldToken      = "ClientRequestToken"
 	secretVanished  = "vanished"
+
+	fieldSecretString = "SecretString"
+	valueOne          = "one"
+	valueTwo          = "two"
+	valueThree        = "three"
+	idWithSpace       = "a b"
 )
 
 // tokens makes the ClientRequestToken every Secrets Manager write needs.
@@ -141,7 +147,7 @@ func (j *joined) parameterFails(operation, region string, body any, code string)
 func (j *joined) createSecret(name, value string) string {
 	j.t.Helper()
 
-	out := j.secret("CreateSecret", obj{kName: name, "SecretString": value, fieldToken: newToken()})
+	out := j.secret("CreateSecret", obj{kName: name, fieldSecretString: value, fieldToken: newToken()})
 	arn, _ := out[keyARN].(string)
 	require.NotEmpty(j.t, arn)
 
@@ -175,9 +181,8 @@ func Test_secretReference_getParameter(t *testing.T) {
 	require.Equal(t, secretValue, got[kValue])
 	require.Equal(t, "SecureString", got[kType])
 	require.InDelta(t, 0, got[kVersion], 0)
-	require.Equal(t, "text", got["DataType"])
-	require.Equal(t, "arn:aws:ssm:us-east-1:000000000000:parameter/aws/reference/secretsmanager/test_secret-a",
-		got[keyARN])
+	require.NotContains(t, got, "DataType", "no AWS source shows one on a reference")
+	require.Equal(t, arn, got[keyARN], "the secret's ARN, as the AWS user guide shows")
 
 	modified, isNumber := got["LastModifiedDate"].(float64)
 	require.True(t, isNumber, "LastModifiedDate in %v", got)
@@ -199,11 +204,11 @@ func Test_secretReference_getParameter(t *testing.T) {
 
 func Test_secretReference_readsTheCurrentVersion(t *testing.T) {
 	j := newJoined(t, bothServices()...)
-	j.createSecret("rolling", "one")
-	j.secret("PutSecretValue", obj{fieldSecretID: "rolling", "SecretString": "two", fieldToken: newToken()})
+	j.createSecret("rolling", valueOne)
+	j.secret("PutSecretValue", obj{fieldSecretID: "rolling", fieldSecretString: valueTwo, fieldToken: newToken()})
 
 	_, out := j.parameter(kGetParameter, regionEast, obj{kName: referencePrefix + "rolling", fieldDecrypt: true})
-	require.Equal(t, "two", param(out)[kValue])
+	require.Equal(t, valueTwo, param(out)[kValue])
 }
 
 func Test_secretReference_nestedNamesAndARNs(t *testing.T) {
@@ -219,18 +224,185 @@ func Test_secretReference_nestedNamesAndARNs(t *testing.T) {
 	require.Equal(t, referencePrefix+"team/app/db", param(out)[kName])
 }
 
-func Test_secretReference_needsDecryption(t *testing.T) {
+// No AWS source refuses a reference without WithDecryption, so GetParameter and
+// GetParameters both answer the secret either way, as LocalStack does.
+func Test_secretReference_needsNoDecryption(t *testing.T) {
 	j := newJoined(t, bothServices()...)
-	j.createSecret("guarded", secretValue)
+	j.createSecret("mine", secretValue)
+
+	name := referencePrefix + "mine"
+
+	for _, body := range []obj{{kName: name}, {kName: name, fieldDecrypt: false}, {kName: name, fieldDecrypt: true}} {
+		status, out := j.parameter(kGetParameter, regionEast, body)
+		require.Equal(t, http.StatusOK, status, "%v", out)
+		require.Equal(t, secretValue, param(out)[kValue])
+	}
 
 	for _, body := range []obj{
-		{kName: referencePrefix + "guarded"},
-		{kName: referencePrefix + "guarded", fieldDecrypt: false},
-		{kName: referencePrefix + "missing"},
+		{fieldNames: []string{name}},
+		{fieldNames: []string{name}, fieldDecrypt: false},
+		{fieldNames: []string{name}, fieldDecrypt: true},
 	} {
-		msg := j.parameterFails(kGetParameter, regionEast, body, kValidationException)
-		require.Equal(t, "WithDecryption flag must be True for retrieving a Secret Manager secret.", msg)
+		status, out := j.parameter(kGetParameters, regionEast, body)
+		require.Equal(t, http.StatusOK, status, "%v", out)
+		require.Equal(t, secretValue, entry(list(out, kParameters), 0)[kValue])
 	}
+
+	// A secret nothing holds is not found, with or without the flag.
+	j.parameterFails(kGetParameter, regionEast, obj{kName: referencePrefix + "missing"}, kParameterNotFound)
+}
+
+// stagedSecret makes a secret with a version for AWSPREVIOUS, one for
+// AWSCURRENT and one for a custom label, and returns their VersionIds, oldest
+// first.
+func stagedSecret(j *joined) (first, second, labeled string) {
+	j.t.Helper()
+
+	created := j.secret("CreateSecret", obj{kName: "s1", fieldSecretString: valueOne, fieldToken: newToken()})
+	first, _ = created["VersionId"].(string)
+
+	put := j.secret("PutSecretValue", obj{fieldSecretID: "s1", fieldSecretString: valueTwo, fieldToken: newToken()})
+	second, _ = put["VersionId"].(string)
+
+	put = j.secret("PutSecretValue", obj{
+		fieldSecretID: "s1", fieldSecretString: valueThree, fieldToken: newToken(), "VersionStages": []string{"mine"},
+	})
+	labeled, _ = put["VersionId"].(string)
+
+	return first, second, labeled
+}
+
+// A reference name takes a trailing selector, a staging label or a VersionId, as
+// Parameter Store honors those of Secrets Manager.
+func Test_secretReference_selectors(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	first, second, labeled := stagedSecret(j)
+
+	for selector, want := range map[string]string{
+		"AWSCURRENT":  valueTwo,
+		"AWSPREVIOUS": valueOne,
+		"mine":        valueThree,
+		first:         valueOne,
+		second:        valueTwo,
+		labeled:       valueThree,
+	} {
+		name := referencePrefix + "s1:" + selector
+
+		status, out := j.parameter(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true})
+		require.Equal(t, http.StatusOK, status, "%s: %v", name, out)
+		require.Equal(t, want, param(out)[kValue], name)
+		require.Equal(t, name, param(out)[kName], "the requested spelling")
+
+		status, out = j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}, fieldDecrypt: true})
+		require.Equal(t, http.StatusOK, status, "%s: %v", name, out)
+		require.Equal(t, want, entry(list(out, kParameters), 0)[kValue], name)
+		require.Empty(t, list(out, kInvalidParameters))
+	}
+
+	// A selector no version carries is no secret to read.
+	for _, selector := range []string{"nolabel", "1", strings.Repeat("0", 32), "AWSPENDING"} {
+		name := referencePrefix + "s1:" + selector
+
+		j.parameterFails(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true}, kParameterNotFound)
+
+		_, out := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}, fieldDecrypt: true})
+		require.Equal(t, []any{name}, list(out, kInvalidParameters), name)
+	}
+}
+
+// The ARN of a secret takes a selector after its eighth field.
+func Test_secretReference_selectorOnAnARN(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	stagedSecret(j)
+
+	status, out := j.parameter(kGetParameter, regionEast, obj{kName: referencePrefix + "s1", fieldDecrypt: true})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+
+	arn, _ := sourceResult(t, param(out))[keyARN].(string)
+	require.NotEmpty(t, arn)
+
+	name := referencePrefix + arn
+
+	status, out = j.parameter(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+	require.Equal(t, valueTwo, param(out)[kValue])
+
+	status, out = j.parameter(kGetParameter, regionEast, obj{kName: name + ":AWSPREVIOUS", fieldDecrypt: true})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+	require.Equal(t, valueOne, param(out)[kValue])
+}
+
+// A reference whose id is an ARN reads the region the ARN names.
+func Test_secretReference_anARNReadsItsOwnRegion(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+
+	status, made := j.do("secretsmanager", "secretsmanager.CreateSecret", regionWest,
+		obj{kName: "west", fieldSecretString: "w", fieldToken: newToken()})
+	require.Equal(t, http.StatusOK, status, "%v", made)
+
+	arn, _ := made[keyARN].(string)
+	require.Contains(t, arn, regionWest)
+
+	name := referencePrefix + arn
+
+	j.parameterFails(kGetParameter, regionEast, obj{kName: referencePrefix + "west", fieldDecrypt: true},
+		kParameterNotFound)
+
+	status, out := j.parameter(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+	require.Equal(t, "w", param(out)[kValue])
+	require.Equal(t, arn, param(out)[keyARN])
+}
+
+// An id Secrets Manager rejects is a secret nothing holds, not a 500.
+func Test_secretReference_invalidIDsAreNotFound(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+
+	for _, id := range []string{idWithSpace, "a,b", "a!b", "a%b", "a*b", "s1:", ":AWSCURRENT", "a b:AWSCURRENT", "arn:x"} {
+		name := referencePrefix + id
+
+		j.parameterFails(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true}, kParameterNotFound)
+
+		status, out := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}, fieldDecrypt: true})
+		require.Equal(t, http.StatusOK, status, "%q: %v", id, out)
+		require.Equal(t, []any{name}, list(out, kInvalidParameters), id)
+	}
+}
+
+// GetParameters reads the ARN form of a reference name as GetParameter does.
+func Test_secretReference_getParametersReadsTheARNForm(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	j.createSecret("mine", secretValue)
+
+	byARN := "arn:aws:ssm:us-east-1:000000000000:parameter" + referencePrefix + "mine"
+	plain := referencePrefix + "mine"
+
+	status, single := j.parameter(kGetParameter, regionEast, obj{kName: byARN})
+	require.Equal(t, http.StatusOK, status, "%v", single)
+
+	status, out := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{byARN}})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+	require.Empty(t, list(out, kInvalidParameters))
+	require.Len(t, list(out, kParameters), 1)
+
+	got := entry(list(out, kParameters), 0)
+	require.Equal(t, secretValue, got[kValue])
+	require.Equal(t, plain, got[kName], "GetParameter names it the same")
+	require.Equal(t, param(single)[kName], got[kName])
+	require.Equal(t, param(single)[keyARN], got[keyARN])
+
+	// With ordinary parameters and the plain form in the same call.
+	status, out = j.parameter(kPutParameter, regionEast, obj{kName: nameRooted, kValue: kLit3, kType: kString})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+
+	_, out = j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{plain, byARN, nameRooted}})
+	require.Len(t, list(out, kParameters), 3)
+	require.Empty(t, list(out, kInvalidParameters))
+
+	// An ARN of a secret nothing holds is invalid, as the plain form is.
+	missing := "arn:aws:ssm:us-east-1:000000000000:parameter" + referencePrefix + "nothing"
+	_, out = j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{missing}})
+	require.Equal(t, []any{missing}, list(out, kInvalidParameters))
 }
 
 func Test_secretReference_missingAndDeletedSecrets(t *testing.T) {

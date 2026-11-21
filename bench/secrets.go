@@ -26,19 +26,22 @@ import (
 //	                      4,096-character value limit)
 //	ssm/path              GetParametersByPath of a path of ten parameters, one
 //	                      full page, at 256 B and 4 KiB a value
+//	ssm/reference         GetParameter of /aws/reference/secretsmanager/<secret>,
+//	                      which SSM answers by reading the secret through
+//	                      Secrets Manager, at 256 B and 4 KiB
 //
 // The secret cells share one secret: Secrets Manager keeps up to 100 versions
-// of a secret that no staging label names, so a secret a worker would be 64
-// secrets of 100 versions at 64 KiB, which is the state of a different test
-// than the one these cells make. Every PutSecretValue adds a version, and the
-// oldest drops out once the secret holds 100, so the state a save writes stays
-// the same size. An SSM parameter a worker keeps to its own name; PutParameter
-// with Overwrite keeps up to 100 versions of it, bounded the same way.
+// of a secret that no staging label names, so one secret for each of 64 workers
+// would be 6,400 versions of 64 KiB, the state of a different test than the one
+// these cells make. Every PutSecretValue adds a version, and the oldest drops
+// out once the secret holds 100, so the state a save writes stays the same
+// size. An SSM parameter a worker keeps to its own name; PutParameter with
+// Overwrite keeps up to 100 versions of it, bounded the same way.
 //
 // GetSecretValue stamps the secret's LastAccessedDate with the day, and
 // persistence is told only when the day changes, so it is the PutSecretValue
-// of each cycle that a persistence-on secret cell saves for. Neither SSM read
-// changes anything.
+// of each cycle that a persistence-on secret cell saves for. The path and
+// reference reads change nothing, so those cells run with persistence off only.
 
 const (
 	serviceSecrets    = "secretsmanager"
@@ -49,12 +52,14 @@ const (
 	workloadValue     = "value"
 	workloadParameter = "parameter"
 	workloadPath      = "path"
+	workloadReference = "reference"
 
 	opPutSecretValue = "put-secret-value"
 	opGetSecretValue = "get-secret-value"
 	opPutParameter   = "put-parameter"
 	opGetParameter   = "get-parameter"
 	opGetByPath      = "get-parameters-by-path"
+	opGetReference   = "get-parameter-reference"
 
 	secretsPayloadSmall = 256
 	// secretsPayloadLimit is the longest SecretString: 65,536 bytes.
@@ -83,6 +88,8 @@ const (
 	secretName = "bench-secret"
 	pathPrefix = "/bench-path/"
 	paramRoot  = "/bench-parameter/"
+	// referenceRoot is the prefix of a parameter name that stands for a secret.
+	referenceRoot = "/aws/reference/secretsmanager/"
 
 	fieldSecretID = "SecretId"
 	fieldName     = "Name"
@@ -93,6 +100,8 @@ var (
 	// cells, "" being off.
 	secretsPersistence = []string{"", persistEnvSecrets}
 	ssmPersistence     = []string{"", persistEnvSSM}
+	// ssmPersistenceOff is the cells of a read-only workload: no save to measure.
+	ssmPersistenceOff = []string{""}
 
 	errSecrets = errors.New("secretsmanager")
 	errSSM     = errors.New("ssm")
@@ -254,6 +263,24 @@ func (c jsonClient) getParameter(ctx context.Context, name string, want int) err
 	return nil
 }
 
+// getReference reads the secret id through its reference name, as an
+// application does, with WithDecryption, and checks that it holds want bytes.
+func (c jsonClient) getReference(ctx context.Context, id string, want int) error {
+	var out struct{ Parameter parameterValue }
+
+	err := c.call(ctx, "GetParameter", map[string]any{fieldName: referenceRoot + id, "WithDecryption": true}, &out)
+	if err != nil {
+		return err
+	}
+
+	if len(out.Parameter.Value) != want {
+		return fmt.Errorf("%w: GetParameter of a reference answered %d bytes, not %d", c.fail, len(out.Parameter.Value),
+			want)
+	}
+
+	return nil
+}
+
 // getByPath reads one page of the parameters under path and checks that it is
 // the full page of values of want bytes.
 func (c jsonClient) getByPath(ctx context.Context, path string, want int) error {
@@ -405,7 +432,7 @@ func (parameterWorkload) Cells(profile string) []cellSpec {
 		}
 	}
 
-	return ssmCells(workloadParameter)
+	return ssmCells(workloadParameter, ssmPersistence)
 }
 
 // pathWorkload is GetParametersByPath of one full page a cycle.
@@ -445,22 +472,72 @@ func (pathWorkload) Run(ctx context.Context, c client, cell cellSpec, duration t
 	})
 }
 
-// Cells is each payload at every concurrency, persistence off and on. The quick
-// profile is the small payload at concurrency 16.
+// Cells is each payload at every concurrency, persistence off: a read changes
+// nothing, so a save never runs. The quick profile is the small payload at
+// concurrency 16.
 func (pathWorkload) Cells(profile string) []cellSpec {
 	if profile == profileQuick {
 		return []cellSpec{ssmCell(workloadPath, ssmPayloadSmall, "", levelMid)}
 	}
 
-	return ssmCells(workloadPath)
+	return ssmCells(workloadPath, ssmPersistenceOff)
 }
 
-// ssmCells is every payload of the SSM workloads at every concurrency,
-// persistence off and on.
-func ssmCells(workload string) []cellSpec {
-	cells := make([]cellSpec, 0, ssmCellsPerSetting*len(ssmPersistence))
+// referenceWorkload is GetParameter of a name that references a secret: SSM
+// reads the secret through Secrets Manager in the same process.
+type referenceWorkload struct{}
 
-	for _, persistEnv := range ssmPersistence {
+func (referenceWorkload) Service() string { return serviceSSM }
+func (referenceWorkload) Name() string    { return workloadReference }
+func (referenceWorkload) Ops() []string   { return []string{opGetReference} }
+
+func (referenceWorkload) Run(ctx context.Context, c client, cell cellSpec, duration time.Duration) (runResult, error) {
+	err := checkLevels(cell)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	err = checkPayload(cell, ssmPayloadLimit)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	sc := newSecretsClient(c.endpoint, cell.Concurrency)
+	pc := newSSMClient(c.endpoint, cell.Concurrency)
+	tok := newTokens()
+	value := payloadBody(cell.Payload)
+
+	err = sc.createSecret(ctx, value, tok)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	l := loop{workers: cell.Concurrency, duration: duration, ops: referenceWorkload{}.Ops()}
+
+	return l.run(ctx, func(ctx context.Context, _ int, rec *recorder) {
+		if rec.measure(opGetReference, func() error { return pc.getReference(ctx, tok.secretID(), len(value)) }) {
+			rec.cycles++
+		}
+	})
+}
+
+// Cells is each payload at every concurrency, persistence off: the read changes
+// no state in either service. The quick profile is the small payload at
+// concurrency 16.
+func (referenceWorkload) Cells(profile string) []cellSpec {
+	if profile == profileQuick {
+		return []cellSpec{ssmCell(workloadReference, ssmPayloadSmall, "", levelMid)}
+	}
+
+	return ssmCells(workloadReference, ssmPersistenceOff)
+}
+
+// ssmCells is every payload of an SSM workload at every concurrency, for each
+// of the persistence settings.
+func ssmCells(workload string, persistence []string) []cellSpec {
+	cells := make([]cellSpec, 0, ssmCellsPerSetting*len(persistence))
+
+	for _, persistEnv := range persistence {
 		for _, payload := range []int{ssmPayloadSmall, ssmPayloadLimit} {
 			for _, level := range []int{levelLow, levelMid, levelHigh} {
 				cells = append(cells, ssmCell(workload, payload, persistEnv, level))

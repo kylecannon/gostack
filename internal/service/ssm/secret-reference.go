@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -31,10 +32,6 @@ const (
 	// default is 1.0.
 	secretsContentType = "application/x-amz-json-1.1"
 
-	// withDecryptionMessage is moto's ValidationException for a secret read
-	// without WithDecryption (ssm/responses.py get_parameter).
-	withDecryptionMessage = "WithDecryption flag must be True for retrieving a Secret Manager secret."
-
 	// referenceMissingMessage is moto's ParameterNotFound for a secret it cannot
 	// read, up to the name (ssm/models.py ParameterDict.__contains__).
 	referenceMissingMessage = "An error occurred (ParameterNotFound) when referencing Secrets Manager: Secret "
@@ -47,31 +44,106 @@ const (
 	secretStringKey = "SecretString"
 )
 
-// A GetSecretValue answer of these types means no secret is there to read: the
-// secret does not exist, or it is marked for deletion. Moto reports both as
-// ParameterNotFound.
-var secretGone = map[string]bool{
-	"ResourceNotFoundException": true,
-	"InvalidRequestException":   true,
-}
+const (
+	// An ARN has seven fields before a selector: arn, partition, service,
+	// region, account, "secret" and the name with its suffix.
+	secretARNFields = 7
+	// versionIDMin and versionIDMax bound a Secrets Manager VersionId, 32 to 64
+	// characters; a shorter or longer selector is a staging label.
+	versionIDMin = 32
+	versionIDMax = 64
+)
 
-// secretReference is the secret id of a name that references a Secrets Manager
-// secret. A name that is only the prefix, with no id after it, is not one.
+// secretReference is the secret id, with any selector, of a normalized
+// parameter name that references a Secrets Manager secret. A name that is only
+// the prefix, with no id after it, is not a reference.
 func secretReference(name string) (string, bool) {
 	id, found := strings.CutPrefix(name, secretReferencePrefix)
 
 	return id, found && id != ""
 }
 
+// requestedReference reads a name of GetParameters as a secret reference. It
+// returns the normalized name, the one GetParameter would look up, and the id
+// after the prefix.
+func requestedReference(requested string) (name, id string, ok bool) {
+	name = requested
+	if _, isARN := arnResource(requested); isARN {
+		name = normalizeName(requested)
+	}
+
+	id, ok = secretReference(name)
+
+	return name, id, ok
+}
+
 // hasSecretReference reports whether any of names references a secret.
 func hasSecretReference(names []string) bool {
-	for _, name := range names {
-		if _, ok := secretReference(name); ok {
+	for _, requested := range names {
+		if _, _, ok := requestedReference(requested); ok {
 			return true
 		}
 	}
 
 	return false
+}
+
+// splitSelector separates a reference id into the secret id and the selector
+// that follows it, "id:AWSCURRENT", "id:AWSPREVIOUS", "id:label" or
+// "id:versionId", as Parameter Store honors the stages and versions of Secrets
+// Manager. A secret name has no colon, so the selector starts at the first. An
+// ARN has seven fields, so it starts at the eighth. An id with a colon and no
+// selector is left whole, for Secrets Manager to refuse.
+func splitSelector(id string) (secretID, selector string) {
+	if strings.HasPrefix(id, "arn:") {
+		parts := strings.SplitN(id, ":", secretARNFields+1)
+		if len(parts) > secretARNFields && parts[secretARNFields] != "" {
+			return strings.Join(parts[:secretARNFields], ":"), parts[secretARNFields]
+		}
+
+		return id, ""
+	}
+
+	secretID, selector, found := strings.Cut(id, ":")
+	if !found || secretID == "" || selector == "" {
+		return id, ""
+	}
+
+	return secretID, selector
+}
+
+// isVersionID reports whether a selector reads as a VersionId: 32 to 64
+// letters, digits and hyphens. Any other selector is a staging label. A label of
+// that shape is read as an id.
+func isVersionID(selector string) bool {
+	if len(selector) < versionIDMin || len(selector) > versionIDMax {
+		return false
+	}
+
+	for i := range len(selector) {
+		c := selector[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// secretRequest is the GetSecretValue body of a reference id.
+func secretRequest(id string) map[string]string {
+	secretID, selector := splitSelector(id)
+	body := map[string]string{"SecretId": secretID}
+
+	switch {
+	case selector == "":
+	case isVersionID(selector):
+		body["VersionId"] = selector
+	default:
+		body["VersionStage"] = selector
+	}
+
+	return body
 }
 
 // secretNotFound is the error for a secret reference that reads nothing. name
@@ -80,16 +152,18 @@ func secretNotFound(name string) error {
 	return ssmapi.NewParameterNotFound(referenceMissingMessage + name + " not found.")
 }
 
-// secretParameter reads the current version of the secret id for the caller of
-// c and returns it as the Parameter LocalStack builds: the value, type
-// SecureString, the creation time in whole seconds and SourceResult, the answer
-// as JSON with the first letter of each key lowered except ARN. Moto's
-// Parameter also carries the version (0), the ARN and the data type, so they
-// are set. The Name is the caller's to set. found is false for a secret that
-// does not exist or is marked for deletion, and when no Secrets Manager is
-// served, as for a secret nothing holds.
+// secretParameter reads the version of the secret that the reference id picks
+// for the caller of c, the current one when it has no selector, and returns it
+// as the Parameter LocalStack builds: the value, type SecureString, the
+// creation time in whole seconds and SourceResult, the answer as JSON with the
+// first letter of each key lowered except ARN. Moto's Parameter also carries the
+// version (0), so it is set, and the ARN is the secret's, as in the AWS user
+// guide's example. The Name is the caller's to set. found is false for a secret
+// that does not exist, is marked for deletion or has no such version, for an id
+// Secrets Manager refuses, and when no Secrets Manager is served, as for a
+// secret nothing holds.
 func (p *Provider) secretParameter(ctx context.Context, c *call, id string) (ssmapi.Parameter, bool, error) {
-	body, err := json.Marshal(map[string]string{"SecretId": id})
+	body, err := json.Marshal(secretRequest(id))
 	if err != nil {
 		return ssmapi.Parameter{}, false, awserr.Internal("encode GetSecretValue: " + err.Error())
 	}
@@ -117,9 +191,15 @@ func (p *Provider) secretParameter(ctx context.Context, c *call, id string) (ssm
 }
 
 // secretFailure is the error for a GetSecretValue answer that is not a 2xx. A
-// secret that is gone is no error: nil, which secretParameter answers as not
-// found. Any other answer fails the call.
+// client error is no error: nil, which secretParameter answers as not found,
+// whether the secret does not exist, is marked for deletion, has no such
+// version, the id is one Secrets Manager refuses, or the caller may not read it.
+// Any other answer is a failure of the call.
 func secretFailure(resp inproc.Response) error {
+	if resp.Status >= http.StatusBadRequest && resp.Status < http.StatusInternalServerError {
+		return nil
+	}
+
 	var failure struct {
 		Type string `json:"__type"`
 	}
@@ -128,10 +208,6 @@ func secretFailure(resp inproc.Response) error {
 
 	if i := strings.LastIndexByte(failure.Type, '#'); i >= 0 {
 		failure.Type = failure.Type[i+1:]
-	}
-
-	if secretGone[failure.Type] {
-		return nil
 	}
 
 	if failure.Type == "" {
@@ -152,9 +228,15 @@ func parameterOfSecret(body []byte) (ssmapi.Parameter, error) {
 	}
 
 	param := ssmapi.Parameter{
-		Type:     new(typeSecureString),
-		Version:  new(int64(0)),
-		DataType: new(dataTypeText),
+		Type:    new(typeSecureString),
+		Version: new(int64(0)),
+	}
+
+	if raw, ok := answer[arnKey]; ok {
+		err = json.Unmarshal(raw, &param.ARN)
+		if err != nil {
+			return ssmapi.Parameter{}, fmt.Errorf("decode ARN: %w", err)
+		}
 	}
 
 	if raw, ok := answer[secretStringKey]; ok {
@@ -209,15 +291,11 @@ func lowerKeys(answer map[string]json.RawMessage) map[string]json.RawMessage {
 }
 
 // getSecretParameter answers GetParameter for the secret reference name, the
-// normalized name that holds the secret id. Moto's check of WithDecryption comes
-// before the lookup, as in its get_parameter response.
+// normalized name that holds the secret id. A secret is answered whatever
+// WithDecryption says, as LocalStack does.
 func (p *Provider) getSecretParameter(
 	ctx context.Context, c *call, in *ssmapi.GetParameterInput, name, id string,
 ) (*ssmapi.GetParameterOutput, error) {
-	if !isTrue(in.WithDecryption) {
-		return nil, ssmapi.NewValidationException(withDecryptionMessage)
-	}
-
 	param, found, err := p.secretParameter(ctx, c, id)
 	if err != nil {
 		return nil, err
@@ -228,7 +306,6 @@ func (p *Provider) getSecretParameter(
 	}
 
 	param.Name = new(echoName(name, *in.Name))
-	param.ARN = new(c.arn(name))
 
 	return &ssmapi.GetParameterOutput{Parameter: &param}, nil
 }
@@ -261,19 +338,19 @@ func (p *Provider) getParametersAndSecrets(
 }
 
 // parameterOrSecret reads one requested name for getParametersAndSecrets: the
-// secret it references, or else the parameter it names, whose name goes through
-// the same check as GetParameter's.
+// secret it references, in the name's own form or as the ARN of the parameter,
+// or else the parameter it names, whose name goes through the same check as
+// GetParameter's.
 func (p *Provider) parameterOrSecret(
 	ctx context.Context, c *call, requested string, withDecryption *bool,
 ) (ssmapi.Parameter, bool, error) {
-	if id, ok := secretReference(requested); ok {
+	if name, id, ok := requestedReference(requested); ok {
 		param, found, err := p.secretParameter(ctx, c, id)
 		if err != nil || !found {
 			return ssmapi.Parameter{}, false, err
 		}
 
-		param.Name = &requested
-		param.ARN = new(c.arn(requested))
+		param.Name = new(echoName(name, requested))
 
 		return param, true, nil
 	}

@@ -80,6 +80,7 @@ var (
 		valueWorkload{},
 		parameterWorkload{},
 		pathWorkload{},
+		referenceWorkload{},
 	}
 	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )

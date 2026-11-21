@@ -189,30 +189,36 @@
 //
 // secrets.go speaks json 1.1 over plain HTTP, as kms.go does, with a SigV4
 // header nobody checks. Each cell makes what it reads before the clock starts.
-// It has three workloads:
+// It has four workloads:
 //
 //	secretsmanager/value  PutSecretValue, then GetSecretValue, of one secret
 //	                      shared by every worker, at 256 B and 64 KiB (the
 //	                      65,536-byte SecretString limit)
 //	ssm/parameter         PutParameter with Overwrite, then GetParameter, of a
-//	                      parameter a worker, at 256 B and 4 KiB (the Standard
-//	                      tier's 4,096-character limit)
+//	                      parameter for each worker, at 256 B and 4 KiB (the
+//	                      Standard tier's 4,096-character limit)
 //	ssm/path              GetParametersByPath of a path of ten parameters, one
 //	                      full page, at 256 B and 4 KiB a value
+//	ssm/reference         GetParameter of /aws/reference/secretsmanager/<secret>,
+//	                      which SSM answers through Secrets Manager's
+//	                      GetSecretValue, of one secret, at 256 B and 4 KiB
 //
-// Every workload runs at concurrency 1, 16, 64 and with PERSIST_SECRETSMANAGER=1
-// or PERSIST_SSM=1 and a tmpfs at /persisted-data. One secret serves every
-// worker because Secrets Manager keeps up to 100 versions that no label names,
-// and a secret a worker at 64 KiB would be 400 MiB of them; PutParameter keeps
-// up to 100 versions of a parameter the same way, so both saves stay the size
-// they reach after the first 100 writes. GetSecretValue tells persistence only
-// when the day of LastAccessedDate changes, so the secret cells' saves follow
-// the puts. LocalStack runs no persistence cell.
+// Every workload runs at concurrency 1, 16, 64. value and parameter also run
+// with PERSIST_SECRETSMANAGER=1 or PERSIST_SSM=1 and a tmpfs at
+// /persisted-data. One secret serves every worker because Secrets Manager keeps
+// up to 100 versions that no label names, and one secret for each of 64 workers
+// at 64 KiB would be 400 MiB of them; PutParameter keeps up to 100 versions of a
+// parameter the same way, so both saves stay the size they reach after the first
+// 100 writes. GetSecretValue tells persistence only when the day of
+// LastAccessedDate changes, so the secret cells' saves follow the puts. path
+// and reference only read, so a save never runs in them and they run with
+// persistence off. LocalStack runs no persistence cell.
 //
-// -profile full runs 36 cells per image that persists, 18 on LocalStack.
-// -profile quick runs 7, all at concurrency 16: value at 256 B and 64 KiB,
-// parameter at 256 B and 4 KiB, path at 256 B, and value and parameter at 256 B
-// with persistence on. Neither service has an agentic workload.
+// -profile full runs 36 cells per image that persists, 24 on LocalStack.
+// -profile quick runs 8, all at concurrency 16: value at 256 B and 64 KiB,
+// parameter at 256 B and 4 KiB, path and reference at 256 B, and value and
+// parameter at 256 B with persistence on; LocalStack runs the first 6. Neither
+// service has an agentic workload.
 //
 // # What else is measured
 //

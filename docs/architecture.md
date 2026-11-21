@@ -2159,13 +2159,23 @@ tags on the name. A `SecureString` is stored as moto stores it,
 under `/aws/reference/secretsmanager/` to `secretParameter`
 (`secret-reference.go`), which calls Secrets Manager's `GetSecretValue` through
 the in-process client and returns the secret as a `Parameter`: its
-`SecretString` as the value, type `SecureString`, `SourceResult` the answer as
-JSON, and `LastModifiedDate` the creation time in whole seconds. A secret that
-does not exist or is marked for deletion answers `ParameterNotFound` from
-`GetParameter` and lands in `InvalidParameters` for `GetParameters`. A
-gateway that serves no Secrets Manager answers the same, as for a secret
-nothing holds. The call is declared on the registration (`Bind`), so SSM runs
-without Secrets Manager and the pair run together.
+`SecretString` as the value, type `SecureString`, the secret's own ARN,
+`SourceResult` the answer as JSON, and `LastModifiedDate` the creation time in
+whole seconds. A name takes a trailing selector, `:AWSCURRENT`, `:AWSPREVIOUS`, a
+staging label or a VersionId, which becomes the call's `VersionStage` or
+`VersionId`. `GetParameters` reads the ARN form of a reference name as
+`GetParameter` does. The secret is read whatever `WithDecryption` says. Any
+client error of `GetSecretValue` (no such secret, one marked for deletion, no
+such version, an id Secrets Manager refuses, a secret the caller may not read)
+answers `ParameterNotFound` from `GetParameter` and lands in `InvalidParameters`
+for `GetParameters`; only a failure of the call itself is a 500. A gateway that
+serves no Secrets Manager answers the same, as for a secret nothing holds. An id
+that is an ARN reads the ARN's region, and another account's secret is read only
+as Secrets Manager's own rule allows: a secret under the default key is not
+readable from another account. The call is declared on the registration
+(`Bind`), so SSM runs without Secrets Manager and the pair run together. The
+system bench loads this path through `ssm/reference` (`bench/doc.go`, "The
+Secrets Manager and SSM matrix").
 
 ## Dependencies
 

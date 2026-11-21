@@ -19,11 +19,19 @@ import (
 func secretsServer(t *testing.T) client {
 	t.Helper()
 
+	services := []service.Registration{secretsmanager.New(nil).Registration(), ssm.New().Registration()}
+
 	g, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAll}} },
-		[]service.Registration{secretsmanager.New(nil).Registration(), ssm.New().Registration()}, nil, nil,
+		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAll}} }, services, nil, nil,
 	)
 	require.NoError(t, err)
+
+	// SSM reads a secret reference through the gateway, as the server binds it.
+	for i := range services {
+		if services[i].Bind != nil {
+			services[i].Bind(g.InternalHandler())
+		}
+	}
 
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)
@@ -63,6 +71,9 @@ func Test_secrets_and_ssm_workloads_refuse_cells_they_cannot_run(t *testing.T) {
 		ssmCell(workloadParameter, ssmPayloadSmall, "", 0),
 		ssmCell(workloadPath, ssmPayloadLimit+1, "", levelLow),
 		ssmCell(workloadPath, ssmPayloadSmall, "", 0),
+		ssmCell(workloadReference, ssmPayloadLimit+1, "", levelLow),
+		ssmCell(workloadReference, 0, "", levelLow),
+		ssmCell(workloadReference, ssmPayloadSmall, "", 0),
 	}
 
 	for _, cell := range bad {
@@ -75,16 +86,23 @@ func Test_secrets_and_ssm_workloads_refuse_cells_they_cannot_run(t *testing.T) {
 }
 
 func Test_secrets_and_ssm_cells(t *testing.T) {
-	// value: 2 payloads x 3 concurrencies; parameter and path likewise; each
-	// with persistence off and on.
+	// value: 2 payloads x 3 concurrencies; parameter likewise; each with
+	// persistence off and on. path and reference: 2 x 3, persistence off only.
 	assert.Len(t, cellsFor(profileFull, target{persistable: true}, serviceSecrets), 2*6)
 	assert.Len(t, cellsFor(profileFull, target{}, serviceSecrets), 6, "a target that does not persist")
-	assert.Len(t, cellsFor(profileFull, target{persistable: true}, serviceSSM), 2*(6+6))
-	assert.Len(t, cellsFor(profileFull, target{}, serviceSSM), 6+6, "a target that does not persist")
+	assert.Len(t, cellsFor(profileFull, target{persistable: true}, serviceSSM), 2*6+6+6)
+	assert.Len(t, cellsFor(profileFull, target{}, serviceSSM), 6+6+6, "a target that does not persist")
 	assert.Len(t, cellsFor(profileQuick, target{persistable: true}, serviceSecrets), 3)
 	assert.Len(t, cellsFor(profileQuick, target{}, serviceSecrets), 2, "a target that does not persist")
-	assert.Len(t, cellsFor(profileQuick, target{persistable: true}, serviceSSM), 4)
-	assert.Len(t, cellsFor(profileQuick, target{}, serviceSSM), 3, "a target that does not persist")
+	assert.Len(t, cellsFor(profileQuick, target{persistable: true}, serviceSSM), 5)
+	assert.Len(t, cellsFor(profileQuick, target{}, serviceSSM), 4, "a target that does not persist")
+
+	// A read-only workload has no persistence-on cell.
+	for _, wl := range []workload{pathWorkload{}, referenceWorkload{}} {
+		for _, c := range wl.Cells(profileFull) {
+			assert.False(t, c.persists(), "%s saves nothing", c.id())
+		}
+	}
 
 	ids := map[string]bool{}
 
@@ -106,6 +124,8 @@ func Test_secrets_and_ssm_cells(t *testing.T) {
 	assert.Equal(t, "ssm/parameter/persist=on/payload=256B/c=16",
 		ssmCell(workloadParameter, ssmPayloadSmall, persistEnvSSM, levelMid).id())
 	assert.Equal(t, "ssm/path/persist=off/payload=4KiB/c=1", ssmCell(workloadPath, ssmPayloadLimit, "", levelLow).id())
+	assert.Equal(t, "ssm/reference/persist=off/payload=256B/c=64",
+		ssmCell(workloadReference, ssmPayloadSmall, "", levelHigh).id())
 }
 
 func Test_secrets_tokens_are_32_characters_and_never_repeat(t *testing.T) {
