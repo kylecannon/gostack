@@ -546,33 +546,49 @@ func Test_partiql_transactionReturningAfterTable(t *testing.T) {
 
 // Test_partiql_existsMalformedOutsideTransaction: the image refuses an EXISTS
 // around an expression outside a transaction in the same words whatever is
-// inside it (verification/SQ-470 r2ord-cand.log "e EXG", "e EXISTS()", "b EXG"),
-// and an EXISTS around a statement, or with something after it, is not well
-// formed ("e EXISTS(UPDATE)", "e EXT").
+// inside it, and an EXISTS around UPDATE, DELETE or FROM, bare, or with
+// something after it, is not well formed. Every statement below was answered
+// so by the image, through ExecuteStatement and BatchExecuteStatement
+// (verification/SQ-439 round3 exists-cand.log).
 func Test_partiql_existsMalformedOutsideTransaction(t *testing.T) {
 	s := newStack(t)
 
-	const only = "EXISTS can only be used in ExecuteTransaction write requests."
+	const (
+		only    = "EXISTS can only be used in ExecuteTransaction write requests."
+		illegal = "Statement wasn't well formed, can't be processed: "
+	)
 
-	for _, src := range []string{"EXISTS(garbage)", "EXISTS()", "EXISTS(a = (1 + 2))"} {
+	inside := "SELECT * FROM t WHERE id = 'a'"
+
+	for _, src := range []string{
+		"EXISTS(garbage)", "EXISTS()", "EXISTS(a = (1 + 2))", "EXISTS(NULL)", "EXISTS(TRUE)", "EXISTS(NOT a)",
+		"EXISTS(MISSING)", "EXISTS(1)", "EXISTS('s')", "EXISTS(?)", "EXISTS(a, b)", "EXISTS(a.b[1])",
+		"EXISTS(garbage);", "EXISTS( garbage )", "exists(garbage)", "EXISTS((" + inside + "))",
+		"EXISTS(INSERT INTO t VALUE {'id': 'a'})", "EXISTS(" + inside + ")",
+	} {
 		t.Run(src, func(t *testing.T) {
 			got := s.call(t, usEast1, opStatement, stmt(src))
 			require.Equal(t, http.StatusBadRequest, got.status, got.body)
-			require.Equal(t, validation(only), got.body)
+			require.JSONEq(t, validation(only), got.body)
+
+			got = s.call(t, usEast1, opBatchStmt, `{"Statements":[`+stmt(src)+`]}`)
+			require.Equal(t, http.StatusOK, got.status, got.body)
+			require.Contains(t, got.body, only)
 		})
 	}
 
-	t.Run("batch", func(t *testing.T) {
-		got := s.call(t, usEast1, opBatchStmt, `{"Statements":[`+stmt("EXISTS(garbage)")+`]}`)
-		require.Equal(t, http.StatusOK, got.status, got.body)
-		require.Contains(t, got.body, only)
-	})
-
-	for _, src := range []string{"EXISTS", "EXISTS(UPDATE t SET a = 1)", "EXISTS(garbage) garbage", "EXISTS(garbage"} {
+	for _, src := range []string{
+		"EXISTS", "EXISTS(garbage) garbage", "EXISTS(garbage", "EXISTS(SELECT)", "EXISTS(FROM t)",
+		"EXISTS(UPDATE t SET a = 1)", "EXISTS(DELETE FROM t WHERE id = 'a')",
+	} {
 		t.Run(src, func(t *testing.T) {
 			got := s.call(t, usEast1, opStatement, stmt(src))
 			require.Equal(t, http.StatusBadRequest, got.status, got.body)
-			require.Equal(t, validation("Statement wasn't well formed, can't be processed: "+src), got.body)
+			require.JSONEq(t, validation(illegal+src), got.body)
+
+			got = s.call(t, usEast1, opBatchStmt, `{"Statements":[`+stmt(src)+`]}`)
+			require.Equal(t, http.StatusOK, got.status, got.body)
+			require.Contains(t, got.body, illegal+src)
 		})
 	}
 }

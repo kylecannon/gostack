@@ -484,12 +484,13 @@ func (p *parser) existsStatement() (*Statement, error) {
 // existsOperand reads what follows `EXISTS(` when it is not a SELECT, and
 // returns the error for it. The image reads `EXISTS(...)` as a call of a
 // function around an expression, so a statement that is one, empty or around
-// anything that is not a statement keyword, is an EXISTS it can refuse outside a
-// transaction, where an EXISTS around a statement or with something after it is
-// not well formed (verification/SQ-470 r2ord-cand.log "e EXG", "e EXISTS()",
-// "e EXISTS(UPDATE)", "e EXT").
+// anything but UPDATE, DELETE or FROM, is an EXISTS it can refuse outside a
+// transaction (NULL, TRUE, NOT a, INSERT INTO ... and a name all are), where an
+// EXISTS around one of those, or with something after it, is not well formed
+// (verification/SQ-439 round3 exists-cand.log, 78 statements probed).
 func (p *parser) existsOperand() error {
-	if !p.peek().punct(")") && (p.peek().kind == tokEOF || p.peek().kind == tokIdent && reserved(p.peek().text)) {
+	first := p.peek()
+	if first.kind == tokEOF || first.is("UPDATE") || first.is("DELETE") || first.is("FROM") {
 		return errMalformed
 	}
 

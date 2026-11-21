@@ -488,6 +488,11 @@ caller's account and region, as LocalStack does.
   `ValidationError` with no `TableName` and a transaction's with a
   `CancellationReasons` entry for it; gostack names the table in the batch's
   answer and answers the transaction with the message alone.
+- `EXISTS(...)` around an expression other than a `SELECT` (`EXISTS(garbage)`,
+  `EXISTS(NULL)`) inside `ExecuteTransaction`: the image answers "Unsupported
+  operation in transaction."; gostack answers "Statement wasn't well formed".
+  Outside a transaction both answer that EXISTS is only for
+  `ExecuteTransaction`.
 - `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
   within ExecuteTransaction must specify the primary key in the where clause.";
   the image answers "Reads on indices are not supported within transactions.".
