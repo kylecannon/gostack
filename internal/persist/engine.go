@@ -53,11 +53,6 @@ type Engine struct {
 	// nil, flushes the drive once after every marker of a round is synced (see
 	// markerSync). Tests replace them.
 	markSync, markFlush func(*os.File) error
-	// slow watches the flushes whose ctx has no deadline but can end, and
-	// watchAfter is how long one runs before it is watched (see slowWatch). Tests
-	// replace watchAfter.
-	slow       slowWatch
-	watchAfter time.Duration
 
 	// sem is held by whatever reads or writes the state files: one flush or one
 	// load. A flush during a load would snapshot a service that Restore has
@@ -113,6 +108,14 @@ type Engine struct {
 	// loaded is true once a Load has opened the base dir, or found it missing: a
 	// later Load is not the startup one.
 	loaded bool
+
+	// slow watches the flushes whose ctx has no deadline but can end, and
+	// watchAfter is how long one runs before it is watched (see slowWatch). Tests
+	// replace watchAfter. They sit last so that mu, services and dirtyAgain, which
+	// MarkDirty touches, keep the offsets they had without them: ahead of mu they
+	// moved it 56 bytes, and MarkDirty read 17% slower on an x86 runner.
+	slow       slowWatch
+	watchAfter time.Duration
 }
 
 // outcome is what one flush did to one service's run of failed saves.
