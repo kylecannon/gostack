@@ -591,7 +591,7 @@ than gostack allows") otherwise:
    `GOMEMLIMIT` above the container's limit does not widen the room past it.
    With neither a Go limit nor a cap (darwin, where no memory is read, and
    tests) it is 85% of a fixed 1 GiB (`protocol.UnknownMemory`): 870 MiB, so
-   758 MiB of room, which every legal body fits
+   758 MiB of room, which every legal body fits beside an empty store
    (`Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts`,
    `Test_ReserveHeap_TheMemoryCapBoundsTheLimit`).
 

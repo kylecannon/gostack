@@ -191,7 +191,7 @@ func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
 // of the smallest values at 400 KB of item, and lists nested to the depth
 // limit. The batch and the transaction are the largest each admits.
 func Test_decodeBudget_worstLegalBody(t *testing.T) {
-	noMemoryLimit(t)
+	roomyMemoryLimit(t)
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("dense"))
@@ -265,7 +265,7 @@ func Test_decodeBudget_worstLegalBody(t *testing.T) {
 // answers ValidationException, as it does for any key of the wrong shape, and
 // the budget does not.
 func Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler(t *testing.T) {
-	noMemoryLimit(t)
+	roomyMemoryLimit(t)
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("keys"))
