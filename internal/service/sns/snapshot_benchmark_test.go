@@ -119,6 +119,10 @@ func filledSNS(b *testing.B, count int) *sns.Provider {
 		b.Fatal(err)
 	}
 
+	// The restored topics start the signing key; the timed calls do not share
+	// a core with it.
+	awaitSigningKey(b, p)
+
 	return p
 }
 
