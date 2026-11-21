@@ -38,7 +38,7 @@ func laneFixture(n, lanes int) (*Topic, []delivery) {
 func Test_lanes_idleAcrossDeadLetter(t *testing.T) {
 	primaryGo, deadEntered, deadGo := make(chan struct{}), make(chan struct{}), make(chan struct{})
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	// The calls held are let go before Close, when the test fails first.
@@ -101,7 +101,7 @@ func Test_lanes_closeRacesPublish(t *testing.T) {
 	const n, lanes = 3000, 32
 
 	for iter := range 20 {
-		p := New(nil)
+		p := New(nil, nil)
 
 		var served atomic.Int64
 
@@ -140,7 +140,7 @@ func Test_lanes_closeRacesPublish(t *testing.T) {
 func Test_lanes_parked(t *testing.T) {
 	const n = inproc.MaxQueued + 500
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	var served atomic.Int64

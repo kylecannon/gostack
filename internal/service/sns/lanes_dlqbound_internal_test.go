@@ -28,7 +28,7 @@ func Test_lanes_httpDeadLetterBuildsAreBounded(t *testing.T) {
 		answered               atomic.Int64
 	)
 
-	p := New(nil)
+	p := New(nil, nil)
 	t.Cleanup(func() { p.Close(t.Context()) })
 
 	p.Bind(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))

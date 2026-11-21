@@ -1819,6 +1819,46 @@ Kinesis. The state is two files, LocalStack's split:
   this shape. `bin/gostack` loading that file, saving once and shutting down
   peaks at 1.46 GB resident (`/usr/bin/time -l`).
 
+**SNS.** `PERSIST_SNS=1` persists SNS alone, at `<base>/sns/store.{json,bin}`.
+LocalStack's `API_DEPENDENCIES` has no `sns` entry, so the queues SNS delivers
+to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
+
+- Saved, per account and region: topics with their attributes and data
+  protection policy; subscriptions with their attributes, filter policy text,
+  confirmation state and token (the token map and each topic's index are built
+  again from them, and the policy is parsed again with the body scope, story
+  log entry 3); platform applications and endpoints with their creation
+  numbers; SMS attributes; the messages `/_aws/sns/platform-endpoint-messages`
+  and `/_aws/sns/sms-messages` list. Per account: tags, in the order their keys
+  were first set, and opted-out numbers. Per process: the last FIFO sequence
+  number, which a restore never moves back. Per FIFO topic: the deduplication
+  window, each id with the message id and sequence number a repeat answers
+  with and the time it was taken; a restore drops the entries the five-minute
+  window has passed, so a repeat inside the window is still not delivered
+  after a restart. A string that is not valid UTF-8 is kept as its bytes, as
+  S3's are.
+- Not saved: deliveries queued in a lane or in flight, and the signing key
+  pair, which each process makes again. The shutdown rule: the drain of the
+  in-process calls, between the first and second shutdown saves, waits for
+  every queued delivery, to SQS and to HTTP, until the shutdown's `Calls`
+  deadline, so a delivery made then is in the queue the second save writes.
+  `Close` then cuts what is left at once and logs `SNS deliveries dropped`
+  with the count. Nothing cut is replayed after a restart; LocalStack does not
+  replay either.
+- `Mutating` leaves out `Publish` and `PublishBatch`. A publish marks SNS
+  dirty itself only when it changes saved state: a FIFO publish that takes a
+  new deduplication id, and one that records a message for an endpoint or a
+  number. A publish to a standard topic whose subscribers are queues or URLs
+  leaves SNS clean. The developer routes that delete recorded messages or add
+  an opted-out number mark it too.
+- Snapshot copies each State under its read lock, each topic and subscription
+  under its own lock in turn, and each FIFO topic's window under the window's
+  lock once the State's is let go, since a FIFO publish records into the State
+  while it holds the window's lock. Restore checks the whole file first: a
+  subscription to a topic the State does not hold, two subscriptions of a
+  topic to one endpoint, a token held twice or a window out of time order
+  refuses it and leaves SNS empty.
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus

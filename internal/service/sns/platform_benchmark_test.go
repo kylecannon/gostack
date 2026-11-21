@@ -46,7 +46,7 @@ type deviceBench struct {
 func newDeviceBench(b *testing.B, protocol string, n int) *deviceBench {
 	b.Helper()
 
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 	b.Cleanup(func() { provider.Close(b.Context()) })
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{listenAny}} },

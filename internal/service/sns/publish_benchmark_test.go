@@ -50,9 +50,16 @@ type publishCell struct {
 	raw         bool
 	filter      bool
 	payload     int
+	// persist wires SNS to a persistence engine, as PERSIST_SNS=1 does.
+	persist bool
 }
 
 func (c publishCell) name(payload string) string {
+	prefix := ""
+	if c.persist {
+		prefix = "persist=on/"
+	}
+
 	topic, delivery, filter := "standard", "envelope", "off"
 	if c.fifo {
 		topic = "fifo"
@@ -66,8 +73,8 @@ func (c publishCell) name(payload string) string {
 		filter = "on"
 	}
 
-	return fmt.Sprintf("subscribers=%d/topic=%s/delivery=%s/filter=%s/payload=%s",
-		c.subscribers, topic, delivery, filter, payload)
+	return fmt.Sprintf("%ssubscribers=%d/topic=%s/delivery=%s/filter=%s/payload=%s",
+		prefix, c.subscribers, topic, delivery, filter, payload)
 }
 
 // discardSQS answers every call with an empty json 200, after reading it.
@@ -89,11 +96,24 @@ type publishBench struct {
 func newPublishBench(b *testing.B, c publishCell) *publishBench {
 	b.Helper()
 
-	provider := sns.New(nil)
+	var (
+		provider *sns.Provider
+		dirtier  gateway.Dirtier
+	)
+
+	if c.persist {
+		eng := persistedBenchEngine(b)
+		provider = sns.New(nil, eng.MarkDirty)
+		registerPersisted(b, eng, provider)
+		dirtier = eng
+	} else {
+		provider = sns.New(nil, nil)
+	}
+
 	b.Cleanup(func() { provider.Close(b.Context()) })
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{listenAny}} },
-		[]service.Registration{provider.Registration()}, nil, nil)
+		[]service.Registration{provider.Registration()}, nil, dirtier)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -163,6 +183,16 @@ func BenchmarkPublish(b *testing.B) {
 					}
 				}
 			}
+		}
+	}
+
+	// The persistence rows: a standard publish to queues leaves SNS clean, a
+	// FIFO publish marks it dirty and the engine saves it every
+	// persistFrequency while the publishes run.
+	for _, fifo := range []bool{false, true} {
+		for _, payload := range benchPayloads {
+			c := publishCell{subscribers: 10, fifo: fifo, payload: payload.size, persist: true}
+			b.Run(c.name(payload.name), func(b *testing.B) { benchPublish(b, c) })
 		}
 	}
 }

@@ -114,7 +114,7 @@ func FuzzOptOutBody(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, body []byte) {
-		p := New(nil)
+		p := New(nil, nil)
 		r := chi.NewRouter()
 		p.mountMessages(r, developerCanonicalPrefix)
 

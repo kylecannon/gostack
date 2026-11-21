@@ -113,8 +113,11 @@ func (p *Provider) recordDevices(t *Topic, msgs []*message) {
 		}
 	}
 
+	if len(recorded) == 0 {
+		return
+	}
+
 	st.mu.Lock()
-	defer st.mu.Unlock()
 
 	for i := range recorded {
 		rec := &recorded[i]
@@ -124,6 +127,10 @@ func (p *Provider) recordDevices(t *Topic, msgs []*message) {
 			st.endpointMessages[rec.TargetARN] = append(st.endpointMessages[rec.TargetARN], rec.RecordedMessage)
 		}
 	}
+
+	st.mu.Unlock()
+
+	p.markChanged()
 }
 
 // recordedFor is a message a topic delivered to a device subscription, and

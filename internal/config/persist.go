@@ -54,7 +54,8 @@ const (
 
 // persistDependencies is LocalStack's API_DEPENDENCIES (bootstrap.py:60-75), the
 // mandatory dependencies resolve_apis follows. Keys and values are as LocalStack
-// spells them.
+// spells them. sns has no entry: PERSIST_SNS=1 persists SNS alone, and the SQS
+// queues it delivers to need PERSIST_SQS of their own.
 var persistDependencies = map[string][]string{
 	svcDynamoDB:        {svcDynamoDBStreams},
 	svcDynamoDBStreams: {svcKinesis},
