@@ -150,7 +150,11 @@ const (
 
 // firstKid is the index in n.kids of the entry a HashMap of them iterates
 // first: the one in the lowest bucket, the earliest added among those that
-// share it.
+// share it. HashMap doubles a table whose bin passes eight entries while it
+// holds under 64 buckets, and treeifies the bin at 64; neither is modeled, so
+// crafted names whose String hashCodes collide nine or more deep may name a
+// different second path than the image does. Whether a request is rejected or
+// accepted is unaffected.
 func (n *clashNode) firstKid() int {
 	buckets := uint32(clashBuckets)
 	for len(n.kids)*clashLoadDen > int(buckets)*clashLoadNum {
