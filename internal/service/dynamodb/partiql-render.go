@@ -251,50 +251,78 @@ func (r *render) is(n *partiql.Node) (string, error) {
 	return s, nil
 }
 
+// The clauses of an UpdateExpression, in the order it writes them.
+const (
+	clauseSet = iota
+	clauseRemove
+	clauseAdd
+	clauseDelete
+)
+
+// updateClause is the actions of one clause, with the place each has in the
+// statement that lists them.
+type updateClause struct {
+	keyword string
+	items   []string
+	at      []int
+}
+
 // update renders an UPDATE's actions as an UpdateExpression: SET for an
-// assignment, ADD and DELETE for set_add and set_delete, REMOVE.
-func (r *render) update(actions []partiql.Action) (string, error) {
-	var set, remove, add, del []string
+// assignment, ADD and DELETE for set_add and set_delete, REMOVE. It also gives
+// the place in the statement of each action, in the order the expression
+// writes them.
+func (r *render) update(actions []partiql.Action) (string, []int, error) {
+	clauses := [...]updateClause{{keyword: "SET"}, {keyword: "REMOVE"}, {keyword: "ADD"}, {keyword: "DELETE"}}
 
-	for _, a := range actions {
-		target := r.path(a.Path)
-
-		switch {
-		case a.Value == nil:
-			remove = append(remove, target)
-		case a.Value.Kind == partiql.KindCall && (a.Value.Name == "set_add" || a.Value.Name == "set_delete"):
-			operand, err := r.setFunc(a)
-			if err != nil {
-				return "", err
-			}
-
-			if a.Value.Name == "set_add" {
-				add = append(add, target+" "+operand)
-			} else {
-				del = append(del, target+" "+operand)
-			}
-		default:
-			v, err := r.updateValue(a.Value)
-			if err != nil {
-				return "", err
-			}
-
-			set = append(set, target+" = "+v)
+	for i, a := range actions {
+		which, item, err := r.updateAction(a)
+		if err != nil {
+			return "", nil, err
 		}
+
+		clauses[which].items = append(clauses[which].items, item)
+		clauses[which].at = append(clauses[which].at, i)
 	}
 
 	var b strings.Builder
 
-	for _, clause := range []struct {
-		kw    string
-		items []string
-	}{{"SET", set}, {"REMOVE", remove}, {"ADD", add}, {"DELETE", del}} {
+	rank := make([]int, 0, len(actions))
+
+	for _, clause := range clauses {
 		if len(clause.items) > 0 {
-			b.WriteString(clause.kw + " " + strings.Join(clause.items, ", ") + " ")
+			b.WriteString(clause.keyword + " " + strings.Join(clause.items, ", ") + " ")
+
+			rank = append(rank, clause.at...)
 		}
 	}
 
-	return strings.TrimSpace(b.String()), nil
+	return strings.TrimSpace(b.String()), rank, nil
+}
+
+// updateAction renders one action of an UPDATE, and says which clause it
+// belongs to.
+func (r *render) updateAction(a partiql.Action) (int, string, error) {
+	target := r.path(a.Path)
+
+	switch {
+	case a.Value == nil:
+		return clauseRemove, target, nil
+	case a.Value.Kind == partiql.KindCall && (a.Value.Name == "set_add" || a.Value.Name == "set_delete"):
+		operand, err := r.setFunc(a)
+		if err != nil {
+			return 0, "", err
+		}
+
+		if a.Value.Name == "set_add" {
+			return clauseAdd, target + " " + operand, nil
+		}
+
+		return clauseDelete, target + " " + operand, nil
+	default:
+		v, err := r.updateValue(a.Value)
+
+		return clauseSet, target + " = " + v, err
+	}
 }
 
 // setFunc renders the set operand of SET p = set_add(p, v) or set_delete,
