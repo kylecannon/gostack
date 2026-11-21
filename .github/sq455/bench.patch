@@ -1,0 +1,304 @@
+diff --git a/internal/service/dynamodb/items_benchmark_test.go b/internal/service/dynamodb/items_benchmark_test.go
+index 78560d0..509d589 100644
+--- a/internal/service/dynamodb/items_benchmark_test.go
++++ b/internal/service/dynamodb/items_benchmark_test.go
+@@ -1,6 +1,7 @@
+ package dynamodb_test
+ 
+ import (
++	"encoding/json"
+ 	"fmt"
+ 	"net/http"
+ 	"strings"
+@@ -15,10 +16,15 @@ import (
+ // concurrency. Sub-benchmark names carry the axes, for example
+ //
+ //	BenchmarkPutItem/payload=4KiB/concurrency=16
++//	BenchmarkGetItem/payload=399KiB/concurrency=1/text=cjk
+ //
+ // At concurrency 16 one iteration is 16 simultaneous calls, each on its own
+ // key, so ns/op and the byte rate are per sixteen calls. The largest payload
+ // keeps the item just under DynamoDB's 400 KB limit.
++//
++// GetItem also has a text axis, at concurrency 1: the item's string is
++// non-ASCII or escape-dense text, which json quotes differently from the
++// ASCII of the other cells. Its value changes nothing else a call does.
+ 
+ var (
+ 	itemPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}, {"399KiB", 399 << 10}}
+@@ -27,6 +33,29 @@ var (
+ 
+ const benchTable = "bench"
+ 
++// itemText is a point on the text axis: whole units of the text, then ASCII
++// to make up the size.
++type itemText struct {
++	name string
++	unit string
++}
++
++// itemTexts are two-byte Latin among ASCII, three-byte CJK, four-byte emoji,
++// and json text, a third of it escaped quotes.
++var itemTexts = []itemText{
++	{"latin", "caf\u00e9 na\u00efve "},
++	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
++	{"emoji", "\U0001f389\U0001f680\u2728"},
++	{"json", `{"k":"v","n":1},`},
++}
++
++// itemTextPayloads are the sizes of the text cells.
++var itemTextPayloads = itemPayloads[1:]
++
++func (t itemText) value(n int) string {
++	return strings.Repeat(t.unit, n/len(t.unit)) + strings.Repeat("x", n%len(t.unit))
++}
++
+ type itemPayload struct {
+ 	name string
+ 	size int
+@@ -58,8 +87,17 @@ func itemMatrixOn(
+ 
+ // putBody is a PutItem body for the item keyed k-worker with a d of size bytes.
+ func putBody(worker, size int) string {
+-	return fmt.Sprintf(`{"TableName":%q,"Item":{"id":{"S":"k-%d"},"d":{"S":%q}}}`,
+-		benchTable, worker, strings.Repeat("x", size))
++	return putValue(worker, strings.Repeat("x", size))
++}
++
++// putValue is a PutItem body for the item keyed k-worker with d the string d.
++func putValue(worker int, d string) string {
++	value, err := json.Marshal(d)
++	if err != nil {
++		panic(err)
++	}
++
++	return fmt.Sprintf(`{"TableName":%q,"Item":{"id":{"S":"k-%d"},"d":{"S":%s}}}`, benchTable, worker, value)
+ }
+ 
+ // getBody is a GetItem body for the item keyed k-worker.
+@@ -135,4 +173,23 @@ func BenchmarkGetItem(b *testing.B) {
+ 			require.NoError(b, s.fanOut(b, opGet, workers, func(worker int) string { return bodies[worker] }))
+ 		}
+ 	})
++
++	for _, p := range itemTextPayloads {
++		for _, text := range itemTexts {
++			b.Run(fmt.Sprintf("payload=%s/concurrency=1/text=%s", p.name, text.name), func(b *testing.B) {
++				s := newStack(b)
++				s.ok(b, opCreate, hashTable(benchTable))
++				s.ok(b, opPut, putValue(0, text.value(p.size)))
++
++				body := getBody(0)
++
++				b.SetBytes(int64(p.size))
++				b.ReportAllocs()
++
++				for b.Loop() {
++					s.ok(b, opGet, body)
++				}
++			})
++		}
++	}
+ }
+diff --git a/internal/service/dynamodb/reads_benchmark_test.go b/internal/service/dynamodb/reads_benchmark_test.go
+index e72891b..c521105 100644
+--- a/internal/service/dynamodb/reads_benchmark_test.go
++++ b/internal/service/dynamodb/reads_benchmark_test.go
+@@ -17,12 +17,17 @@ import (
+ // example
+ //
+ //	BenchmarkReads/items=100/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=16
++//	BenchmarkReads/items=100/payload=4KiB/text=cjk/op=Query/target=table/filter=off/concurrency=1
+ //
+ // One iteration reads the whole result, following LastEvaluatedKey across the
+ // 1 MB pages, on each of concurrency simultaneous callers. The filter keeps
+ // every item, so it adds its evaluation and not a smaller result. 500 items of
+ // 4 KiB are three pages; 10,000 items made ops of 60 to 340 ms, too slow for
+ // the benchstat gate's ten runs a row.
++//
++// The text cells hold non-ASCII or escape-dense strings, which json quotes
++// differently from ASCII, and only on a plain Query of 100 items: the text
++// changes nothing but the encoding of the result.
+ 
+ var (
+ 	readSizes       = []int{1, 100, 500}
+@@ -61,6 +66,36 @@ func BenchmarkReads(b *testing.B) {
+ 			})
+ 		}
+ 	}
++
++	const textItems = 100
++
++	for _, text := range itemTexts {
++		payload := readPayloads[1]
++
++		b.Run(fmt.Sprintf("items=%d/payload=%s/text=%s", textItems, payload.name, text.name), func(b *testing.B) {
++			s := newStack(b)
++			s.ok(b, opCreate, readTable)
++
++			data, err := json.Marshal(text.value(payload.size))
++			require.NoError(b, err)
++
++			for i := range textItems {
++				s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
++					`"},"g":{"S":"G"},"d":{"S":`+string(data)+`}}}`)
++			}
++
++			body := readBody(opQuery, "table", "")
++
++			b.Run("op=Query/target=table/filter=off/concurrency=1", func(b *testing.B) {
++				b.SetBytes(int64(textItems * payload.size))
++				b.ReportAllocs()
++
++				for b.Loop() {
++					require.NoError(b, s.readAll(b, opQuery, body, textItems))
++				}
++			})
++		})
++	}
+ }
+ 
+ // readCells runs every operation, target, filter and concurrency over the
+diff --git a/internal/service/sqs/messages_benchmark_test.go b/internal/service/sqs/messages_benchmark_test.go
+index 3d991cc..8fac2a7 100644
+--- a/internal/service/sqs/messages_benchmark_test.go
++++ b/internal/service/sqs/messages_benchmark_test.go
+@@ -17,6 +17,7 @@ import (
+ //
+ //	BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB
+ //	BenchmarkReceiveMessage/proto=query/queue=standard/max=10/payload=256B/attrs=10
++//	BenchmarkReceiveMessage/proto=json/queue=standard/max=1/payload=64KiB/text=cjk
+ //
+ // Cells left out, and why. The matrix is the cross product less the cells that
+ // run no code the kept ones do not, so that `make bench` at -count=10 fits its
+@@ -33,6 +34,10 @@ import (
+ //     attributes on a 256B body.
+ //   - Payload and attributes on DeleteMessage and DeleteMessageBatch. They
+ //     take a receipt handle and read neither.
++//   - The text axis on anything but json ReceiveMessage from a standard queue.
++//     Body text changes only how json quotes a body on the way out; the
++//     ASCII cells measure every other path. The text cells are the non-ASCII
++//     and escape-dense bodies that quote differently from ASCII.
+ //   - Persistence is measured by the snapshot benchmarks, and the system bench
+ //     runs the operations with PERSIST_SQS=1.
+ 
+@@ -48,6 +53,7 @@ type cell struct {
+ 	payload benchPayload
+ 	max     int
+ 	attrs   int
++	text    benchText
+ }
+ 
+ // cellOpts says which axes an operation has.
+@@ -55,6 +61,7 @@ type cellOpts struct {
+ 	maxes   []int // receive sizes; nil when the operation has none
+ 	payload bool  // the payload axis applies
+ 	attrs   bool  // the attribute cells apply
++	texts   bool  // the text cells apply
+ }
+ 
+ // name is the sub-benchmark name of a cell. The axes an operation does not have
+@@ -74,6 +81,10 @@ func (c cell) name(opts cellOpts) string {
+ 		name += "/attrs=" + strconv.Itoa(c.attrs)
+ 	}
+ 
++	if c.text.name != "" {
++		name += "/text=" + c.text.name
++	}
++
+ 	return name
+ }
+ 
+@@ -114,6 +125,16 @@ func (o cellOpts) cells() []cell {
+ 		}
+ 	}
+ 
++	if o.texts {
++		for _, size := range maxes {
++			for _, payload := range allPayloads {
++				for _, text := range benchTexts {
++					out = append(out, cell{proto: protoJSONName, kind: queueStandard, payload: payload, max: size, text: text})
++				}
++			}
++		}
++	}
++
+ 	return out
+ }
+ 
+@@ -375,10 +396,12 @@ func receiveBody(c cell, queueURL string) *segmented {
+ // every benchRefillCalls calls, with the timer stopped, and the memory of a cell
+ // stays the same however long it runs.
+ func BenchmarkReceiveMessage(b *testing.B) {
+-	eachCell(b, cellOpts{payload: true, attrs: true, maxes: []int{1, benchBatch}}, func(b *testing.B, c cell) {
++	opts := cellOpts{payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch}}
++	eachCell(b, opts, func(b *testing.B, c cell) {
+ 		env := newBenchEnv(b)
+ 		queueURL := env.queue(c.kind)
+-		env.fill(queueURL, c.kind, benchBatch, c.payload.bytes, c.attrs, 1)
++		body := c.text.body(c.payload.bytes)
++		env.fillBody(queueURL, c.kind, benchBatch, body, c.attrs, 1)
+ 
+ 		caller := env.caller(c.proto, "ReceiveMessage", receiveBody(c, queueURL))
+ 		expectCount(b, caller.probe(), "MessageId", c.max)
+@@ -390,7 +413,7 @@ func BenchmarkReceiveMessage(b *testing.B) {
+ 			if i%benchRefillCalls == 0 {
+ 				b.StopTimer()
+ 				env.purge(queueURL)
+-				env.fill(queueURL, c.kind, benchBatch, c.payload.bytes, c.attrs, 1)
++				env.fillBody(queueURL, c.kind, benchBatch, body, c.attrs, 1)
+ 				b.StartTimer()
+ 			}
+ 
+diff --git a/internal/service/sqs/wire-harness_benchmark_test.go b/internal/service/sqs/wire-harness_benchmark_test.go
+index d5b3a25..5e46b52 100644
+--- a/internal/service/sqs/wire-harness_benchmark_test.go
++++ b/internal/service/sqs/wire-harness_benchmark_test.go
+@@ -70,6 +70,33 @@ func benchBody(n int) string {
+ 	return strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", n/36+1)[:n]
+ }
+ 
++// benchText is a point on the text axis: what a body is made of. The zero
++// value is benchBody's ASCII, and its cells keep the names they had before the
++// axis.
++type benchText struct {
++	name string
++	unit string
++}
++
++// benchTexts are the bodies that quote differently in json: two-byte Latin
++// among ASCII, three-byte CJK, four-byte emoji, and json text, a third of it
++// escaped quotes.
++var benchTexts = []benchText{
++	{"latin", "caf\u00e9 na\u00efve "},
++	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
++	{"emoji", "\U0001f389\U0001f680\u2728"},
++	{"json", `{"k":"v","n":1},`},
++}
++
++// body is n bytes of the text: whole units, then ASCII to make up the size.
++func (t benchText) body(n int) string {
++	if t.unit == "" {
++		return benchBody(n)
++	}
++
++	return strings.Repeat(t.unit, n/len(t.unit)) + strings.Repeat("x", n%len(t.unit))
++}
++
+ // benchEnv is the provider behind the real gateway.
+ type benchEnv struct {
+ 	b        *testing.B
+@@ -158,8 +185,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
+ // benchmark can have many messages in flight at once, as a busy queue has.
+ func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, groups int) {
+ 	e.b.Helper()
++	e.fillBody(url, kind, count, benchBody(bodyBytes), attrs, groups)
++}
+ 
+-	body := benchBody(bodyBytes)
++// fillBody is fill with a body of the caller's.
++func (e *benchEnv) fillBody(url string, kind queueKind, count int, body string, attrs, groups int) {
++	e.b.Helper()
+ 
+ 	// The provider keeps the map it is given and never changes it, so the
+ 	// messages share one, as they share the body.

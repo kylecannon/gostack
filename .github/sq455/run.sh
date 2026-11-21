@@ -1,38 +1,28 @@
 #!/usr/bin/env bash
-# SQ-460 scratch measurement for PR #54. Never merged. Builds the arms of the
-# internal/persist benchmark binary and runs BenchmarkSQSFlush's 64 KiB rows
-# (queues=10/messages=100 and queues=1000/messages=1) interleaved, ROUNDS
-# rounds, each run relinked with a new -randlayout seed, the way `make bench-ab`
-# does.
-#
-# Run 44905835243 showed the slowdown on AMD EPYC 7763 and 9V74 (Zen 3, Zen 4)
-# is the stack position of BenchmarkSQSFlush's closure and nothing else: the
-# closure held two persist.Config copies, so PR #54's two Config fields moved
-# its frame 0x148 -> 0x178 and every production frame below it is equal. The fix
-# under test builds the engine in a noinline helper, so the closure holds no
-# Config and its frame is 0xb0 whatever Config's size.
-#   base              b15da1d, origin/main when PR #54 last merged it, as it is
-#   head54            5ae49ce, PR #54's head, benchmark unchanged (control: slow
-#                     on Zen 3/4)
-#   fixedbench        5ae49ce + fixedbench.patch (the benchmark change)
-#   fixedbenchcfg16   fixedbench + 16 unused bytes in Config (robustness check:
-#                     must equal fixedbench; never committed to the branch)
-#   fixedbenchpad<N>  fixedbench + N unused bytes in the closure's frame (0xb0+N).
-#                     Only a contingency, to find which frames are fast if
-#                     fixedbench's own frame lands in the slow window.
-# Required: fixedbench within the 10% gate of base on every CPU model, and
-# fixedbenchcfg16 equal to fixedbench.
+# SQ-458 round-2 scratch measurement. Never merged. Builds the arms of the sqs
+# and dynamodb benchmark binaries and runs them interleaved, ROUNDS rounds,
+# each run relinked with a new -randlayout seed, the way `make bench-ab` does.
+#   base        6220cf0 (main) + bench.patch (the text rows of the matrix)
+#   baseframe16 base + 16 unused bytes in formReader: serveAWS frame +0x10
+#   new         6220cf0 + sq458.patch (SQ-458 after review SQ-463: generated
+#               json encoders, quoting in runs, text rows included)
+#   newframe16  new + the same 16 unused bytes in formReader
+# Wanted: new and newframe16 flat on AMD Zen 3/4; new within 10% of base on
+# every row, the new non-ASCII and escape-dense text rows included.
 set -euo pipefail
 
-ROUNDS=${ROUNDS:-10}
-BASE_SHA=b15da1dc172713bc7e2b071fa0f30d76d31b517a
-HEAD54_SHA=5ae49cebd18c76f3fed9bd35a512f78a38c74660
+ROUNDS=${ROUNDS:-8}
+BASE_SHA=6220cf077ae9093f6076cd5147ca2246905a8d63
 REPO=${REPO:-$PWD}
-PATCH=${PATCH:-$REPO/.github/sq455/fixedbench.patch}
-W=${RUNNER_TEMP:?}/sq455
+PATCHES=${PATCHES:-$REPO/.github/sq455}
+W=$RUNNER_TEMP/sq455
 OUT=$W/out
-BENCH='^BenchmarkSQSFlush$/^queues=(10|1000)$/^messages=(100|1)$/^body=64KiB$'
-read -r -a ARMS <<<"${ARMS:-base head54 fixedbench fixedbenchcfg16 fixedbenchpad8 fixedbenchpad16 fixedbenchpad24 fixedbenchpad32 fixedbenchpad40 fixedbenchpad48 fixedbenchpad56}"
+# A package and its bench regexes, one package per line. A regex with more
+# levels than a row's name matches it only partly and reports nothing, hence
+# two for dynamodb.
+PLAN='internal/service/sqs ^BenchmarkReceiveMessage$/^proto=json$/^queue=standard$/^max=1$/^payload=(256B|64KiB|1MiB)$
+internal/service/dynamodb ^BenchmarkGetItem$/^payload=(4KiB|399KiB)$/^concurrency=1$ ^BenchmarkReads$/^items=100$/^payload=4KiB$/^(text=.*|op=Query)$/^(op=Query|target=table)$/^(target=table|filter=off)$/^(filter=off|concurrency=1)$'
+read -r -a ARMS <<<"${ARMS:-base baseframe16 new newframe16}"
 N=${#ARMS[@]}
 
 mkdir -p "$W" "$OUT/prof" "$OUT/bin"
@@ -46,44 +36,35 @@ mkdir -p "$W" "$OUT/prof" "$OUT/bin"
 	go version
 } | tee "$OUT/host.txt"
 
-git -C "$REPO" fetch --no-tags origin "$BASE_SHA" "$HEAD54_SHA"
+git -C "$REPO" fetch --no-tags origin "$BASE_SHA"
 
 for arm in "${ARMS[@]}"; do
 	mkdir -p "$W/$arm"
+	git -C "$REPO" archive "$BASE_SHA" | tar -x -C "$W/$arm"
 	case $arm in
-		base) sha=$BASE_SHA ;;
-		*) sha=$HEAD54_SHA ;;
+		new*) (cd "$W/$arm" && git apply "$PATCHES/sq458.patch") ;;
+		*) (cd "$W/$arm" && git apply "$PATCHES/bench.patch") ;;
 	esac
-	git -C "$REPO" archive "$sha" | tar -x -C "$W/$arm"
 	case $arm in
-		fixedbench*) git -C "$W/$arm" apply "$PATCH" ;;
-	esac
-	cfg=$W/$arm/internal/persist/config.go
-	bench=$W/$arm/internal/persist/sqs_benchmark_test.go
-	case $arm in
-		fixedbenchcfg*) perl -0pi -e "s/(\tmountinfo string\n)/\$1\t_ [${arm##*cfg}]byte\n/" "$cfg" ;;
-		fixedbenchpad*) perl -0pi -e "s/(\t\t\tinfo, err := os\.Stat)/\t\t\tvar padv [${arm##*pad}]byte\n\n\t\t\tpadv[len(base)%len(padv)] = 1\n\n\t\t\tif padv[0] > 1 {\n\t\t\t\tb.Fatal()\n\t\t\t}\n\n\$1/" "$bench" ;;
+		*frame*) perl -0pi -e "s/(\tvals url.Values\n)/\$1\t_    [${arm##*frame}]byte\n/" "$W/$arm/internal/gateway/dispatch.go" ;;
 	esac
 done
 
-grep -n -E '_ +\[[0-9]+\]byte' "$W"/*/internal/persist/config.go | tee "$OUT/pad.txt" || true
-grep -c 'var padv' "$W"/*/internal/persist/sqs_benchmark_test.go | tee -a "$OUT/pad.txt" || true
+grep -c '_    \[16\]byte' "$W"/*/internal/gateway/dispatch.go | tee "$OUT/pad.txt" || true
 
-build() { # arm layout-seed output
-	(cd "$W/$1" && go test -c -vet=off ${2:+-ldflags=-randlayout=$2} -o "$3" ./internal/persist)
+build() { # arm package layout-seed output
+	(cd "$W/$1" && go test -c -vet=off ${3:+-ldflags=-randlayout=$3} -o "$4" "./$2")
 }
 
-# Frame of every function on the flush chain, at the default layout. The chain
-# is BenchmarkSQSFlush.func1.1, func1, Engine.Flush, flushByHand, writeDirty,
-# writeAll, flushRun.firstPass, Engine.snapshot, callSnapshot, Provider.Snapshot.
-chain='persist_test\.BenchmarkSQSFlush\.func1(\.1)?$|persist\.\(\*Engine\)\.(Flush|flushByHand|writeDirty|writeAll|snapshot|callSnapshot)$|persist\.\(\*flushRun\)\.firstPass$|sqs\.\(\*Provider\)\.Snapshot$'
-
-for arm in "${ARMS[@]}"; do
-	build "$arm" "" "$OUT/bin/$arm.test"
-	go tool objdump -s "$chain" "$OUT/bin/$arm.test" |
-		awk -v arm="$arm" '/^TEXT/ {name=$2; sub(/^github.com\/kylecannon\/gostack\/internal\//, "", name)} /SUBQ \$0x[0-9a-f]+, SP/ {print arm, name, $(NF-1)}' |
-		tee "$OUT/frames-$arm.txt" | grep -E 'func1\(' | tee -a "$OUT/layout.txt" || true
-done
+while read -r pkg _; do
+	name=${pkg##*/}
+	for arm in "${ARMS[@]}"; do
+		build "$arm" "$pkg" "" "$OUT/bin/$arm-$name.test"
+		frame=$(go tool objdump -s 'gateway.\(\*Gateway\).serveAWS$' "$OUT/bin/$arm-$name.test" | grep -oE 'SUBQ \$0x[0-9a-f]+, SP' | head -1 || true)
+		echo "$arm $name serveAWS $frame" | tee -a "$OUT/layout.txt"
+		rm -f "$OUT/bin/$arm-$name.test"
+	done
+done <<<"$PLAN"
 
 for r in $(seq 1 "$ROUNDS"); do
 	# Rotate the order each round so drift lands on every arm.
@@ -92,13 +73,18 @@ for r in $(seq 1 "$ROUNDS"); do
 	echo "round $r: ${order[*]}"
 	for i in $(seq 0 $((N - 1))); do
 		arm=${order[$i]}
-		seed=$((r * 100 + i + 1))
-		bin=$W/bin-$arm-$r.test
-		build "$arm" "$seed" "$bin"
-		(cd "$W/$arm/internal/persist" && "$bin" -test.run '^$' -test.bench "$BENCH" -test.benchmem \
-			-test.benchtime=1s -test.count=1 -test.timeout=30m \
-			-test.cpuprofile "$OUT/prof/$arm-r$r.prof" </dev/null) >>"$OUT/$arm.txt"
-		rm -f "$bin"
+		seed=$((r * 10 + i + 1))
+		while read -r pkg benches; do
+			name=${pkg##*/}
+			bin=$W/bin-$arm-$name-$r.test
+			build "$arm" "$pkg" "$seed" "$bin"
+			read -r -a list <<<"$benches"
+			for bench in "${list[@]}"; do
+				(cd "$W/$arm/$pkg" && "$bin" -test.run '^$' -test.bench "$bench" -test.benchmem \
+					-test.benchtime=500ms -test.count=1 -test.timeout=30m </dev/null) >>"$OUT/$arm.txt"
+			done
+			rm -f "$bin"
+		done <<<"$PLAN"
 	done
 done
 
@@ -107,14 +93,8 @@ compare() { # a b
 	benchstat "$1=$OUT/$1.txt" "$2=$OUT/$2.txt" | tee -a "$OUT/benchstat.txt"
 }
 
-for arm in "${ARMS[@]}"; do
-	[ "$arm" = base ] || compare base "$arm"
-done
-compare fixedbench fixedbenchcfg16
-compare head54 fixedbench
-{
-	echo '```'
-	grep -m1 'model name' /proc/cpuinfo || true
-	cat "$OUT/layout.txt" "$OUT/benchstat.txt"
-	echo '```'
-} >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
+compare base baseframe16
+compare new newframe16
+compare base new
+compare baseframe16 newframe16
+cat "$OUT/layout.txt" "$OUT/benchstat.txt" >>"$GITHUB_STEP_SUMMARY"
