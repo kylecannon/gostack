@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -24,6 +25,14 @@ const (
 
 	sqsService      = "sqs"
 	sqsTargetPrefix = "AmazonSQS."
+
+	// snsService is the signing name of SNS. Its query calls carry the version of
+	// its API; a Publish carries the subject S3 gives every notification.
+	snsService     = "sns"
+	snsVersion     = "2010-03-31"
+	snsSubject     = "Amazon S3 Notification"
+	snsContentType = "application/x-www-form-urlencoded"
+	snsTopicArn    = "TopicArn"
 
 	// queueHost is the host of the queue URLs notifications are sent to. SQS
 	// takes the region from its first label and the account and the name from the
@@ -49,7 +58,7 @@ func newTarget(service, argument string) target {
 
 var (
 	queueTarget  = newTarget(sqsService, "Queue")
-	topicTarget  = newTarget("sns", "TopicArn")
+	topicTarget  = newTarget(snsService, snsTopicArn)
 	lambdaTarget = newTarget("lambda", "LambdaFunctionArn")
 )
 
@@ -82,9 +91,9 @@ func (p *Provider) GetBucketNotificationConfiguration(
 // PutBucketNotificationConfiguration replaces the notification configuration.
 // Every configuration is checked first: its ARN, its filter rules and, unless
 // SkipDestinationValidation says not to, that its target exists and takes a test
-// message. Nothing is stored when one fails. A queue is the only target gostack
-// checks, because it has no SNS or Lambda to ask; their configurations are kept
-// and read back, and no event is delivered to them.
+// message. Nothing is stored when one fails. A queue and a topic are the targets
+// gostack checks, through SQS and SNS; a Lambda configuration is kept and read
+// back, and no event is delivered to it.
 func (p *Provider) PutBucketNotificationConfiguration(
 	ctx context.Context, in *s3api.PutBucketNotificationConfigurationInput,
 ) (*s3api.PutBucketNotificationConfigurationOutput, error) {
@@ -98,11 +107,14 @@ func (p *Provider) PutBucketNotificationConfiguration(
 		cfg = &s3api.GetBucketNotificationConfigurationOutput{}
 	}
 
-	// A queue is verified unless the request says not to.
-	var verify func(arn string) error
+	// A queue and a topic are verified unless the request says not to.
+	var verify verifiers
 
 	if in.SkipDestinationValidation == nil || !*in.SkipDestinationValidation {
-		verify = func(arn string) error { return p.verifyQueue(ctx, b, arn) }
+		verify = verifiers{
+			queue: func(arn string) error { return p.verifyQueue(ctx, b, arn) },
+			topic: func(arn string) error { return p.verifyTopic(ctx, b, arn) },
+		}
 	}
 
 	err = checkNotifications(cfg, verify)
@@ -122,15 +134,22 @@ func (p *Provider) PutBucketNotificationConfiguration(
 	return &s3api.PutBucketNotificationConfigurationOutput{}, nil
 }
 
+// verifiers check that the target of a queue or a topic ARN exists and takes a
+// test message. A nil one leaves that kind of target unchecked.
+type verifiers struct {
+	queue func(arn string) error
+	topic func(arn string) error
+}
+
 // checkNotifications validates the configurations in the order LocalStack does:
 // topics, queues, then Lambda functions, and in each list as given. It gives
 // an id to a configuration that has none and spells its filter rule names with a
-// capital. verifyQueue checks that a queue exists; nil leaves queues unchecked.
-func checkNotifications(cfg *s3api.GetBucketNotificationConfigurationOutput, verifyQueue func(arn string) error) error {
+// capital.
+func checkNotifications(cfg *s3api.GetBucketNotificationConfigurationOutput, verify verifiers) error {
 	for i := range cfg.TopicConfigurations {
 		topic := &cfg.TopicConfigurations[i]
 
-		err := checkConfiguration(topicTarget, &topic.Id, deref(topic.TopicArn), topic.Filter, nil)
+		err := checkConfiguration(topicTarget, &topic.Id, deref(topic.TopicArn), topic.Filter, verify.topic)
 		if err != nil {
 			return err
 		}
@@ -139,7 +158,7 @@ func checkNotifications(cfg *s3api.GetBucketNotificationConfigurationOutput, ver
 	for i := range cfg.QueueConfigurations {
 		queue := &cfg.QueueConfigurations[i]
 
-		err := checkConfiguration(queueTarget, &queue.Id, deref(queue.QueueArn), queue.Filter, verifyQueue)
+		err := checkConfiguration(queueTarget, &queue.Id, deref(queue.QueueArn), queue.Filter, verify.queue)
 		if err != nil {
 			return err
 		}
@@ -241,15 +260,7 @@ func (p *Provider) verifyQueue(ctx context.Context, b *Bucket, arn string) error
 // sendTestEvent is the s3:TestEvent message S3 sends a queue when it is
 // configured.
 func (p *Provider) sendTestEvent(ctx context.Context, b *Bucket, q arnParts, queueURL, arn string) error {
-	var requestID string
-	if rc, ok := request.From(ctx); ok {
-		requestID = rc.RequestID
-	}
-
-	payload, err := encodeJSON(map[string]any{
-		"Service": "Amazon S3", "Event": "s3:TestEvent", "Time": time.Now().UTC().Format(eventTimeFormat),
-		"Bucket": b.Name, "RequestId": requestID, "HostId": recordHostID,
-	})
+	payload, err := testEvent(ctx, b)
 	if err != nil {
 		return notifyInternal(err)
 	}
@@ -268,6 +279,74 @@ func (p *Provider) sendTestEvent(ctx context.Context, b *Bucket, q arnParts, que
 	}
 
 	return nil
+}
+
+// testEvent is the s3:TestEvent document S3 sends a target when it is configured.
+func testEvent(ctx context.Context, b *Bucket) ([]byte, error) {
+	var requestID string
+	if rc, ok := request.From(ctx); ok {
+		requestID = rc.RequestID
+	}
+
+	return encodeJSON(map[string]any{
+		"Service": "Amazon S3", "Event": "s3:TestEvent", "Time": time.Now().UTC().Format(eventTimeFormat),
+		"Bucket": b.Name, "RequestId": requestID, "HostId": recordHostID,
+	})
+}
+
+// verifyTopic asks SNS whether the topic exists, as the owner of its ARN, and
+// publishes S3's test event to it as the bucket's owner, both through the
+// gateway. A gateway that does not serve SNS, or no gateway, leaves the target
+// unchecked, as LocalStack's is when its SNS is not enabled.
+func (p *Provider) verifyTopic(ctx context.Context, b *Bucket, arn string) error {
+	t := parseARN(arn)
+	if t.err != nil {
+		return invalidArgument("The ARN could not be parsed", topicTarget.argument, &arn)
+	}
+
+	resp, err := p.client.Do(ctx, topicCall(t, t.account, "GetTopicAttributes", url.Values{snsTopicArn: {arn}}))
+
+	switch {
+	case errors.Is(err, inproc.ErrNotBound), err == nil && resp.NotEnabled():
+		return nil
+	case err != nil:
+		return notifyInternal(err)
+	case !resp.OK():
+		return invalidArgument(destinationMessage, arn, new("The destination topic does not exist"))
+	}
+
+	payload, err := testEvent(ctx, b)
+	if err != nil {
+		return notifyInternal(err)
+	}
+
+	resp, err = p.client.Do(ctx, publishCall(t, b.Account, arn, string(payload)))
+	if err != nil || !resp.OK() {
+		return invalidArgument(destinationMessage, arn,
+			new("Permissions on the destination topic do not allow S3 to publish notifications from this bucket"))
+	}
+
+	return nil
+}
+
+// topicCall is the query call of an SNS action to the region the topic's ARN
+// names, as account. params go in the form next to the action.
+func topicCall(t arnParts, account, action string, params url.Values) inproc.Call {
+	form := url.Values{"Action": {action}, "Version": {snsVersion}}
+	maps.Copy(form, params)
+
+	return inproc.Call{
+		Account: account, Region: t.region, Service: snsService, ContentType: snsContentType,
+		Body: []byte(form.Encode()),
+	}
+}
+
+// publishCall is the call that publishes body to the topic arn as account, with
+// the subject S3 gives every notification.
+func publishCall(t arnParts, account, arn, body string) inproc.Call {
+	return topicCall(t, account, "Publish", url.Values{
+		snsTopicArn: {arn}, "Message": {body}, "Subject": {snsSubject},
+	})
 }
 
 // notifyInternal is the answer to a validation that could not be made at all.

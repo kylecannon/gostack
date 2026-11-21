@@ -603,7 +603,7 @@ and any other like it, as a change to every service. The selection tables in
 `secretsmanager` and `ssm`: their source and API paths follow from the service
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
 `ssm` calls `secretsmanager`, `dynamodb` and `dynamodbstreams` run together, and
-`s3` will call `sns` and `kms`), so no service branch edits a table, not even
+`s3` calls `kms`, `sns` and `sqs`), so no service branch edits a table, not even
 for the first commit of a service that calls nothing yet (`DECLARED_AHEAD`
 lists the keys allowed to precede their calls). A
 service is selected for a gostack run only when `internal/service/<svc>/`
@@ -715,10 +715,12 @@ A call made before `Bind` gives the client a handler returns `ErrNotBound`. A
 handler that panics, as the gateway does to abort a response whose status it
 has written, fails that call with `ErrAborted` for `Do`, `Stream` and
 `Enqueue` alike; the caller's request and the queue's workers carry on. S3
-uses the client to check a notification's queue and to deliver event
-notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
-the lane of the queue's ARN, so the events for one queue arrive in the order
-they were raised and a slow queue holds up no other.
+uses the client to check a notification's queue or topic and to deliver event
+notifications to SQS and SNS. Each event to a queue is a `SendMessage` as the
+bucket's owner, in the lane of the queue's ARN; each event to a topic is a
+query-protocol `Publish` in the lane of the topic's ARN. So the events for one
+queue or topic arrive in the order they were raised and a slow one holds up no
+other. S3 names the calls itself and imports neither service's package.
 
 `cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
 the calls through the gateway's `InternalHandler`: the root router with each

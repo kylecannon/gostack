@@ -137,11 +137,11 @@ func (p *Provider) notifyRestore(ctx context.Context, b *Bucket, key string, v *
 	p.raise(ctx, b, key, v, eventRestoreComplete)
 }
 
-// raise delivers the event to every queue the bucket's configuration sends it
-// to. name overrides the event the operation maps to.
+// raise delivers the event to every queue and topic the bucket's configuration
+// sends it to. name overrides the event the operation maps to.
 func (p *Provider) raise(ctx context.Context, b *Bucket, key string, v *Version, name string) {
 	cfg := b.notificationConfig()
-	if cfg == nil || len(cfg.QueueConfigurations) == 0 || !p.client.Bound() {
+	if cfg == nil || len(cfg.QueueConfigurations)+len(cfg.TopicConfigurations) == 0 || !p.client.Bound() {
 		return
 	}
 
@@ -167,6 +167,15 @@ func (p *Provider) raise(ctx context.Context, b *Bucket, key string, v *Version,
 		}
 
 		p.sendEvent(&ev, queue)
+	}
+
+	for i := range cfg.TopicConfigurations {
+		topic := &cfg.TopicConfigurations[i]
+		if !matchesEvent(topic.Events, name) || !matchesFilter(topic.Filter, ev.key) {
+			continue
+		}
+
+		p.sendTopicEvent(&ev, topic)
 	}
 }
 
@@ -441,22 +450,56 @@ func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 	call.Lane = queueARN
 
 	queued := p.client.Enqueue(call, func(resp inproc.Response, err error) {
-		logDelivery(ev.bucket, arn.resource, resp, err)
+		logDelivery(ev.bucket, "queue", arn.resource, resp, err)
 	})
 	if !queued {
 		slog.Warn("S3 notification dropped: the delivery queue is full or closed", "bucket", ev.bucket, "queue", arn.resource)
 	}
 }
 
-// logDelivery records a notification that SQS did not take.
-func logDelivery(bucket, queue string, resp inproc.Response, err error) {
+// sendTopicEvent queues the event's message for one topic configuration, as an
+// SNS Publish with the subject S3 gives every notification. It is asynchronous
+// as sendEvent is: a topic that is gone costs a log line. The topic's ARN is the
+// call's lane, so the events for one topic are published in the order they were
+// raised, and SNS fans each out to its subscribers before the next is taken.
+func (p *Provider) sendTopicEvent(ev *event, topic *s3api.TopicConfiguration) {
+	topicARN := deref(topic.TopicArn)
+
+	arn := parseARN(topicARN)
+	if arn.err != nil {
+		slog.Error("S3 notification skipped: unparseable topic ARN", "bucket", ev.bucket, "arn", topicARN)
+
+		return
+	}
+
+	body, err := encodeJSON(notification{Records: []eventRecord{ev.record(deref(topic.Id))}})
 	if err != nil {
-		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, "queue", queue, "error", err)
+		slog.Error("S3 notification skipped: cannot encode the event", "bucket", ev.bucket, "error", err)
+
+		return
+	}
+
+	call := publishCall(arn, ev.account, topicARN, string(body))
+	call.Lane = topicARN
+
+	queued := p.client.Enqueue(call, func(resp inproc.Response, err error) {
+		logDelivery(ev.bucket, "topic", topicARN, resp, err)
+	})
+	if !queued {
+		slog.Warn("S3 notification dropped: the delivery queue is full or closed", "bucket", ev.bucket, "topic", topicARN)
+	}
+}
+
+// logDelivery records a notification that its target did not take. kind is
+// "queue" or "topic" and names the log member that holds target.
+func logDelivery(bucket, kind, target string, resp inproc.Response, err error) {
+	if err != nil {
+		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, kind, target, "error", err)
 
 		return
 	}
 
 	if !resp.OK() {
-		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, "queue", queue, "status", resp.Status)
+		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, kind, target, "status", resp.Status)
 	}
 }
