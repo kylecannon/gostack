@@ -3,7 +3,6 @@ package persist
 import (
 	"context"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -117,7 +116,7 @@ func Test_Engine_Load_UnopenableBaseDirTurnsSavingOffForEveryService(t *testing.
 	require.NoError(t, os.Chmod(dir, 0))
 
 	logs := &warnings{}
-	e2 := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+	e2 := New(warnConfig(dir, time.Hour, logs))
 	s2 := &stateSnap{}
 	e2.Register("svc", s2)
 	e2.Register("other", &stateSnap{})
@@ -159,7 +158,7 @@ func Test_Engine_SameFailureIsLoggedOnceNotAtEveryRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 		s := &stateSnap{state: "v1"}
 		e.Register("svc", s)
 		e.MarkDirty("svc")
@@ -236,7 +235,7 @@ func Test_Engine_Flush_PanickingSnapshotIsLoggedAndTheOthersSave(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, time.Hour, logs))
 		bad := &stateSnap{state: "bad v1", during: func() error { panic("a service bug") }}
 		good := &stateSnap{state: "good v1"}
 		e.Register("a-bad", bad)

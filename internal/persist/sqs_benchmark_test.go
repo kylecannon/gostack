@@ -14,7 +14,6 @@ import (
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
-	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	sqsservice "github.com/kylecannon/gostack/internal/service/sqs"
@@ -130,9 +129,7 @@ func BenchmarkSQSFlush(b *testing.B) {
 			p := filledProvider(b, c.queues, c.messages)
 			base := b.TempDir()
 
-			e := persist.New(persist.Config{
-				PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: discard(),
-			})
+			e := benchEngine(base, time.Hour)
 			e.Register(sqs, p)
 
 			flush := func() {
@@ -145,6 +142,20 @@ func BenchmarkSQSFlush(b *testing.B) {
 			}
 
 			flush()
+
+			// pad keeps this closure's frame at 0xc8 bytes, which is the stack
+			// alignment main's benchmark had. encoding/json/v2's string quoting
+			// runs about 10% slower or faster on AMD Zen 3 and Zen 4 depending
+			// on stack alignment, so without the pad this benchmark measures
+			// where its frame lands instead of the code under test. Only this
+			// benchmark carries it; no production frame does.
+			var pad [24]byte
+
+			pad[len(base)%len(pad)] = 1
+
+			if pad[0] > 1 {
+				b.Fatal("unreachable")
+			}
 
 			info, err := os.Stat(filepath.Join(base, sqs, jsonFile))
 			if err != nil {
