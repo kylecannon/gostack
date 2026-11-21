@@ -496,6 +496,45 @@ per stream (`internal/service/dynamodb/stream`). The LocalStack column is the
 | `ListStreams` with `Limit` | Ignores it | Pages by it, with `LastEvaluatedStreamArn` | The `ListStreams` reference |
 | `ListStreams` with no `TableName` in a region a table is replicated to | Leaves the replica's stream out | Lists it, with the caller's region in the ARN | AWS gives every replica its own stream |
 
+## SNS topics, signing and parity
+
+| Behavior | LocalStack | gostack | Source |
+|---|---|---|---|
+| FIFO topic deduplication | None at the topic: every publish is delivered, and each FIFO queue deduplicates on its own | The topic deduplicates, as AWS does. A message whose deduplication id (`MessageDeduplicationId`, or with `ContentBasedDeduplication` the SHA-256 of the message) the topic took in the last 5 minutes is accepted, answers the first message's `MessageId` and `SequenceNumber`, and is not delivered again. Under `PERSIST_SNS` the window survives a restart. | `test_publish_to_fifo_topic_deduplication_on_topic_level` (`aws.validated`) |
+| Protocols delivered to | SQS, HTTP, HTTPS, Lambda, Firehose, email (through SES), application endpoints and SMS | SQS, HTTP and HTTPS are delivered. Application endpoints and SMS are recorded and never sent (next section). A `lambda`, `firehose`, `email` or `email-json` subscription is accepted and stored, and nothing is delivered to it until gostack has the service. | Story contract (US-5): Lambda, Firehose and SES are out of scope until their services exist |
+
+**Signing.** gostack signs a delivered message with SignatureVersion 1
+(SHA1withRSA) or 2 (SHA256withRSA), PKCS #1 v1.5, under its own RSA-2048 key and
+a self-signed certificate (common name "gostack TEST SNS Root Certificate
+Authority", valid one year). The pair is generated the first time the process
+signs or serves the certificate, and is not persisted, so a restart changes the
+key; a subscriber that cached the certificate fetches it again from
+`SigningCertURL`. LocalStack does the same with its own issuer name:
+`certificate.py` generates a pair each time the process starts and ships no
+fixed key, so nothing of LocalStack's or AWS's is copied. The certificate is
+served at `/_aws/sns/SimpleNotificationService-6c6f63616c737461636b69736e696365.pem`
+whatever `GOSTACK_COMPAT_PATHS` says, and `SigningCertURL` names that path on
+`SNS_CERT_URL_HOST` when it is set and on the external URL otherwise.
+
+**What the parity suite does not run.** 25 of LocalStack's 208 SNS tests are
+excluded in `parity/exclusions/sns.yaml`, each with its reason:
+
+- 12 `requires_in_process`: 11 read SNS's store through `SnsProvider.get_store`,
+  which no container outside the server can reach, and `test_email_sender`
+  patches `config.SNS_SES_SENDER_ADDRESS` and reads SES's mailbox. The two
+  `TestSNSSubscriptionSES` tests are the story's SES rows.
+- 5 skipped by LocalStack's own suite (`pytest.mark.skip`, or skipped unless run
+  against AWS).
+- 7 `depends-on:lambda`: each deploys a Lambda function, directly or through the
+  `create_sns_http_endpoint_and_queue` fixture.
+- 1 `depends-on:firehose`: a Firehose delivery stream that writes to S3.
+
+Eleven more rows that LocalStack marks `requires_in_process` run, through
+`parity/bridgeable.yaml`: eight rows of five tests that need only the runner's
+`HTTPServer` as a subscription endpoint, both `test_cert_endpoint_host` cases,
+which patch only `SNS_CERT_URL_HOST`, and
+`test_opt_out_phone_number_via_endpoint`.
+
 ## SNS platform applications, endpoints and SMS
 
 Where gostack's platform application, platform endpoint and SMS operations (SQ-232)
