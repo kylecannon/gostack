@@ -1,0 +1,23 @@
+471 278 0:53 / / rw,relatime - overlay overlay rw,lowerdir=/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75819/fs:/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75803/fs:/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75802/fs:/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75801/fs:/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75800/fs:/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75799/fs,upperdir=/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75820/fs,workdir=/var/lib/docker/containerd/daemon/io.containerd.snapshotter.v1.overlayfs/snapshots/75820/work
+473 471 0:58 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+474 471 0:59 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+475 474 0:60 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666
+476 471 0:61 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro
+477 476 0:32 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw,nsdelegate
+478 474 0:56 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+479 474 0:62 / /dev/shm rw,nosuid,nodev,noexec,relatime - tmpfs shm rw,size=12834816k
+480 471 0:38 /docker/containers/7397712a5b8d02b90a351648d1acdab24e63073a16037d20ce71133176a5a7b1/hostname /etc/hostname rw,noatime - btrfs /dev/vdb1 rw,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker
+481 471 0:38 /docker/containers/7397712a5b8d02b90a351648d1acdab24e63073a16037d20ce71133176a5a7b1/hosts /etc/hosts rw,noatime - btrfs /dev/vdb1 rw,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker
+482 471 0:38 /docker/containers/7397712a5b8d02b90a351648d1acdab24e63073a16037d20ce71133176a5a7b1/resolv.conf /etc/resolv.conf rw,noatime - btrfs /dev/vdb1 rw,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker
+483 471 0:38 /docker/volumes/sq437-s3/_data /persisted-data/s3 rw,noatime master:69 - btrfs /dev/vdb1 rw,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker
+484 471 0:38 /docker/volumes/2ea339137f435c4fe6647338a499288242c5ba5e1928c349df97ae1209b04f77/_data /var/lib/localstack rw,noatime master:69 - btrfs /dev/vdb1 rw,nodatasum,nodatacow,ssd,discard,space_cache=v2,subvolid=256,subvol=/docker
+281 473 0:58 /bus /proc/bus ro,nosuid,nodev,noexec,relatime - proc proc rw
+282 473 0:58 /fs /proc/fs ro,nosuid,nodev,noexec,relatime - proc proc rw
+283 473 0:58 /irq /proc/irq ro,nosuid,nodev,noexec,relatime - proc proc rw
+284 473 0:58 /sys /proc/sys ro,nosuid,nodev,noexec,relatime - proc proc rw
+285 473 0:58 /sysrq-trigger /proc/sysrq-trigger ro,nosuid,nodev,noexec,relatime - proc proc rw
+286 473 0:63 / /proc/asound ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1
+287 473 0:59 /null /proc/interrupts rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+288 473 0:59 /null /proc/keys rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+289 473 0:59 /null /proc/timer_list rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+290 476 0:63 / /sys/firmware ro,relatime - tmpfs tmpfs ro,size=4k,nr_inodes=1
