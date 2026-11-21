@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"html"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +76,51 @@ func Test_sns_workload_takes_every_delivery_it_publishes(t *testing.T) {
 			assert.Equal(t, run.Cycles*spec.Subs, run.Ops[opDelete].Count)
 			assert.Contains(t, run.Counters, counterEmptyReceives)
 		})
+	}
+}
+
+// A raw, filter=on cell's subscriptions hold the policy and raw delivery: a
+// filter the subscription ignored would deliver every message as well, so the
+// run alone cannot tell.
+func Test_sns_fanout_subscribes_with_the_cells_delivery_and_filter(t *testing.T) {
+	c := snsServer(t)
+	sc := snsClient{http: &http.Client{}, endpoint: c.endpoint}
+
+	for _, spec := range []snsCell{
+		{Payload: snsPayloadSmall, Subs: 2, Raw: true, Filter: true, Concurrency: levelLow},
+		{Payload: snsPayloadSmall, Subs: 1, FIFO: true, Concurrency: levelLow},
+	} {
+		fan, err := newFanout(t.Context(), sc, newSQSClient(c.endpoint, 1), spec)
+		require.NoError(t, err)
+		require.Len(t, fan.queues, spec.Subs)
+
+		listed, err := sc.call(t.Context(), "ListSubscriptionsByTopic", "&TopicArn="+url.QueryEscape(fan.topic))
+		require.NoError(t, err)
+
+		arns := strings.Split(string(listed), "<SubscriptionArn>")[1:]
+		require.Len(t, arns, spec.Subs)
+
+		for _, rest := range arns {
+			arn, _, _ := strings.Cut(rest, "</SubscriptionArn>")
+
+			attrs, err := sc.call(t.Context(), "GetSubscriptionAttributes", "&SubscriptionArn="+url.QueryEscape(arn))
+			require.NoError(t, err)
+
+			raw := between(attrs, "<key>RawMessageDelivery</key><value>", "</value>")
+			policy := html.UnescapeString(between(attrs, "<key>FilterPolicy</key><value>", "</value>"))
+
+			if spec.Raw {
+				assert.Equal(t, "true", raw)
+			} else {
+				assert.Equal(t, "false", raw)
+			}
+
+			if spec.Filter {
+				assert.JSONEq(t, snsFilterPolicy, policy)
+			} else {
+				assert.Empty(t, policy)
+			}
+		}
 	}
 }
 

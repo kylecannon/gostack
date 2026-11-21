@@ -529,10 +529,11 @@ excluded in `parity/exclusions/sns.yaml`, each with its reason:
   `create_sns_http_endpoint_and_queue` fixture.
 - 1 `depends-on:firehose`: a Firehose delivery stream that writes to S3.
 
-Eight more tests that LocalStack marks `requires_in_process` run, through
-`parity/bridgeable.yaml`: five that need only the runner's `HTTPServer` as a
-subscription endpoint, both `test_cert_endpoint_host` cases, which patch only
-`SNS_CERT_URL_HOST`, and `test_opt_out_phone_number_via_endpoint`.
+Eleven more rows that LocalStack marks `requires_in_process` run, through
+`parity/bridgeable.yaml`: eight rows of five tests that need only the runner's
+`HTTPServer` as a subscription endpoint, both `test_cert_endpoint_host` cases,
+which patch only `SNS_CERT_URL_HOST`, and
+`test_opt_out_phone_number_via_endpoint`.
 
 ## SNS platform applications, endpoints and SMS
 
