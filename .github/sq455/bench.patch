@@ -1,3 +1,59 @@
+diff --git a/internal/service/dynamodb/batch_benchmark_test.go b/internal/service/dynamodb/batch_benchmark_test.go
+index c22a6ed..a56e949 100644
+--- a/internal/service/dynamodb/batch_benchmark_test.go
++++ b/internal/service/dynamodb/batch_benchmark_test.go
+@@ -2,6 +2,7 @@ package dynamodb_test
+ 
+ import (
+ 	"fmt"
++	"net/http"
+ 	"strings"
+ 	"testing"
+ 
+@@ -110,10 +111,43 @@ func BenchmarkBatchWriteItem(b *testing.B) {
+ 
+ // BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
+ // BatchWriteItem put before the timer starts.
++//
++// One more row reads 40 items of 399 KiB of newlines, about as much as one
++// BatchGetItem returns: each newline is two bytes of json, so the body is
++// about 31 MiB, and the buffer it grows is past what the json encoder keeps
++// of its large buffers.
+ func BenchmarkBatchGetItem(b *testing.B) {
+ 	batchMatrix(b, opBatchGet, func(b *testing.B, s *stack, worker, size int) {
+ 		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
+ 	}, func(worker, _ int) string { return batchGetBody(worker) })
++
++	b.Run("payload=399KiB/items=40/text=newlines/concurrency=1", func(b *testing.B) {
++		const items = 40
++
++		s := newStack(b)
++		s.ok(b, opCreate, hashTable(benchTable))
++
++		d := strings.Repeat("\n", itemPayloads[2].size)
++		keys := make([]string, items)
++
++		for i := range keys {
++			s.ok(b, opPut, putValue(i, d))
++			keys[i] = fmt.Sprintf(`{"id":{"S":"k-%d"}}`, i)
++		}
++
++		body := `{"RequestItems":{"` + benchTable + `":{"Keys":[` + strings.Join(keys, ",") + `]}}}`
++
++		responses, ok := s.ok(b, opBatchGet, body)["Responses"].(map[string]any)
++		require.True(b, ok, "a call returns Responses")
++		require.Len(b, responses[benchTable], items, "a call returns every item")
++
++		b.SetBytes(int64(items * len(d)))
++		b.ReportAllocs()
++
++		for b.Loop() {
++			require.Equal(b, http.StatusOK, s.call(b, usEast1, opBatchGet, body).status)
++		}
++	})
+ }
+ 
+ // transactMatrix runs one sub-benchmark for every number of actions at every
 diff --git a/internal/service/dynamodb/items_benchmark_test.go b/internal/service/dynamodb/items_benchmark_test.go
 index 78560d0..e7b6c78 100644
 --- a/internal/service/dynamodb/items_benchmark_test.go
@@ -255,10 +311,10 @@ index 3d991cc..8fac2a7 100644
  			}
  
 diff --git a/internal/service/sqs/wire-harness_benchmark_test.go b/internal/service/sqs/wire-harness_benchmark_test.go
-index d5b3a25..494e51a 100644
+index d5b3a25..7478b30 100644
 --- a/internal/service/sqs/wire-harness_benchmark_test.go
 +++ b/internal/service/sqs/wire-harness_benchmark_test.go
-@@ -70,6 +70,37 @@ func benchBody(n int) string {
+@@ -70,6 +70,39 @@ func benchBody(n int) string {
  	return strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", n/36+1)[:n]
  }
  
@@ -272,8 +328,9 @@ index d5b3a25..494e51a 100644
 +
 +// benchTexts are the bodies that quote differently in json: two-byte Latin
 +// among ASCII, three-byte CJK, four-byte emoji, json text, a third of it
-+// escaped quotes, Vietnamese, CJK and ASCII alternating, and pretty-printed
-+// json, escaped quotes among newlines.
++// escaped quotes, Vietnamese, CJK and ASCII alternating, pretty-printed json,
++// escaped quotes among newlines, and accents, one two-byte letter after every
++// 17 ASCII bytes, as in French or German prose.
 +var benchTexts = []benchText{
 +	{"latin", "caf\u00e9 na\u00efve "},
 +	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
@@ -282,6 +339,7 @@ index d5b3a25..494e51a 100644
 +	{"viet", "Ti\u1ebfng Vi\u1ec7t c\u00f3 nhi\u1ec1u d\u1ea5u thanh \u0111i\u1ec7u "},
 +	{"cjkascii", "\u65e5a\u672cb\u8a9ec"},
 +	{"jsonpretty", "{\n  \"name\": \"value\",\n  \"count\": 12\n}\n"},
++	{"accents", "Le thé est chaud, "},
 +}
 +
 +// body is n bytes of the text: whole units, then ASCII to make up the size.
@@ -296,7 +354,7 @@ index d5b3a25..494e51a 100644
  // benchEnv is the provider behind the real gateway.
  type benchEnv struct {
  	b        *testing.B
-@@ -158,8 +189,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
+@@ -158,8 +191,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
  // benchmark can have many messages in flight at once, as a busy queue has.
  func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, groups int) {
  	e.b.Helper()
