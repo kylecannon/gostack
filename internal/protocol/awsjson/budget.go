@@ -115,9 +115,9 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 		unwalked = protocol.FreeDecode
 	}
 
-	var move func() error
+	var move moveFunc
 	if hold != nil && budget > protocol.DecodeBudget(len(body)) {
-		move = func() error { return moveBody(body, r) }
+		move = func(heap, read int64) error { return moveBody(body, r, heap, read) }
 	}
 
 	cost, heap, err := decodeCost(body, p, budget, unwalked, move)
@@ -147,6 +147,10 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 	return nil
 }
 
+// moveFunc is what a walk runs once its cost passes DecodeBudget (moveBody),
+// with the heap the walk has bounded so far and the bytes it has read.
+type moveFunc func(heap, read int64) error
+
 // errNoRoom stops a walk whose body found no room on the heap, or found the
 // dense lane taken (moveBody).
 var errNoRoom = errors.New("no room for the body on the heap")
@@ -164,8 +168,15 @@ var errNoRoom = errors.New("no room for the body on the heap")
 // under the in-flight bound (protocol.BodiesWait): the queue then drains one
 // body at a time, and a dense body walked and decoded beside it, or walked to
 // its end only to be refused, slows what every waiting request waits on.
-func moveBody(body []byte, r *reservations) error {
-	if protocol.BodiesWait() {
+//
+// It also fails when the heap could not hold the body and the heap its walk
+// would end at, projected from the heap the first read bytes of it hold, so
+// that a body the final reservation would refuse is not walked to its end
+// first. The projection only refuses early: what the walk bounds is still
+// reserved once it ends, and a body the projection admits can still be
+// refused there.
+func moveBody(body []byte, r *reservations, heap, read int64) error {
+	if protocol.BodiesWait() || !protocol.HeapCouldFit(int64(len(body))+projectHeap(heap, read, len(body))) {
 		return errNoRoom
 	}
 
@@ -184,6 +195,16 @@ func moveBody(body []byte, r *reservations) error {
 	return nil
 }
 
+// projectHeap is the heap a walk of a body of n bytes ends at, were the rest
+// of it shaped as its first read bytes, which hold heap.
+func projectHeap(heap, read int64, n int) int64 {
+	if read <= 0 {
+		return heap
+	}
+
+	return heap/read*int64(n) + heap%read*int64(n)/read
+}
+
 // decodeCost is what both passes of decoding body as p plans it hold at most,
 // and the most one pass keeps on the heap at its peak (walker.heap), or
 // ErrTooLarge when the cost passes budget. The heap is zero for a body that is
@@ -198,7 +219,7 @@ func moveBody(body []byte, r *reservations) error {
 // token (walkCost), which is as costly as decoding it. When move is not nil,
 // the walk runs it once its cost passes protocol.DecodeBudget (moveBody), and
 // a move that fails is ErrTooLarge too.
-func decodeCost(body []byte, p *plan, budget, unwalked int64, move func() error) (cost, heap int64, err *awserr.Error) {
+func decodeCost(body []byte, p *plan, budget, unwalked int64, move moveFunc) (cost, heap int64, err *awserr.Error) {
 	structure := decodePasses * structureUnits(body) * p.perUnit
 	bound := decodePasses*int64(len(body)) + structure
 
@@ -540,7 +561,7 @@ type walker struct {
 	heap, peak, open int64
 	name             []byte
 	mark             int64
-	move             func() error
+	move             moveFunc
 }
 
 func (w *walker) charge(n int64) error {
@@ -553,7 +574,7 @@ func (w *walker) charge(n int64) error {
 		move := w.move
 		w.move = nil
 
-		return move()
+		return move(w.heap+w.peak, w.dec.InputOffset())
 	}
 
 	return nil

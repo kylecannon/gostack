@@ -184,7 +184,38 @@ func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
 	assert.Zero(t, heap.reserved)
 }
 
-// Test_BodiesWait_InEitherQueue: BodiesWait reports a body or a decoding
+// Test_HeapCouldFit_WeighsWhatIsLiveAndReserved: HeapCouldFit admits what
+// ReserveHeap could reserve after a collection, from what is live and what is
+// reserved, reserving nothing and collecting nothing; with no Go memory limit
+// it admits nothing.
+func Test_HeapCouldFit_WeighsWhatIsLiveAndReserved(t *testing.T) {
+	collections := fakeHeap(t, 80<<20, 20<<20)
+
+	debug.SetMemoryLimit(math.MaxInt64)
+	assert.False(t, HeapCouldFit(0), "no limit")
+
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	room := int64(100 << 20)
+	debug.SetMemoryLimit(bound + HeapSlack + room)
+
+	assert.True(t, HeapCouldFit(room-20<<20), "garbage does not count")
+	assert.False(t, HeapCouldFit(room-20<<20+1))
+
+	release, ok := ReserveHeap(30 << 20)
+	require.True(t, ok)
+	assert.True(t, HeapCouldFit(room-50<<20), "what is reserved counts")
+	assert.False(t, HeapCouldFit(room-50<<20+1))
+	release()
+
+	assert.Equal(t, 1, *collections, "only ReserveHeap collected")
+	assert.Zero(t, heap.reserved)
+}
+
+// Test_BodiesWait_InEitherQueue:BodiesWait reports a body or a decoding
 // waiting for room under the in-flight bound, in either queue, and nothing
 // once it is granted; with no bound nothing waits.
 func Test_BodiesWait_InEitherQueue(t *testing.T) {

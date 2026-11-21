@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"runtime/debug"
+	"runtime/metrics"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +245,50 @@ func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 	_, _, err = DecodeWithin[denseValue](broken, budget, plainHold{})
 	require.NotNil(t, err)
 	requireLaneFree(t)
+}
+
+// Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark: a body past
+// DecodeBudget whose own bytes fit the heap, but not with the heap its walk
+// is projected to end at, is refused where the walk passes DecodeBudget,
+// holding nothing and keeping the pool, instead of being walked to its end
+// and refused by the final reservation. With room for both it is served.
+func Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark(t *testing.T) {
+	body := denseBody(3_000_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+
+	_, estimate, err := decodeCost(body, planOf(reflect.TypeFor[denseValue]()), budget, protocol.FreeDecode, nil)
+	require.Nil(t, err)
+	require.Greater(t, estimate, int64(4*len(body)), "the body's heap is far past its bytes")
+
+	bound, _ := protocol.InFlight()
+	if bound == 0 {
+		bound = protocol.DefaultInFlight
+	}
+
+	sample := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(sample)
+
+	live := int64(sample[0].Value.Uint64())
+
+	// Room for the body's bytes and half its heap, past what is live now.
+	withMemoryLimit(t, bound+protocol.HeapSlack+live+int64(len(body))+estimate/2)
+
+	hold := &recordingHold{}
+	t.Cleanup(hold.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, hold)
+	assert.Same(t, ErrTooLarge, err, "main's answer")
+	assert.Empty(t, hold.steps, "refused at the mark: nothing is reserved and the pool is kept")
+	requireLaneFree(t)
+
+	withMemoryLimit(t, 8<<30)
+
+	hold = &recordingHold{}
+	t.Cleanup(hold.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, hold)
+	require.Nil(t, err, "room for both: served")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, hold.steps)
 }
 
 // Test_DecodeWithin_NoDenseBodyWhileABodyWaits: while a request waits for

@@ -67,17 +67,10 @@ const (
 // it reports false: decoding it could end in the container's OOM killer, which
 // waiting does not prevent.
 func ReserveHeap(estimate int64) (release func(), ok bool) {
-	limit := debug.SetMemoryLimit(-1)
-	if limit == math.MaxInt64 {
+	room, ok := heapRoom()
+	if !ok {
 		return nil, false
 	}
-
-	bound, _ := InFlight()
-	if bound == 0 {
-		bound = DefaultInFlight
-	}
-
-	room := limit - bound - HeapSlack
 
 	fits, collectable := tryReserve(estimate, room)
 	if !fits && collectable && heap.collecting.TryLock() {
@@ -96,6 +89,42 @@ func ReserveHeap(estimate int64) (release func(), ok bool) {
 		heap.reserved -= estimate
 		heap.mu.Unlock()
 	}, true
+}
+
+// heapRoom is what ReserveHeap weighs the heap against: the Go memory limit
+// less the in-flight bound and HeapSlack. It reports false when there is no
+// limit.
+func heapRoom() (room int64, ok bool) {
+	limit := debug.SetMemoryLimit(-1)
+	if limit == math.MaxInt64 {
+		return 0, false
+	}
+
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	return limit - bound - HeapSlack, true
+}
+
+// HeapCouldFit reports whether ReserveHeap could reserve n now: whether what
+// the last collection found live, what is reserved and n fit the room
+// ReserveHeap weighs them against. It reserves nothing and runs no
+// collection, so a decoder can refuse a body early that ReserveHeap would
+// refuse at the end of its walk.
+func HeapCouldFit(n int64) bool {
+	room, ok := heapRoom()
+	if !ok {
+		return false
+	}
+
+	heap.mu.Lock()
+	defer heap.mu.Unlock()
+
+	_, live := heap.read()
+
+	return live+heap.reserved+n <= room
 }
 
 // denseLane is held by the one body at a time that is walked and decoded past
