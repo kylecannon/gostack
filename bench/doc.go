@@ -185,6 +185,35 @@
 // with fifo, raw, filter on, 100 subscribers and 256 KB each alone, and fifo
 // with persistence on. SNS has no agentic workload.
 //
+// # The Secrets Manager and SSM matrix
+//
+// secrets.go speaks json 1.1 over plain HTTP, as kms.go does, with a SigV4
+// header nobody checks. Each cell makes what it reads before the clock starts.
+// It has three workloads:
+//
+//	secretsmanager/value  PutSecretValue, then GetSecretValue, of one secret
+//	                      shared by every worker, at 256 B and 64 KiB (the
+//	                      65,536-byte SecretString limit)
+//	ssm/parameter         PutParameter with Overwrite, then GetParameter, of a
+//	                      parameter a worker, at 256 B and 4 KiB (the Standard
+//	                      tier's 4,096-character limit)
+//	ssm/path              GetParametersByPath of a path of ten parameters, one
+//	                      full page, at 256 B and 4 KiB a value
+//
+// Every workload runs at concurrency 1, 16, 64 and with PERSIST_SECRETSMANAGER=1
+// or PERSIST_SSM=1 and a tmpfs at /persisted-data. One secret serves every
+// worker because Secrets Manager keeps up to 100 versions that no label names,
+// and a secret a worker at 64 KiB would be 400 MiB of them; PutParameter keeps
+// up to 100 versions of a parameter the same way, so both saves stay the size
+// they reach after the first 100 writes. GetSecretValue tells persistence only
+// when the day of LastAccessedDate changes, so the secret cells' saves follow
+// the puts. LocalStack runs no persistence cell.
+//
+// -profile full runs 36 cells per image that persists, 18 on LocalStack.
+// -profile quick runs 7, all at concurrency 16: value at 256 B and 64 KiB,
+// parameter at 256 B and 4 KiB, path at 256 B, and value and parameter at 256 B
+// with persistence on. Neither service has an agentic workload.
+//
 // # What else is measured
 //
 // For each target, in a container of its own:

@@ -77,6 +77,9 @@ var (
 		dataKeyWorkload{},
 		signWorkload{},
 		publishWorkload{},
+		valueWorkload{},
+		parameterWorkload{},
+		pathWorkload{},
 	}
 	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )
