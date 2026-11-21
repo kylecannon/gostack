@@ -1618,8 +1618,13 @@ is untouched.
   service's newest state file, or `never` when it has none. The marker stays
   until a save completes, so each start says so until then. A marker that cannot
   be written or removed is logged and changes nothing else. A crash between a
-  completed save's rename and the removal of the marker, or a deadline that
-  falls while a save renames, leaves one warning too many. Every service that
+  completed save's rename and the removal of the marker leaves one warning too
+  many. A deadline that falls while a save renames leaves none: a save records
+  the rename before it lists the directory, so a marker written before the
+  listing is removed by the save, and one checked after the record is removed
+  by the writer. On Linux tmpfs, 600 flushes whose context ended with a
+  deadline's cause at the instant their `Snapshot` ended left 199 markers beside
+  a completed save before this, and none in six runs after. Every service that
   is held or dirty when a round runs is marked, within the round's time, so a
   change made before the deadline's round is never one too few. One made after
   the flush's last round, or while the budget was spent, is not marked.

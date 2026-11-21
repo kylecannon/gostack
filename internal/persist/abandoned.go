@@ -207,10 +207,36 @@ func (e *Engine) writeMarkers(ctx context.Context, root *os.Root, services []str
 
 		if m != nil {
 			marked = append(marked, m)
+
+			e.dropIfRenamed(root, service)
 		}
 	}
 
 	return marked
+}
+
+// dropIfRenamed removes the marker just written for service when the service's
+// save has renamed its snapshot into place since the services to mark were
+// chosen, and nothing has changed it: the save listed the directory for a marker
+// before this one was there, so it would never remove it, and its state is on
+// disk. The save records the rename before it lists the directory (see
+// markRenamed): a marker whose check comes before the record was written before
+// the listing, and the save removes it, and one whose check comes after sees the
+// record, and this removes it.
+func (e *Engine) dropIfRenamed(root *os.Root, service string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	t, ok := e.services[service]
+	if !ok || !t.renamed || t.dirty {
+		return
+	}
+
+	err := removeIfPresent(root, abandonedPath(service))
+	if err != nil {
+		e.log.Warn("persist: the marker of a save that completed could not be removed; "+
+			"the next start warns until a save removes it", "service", service, "error", err)
+	}
 }
 
 // marker is a marker written and not yet fsynced.
@@ -390,8 +416,8 @@ const markWatchAfter = 50 * time.Millisecond
 // (SQ-461): a ctx that can end is left to the slowWatch, which watches it once
 // the flush has lasted [markWatchAfter], and a ctx that cannot end is never
 // watched. A service that saves anyway, as one whose Snapshot returns after the
-// deadline does, has its marker removed by that save (see clearAbandoned); a
-// marker written while the save renames is at worst one warning too many.
+// deadline does, has its marker removed by that save (see clearAbandoned), or by
+// the marking that finds the save has renamed (see dropIfRenamed).
 func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) {
 	if run.by == byTimer {
 		return

@@ -2173,10 +2173,17 @@ func (e *Engine) measured(service string, took time.Duration) {
 	}
 }
 
-// markRenamed records that the save of service has renamed its snapshot into
-// place: from then a deadline marks nothing for it (see unsavedLocked), though
-// the flush still holds it.
-func (e *Engine) markRenamed(service string) {
+// markRenamed records, once the save of service has no state file left to
+// rename (left is zero), that it has renamed its snapshot into place: from then
+// a deadline marks nothing for it (see unsavedLocked), though the flush still
+// holds it. The save calls it before the listing that looks for a marker, so a
+// marker written after the listing is written after the record (see
+// dropIfRenamed).
+func (e *Engine) markRenamed(service string, left int) {
+	if left > 0 {
+		return
+	}
+
 	e.mu.Lock()
 	e.services[service].renamed = true
 	e.mu.Unlock()
@@ -2206,6 +2213,8 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 			return err
 		}
 
+		e.markRenamed(s.p.name, len(s.writers)-1-i)
+
 		dir := dirOf(w.target)
 
 		seen, err := sweepTemps(root, dir, baseOf(w.target), abandonedFile)
@@ -2225,8 +2234,6 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 	}
 
 	s.writers = nil
-
-	e.markRenamed(s.p.name)
 
 	// A completed save ends the loss an abandoned one left (see abandonedFile).
 	// A save with no listing of the directory looks for the marker itself.

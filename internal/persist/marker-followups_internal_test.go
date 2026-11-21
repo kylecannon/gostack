@@ -463,6 +463,33 @@ func Test_Engine_DeadlineMarksNothingForAServiceWhoseSaveHasRenamed(t *testing.T
 	}
 }
 
+// Test_Engine_MarkerWrittenForAServiceThatRenamedIsDropped checks that a marker
+// written for a service whose save has renamed its snapshot into place since the
+// services were chosen is removed, as the save's listing for one had passed by
+// then and would never remove it, and that one for a service changed since, or
+// that has not renamed, stays. It is the race of a ctx that ends at the instant
+// the Snapshot does, made without the race: the flag the save sets is set by
+// hand.
+func Test_Engine_MarkerWrittenForAServiceThatRenamedIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	e := New(quietConfig(dir, time.Hour))
+
+	for _, name := range []string{"renamed", "changed", "unsaved"} {
+		e.Register(name, &stateSnap{state: name})
+	}
+
+	e.mu.Lock()
+	e.services["renamed"].renamed = true
+	e.services["changed"].renamed, e.services["changed"].dirty = true, true
+	e.mu.Unlock()
+
+	e.markAbandoned(t.Context(), []string{"renamed", "changed", "unsaved"})
+
+	assert.NoFileExists(t, markerOf(dir, "renamed"), "its state is on disk")
+	assert.FileExists(t, markerOf(dir, "changed"), "changed since the save, which is lost")
+	assert.FileExists(t, markerOf(dir, "unsaved"), "no save of it renamed")
+}
+
 // Test_Engine_FlushRefusesAStateFileLinkedToTheMarker checks that a state file
 // that is a link to the name of the marker is refused, with an error, and the
 // file behind it is left as it was, where the save used to rename its snapshot
