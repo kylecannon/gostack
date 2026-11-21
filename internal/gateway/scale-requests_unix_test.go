@@ -32,6 +32,15 @@ import (
 // 0.11 s (SQ-372, darwin/arm64 under -race). A defect that costs less than that
 // pair loop at 16,000 entries was not tried and may pass.
 //
+// The limits are the decoder test's, 1.5 and 1.6 (SQ-451), which give the CI
+// reading behind them. Planted in hasBelow of the query decoder, darwin/arm64
+// under -race at load average above 60: a full key scan on every lookup failed
+// on the ceiling (6 s of CPU in one call); a scan on 1 lookup in 256 read an
+// exponent of 1.236 and a tail slope of 1.348 and passed, as did 1 in 768 (1.152
+// and 1.207). The smaller path cost of the decoder test's plants is not the
+// gateway's: here the whole call costs 135 ms at 16,000 entries, so only a scan on
+// far more lookups than 1 in 256 moves the figures past 1.6.
+//
 // A healthy path measured an exponent of 1.054 to 1.078 and a tail slope of 1.043
 // to 1.095 over 20 runs of 15 rounds, and passed all of them, at load average 7
 // to 16 on 10 cores, darwin/arm64 under -race. Under load, at average 18 to 49 on
