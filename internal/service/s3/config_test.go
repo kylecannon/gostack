@@ -410,7 +410,12 @@ func TestAccelerateRequestPaymentAndEncryption(t *testing.T) {
 	assert.Contains(t, string(cfgGet(s, encryption).body), withKey)
 
 	cfgExpect(t, cfgDelete(s, encryption), http.StatusNoContent, "")
-	assert.Contains(t, string(cfgGet(s, encryption).body), "AES256", "a deleted configuration falls back to SSE-S3")
+	deleted := cfgGet(s, encryption)
+	cfgExpect(t, deleted, http.StatusOK, "")
+	assert.Contains(t, string(deleted.body), "<SSEAlgorithm>AES256</SSEAlgorithm>",
+		"a deleted configuration resets to SSE-S3, as AWS documents; LocalStack answers no rule")
+	assert.NotContains(t, string(deleted.body), "KMSMasterKeyID")
+	cfgExpect(t, cfgDelete(s, encryption), http.StatusNoContent, "")
 }
 
 func TestAccelerateRefusesDottedBucket(t *testing.T) {
