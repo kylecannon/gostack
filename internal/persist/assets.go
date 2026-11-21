@@ -154,6 +154,10 @@ type Assets struct {
 	// of the assets directory, with syncfs(2), otherwise one file or directory.
 	// Tests replace it to record the order of the syncs.
 	fsync func(f *os.File) error
+	// flush is the sync mode's final flush, run once on the assets directory
+	// after every pending path is fsynced, or nil when the mode has none. Tests
+	// replace it to count it and to fail it.
+	flush func(f *os.File) error
 }
 
 var (
@@ -233,6 +237,7 @@ func newAssets(baseDir, service string, log *slog.Logger) (*Assets, error) {
 		fresh:     make(map[string]struct{}),
 		unsynced:  make(map[string]struct{}),
 		fsync:     mode.sync,
+		flush:     mode.flush,
 	}, nil
 }
 

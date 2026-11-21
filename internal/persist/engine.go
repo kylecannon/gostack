@@ -426,6 +426,7 @@ func (e *Engine) Load(ctx context.Context) error {
 	defer func() { _ = root.Close() }()
 
 	e.mu.Lock()
+	startup := !e.loaded
 	e.loaded = true
 	safe := make(map[string]*tracked, len(e.services))
 
@@ -448,6 +449,10 @@ func (e *Engine) Load(ctx context.Context) error {
 		}
 
 		e.loadService(root, name, safe[name])
+	}
+
+	if startup {
+		e.warnAbandoned(root, names)
 	}
 
 	e.drainRemovals(safe) //nolint:contextcheck // arms a timer, whose callback has no caller context
@@ -1077,6 +1082,9 @@ func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) 
 
 		e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved",
 			"services", names)
+
+		// The process is likely on its way out, so the next start has to be told.
+		e.markAbandoned(names)
 	}
 
 	return run.results, err
@@ -2056,6 +2064,9 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 	}
 
 	s.writers = nil
+
+	// A completed save ends the loss an abandoned one left (see abandonedFile).
+	e.clearAbandoned(root, s.p.name)
 
 	// Formats that are no longer listed go only after the listed ones are safe.
 	for _, f := range knownFormats {

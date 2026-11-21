@@ -1388,7 +1388,9 @@ is untouched.
     renames into `blobs/<xx>` included.
   - **per-file fsync:** it fsyncs each asset, 8 at a time, on a descriptor
     opened for it, then each of their `blobs/<xx>` directories once. It costs
-    about 0.4 ms per pending asset on a Linux volume.
+    about 0.4 ms per pending asset on a Linux volume. On macOS the fsyncs are
+    plain `fsync(2)` and one `F_FULLFSYNC` on `assets/.gostack` follows the
+    last of them (see below).
 
   When the assets open, on Linux, gostack reads the type of the assets
   filesystem with `fstatfs` and takes syncfs only on a filesystem where the
@@ -1402,7 +1404,7 @@ is untouched.
   already covers. Every other filesystem takes the
   per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, any other, and
   one whose type cannot be read. Other
-  systems always take the per-file path. One info line per service at startup
+  systems always take the per-file path, macOS in the form below. One info line per service at startup
   names the filesystem and the path, such as
   `persist: asset sync service=s3 fs=overlay sync="per-file fsync"` or
   `fs=tmpfs sync=syncfs`. A save
@@ -1468,6 +1470,44 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
+- **macOS: one drive flush per save** (SQ-427). Go's `File.Sync` is
+  `fcntl(F_FULLFSYNC)` on macOS, which asks the drive to flush its whole write
+  cache, so a per-file sync paid one drive flush per pending asset and per
+  directory, 1 to 7 ms each on an Apple SSD, more the more the disk is busy
+  with other writers (SQ-424 measured it). A shutdown save with
+  1,000 to 1,500 pending S3 objects ran past its save deadline (about 4.5 s
+  with the default `SHUTDOWN_TIMEOUT`) and was abandoned: 3,000 objects at
+  4.93 s, and 10,000 the same. Only in the macOS build, each asset and each
+  directory gets plain `fsync(2)`, 8 at a time, and one `F_FULLFSYNC` on
+  `assets/.gostack` runs after the last of them returned and before the
+  snapshot is renamed; the same 3,000 objects take 0.17 s. Apple's
+  `fsync(2)` page says `fsync` hands the data to the drive, which may hold it in
+  its cache, and that `F_FULLFSYNC` "asks the drive to flush all buffered data
+  to permanent storage". That is all data already handed to the drive, not only
+  the descriptor's, so the one flush after the last fsync makes every asset and
+  directory permanent before the rename, the order a flush per file gave.
+  `F_BARRIERFSYNC` only orders writes without flushing, so it is not enough.
+  An error of that flush, or of opening `assets/.gostack` for it, is a failed
+  sync like an fsync's, with everything the section says of one: final, the
+  service turns off. A save whose deadline passes before the flush starts does
+  not run it, and keeps its ids pending. Linux and the other systems are
+  unchanged.
+- **An abandoned save is marked for the next start** (SQ-427). A save that runs
+  out of time loses every change since the last completed save, and the
+  process that abandoned it is on its way out. When a flush gives up at its
+  deadline, it writes `<base>/<service>/.gostack-save-abandoned` for each
+  service it did not save, and fsyncs it and its directory, before it
+  returns. A save of the service that completes removes the marker, after it
+  renames the snapshot; a shutdown whose saves all complete leaves none. The
+  startup `Load` logs one warning for the services that have a marker, at warn:
+  `persist: a save was abandoned at its deadline before this start, so what
+  changed after the last completed save is lost` with `services=[s3]` and
+  `last_completed_save=[s3=2026-11-20T21:45:22Z]`, the modification time of the
+  service's newest state file, or `never` when it has none. The marker stays
+  until a save completes, so each start says so until then. A marker that cannot
+  be written or removed is logged and changes nothing else; a crash between a
+  completed save's rename and the removal leaves one warning too many, never
+  one too few.
 - Save order: a flush saves in two passes, each in the same order. Services
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last
@@ -1612,7 +1652,9 @@ is untouched.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
-  Go's fsync is `F_FULLFSYNC`, 1000 pending take 5 to 7 s.
+  Go's fsync is `F_FULLFSYNC`, 1000 pending took 5 to 7 s with a flush per
+  file; with plain fsyncs and one flush (SQ-427) they take about 0.1 s
+  (`BenchmarkSyncPending/files=1000`, on an Apple M1 Max under heavy load).
 - `Remove` queues the id. A flush takes the queue before it takes the snapshot,
   and deletes those files once the snapshot is renamed into place and its
   directory fsynced. A deletion is not fsynced: if a crash loses it, the file
@@ -2132,7 +2174,7 @@ in the product `go.mod`.
 | santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
 | go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
-| golang.org/x/sys | the asset sync on Linux | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. It was already in the module graph, indirect, so no module was added. |
+| golang.org/x/sys | the asset sync on Linux and macOS | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. On macOS `unix.Fsync` syncs each asset and one `unix.F_FULLFSYNC` flushes the drive per save. It was already in the module graph, indirect, so no module was added. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |
