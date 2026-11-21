@@ -235,6 +235,18 @@
 //     difference is the cost of the check;
 //   - an agentic workload: 200 cycles of create queue, 10 SendMessage,
 //     receive 10, delete queue, at concurrency 16;
+//   - the first use of what a service makes once per process (firstuse.go): for
+//     SNS, the time from CreateTopic to the signed delivery of the first Publish
+//     to an enveloped SQS subscriber, on a container that has just started. SNS
+//     makes its RSA-2048 signing key on that CreateTopic, and the first delivery
+//     waits for it, so the time is one key generation and a few calls. It runs
+//     once a process, which no micro benchmark can time: one key generation an
+//     iteration cannot reach the micro-benchmark gate's 50 iterations. Each run
+//     is a container of its own (`loadgen first` times the use), -first-use-runs
+//     of them a side (30), the sides alternating as startup does. The result
+//     keeps the runs whole (first_use, by service), the report lists them under
+//     "First use", and the compare cell is first-use/<service>, metric "first
+//     use";
 //   - image size.
 //
 // # The flags
@@ -250,7 +262,19 @@
 // git-tracked result with the head's host fingerprint, holds head against base
 // on the gostack and gostack-slim cells both files have. It exits 1 when a
 // metric moved past its limit (constants in compare.go) and the ranges of its
-// runs do not overlap. LocalStack never gates. A result carries a host
+// runs do not overlap. The first-use metric is judged on its whole runs and not
+// on their ranges: a key generation takes 15 to 313 ms from one run to the next,
+// so the ranges of a head that generates two keys and a base that generates one
+// still overlap (5 runs a side see the doubling 8% of the time, 10 or more
+// almost never). It fails when its median rose past 25% and a rank-sum
+// (Mann-Whitney) test of the runs puts the head past z = 2.6. Resampling 150
+// measured key generations gives, at 30 runs a side, a false alarm for about
+// 0.5% of pairs of equal sets (1 in 215, the order of the 1 in 252 that five
+// runs a side give on disjoint ranges), a flag for about 90% of doublings and
+// for about 37% of rises of 50%. A one-time cost caught nine times in ten is
+// worth the minute the runs take, so the count stays. LocalStack never gates;
+// its first-use time includes loading its SNS provider, so it is a reference
+// and not the same work. A result carries a host
 // fingerprint (OS, architecture, CPU count, Docker version, OrbStack); results
 // with different fingerprints are not compared, and compare says so and exits 0.
 // `bench run -compare-dir bench/results` runs the same comparison after the

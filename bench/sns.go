@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 )
@@ -34,6 +36,10 @@ import (
 // queue, so a queue holds at most one message a worker. The receive waits for a
 // delivery (WaitTimeSeconds=1, up to snsMaxEmpty times), so its latency is how
 // long a delivery takes to land as well as the call's own time.
+//
+// publishWorkload also times the first signed publish of a fresh target
+// (FirstUse, firstuse.go), outside the cells: the signing key is made once a
+// process, so a cell that runs for seconds never sees its cost again.
 //
 // Every publish carries one message attribute, kind=bench, so the filter=on
 // cells, whose subscriptions hold the policy {"kind":["bench"]}, deliver every
@@ -220,19 +226,10 @@ func newFanout(ctx context.Context, sc snsClient, queues *sqs.Client, spec snsCe
 	for i := range spec.Subs {
 		queueName := fmt.Sprintf("%s-%d%s", name, i, suffix)
 
-		created, err := queues.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &queueName, Attributes: queueAttrs})
+		queueURL, arn, err := createQueue(ctx, queues, queueName, queueAttrs)
 		if err != nil {
-			return fanout{}, fmt.Errorf("create queue %s: %w", queueName, err)
+			return fanout{}, err
 		}
-
-		attrs, err := queues.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-			QueueUrl: created.QueueUrl, AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn},
-		})
-		if err != nil {
-			return fanout{}, fmt.Errorf("read the ARN of %s: %w", queueName, err)
-		}
-
-		arn := attrs.Attributes[string(types.QueueAttributeNameQueueArn)]
 
 		_, err = sc.call(ctx, "Subscribe", "&TopicArn="+url.QueryEscape(out.topic)+"&Protocol=sqs&Endpoint="+
 			url.QueryEscape(arn)+subFields)
@@ -240,10 +237,114 @@ func newFanout(ctx context.Context, sc snsClient, queues *sqs.Client, spec snsCe
 			return fanout{}, err
 		}
 
-		out.queues = append(out.queues, *created.QueueUrl)
+		out.queues = append(out.queues, queueURL)
 	}
 
 	return out, nil
+}
+
+// createQueue makes a queue and returns its URL and ARN.
+func createQueue(ctx context.Context, queues *sqs.Client, name string,
+	attrs map[string]string,
+) (string, string, error) {
+	created, err := queues.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &name, Attributes: attrs})
+	if err != nil {
+		return "", "", fmt.Errorf("create queue %s: %w", name, err)
+	}
+
+	got, err := queues.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+		QueueUrl: created.QueueUrl, AttributeNames: []types.QueueAttributeName{types.QueueAttributeNameQueueArn},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("read the ARN of %s: %w", name, err)
+	}
+
+	return *created.QueueUrl, got.Attributes[string(types.QueueAttributeNameQueueArn)], nil
+}
+
+// FirstUse times the first signed publish of a target that has just started:
+// CreateTopic, which starts making SNS's signing key, Subscribe of a queue with
+// the envelope, Publish, and the receive of the delivery, whose signature is
+// checked to be there and not empty. The queue exists before the clock starts,
+// so the time is SNS's: SQS's first use is not in it. The first delivery waits
+// for the key, so the time is the key generation, one RSA-2048 key, and the few
+// calls around it.
+func (publishWorkload) FirstUse(ctx context.Context, c client) (time.Duration, error) {
+	queues := newSQSClient(c.endpoint, 1)
+	sc := snsClient{http: &http.Client{Transport: newTransport(1)}, endpoint: c.endpoint}
+	name := fmt.Sprintf("bench-first-%x", time.Now().UnixNano())
+
+	queueURL, arn, err := createQueue(ctx, queues, name, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	started := time.Now()
+
+	body, err := sc.call(ctx, "CreateTopic", "&Name="+name)
+	if err != nil {
+		return 0, err
+	}
+
+	topic := between(body, "<TopicArn>", "</TopicArn>")
+	if topic == "" {
+		return 0, fmt.Errorf("%w: CreateTopic answered no TopicArn: %.*s", errSNS, formErrorHead, body)
+	}
+
+	_, err = sc.call(ctx, "Subscribe", "&TopicArn="+url.QueryEscape(topic)+"&Protocol=sqs&Endpoint="+url.QueryEscape(arn))
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = sc.call(ctx, "Publish", "&TopicArn="+url.QueryEscape(topic)+"&Message=first")
+	if err != nil {
+		return 0, err
+	}
+
+	delivery, err := firstDelivery(ctx, queues, queueURL)
+	took := time.Since(started)
+
+	if err != nil {
+		return 0, err
+	}
+
+	if !isSigned(delivery) {
+		return 0, fmt.Errorf("%w: the delivery is not a signed envelope: %.*s", errSNS, formErrorHead, delivery)
+	}
+
+	return took, nil
+}
+
+// isSigned reports whether a delivery is an envelope with a signature in it: a
+// JSON document whose Signature is not empty. An envelope that names an empty
+// Signature is what an unsigned delivery looks like, and the time it took proves
+// no key was used.
+func isSigned(delivery string) bool {
+	var envelope struct {
+		Signature string `json:"Signature"`
+	}
+
+	return json.Unmarshal([]byte(delivery), &envelope) == nil && envelope.Signature != ""
+}
+
+// firstDelivery waits for the first message of a queue, as take does, and
+// returns its body.
+func firstDelivery(ctx context.Context, queues *sqs.Client, queueURL string) (string, error) {
+	for range snsMaxEmpty {
+		out, err := queues.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+			QueueUrl: &queueURL, MaxNumberOfMessages: 1, WaitTimeSeconds: snsReceiveWait,
+		})
+		if err != nil {
+			return "", fmt.Errorf("receive message: %w", err)
+		}
+
+		if len(out.Messages) > 0 {
+			return aws.ToString(out.Messages[0].Body), nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: no delivery reached %s in %d receives of %d s", errSNS, queueURL, snsMaxEmpty,
+		snsReceiveWait)
 }
 
 // subscriptionFields are the Subscribe attributes of the cell's delivery and
