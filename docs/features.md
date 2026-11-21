@@ -62,7 +62,7 @@ An operation the service does not implement answers 501.
 | s3 | Parity done | 90 of 112 | [row](parity.md#s3) | [s3](#s3) |
 | s3control | Not started | none | none | [not started and deferred](#not-started-and-deferred) |
 | scheduler | Not started | none | none | [not started and deferred](#not-started-and-deferred) |
-| secretsmanager | Parity done | 23 of 23 | [row](parity.md#secretsmanager) | [secretsmanager](#secretsmanager) |
+| secretsmanager | Parity done | 21 of 23 | [row](parity.md#secretsmanager) | [secretsmanager](#secretsmanager) |
 | ses | Not started | none | none | [not started and deferred](#not-started-and-deferred) |
 | sns | Parity done | 36 of 42 | [row](parity.md#sns) | [sns](#sns) |
 | sqs | Parity done | 23 of 23 | [row](parity.md#sqs) | [sqs](#sqs) |
@@ -224,7 +224,7 @@ Settings and known differences in compat.md: [S3](compat.md#s3), [S3 versioning 
 
 ### secretsmanager
 
-Status: Parity done. Operations implemented: 23 of 23.
+Status: Parity done. Operations implemented: 21 of 23.
 
 Persistence: `PERSIST_SECRETSMANAGER`: yes.
 
@@ -232,7 +232,7 @@ Parity: [row in parity.md](parity.md#secretsmanager).
 
 Settings and known differences in compat.md: [Secrets Manager](compat.md#secrets-manager).
 
-**Implemented (23)**
+**Implemented (21)**
 
 - Batch (1): `BatchGetSecretValue`
 - Cancel (1): `CancelRotateSecret`
@@ -246,15 +246,14 @@ Settings and known differences in compat.md: [Secrets Manager](compat.md#secrets
 - Replicate (1): `ReplicateSecretToRegions`
 - Restore (1): `RestoreSecret`
 - Rotate (1): `RotateSecret`
-- Stop (1): `StopReplicationToReplica`
 - Tag (1): `TagResource`
 - Untag (1): `UntagResource`
 - Update (2): `UpdateSecret`, `UpdateSecretVersionStage`
+
+**Not implemented, answered 501 (2)**
+
+- Stop (1): `StopReplicationToReplica`
 - Validate (1): `ValidateResourcePolicy`
-
-**Not implemented, answered 501 (0)**
-
-None.
 
 ### sns
 

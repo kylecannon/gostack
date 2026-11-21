@@ -205,6 +205,18 @@ type cycleWrap struct{ *selfEmbedding }
 
 type cycleDeep struct{ cycleWrap }
 
+// stubProvider declares Alpha, Bravo and Charlie, as a provider that checks a
+// request before it answers 501 does, and names Bravo and a name outside the
+// API as stubs: Implemented leaves Bravo out and ignores the other.
+type stubProvider struct{ Unimplemented }
+
+func (*stubProvider) Alpha(context.Context) error { return nil }
+func (p *stubProvider) Bravo(ctx context.Context) error {
+	return p.Unimplemented.Bravo(ctx)
+}
+func (*stubProvider) Charlie(context.Context) error { return nil }
+func (*stubProvider) Stubs() []string               { return []string{bravo, "NotAnOperation"} }
+
 func Test_Implemented(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -249,6 +261,10 @@ func Test_Implemented(t *testing.T) {
 		{name: "a type that embeds itself, no override", handler: &selfEmbeddingPlain{}, want: []string{}, known: true},
 		{name: "a pair of types that embed each other", handler: &cycleA{}, want: []string{delta}, known: true},
 		{name: "a cycle two fields down", handler: &cycleDeep{}, want: []string{alpha}, known: true},
+		{
+			name: "a stub that checks and then answers 501 is not counted", handler: &stubProvider{},
+			want: []string{alpha, charlie}, known: true,
+		},
 	}
 
 	for _, tt := range tests {
