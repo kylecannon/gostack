@@ -342,29 +342,46 @@ func Test_partiql_whereIsNotSized(t *testing.T) {
 	run(t, s, c.steps)
 }
 
-// Test_partiql_whereKeepsItsOtherLimits: the operators and the operands of an IN
-// of a long WHERE are counted as the image counts them.
-func Test_partiql_whereKeepsItsOtherLimits(t *testing.T) {
+// whereLimitsCase is the rows of the limits a long WHERE keeps: the operators,
+// which an UPDATE refuses at 301 with `id = 'a' AND (` and 149 comparisons joined
+// by OR, 299 operators, `)`, as the attribute_exists and AND its condition is
+// built with stand for the key equality and the AND, and the operands of an IN.
+func whereLimitsCase() limitCase {
 	const table = "pwhere"
 
-	s := newStack(t)
-	s.ok(t, opCreate, limitTable(table))
-	run(t, s, []step{
-		{
-			"operators", opStatement, stmt("SELECT id FROM " + table + " WHERE " +
-				repeat(160, " OR ", func(i int) string { return "k" + strconv.Itoa(i) + "=1" })),
+	comparisons := func(n int) string {
+		return repeat(n, " OR ", func(i int) string { return "k" + strconv.Itoa(i%8) + "=1" })
+	}
+	update := func(n int) string {
+		return "UPDATE " + table + " SET x = 1 WHERE id = 'a' AND (" + comparisons(n) + ")"
+	}
+
+	c := limitCase{table: table, steps: putSteps(table, whereItem("a"))}
+	c.steps = append(c.steps,
+		step{
+			"operators", opStatement, stmt("SELECT id FROM " + table + " WHERE " + comparisons(160)),
 			http.StatusBadRequest, validation(tooManyOperators),
 		},
-		{
-			"operators of an update", opStatement, stmt("UPDATE " + table + " SET x = 1 WHERE id = 'a' AND (" +
-				repeat(250, " OR ", func(i int) string { return "k" + strconv.Itoa(i) + "=1" }) + ")"),
-			http.StatusBadRequest, validation(tooManyOperators),
-		},
-		{
+		step{"operators of an update", opStatement, stmt(update(250)), http.StatusBadRequest, validation(tooManyOperators)},
+		step{"update at 300", opStatement, stmt(update(149)), http.StatusOK, noItems},
+		step{"update at 301", opStatement, stmt(update(150)), http.StatusBadRequest, validation(tooManyOperators)},
+		step{
 			"operands", opStatement, stmt("SELECT id FROM " + table + " WHERE k0 IN " + listOf(101)),
 			http.StatusBadRequest, validation("The IN operator is provided with too many operands; number of operands: 101"),
 		},
-	})
+	)
+
+	return c
+}
+
+// Test_partiql_whereKeepsItsOtherLimits: the operators and the operands of an IN
+// of a long WHERE are counted as the image counts them.
+func Test_partiql_whereKeepsItsOtherLimits(t *testing.T) {
+	c := whereLimitsCase()
+
+	s := newStack(t)
+	s.ok(t, opCreate, limitTable(c.table))
+	run(t, s, c.steps)
 }
 
 // longCondition is 10 lists of 100 values, k<i> IN (:a0, ..., :a99), joined by

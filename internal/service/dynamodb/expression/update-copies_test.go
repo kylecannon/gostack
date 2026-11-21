@@ -44,9 +44,12 @@ func Test_Apply_SiblingsShareOneCopy(t *testing.T) {
 }
 
 // Test_Apply_NestedSetsCopyTheirParentOnce: 1,000 SET actions under one map
-// copied that map for each of them, 188 ms an UPDATE statement and a gigabyte
-// of garbage for the 1,000; they copy it once, and the whole update allocates
-// a few megabytes (SQ-452).
+// copied that map and walked it for nesting once for each of them, 188 ms an
+// UPDATE statement; they copy it once and walk it once (SQ-452). The test counts
+// work, the bytes one Apply allocates, and not time: 788 KB fixed, where the
+// copy for each action alone is 103 MB and the walk for each action alone 161
+// MB, and the limit sits between at 4 MiB. Either defect restored fails it; a
+// regression under about 5 times the fixed cost does not.
 func Test_Apply_NestedSetsCopyTheirParentOnce(t *testing.T) {
 	t.Parallel()
 
@@ -77,5 +80,6 @@ func Test_Apply_NestedSetsCopyTheirParentOnce(t *testing.T) {
 		}
 	})
 
+	t.Logf("bytes of one Apply of %d nested SET actions: %d", actions, res.AllocedBytesPerOp())
 	require.Less(t, res.AllocedBytesPerOp(), int64(4<<20), "bytes of one Apply of %d nested SET actions", actions)
 }
