@@ -5,33 +5,34 @@
 # rounds, each run relinked with a new -randlayout seed, the way `make bench-ab`
 # does.
 #
-# Run 44900565652 showed the slowdown on AMD EPYC 7763 only, with the
-# Engine.mountWarn field not the cause (basefield flat) and the slow arms head54
-# and fixed. Their one difference from base on the flush chain is the frame of
-# BenchmarkSQSFlush's closure, 0x148 -> 0x178: persist.Config grew by 24 bytes
-# (InContainer, mountinfo) and the closure holds two copies of it. Every other
-# frame on the chain (Flush .. Provider.Snapshot) is equal. This run moves only
-# that frame:
-#   base            b15da1d, origin/main when PR #54 last merged it
-#   baseframe16     base + 8 unused bytes in Config: closure frame 0x158 (base + 16)
-#   baseframe32     base + 16 unused bytes in Config: closure frame 0x168 (base + 32)
-#   baseframe48     base + 24 unused bytes in Config: closure frame 0x178 (as head54)
-#   head54          f249254, PR #54's head: closure frame 0x178 (base + 48)
-#   head54frame16   head54 + 8 unused bytes in Config: closure frame 0x188 (base + 64)
-# Predicted if the frame is the cause, on Zen 3: baseframe16 and baseframe32
-# slow or flat as the stack alignment says, baseframe48 slow as head54, and
-# head54frame16 back at base's alignment mod 64, so flat against base. Intel
-# flat everywhere.
+# Run 44905835243 showed the slowdown on AMD EPYC 7763 and 9V74 (Zen 3, Zen 4)
+# is the stack position of BenchmarkSQSFlush's closure and nothing else: the
+# closure held two persist.Config copies, so PR #54's two Config fields moved
+# its frame 0x148 -> 0x178 and every production frame below it is equal. The fix
+# under test builds the engine in a noinline helper, so the closure holds no
+# Config and its frame is 0xb0 whatever Config's size.
+#   base              b15da1d, origin/main when PR #54 last merged it, as it is
+#   head54            5ae49ce, PR #54's head, benchmark unchanged (control: slow
+#                     on Zen 3/4)
+#   fixedbench        5ae49ce + fixedbench.patch (the benchmark change)
+#   fixedbenchcfg16   fixedbench + 16 unused bytes in Config (robustness check:
+#                     must equal fixedbench; never committed to the branch)
+#   fixedbenchpad<N>  fixedbench + N unused bytes in the closure's frame (0xb0+N).
+#                     Only a contingency, to find which frames are fast if
+#                     fixedbench's own frame lands in the slow window.
+# Required: fixedbench within the 10% gate of base on every CPU model, and
+# fixedbenchcfg16 equal to fixedbench.
 set -euo pipefail
 
 ROUNDS=${ROUNDS:-10}
 BASE_SHA=b15da1dc172713bc7e2b071fa0f30d76d31b517a
-HEAD54_SHA=f2492548fdc4e0bb07b03fb925cc505698e654f2
+HEAD54_SHA=5ae49cebd18c76f3fed9bd35a512f78a38c74660
 REPO=${REPO:-$PWD}
+PATCH=${PATCH:-$REPO/.github/sq455/fixedbench.patch}
 W=${RUNNER_TEMP:?}/sq455
 OUT=$W/out
 BENCH='^BenchmarkSQSFlush$/^queues=(10|1000)$/^messages=(100|1)$/^body=64KiB$'
-read -r -a ARMS <<<"${ARMS:-base baseframe16 baseframe32 baseframe48 head54 head54frame16}"
+read -r -a ARMS <<<"${ARMS:-base head54 fixedbench fixedbenchcfg16 fixedbenchpad8 fixedbenchpad16 fixedbenchpad24 fixedbenchpad32 fixedbenchpad40 fixedbenchpad48 fixedbenchpad56}"
 N=${#ARMS[@]}
 
 mkdir -p "$W" "$OUT/prof" "$OUT/bin"
@@ -50,20 +51,23 @@ git -C "$REPO" fetch --no-tags origin "$BASE_SHA" "$HEAD54_SHA"
 for arm in "${ARMS[@]}"; do
 	mkdir -p "$W/$arm"
 	case $arm in
-		base | baseframe*) sha=$BASE_SHA ;;
+		base) sha=$BASE_SHA ;;
 		*) sha=$HEAD54_SHA ;;
 	esac
 	git -C "$REPO" archive "$sha" | tar -x -C "$W/$arm"
-	# Config is copied twice in the benchmark's closure, so n unused bytes in
-	# it move the closure's frame by 2n; the arm's number is the frame bytes.
-	cfg=$W/$arm/internal/persist/config.go
 	case $arm in
-		baseframe*) perl -0pi -e "s/(\tLogger +\*slog\.Logger\n)/\$1\t_ [$((${arm##*frame} / 2))]byte\n/" "$cfg" ;;
-		head54frame*) perl -0pi -e "s/(\tmountinfo string\n)/\$1\t_ [$((${arm##*frame} / 2))]byte\n/" "$cfg" ;;
+		fixedbench*) git -C "$W/$arm" apply "$PATCH" ;;
+	esac
+	cfg=$W/$arm/internal/persist/config.go
+	bench=$W/$arm/internal/persist/sqs_benchmark_test.go
+	case $arm in
+		fixedbenchcfg*) perl -0pi -e "s/(\tmountinfo string\n)/\$1\t_ [${arm##*cfg}]byte\n/" "$cfg" ;;
+		fixedbenchpad*) perl -0pi -e "s/(\t\t\tinfo, err := os\.Stat)/\t\t\tvar padv [${arm##*pad}]byte\n\n\t\t\tpadv[len(base)%len(padv)] = 1\n\n\t\t\tif padv[0] > 1 {\n\t\t\t\tb.Fatal()\n\t\t\t}\n\n\$1/" "$bench" ;;
 	esac
 done
 
 grep -n -E '_ +\[[0-9]+\]byte' "$W"/*/internal/persist/config.go | tee "$OUT/pad.txt" || true
+grep -c 'var padv' "$W"/*/internal/persist/sqs_benchmark_test.go | tee -a "$OUT/pad.txt" || true
 
 build() { # arm layout-seed output
 	(cd "$W/$1" && go test -c -vet=off ${2:+-ldflags=-randlayout=$2} -o "$3" ./internal/persist)
@@ -88,7 +92,7 @@ for r in $(seq 1 "$ROUNDS"); do
 	echo "round $r: ${order[*]}"
 	for i in $(seq 0 $((N - 1))); do
 		arm=${order[$i]}
-		seed=$((r * 10 + i + 1))
+		seed=$((r * 100 + i + 1))
 		bin=$W/bin-$arm-$r.test
 		build "$arm" "$seed" "$bin"
 		(cd "$W/$arm/internal/persist" && "$bin" -test.run '^$' -test.bench "$BENCH" -test.benchmem \
@@ -106,8 +110,8 @@ compare() { # a b
 for arm in "${ARMS[@]}"; do
 	[ "$arm" = base ] || compare base "$arm"
 done
-compare baseframe48 head54
-compare head54 head54frame16
+compare fixedbench fixedbenchcfg16
+compare head54 fixedbench
 {
 	echo '```'
 	grep -m1 'model name' /proc/cpuinfo || true

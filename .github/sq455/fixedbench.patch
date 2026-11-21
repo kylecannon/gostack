@@ -1,0 +1,81 @@
+diff --git a/internal/persist/assets_benchmark_test.go b/internal/persist/assets_benchmark_test.go
+index 6bbdcbc..ce36808 100644
+--- a/internal/persist/assets_benchmark_test.go
++++ b/internal/persist/assets_benchmark_test.go
+@@ -27,7 +27,7 @@ func benchAssets(b *testing.B) (*persist.Assets, string) {
+ 	b.Helper()
+ 
+ 	dir := b.TempDir()
+-	e := persist.New(baseCfg(dir))
++	e := benchEngine(dir, flushEvery)
+ 	e.Register(shelfService, newShelf())
+ 
+ 	a, err := e.Assets(shelfService)
+@@ -92,7 +92,7 @@ func BenchmarkSavePendingAssets(b *testing.B) {
+ 				b.StopTimer()
+ 
+ 				run++
+-				e := persist.New(baseCfg(filepath.Join(base, strconv.Itoa(run))))
++				e := benchEngine(filepath.Join(base, strconv.Itoa(run)), flushEvery)
+ 				s := newShelf()
+ 				e.Register(shelfService, s)
+ 
+diff --git a/internal/persist/engine_benchmark_test.go b/internal/persist/engine_benchmark_test.go
+index 848f7f1..9d895dd 100644
+--- a/internal/persist/engine_benchmark_test.go
++++ b/internal/persist/engine_benchmark_test.go
+@@ -7,11 +7,27 @@ import (
+ 	"github.com/kylecannon/gostack/internal/persist"
+ )
+ 
+-func BenchmarkMarkDirty(b *testing.B) {
+-	cfg := baseCfg(b.TempDir())
+-	cfg.Frequency = time.Hour
++// benchEngine builds an engine from baseCfg and hands back only the pointer.
++//
++// A benchmark that held persist.Config itself, as a literal or as the argument
++// of persist.New, would carry its size in its own stack frame. The frame of a
++// benchmark closure is where the benchmark's hot loop sits in the stack, and on
++// some CPUs (AMD Zen 3, Zen 4) the speed of a byte-at-a-time loop such as
++// jsonwire.AppendQuote depends on that position: adding two fields to Config
++// slowed BenchmarkSQSFlush by 11% with no change to any code it runs
++// (SQ-455, SQ-460). Building the engine here, with no inlining, keeps Config out
++// of every benchmark frame, so a field added to Config cannot move one.
++//
++//go:noinline
++func benchEngine(dir string, frequency time.Duration) *persist.Engine {
++	cfg := baseCfg(dir)
++	cfg.Frequency = frequency
++
++	return persist.New(cfg)
++}
+ 
+-	e := persist.New(cfg)
++func BenchmarkMarkDirty(b *testing.B) {
++	e := benchEngine(b.TempDir(), time.Hour)
+ 	e.Register(sqs, &fake{})
+ 	e.MarkDirty(sqs)
+ 
+diff --git a/internal/persist/sqs_benchmark_test.go b/internal/persist/sqs_benchmark_test.go
+index a97de70..8aad010 100644
+--- a/internal/persist/sqs_benchmark_test.go
++++ b/internal/persist/sqs_benchmark_test.go
+@@ -14,7 +14,6 @@ import (
+ 	"time"
+ 
+ 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
+-	"github.com/kylecannon/gostack/internal/persist"
+ 	"github.com/kylecannon/gostack/internal/protocol"
+ 	"github.com/kylecannon/gostack/internal/request"
+ 	sqsservice "github.com/kylecannon/gostack/internal/service/sqs"
+@@ -130,9 +129,7 @@ func BenchmarkSQSFlush(b *testing.B) {
+ 			p := filledProvider(b, c.queues, c.messages)
+ 			base := b.TempDir()
+ 
+-			e := persist.New(persist.Config{
+-				PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: discard(),
+-			})
++			e := benchEngine(base, time.Hour)
+ 			e.Register(sqs, p)
+ 
+ 			flush := func() {

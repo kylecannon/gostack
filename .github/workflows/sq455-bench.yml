@@ -32,7 +32,7 @@ jobs:
           cache: true
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
-      - name: Measure base, head54 and the config-padded frame arms
+      - name: Measure base, head54, fixedbench and the frame arms
         run: bash .github/sq455/run.sh
       - uses: actions/upload-artifact@v4
         if: always()
