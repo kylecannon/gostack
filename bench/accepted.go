@@ -486,6 +486,8 @@ func (e *acceptedEntry) flaggedAt() (percent float64, lower, ok bool) {
 	switch {
 	case e.Metric == metricStartup:
 		return limitStartup * percentScale, true, true
+	case e.Metric == metricFirstUse:
+		return limitFirstUse * percentScale, true, true
 	case e.Metric == "idle RSS", e.Metric == "peak RSS":
 		return limitRSS * percentScale, true, true
 	case e.Metric == "throughput":
