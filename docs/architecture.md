@@ -489,6 +489,15 @@ written by hand.
   per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
   4 its cost moved up to 38% with a 16-byte change in a caller's frame
   (SQ-455). rest-json and error bodies still go through v2.
+- **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
+  generated encoder writes into a reused buffer, given back once the body is
+  written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go
+  to a stack that holds at most 32 MiB of them, and apart from it the
+  largest buffer given back that is bigger than 32 MiB, so that one large
+  body called for again does not grow its buffer from nothing each time.
+  Every GC cycle a cleanup checks whether a json response took or gave back
+  a large buffer since the cycle before; when none did, it drops them all,
+  so an idle server holds them for at most two collections.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;

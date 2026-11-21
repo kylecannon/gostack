@@ -2,6 +2,7 @@ package dynamodb_test
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -110,10 +111,43 @@ func BenchmarkBatchWriteItem(b *testing.B) {
 
 // BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
 // BatchWriteItem put before the timer starts.
+//
+// One more row reads 40 items of 399 KiB of newlines, about as much as one
+// BatchGetItem returns: each newline is two bytes of json, so the body is
+// about 31 MiB, and the buffer it grows is past what the json encoder keeps
+// of its large buffers.
 func BenchmarkBatchGetItem(b *testing.B) {
 	batchMatrix(b, opBatchGet, func(b *testing.B, s *stack, worker, size int) {
 		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
 	}, func(worker, _ int) string { return batchGetBody(worker) })
+
+	b.Run("payload=399KiB/items=40/text=newlines/concurrency=1", func(b *testing.B) {
+		const items = 40
+
+		s := newStack(b)
+		s.ok(b, opCreate, hashTable(benchTable))
+
+		d := strings.Repeat("\n", itemPayloads[2].size)
+		keys := make([]string, items)
+
+		for i := range keys {
+			s.ok(b, opPut, putValue(i, d))
+			keys[i] = fmt.Sprintf(`{"id":{"S":"k-%d"}}`, i)
+		}
+
+		body := `{"RequestItems":{"` + benchTable + `":{"Keys":[` + strings.Join(keys, ",") + `]}}}`
+
+		responses, ok := s.ok(b, opBatchGet, body)["Responses"].(map[string]any)
+		require.True(b, ok, "a call returns Responses")
+		require.Len(b, responses[benchTable], items, "a call returns every item")
+
+		b.SetBytes(int64(items * len(d)))
+		b.ReportAllocs()
+
+		for b.Loop() {
+			require.Equal(b, http.StatusOK, s.call(b, usEast1, opBatchGet, body).status)
+		}
+	})
 }
 
 // transactMatrix runs one sub-benchmark for every number of actions at every
