@@ -62,6 +62,10 @@ func newDeviceBench(b *testing.B, protocol string, n int) *deviceBench {
 	d.must(queryForm("CreateTopic", paramName, "bench-devices").Encode())
 	d.topic = arnPrefix + "bench-devices"
 
+	// CreateTopic starts the signing key; the timed calls do not share a core
+	// with it.
+	awaitSigningKey(b, provider)
+
 	var app string
 
 	if protocol == protocolApplication {

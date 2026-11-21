@@ -119,6 +119,10 @@ func filledSNS(b *testing.B, count int) *sns.Provider {
 		b.Fatal(err)
 	}
 
+	// The restored topics start the signing key; the timed calls do not share
+	// a core with it.
+	awaitSigningKey(b, p)
+
 	return p
 }
 
@@ -158,6 +162,16 @@ func BenchmarkRestore(b *testing.B) {
 			}
 
 			p := sns.New(nil, nil)
+
+			// The first Restore starts the signing key; it runs before the timed
+			// loop, which starts at its first b.Loop call, so the key is not made
+			// inside it.
+			err = p.Restore(bytes.NewReader(saved.Bytes()))
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			awaitSigningKey(b, p)
 
 			b.SetBytes(int64(saved.Len()))
 			b.ReportAllocs()
