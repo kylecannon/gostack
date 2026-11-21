@@ -28,13 +28,13 @@ const (
 	// scaleExponent is the most the cost over every size may grow faster than the
 	// size: linear is 1, the sort of the keys adds a little, a scan of every key
 	// per lookup is 2. See Test_Decoder_BatchScalesWithEntries for the figures.
-	scaleExponent = 1.3
+	scaleExponent = 1.5
 	// scaleTailSlope is the most the cost between 4,000 and 16,000 entries may
 	// grow faster than the size. It catches a quadratic step whose constant is
 	// small enough for the linear cost to hide it at the small sizes, where it
 	// holds the fitted exponent down. The ends are four times apart, so noise in
 	// one of them moves the slope half as far as it would between neighbours.
-	scaleTailSlope = 1.35
+	scaleTailSlope = 1.6
 	// scaleCeiling is the CPU time of the whole test process one decode may take
 	// before the test gives up on it, so a quadratic decode fails after seconds of
 	// CPU and not the minutes it would take to finish. A healthy decode of the
@@ -210,25 +210,48 @@ func growthExponent(sizes []int, costs []time.Duration) float64 {
 // its whole run, and its ceiling counts the CPU time of the whole process, so a
 // test running beside it would be charged to both.
 //
-// What it is proven to catch, with a full scan of the form planted in hasBelow
-// on 1 lookup in N, 10 runs each under -race in that container beside the same
-// loops: every lookup, 1 in 64, 1,536 and 2,048 fail 10 of 10, as does a scan on
-// 1 lookup in 1,024 that starts only above 12,000 entries. The smallest tail
-// slope was 1.398 at 1 in 1,536 (1.422 on darwin, with 5 rounds), 1.370 at 1 in
-// 2,048, on the limit, and 1.729 for the scan above 12,000 entries. On darwin
-// with 5 rounds, at load average 191 to 387 on 10 cores, 1 in 16, 256, 1,024 and
-// 1,280 also failed 10 of 10 and 1 in 3,072 failed 3 of 10. So the smallest
-// defect it catches with room to spare is a scan on 1 lookup in 1,536; from 1 in
-// 2,048 down it may pass.
+// The limits are 1.5 and 1.6 because CI failed a healthy decode at the first
+// ones, 1.3 and 1.35 (SQ-444). Run 44878816282, ubuntu-latest under -race, on a
+// change to internal/persist alone, read 9.2, 20.3, 42.1, 114.1 and 279.5 ms for
+// the five sizes: an exponent of 1.233 and a tail slope of 1.365. It is the only
+// CPU reading CI has produced, since a passing run logs none; every other reading
+// below is from a macOS host or a container on it. A healthy tail slope was 1.02
+// to 1.30 in the container, 1.10 to 1.19 on darwin and 1.365 on that runner,
+// where the 4,000 to 8,000 step alone cost 2.7 times (a slope of 1.44), so a point
+// of the five can sit well off the line even as the smallest of 15 rounds.
+// A tail limit of 1.6 lets the largest size cost 387 ms where that runner read
+// 279 ms, 39% more, and an exponent limit of 1.5 sits 0.27 above its 1.233.
+//
+// A count of the keys looked at, kept by a hook in the Decoder, would not move
+// with the machine, but it counts only what the Decoder's own code reports. The
+// defect this test exists for is a loop over the form that the author wrote and
+// did not report, as in the plants below, so a count passes it and CPU time does
+// not. Nor does the cost show in allocations: a scan allocates nothing.
+//
+// What it is proven to catch, with a full scan of the form planted in hasBelow,
+// on darwin with 15 rounds under -race (SQ-444). (a) a scan on every lookup: the
+// ceiling stops it at 4,000 entries after 4 s of CPU; with the ceiling lifted and
+// one round it reads an exponent of 2.087 and a tail slope of 2.040. (b) a scan on
+// 1 lookup in 256: exponent 1.70, tail slope 1.85, 2 of 2 runs. (c) a scan on
+// every lookup, only above 60,000 keys, which is the 16,000-entry batch alone:
+// the ceiling stops it; with the ceiling lifted, a tail slope of 6.36. (d) a scan
+// on 1 lookup in 256 above 60,000 keys: exponent 1.66, tail slope 2.46, 2 of 2
+// runs. By rate, the tail slope of a scan on 1 lookup in 512 is 1.72, in 768 1.63
+// and 1.64, in 1,024 1.58 and 1.59, in 2,048 1.42 and 1.43. So the smallest
+// defect it catches with room to spare is a scan on 1 lookup in 768; from 1 in
+// 1,024 down it may pass. The old limits caught 1 in 1,536.
 //
 // A healthy decode, in that container beside the two loops, measured an exponent
 // of 1.09 to 1.22 and a tail slope of 1.02 to 1.30 (median 1.15, 99th percentile
-// 1.30) over 200 runs, and passed every one. On darwin beside the same loops, at
-// load average 64 to 164, it measured an exponent of 1.08 to 1.13 and a tail
-// slope of 1.10 to 1.16 over 100 runs and passed every one; with 5 rounds it
-// also passed 300 runs at load average 218 to 408 and 50 under GOMAXPROCS=1.
-// The race detector slows the sizes by nearly the same factor (a healthy tail
-// slope of 1.16 with it, 1.21 without), so the test needs no skip under it.
+// 1.30) over 200 runs. On darwin beside the same loops, at load average 64 to
+// 164, it measured an exponent of 1.08 to 1.13 and a tail slope of 1.10 to 1.16
+// over 100 runs; with 5 rounds it also ran 300 runs at load average 218 to 408
+// and 50 under GOMAXPROCS=1. With the limits of SQ-444, 200 runs under -race
+// beside a loop of `go test -race -count=1 ./...` on darwin at load average 30
+// to 75 measured an exponent of 1.115 to 1.169 and a tail slope of 1.107 to 1.192,
+// and passed every one. The race detector slows the sizes by nearly the same
+// factor (a healthy tail slope of 1.16 with it, 1.21 without), so the test needs
+// no skip under it.
 func Test_Decoder_BatchScalesWithEntries(t *testing.T) {
 	costs := bestDecodes(t)
 
