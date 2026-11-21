@@ -120,9 +120,15 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   `go fix` follows the toolchain, `modernize` follows the linter's release.
 - **CI** (`ci.yml`, on every pull request and every push to main) runs
   `make fmt FMT_ARGS=--diff`, `make tidy-check`, `make gen-check`,
-  `make fix-check`, `make lint`, `make test` and `make build`.
+  `make features-check`, `make fix-check`, `make lint`, `make test` and
+  `make build`.
 - **`make gen-check`** (`ci.yml`) regenerates `internal/api` and fails on any
   modified file or untracked generated file.
+- **`make features-check`** (`ci.yml`) renders `docs/features.md` from the
+  registered services (`Test_featureFacts` in `cmd/gostack`), the parity ledger
+  and `parity/features-services.json`, and fails when the file differs. A change
+  that adds or removes an operation, or moves a ledger row, regenerates
+  `docs/features.md` with `make features` in the same commit.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
   `services` input) builds an image from GitHub's merge ref, the pull request
   head merged into its base, and runs LocalStack's own tests for the services

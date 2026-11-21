@@ -1371,9 +1371,18 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         "gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tests "
         "that LocalStack passes that gostack also passes in the same runner. Tests LocalStack "
         "fails are recorded and not required. Excluded tests are listed with a reason in "
-        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n",
+        "`parity/exclusions/`.\n\n" + header + "\n".join(rows) + "\n\n" + service_sections(sorted(by_service)),
         encoding="utf-8",
     )
+
+
+def service_sections(services: list[str]) -> str:
+    """One heading per service, so docs/features.md can link to a service by
+    anchor: a table row has none."""
+    sections = ["## Per service\n"]
+    for service in services:
+        sections.append(f"### {service}\n\nRows: [`parity/ledger/{service}.json`](../parity/ledger/{service}.json).\n")
+    return "\n".join(sections)
 
 
 def format_row(label: str, c: Counter, show_share_of: bool = False) -> str:

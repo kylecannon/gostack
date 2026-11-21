@@ -16,3 +16,41 @@ gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tes
 | ssm | 14 | 3 | 0 | 11 | 0 | 11 | 100.0% |
 | sts | 14 | 7 | 0 | 7 | 0 | 7 | 100.0% |
 | **total** | 1538 | 123 | 0 | 1412 | 3 | 1415 | 100.0% |
+
+## Per service
+
+### dynamodb
+
+Rows: [`parity/ledger/dynamodb.json`](../parity/ledger/dynamodb.json).
+
+### dynamodbstreams
+
+Rows: [`parity/ledger/dynamodbstreams.json`](../parity/ledger/dynamodbstreams.json).
+
+### kms
+
+Rows: [`parity/ledger/kms.json`](../parity/ledger/kms.json).
+
+### s3
+
+Rows: [`parity/ledger/s3.json`](../parity/ledger/s3.json).
+
+### secretsmanager
+
+Rows: [`parity/ledger/secretsmanager.json`](../parity/ledger/secretsmanager.json).
+
+### sns
+
+Rows: [`parity/ledger/sns.json`](../parity/ledger/sns.json).
+
+### sqs
+
+Rows: [`parity/ledger/sqs.json`](../parity/ledger/sqs.json).
+
+### ssm
+
+Rows: [`parity/ledger/ssm.json`](../parity/ledger/ssm.json).
+
+### sts
+
+Rows: [`parity/ledger/sts.json`](../parity/ledger/sts.json).
