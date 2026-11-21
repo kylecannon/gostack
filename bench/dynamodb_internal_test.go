@@ -21,7 +21,7 @@ func ddbServer(t *testing.T) client {
 
 	ddb := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)
 	g, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
+		func() gateway.Settings { return gateway.Settings{Listen: []string{listenAll}} },
 		[]service.Registration{ddb.Registration(), dynamodbstreams.New(ddb).Registration()}, nil, nil,
 	)
 	require.NoError(t, err)
