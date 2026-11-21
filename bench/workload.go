@@ -76,6 +76,7 @@ var (
 		cryptWorkload{},
 		dataKeyWorkload{},
 		signWorkload{},
+		publishWorkload{},
 	}
 	agenticWorkloads = []agenticWorkload{sqsWorkload{}, objectsWorkload{}}
 )

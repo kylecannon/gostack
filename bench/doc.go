@@ -146,6 +146,45 @@
 // spec, all at concurrency 16, and crypt at 32 B with persistence on. KMS has
 // no agentic workload.
 //
+// # The SNS matrix
+//
+// sns.go speaks SNS's query protocol as a hand-built form post, with a SigV4
+// header nobody checks, and SQS through the SDK. Each cell makes one topic and
+// its subscribed SQS queues before the clock starts. It has one workload:
+//
+//	sns/publish  Publish of one message, then ReceiveMessage of one message
+//	             (WaitTimeSeconds=1) and DeleteMessage of it on every
+//	             subscribed queue
+//
+// The cycle takes off the queues what it published, so a queue holds at most
+// one message a worker and the receive's latency includes the delivery's. A
+// publish-only cycle would time the enqueue: SNS's lanes have no bound, so the
+// deliveries would pile up for the length of the run. Every publish carries the
+// message attribute kind=bench, which the filter=on policy {"kind":["bench"]}
+// matches. Its axes:
+//
+//	subs      SQS subscribers: 1, 10, 100
+//	payload   256 B and 256 KB; 256 KB is 256,000 bytes, payload=250KiB in the
+//	          id, since SNS takes 262,144 bytes of message and attributes
+//	topic     standard, fifo (FIFO queues, a message group per worker, a new
+//	          deduplication id each publish)
+//	delivery  envelope, raw (RawMessageDelivery)
+//	filter    off, on
+//
+// The three two-valued axes are crossed at 256 B and one subscriber; 10 and
+// 100 subscribers and 256 KB vary the base cell (standard, envelope, filter
+// off) alone, because 256 KB to 100 queues at concurrency 64 would hold about
+// 1.6 GiB of deliveries. Every cell runs at concurrency 1, 16 and 64, and with
+// PERSIST_SNS=1 and a tmpfs at /persisted-data. A standard publish changes
+// nothing SNS saves; a FIFO publish records its deduplication id, so the FIFO
+// cells' saves grow with the topic's five-minute window. LocalStack runs no
+// persistence cell.
+//
+// -profile full runs 66 cells per image that persists, 33 on LocalStack.
+// -profile quick runs 7, all at concurrency 16: the base cell, the base cell
+// with fifo, raw, filter on, 100 subscribers and 256 KB each alone, and fifo
+// with persistence on. SNS has no agentic workload.
+//
 // # What else is measured
 //
 // For each target, in a container of its own:
