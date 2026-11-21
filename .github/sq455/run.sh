@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# SQ-458 round-5 scratch measurement. Never merged. Builds the arms of the sqs
-# and dynamodb benchmark binaries and runs them interleaved, ROUNDS rounds,
-# each run relinked with a new -randlayout seed, the way `make bench-ab` does.
+# SQ-458 round-8 scratch measurement. Never merged. Builds the arms of the sqs
+# and dynamodb benchmark binaries and runs them interleaved, one round per
+# -randlayout seed in SEEDS. Every arm of a round is linked with that round's
+# seed, so the frame16 move is read at a fixed seed and the seed's own effect
+# at a fixed frame. Each arm's results per seed also land in out/seed/.
 #   base        630a1d3 (main) + bench.patch (the text rows of the matrix,
 #               the sparse-accent row included)
 #   baseframe16 base + 16 unused bytes in formReader: serveAWS frame +0x10
@@ -9,25 +11,29 @@
 #               plain ASCII and a v2-shaped byte loop that checks UTF-8 in
 #               line; text rows included)
 #   newframe16  new + the same 16 unused bytes in formReader
-# Wanted: every new row within 5% of base at the median on every runner; each
-# new row's frame16 move no more than max(5%, base's own frame16 move).
+# Rows: the text rows (ReceiveMessage max=1 at 256B, 64KiB and 1MiB; GetItem at
+# concurrency 1; the 100-item Query) and plain ReceiveMessage 64KiB and 1MiB.
+# Wanted, for new and base: the frame16 move at a fixed seed, and the gap
+# between seeds at a fixed frame.
 set -euo pipefail
 
-ROUNDS=${ROUNDS:-8}
+read -r -a SEEDS <<<"${SEEDS:-12 21 34 43 52 61 74 83 13 22 31 44 53 62 71 84}"
+ROUNDS=${#SEEDS[@]}
 BASE_SHA=630a1d36931929da5c09a7bbe3280c909c633900
 REPO=${REPO:-$PWD}
 PATCHES=${PATCHES:-$REPO/.github/sq455}
 W=$RUNNER_TEMP/sq455
 OUT=$W/out
 # A package and its bench regexes, one package per line. A regex with more
-# levels than a row's name matches it only partly and reports nothing, hence
-# two for dynamodb.
-PLAN='internal/service/sqs ^BenchmarkReceiveMessage$/^proto=json$/^queue=standard$/^max=1$/^payload=(256B|64KiB|1MiB)$
-internal/service/dynamodb ^BenchmarkGetItem$/^payload=(4KiB|399KiB)$/^concurrency=1$ ^BenchmarkReads$/^items=100$/^payload=4KiB$/^(text=.*|op=Query)$/^(op=Query|target=table)$/^(target=table|filter=off)$/^(filter=off|concurrency=1)$'
+# levels than a row's name matches it only partly and reports nothing, so the
+# ^text= regexes leave the plain rows out. The 64KiB and 1MiB regex has no text
+# level and takes the plain row and its text rows.
+PLAN='internal/service/sqs ^BenchmarkReceiveMessage$/^proto=json$/^queue=standard$/^max=1$/^payload=(64KiB|1MiB)$ ^BenchmarkReceiveMessage$/^proto=json$/^queue=standard$/^max=1$/^payload=256B$/^text=
+internal/service/dynamodb ^BenchmarkGetItem$/^payload=(4KiB|399KiB)$/^concurrency=1$/^text= ^BenchmarkReads$/^items=100$/^payload=4KiB$/^text=/^op=Query$/^target=table$/^filter=off$/^concurrency=1$'
 read -r -a ARMS <<<"${ARMS:-base baseframe16 new newframe16}"
 N=${#ARMS[@]}
 
-mkdir -p "$W" "$OUT/prof" "$OUT/bin"
+mkdir -p "$W" "$OUT/prof" "$OUT/bin" "$OUT/seed"
 
 {
 	lscpu || true
@@ -72,10 +78,10 @@ for r in $(seq 1 "$ROUNDS"); do
 	# Rotate the order each round so drift lands on every arm.
 	order=()
 	for i in $(seq 0 $((N - 1))); do order+=("${ARMS[$(((i + r) % N))]}"); done
-	echo "round $r: ${order[*]}"
+	seed=${SEEDS[$((r - 1))]}
+	echo "round $r seed $seed: ${order[*]}" | tee -a "$OUT/rounds.txt"
 	for i in $(seq 0 $((N - 1))); do
 		arm=${order[$i]}
-		seed=$((r * 10 + i + 1))
 		while read -r pkg benches; do
 			name=${pkg##*/}
 			bin=$W/bin-$arm-$name-$r.test
@@ -83,7 +89,8 @@ for r in $(seq 1 "$ROUNDS"); do
 			read -r -a list <<<"$benches"
 			for bench in "${list[@]}"; do
 				(cd "$W/$arm/$pkg" && "$bin" -test.run '^$' -test.bench "$bench" -test.benchmem \
-					-test.benchtime=500ms -test.count=1 -test.timeout=30m </dev/null) >>"$OUT/$arm.txt"
+					-test.benchtime=500ms -test.count=1 -test.timeout=30m </dev/null) |
+					tee -a "$OUT/seed/$arm-$seed.txt" >>"$OUT/$arm.txt"
 			done
 			rm -f "$bin"
 		done <<<"$PLAN"
