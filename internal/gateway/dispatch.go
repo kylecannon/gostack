@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/account"
@@ -16,10 +17,8 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
+	"github.com/kylecannon/gostack/internal/service"
 )
-
-// formMediaType is the content type of a query call's form body.
-const formMediaType = "application/x-www-form-urlencoded"
 
 const (
 	// The bits of a version 4 UUID, RFC 4122 variant: the version occupies the
@@ -81,10 +80,6 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	rc.Request = r
 
 	Record(r, rc)
-
-	if form.refuseHiddenAction(w, rc) {
-		return
-	}
 
 	// net/http sends the end of a response only after this returns (no service
 	// flushes or declares the length of a write's response), so marking after
@@ -167,18 +162,13 @@ func defaultMutating(operation string) bool {
 	return true
 }
 
-// refuseDetection answers a request that no single service claims. A form body
-// that could not be read hid the Action that would have named the service, so
-// no service is named and the answer is the query protocol's.
+// refuseDetection answers a request that no single service claims.
 func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error, form *formReader) {
 	var ambiguous *route.AmbiguousError
 
 	switch {
-	case errors.Is(err, route.ErrNoService) && form.unreadable():
-		rc := &request.Context{Protocol: protocol.KindQuery, RequestID: newRequestID(), Request: r}
-		writeFormError(w, rc, form.err)
 	case errors.Is(err, route.ErrNoService):
-		g.refuseUnclaimed(w, r)
+		g.refuseUnclaimed(w, r, form)
 	case errors.As(err, &ambiguous), errors.Is(err, route.ErrProtocol):
 		slog.WarnContext(r.Context(), "cannot route request", "error", err)
 		writeFailure(w, http.StatusBadRequest, failure{Error: "Bad Request", Message: err.Error()})
@@ -196,7 +186,13 @@ func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err er
 // CorsEnforcer in aws/handlers/cors.py answers it with 204 only when the setting
 // is off, otherwise it goes down the handler chain and LocalStack's chain ends it
 // that way, where any other request ends in 404. Internal paths keep their 404.
-func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
+//
+// Last, a form body that was cut (query.ErrFormCut) hid the Action that would
+// have named the service, so the call is a query call that no service can be
+// named for. It is answered as the form error a query call with its Action in
+// the URL gets, in the query protocol. A signing scope that names a registered
+// service leaves the 404: that service speaks json and the call has no target.
+func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request, form *formReader) {
 	if match, ok := g.table.Unregistered(r); ok {
 		rc := &request.Context{Service: match.Service, Protocol: match.Protocol, RequestID: newRequestID(), Request: r}
 
@@ -218,7 +214,30 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isInternalPath(r.URL.Path) && !g.signedForRegistered(r) {
+		cut := query.CutFormAnswer(form.formErr())
+		if cut != nil {
+			rc := &request.Context{Protocol: protocol.KindQuery, RequestID: newRequestID(), Request: r}
+			writeAWSError(w, rc, cut)
+
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusNotFound, []byte(notFoundBody))
+}
+
+// signedForRegistered reports whether the signing name of r's Authorization
+// header is a registered service's. When detection still finds no service for
+// such a request, the service the scope names speaks json and the request has
+// no target to say it is a json call.
+func (g *Gateway) signedForRegistered(r *http.Request) bool {
+	cred, _ := account.FromAuthorization(r)
+
+	return cred.SigningName != "" &&
+		slices.ContainsFunc(g.regs, func(reg service.Registration) bool {
+			return reg.Metadata.SigningName == cred.SigningName
+		})
 }
 
 // formReader gives the query string and form body parameters of a request, the
@@ -237,51 +256,19 @@ func (f *formReader) values() url.Values {
 		f.done = true
 		// A request that cannot be read whole still has the parameters that
 		// read cleanly. The service answers the failure when it reads the form,
-		// unless the failure took the Action with it: unreadable tells that.
+		// unless the failure took the Action with it: formErr tells that.
 		f.vals, f.err = query.RequestFormHeld(f.r, f.hold)
 	}
 
 	return f.vals
 }
 
-// unreadable reports whether the form body of a request could not be read: it
-// is over the cap, fails mid-read, or the bodies in flight left it no room.
-// Then its pairs are not in values, the Action among them. A query string that
-// is not UTF-8 is not it: the pairs of a form that is only that are all there.
-func (f *formReader) unreadable() bool {
-	if f.err == nil || f.r.Body == nil || f.r.Body == http.NoBody {
-		return false
-	}
+// formErr is the error of reading the form, which is read now if it has not
+// been. query.CutFormAnswer tells whether it took pairs, the Action among them.
+func (f *formReader) formErr() error {
+	f.values()
 
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.r.Header.Get("Content-Type"))), formMediaType)
-}
-
-// refuseHiddenAction answers the call in rc when it is a query call whose Action
-// is in a form body that could not be read, and reports whether it did. The
-// generated serve would answer it MissingAction, where a form that names its
-// Action in the URL answers the read error.
-func (f *formReader) refuseHiddenAction(w http.ResponseWriter, rc *request.Context) bool {
-	isQuery := rc.Protocol == protocol.KindQuery || rc.Protocol == protocol.KindEC2
-	if !isQuery || rc.Operation != "" || !f.unreadable() {
-		return false
-	}
-
-	writeFormError(w, rc, f.err)
-
-	return true
-}
-
-// writeFormError answers a call whose form body could not be read as the
-// generated services' readForm does: Throttling when the bodies in flight left
-// it no room, MalformedQueryString for any other failure.
-func writeFormError(w http.ResponseWriter, rc *request.Context, err error) {
-	if errors.Is(err, protocol.ErrBusy) {
-		writeAWSError(w, rc, protocol.ThrottledQuery())
-
-		return
-	}
-
-	writeAWSError(w, rc, query.MalformedQueryString())
+	return f.err
 }
 
 // newRequestID returns a random UUID, version 4.
