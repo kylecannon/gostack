@@ -61,7 +61,7 @@ func (n *notifyStack) snsCall(form url.Values) (int, string) {
 		"SignedHeaders=host, Signature=0")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(n.t, err)
 
 	defer func() { require.NoError(n.t, resp.Body.Close()) }()

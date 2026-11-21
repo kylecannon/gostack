@@ -10,10 +10,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
@@ -34,6 +38,12 @@ const (
 	// zeroCRC32 is a CRC32 of four zero bytes, which no body here has.
 	zeroCRC32 = "AAAAAA=="
 )
+
+// testClient sends the tests' requests through a transport of its own. Every
+// httptest.Server.Close closes http.DefaultTransport's idle connections, which
+// fails a parallel test's request sent through it (see
+// TestRequestsSurviveIdleConnectionCloses); nothing closes this one's.
+var testClient = &http.Client{Transport: new(http.Transport)}
 
 // server runs the real gateway with S3 alone registered.
 type server struct {
@@ -71,6 +81,7 @@ type call struct {
 	region string
 	header map[string]string
 	body   []byte
+	trace  *httptrace.ClientTrace
 }
 
 type reply struct {
@@ -91,7 +102,12 @@ type s3Error struct {
 func (s *server) do(c call) reply {
 	s.t.Helper()
 
-	req, err := http.NewRequestWithContext(s.t.Context(), c.method, s.url+c.target, bytes.NewReader(c.body))
+	ctx := s.t.Context()
+	if c.trace != nil {
+		ctx = httptrace.WithClientTrace(ctx, c.trace)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, c.method, s.url+c.target, bytes.NewReader(c.body))
 	require.NoError(s.t, err)
 
 	if c.host != "" {
@@ -107,7 +123,7 @@ func (s *server) do(c call) reply {
 		req.Header.Set(name, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(s.t, err)
 
 	defer func() { require.NoError(s.t, resp.Body.Close()) }()
@@ -116,6 +132,63 @@ func (s *server) do(c call) reply {
 	require.NoError(s.t, err)
 
 	return reply{status: resp.StatusCode, header: resp.Header, body: body}
+}
+
+// TestRequestsSurviveIdleConnectionCloses holds the tests' requests clear of
+// every other test's httptest.Server.Close, which closes http.DefaultTransport's
+// idle connections. net/http puts a bodyless answer's connection back in the
+// idle pool before it hands the answer to the caller, so a close in that window
+// failed the request with "http: CloseIdleConnections called" while the tests
+// sent through the default transport. The trace closes them in that window and,
+// when that closed this request's connection, holds the answer back until the
+// request has failed, so the failure does not depend on the scheduler.
+func TestRequestsSurviveIdleConnectionCloses(t *testing.T) {
+	t.Parallel()
+
+	s := newServer(t)
+
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	require.True(t, ok)
+
+	var conn net.Conn
+
+	got := s.do(call{method: http.MethodPut, target: bucketPath, region: regionUSEast1, trace: &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { conn = info.Conn },
+		PutIdleConn: func(err error) {
+			if err != nil {
+				return
+			}
+
+			transport.CloseIdleConnections() // what httptest.Server.Close does
+
+			if !connClosed(conn) {
+				return
+			}
+
+			// The request fails, which ends the test and cancels its context;
+			// the timer is a guard against a hang.
+			select {
+			case <-t.Context().Done():
+			case <-time.After(time.Minute):
+			}
+		},
+	}})
+	require.Equal(t, http.StatusOK, got.status, string(got.body))
+}
+
+// connClosed reports whether c has been closed.
+func connClosed(c net.Conn) bool {
+	sc, ok := c.(syscall.Conn)
+	if !ok {
+		return false
+	}
+
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return true
+	}
+
+	return raw.Control(func(uintptr) {}) != nil
 }
 
 func (r reply) err(t *testing.T) s3Error {
@@ -495,7 +568,7 @@ func (s *server) send(method string, body []byte) (int, []byte, error) {
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, "+
 		"SignedHeaders=host, Signature=0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
 	}
