@@ -20,14 +20,22 @@ import (
 // last endpoint has answered. The endpoints are paths of one local server
 // that reads each body and answers 200, so each subscriber is its own lane.
 //
-//	BenchmarkPublishHTTP/subscribers=100/delivery=raw/payload=256KiB
+// As for BenchmarkPublish, 100 subscribers run the small payload only: at
+// 256 KiB a publish took 11 to 40 ms, under the 50 iterations in 500 ms a cell
+// needs to be gated on.
+//
+//	BenchmarkPublishHTTP/subscribers=100/delivery=raw/payload=256B
 
 var benchHTTPSubscribers = []int{1, 100}
 
 func BenchmarkPublishHTTP(b *testing.B) {
 	for _, subscribers := range benchHTTPSubscribers {
 		for _, delivery := range benchHTTPDeliveries {
-			for _, payload := range benchPayloads {
+			for i, payload := range benchPayloads {
+				if subscribers == widestFanOut && i > 0 {
+					continue
+				}
+
 				name := fmt.Sprintf("subscribers=%d/delivery=%s/payload=%s", subscribers, delivery.name, payload.name)
 				b.Run(name, func(b *testing.B) { benchPublishHTTP(b, subscribers, payload.size, delivery.attrs...) })
 			}

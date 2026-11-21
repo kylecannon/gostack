@@ -13,13 +13,21 @@ const (
 	maxBatchEntries = 10
 	// maxBatchIDSize is the longest batch entry Id.
 	maxBatchIDSize = 80
+	// batchEntryInvalid is the Code of a Failed entry that is refused as
+	// InvalidParameter is.
+	batchEntryInvalid = "InvalidParameter"
+	// msgEmptyMessage is why a Publish, and a batch entry, with no message
+	// text is refused.
+	msgEmptyMessage = "Invalid parameter: Empty message"
 )
 
 // PublishBatch publishes up to ten messages to a topic, as LocalStack's
 // publish_batch, in its order of checks: the entry count, the topic, the
 // entry ids, then each entry in turn and the total size. A failed check fails
-// the whole call, so Failed is always empty, as LocalStack and, by the
-// aws.validated test_publish_batch_exceptions, AWS answer.
+// the whole call, as LocalStack and, by the aws.validated
+// test_publish_batch_exceptions, AWS answer. The one check that fails an
+// entry alone is an empty Message: the entry is answered in Failed and the
+// others are published (docs/compat.md).
 //
 // Every delivery is sent as the queue's account, as a single Publish is:
 // LocalStack sends a batch so and a single publish as its default account,
@@ -39,8 +47,8 @@ func (p *Provider) PublishBatch(ctx context.Context, in *api.PublishBatchInput) 
 			"The batch request contains more entries than permissible.")
 	}
 
-	// LocalStack takes an empty batch and publishes nothing; AWS's API
-	// reference names EmptyBatchRequest for it.
+	// AWS's API reference names EmptyBatchRequest for an empty batch.
+	// LocalStack answers 500 InternalError: it takes len() of the missing list.
 	if len(entries) == 0 {
 		return nil, api.NewEmptyBatchRequestException("The batch request doesn't contain any entries.")
 	}
@@ -62,27 +70,54 @@ func (p *Provider) PublishBatch(ctx context.Context, in *api.PublishBatchInput) 
 		return nil, err
 	}
 
-	if fifo {
-		p.lanes.dispatch(p.publishFIFO(rc, t, msgs))
-	} else {
-		p.lanes.dispatch(p.fanOut(rc, t, msgs))
+	accepted := make([]*message, 0, len(msgs))
+
+	for _, m := range msgs {
+		if m != nil {
+			accepted = append(accepted, m)
+		}
 	}
 
+	if len(accepted) > 0 {
+		if fifo {
+			p.lanes.dispatch(p.publishFIFO(rc, t, accepted))
+		} else {
+			p.lanes.dispatch(p.fanOut(rc, t, accepted))
+		}
+	}
+
+	return batchOutput(entries, msgs), nil
+}
+
+// batchOutput answers each entry: Successful with its message's id and, on a
+// FIFO topic, where publishFIFO gave the message a sequence number, that
+// number; or Failed, when the entry had no message to publish. msgs holds a
+// message for each entry in the same order, nil for one that failed.
+func batchOutput(entries []api.PublishBatchRequestEntry, msgs []*message) *api.PublishBatchOutput {
 	out := &api.PublishBatchOutput{
-		Successful: make([]api.PublishBatchResultEntry, len(entries)),
+		Successful: make([]api.PublishBatchResultEntry, 0, len(msgs)),
 		Failed:     []api.BatchResultErrorEntry{},
 	}
 
 	for i, m := range msgs {
-		r := &out.Successful[i]
-		r.Id, r.MessageId = entries[i].Id, new(m.id)
+		if m == nil {
+			out.Failed = append(out.Failed, api.BatchResultErrorEntry{
+				Id: entries[i].Id, Code: new(batchEntryInvalid), Message: new(msgEmptyMessage), SenderFault: new(true),
+			})
 
-		if fifo {
+			continue
+		}
+
+		r := api.PublishBatchResultEntry{Id: entries[i].Id, MessageId: new(m.id)}
+
+		if m.sequence != "" {
 			r.SequenceNumber = new(m.sequence)
 		}
+
+		out.Successful = append(out.Successful, r)
 	}
 
-	return out, nil
+	return out
 }
 
 // checkBatchIDs refuses a batch whose entry ids repeat, then an id that is too
@@ -134,7 +169,8 @@ func validBatchID(id string) bool {
 }
 
 // batchMessages checks each entry in turn, as LocalStack does, then the total
-// size, and returns the entries' messages for t.
+// size, and returns the entries' messages for t, in entry order. An entry
+// with an empty Message has no message: its place is nil.
 func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message, error) {
 	fifo := strings.HasSuffix(t.ARN, fifoSuffix)
 	now := time.Now()
@@ -144,12 +180,24 @@ func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message
 	for i := range entries {
 		e := &entries[i]
 
-		msg, err := batchMessage(e, i+1)
+		err := checkAttributes(e.MessageAttributes, i+1)
 		if err != nil {
 			return nil, err
 		}
 
-		total += publishSize(msg.text, e.MessageAttributes)
+		// An entry with no Message, or an empty one, has no message and
+		// fails alone. The model marks Message required, SQS refuses an
+		// empty body, and LocalStack answers such an entry Successful, or
+		// 500 when the member is missing, for a message nobody can receive.
+		if deref(e.Message) != "" {
+			msgs[i], err = batchMessage(e)
+			if err != nil {
+				return nil, err
+			}
+
+			msgs[i].topicARN, msgs[i].time = t.ARN, now
+			total += publishSize(msgs[i].text, e.MessageAttributes)
+		}
 
 		// LocalStack checks every entry's FIFO members while reading each
 		// one, so the first entry's turn decides.
@@ -159,9 +207,6 @@ func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message
 				return nil, err
 			}
 		}
-
-		msg.topicARN, msg.time = t.ARN, now
-		msgs[i] = msg
 	}
 
 	if total > maxPublishSize {
@@ -172,21 +217,17 @@ func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message
 	return msgs, nil
 }
 
-// batchMessage checks one entry's attributes and MessageStructure, as
-// LocalStack does for each entry, and returns its message. position is the
-// entry's 1-based place in the batch.
-func batchMessage(e *api.PublishBatchRequestEntry, position int) (*message, error) {
-	err := checkAttributes(e.MessageAttributes, position)
-	if err != nil {
-		return nil, err
-	}
-
+// batchMessage checks one entry's MessageStructure, as LocalStack does for
+// each entry, and returns its message.
+func batchMessage(e *api.PublishBatchRequestEntry) (*message, error) {
 	msg := &message{
 		id: newUUID(), text: deref(e.Message), subject: deref(e.Subject), structure: deref(e.MessageStructure),
 		attrs: e.MessageAttributes, groupID: deref(e.MessageGroupId), dedupID: deref(e.MessageDeduplicationId),
 	}
 
 	if msg.structure == structureJSON {
+		var err error
+
 		msg.bodies, err = parseStructure(msg.text)
 		if err != nil {
 			return nil, err

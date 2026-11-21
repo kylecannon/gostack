@@ -72,7 +72,7 @@ var burstPayloads = []struct {
 	size int
 }{
 	{"32KiB", 32000},
-	{"256KiB", 262140},
+	{name256KiB, 262140},
 }
 
 // burstRun is SNS with a lane for each of lanes subscriptions, HTTP endpoints

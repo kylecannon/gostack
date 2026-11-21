@@ -170,6 +170,15 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 	}
 }
 
+// tooSlowToGate is true for the cells that do not reach the 50 iterations in
+// the benchmark job's 500 ms that a cell needs to be gated on: 16 workers at
+// 256 KiB took 10 to 38 ms an iteration, and 5 of the 12 endpoint and sms cells
+// there ran 15 to 46 times. Those cells run at one worker, which still spans
+// every other axis.
+func tooSlowToGate(payload, workers int) bool {
+	return workers > 1 && payload > benchPayloads[0].size
+}
+
 // BenchmarkPublishEndpoint publishes to a platform endpoint with and without
 // MessageStructure=json, whose body for the endpoint's platform is picked out.
 func BenchmarkPublishEndpoint(b *testing.B) {
@@ -180,6 +189,10 @@ func BenchmarkPublishEndpoint(b *testing.B) {
 			for _, structure := range []string{"plain", valueStructure} {
 				for _, payload := range benchPayloads {
 					for _, workers := range benchConcurrency {
+						if tooSlowToGate(payload.size, workers) {
+							continue
+						}
+
 						name := fmt.Sprintf("route=%s/endpoints=%d/structure=%s/payload=%s/concurrency=%d",
 							route, endpoints, structure, payload.name, workers)
 
@@ -224,6 +237,10 @@ func BenchmarkPublishSMS(b *testing.B) {
 
 			for _, payload := range benchPayloads {
 				for _, workers := range benchConcurrency {
+					if tooSlowToGate(payload.size, workers) {
+						continue
+					}
+
 					name := fmt.Sprintf("route=%s/numbers=%d/payload=%s/concurrency=%d",
 						route, numbers, payload.name, workers)
 

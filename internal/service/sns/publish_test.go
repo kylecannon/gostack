@@ -19,7 +19,8 @@ const (
 	fifoNoGroup    = "Invalid parameter: The MessageGroupId parameter is required for FIFO topics"
 	fifoNoDedup    = "Invalid parameter: The topic should either have ContentBasedDeduplication enabled or " +
 		"MessageDeduplicationId provided explicitly"
-	noDefault = "Invalid parameter: Message Structure - No default entry in JSON message body"
+	noDefault    = "Invalid parameter: Message Structure - No default entry in JSON message body"
+	emptyMessage = "Invalid parameter: Empty message"
 )
 
 func Test_Provider_Publish_validation(t *testing.T) {
@@ -45,7 +46,7 @@ func Test_Provider_Publish_validation(t *testing.T) {
 		{
 			// LocalStack reports the empty message before the attribute.
 			name: "empty message before attributes", params: append([]string{paramTopicArn, topic}, noType...),
-			status: http.StatusBadRequest, code: invalidParameter, message: "Invalid parameter: Empty message",
+			status: http.StatusBadRequest, code: invalidParameter, message: emptyMessage,
 		},
 		{
 			name: "bad phone number", params: []string{"PhoneNumber", "abc", paramMessage, "m"},
@@ -197,6 +198,13 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoGroup,
 		},
 		{
+			// LocalStack answers 200 for an empty group id. The AWS API
+			// reference (PublishBatchRequestEntry.MessageGroupId): "You must
+			// associate a non-empty MessageGroupId with a message."
+			name: "fifo with an empty group", params: batch(fifo, entry(1, "1", "m", paramGroup, "")),
+			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoGroup,
+		},
+		{
 			name: "fifo without deduplication", params: batch(fifo, entry(1, "1", "m", paramGroup, "g")),
 			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoDedup,
 		},
@@ -227,7 +235,16 @@ type batchSuccess struct {
 	SequenceNumber string `xml:"SequenceNumber"`
 }
 
-type batchFailed struct{}
+type batchFailure struct {
+	ID          string `xml:"Id"`
+	Code        string `xml:"Code"`
+	Message     string `xml:"Message"`
+	SenderFault bool   `xml:"SenderFault"`
+}
+
+type batchFailed struct {
+	Entries []batchFailure `xml:"member"`
+}
 
 type batchReply struct {
 	Successful []batchSuccess `xml:"PublishBatchResult>Successful>member"`
@@ -263,6 +280,55 @@ func Test_Provider_PublishBatch_standard(t *testing.T) {
 
 	msgs := q.await(2)
 	assert.ElementsMatch(t, []string{"one", "two"}, []string{msgs[0].Body, msgs[1].Body})
+}
+
+// Test_Provider_PublishBatch_empty_message: an entry with no Message, or an
+// empty one, is answered as Failed with InvalidParameter and published to no
+// one, as Publish refuses an empty message. SQS would refuse the empty body
+// and the entry would have been reported Successful for a message that was
+// never delivered. The entries beside it are published.
+func Test_Provider_PublishBatch_empty_message(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	q := s.createQueue(account, region, "q", nil)
+	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
+
+	noMessage := []string{"PublishBatchRequestEntries.member.2.Id", "b"}
+
+	out := s.publishBatch(batch(topic, entry(1, "a", "one"), noMessage, entry(3, "c", ""), entry(4, "d", "four"))...)
+
+	require.Len(t, out.Successful, 2)
+	assert.Equal(t, "a", out.Successful[0].ID)
+	assert.Equal(t, "d", out.Successful[1].ID)
+	require.NotNil(t, out.Failed)
+	assert.Equal(t, []batchFailure{
+		{ID: "b", Code: invalidParameter, Message: emptyMessage, SenderFault: true},
+		{ID: "c", Code: invalidParameter, Message: emptyMessage, SenderFault: true},
+	}, out.Failed.Entries)
+
+	msgs := q.await(2)
+	assert.ElementsMatch(t, []string{"one", "four"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, q.receive(0), "the empty entries were not sent")
+}
+
+// Test_Provider_PublishBatch_only_empty_messages: a batch whose every entry
+// fails answers 200 with an empty Successful and publishes nothing, on a FIFO
+// topic too.
+func Test_Provider_PublishBatch_only_empty_messages(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+	q := s.createQueue(account, region, "q.fifo", map[string]string{attrFifoQueue: textTrue})
+	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
+
+	out := s.publishBatch(batch(topic,
+		entry(1, "a", "", paramGroup, "g", paramDedup, "1"),
+		entry(2, "b", "", paramGroup, "g", paramDedup, "2"),
+	)...)
+
+	assert.Empty(t, out.Successful)
+	require.NotNil(t, out.Failed)
+	assert.Len(t, out.Failed.Entries, 2)
+	assert.Empty(t, q.receive(0))
 }
 
 // Test_Provider_PublishBatch_fifo publishes a batch whose third entry repeats
