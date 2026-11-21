@@ -1,0 +1,21 @@
+diff --git a/a/internal/gateway/dispatch.go b/b/internal/gateway/dispatch.go
+index a7a6d77..4b437fa 100644
+--- a/a/internal/gateway/dispatch.go
++++ b/b/internal/gateway/dispatch.go
+@@ -217,6 +217,7 @@ type formReader struct {
+ 	hold protocol.DecodeHolder
+ 	done bool
+ 	vals url.Values
++	err  error
+ }
+ 
+ func (f *formReader) values() url.Values {
+@@ -224,7 +225,7 @@ func (f *formReader) values() url.Values {
+ 		f.done = true
+ 		// A request that cannot be read whole still has the parameters that
+ 		// read cleanly. The service answers the failure when it reads the form.
+-		f.vals, _ = query.RequestFormHeld(f.r, f.hold)
++		f.vals, f.err = query.RequestFormHeld(f.r, f.hold)
+ 	}
+ 
+ 	return f.vals

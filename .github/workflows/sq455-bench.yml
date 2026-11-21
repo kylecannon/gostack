@@ -1,0 +1,42 @@
+# SQ-455 scratch measurement for PR #49. Lives only on scratch/sq455-bench and
+# is deleted with it. It does not touch the bench gate.
+name: sq455-bench
+
+on:
+  push:
+    branches: [scratch/sq455-bench]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [1, 2, 3, 4]
+    name: measure ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20261117185222-4febdb082b2c
+      - name: Measure base, head, errfield, errvar
+        run: bash .github/sq455/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sq455-${{ matrix.runner }}
+          path: ${{ runner.temp }}/sq455/out
+          retention-days: 3
