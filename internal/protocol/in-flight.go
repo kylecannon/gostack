@@ -148,9 +148,13 @@ func InFlight() (bound, held int64) {
 	return pool.capacity, pool.used
 }
 
-// BodiesWait reports whether a request body, or a decoding, waits for room
-// under the in-flight bound now. It is false when there is no bound.
-func BodiesWait() bool {
+// BodiesWait reports whether a request body, or a decoding, would still wait
+// for room under the in-flight bound were own bytes of what the pool holds
+// given back: whether the waiters, in the order they are let in, need more
+// than the room that leaves. A caller that holds own bytes and is about to
+// give them back asks it, so that a body waiting only on those bytes does not
+// count. It is false when there is no bound.
+func BodiesWait(own int64) bool {
 	pool := inFlight.Load()
 	if pool == nil {
 		return false
@@ -159,7 +163,18 @@ func BodiesWait() bool {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
-	return len(pool.growing)+len(pool.starting) > 0
+	room := pool.capacity - (pool.used - own)
+
+	for _, queue := range [][]*bodyWaiter{pool.growing, pool.starting} {
+		for _, w := range queue {
+			room -= w.n
+			if room < 0 {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // SetBodyWait sets how long a body waits for room under the bound. A test that

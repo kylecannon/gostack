@@ -17,7 +17,7 @@ import (
 func fakeHeap(t *testing.T, objects, live int64) *int {
 	t.Helper()
 
-	read, collect, limit := heap.read, heap.collect, debug.SetMemoryLimit(-1)
+	read, collect, limit, memoryCap := heap.read, heap.collect, debug.SetMemoryLimit(-1), SetMemoryCap(0)
 	collections := 0
 
 	heap.read = func() (int64, int64) { return objects, live }
@@ -29,15 +29,18 @@ func fakeHeap(t *testing.T, objects, live int64) *int {
 	t.Cleanup(func() {
 		heap.read, heap.collect = read, collect
 		debug.SetMemoryLimit(limit)
+		SetMemoryCap(memoryCap)
 	})
 
 	return &collections
 }
 
-// Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit: with no Go
-// memory limit nothing is reserved; with one, an estimate is reserved while the
-// heap's objects, what is reserved and it fit the limit less the in-flight
-// bound and HeapSlack, and given back by its release.
+// Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit: an estimate
+// is reserved while the heap's objects, what is reserved and it fit the Go
+// memory limit less the in-flight bound and HeapSlack, and given back by its
+// release. With no Go memory limit and no memory cap, the limit weighed is
+// SoftLimit(UnknownMemory): a body that fits it is reserved, one past it is
+// not.
 func Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit(t *testing.T) {
 	const objects = 20 << 20
 
@@ -49,8 +52,14 @@ func Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit(t *testing.T
 
 	debug.SetMemoryLimit(math.MaxInt64)
 
-	_, ok := ReserveHeap(1)
-	assert.False(t, ok, "no limit: nothing is proven to fit")
+	unknown := SoftLimit(UnknownMemory) - bound - HeapSlack - objects
+
+	_, ok := ReserveHeap(unknown + 1)
+	assert.False(t, ok, "no limit: a byte past the room of the unknown memory")
+
+	release, ok := ReserveHeap(unknown)
+	require.True(t, ok, "no limit: the room of the unknown memory")
+	release()
 
 	room := int64(100 << 20)
 	debug.SetMemoryLimit(bound + HeapSlack + objects + room)
@@ -77,6 +86,43 @@ func Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit(t *testing.T
 
 	assert.Zero(t, heap.reserved, "every release gives back its reservation")
 	assert.Zero(t, *collections, "the heap was all live: no collection could make room")
+}
+
+// Test_ReserveHeap_TheMemoryCapBoundsTheLimit: a memory cap below the Go
+// memory limit, a container's under a GOMEMLIMIT set above it, is the limit
+// ReserveHeap weighs against; one above it changes nothing; with no Go memory
+// limit, the cap is the limit.
+func Test_ReserveHeap_TheMemoryCapBoundsTheLimit(t *testing.T) {
+	const objects = 20 << 20
+
+	fakeHeap(t, objects, objects)
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	container := int64(512 << 20 / 100 * 85)
+	room := container - bound - HeapSlack - objects
+
+	for _, limit := range []int64{4 << 30, math.MaxInt64} {
+		debug.SetMemoryLimit(limit)
+		SetMemoryCap(container)
+
+		_, ok := ReserveHeap(room + 1)
+		assert.False(t, ok, "limit %d: a byte past the cap's room", limit)
+
+		release, ok := ReserveHeap(room)
+		require.True(t, ok, "limit %d: the cap's room", limit)
+		release()
+	}
+
+	debug.SetMemoryLimit(container - 100<<20)
+	SetMemoryCap(container)
+
+	_, ok := ReserveHeap(room - 100<<20 + 1)
+	assert.False(t, ok, "a limit under the cap is the limit")
+
+	assert.Zero(t, heap.reserved)
 }
 
 // Test_ReserveHeap_CollectsWhenOnlyGarbageStandsInTheWay: objects the last
@@ -187,17 +233,20 @@ func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
 // Test_HeapCouldFit_WeighsWhatIsLiveAndReserved: HeapCouldFit admits what
 // ReserveHeap could reserve after a collection, from what is live and what is
 // reserved, reserving nothing and collecting nothing; with no Go memory limit
-// it admits nothing.
+// it weighs them against the room of SoftLimit(UnknownMemory).
 func Test_HeapCouldFit_WeighsWhatIsLiveAndReserved(t *testing.T) {
 	collections := fakeHeap(t, 80<<20, 20<<20)
-
-	debug.SetMemoryLimit(math.MaxInt64)
-	assert.False(t, HeapCouldFit(0), "no limit")
 
 	bound, _ := InFlight()
 	if bound == 0 {
 		bound = DefaultInFlight
 	}
+
+	debug.SetMemoryLimit(math.MaxInt64)
+
+	unknown := SoftLimit(UnknownMemory) - bound - HeapSlack - 20<<20
+	assert.True(t, HeapCouldFit(unknown), "no limit: the room of the unknown memory")
+	assert.False(t, HeapCouldFit(unknown+1), "no limit: a byte past it")
 
 	room := int64(100 << 20)
 	debug.SetMemoryLimit(bound + HeapSlack + room)
@@ -217,7 +266,8 @@ func Test_HeapCouldFit_WeighsWhatIsLiveAndReserved(t *testing.T) {
 
 // Test_BodiesWait_InEitherQueue:BodiesWait reports a body or a decoding
 // waiting for room under the in-flight bound, in either queue, and nothing
-// once it is granted; with no bound nothing waits.
+// once it is granted; with no bound nothing waits. A waiter that what the
+// caller gives back would let in does not count; one it would not does.
 func Test_BodiesWait_InEitherQueue(t *testing.T) {
 	old, oldWait := inFlight.Load(), bodyWait.Load()
 
@@ -227,7 +277,7 @@ func Test_BodiesWait_InEitherQueue(t *testing.T) {
 	})
 
 	SetInFlight(0)
-	assert.False(t, BodiesWait(), "no bound")
+	assert.False(t, BodiesWait(0), "no bound")
 
 	SetInFlight(DefaultInFlight)
 	SetBodyWait(time.Minute)
@@ -248,13 +298,40 @@ func Test_BodiesWait_InEitherQueue(t *testing.T) {
 			return len(*queue) == 1
 		}, 10*time.Second, time.Millisecond)
 
-		assert.True(t, BodiesWait(), "a body waits for the bound")
+		assert.True(t, BodiesWait(0), "a body waits for the bound")
+		assert.False(t, BodiesWait(pool.capacity), "a body waits only on what the caller holds")
+		assert.False(t, BodiesWait(1), "a body waits only on the caller's byte")
 
 		pool.release(pool.capacity)
 		require.NoError(t, <-waited)
-		assert.False(t, BodiesWait(), "the waiter is granted")
+		assert.False(t, BodiesWait(0), "the waiter is granted")
 		pool.release(1)
 	}
+
+	// Two waiters in order, of which what the caller holds lets in only the
+	// first.
+	require.NoError(t, pool.acquire(context.Background(), pool.capacity, &pool.starting))
+
+	waited := make(chan error, 2)
+
+	for range 2 {
+		go func() { waited <- pool.acquire(context.Background(), pool.capacity/2, &pool.starting) }()
+	}
+
+	require.Eventually(t, func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+
+		return len(pool.starting) == 2
+	}, 10*time.Second, time.Millisecond)
+
+	assert.True(t, BodiesWait(pool.capacity/2), "the second waits past what the caller gives back")
+	assert.False(t, BodiesWait(pool.capacity), "both are let in")
+
+	pool.release(pool.capacity)
+	require.NoError(t, <-waited)
+	require.NoError(t, <-waited)
+	pool.release(pool.capacity / 2 * 2)
 }
 
 // Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered: once a dense

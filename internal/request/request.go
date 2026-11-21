@@ -109,6 +109,15 @@ func (rc *Context) ReleasePool() {
 	rc.decode.Release()
 }
 
+// PoolHeld is protocol.HeapKeeper: what ReleasePool would give back.
+func (rc *Context) PoolHeld() int64 {
+	if c := rc.charge(); c != nil {
+		return c.PoolHeld()
+	}
+
+	return rc.decode.Held()
+}
+
 // ReleaseDecode gives back what HoldDecode charged to this Context's own hold,
 // for a request that carries no protocol.Charge. What a request with one holds
 // is given back by protocol.ReleaseBody, and by the gateway when the handler

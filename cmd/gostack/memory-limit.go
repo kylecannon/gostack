@@ -8,54 +8,92 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/kylecannon/gostack/internal/protocol"
 )
 
-const (
-	// memoryLimitPercent is how much of a container's memory limit becomes the
-	// Go runtime's soft limit (debug.SetMemoryLimit). The runtime counts what
-	// it has mapped for heap, stacks and its own tables; the container also
-	// counts the binary, the page cache and the services' tmpfs, so the rest is
-	// left to them. docs/architecture.md, "Memory under a container limit",
-	// has the measurements the number comes from.
-	memoryLimitPercent = 85
+// cgroupV1Unlimited is where cgroup v1 reports a limit that is not set: the
+// largest page-aligned int64, 2^63 less a page. Any limit past 2^60 is not a
+// limit anyone set.
+const cgroupV1Unlimited = 1 << 60
 
-	// cgroupV1Unlimited is where cgroup v1 reports a limit that is not set:
-	// the largest page-aligned int64, 2^63 less a page. Any limit past 2^60 is
-	// not a limit anyone set.
-	cgroupV1Unlimited = 1 << 60
-
-	percent = 100
-)
-
-// setMemoryLimit gives the Go runtime a soft memory limit of
-// memoryLimitPercent of the container's, when the process runs under a cgroup
-// memory limit and GOMEMLIMIT is not set, and logs it once. The collector then
-// works harder as the heap nears the limit, in place of letting the container's
+// setMemoryLimit reads the memory the process may use, its cgroup's memory
+// limit or else its machine's memory (/proc/meminfo's MemTotal), and returns
+// protocol.SoftLimit of it, the cap on what the decode budget takes as the Go
+// memory limit (protocol.SetMemoryCap). When GOMEMLIMIT is not set it also
+// gives the Go runtime that soft memory limit, and logs it once: the collector
+// then works harder as the heap nears it, in place of letting the container's
 // OOM killer end the process with a request half decoded. A GOMEMLIMIT in the
 // environment, whatever its value (off included), is the user's and is left as
-// the runtime read it. root is the file system root the cgroup files are read
-// below; set is debug.SetMemoryLimit.
-func setMemoryLimit(getenv func(string) string, root string, set func(int64) int64) {
-	if getenv("GOMEMLIMIT") != "" {
-		return
-	}
-
-	limit, source, ok := cgroupMemoryLimit(root)
+// the runtime read it; the cap still bounds what the decode budget takes from
+// it. It returns 0 when it reads neither (darwin), or when the memory is too
+// small to keep. root is the file system root the files are read below; set is
+// debug.SetMemoryLimit.
+func setMemoryLimit(getenv func(string) string, root string, set func(int64) int64) int64 {
+	memory, source, ok := cgroupMemoryLimit(root)
 	if !ok {
-		return
+		memory, source, ok = machineMemory(root)
 	}
 
-	// A limit under percent bytes would round to zero, which the runtime
-	// takes as a limit of nothing; it is no limit anyone could run under.
-	soft := limit / percent * memoryLimitPercent
+	if !ok {
+		return 0
+	}
+
+	// Memory under 100 bytes rounds to zero, which the runtime takes as a
+	// limit of nothing; it is no limit anyone could run under.
+	soft := protocol.SoftLimit(memory)
 	if soft <= 0 {
-		return
+		return 0
+	}
+
+	if getenv("GOMEMLIMIT") != "" {
+		slog.Info("gostack caps the decode budget's memory at the memory it may use; GOMEMLIMIT is left as set",
+			"memory_cap", soft, "memory", memory, "percent", protocol.MemoryPercent, "source", source)
+
+		return soft
 	}
 
 	set(soft)
 
-	slog.Info("gostack set the Go memory limit from the container's memory limit",
-		"memory_limit", soft, "container_limit", limit, "percent", memoryLimitPercent, "source", source)
+	slog.Info("gostack set the Go memory limit from the memory it may use",
+		"memory_limit", soft, "memory", memory, "percent", protocol.MemoryPercent, "source", source)
+
+	return soft
+}
+
+// machineMemory returns the memory of the machine, MemTotal in /proc/meminfo
+// read below root, and the file it came from. It reports false when the file
+// is missing or names no MemTotal (darwin).
+func machineMemory(root string) (memory int64, source string, ok bool) {
+	fsys, err := os.OpenRoot(root)
+	if err != nil {
+		return 0, "", false
+	}
+
+	defer func() { _ = fsys.Close() }()
+
+	const file = "proc/meminfo"
+
+	text, err := fsys.ReadFile(file)
+	if err != nil {
+		return 0, "", false
+	}
+
+	for line := range strings.SplitSeq(string(text), "\n") {
+		rest, found := strings.CutPrefix(line, "MemTotal:")
+		if !found {
+			continue
+		}
+
+		kib, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rest), "kB")), 10, 64)
+		if err != nil || kib <= 0 || kib >= cgroupV1Unlimited>>10 {
+			return 0, "", false
+		}
+
+		return kib << 10, "/" + file, true //nolint:mnd // meminfo counts KiB
+	}
+
+	return 0, "", false
 }
 
 // cgroupMemoryLimit returns the memory limit in bytes of the cgroup this
@@ -140,7 +178,8 @@ func parseCgroupLimit(text string) (int64, bool) {
 	return n, true
 }
 
-// applyMemoryLimit is setMemoryLimit for this process.
+// applyMemoryLimit is setMemoryLimit for this process, which also caps what
+// the decode budget takes as the Go memory limit.
 func applyMemoryLimit() {
-	setMemoryLimit(os.Getenv, "/", debug.SetMemoryLimit)
+	protocol.SetMemoryCap(setMemoryLimit(os.Getenv, "/", debug.SetMemoryLimit))
 }

@@ -29,6 +29,8 @@ type HeapKeeper interface {
 	// from then on, so that a body decoded past DecodeBudget holds the bound
 	// no longer than one refused there.
 	ReleasePool()
+	// PoolHeld is what ReleasePool would give back.
+	PoolHeld() int64
 }
 
 // heap is what ReserveHeap has reserved, and the samples it reads the heap
@@ -57,20 +59,18 @@ const (
 
 // ReserveHeap reserves estimate bytes of heap for a decoding that keeps at most
 // that much at its peak, and returns the release that gives them back once it
-// is decoded. It reports false, reserving nothing, when there is no Go memory
-// limit (debug.SetMemoryLimit, which cmd/gostack sets from a container's), or
-// when the heap's objects now, what is reserved already and estimate pass the
-// limit less the in-flight bound, which what every other request's body and
+// is decoded. It reports false, reserving nothing, when the heap's objects
+// now, what is reserved already and estimate pass the room heapRoom weighs
+// them against: the Go memory limit (debug.SetMemoryLimit, which cmd/gostack
+// sets from a container's or a machine's memory), no more than the memory cap,
+// less the in-flight bound, which what every other request's body and
 // decoding holds stays below, and HeapSlack. Objects not yet collected count
 // as live; when only they stand in the way, it runs one collection, one
 // request at a time, and reads the heap again. A decoder refuses the body when
 // it reports false: decoding it could end in the container's OOM killer, which
 // waiting does not prevent.
 func ReserveHeap(estimate int64) (release func(), ok bool) {
-	room, ok := heapRoom()
-	if !ok {
-		return nil, false
-	}
+	room := heapRoom()
 
 	fits, collectable := tryReserve(estimate, room)
 	if !fits && collectable && heap.collecting.TryLock() {
@@ -91,13 +91,18 @@ func ReserveHeap(estimate int64) (release func(), ok bool) {
 	}, true
 }
 
-// heapRoom is what ReserveHeap weighs the heap against: the Go memory limit
-// less the in-flight bound and HeapSlack. It reports false when there is no
-// limit.
-func heapRoom() (room int64, ok bool) {
+// heapRoom is what ReserveHeap weighs the heap against: the Go memory limit,
+// no more than the memory cap (SetMemoryCap), less the in-flight bound and
+// HeapSlack. With neither a limit nor a cap it takes SoftLimit(UnknownMemory)
+// as the limit.
+func heapRoom() int64 {
 	limit := debug.SetMemoryLimit(-1)
+	if memoryCap := memoryCap.Load(); memoryCap > 0 {
+		limit = min(limit, memoryCap)
+	}
+
 	if limit == math.MaxInt64 {
-		return 0, false
+		limit = SoftLimit(UnknownMemory)
 	}
 
 	bound, _ := InFlight()
@@ -105,19 +110,51 @@ func heapRoom() (room int64, ok bool) {
 		bound = DefaultInFlight
 	}
 
-	return limit - bound - HeapSlack, true
+	return limit - bound - HeapSlack
+}
+
+const (
+	// MemoryPercent is how much of the memory the process may use, its
+	// container's limit or else its machine's, becomes its Go memory limit
+	// (cmd/gostack) and the memory cap (SetMemoryCap). The runtime counts what
+	// it has mapped for heap, stacks and its own tables; the container also
+	// counts the binary, the page cache and the services' tmpfs, so the rest
+	// is left to them. docs/architecture.md, "Memory under a container limit",
+	// has the measurements the number comes from.
+	MemoryPercent = 85
+
+	// UnknownMemory is the memory heapRoom takes as the process's when nothing
+	// says what it may use, no Go memory limit and no memory cap: on darwin,
+	// where cmd/gostack reads no memory, and in a test.
+	UnknownMemory = 1 << 30
+
+	percent = 100
+)
+
+// SoftLimit is MemoryPercent of memory bytes.
+func SoftLimit(memory int64) int64 {
+	return memory / percent * MemoryPercent
+}
+
+// memoryCap is the most heapRoom takes as the Go memory limit (SetMemoryCap);
+// zero is none.
+var memoryCap atomic.Int64
+
+// SetMemoryCap makes n the most ReserveHeap takes as the Go memory limit,
+// whatever GOMEMLIMIT set the runtime's to, and returns the cap it replaces.
+// cmd/gostack sets it to SoftLimit of the memory its container, or else its
+// machine, has. Zero or less removes it.
+func SetMemoryCap(n int64) (old int64) {
+	return memoryCap.Swap(max(n, 0))
 }
 
 // HeapCouldFit reports whether ReserveHeap could reserve n now: whether what
 // the last collection found live, what is reserved and n fit the room
-// ReserveHeap weighs them against. It reserves nothing and runs no
+// ReserveHeap weighs them against (heapRoom). It reserves nothing and runs no
 // collection, so a decoder can refuse a body early that ReserveHeap would
 // refuse at the end of its walk.
 func HeapCouldFit(n int64) bool {
-	room, ok := heapRoom()
-	if !ok {
-		return false
-	}
+	room := heapRoom()
 
 	heap.mu.Lock()
 	defer heap.mu.Unlock()

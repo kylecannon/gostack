@@ -3,6 +3,7 @@ package dynamodb_test
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -56,12 +57,131 @@ func denseItem(id, elements string) string {
 // roomyMemoryLimit gives the process a Go memory limit far above what any body
 // here keeps, as cmd/gostack gives it one from a container's, so that a body
 // charged past protocol.DecodeFactor is decoded (protocol.ReserveHeap) and not
-// refused for want of a limit. The old limit is put back after tb.
+// refused for want of room. The old limit is put back after tb.
 func roomyMemoryLimit(tb testing.TB) {
 	tb.Helper()
 
 	old := debug.SetMemoryLimit(8 << 30)
 	tb.Cleanup(func() { debug.SetMemoryLimit(old) })
+}
+
+// noMemoryLimit runs tb with no Go memory limit and no memory cap, as gostack
+// runs where it reads neither a container's limit nor a machine's memory, so
+// that the decode budget weighs a body against the room of
+// protocol.UnknownMemory. The old limit and cap are put back after tb.
+func noMemoryLimit(tb testing.TB) {
+	tb.Helper()
+
+	old, oldCap := debug.SetMemoryLimit(math.MaxInt64), protocol.SetMemoryCap(0)
+
+	tb.Cleanup(func() {
+		debug.SetMemoryLimit(old)
+		protocol.SetMemoryCap(oldCap)
+	})
+}
+
+// numberAttributes is an item of key id holding n number attributes.
+func numberAttributes(id string, n int) string {
+	var b strings.Builder
+
+	b.WriteString(`{"id":{"S":"` + id + `"}`)
+
+	for i := range n {
+		fmt.Fprintf(&b, `,"a%d":{"N":"1"}`, i)
+	}
+
+	return b.String() + "}"
+}
+
+// Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts: with no Go memory limit
+// and no memory cap, the default `docker run`, items that AWS and LocalStack
+// accept and every other service's budget refuses are served, weighed against
+// the room of protocol.UnknownMemory; a body whose heap does not fit that room
+// is still refused.
+func Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts(t *testing.T) {
+	noMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("open"))
+
+	for name, item := range map[string]string{
+		"a list of 10,445 numbers":  denseItem("l10445", numberList(10_445)),
+		"22,433 number attributes":  numberAttributes("w22433", 22_433),
+		"a list of 50,000 numbers":  denseItem("l50000", numberList(50_000)),
+		"a list of 130,000 numbers": denseItem("l130000", numberList(numbers)),
+	} {
+		got := s.call(t, usEast1, opPut, `{"TableName":"open","Item":`+item+`}`)
+		assert.Equal(t, http.StatusOK, got.status, "%s: %s", name, got.body[:min(len(got.body), 300)])
+	}
+
+	// No legal body keeps more than the 758 MiB of room the unknown memory
+	// leaves (the densest batch keeps 355 MiB), so the in-flight bound takes
+	// all but 64 MiB of it: 1,000,000 numbers in a 10 MB body keep more than
+	// that at their peak, and are refused.
+	protocol.SetInFlight(protocol.SoftLimit(protocol.UnknownMemory) - protocol.HeapSlack - 64<<20)
+
+	got := s.call(t, usEast1, opPut, `{"TableName":"open","Item":`+denseItem("over", numberList(1_000_000))+`}`)
+	assert.Equal(t, http.StatusBadRequest, got.status, got.body[:min(len(got.body), 300)])
+	assert.Contains(t, got.body, "more than gostack allows")
+
+	_, held := protocol.InFlight()
+	assert.Zero(t, held, "every request gives back what it held")
+}
+
+// Test_decodeBudget_aDenseBodyBesideASparseOneIsServed: a dense BatchWriteItem
+// of 15.5 MB and a sparse one of 9.75 MB, both legal, sent at once, round
+// after round. The sparse body waits for room under the in-flight bound that
+// the dense body holds, and only that; the dense body is served in every
+// round, not refused for a waiter its own move lets in.
+func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
+	const rounds = 15
+
+	roomyMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pair"))
+
+	server := httptest.NewServer(s.handler)
+	t.Cleanup(server.Close)
+
+	dense := make([]string, 0, batchItems)
+	sparse := make([]string, 0, batchItems)
+
+	for i := range batchItems {
+		dense = append(dense, `{"PutRequest":{"Item":`+denseItem(fmt.Sprint("d", i), numberList(62_000))+`}}`)
+		sparse = append(sparse, `{"PutRequest":{"Item":{"id":{"S":"`+fmt.Sprint("s", i)+`"},"t":{"S":"`+
+			strings.Repeat("x", 390_000)+`"}}}}`)
+	}
+
+	bodies := []string{
+		`{"RequestItems":{"pair":[` + strings.Join(dense, ",") + `]}}`,
+		`{"RequestItems":{"pair":[` + strings.Join(sparse, ",") + `]}}`,
+	}
+
+	for round := range rounds {
+		var (
+			wg      sync.WaitGroup
+			answers [2]string
+			status  [2]int
+		)
+
+		for i, body := range bodies {
+			wg.Go(func() { status[i], answers[i] = sendTo(t, server, "BatchWriteItem", body) })
+		}
+
+		wg.Wait()
+
+		for i, name := range []string{"dense", "sparse"} {
+			assert.Equal(t, http.StatusOK, status[i], "round %d, %s: %s", round, name, answers[i][:min(len(answers[i]), 200)])
+		}
+	}
+
+	_, held := protocol.InFlight()
+	assert.Zero(t, held, "every request gives back what it held")
 }
 
 // Test_decodeBudget_worstLegalBody sends, for each operation that takes
@@ -71,7 +191,7 @@ func roomyMemoryLimit(tb testing.TB) {
 // of the smallest values at 400 KB of item, and lists nested to the depth
 // limit. The batch and the transaction are the largest each admits.
 func Test_decodeBudget_worstLegalBody(t *testing.T) {
-	roomyMemoryLimit(t)
+	noMemoryLimit(t)
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("dense"))
@@ -145,7 +265,7 @@ func Test_decodeBudget_worstLegalBody(t *testing.T) {
 // answers ValidationException, as it does for any key of the wrong shape, and
 // the budget does not.
 func Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler(t *testing.T) {
-	roomyMemoryLimit(t)
+	noMemoryLimit(t)
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("keys"))

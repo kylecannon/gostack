@@ -30,10 +30,17 @@ const (
 )
 
 // recordingHold is a protocol.HeapKeeper that records what a decoder asks of
-// it, in order, and keeps the reservations it is given.
+// it, in order, and keeps the reservations it is given. When pool is not nil,
+// it is what the request holds of the in-flight bound, which ReleasePool
+// gives back.
 type recordingHold struct {
 	steps []string
 	kept  []func()
+	pool  *protocol.DecodeHold
+}
+
+func (h *recordingHold) PoolHeld() int64 {
+	return h.pool.Held()
 }
 
 func (h *recordingHold) HoldDecode(int64) (int64, error) {
@@ -51,6 +58,7 @@ func (h *recordingHold) KeepHeap(release func()) bool {
 
 func (h *recordingHold) ReleasePool() {
 	h.steps = append(h.steps, stepReleasePool)
+	h.pool.Release()
 }
 
 func (h *recordingHold) release() {
@@ -325,7 +333,7 @@ func Test_DecodeWithin_NoDenseBodyWhileABodyWaits(t *testing.T) {
 		waited <- err
 	}()
 
-	require.Eventually(t, protocol.BodiesWait, 10*time.Second, time.Millisecond,
+	require.Eventually(t, func() bool { return protocol.BodiesWait(0) }, 10*time.Second, time.Millisecond,
 		"the second hold waits for the bound")
 
 	body := denseBody(300_000)
@@ -348,6 +356,62 @@ func Test_DecodeWithin_NoDenseBodyWhileABodyWaits(t *testing.T) {
 	_, _, decodeErr = DecodeWithin[denseValue](body, budget, served)
 	require.Nil(t, decodeErr, "nothing waits: the dense body is served")
 	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, served.steps)
+
+	served.release()
+	requireLaneFree(t)
+}
+
+// Test_DecodeWithin_ABodyWaitingOnlyOnTheDenseBodysBytesDoesNotStopIt: a
+// request that waits for room under the in-flight bound only because a body
+// past DecodeBudget holds it does not stop that body: the body is moved off
+// the bound, which lets the waiting request in, and served. Refusing it would
+// answer a legal request with a terminal 400 for want of bytes it holds itself.
+func Test_DecodeWithin_ABodyWaitingOnlyOnTheDenseBodysBytesDoesNotStopIt(t *testing.T) {
+	withMemoryLimit(t, 8<<30)
+
+	bound, _ := protocol.InFlight()
+
+	t.Cleanup(func() {
+		protocol.SetInFlight(bound)
+		protocol.SetBodyWait(protocol.DefaultBodyWait)
+	})
+
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	protocol.SetBodyWait(time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// The dense body's request holds the bound less one body; the other
+	// request waits for as much, which only the dense body's bytes free.
+	var dense, waiting protocol.DecodeHold
+
+	_, err := dense.Cover(ctx, 1<<40)
+	require.NoError(t, err)
+	require.Positive(t, dense.Held())
+
+	waited := make(chan error, 1)
+
+	go func() {
+		_, err := waiting.Cover(ctx, 1<<40)
+		waited <- err
+	}()
+
+	t.Cleanup(waiting.Release)
+
+	require.Eventually(t, func() bool { return protocol.BodiesWait(0) }, 10*time.Second, time.Millisecond,
+		"the other request waits for the bound")
+
+	body := denseBody(300_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+
+	served := &recordingHold{pool: &dense}
+	t.Cleanup(served.release)
+
+	_, _, decodeErr := DecodeWithin[denseValue](body, budget, served)
+	require.Nil(t, decodeErr, "the waiter waits only on the dense body's bytes: served")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, served.steps)
+	require.NoError(t, <-waited, "moving the dense body lets the waiting request in")
 
 	served.release()
 	requireLaneFree(t)

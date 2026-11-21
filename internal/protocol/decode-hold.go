@@ -107,6 +107,16 @@ func (h *DecodeHold) Release() {
 	}
 }
 
+// Held is what the hold holds of the in-flight bound now. A nil hold holds
+// nothing.
+func (h *DecodeHold) Held() int64 {
+	if h == nil {
+		return 0
+	}
+
+	return h.held
+}
+
 // planned is what Cover would hold from pool for a decoding that costs cost, for
 // a hold that holds nothing yet: what passes FreeDecode, in whole steps, up to
 // its room. It is zero for a hold that charges nothing or already holds some.

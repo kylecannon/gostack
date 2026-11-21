@@ -90,6 +90,17 @@ func (c *Charge) ReleasePool() {
 	c.ReleaseDecode()
 }
 
+// PoolHeld is HeapKeeper: what the request's body and its decoding hold of
+// the in-flight bound now.
+func (c *Charge) PoolHeld() int64 {
+	held := c.decode.Held()
+	if c.meter != nil {
+		held += c.meter.held
+	}
+
+	return held
+}
+
 // Release gives back everything the request holds. The gateway calls it when
 // the handler returns.
 func (c *Charge) Release() {

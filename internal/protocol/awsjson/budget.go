@@ -164,10 +164,12 @@ var errNoRoom = errors.New("no room for the body on the heap")
 // for is free again as soon as it would be were the body refused. It fails
 // with errNoRoom, holding what it held, when another body has the lane or the
 // heap has no room: the answer at protocol.DecodeFactor, without waiting. It
-// fails the same way, before taking the lane, while any request waits for room
-// under the in-flight bound (protocol.BodiesWait): the queue then drains one
-// body at a time, and a dense body walked and decoded beside it, or walked to
-// its end only to be refused, slows what every waiting request waits on.
+// fails the same way, before taking the lane, while any request would still
+// wait for room under the in-flight bound once the body gave back what it
+// holds of it (protocol.BodiesWait): the queue then drains one body at a time,
+// and a dense body walked and decoded beside it, or walked to its end only to
+// be refused, slows what every waiting request waits on. A request that waits
+// only on the body's own bytes does not count: moving the body lets it in.
 //
 // It also fails when the heap could not hold the body and the heap its walk
 // would end at, projected from the heap the first read bytes of it hold, so
@@ -176,7 +178,14 @@ var errNoRoom = errors.New("no room for the body on the heap")
 // reserved once it ends, and a body the projection admits can still be
 // refused there.
 func moveBody(body []byte, r *reservations, heap, read int64) error {
-	if protocol.BodiesWait() || !protocol.HeapCouldFit(int64(len(body))+projectHeap(heap, read, len(body))) {
+	keeper, keeps := r.hold.(protocol.HeapKeeper)
+
+	var own int64
+	if keeps {
+		own = keeper.PoolHeld()
+	}
+
+	if protocol.BodiesWait(own) || !protocol.HeapCouldFit(int64(len(body))+projectHeap(heap, read, len(body))) {
 		return errNoRoom
 	}
 
@@ -188,7 +197,7 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	r.lane = lane
 	r.keep(release)
 
-	if keeper, ok := r.hold.(protocol.HeapKeeper); ok {
+	if keeps {
 		keeper.ReleasePool()
 	}
 

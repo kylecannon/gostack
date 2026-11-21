@@ -68,13 +68,13 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 		},
 		{
 			name:   "v2 max is no limit",
-			files:  map[string]string{rootFile: "max\n", procCgroup: "0::/\n"},
+			files:  map[string]string{rootFile: unlimited, procCgroup: "0::/\n"},
 			wantOK: false,
 		},
 		{
 			name: "v2 max in the process's own cgroup passes to the mount's root",
 			files: map[string]string{
-				"sys/fs/cgroup/system.slice/gostack.service/memory.max": "max\n",
+				"sys/fs/cgroup/system.slice/gostack.service/memory.max": unlimited,
 				rootFile:   container512,
 				procCgroup: "0::/system.slice/gostack.service\n",
 			},
@@ -147,10 +147,45 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 	}
 }
 
-// Test_setMemoryLimit sets 85% of the container's limit, once, unless the user
-// set GOMEMLIMIT, whatever its value.
+const (
+	meminfo    = "proc/meminfo"
+	unlimited  = "max\n"
+	goMemLimit = "GOMEMLIMIT"
+)
+
+// Test_machineMemory reads MemTotal from /proc/meminfo, and reports none when
+// the file is missing (darwin) or names no MemTotal.
+func Test_machineMemory(t *testing.T) {
+	memory, source, ok := machineMemory(cgroupRoot(t, map[string]string{
+		meminfo: "MemTotal:        8034212 kB\nMemFree:         1234567 kB\n",
+	}))
+	require.True(t, ok)
+	assert.Equal(t, int64(8034212)<<10, memory)
+	assert.Equal(t, "/"+meminfo, source)
+
+	_, _, ok = machineMemory(cgroupRoot(t, nil))
+	assert.False(t, ok, "no /proc/meminfo")
+
+	_, _, ok = machineMemory(cgroupRoot(t, map[string]string{meminfo: "MemFree: 1 kB\n"}))
+	assert.False(t, ok, "no MemTotal")
+
+	_, _, ok = machineMemory(cgroupRoot(t, map[string]string{meminfo: "MemTotal: lots kB\n"}))
+	assert.False(t, ok, "MemTotal is no number")
+}
+
+// Test_setMemoryLimit sets 85% of the container's limit, or else of the
+// machine's memory, once, unless the user set GOMEMLIMIT, whatever its value;
+// it returns that 85% as the decode budget's memory cap either way, so a
+// GOMEMLIMIT above the container's limit does not raise the decode budget's
+// room past it.
 func Test_setMemoryLimit(t *testing.T) {
-	root := cgroupRoot(t, map[string]string{rootFile: container512})
+	const (
+		soft512   = 512 << 20 / 100 * 85
+		machine   = "MemTotal:        2097152 kB\n" // 2 GiB
+		softTwoGi = 2 << 30 / 100 * 85
+	)
+
+	root := cgroupRoot(t, map[string]string{rootFile: container512, meminfo: machine})
 
 	tests := []struct {
 		name    string
@@ -159,10 +194,14 @@ func Test_setMemoryLimit(t *testing.T) {
 		want    int64
 		wantSet bool
 	}{
-		{"a container limit", nil, root, 512 << 20 / 100 * 85, true},
-		{"GOMEMLIMIT wins", map[string]string{"GOMEMLIMIT": "300MiB"}, root, 0, false},
-		{"GOMEMLIMIT=off wins too", map[string]string{"GOMEMLIMIT": "off"}, root, 0, false},
-		{"no container limit", nil, cgroupRoot(t, nil), 0, false},
+		{"a container limit", nil, root, soft512, true},
+		{"GOMEMLIMIT wins", map[string]string{goMemLimit: "300MiB"}, root, soft512, false},
+		{"GOMEMLIMIT above the container limit", map[string]string{goMemLimit: "4GiB"}, root, soft512, false},
+		{"GOMEMLIMIT=off wins too", map[string]string{goMemLimit: "off"}, root, soft512, false},
+		{"no container limit: the machine's memory", nil, cgroupRoot(t, map[string]string{
+			rootFile: unlimited, meminfo: machine,
+		}), softTwoGi, true},
+		{"no container limit and no machine memory read", nil, cgroupRoot(t, nil), 0, false},
 		// 85% of 99 bytes rounds to 0, which the runtime would take as a limit
 		// of nothing.
 		{"a limit too small to keep", nil, cgroupRoot(t, map[string]string{rootFile: "99\n"}), 0, false},
@@ -173,11 +212,13 @@ func Test_setMemoryLimit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var calls []int64
 
-			setMemoryLimit(func(k string) string { return tt.env[k] }, tt.root, func(n int64) int64 {
+			memoryCap := setMemoryLimit(func(k string) string { return tt.env[k] }, tt.root, func(n int64) int64 {
 				calls = append(calls, n)
 
 				return math.MaxInt64
 			})
+
+			assert.Equal(t, tt.want, memoryCap, "the decode budget's memory cap")
 
 			if !tt.wantSet {
 				assert.Empty(t, calls)
