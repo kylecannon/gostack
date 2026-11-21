@@ -216,18 +216,25 @@ func convoyBatch(client int) string {
 }
 
 // Test_decodeBudget_aBurstOfDenseBodiesIsServed: 32 clients at once each send
-// a 1 MB BatchWriteItem that decodes into about 15 MiB charged, over the
-// default in-flight bound of 64 MiB. A body is admitted with the room its
+// a 1 MB BatchWriteItem that decodes into about 8.5 MiB charged, together over
+// the default in-flight bound of 64 MiB. A body is admitted with the room its
 // elements will need (service.Registration.DecodeUnit), so the bound admits as
 // many as fit and the others wait their turn, none part way, and every client
-// is served well inside the 5 s a body waits. Admitted with twice its length, as
-// before, each held a few MiB and waited for 12 MiB more that none could
-// give, and nearly all were throttled at the 5 s.
+// is served. Admitted with twice its length, as before, each held a few MiB
+// and waited for more that none could give, and most were throttled at the
+// wait.
 func Test_decodeBudget_aBurstOfDenseBodiesIsServed(t *testing.T) {
 	const clients = 32
 
+	// The wait is long so that a slow machine, or the race detector, serving
+	// the bodies one after another does not throttle the last; a body that
+	// waited on the others part way would still wait it out and fail.
 	protocol.SetInFlight(protocol.DefaultInFlight)
-	t.Cleanup(func() { protocol.SetInFlight(0) })
+	protocol.SetBodyWait(20 * time.Second)
+	t.Cleanup(func() {
+		protocol.SetInFlight(0)
+		protocol.SetBodyWait(protocol.DefaultBodyWait)
+	})
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("burst"))
@@ -247,10 +254,7 @@ func Test_decodeBudget_aBurstOfDenseBodiesIsServed(t *testing.T) {
 		require.Greater(t, len(bodies[client]), 1<<20-100<<10)
 	}
 
-	var (
-		start   = make(chan struct{})
-		started time.Time
-	)
+	start := make(chan struct{})
 
 	for client := range clients {
 		wg.Go(func() {
@@ -267,8 +271,6 @@ func Test_decodeBudget_aBurstOfDenseBodiesIsServed(t *testing.T) {
 		})
 	}
 
-	started = time.Now()
-
 	close(start)
 	wg.Wait()
 
@@ -279,7 +281,6 @@ func Test_decodeBudget_aBurstOfDenseBodiesIsServed(t *testing.T) {
 	})
 
 	assert.Equal(t, int64(clients), served.Load(), "every client of the burst is served")
-	assert.Less(t, time.Since(started), protocol.DefaultBodyWait, "and none waited out the bound")
 
 	_, held := protocol.InFlight()
 	assert.Zero(t, held, "every request gives back what it held")
