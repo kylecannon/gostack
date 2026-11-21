@@ -50,10 +50,16 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 
 	root := api.AttributeValue{M: item}
 
-	var copied copies
+	// Only an action below an attribute copies one, so an update of top-level
+	// attributes allocates no record.
+	var copied *copies
 
 	for _, act := range u.order {
-		err = updateAt(&root, act.target.path, &copied, updateFinalFor(act, results[act]))
+		if copied == nil && len(act.target.path) > 1 {
+			copied = new(copies)
+		}
+
+		err = updateAt(&root, act.target.path, copied, updateFinalFor(act, results[act]))
 		if err != nil {
 			return nil, err
 		}
