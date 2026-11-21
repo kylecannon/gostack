@@ -240,3 +240,184 @@ func Test_partiql_nestedPathShapes(t *testing.T) {
 		},
 	})
 }
+
+// Test_partiql_batchOrder: the checks a BatchExecuteStatement makes of the call
+// go statement by statement in order. An empty or long statement refuses the
+// call where it stands, and so does one that mixes reads and writes with those
+// before it, where a statement that does not parse has no kind, and one whose
+// parameters are short has its kind; then the count. The rows are the image's
+// answers (verification/SQ-467 image-probe.log, SQ-439 probe).
+func Test_partiql_batchOrder(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pbo"))
+
+	const (
+		read    = "SELECT * FROM pbo WHERE id = `a`"
+		write   = "UPDATE pbo SET q = 1 WHERE id = `w5`"
+		short   = "UPDATE pbo SET q = ? WHERE id = `w1`"
+		garbage = "garbage in"
+	)
+
+	long := read + strings.Repeat(" ", 8193-len(read))
+	mixed := validation("Read and write requests together in the same batch is not supported.")
+	empty := validation("The statement was empty.")
+	tooLong := validation("Member must have length less than or equal to 8192")
+	manyReads := validation("BatchGetItem cannot fetch more than 25 items")
+	manyWrites := validation("BatchWriteItem cannot write more than 25 items")
+
+	repeat := func(src string, n int) []string {
+		return strings.Split(strings.TrimSuffix(strings.Repeat(src+"\n", n), "\n"), "\n")
+	}
+
+	for _, c := range []struct {
+		name string
+		srcs []string
+		want string
+	}{
+		{"read write empty", []string{read, write, ""}, mixed},
+		{"read write long", []string{read, write, long}, mixed},
+		{"read write garbage", []string{read, write, garbage}, mixed},
+		{"read garbage write", []string{read, garbage, write}, mixed},
+		{"read short", []string{read, short}, mixed},
+		{"short write read", []string{short, write, read}, mixed},
+		{"read empty write", []string{read, "", write}, empty},
+		{"empty read write", []string{"", read, write}, empty},
+		{"long read write", []string{long, read, write}, tooLong},
+		{"empty before later mixed and long", []string{"", read, write, long}, empty},
+		{"26 mixed", append(repeat(read, 13), repeat(write, 13)...), mixed},
+		{"26 reads short", append(repeat(read, 25), short), mixed},
+		{"26 reads garbage", append(repeat(read, 25), garbage), manyReads},
+		{"26 garbage", repeat(garbage, 26), manyWrites},
+		{"26 writes", repeat(write, 26), manyWrites},
+		{"26 reads long", append(repeat(read, 25), long), tooLong},
+	} {
+		run(t, s, []step{{c.name, opBatchStmt, batch(c.srcs...), http.StatusBadRequest, c.want}})
+	}
+}
+
+// Test_partiql_transactionOrder: the checks an ExecuteTransaction makes go
+// statement by statement in order too: an empty or long statement, a statement
+// that does not parse, and one that mixes reads and writes with those before
+// it refuse the call where it stands. A parameter mismatch and a RETURNING
+// clause wait for after that, and then come in order with the statement's table
+// and the rest of what is wrong with it. The rows are the image's answers
+// (verification/SQ-467 image-probe.log, SQ-439 probe).
+func Test_partiql_transactionOrder(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pto"))
+
+	const (
+		read      = "SELECT * FROM pto WHERE id = `a`"
+		write     = "UPDATE pto SET q = 1 WHERE id = `w5`"
+		short     = "UPDATE pto SET q = ? WHERE id = `w1`"
+		returning = "UPDATE pto SET q = 1 WHERE id = `w3` RETURNING ALL NEW *"
+		missing   = "UPDATE nope SET q = 1 WHERE id = `w`"
+		exists    = "EXISTS(SELECT * FROM pto WHERE id = `a`)"
+		garbage   = "garbage in"
+	)
+
+	long := read + strings.Repeat(" ", 8193-len(read))
+	mixed := validation("ExecuteTransaction API does not support both read and write operations in the same request.")
+	empty := validation("ExecutePartiQLTransaction can not have empty statement.")
+	tooLong := validation("Member must have length less than or equal to 8192")
+	syntax := validation("Statement wasn't well formed, can't be processed: " + garbage)
+	failed := func(i, msg string) string {
+		return validation("Validation failed in TransactStatements[" + i + "]: " + msg)
+	}
+	mismatch := func(i string) string { return failed(i, paramMismatch) }
+	returnsAt := func(i string) string { return failed(i, "RETURNING clause is not supported in ExecuteTransaction.") }
+	notFound := `{"__type":"ResourceNotFoundException","message":"Requested resource not found"}`
+
+	for _, c := range []struct {
+		name string
+		srcs []string
+		want string
+	}{
+		{"read write empty", []string{read, write, ""}, mixed},
+		{"read write long", []string{read, write, long}, mixed},
+		{"read write garbage", []string{read, write, garbage}, mixed},
+		{"read garbage write", []string{read, garbage, write}, syntax},
+		{"read empty write", []string{read, "", write}, empty},
+		{"long read write", []string{long, read, write}, tooLong},
+		{"garbage long", []string{garbage, long}, syntax},
+		{"long garbage", []string{long, garbage}, tooLong},
+		{"garbage empty", []string{garbage, ""}, syntax},
+		{"empty garbage", []string{"", garbage}, empty},
+		{"read short", []string{read, short}, mixed},
+		{"short read", []string{short, read}, mixed},
+		{"read returning", []string{read, returning}, mixed},
+		{"returning read", []string{returning, read}, mixed},
+		{"write returning read", []string{write, returning, read}, mixed},
+		{"exists read garbage", []string{exists, read, garbage}, mixed},
+		{"short returning", []string{short, returning}, mismatch("0")},
+		{"returning short", []string{returning, short}, returnsAt("0")},
+		{"write returning short", []string{write, returning, short}, returnsAt("1")},
+		{"returning garbage", []string{returning, garbage}, syntax},
+		{"short returning garbage", []string{short, returning, garbage}, syntax},
+		{"missing short", []string{missing, short}, notFound},
+		{"short missing", []string{short, missing}, mismatch("0")},
+	} {
+		run(t, s, []step{{c.name, opTransaction, transaction(c.srcs...), http.StatusBadRequest, c.want}})
+	}
+}
+
+// Test_partiql_existsOutsideTransaction: an EXISTS statement is refused in
+// the image's words by ExecuteStatement and by a batch, which answers it for
+// the statement, and it is no kind for the batch's mixing check.
+func Test_partiql_existsOutsideTransaction(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pex"))
+
+	exists := "EXISTS(SELECT * FROM pex WHERE id = `a`)"
+	msg := "EXISTS can only be used in ExecuteTransaction write requests."
+
+	run(t, s, []step{
+		{"statement", opStatement, stmt(exists), http.StatusBadRequest, validation(msg)},
+		{
+			viaBatch, opBatchStmt, batch(exists, "UPDATE pex SET q = 1 WHERE id = `w`"), http.StatusOK,
+			`{"Responses":[{"Error":{"Code":"ValidationError","Message":"` + msg + `"}},` +
+				`{"Error":{"Code":"ConditionalCheckFailed","Message":"The conditional request failed"},"TableName":"pex"}]}`,
+		},
+	})
+}
+
+// Test_partiql_cutPathsDistinctLists: two paths of a SELECT through the same
+// index of different lists take one key, `l[1]`, which holds one value. The
+// image answers the first path in name order, whole, and never a value of a
+// path the statement does not name; the rows are its answers (verification/
+// SQ-467 image-probe.log).
+func Test_partiql_cutPathsDistinctLists(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pcut"))
+	s.ok(t, opPut, `{"TableName":"pcut","Item":{"id":{"S":"a"},`+
+		`"m":{"M":{"l":{"L":[{"M":{"p":{"S":"m0p"}}},{"M":{"p":{"S":"m1p"},"q":{"S":"m1q"}}},`+
+		`{"M":{"p":{"S":"m2p"},"q":{"S":"m2q"}}}]}}},`+
+		`"n":{"M":{"l":{"L":[{"M":{"p":{"S":"n0p"}}},{"M":{"p":{"S":"n1p"},"q":{"S":"n1q"}}}]}}},`+
+		`"o":{"M":{"l":{"L":[{"M":{"x":{"S":"o0x"}}},{"M":{"x":{"S":"o1x"},"y":{"S":"o1y"}}}]}}},`+
+		`"p":{"M":{"l":{"L":[{"M":{"x":{"S":"p0x"}}},{"M":{"x":{"S":"p1x"},"y":{"S":"p1y"}}}]}}},`+
+		`"l":{"L":[{"M":{"p":{"S":"l0p"}}},{"M":{"p":{"S":"l1p"},"q":{"S":"l1q"},"z":{"S":"l1z"}}}]}}}`)
+
+	element := func(fields string) string { return `{"Items":[{"l[1]":{"M":{` + fields + `}}}]}` }
+	m1p, l1p := `"p":{"S":"m1p"}`, `"p":{"S":"l1p"}`
+
+	for _, c := range []struct{ sel, want string }{
+		{"m.l[1].p, n.l[1].q", element(m1p)},
+		{"n.l[1].q, m.l[1].p", element(m1p)},
+		{"l[1].p, m.l[1].q", element(l1p)},
+		{"m.l[1].q, l[1].p", element(l1p)},
+		{"l[1].p, m.l[1]", element(l1p)},
+		{"m.l[1], l[1].p", element(l1p)},
+		{"l[1], m.l[1].p", element(l1p + `,"q":{"S":"l1q"},"z":{"S":"l1z"}`)},
+		{"m.l[2].p, m.l[2].q", `{"Items":[{"l[2]":{"M":{"p":{"S":"m2p"},"q":{"S":"m2q"}}}}]}`},
+		// Name order, not the order of a Java hash set (it holds "p" before
+		// "o"), and the next path when the first holds no such element.
+		{"o.l[1].x, p.l[1].y", element(`"x":{"S":"o1x"}`)},
+		{"p.l[1].y, o.l[1].x", element(`"x":{"S":"o1x"}`)},
+		{"o.l[5].x, p.l[1].y", element(`"y":{"S":"p1y"}`)},
+		{"p.l[1].y, o.l[5].x", element(`"y":{"S":"p1y"}`)},
+	} {
+		for _, where := range []string{" FROM pcut", " FROM pcut WHERE id = `a`"} {
+			run(t, s, []step{{c.sel + where, opStatement, stmt("SELECT " + c.sel + where), http.StatusOK, c.want}})
+		}
+	}
+}

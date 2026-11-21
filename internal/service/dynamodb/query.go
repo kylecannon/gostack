@@ -216,14 +216,12 @@ func (r *reader) queryExpressions(in *api.QueryInput) (expression.KeyCondition, 
 	}
 
 	if err == nil {
-		err = r.checkIndexProjects(topNames(r.projection))
+		err = r.checkProjection()
 	}
 
 	if err != nil {
 		return nil, err
 	}
-
-	r.decideFetch(topNames(r.projection))
 
 	return kc, nil
 }
@@ -323,13 +321,15 @@ func (r *reader) queryKey(text *expression.KeyText) (expression.KeyCondition, er
 // checkFilterKeys refuses a filter on a key attribute of the table or index,
 // and one on an attribute a global index does not project.
 func (r *reader) checkFilterKeys() error {
-	for _, name := range expression.Names(r.filter) {
+	names := expression.Names(r.filter)
+
+	for _, name := range names {
 		if name == r.key.Hash.Name || name == r.key.Range.Name {
 			return value.Invalid(msgFilterOnKey + name)
 		}
 	}
 
-	return r.checkFilterProjected()
+	return r.checkFilterProjected(names)
 }
 
 // checkKeyConditionEmpty refuses a key condition that compares a key attribute

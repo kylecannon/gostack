@@ -134,7 +134,7 @@ func (p *Provider) BatchExecuteStatement(
 
 		var dup bool
 
-		if stmt.stmt != nil {
+		if stmt.err == nil {
 			key, table := c.compileBatch(&b, stmt.stmt, &in.Statements[i])
 			if key != nil {
 				k := itemKeyString(table, key)
@@ -165,21 +165,24 @@ type parsedStatement struct {
 }
 
 // parseBatch parses a batch's statements and makes the checks on the whole
-// batch: no empty or long statement, at most 25, reads and writes not mixed.
+// batch, statement by statement in order, as the image does: an empty or long
+// statement, and one that mixes reads and writes with those before it, refuse
+// the call where it stands; then at most 25 (SQ-467 image-probe.log).
 func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 	if len(reqs) == 0 {
 		return nil, value.Invalid(msgStatementEmpty)
 	}
 
-	err := checkStatementTexts(len(reqs), func(i int) *string { return reqs[i].Statement }, msgStatementEmpty)
-	if err != nil {
-		return nil, err
-	}
-
 	out := make([]parsedStatement, len(reqs))
-	reads, writes := 0, 0
+	mix := mixing{msg: msgBatchMixed}
+	reads := false
 
 	for i := range reqs {
+		err := checkStatementText(reqs[i].Statement, msgStatementEmpty)
+		if err != nil {
+			return nil, err
+		}
+
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, false)
 		if err != nil && messageOf(err) == partiql.MsgVariable {
 			// A batch names a lone name in its own words (verification/SQ-229
@@ -189,22 +192,19 @@ func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 
 		out[i] = parsedStatement{stmt: stmt, err: err}
 
-		switch {
-		case err != nil:
-		case stmt.Kind == partiql.Select:
-			reads++
-		default:
-			writes++
+		mixed := mix.check(stmt)
+		if mixed != nil {
+			return nil, mixed
 		}
+
+		reads = reads || (stmt != nil && stmt.Kind == partiql.Select)
 	}
 
 	switch {
-	case len(reqs) > maxBatchWrites && reads > 0:
+	case len(reqs) > maxBatchWrites && reads:
 		return nil, value.Invalid(msgBatchReads)
 	case len(reqs) > maxBatchWrites:
 		return nil, value.Invalid(msgBatchWrites)
-	case reads > 0 && writes > 0:
-		return nil, value.Invalid(msgBatchMixed)
 	default:
 		return out, nil
 	}

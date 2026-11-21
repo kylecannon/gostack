@@ -164,15 +164,32 @@ func (r *reader) checkIndexProjects(names []string) error {
 	return value.Invalid(fmt.Sprintf(msgIndexNotProjected, r.index.Name, ordered))
 }
 
-// checkFilterProjected refuses a Query's filter that names an attribute a
-// global index does not hold. A statement's WHERE is left alone, as the image
-// leaves it (docs/compat.md).
-func (r *reader) checkFilterProjected() error {
+// checkProjection makes the checks a read's projection meets on an index: a
+// global index must hold what it names (checkIndexProjects), and a local index
+// that does not decides to fetch from the table (decideFetch). The names are
+// listed once.
+func (r *reader) checkProjection() error {
+	names := topNames(r.projection)
+
+	err := r.checkIndexProjects(names)
+	if err != nil {
+		return err
+	}
+
+	r.decideFetch(names)
+
+	return nil
+}
+
+// checkFilterProjected refuses a Query's filter, whose attribute names are
+// given, that names one a global index does not hold. A statement's WHERE is
+// left alone, as the image leaves it (docs/compat.md).
+func (r *reader) checkFilterProjected(names []string) error {
 	if r.from == fromStatement {
 		return nil
 	}
 
-	missing := r.unheld(expression.Names(r.filter))
+	missing := r.unheld(names)
 	if len(missing) == 0 {
 		return nil
 	}

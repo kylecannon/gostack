@@ -105,17 +105,11 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 		err = r.attributesToGet(in.AttributesToGet)
 	}
 
-	if err == nil {
-		err = r.checkIndexProjects(topNames(r.projection))
-	}
-
 	if err != nil {
 		return err
 	}
 
-	r.decideFetch(topNames(r.projection))
-
-	return nil
+	return r.checkProjection()
 }
 
 // scanTarget finds the table and index a Scan reads and makes the checks that

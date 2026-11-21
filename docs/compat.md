@@ -445,11 +445,11 @@ caller's account and region, as LocalStack does.
   pages say ("you can only request attributes that are projected into the
   index. Global secondary index queries cannot fetch attributes from the
   parent table."). The attributes are listed in the image's order, which is
-  that of the `HashSet` it lists them from, except where a bucket of the set
-  holds 5 to 12 of them: there the image lists them in the order the set was
-  filled, which gostack does not model, so the text may order two of them
-  differently (the same names, the same status). A `Query` filter lists them
-  by name.
+  that of the `HashSet` it lists them from: by bucket of the set. Where two
+  names fall in one bucket the image lists them in the order the set was
+  filled, which gostack sorts by text, so a list of any length can order two
+  names differently (seen from five names, and at 15 and 18); the same names,
+  the same status. A `Query` filter lists them by name.
 - A filter on an attribute an index does not project, where the image does not
   refuse it: a `Scan` of a global index and a statement's `WHERE` on one, which
   the image evaluates against the table's item and gostack against the
@@ -465,14 +465,28 @@ caller's account and region, as LocalStack does.
   also drops a later such path from the answer (`l[1].p, l[2].q.r` answers
   `l[1]` alone), and keys a path whose element comes after one that moved
   back by its full path (`l[1][0], l[0]` answers `l[0]` and `l[1][0]`);
-  gostack answers every path, keyed by its element (`l[1]` and `l[0]`). A
+  gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
+  through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
+  key, `l[1]`, which holds one value in both: gostack answers the first path
+  in name order that the item holds, with what that path names and nothing of
+  the others, as the image did for every such statement probed (name order
+  `l`, `m`, `n`; the image's own order for names it was not probed on may
+  differ), and never a value of a path the statement does not name. A
   statement with one path, or with all its paths in the first element they
   name, answers as the image does.
-- A path step written `m['x']` (the image answers it as `m.x`) and a
-  projection alias (`SELECT a AS z`, which the image refuses with "Aliasing is
-  not supported"): gostack's statement parser does not read either, and
-  answers "Statement wasn't well formed". Neither is new; both are outside
-  the projection work above.
+- A path step written `m['x']` (the image answers it as `m.x`), a projection
+  alias (`SELECT a AS z`, which the image refuses with "Aliasing is not
+  supported") and a block comment (`/* ... */`, which the image reads as white
+  space, where `--` comments are read by both): gostack's statement parser does
+  not read them, and answers "Statement wasn't well formed". None is new; all
+  are outside the projection work above. A statement with one of them in a
+  batch or a transaction is no kind for the check that refuses reads and writes
+  together, where the image counts it as the kind it is.
+- A statement in a batch or a transaction whose key is over 2,048 bytes (a hash
+  key) or 1,024 bytes (a range key): the image answers a batch statement's
+  `ValidationError` with no `TableName` and a transaction's with a
+  `CancellationReasons` entry for it; gostack names the table in the batch's
+  answer and answers the transaction with the message alone.
 - `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
   within ExecuteTransaction must specify the primary key in the where clause.";
   the image answers "Reads on indices are not supported within transactions.".

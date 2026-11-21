@@ -1,7 +1,9 @@
 package dynamodb
 
 import (
+	"cmp"
 	"slices"
+	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/partiql"
@@ -31,11 +33,11 @@ func indexCut(path partiql.Path) int {
 // `l[1].p, l[1].q` is one `l[1]` with both.
 type cutPaths struct {
 	keys []string
-	cuts map[string]*cutPath
+	cuts map[string][]*cutPath
 }
 
-// cutPath is one key of cutPaths: the element it names, and the parts of it the
-// paths that share the key ask for.
+// cutPath is one element a key names: the element, and the parts of it the
+// paths that name it ask for.
 type cutPath struct {
 	element partiql.Path
 	below   []partiql.Path
@@ -44,36 +46,78 @@ type cutPath struct {
 // add records path, cut at i.
 func (c *cutPaths) add(path partiql.Path, i int) {
 	if c.cuts == nil {
-		c.cuts = map[string]*cutPath{}
+		c.cuts = map[string][]*cutPath{}
 	}
 
 	key := path[:i+1].Alias()
+	element := path[:i+1]
 
-	cp, ok := c.cuts[key]
-	if !ok {
-		cp = &cutPath{element: path[:i+1]}
-		c.cuts[key] = cp
+	elements, seen := c.cuts[key]
+	if !seen {
 		c.keys = append(c.keys, key)
+	}
+
+	cp := findElement(elements, element)
+	if cp == nil {
+		cp = &cutPath{element: element}
+		c.cuts[key] = append(elements, cp)
 	}
 
 	cp.below = append(cp.below, path[i+1:])
 }
 
-// put adds to out the value of each key, the element item holds at its path
-// with only what the paths below it name.
-func (c *cutPaths) put(out, item value.Item) {
-	for _, key := range c.keys {
-		cp := c.cuts[key]
-
-		element, ok := lookupPath(item, cp.element)
-		if !ok {
-			continue
-		}
-
-		if v, ok := projectBelow(element, cp.below); ok {
-			out[key] = v
+// findElement is the cutPath of elements that names element, nil when none.
+func findElement(elements []*cutPath, element partiql.Path) *cutPath {
+	for _, cp := range elements {
+		if slices.Equal(cp.element, element) {
+			return cp
 		}
 	}
+
+	return nil
+}
+
+// put adds to out the value of each key, the element item holds at its path
+// with only what the paths below it name. Two paths through different lists
+// can take one key (`m.l[1].p, n.l[1].q` are both `l[1]`), and a key holds one
+// value: the image answers the one of the first path in name order that item
+// holds, whole, with nothing of the others (verification/SQ-467,
+// docs/compat.md), so what is answered is always what a path of the statement
+// names.
+func (c *cutPaths) put(out, item value.Item) {
+	for _, key := range c.keys {
+		elements := c.cuts[key]
+		if len(elements) > 1 {
+			slices.SortFunc(elements, func(a, b *cutPath) int { return comparePaths(a.element, b.element) })
+		}
+
+		for _, cp := range elements {
+			element, ok := lookupPath(item, cp.element)
+			if !ok {
+				continue
+			}
+
+			if v, ok := projectBelow(element, cp.below); ok {
+				out[key] = v
+
+				break
+			}
+		}
+	}
+}
+
+// comparePaths orders paths by their steps, names before indexes.
+func comparePaths(a, b partiql.Path) int {
+	return slices.CompareFunc(a, b, func(x, y partiql.Step) int {
+		switch {
+		case x.IsIndex && !y.IsIndex:
+			return 1
+		case !x.IsIndex && y.IsIndex:
+			return -1
+		default:
+			return cmp.Or(strings.Compare(x.Name, y.Name), cmp.Compare(x.Index, y.Index))
+		}
+	})
 }
 
 // projectBelow is v with only the parts the paths below name, a list holding

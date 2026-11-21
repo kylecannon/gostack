@@ -80,28 +80,55 @@ func (p *Provider) runStatement(
 	return out, nil
 }
 
-// checkStatementTexts makes the check a batch and a transaction make of every
-// statement before it parses any: each is given and holds at most 8,192 bytes,
-// the first that is not refused for the whole call, so a long statement
-// anywhere answers before another's syntax error, and an empty one before a
-// later long one. empty is the message for a statement missing or empty.
-func checkStatementTexts(n int, text func(i int) *string, empty string) error {
-	for i := range n {
-		src := text(i)
+// checkStatementText makes the check a batch and a transaction make of each
+// statement as it takes it up, before they parse it: it is given and holds at
+// most 8,192 bytes, or the whole call is refused. empty is the message for a
+// statement missing or empty.
+func checkStatementText(src *string, empty string) error {
+	switch {
+	case src == nil || *src == "":
+		return value.Invalid(empty)
+	case len(*src) > maxStatementBytes:
+		return value.Invalid(msgStatementLong)
+	default:
+		return nil
+	}
+}
 
-		switch {
-		case src == nil || *src == "":
-			return value.Invalid(empty)
-		case len(*src) > maxStatementBytes:
-			return value.Invalid(msgStatementLong)
-		}
+// mixing refuses the call at the first statement that is a read where the
+// first was a write, or the other way, as the image does: before it looks at
+// the statements after that one, and so before an empty or long one among them,
+// and whatever is wrong with the statement itself but its syntax (SQ-467
+// image-probe.log). A statement that did not parse has no kind.
+type mixing struct {
+	seen  bool
+	reads bool
+	msg   string
+}
+
+// check refuses stmt when it mixes reads and writes with the statements
+// before it.
+func (m *mixing) check(stmt *partiql.Statement) error {
+	if stmt == nil {
+		return nil
+	}
+
+	reads := stmt.Kind == partiql.Select
+
+	switch {
+	case !m.seen:
+		m.seen, m.reads = true, reads
+	case reads != m.reads:
+		return value.Invalid(m.msg)
+	default:
 	}
 
 	return nil
 }
 
 // parseStatement parses a request's statement and checks it has a value for
-// each of its parameters. An EXISTS parses only where exists allows it, in a
+// each of its parameters; one that does not is returned with the error, as it
+// has a kind (mixing). An EXISTS parses only where exists allows it, in a
 // transaction.
 //
 //nolint:revive // flag-parameter: whether the operation runs EXISTS
@@ -120,11 +147,11 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 	}
 
 	if stmt.Kind == partiql.Exists && !exists {
-		return nil, value.Invalid(partiql.MsgNotWellFormed + *src)
+		return nil, value.Invalid(msgExistsOnlyTx)
 	}
 
 	if stmt.Params > len(params) {
-		return nil, value.Invalid(partiql.MsgParamCount)
+		return stmt, value.Invalid(partiql.MsgParamCount)
 	}
 
 	return stmt, nil
