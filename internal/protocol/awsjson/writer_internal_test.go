@@ -70,6 +70,63 @@ func TestAppendQuoteMatchesV2(t *testing.T) {
 	}
 }
 
+// TestAppendQuoteShort checks every string of one and two bytes.
+func TestAppendQuoteShort(t *testing.T) {
+	t.Parallel()
+
+	for i := range 0x100 {
+		checkQuote(t, string([]byte{byte(i)}))
+
+		for j := range 0x100 {
+			checkQuote(t, string([]byte{byte(i), byte(j)}))
+		}
+	}
+}
+
+// TestAppendQuotePositions puts each byte, each escape pair and each valid,
+// truncated, overlong, surrogate and out-of-range UTF-8 sequence at every
+// offset within a word, with every tail length up to two words, once and
+// twice, and near the end of a 4 KiB run.
+func TestAppendQuotePositions(t *testing.T) {
+	t.Parallel()
+
+	seqs := []string{
+		// Valid: two, three and four bytes, U+2028, U+2029, U+FFFD, a BOM, the
+		// largest code point and the edges of each length.
+		"\xc3\xa9", "\xe2\x82\xac", "\U0001f389", "\xe2\x80\xa8", "\xe2\x80\xa9", "\xef\xbf\xbd",
+		"\xef\xbb\xbf", "\xf4\x8f\xbf\xbf", "\xc2\x80", "\xdf\xbf", "\xe0\xa0\x80",
+		// Invalid: truncated, overlong, surrogate, past U+10FFFF, five bytes.
+		"\xc3", "\xe2\x82", "\xf0\x9f\x8e", "\xc0\x80", "\xe0\x80\x80", "\xed\xa0\x80", "\xed\xbf\xbf",
+		"\xf4\x90\x80\x80", "\xf8\x88\x80\x80\x80", "\xc3\xa9\xe6\x97\xa5", "\xc3\xa9\xff",
+		// Escapes next to each other, and what v2 leaves alone.
+		`\"`, `""`, `\\\`, "\n\r\t\b\f", "\x00\x01", "<>&", "\xe2\x80\xa8\xff",
+	}
+
+	specials := make([]string, 0, len(seqs)+0x100)
+	specials = append(specials, seqs...)
+
+	for c := range 0x100 {
+		specials = append(specials, string([]byte{byte(c)}))
+	}
+
+	for pad := range 2 * wordBytes {
+		for tail := range 2*wordBytes + 1 {
+			for _, sp := range specials {
+				s := strings.Repeat("a", pad) + sp + strings.Repeat("b", tail)
+				checkQuote(t, s)
+				checkQuote(t, s+sp)
+			}
+		}
+	}
+
+	run := strings.Repeat("x", 4096)
+	for off := 4096 - 3*wordBytes; off <= 4096; off++ {
+		for _, sp := range specials {
+			checkQuote(t, run[:off]+sp+run[off:])
+		}
+	}
+}
+
 func FuzzAppendQuote(f *testing.F) {
 	for _, s := range quoteSeeds() {
 		f.Add([]byte(s))

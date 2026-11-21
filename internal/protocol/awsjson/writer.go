@@ -4,9 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"math"
-	"math/bits"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/kylecannon/gostack/internal/protocol"
 )
@@ -174,121 +172,9 @@ func (w *Writer) Reflect(v any) {
 	w.buf = append(w.buf, b...)
 }
 
-// appendQuote appends s to dst as a json string, byte for byte as v2 writes
-// it with the options of this package: '"', '\\' and the bytes below 0x20 are
-// escaped, \b \f \n \r \t by name and the rest as \u00xx; '<', '>', '&',
-// U+2028 and U+2029 are not. It reports false when s is not valid UTF-8, which
-// v2 refuses.
-//
-// v2 quotes a byte per loop turn, and that loop keeps three values on the
-// stack, so its cost moves with the stack pointer's place in a cache line: on
-// AMD Zen 3 and 4 a 16-byte change in a caller's frame moved a 1 MiB
-// ReceiveMessage by 38% (SQ-455). This scans eight bytes per turn for the next
-// byte to escape or to check as UTF-8, and copies each clean run whole.
-func appendQuote(dst []byte, s string) ([]byte, bool) {
-	dst = append(dst, '"')
-	start, i := 0, 0
-
-	for {
-		i += nextSpecial(s[i:])
-		if i == len(s) {
-			break
-		}
-
-		if c := s[i]; c >= utf8.RuneSelf {
-			r, n := utf8.DecodeRuneInString(s[i:])
-			if r == utf8.RuneError && n == 1 {
-				return dst, false
-			}
-
-			i += n
-
-			continue
-		}
-
-		dst = append(dst, s[start:i]...)
-		dst = appendEscaped(dst, s[i])
-		i++
-		start = i
-	}
-
-	dst = append(dst, s[start:]...)
-
-	return append(dst, '"'), true
-}
-
 // decimalBase and float64Bits are the base of an integer and the width of a
 // float as json writes them.
 const (
 	decimalBase = 10
 	float64Bits = 64
 )
-
-const (
-	ones  = 0x0101010101010101
-	highs = 0x8080808080808080
-)
-
-// nextSpecial returns the index of the first byte of s that json escapes or
-// that starts a multi-byte UTF-8 sequence, or len(s).
-func nextSpecial(s string) int {
-	i := 0
-
-	for ; len(s)-i >= 8; i += 8 {
-		x := load64(s[i : i+8])
-
-		// A byte of 0x80 or more, one below 0x20, or one equal to '"' or '\\'
-		// sets the high bit of its own byte. A borrow can also set the bits
-		// of the bytes above a match, never below one, so the lowest set bit
-		// is exact.
-		quote := x ^ (ones * '"')
-		slash := x ^ (ones * '\\')
-		m := x | (x-ones*0x20)&^x
-		m |= (quote - ones) &^ quote
-		m |= (slash - ones) &^ slash
-
-		if m &= highs; m != 0 {
-			return i + bits.TrailingZeros64(m)/8
-		}
-	}
-
-	for ; i < len(s); i++ {
-		if c := s[i]; c < 0x20 || c == '"' || c == '\\' || c >= utf8.RuneSelf {
-			return i
-		}
-	}
-
-	return i
-}
-
-// load64 reads the eight bytes of s little-endian, which the compiler makes one
-// load.
-func load64(s string) uint64 {
-	_ = s[7]
-
-	return uint64(s[0]) | uint64(s[1])<<8 | uint64(s[2])<<16 | uint64(s[3])<<24 |
-		uint64(s[4])<<32 | uint64(s[5])<<40 | uint64(s[6])<<48 | uint64(s[7])<<56
-}
-
-// appendEscaped appends the json escape of c, an ASCII byte nextSpecial
-// stopped at.
-func appendEscaped(dst []byte, c byte) []byte {
-	const hex = "0123456789abcdef"
-
-	switch c {
-	case '"', '\\':
-		return append(dst, '\\', c)
-	case '\b':
-		return append(dst, '\\', 'b')
-	case '\f':
-		return append(dst, '\\', 'f')
-	case '\n':
-		return append(dst, '\\', 'n')
-	case '\r':
-		return append(dst, '\\', 'r')
-	case '\t':
-		return append(dst, '\\', 't')
-	default:
-		return append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xf])
-	}
-}
