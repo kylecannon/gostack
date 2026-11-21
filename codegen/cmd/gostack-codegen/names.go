@@ -27,6 +27,10 @@ var emittedNames = map[string]bool{
 	"Run":             true, // fixtures.go: runs a call on a Fixture
 	"NewOutput":       true, // fixtures.go: an empty output
 	"NewError":        true, // fixtures.go: the error of a shape name
+
+	"TestJSONEncodersCover":   true, // emit_jsonenc.go: every output has a json encoder
+	"TestJSONEncodeMatchesV2": true, // emit_jsonenc.go: the encoders against v2
+	"FuzzJSONEncode":          true, // emit_jsonenc.go: the same, fuzzed
 }
 
 // shapeName is the Go name of a shape, which a type, its constructor and every

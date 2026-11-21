@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -44,6 +45,10 @@ type errorBody struct {
 // the map directly: Header.Set would canonicalize "x-amzn-RequestId" to
 // "X-Amzn-Requestid", and LocalStack sends the former.
 func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
+	if a, ok := out.(Appender); ok && writeAppended(w, requestID, version, a) {
+		return
+	}
+
 	body := []byte("{}")
 
 	if out != nil {
@@ -57,6 +62,37 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 		body = encoded
 	}
 
+	writeOK(w, requestID, version, body)
+}
+
+// maxPooledResponse is the largest buffer responseBufs keeps.
+const maxPooledResponse = 4 << 20
+
+// responseBufs hold the bodies the generated encoders write. A Write never
+// keeps the slice it is given, so the buffer goes back once written.
+var responseBufs = sync.Pool{New: func() any { return new([]byte) }}
+
+// writeAppended writes a's json as the body of a 200 response. It writes
+// nothing and returns false when a refuses its value, which WriteResponse then
+// hands to v2 for v2's own error.
+func writeAppended(w http.ResponseWriter, requestID, version string, a Appender) bool {
+	bp, _ := responseBufs.Get().(*[]byte)
+
+	body, err := a.AppendJSON((*bp)[:0])
+	if err == nil {
+		writeOK(w, requestID, version, body)
+	}
+
+	if cap(body) <= maxPooledResponse {
+		*bp = body[:0]
+	}
+
+	responseBufs.Put(bp)
+
+	return err == nil
+}
+
+func writeOK(w http.ResponseWriter, requestID, version string, body []byte) {
 	h := w.Header()
 	h["Content-Type"] = []string{"application/x-amz-json-" + version}
 	h["x-amzn-RequestId"] = []string{requestID}
