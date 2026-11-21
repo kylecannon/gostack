@@ -30,6 +30,7 @@ jobs:
       - run: make fmt FMT_ARGS=--diff
       - run: make tidy-check
       - run: make gen-check
+      - run: make features-check
       - run: make fix-check
       - run: make lint
 

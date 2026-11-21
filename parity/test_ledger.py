@@ -934,7 +934,7 @@ class DocsTest(unittest.TestCase):
         rows = {f"{STS}::a": row("pass", "pass"), f"{SQS}::b": row("pass", "pass"), f"{SQS}::c": row("pass", "fail", "x")}
         sns = {f"tests/aws/services/sns/test_sns.py::T::{n}": row("pass", None) for n in "xy"}
         without, with_sns = self.rendered(rows), self.rendered({**rows, **sns})
-        self.assertIn("| sns | 2 | 0 | 0 | 2 | 0 | not run | n/a |", with_sns)
+        self.assertIn('| <a id="sns"></a>sns | 2 | 0 | 0 | 2 | 0 | not run | n/a |', with_sns)
         total = {text: next(line for line in text.splitlines() if line.startswith("| **total**")) for text in (without, with_sns)}
         self.assertTrue(total[without].endswith("| 3 | 0 | 2 | 66.7% |"), total[without])
         # The LocalStack pass column of the total counts sns's two passes; the
