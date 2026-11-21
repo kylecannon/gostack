@@ -52,6 +52,8 @@ func (g *benchGateway) fillSubscriptions(n int) {
 	for i := range n {
 		g.must(subscribeForm(benchNumber(int64(i))))
 	}
+
+	awaitSigningKey(g.b, g.provider)
 }
 
 // subscriptionARN is the SubscriptionArn of a Subscribe reply.
