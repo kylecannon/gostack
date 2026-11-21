@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -163,6 +164,57 @@ func Test_Provider_Publish_deadLetter(t *testing.T) {
 	assert.Equal(t, out.MessageID, e.MessageID)
 	assert.Equal(t, "lost", e.Message)
 	assert.Zero(t, s.sns.Dropped())
+}
+
+// Test_Provider_Publish_deadLetterBodyUnchanged: the dead-letter queue gets the
+// message as the failed queue would have, whole: the body, however it is
+// escaped, the attributes of a raw delivery, and for a FIFO queue its group
+// and deduplication ids. The dead letter is made when the delivery fails, from
+// the call that failed (SQ-327).
+func Test_Provider_Publish_deadLetterBodyUnchanged(t *testing.T) {
+	const body = "a \"quote\", a \\ slash, a \t tab, é, and\na line"
+
+	fifo := map[string]string{attrFifoQueue: textTrue}
+
+	for _, raw := range []bool{true, false} {
+		t.Run("raw="+strconv.FormatBool(raw), func(t *testing.T) {
+			s := newStack(t, nil)
+			topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+			live := s.createQueue(account, region, "live.fifo", fifo)
+			dlq := s.createQueue(account, region, "dlq.fifo", fifo)
+			missing := "arn:aws:sqs:" + region + ":" + account + ":missing.fifo"
+
+			attrs := make([]string, 0, 4)
+			if raw {
+				attrs = append(attrs, attrRaw, textTrue)
+			}
+
+			s.subscribeQueue(topic, live.arn, attrs...)
+			s.subscribeQueue(topic, missing, append(attrs, attrRedrive, redrive(dlq.arn))...)
+
+			s.publish(slices.Concat(
+				[]string{paramTopicArn, topic, paramMessage, body, paramGroup, "g", paramDedup, "d"},
+				attr(1, attrColor, valueRed))...)
+
+			want := live.await(1)[0]
+			got := dlq.await(1)[0]
+
+			assert.Equal(t, want.MsgAttrs, got.MsgAttrs)
+
+			if raw {
+				assert.Equal(t, body, got.Body)
+				assert.Equal(t, valueRed, got.MsgAttrs[attrColor]["StringValue"])
+			} else {
+				// The envelope names the subscription it was made for, which differs.
+				assert.Equal(t, body, parseEnvelope(t, got.Body).Message)
+				assert.Contains(t, parseEnvelope(t, got.Body).MessageAttributes, attrColor)
+			}
+
+			assert.Equal(t, "g", got.Attributes["MessageGroupId"])
+			assert.Equal(t, "d", got.Attributes["MessageDeduplicationId"])
+			assert.Zero(t, s.sns.Dropped())
+		})
+	}
 }
 
 func Test_Provider_Publish_droppedWithoutDeadLetter(t *testing.T) {

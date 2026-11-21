@@ -62,7 +62,9 @@ func (l leading) Follows() string { return l.leader }
 // Test_saveOrder_followerRightAfterItsLeader: dynamodbstreams follows
 // dynamodb. However long each last took, a flush saves dynamodbstreams right
 // after dynamodb, so the streams file is never the older of the two; a
-// follower whose leader is not pending keeps its place.
+// follower whose leader is not pending keeps its place. The pair's place among
+// the other services is by the larger of the two times; see
+// Test_saveOrder_PairGoesByTheSlowerOfLeaderAndFollower.
 func Test_saveOrder_followerRightAfterItsLeader(t *testing.T) {
 	log := &orderLog{}
 	streams := leading{logged{name: ddbStream, leader: ddb, log: log}}

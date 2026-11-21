@@ -29,8 +29,9 @@ type Committer interface {
 // calls Followed before each Snapshot: true when it saves a follower right
 // after this service, false when it saves the service alone (the follower is
 // not persisted, is unsafe, or is in its own backoff). A flush that told it
-// true tells it Followed(false) once the flush ends, whatever happened to
-// either save, so nothing it kept for its follower outlives the flush.
+// true tells it Followed(false) once the saves of both have ended, whatever
+// happened to either, and before another flush may take them, so nothing it
+// kept for its follower outlives them.
 type Leader interface {
 	Followed(saved bool)
 }

@@ -213,7 +213,9 @@ func Test_Engine_LentDeadlineLogsTheAbandonedSave(t *testing.T) {
 
 			s3 := &stateSnap{state: "s3 buckets", entered: make(chan struct{}, 1), gate: make(chan struct{})}
 			e.Register("s3", s3)
-			e.Register("sqs", &stateSnap{state: "sqs state"})
+			// sqs follows s3 here, so the Flush cannot save it beside the timed save,
+			// which has begun s3's.
+			e.Register("sqs", followingSnap{stateSnap: &stateSnap{state: "sqs state"}, leader: "s3"})
 
 			s3.mu.Lock()
 			gate := s3.gate

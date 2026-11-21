@@ -1,6 +1,7 @@
 package persist_test
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"os"
@@ -228,9 +229,10 @@ func Test_Assets_StuckRemovalsAreLogged(t *testing.T) {
 	}
 
 	// The disk is full. Each save names a different random temp file in its
-	// error, and the cause is the same.
-	for i := range 3 {
-		s.set(nil, fmt.Errorf("write store.json.tmp-%d: %w", i, syscall.ENOSPC))
+	// error (crypto/rand.Text, as a state file's temp name is), and the failure
+	// is the same.
+	for range 3 {
+		s.set(nil, fmt.Errorf("write store.json.tmp-%s: %w", rand.Text(), syscall.ENOSPC))
 		e.MarkDirty(shelfService)
 		require.ErrorIs(t, e.Flush(t.Context()), syscall.ENOSPC)
 	}
