@@ -284,11 +284,11 @@ func Test_restore_refuses_bad_snapshots(t *testing.T) {
 			"one another has",
 		},
 		"bad raw string": {state(`"smsMessages":[{"Message":"\u0000b64:!"}]`), "a raw string"},
-		"window out of order": {
+		"window id twice": {
 			state(`"topics":[{"name":"f.fifo","arn":"arn:f","attributes":{},"window":[` +
 				`{"key":"a","id":"1","sequence":"1","at":"2026-01-01T00:00:00Z"},` +
-				`{"key":"b","id":"2","sequence":"2","at":"2025-01-01T00:00:00Z"}]}]`),
-			"out of order",
+				`{"key":"a","id":"2","sequence":"2","at":"2026-01-01T00:00:00Z"}]}]`),
+			"appears twice",
 		},
 		"application past next": {
 			state(`"applications":[{"seq":3,"arn":"arn:app","attributes":{},"endpoints":{}}],"applicationNext":1`),
@@ -307,6 +307,24 @@ func Test_restore_refuses_bad_snapshots(t *testing.T) {
 			assert.Equal(t, string(snapshotOf(t, empty)), string(snapshotOf(t, p)), "a refused file leaves SNS empty")
 		})
 	}
+}
+
+// Test_restore_takes_a_window_whose_clock_went_back: the window's times are
+// the wall clock's, which can step back between two publishes. The file
+// restores, the later id takes the earlier one's time, and the window still
+// expires in the order the ids were taken.
+func Test_restore_takes_a_window_whose_clock_went_back(t *testing.T) {
+	const file = `{"v":1,"data":{"sequence":0,"states":[{"account":"a","region":"r",` +
+		`"topics":[{"name":"f.fifo","arn":"arn:f","attributes":{},"window":[` +
+		`{"key":"a","id":"1","sequence":"1","at":"2025-12-31T23:58:00Z"},` +
+		`{"key":"b","id":"2","sequence":"2","at":"2025-12-31T23:50:00Z"}]}]}],"accounts":[]}}`
+
+	p := fuzzProvider()
+	require.NoError(t, p.Restore(strings.NewReader(file)))
+
+	fifo := &p.regions.Get("a", "r").topics["arn:f"].fifo
+	assert.Equal(t, []string{"a", "b"}, fifo.order, "an entry the clock put earlier is kept, in its place")
+	assert.Equal(t, fifo.seen["a"].at, fifo.seen["b"].at)
 }
 
 // Test_restore_keeps_a_newer_sequence: a restore never moves the FIFO

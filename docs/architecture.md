@@ -1836,7 +1836,8 @@ to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
   with and the time it was taken; a restore drops the entries the five-minute
   window has passed, so a repeat inside the window is still not delivered
   after a restart. A string that is not valid UTF-8 is kept as its bytes, as
-  S3's are.
+  S3's are. This is defensive: a message sent with `%FF` reached SNS as
+  that text, not as the byte.
 - Not saved: deliveries queued in a lane or in flight, and the signing key
   pair, which each process makes again. The shutdown rule: the drain of the
   in-process calls, between the first and second shutdown saves, waits for
@@ -1856,8 +1857,9 @@ to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
   lock once the State's is let go, since a FIFO publish records into the State
   while it holds the window's lock. Restore checks the whole file first: a
   subscription to a topic the State does not hold, two subscriptions of a
-  topic to one endpoint, a token held twice or a window out of time order
-  refuses it and leaves SNS empty.
+  topic to one endpoint, a token held twice or a deduplication id held twice
+  refuses it and leaves SNS empty. A window entry older than the one before
+  it, from a wall clock that stepped back, takes that one's time.
 
 **Format:**
 

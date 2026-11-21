@@ -23,9 +23,9 @@ const snapshotVersion = 1
 
 // rawPrefix starts a string the snapshot holds in base64: one that is not
 // valid UTF-8, which json would mangle, or one that starts with rawPrefix
-// itself. A message, an HTTP endpoint or a tag can hold any bytes the query
-// protocol decodes, and two endpoints json mangled the same way would be one
-// subscription after a restore, delivering to neither URL.
+// itself. Two endpoints json mangled the same way would be one subscription
+// after a restore, delivering to neither URL. This is defensive, as S3's is:
+// a message sent with %FF reached SNS as that text, not as the byte.
 const rawPrefix = "\x00b64:"
 
 // snapshotOptions are the json settings of a snapshot, on both sides of it. A
@@ -518,11 +518,14 @@ func (b *builtState) buildTopics(saved []topicData, now time.Time) error {
 }
 
 // build puts a saved window in place, without the entries the window has
-// passed by now.
+// passed by now. The times are the wall clock's, which can step back between
+// two publishes, so an entry older than the one before it takes that one's
+// time: the order is the order the ids were taken in, which expire walks.
 func (f *fifoTopic) build(saved []windowEntry, now time.Time) error {
 	for i, entry := range saved {
 		if i > 0 && entry.At.Before(saved[i-1].At) {
-			return errors.New("the deduplication window is out of order")
+			entry.At = saved[i-1].At
+			saved[i].At = entry.At
 		}
 
 		if _, ok := f.seen[entry.Key]; ok {

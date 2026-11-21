@@ -220,9 +220,10 @@ func TestPersistedSNSKeepsAcknowledgedPublishes(t *testing.T) {
 // whose topic records SMS messages under the window's lock, and topics and
 // subscriptions come and go. Snapshot takes a window's lock only once it let
 // go of the State's, so neither waits for the other for good; each snapshot
-// restores.
+// restores. The engine flushes beside them too, with every FIFO publish
+// marking SNS dirty under the window's lock.
 func TestSNSSnapshotBesideFIFOPublishes(t *testing.T) {
-	s := newStack(t, nil)
+	s, eng := persistedStack(t, t.TempDir(), persist.FormatJSON)
 
 	fifo := s.createTopic(paramName, "busy.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
 	s.subscribe(paramTopicArn, fifo, paramProtocol, "sms", paramEndpoint, number)
@@ -268,7 +269,13 @@ func TestSNSSnapshotBesideFIFOPublishes(t *testing.T) {
 		for time.Now().Before(deadline) {
 			var out bytes.Buffer
 
-			err := s.sns.Snapshot(&out)
+			// A save through the engine, as the timer makes one, and a
+			// snapshot that must restore.
+			err := eng.Flush(t.Context())
+			if err == nil {
+				err = s.sns.Snapshot(&out)
+			}
+
 			if err == nil {
 				err = sns.New(nil, nil).Restore(&out)
 			}
