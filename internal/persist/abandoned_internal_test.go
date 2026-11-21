@@ -22,8 +22,10 @@ func (f *syncFixture) abandonedMarker() string {
 	return filepath.Join(filepath.Dir(f.stateFile), abandonedFile)
 }
 
-// restart returns the log lines at warn level of a new engine on the fixture's
-// base dir, once it has loaded: what the next start of the process says.
+// restart returns the warnings of a new engine on the fixture's base dir, once
+// it has loaded, that say a save was abandoned: what the next start of the
+// process says of it. It leaves out any other warning the start logs, as one
+// about the volume the base dir is on, which a test of the marker does not count.
 func (f *syncFixture) restart(t *testing.T) []string {
 	t.Helper()
 
@@ -32,7 +34,20 @@ func (f *syncFixture) restart(t *testing.T) []string {
 	e.Register(syncService, &namer{})
 	require.NoError(t, e.Load(t.Context()))
 
-	return logs.all()
+	return abandonWarnings(logs.all())
+}
+
+// abandonWarnings returns the lines among lines that begin with abandonWarning.
+func abandonWarnings(lines []string) []string {
+	var found []string
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, abandonWarning) {
+			found = append(found, line)
+		}
+	}
+
+	return found
 }
 
 // abandon makes the save of the next Flush run out of time in an asset sync

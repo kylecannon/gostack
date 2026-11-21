@@ -140,6 +140,10 @@ type tracked struct {
 	// takes it, nor its leader (see takeDirty).
 	owner   *flushRun
 	started bool
+	// renamed is true once the owner's save has renamed the service's snapshot
+	// into place, which is when the abandoned-save marker is no longer needed for
+	// it (see unsavedLocked). It is meaningful while a flush holds the service.
+	renamed bool
 	// retryAt is when the service's failed save may be tried again by the timer:
 	// the backoff after it ended. It is zero after a save. A service backs off
 	// alone, so a failing one never holds back another's save.
@@ -377,8 +381,9 @@ func (e *Engine) MarkDirty(service string) {
 // marked for the same way once the flush has run for [markWatchAfter], so
 // within that long of its end, and at the flush's end before that: a Flush that
 // is in time allocates nothing for it. It marks the same when it ends waiting for
-// sem. A Flush that has a deadline marks as well, at it, the services a Flush
-// with none holds, which nothing else would mark.
+// sem. A Flush that has a deadline marks as well, at it, the services another
+// Flush holds and has not yet renamed, whatever that Flush's ctx: one with no
+// deadline, or one that comes after this kill, would not mark them in time.
 //
 // A panic of a service's Snapshot is recovered: the save fails, and saving is
 // off for the service until restart. A panic of its [Committer] or [Leader]
@@ -1095,7 +1100,6 @@ const (
 // whoever recovers it.
 func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) {
 	run := newFlushRun(e, by)
-	run.deadlined = hasDeadline(ctx)
 
 	pending := e.takeDirty(by, run)
 	if len(pending) == 0 {
@@ -1319,7 +1323,7 @@ func (e *Engine) takeDirty(by flushBy, run *flushRun) []pendingService {
 			e.dirtyAgain = true
 		default:
 			from[name] = t.owner
-			t.dirty, t.owner, t.started = false, run, false
+			t.dirty, t.owner, t.started, t.renamed = false, run, false, false
 			taken[name] = true
 			run.holding[name] = pendingService{
 				name: name, snap: t.snap, assets: t.assets, took: t.took, moved: from[name] != nil,
@@ -1569,10 +1573,6 @@ type flushRun struct {
 	root *os.Root
 	// by is who asked for the flush.
 	by flushBy
-	// deadlined is true when the ctx of the flush has a deadline, at which it
-	// marks what it holds itself (see markAtDeadline). It is set before the run
-	// holds a service, and not changed.
-	deadlined bool
 	// endDeadline ends the marking armed for the ctx's deadline, and watching is
 	// true while the flush is registered with e.slow. Only the goroutine of the
 	// flush touches them. slow is what e.slow keeps of it, under its lock.
@@ -2173,6 +2173,15 @@ func (e *Engine) measured(service string, took time.Duration) {
 	}
 }
 
+// markRenamed records that the save of service has renamed its snapshot into
+// place: from then a deadline marks nothing for it (see unsavedLocked), though
+// the flush still holds it.
+func (e *Engine) markRenamed(service string) {
+	e.mu.Lock()
+	e.services[service].renamed = true
+	e.mu.Unlock()
+}
+
 // rename renames a service's snapshot over its state files, removes the ones of
 // formats that are no longer listed, and fsyncs the directories it changed.
 // Every asset the snapshot names is synced by then. A save a Load or
@@ -2216,6 +2225,8 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 	}
 
 	s.writers = nil
+
+	e.markRenamed(s.p.name)
 
 	// A completed save ends the loss an abandoned one left (see abandonedFile).
 	// A save with no listing of the directory looks for the marker itself.

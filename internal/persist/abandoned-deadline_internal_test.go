@@ -273,7 +273,8 @@ func Test_Engine_AbandonedSaveDoesNotMarkAServiceThatFailedAlone(t *testing.T) {
 // Flush whose deadline passes while it waits for the flush that holds sem marks
 // the dirty services nothing saved or holds (SQ-431 N3, probe P6, with the
 // wait forced rather than drawn): svc changed after the running flush took its
-// services.
+// services. It marks the service that flush holds as well, whatever ctx that
+// flush has (SQ-465).
 func Test_Engine_FlushWaitingForSemMarksTheServicesItDidNotSave(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newSyncFixture(t, time.Hour)
@@ -285,12 +286,7 @@ func Test_Engine_FlushWaitingForSemMarksTheServicesItDidNotSave(t *testing.T) {
 
 		running := make(chan error, 1)
 
-		// The flush that holds blocker has a deadline of its own, at which it marks
-		// it; one with none has its service marked by another's (SQ-465).
-		held, release := context.WithTimeout(t.Context(), time.Hour)
-		defer release()
-
-		go func() { running <- f.e.Flush(held) }()
+		go func() { running <- f.e.Flush(t.Context()) }()
 
 		<-blocker.entered // a flush by hand holds sem, inside blocker's Snapshot
 
@@ -302,11 +298,12 @@ func Test_Engine_FlushWaitingForSemMarksTheServicesItDidNotSave(t *testing.T) {
 		err := f.e.Flush(ctx)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		assert.FileExists(t, f.abandonedMarker(), "marked, though no save of it began")
-		assert.NoFileExists(t, f.markerOf("blocker"), "the flush that holds blocker marks it if its deadline comes")
+		assert.FileExists(t, f.markerOf("blocker"), "held by a flush that is stuck, whose own end may come after the kill")
 
 		close(gate)
 		require.NoError(t, <-running)
-		assert.Len(t, f.restart(t), 1)
+		assert.NoFileExists(t, f.markerOf("blocker"), "the save that completed removed it")
+		assert.Len(t, f.restart(t), 1, "and svc, which nothing saved, is the one the start names")
 	})
 }
 

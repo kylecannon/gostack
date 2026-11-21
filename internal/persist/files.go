@@ -133,7 +133,12 @@ var errStateIsMarker = errors.New("the state file is a link to the name of the a
 	abandonedFile + ", which a save removes; point the link at another name")
 
 // createState opens the temp file for a save of file. It refuses a file whose
-// links lead to the name of the marker (see errStateIsMarker), in any case.
+// links lead to a file with the name of the marker (see errStateIsMarker), by
+// the base name alone: in any directory, and in any case, since a volume that
+// folds case holds the name in any case as the marker. So a link into a sub
+// directory, or to the name in another case on a volume that keeps case apart,
+// is refused though it is nobody's marker: it is safe, and the person who made
+// the link points it elsewhere.
 func createState(root *os.Root, file string) (*stateWriter, error) {
 	path, err := target(root, file)
 	if err != nil {

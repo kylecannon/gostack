@@ -1533,11 +1533,12 @@ is untouched.
   writes those markers itself and does not return before they are written.
   What the flush's end finds dirty is marked then, so a change made after the
   deadline's round is named if the flush ends before the kill. A service that
-  another `Flush` holds is marked for this one when that call has no deadline,
-  as the save of `POST /_gostack/state/save` has none and a `Stop` behind it
-  would otherwise leave the service it is stuck in unmarked; one that has a
-  deadline marks what it holds at it, and the service is marked for this one
-  only when it is dirty. A flush whose save of a service failed for a reason of
+  another `Flush` holds is marked for this one, whatever deadline that call has:
+  the save of `POST /_gostack/state/save` has none, and a `Stop` behind it would
+  otherwise leave the service it is stuck in unmarked, and one with a deadline
+  later than the `Stop`'s would be marked only after the kill. A held service
+  whose save has renamed its snapshot into place is not marked: its state is on
+  disk. A flush whose save of a service failed for a reason of
   its own, and a `Follower` whose leader did, is not marked: the flush's warning
   names it with its cause, apart from the services the deadline cut, and the
   advice to raise `SHUTDOWN_TIMEOUT` is for those. A `Flush` that ends at its
@@ -1577,16 +1578,24 @@ is untouched.
   listing takes a name that differs from the marker's in case only, whatever the
   volume: a volume that folds case, as APFS does by default, holds it as the
   marker, and one that keeps case apart costs the save one `lstat` that finds
-  nothing. A state file that is a link to the marker's name is refused with an
-  error, and the file behind it is left alone, since the save would rename its
-  snapshot onto it and then remove it as the marker.
+  nothing. A state file that is a link to a file with the marker's name is
+  refused with an error, and the file behind it is left alone, since the save
+  would rename its snapshot onto it and then remove it as the marker. The
+  refusal is by the base name of where the link leads, in any directory and in
+  any case, so a link into a sub directory, or to the name in another case on a
+  volume that keeps case apart, is refused though it is nobody's marker.
   A flush in time allocates nothing for the marker (SQ-461): a request marks
   nothing, and a flush whose context has no deadline arms no marking at its
   deadline and shares no budget between its rounds. One with a deadline pays
   for the arming, the allowance and the `AfterFunc` that watches the context:
   a change to one service and its `Flush` took 108 allocations without a
-  deadline and 117 with one on darwin (105 and 114 on Linux), the 9 more that
-  `Test_Engine_FlushInTimeAllocations` pins with the whole.
+  deadline and 117 with one on darwin, in a plain build and under the race
+  detector alike. On Linux it is 105 and 114 under the race detector, which
+  `make test` always runs with, and 104 and 113 in a plain build or a
+  benchmark. The 9 more are what `Test_Engine_FlushInTimeAllocations` pins, with
+  the whole: the least of 60 single flushes in a process of its own must equal
+  the race-build figure, so a Go release that takes an allocation out fails it
+  until the figure is updated, and a plain build is held to it as a ceiling.
   A context with no deadline that can end is registered with a timer the engine
   keeps, which arms a watch of it only once the flush has lasted 50 ms, at 4 or 5
   allocations that flush then takes (`make bench-ab` on `SQSFlush` with 100

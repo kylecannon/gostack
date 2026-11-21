@@ -562,13 +562,8 @@ func (w *slowWatch) look(e *Engine) {
 func (w *slowWatch) unwatch(run *flushRun) {
 	w.mu.Lock()
 
+	// run is registered: endMark calls unwatch once, for a run it registered.
 	i := slices.Index(w.runs, run)
-	if i < 0 {
-		w.mu.Unlock()
-
-		return
-	}
-
 	w.runs = slices.Delete(w.runs, i, i+1)
 	stop, done := run.slow.stop, run.slow.done
 	run.slow = slowFlush{}
@@ -612,14 +607,16 @@ func (e *Engine) markUnsaved(ctx context.Context, run *flushRun, cut []string) {
 // unsavedLocked returns the services a deadline of ctx puts at risk: the ones
 // whose save the flush run holds, and when run is a Flush's, or nil for a Flush
 // that is not running one, the ones the flush by the timer holds, since the
-// deadline is lent to it; and every service that is dirty, which a change since
-// its last save, or since the snapshot a save took, left unsaved. A service run
-// lost for a reason of its own is not one of them, though it is dirty again: its
-// warning names it, and a longer SHUTDOWN_TIMEOUT would not have saved it (see
-// logAbandoned). A flush by another caller that holds a service and has a
-// deadline of its own is not marked for, since it marks what it holds at that
-// deadline; one with none is, since nothing else will, as a request's save
-// (POST /_gostack/state/save) has none. The caller holds mu.
+// deadline is lent to it; the ones a flush by another caller holds, whatever
+// deadline that flush has, since the kill this deadline stands for may come
+// before the deadline of its own, or it has none, as a request's save (POST
+// /_gostack/state/save) has; and every service that is dirty, which a change
+// since its last save, or since the snapshot a save took, left unsaved. A held
+// service whose save has renamed its snapshot into place is none of these: its
+// state is on disk, and a marker beside it would be a warning too many. A
+// service run lost for a reason of its own is not one of them, though it is
+// dirty again: its warning names it, and a longer SHUTDOWN_TIMEOUT would not
+// have saved it (see logAbandoned). The caller holds mu.
 func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
 	lends := run == nil || run.by == byHand
 	names := make([]string, 0, len(e.services))
@@ -629,8 +626,8 @@ func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
 			continue
 		}
 
-		held := t.owner != nil &&
-			(t.owner == run || lends && t.owner.by == byTimer || t.owner.by == byHand && !t.owner.deadlined)
+		held := t.owner != nil && !t.renamed &&
+			(t.owner == run || lends && t.owner.by == byTimer || t.owner.by == byHand)
 
 		if held || t.dirty && !run.lostToOwnFaultLocked(ctx, name) {
 			names = append(names, name)
