@@ -16,6 +16,13 @@ type serviceOptions struct {
 	// own name as well as its locationName, as SQS's does: "Attribute.1" and
 	// "Attributes.1", "Tag.1" and "Tags.1".
 	QueryAliases bool
+	// QueryOverBody answers a json body over the request cap, or one that
+	// decodes into more than its budget, with the query protocol's
+	// MalformedQueryString, as SQS does in both its protocols (the SQS developer
+	// API tests record it). Without it a body over the cap answers 413
+	// RequestEntityTooLarge, and a decode that passes its budget answers
+	// awsjson.ErrTooLarge.
+	QueryOverBody bool
 	// MissingParam is the error a missing required member gives. A nil value
 	// means the generic ValidationError.
 	MissingParam *missingParam
@@ -104,6 +111,9 @@ var serviceTable = map[string]serviceOptions{
 		QueryModel:   "localstack/sqs-query/2012-11-05/service-2.json",
 		EscapeQuotes: true,
 		QueryAliases: true,
+		// The SQS developer API tests record MalformedQueryString for a body
+		// over the cap in both protocols.
+		QueryOverBody: true,
 		// query_api.py raises MissingRequiredParameterException, which the query
 		// serializer reports as MissingParameter.
 		MissingParam: &missingParam{Code: "MissingRequiredParameterException", QueryCode: "MissingParameter"},

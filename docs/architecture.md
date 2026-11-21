@@ -172,7 +172,12 @@ The server is `net/http` with `github.com/go-chi/chi/v5` for routing and
 middleware composition. fasthttp stays out: it has no HTTP/2, and its request
 type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
-decoding, and an oversized one answers `MalformedQueryString` (400).
+decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
+services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
+query form whose Action is in the URL or whose path is an SQS queue URL. A form
+that carries its Action in the body answers `MissingAction` (400) with a SigV4
+`Authorization` header and 404 without one: the gateway reads it to find the
+Action and drops the read error.
 
 ### How chi is used
 
