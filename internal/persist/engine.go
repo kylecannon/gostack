@@ -98,8 +98,8 @@ type Engine struct {
 	// after.
 	dirtyAgain bool
 	closed     bool
-	// mountWarn runs the warning that the base dir is on no mounted volume once,
-	// at the first Load.
+	// mountWarn runs the warning that a service's state dir is where saved state
+	// does not last (see warnUnmounted) once, at the first Load.
 	mountWarn sync.Once
 	// loaded is true once a Load has opened the base dir, or found it missing: a
 	// later Load is not the startup one.
@@ -501,19 +501,6 @@ func (e *Engine) closeAssets() {
 	for _, a := range open {
 		a.close()
 	}
-}
-
-// warnUnmounted logs a warning when the base dir is on no mounted volume. What
-// is saved there lives in the container's own layer, and goes when the
-// container is removed. The image declares VOLUME /var/lib/localstack, so the
-// PERSISTENCE=1 state dir is always under a mount and never warns.
-func (e *Engine) warnUnmounted() {
-	if !e.cfg.onRootFS(e.dir) {
-		return
-	}
-
-	e.log.Warn("persist: the base dir is not on a mounted volume, so saved state will be lost with the container",
-		"dir", e.dir)
 }
 
 // openFailed ends a Load that could not open the base dir. A missing base dir

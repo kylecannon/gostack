@@ -15,7 +15,7 @@ type nopSnapshotter struct{}
 func (nopSnapshotter) Snapshot(io.Writer) error { return nil }
 func (nopSnapshotter) Restore(io.Reader) error  { return nil }
 
-func Test_mountinfoHas(t *testing.T) {
+func Test_parseMountinfo_MountPoints(t *testing.T) {
 	const info = `22 28 0:21 / /sys rw,nosuid,nodev,noexec,relatime shared:7 - sysfs none rw
 30 28 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
 41 30 8:17 /data /persisted-data rw,relatime shared:20 - ext4 /dev/sdb1 rw
@@ -30,17 +30,20 @@ short line
 		givePath string
 		want     bool
 	}{
-		{name: "mounted", giveInfo: info, givePath: "/persisted-data", want: true},
+		{name: "mounted", giveInfo: info, givePath: DefaultBaseDir, want: true},
 		{name: "root mount", giveInfo: info, givePath: "/", want: true},
 		{name: "prefix of another mount", giveInfo: info, givePath: "/persisted", want: false},
 		{name: "escaped space", giveInfo: info, givePath: "/with space", want: true},
 		{name: "not mounted", giveInfo: info, givePath: "/nowhere", want: false},
-		{name: "empty file", giveInfo: "", givePath: "/persisted-data", want: false},
+		{name: "empty file", giveInfo: "", givePath: DefaultBaseDir, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, mountinfoHas(strings.NewReader(tt.giveInfo), tt.givePath))
+			table, err := parseMountinfo(strings.NewReader(tt.giveInfo))
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.want, table[tt.givePath] != mount{})
 		})
 	}
 }

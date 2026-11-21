@@ -1,14 +1,9 @@
 package persist
 
 import (
-	"bufio"
 	"cmp"
-	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -33,8 +28,6 @@ const (
 	// maxRetryDelay is the longest wait between failed flushes, unless
 	// PERSIST_FREQUENCY is longer.
 	maxRetryDelay = 30 * time.Second
-
-	mountinfoPath = "/proc/self/mountinfo"
 )
 
 // Format is a file format for the state of one service.
@@ -86,11 +79,19 @@ type Config struct {
 	// An unknown or repeated format is ignored.
 	Formats []Format
 	// MountDetector reports whether path is a mount point. Nil reads
-	// /proc/self/mountinfo.
+	// /proc/self/mountinfo. A mount it finds is taken for one that holds files:
+	// only the file can tell a memory filesystem or an anonymous volume.
 	MountDetector func(path string) bool
+	// InContainer is whether the process runs in a container, which words the
+	// warning that the base dir is on no mounted volume.
+	InContainer bool
 	// Logger receives load and background flush errors. Nil means
 	// slog.Default().
 	Logger *slog.Logger
+
+	// mountinfo is the file MountDetector nil reads, for tests. Empty means
+	// /proc/self/mountinfo.
+	mountinfo string
 }
 
 // baseDir returns the directory state is written to, or "" when persistence is
@@ -106,61 +107,17 @@ func (c Config) baseDir() string {
 	}
 }
 
+// mounted reports whether path is a mount point. It is false where the mounts
+// cannot be read.
 func (c Config) mounted(path string) bool {
-	if c.MountDetector != nil {
-		return c.MountDetector(path)
-	}
-
-	return procMounted(path)
-}
-
-// onRootFS reports that dir sits on the container's own root filesystem, so
-// that what is saved there is lost with the container: neither dir nor any
-// directory above it short of "/" is a mount point. A directory inside a
-// volume, such as /persisted-data/gostack, is not on it. It reports false when
-// it cannot tell, which is whenever MountDetector is nil and the host has no
-// /proc/self/mountinfo, as off Linux.
-func (c Config) onRootFS(dir string) bool {
-	if c.MountDetector == nil {
-		_, err := os.Stat(mountinfoPath)
-		if err != nil {
-			return false
-		}
-	}
-
-	abs, err := filepath.Abs(dir)
-	if err != nil {
+	find := c.mountLookup()
+	if find == nil {
 		return false
 	}
 
-	for p := resolveExisting(abs); p != filepath.Dir(p); p = filepath.Dir(p) {
-		if c.mounted(p) {
-			return false
-		}
-	}
+	_, ok := find(path)
 
-	return true
-}
-
-// resolveExisting returns path with the links in it resolved, as far as it
-// exists. A link on the way is not a mount point, its target may be under one,
-// and /proc/self/mountinfo lists resolved paths. What is not made yet is kept
-// as it is.
-func resolveExisting(path string) string {
-	var rest []string
-
-	for p := path; ; p = filepath.Dir(p) {
-		resolved, err := filepath.EvalSymlinks(p)
-		if err == nil {
-			return filepath.Join(append([]string{resolved}, rest...)...)
-		}
-
-		if p == filepath.Dir(p) {
-			return path
-		}
-
-		rest = append([]string{filepath.Base(p)}, rest...)
-	}
+	return ok
 }
 
 // serviceEnabled reports whether the service named by name persists.
@@ -215,33 +172,4 @@ func (c Config) flushDelay() time.Duration {
 	default:
 		return c.Frequency
 	}
-}
-
-// procMounted reports whether path is a mount point in /proc/self/mountinfo.
-// A missing or unreadable file means no.
-func procMounted(path string) bool {
-	f, err := os.Open(mountinfoPath)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-
-	return mountinfoHas(f, path)
-}
-
-// mountinfoHas reports whether the mountinfo text in r lists path as a mount
-// point. The mount point is the fifth field, with space, tab, newline and
-// backslash written as octal escapes.
-func mountinfoHas(r io.Reader, path string) bool {
-	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
-	sc := bufio.NewScanner(r)
-
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) > 4 && unescape.Replace(fields[4]) == path {
-			return true
-		}
-	}
-
-	return false
 }

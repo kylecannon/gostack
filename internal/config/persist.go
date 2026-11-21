@@ -154,6 +154,7 @@ func (c *Config) PersistConfig(services ...string) persist.Config {
 		Services:      byName,
 		Frequency:     frequency,
 		Formats:       formats,
+		InContainer:   settings.InDocker,
 	}
 }
 

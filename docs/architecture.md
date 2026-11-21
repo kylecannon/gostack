@@ -1195,18 +1195,52 @@ Tests split along the same line:
   Kinesis, CloudWatch and SES assets).
 - Otherwise nothing persists and state is in-memory only.
 
-**Unmounted base directory.** When persistence selects a base directory, the
-first `Load` at startup logs one `WARN` naming it, `persist: the base dir is
-not on a mounted volume, so saved state will be lost with the container`, if
-neither the directory nor any directory above it short of `/` is a mount point
-in `/proc/self/mountinfo` (`Config.onRootFS`). A directory inside a volume
-(`/persisted-data/gostack`) does not warn, and neither does the
-`PERSISTENCE=1` state directory in gostack's image, whose `VOLUME
-/var/lib/localstack` makes `/var/lib/localstack` a mount. A path with a link
-is resolved first, as far as it exists. Where the check cannot tell, as off
-Linux with no `/proc/self/mountinfo`, it logs nothing. It warns once, not on a
-later `Load` from `POST /_gostack/state/load`, and changes nothing else:
-state is saved to the directory as before.
+**Unmounted base directory.** The first `Load` at startup checks where each
+service that persists saves, its own directory `<base>/<service>`, against
+`/proc/self/mountinfo` (`warnUnmounted`). The mount nearest to the directory,
+at it or above it short of `/`, holds what is saved there. It logs one `WARN`
+for each of these, naming the base dir and the services in it:
+
+- No mount: the directory is on the root filesystem. In a container
+  (`Settings.InDocker`, LocalStack's `in_docker()`) the message is `persist: the
+  base dir is not on a mounted volume, so saved state will be lost with the
+  container`, and out of one, `persist: the base dir is on the root filesystem,
+  not on a mounted volume`.
+- A `tmpfs` or `ramfs` mount, as `--tmpfs /persisted-data` or a path under
+  `/dev/shm`: `persist: saved state is on a memory filesystem; lost when it is
+  unmounted`.
+- An anonymous volume, which Docker makes for an image's `VOLUME` when no `-v`
+  covers it: `persist: saved state is on an anonymous volume; it survives a
+  restart but not docker rm or docker compose down`. The mount's root field
+  ends in `/volumes/<64 hex digits>/_data`, where a named volume has its name:
+  `/docker/volumes/8306b0...966da/_data` against
+  `/docker/volumes/sq437-named/_data` in the mountinfo captured inside the
+  image under Docker 29.8.2 on OrbStack (`internal/persist/testdata/mountinfo`,
+  one file per layout: no volume, an anonymous, a named and a bind-mounted
+  volume at `/var/lib/localstack` and at `/persisted-data`, `--tmpfs`, and a
+  volume at `/persisted-data/s3`). A volume from `docker volume create` with no
+  name has such a name too, and warns alike. Podman was not installed to
+  capture; its docs name its anonymous volumes the same way, which is not
+  verified here.
+
+A volume per service, `-v s3:/persisted-data/s3`, is a mount for S3 alone: the
+other services that persist are named in the warning, and S3 is not. A
+directory inside a volume (`/persisted-data/gostack`) and a bind mount warn of
+nothing. A mount found by a `MountDetector` is taken for one that holds files.
+Nothing is logged when no service persists, as with `PERSIST_DEFAULT=0` and no
+`PERSIST_<SERVICE>=1`, and nothing where the mounts cannot be read: no
+`/proc/self/mountinfo`, as off Linux, or one that cannot be opened or read. A
+line of it has no length limit. A path with a link is resolved before a `..` in
+it is cleaned, as far as it exists, since the kernel takes `/link/../data`
+through the link. The check warns once, not on a later `Load` from
+`POST /_gostack/state/load`, and changes nothing else: state is saved to the
+directory as before.
+
+The `PERSISTENCE=1` state directory relies on the container runtime mounting
+the image's `VOLUME /var/lib/localstack`. Docker and Podman mount an anonymous
+volume there, which warns as above unless a `-v` names one. CRI-O's default
+`image_volumes = "mkdir"` only makes the directory, so under it the state is in
+the container's layer and the warning says so.
 
 **Configuration** is copied exactly from localstack-persist
 (`src/localstack_persist/config.py`, `state.py`); `internal/config/persist.go`
