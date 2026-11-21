@@ -118,12 +118,16 @@ func randomBinary(r *rand.Rand) api.AttributeValue {
 }
 
 func Test_SortKey_ordersRandomKeysAsCompare(t *testing.T) {
-	r := rand.New(rand.NewPCG(405, 405))
+	kinds := []struct {
+		name string
+		gen  func(*rand.Rand) api.AttributeValue
+	}{{"S", randomString}, {"N", randomNumber}, {"B", randomBinary}}
 
-	kinds := map[string]func(*rand.Rand) api.AttributeValue{"S": randomString, "N": randomNumber, "B": randomBinary}
+	for _, kind := range kinds {
+		t.Run(kind.name, func(t *testing.T) {
+			// Each kind draws from its own sequence, so a failure replays.
+			r, gen := rand.New(rand.NewPCG(405, 405)), kind.gen
 
-	for name, gen := range kinds {
-		t.Run(name, func(t *testing.T) {
 			for range 20000 {
 				a, b := gen(r), gen(r)
 
