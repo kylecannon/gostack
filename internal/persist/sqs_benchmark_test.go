@@ -14,7 +14,6 @@ import (
 	"time"
 
 	sqsapi "github.com/kylecannon/gostack/internal/api/sqs"
-	"github.com/kylecannon/gostack/internal/persist"
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	sqsservice "github.com/kylecannon/gostack/internal/service/sqs"
@@ -130,9 +129,7 @@ func BenchmarkSQSFlush(b *testing.B) {
 			p := filledProvider(b, c.queues, c.messages)
 			base := b.TempDir()
 
-			e := persist.New(persist.Config{
-				PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: discard(),
-			})
+			e := benchEngine(base, time.Hour)
 			e.Register(sqs, p)
 
 			flush := func() {
