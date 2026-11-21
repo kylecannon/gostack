@@ -157,8 +157,8 @@ func newPublishBench(b *testing.B, c publishCell) *publishBench {
 		pb.must(queryForm(opSubscribe, params...).Encode())
 	}
 
-	// One publish before the clock starts, so the signer's key pair, made on
-	// first use, is not timed.
+	// One publish before the clock starts, so the connections and the first
+	// signature are not timed.
 	warm := []string{paramTopicArn, pb.topic, paramMessage, "warm"}
 	if c.fifo {
 		warm = append(warm, paramGroup, "g", paramDedup, "warm")
@@ -166,6 +166,10 @@ func newPublishBench(b *testing.B, c publishCell) *publishBench {
 
 	pb.must(queryForm(opPublish, warm...).Encode())
 	provider.AwaitDeliveries(b.Context())
+
+	// The key pair starts at CreateTopic and a raw or FIFO cell may not sign
+	// in the publish above, so wait for it here, off the clock.
+	awaitSigningKey(b, provider)
 
 	return pb
 }
