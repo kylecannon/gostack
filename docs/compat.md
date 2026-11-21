@@ -456,6 +456,14 @@ caller's account and region, as LocalStack does.
   addition to the reads from the local secondary index ... you are charged for
   read capacity units for every base table item fetched", so the document
   wins.
+- Two document paths that overlap or conflict in an `UpdateExpression` or
+  `ProjectionExpression` with three or more paths: the error names, as its
+  second path, the first entry of the image's `java.util.HashMap` at each
+  level, which gostack models from the names' `String.hashCode`. When nine or
+  more sibling names share one hash bucket (names crafted to collide), the
+  image's table resizes or treeifies in a way gostack does not model, and the
+  message may name a different second path. The request is rejected or
+  accepted the same either way.
 
 ## DynamoDB batches and transactions
 

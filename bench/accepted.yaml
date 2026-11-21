@@ -83,7 +83,7 @@
   unit: B/op
   max: +16%
   reason: the path-clash parse keeps a node arena, a root kids slice and an index map above 16 siblings, so each parse allocates more bytes; sec/op falls 28-71% at 100 or more paths, allocs/op rises 1-3%
-  pr: 44
+  pr: 45
   commit: 3c2885569cc1160561e4fc85aa7cb31a03d3066e
 
 - gate: benchstat
@@ -92,5 +92,5 @@
   unit: B/op
   max: +30%
   reason: the path-clash parse keeps a node arena, a root kids slice and an index map above 16 siblings, so each parse allocates more bytes; sec/op falls 28-71% at 100 or more paths, allocs/op rises 1-3%
-  pr: 44
+  pr: 45
   commit: 3c2885569cc1160561e4fc85aa7cb31a03d3066e
