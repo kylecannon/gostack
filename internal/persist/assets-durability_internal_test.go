@@ -215,7 +215,7 @@ func Test_Assets_FailedSyncIsFinal(t *testing.T) {
 	dir := t.TempDir()
 	stateFile := filepath.Join(dir, syncService, FormatJSON.fileName())
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(dir, time.Hour, logs))
 	n := &namer{}
 	e.Register(syncService, n)
 
@@ -249,6 +249,17 @@ func Test_Assets_FailedSyncIsFinal(t *testing.T) {
 type warnings struct {
 	mu   sync.Mutex
 	msgs map[slog.Level][]string
+}
+
+// warnConfig is the Config of an engine on dir that logs to logs. A temp dir on
+// Linux is in the root filesystem of a container, which the startup Load warns
+// of; these tests count the warnings of what they test, so the mounts report a
+// volume. The warning has its own tests (mount-warning_internal_test.go).
+func warnConfig(dir string, freq time.Duration, logs *warnings) Config {
+	return Config{
+		PersistVarSet: true, BaseDir: dir, Frequency: freq, Logger: slog.New(logs),
+		MountDetector: func(string) bool { return true },
+	}
 }
 
 func (*warnings) Enabled(context.Context, slog.Level) bool { return true }
@@ -305,7 +316,7 @@ func Test_Assets_SaveAbandonedAtItsDeadline(t *testing.T) {
 		dir := t.TempDir()
 		stateFile := filepath.Join(dir, syncService, FormatJSON.fileName())
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, time.Hour, logs))
 		n := &namer{}
 		e.Register(syncService, n)
 

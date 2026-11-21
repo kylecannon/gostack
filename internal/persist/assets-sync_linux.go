@@ -30,10 +30,10 @@ import (
 // so they take it rather than a per-file fsync for each asset.
 var syncfsProven = map[uint32]string{
 	unix.BTRFS_SUPER_MAGIC: "btrfs",
-	unix.EXT4_SUPER_MAGIC:  "ext4",
-	unix.RAMFS_MAGIC:       "ramfs",
-	unix.TMPFS_MAGIC:       "tmpfs",
-	unix.XFS_SUPER_MAGIC:   "xfs",
+	unix.EXT4_SUPER_MAGIC:  fsExt4,
+	unix.RAMFS_MAGIC:       fsRamfs,
+	unix.TMPFS_MAGIC:       fsTmpfs,
+	unix.XFS_SUPER_MAGIC:   fsXFS,
 }
 
 // fsNames names other filesystems for the log.
