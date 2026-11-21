@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 
 	"github.com/kylecannon/gostack/internal/awserr"
 )
@@ -45,14 +44,21 @@ type errorBody struct {
 // the map directly: Header.Set would canonicalize "x-amzn-RequestId" to
 // "X-Amzn-Requestid", and LocalStack sends the former.
 func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
-	if a, ok := out.(Appender); ok && writeAppended(w, requestID, version, a) {
-		return
+	encode := Encode
+
+	if a, ok := out.(Appender); ok {
+		if writeAppended(w, requestID, version, a) {
+			return
+		}
+
+		// a refused its value: v2 refuses it too, with its own error.
+		encode = encodeReflect
 	}
 
 	body := []byte("{}")
 
 	if out != nil {
-		encoded, err := Encode(out)
+		encoded, err := encode(out)
 		if err != nil {
 			WriteError(w, nil, requestID, err, ErrorOptions{})
 
@@ -65,32 +71,19 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 	writeOK(w, requestID, version, body)
 }
 
-// maxPooledResponse is the largest buffer responseBufs keeps: room for a
-// ReceiveMessage of ten 1 MiB messages, which would otherwise grow a new
-// buffer from nothing on every call, four times its size in all. A pooled
-// buffer goes after two collections with no use.
-const maxPooledResponse = 16 << 20
-
-// responseBufs hold the bodies the generated encoders write. A Write never
-// keeps the slice it is given, so the buffer goes back once written.
-var responseBufs = sync.Pool{New: func() any { return new([]byte) }}
-
-// writeAppended writes a's json as the body of a 200 response. It writes
-// nothing and returns false when a refuses its value, which WriteResponse then
-// hands to v2 for v2's own error.
+// writeAppended writes a's json as the body of a 200 response, from a reused
+// buffer: a Write never keeps the slice it is given, so the buffer goes back
+// once written. It writes nothing and returns false when a refuses its value.
 func writeAppended(w http.ResponseWriter, requestID, version string, a Appender) bool {
-	bp, _ := responseBufs.Get().(*[]byte)
+	bp := getBuffer()
 
-	body, err := a.AppendJSON((*bp)[:0])
+	body, err := a.AppendJSON(*bp)
 	if err == nil {
 		writeOK(w, requestID, version, body)
 	}
 
-	if cap(body) <= maxPooledResponse {
-		*bp = body[:0]
-	}
-
-	responseBufs.Put(bp)
+	*bp = body
+	putBuffer(bp)
 
 	return err == nil
 }

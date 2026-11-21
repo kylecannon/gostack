@@ -13,7 +13,10 @@ import (
 // json service is one: AppendJSON appends the value to b, byte for byte as
 // encoding/json/v2 writes it with the options of this package, without
 // reflection. The error is the first value v2 refuses, invalid UTF-8 in a
-// string; Encode then runs v2 itself, so the error is v2's own.
+// string; Encode then runs v2 itself, so the error is v2's own. The encoder
+// does not count depth: v2 refuses a value nested past 10000 levels, and the
+// encoder writes it. No output nests that deep: DynamoDB refuses an attribute
+// value past 32 levels.
 type Appender interface {
 	AppendJSON(b []byte) ([]byte, error)
 }
