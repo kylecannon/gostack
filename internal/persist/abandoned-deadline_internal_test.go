@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -314,7 +313,7 @@ func Test_Engine_LentDeadlineMarksTheServicesAtOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 
 		gate := make(chan struct{})
 		s3 := &stateSnap{state: "s3 buckets", entered: make(chan struct{}, 1), gate: gate}
