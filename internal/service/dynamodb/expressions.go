@@ -1,6 +1,7 @@
 package dynamodb
 
 import (
+	"context"
 	"fmt"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -25,6 +26,29 @@ const (
 type exprs struct {
 	subs expression.Substitutions
 	used map[string]struct{}
+	// statement is an expression set that a PartiQL statement compiled: its
+	// projection and update parse held to no size of their own, as the image
+	// holds the statement alone, to 8,192 bytes (SQ-412).
+	statement bool
+}
+
+// statementKey marks the context of a request a PartiQL statement compiled to.
+type statementKey struct{}
+
+// forStatement marks ctx for the item operations a PartiQL statement runs as.
+// DynamoDB Local bounds the statement's text and not the ProjectionExpression
+// or UpdateExpression it is read through, so those two parse here with no size
+// of their own; every other expression, and every request a caller sends, is
+// held to its size as before.
+func forStatement(ctx context.Context) context.Context {
+	return context.WithValue(ctx, statementKey{}, true)
+}
+
+// isStatement reports whether ctx is marked by forStatement.
+func isStatement(ctx context.Context) bool {
+	statement, _ := ctx.Value(statementKey{}).(bool)
+
+	return statement
 }
 
 // newExprs checks a request's placeholders. hasExpr is whether the request
@@ -96,7 +120,12 @@ func (x *exprs) projection(src *string) (expression.Projection, error) {
 		return nil, nil //nolint:nilnil // no expression
 	}
 
-	p, err := expression.ParseProjection(*src, x.subs, x.used)
+	parse := expression.ParseProjection
+	if x.statement {
+		parse = expression.ParseStatementProjection
+	}
+
+	p, err := parse(*src, x.subs, x.used)
 	if err != nil {
 		return nil, fmt.Errorf("projection: %w", err)
 	}
@@ -116,7 +145,12 @@ func (x *exprs) updateRanked(src *string, rank []int) (*expression.UpdateExpr, e
 		return nil, nil //nolint:nilnil // no expression
 	}
 
-	u, err := expression.ParseUpdateRanked(*src, x.subs, x.used, rank)
+	parse := expression.ParseUpdateRanked
+	if x.statement {
+		parse = expression.ParseStatementUpdate
+	}
+
+	u, err := parse(*src, x.subs, x.used, rank)
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}

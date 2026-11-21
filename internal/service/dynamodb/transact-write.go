@@ -528,7 +528,7 @@ func (c caller) checkTransactAction(position int, r *txRequest, tables map[strin
 		return nil, err
 	}
 
-	err = a.parse(r)
+	err = a.parse(r, c.statement)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +566,7 @@ func (a *txAction) checkKey() error {
 // parse parses the action's expressions and checks its placeholders, as
 // PutItem, UpdateItem and DeleteItem do. An update of a key attribute cancels
 // the transaction with that one reason.
-func (a *txAction) parse(r *txRequest) error {
+func (a *txAction) parse(r *txRequest, statement bool) error {
 	if a.op != opUpdate {
 		cond, err := writeCondition(r.condition, r.names, r.values)
 		if err != nil {
@@ -581,7 +581,7 @@ func (a *txAction) parse(r *txRequest) error {
 	update, cond, err := updateExpressions(&api.UpdateItemInput{
 		UpdateExpression: r.update, ConditionExpression: r.condition,
 		ExpressionAttributeNames: r.names, ExpressionAttributeValues: r.values,
-	}, nil)
+	}, nil, statement)
 	if err != nil {
 		return err
 	}

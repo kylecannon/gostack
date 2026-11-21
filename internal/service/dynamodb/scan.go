@@ -67,6 +67,8 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 		return err
 	}
 
+	x.statement = r.statement
+
 	r.limit, err = limitOf(in.Limit)
 	if err != nil {
 		return err
@@ -152,7 +154,7 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, err
 	}
 
-	r.name, r.filter = name, legacy
+	r.name, r.filter, r.statement = name, legacy, isStatement(ctx)
 
 	err = r.checkConsistent()
 	if err != nil {

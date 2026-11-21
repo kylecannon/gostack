@@ -123,6 +123,8 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		return nil, nil, err
 	}
 
+	r.statement = isStatement(ctx)
+
 	r.name, r.legacy = name, legacy
 
 	return e, r, nil
@@ -240,6 +242,8 @@ func (r *reader) parseQuery(in *api.QueryInput) (*expression.KeyText, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	x.statement = r.statement
 
 	r.filter, err = x.condition(expression.FilterExpression, in.FilterExpression)
 	if err != nil {

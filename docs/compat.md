@@ -435,9 +435,11 @@ caller's account and region, as LocalStack does.
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
 - A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project: LocalStack answers "Global secondary
+  attribute the index does not project, and a PartiQL `SELECT` of one with such
+  an attribute in its list, at any length: LocalStack answers "Global secondary
   index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal in both.
+  attribute. `AttributesToGet` gets the image's refusal on a `Query` and a
+  `Scan`.
 - `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
   parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
   not have empty statement." / "The statement was empty." and prefixes the
@@ -472,19 +474,7 @@ caller's account and region, as LocalStack does.
   message may name a different second path. The request is rejected or
   accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
   first to last in the statement's order. A `SELECT` list is checked for overlap
-  whatever its size, and a list that overlaps is answered with the overlap. The
-  image holds a `SELECT` to no size of its own, so one of 602 or more distinct
-  top-level attributes is accepted there. gostack reads with a
-  `ProjectionExpression` of those attributes, which the 4,096-character limit
-  bounds: it is `#n0, #n1, ...`, 7N-112 characters for N of 602 or more, so 602
-  is the first to be refused. Paths below the top level add nothing to it: a
-  list of any number of paths under one attribute, as long as the statement's
-  8,192 bytes hold it, is accepted, as in the image. The refusal is
-  `Expression size has exceeded the maximum allowed size;`: `400` from
-  ExecuteStatement, a `ValidationError` in the statement's `Error` from
-  BatchExecuteStatement, and `400` with
-  `Validation failed in TransactStatements[0]: ` before it from
-  ExecuteTransaction.
+  whatever its size, and a list that overlaps is answered with the overlap.
 
 ## DynamoDB batches and transactions
 

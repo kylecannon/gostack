@@ -175,6 +175,8 @@ func checkStatementExprs(
 		return err
 	}
 
+	x.statement = true
+
 	_, err = x.updateRanked(update, rank)
 	if err != nil {
 		return err

@@ -102,6 +102,8 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, err
 	}
 
+	x.statement = isStatement(ctx)
+
 	name, e, err := p.lookupHome(p.caller(ctx), in.TableName)
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)

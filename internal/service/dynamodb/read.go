@@ -48,6 +48,9 @@ type reader struct {
 	selectMode string
 	filter     expression.Condition
 	projection expression.Projection
+	// statement is a read a PartiQL statement compiled to, whose
+	// ProjectionExpression is held to no size (forStatement).
+	statement bool
 	// fetch reads the table's item for an index entry, as a local index does
 	// for attributes it does not project.
 	fetch      bool

@@ -127,7 +127,8 @@ func (p *parser) leave() { p.depth-- }
 // newParser is the way into the parser of an expression a request sends: it
 // refuses an empty or oversized expression before lexing, since the size cap is
 // what bounds a parser's work and recursion, and then splits src into tokens.
-// The paths of a PartiQL SELECT come in through newUnboundedParser.
+// The paths of a PartiQL SELECT and the actions of a PartiQL UPDATE come in
+// through newUnboundedParser.
 func newParser(kind Kind, src string) (*parser, error) {
 	err := checkSize(kind, src)
 	if err != nil {

@@ -171,6 +171,8 @@ func (c caller) checkGet(position int, get *api.Get, tables map[string]*tableEnt
 		return txGet{}, err
 	}
 
+	x.statement = c.statement
+
 	projection, err := x.projection(get.ProjectionExpression)
 	if err == nil {
 		err = x.done()

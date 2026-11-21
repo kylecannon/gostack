@@ -94,9 +94,28 @@ func ParseUpdateRanked(
 		return nil, err
 	}
 
+	return parseUpdateFrom(base, subs, used, rank)
+}
+
+// ParseStatementUpdate is ParseUpdateRanked for the actions of a PartiQL UPDATE,
+// which DynamoDB Local holds to no size of their own: an UPDATE of 300 SET
+// actions compiles to an UpdateExpression past an expression's 4,096 code
+// units and is applied, the statement's own 8,192 bytes bounding the text
+// (SQ-412).
+func ParseStatementUpdate(
+	text string, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
+	return parseUpdateFrom(newUnboundedParser(updateExpression, text), subs, used, rank)
+}
+
+// parseUpdateFrom parses base, the tokens of an UpdateExpression its caller has
+// held to a size or knows to be bounded.
+func parseUpdateFrom(
+	base *parser, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
 	p := &updateParser{parser: base}
 
-	err = p.parse()
+	err := p.parse()
 	if err == nil {
 		err = p.index
 	}

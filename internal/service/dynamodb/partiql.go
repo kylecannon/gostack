@@ -25,7 +25,7 @@ const codeConditionFailed = "ConditionalCheckFailedException"
 func (p *Provider) ExecuteStatement(
 	ctx context.Context, in *api.ExecuteStatementInput,
 ) (*api.ExecuteStatementOutput, error) {
-	out, err := p.runStatement(ctx, in)
+	out, err := p.runStatement(forStatement(ctx), in)
 	if err != nil {
 		return nil, statementFailure(err)
 	}
@@ -437,15 +437,11 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 		return nil, nil, fmt.Errorf("statement: %w", err)
 	}
 
-	// The image holds a SELECT's paths to no size, so the list its read runs
-	// with is held to the limit here, after the overlap check, and answers as
-	// any statement's expression does. Nested paths add nothing to it (SQ-417).
+	// The image holds a SELECT's paths to no size, and so does the read this
+	// list goes to, which parses it with no size of its own (forStatement).
+	// Nested paths add nothing to it: the read keeps the whole top-level
+	// attribute and shapeItems takes the paths from it.
 	text := strings.Join(top, ", ")
-
-	err = expression.CheckProjectionSize(text)
-	if err != nil {
-		return nil, nil, fmt.Errorf("statement: %w", err)
-	}
 
 	if !nested {
 		return &text, nil, nil
@@ -472,7 +468,9 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 		return item
 	}
 
-	out := make(value.Item, len(paths))
+	// No size is given: most of a long list names nothing the item holds, and
+	// a map sized for the list costs every item the list's length (SQ-412).
+	out := make(value.Item)
 
 	for _, path := range paths {
 		if v, ok := lookupPath(item, path); ok {
