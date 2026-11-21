@@ -285,7 +285,12 @@ func Test_Engine_FlushWaitingForSemMarksTheServicesItDidNotSave(t *testing.T) {
 
 		running := make(chan error, 1)
 
-		go func() { running <- f.e.Flush(t.Context()) }()
+		// The flush that holds blocker has a deadline of its own, at which it marks
+		// it; one with none has its service marked by another's (SQ-465).
+		held, release := context.WithTimeout(t.Context(), time.Hour)
+		defer release()
+
+		go func() { running <- f.e.Flush(held) }()
 
 		<-blocker.entered // a flush by hand holds sem, inside blocker's Snapshot
 

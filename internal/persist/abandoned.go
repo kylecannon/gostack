@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -16,11 +17,14 @@ import (
 // A save abandoned at its deadline loses every change since the last completed
 // save, and the process that abandoned it is on its way out, so nothing else
 // would tell the next one. The marker is written from the moment the save's
-// context ends (see markAtDeadline), not when the work the save cannot interrupt
-// returns: a Snapshot that outlasts the deadline outlasts the kill after it as
-// well. It is fsynced after, within the round's budget, so a marker created and
-// not yet fsynced when the process is killed can be lost by a power cut, which
-// loses the warning and never state. The next save of the service that
+// context ends at a deadline (see markAtDeadline), not when the work the save
+// cannot interrupt returns: a Snapshot that outlasts the deadline outlasts the
+// kill after it as well. A context with no deadline that ends with a deadline's
+// cause is marked within [markWatchAfter] of its end once the flush has lasted
+// that long (see slowWatch), and when the flush ends before that. It is fsynced
+// after, within the round's budget, so a marker created and not yet fsynced when
+// the process is killed can be lost by a power cut, which loses the warning and
+// never state. The next save of the service that
 // completes removes it, unless the service changed since that save took its
 // snapshot (see clearAbandoned); a shutdown that saved everything leaves none.
 // Its presence is the whole signal, its content only for a person who finds it.
@@ -55,7 +59,9 @@ const markBudget = 60 * time.Millisecond
 // took, so the three together take markBudget, not three times it. They do not
 // share the clock: a round that comes after the Snapshot the flush was inside
 // returned has the time the first did not use. A round with none left writes
-// nothing and logs what it could not mark. Flush makes one for its call.
+// nothing and logs what it could not mark. Flush makes one for its call when its
+// ctx has a deadline (see hasDeadline), at two allocations; a call with none has
+// no allowance, and each round of it has the whole budget.
 type markAllowance struct {
 	mu    sync.Mutex
 	spent time.Duration
@@ -80,12 +86,12 @@ func (a *markAllowance) spend(d time.Duration) {
 // markAllowanceKey is the context key under which a Flush keeps its markAllowance.
 type markAllowanceKey struct{}
 
-// hasDeadline reports whether ctx can end at a deadline: only a ctx with one
-// does, short of a caller that cancels one with a deadline's cause. A flush with
-// a ctx that has none does not pay, in its allocations, for marking it will not
-// need: Flush makes it no allowance, so each of its rounds has the whole budget
-// (see allowanceOf), and markAtDeadline arms nothing, so it marks when it ends
-// (see logAbandoned and markWaiting) and not when its ctx does.
+// hasDeadline reports whether ctx has a deadline, which is how it usually ends
+// at one; a caller that cancels one with a deadline's cause ends at it without.
+// A flush with a ctx that has none does not pay, in its allocations, for marking
+// it will not need: Flush makes it no allowance, so each of its rounds has the
+// whole budget (see allowanceOf), and markAtDeadline arms nothing for it until
+// the flush has lasted [markWatchAfter] (see slowWatch).
 func hasDeadline(ctx context.Context) bool {
 	_, ok := ctx.Deadline()
 
@@ -361,6 +367,11 @@ func (m *marker) sync(root *os.Root, fsync func(*os.File) error) error {
 	return nil
 }
 
+// markWatchAfter is how long a flush whose ctx has no deadline runs before
+// markAtDeadline begins to watch for the ctx ending with a deadline's cause (see
+// slowWatch). A flush in time is over before then and allocates nothing for it.
+const markWatchAfter = 50 * time.Millisecond
+
 // markAtDeadline arranges that when ctx ends at a deadline (see ranOutOfTime)
 // the services the deadline puts at risk are marked at that moment, whatever the
 // flush is then inside: a Snapshot cannot be cut short, and the markers written
@@ -370,45 +381,208 @@ func (m *marker) sync(root *os.Root, fsync func(*os.File) error) error {
 // the Flush waits for sem (see wait): a Flush inside its own Snapshot at its
 // deadline would otherwise leave those to the end of that Snapshot. It marks
 // them itself, so it does not return, nor the Flush with it, before the
-// markers are written. It returns a function that ends it, which the caller
-// calls once its flush has ended, waiting for a marking that has begun.
+// markers are written. The caller ends it with [flushRun.endMark] once its flush
+// has ended, which waits for a marking that has begun.
 //
 // The flush by the timer arms none: the Flush that lends it a deadline marks
-// what it holds. Nor does a flush whose ctx has no deadline (see hasDeadline),
-// which marks when it ends instead. A service that saves anyway, as one whose Snapshot returns
-// after the deadline does, has its marker removed by that save (see
-// clearAbandoned); a marker written while the save renames is at worst one
-// warning too many.
-func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) (end func()) {
-	if run.by == byTimer || !hasDeadline(ctx) {
-		return func() {}
+// what it holds. A ctx with a deadline is watched with [context.AfterFunc]. One
+// with none is not, since the flush in time would pay for it in allocations
+// (SQ-461): a ctx that can end is left to the slowWatch, which watches it once
+// the flush has lasted [markWatchAfter], and a ctx that cannot end is never
+// watched. A service that saves anyway, as one whose Snapshot returns after the
+// deadline does, has its marker removed by that save (see clearAbandoned); a
+// marker written while the save renames is at worst one warning too many.
+func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) {
+	if run.by == byTimer {
+		return
 	}
 
-	done := make(chan struct{})
-
-	stop := context.AfterFunc(ctx, func() {
-		defer close(done)
-
-		if !ranOutOfTime(ctx, ctx.Err()) {
-			return
+	if !hasDeadline(ctx) {
+		if ctx.Done() != nil {
+			e.slow.watch(ctx, e, run)
+			run.watching = true
 		}
 
-		e.mu.Lock()
-		if e.timed != nil {
-			e.timed.lend(context.Cause(ctx))
-		}
+		return
+	}
 
-		names := e.unsavedLocked(ctx, run)
-		e.mu.Unlock()
+	stop, done := e.markWhenEnds(ctx, run)
 
-		e.markAbandoned(ctx, names)
-	})
-
-	return sync.OnceFunc(func() {
+	// The marking that has begun is waited for, so the flush returns after its
+	// markers are written.
+	run.endDeadline = sync.OnceFunc(func() {
 		if !stop() {
 			<-done
 		}
 	})
+}
+
+// markWhenEnds arranges that e marks what run puts at risk when ctx ends. It
+// returns the stop of [context.AfterFunc], and a channel that closes when a
+// marking that has begun has ended.
+func (e *Engine) markWhenEnds(ctx context.Context, run *flushRun) (stop func() bool, done <-chan struct{}) {
+	ended := make(chan struct{})
+
+	stop = context.AfterFunc(ctx, func() {
+		defer close(ended)
+
+		e.markAtEnd(ctx, run)
+	})
+
+	return stop, ended
+}
+
+// markAtEnd marks what the end of ctx puts at risk, when it is the end of a
+// deadline (see ranOutOfTime), and lends the flush by the timer that deadline.
+func (e *Engine) markAtEnd(ctx context.Context, run *flushRun) {
+	if !ranOutOfTime(ctx, ctx.Err()) {
+		return
+	}
+
+	e.mu.Lock()
+	if e.timed != nil {
+		e.timed.lend(context.Cause(ctx))
+	}
+
+	names := e.unsavedLocked(ctx, run)
+	e.mu.Unlock()
+
+	e.markAbandoned(ctx, names)
+}
+
+// endMark ends what markAtDeadline arranged for the flush, and waits for a
+// marking that has begun. It is safe to call twice.
+func (r *flushRun) endMark() {
+	if r.endDeadline != nil {
+		r.endDeadline()
+	}
+
+	if r.watching {
+		r.watching = false
+		r.e.slow.unwatch(r)
+	}
+}
+
+// slowWatch watches the flushes whose ctx has no deadline but can end, so that
+// one that ends with a deadline's cause (see ranOutOfTime), as a
+// [context.WithCancelCause] ctx can, is marked when it ends and not when the
+// Snapshot it is inside returns. Watching a ctx costs allocations, which a flush
+// in time must not pay (SQ-461), and no flush in tree has such a ctx end at a
+// deadline, so the watch begins only for a flush that has lasted
+// [Engine.watchAfter]: one timer for the engine, made at the first such flush and
+// reset after it, looks at the registered flushes when it fires and arms
+// [context.AfterFunc] for each that has lasted that long. A flush in time
+// registers and unregisters, which allocates nothing once the registry has grown
+// to the flushes that run at once. A ctx that ended before the watch began is
+// marked as it begins, which is [Engine.watchAfter] after the flush began at
+// most.
+type slowWatch struct {
+	mu    sync.Mutex
+	runs  []*flushRun
+	timer *time.Timer
+	// timed is true while timer is set to fire.
+	timed bool
+}
+
+// slowFlush is what a flushRun keeps of its registration with a slowWatch. The
+// watch guards it.
+type slowFlush struct {
+	ctx   context.Context //nolint:containedctx // the ctx of the flush, which the watch arms
+	since time.Time
+	// stop, set once the watch has armed the flush, is the function of
+	// [context.AfterFunc] that watches ctx, and done closes when the marking it
+	// began has ended.
+	stop func() bool
+	done <-chan struct{}
+}
+
+// watch registers run, whose flush by hand runs with ctx, which has no deadline
+// but can end.
+func (w *slowWatch) watch(ctx context.Context, e *Engine, run *flushRun) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	run.slow = slowFlush{ctx: ctx, since: time.Now()}
+	w.runs = append(w.runs, run)
+
+	if !w.timed {
+		w.schedule(e, e.watchAfter)
+	}
+}
+
+// schedule sets the timer to fire in d. The caller holds mu.
+func (w *slowWatch) schedule(e *Engine, d time.Duration) {
+	w.timed = true
+
+	if w.timer == nil {
+		w.timer = time.AfterFunc(d, func() { w.look(e) })
+
+		return
+	}
+
+	w.timer.Reset(d)
+}
+
+// look arms every registered flush that has lasted [Engine.watchAfter], with
+// the same watch a ctx with a deadline has, and sets the timer for the next of
+// the others. The marking runs in its own goroutine, which takes no lock of the
+// watch.
+func (w *slowWatch) look(e *Engine) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.timed = false
+
+	var next time.Duration
+
+	for _, run := range w.runs {
+		if run.slow.stop != nil {
+			continue
+		}
+
+		left := e.watchAfter - time.Since(run.slow.since)
+		if left > 0 {
+			if next == 0 || left < next {
+				next = left
+			}
+
+			continue
+		}
+
+		run.slow.stop, run.slow.done = e.markWhenEnds(run.slow.ctx, run)
+	}
+
+	if next > 0 {
+		w.schedule(e, next)
+	}
+}
+
+// unwatch removes run, and waits for a marking that has begun, so the flush
+// returns after its markers are written.
+func (w *slowWatch) unwatch(run *flushRun) {
+	w.mu.Lock()
+
+	i := slices.Index(w.runs, run)
+	if i < 0 {
+		w.mu.Unlock()
+
+		return
+	}
+
+	w.runs = slices.Delete(w.runs, i, i+1)
+	stop, done := run.slow.stop, run.slow.done
+	run.slow = slowFlush{}
+
+	if len(w.runs) == 0 && w.timed {
+		w.timer.Stop()
+		w.timed = false
+	}
+
+	w.mu.Unlock()
+
+	if stop != nil && !stop() {
+		<-done
+	}
 }
 
 // markWaiting marks the services a Flush's ctx, ended at a deadline, left unsaved
@@ -442,8 +616,10 @@ func (e *Engine) markUnsaved(ctx context.Context, run *flushRun, cut []string) {
 // its last save, or since the snapshot a save took, left unsaved. A service run
 // lost for a reason of its own is not one of them, though it is dirty again: its
 // warning names it, and a longer SHUTDOWN_TIMEOUT would not have saved it (see
-// logAbandoned). A flush by another caller that holds a service has its own
-// deadline, and is not marked for. The caller holds mu.
+// logAbandoned). A flush by another caller that holds a service and has a
+// deadline of its own is not marked for, since it marks what it holds at that
+// deadline; one with none is, since nothing else will, as a request's save
+// (POST /_gostack/state/save) has none. The caller holds mu.
 func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
 	lends := run == nil || run.by == byHand
 	names := make([]string, 0, len(e.services))
@@ -453,7 +629,8 @@ func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
 			continue
 		}
 
-		held := t.owner != nil && (t.owner == run || lends && t.owner.by == byTimer)
+		held := t.owner != nil &&
+			(t.owner == run || lends && t.owner.by == byTimer || t.owner.by == byHand && !t.owner.deadlined)
 
 		if held || t.dirty && !run.lostToOwnFaultLocked(ctx, name) {
 			names = append(names, name)

@@ -1533,7 +1533,10 @@ is untouched.
   writes those markers itself and does not return before they are written.
   What the flush's end finds dirty is marked then, so a change made after the
   deadline's round is named if the flush ends before the kill. A service that
-  another `Flush` holds has that call's deadline, and is marked for this one
+  another `Flush` holds is marked for this one when that call has no deadline,
+  as the save of `POST /_gostack/state/save` has none and a `Stop` behind it
+  would otherwise leave the service it is stuck in unmarked; one that has a
+  deadline marks what it holds at it, and the service is marked for this one
   only when it is dirty. A flush whose save of a service failed for a reason of
   its own, and a `Follower` whose leader did, is not marked: the flush's warning
   names it with its cause, apart from the services the deadline cut, and the
@@ -1570,13 +1573,29 @@ is untouched.
   the marker stays and the next save that finds the service unchanged removes
   it. A save looks for the marker in the listing of the service's directory
   that it reads anyway to remove the temp files of its state file, and looks
-  by itself only when a link leads the state file to another directory. A
-  flush in time allocates nothing for the marker (SQ-461): a request marks
-  nothing, a flush whose context has no deadline arms no marking at its
-  deadline and shares no budget between its rounds, and a flush with one pays
-  for the arming alone. Such a flush marks when it ends, so a `Snapshot` that
-  outlasts a deadline it was never given is marked after it returns, and each
-  round of it has the whole budget. `BenchmarkSavePendingAssets/pending=100` on
+  by itself only when a link leads the state file to another directory. The
+  listing takes a name that differs from the marker's in case only, whatever the
+  volume: a volume that folds case, as APFS does by default, holds it as the
+  marker, and one that keeps case apart costs the save one `lstat` that finds
+  nothing. A state file that is a link to the marker's name is refused with an
+  error, and the file behind it is left alone, since the save would rename its
+  snapshot onto it and then remove it as the marker.
+  A flush in time allocates nothing for the marker (SQ-461): a request marks
+  nothing, and a flush whose context has no deadline arms no marking at its
+  deadline and shares no budget between its rounds. One with a deadline pays
+  for the arming, the allowance and the `AfterFunc` that watches the context:
+  a change to one service and its `Flush` took 108 allocations without a
+  deadline and 117 with one on darwin (105 and 114 on Linux), the 9 more that
+  `Test_Engine_FlushInTimeAllocations` pins with the whole.
+  A context with no deadline that can end is registered with a timer the engine
+  keeps, which arms a watch of it only once the flush has lasted 50 ms: one
+  that ends with a deadline's cause, as a `context.WithCancelCause` context can,
+  is marked within 50 ms of its end, with a `Snapshot` still running, and at the
+  flush's end when that comes first
+  (`Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause`). No
+  caller in the tree ends one so, since shutdown's context has a deadline and a
+  request's ends `Canceled`. Each round of such a flush has the whole budget.
+  `BenchmarkSavePendingAssets/pending=100` on
   tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
   marker; the first version of the marker took 174, and PR #56's benchmark gate
   read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).

@@ -125,11 +125,23 @@ type stateWriter struct {
 	buf    *bufio.Writer
 }
 
-// createState opens the temp file for a save of file.
+// errStateIsMarker is the reason a save is refused when the state file is a link
+// that leads to the name of the abandoned-save marker: the save would rename its
+// snapshot onto the marker, and the save's own removal of the marker (see
+// clearAbandoned) would then remove the state it wrote.
+var errStateIsMarker = errors.New("the state file is a link to the name of the abandoned-save marker, " +
+	abandonedFile + ", which a save removes; point the link at another name")
+
+// createState opens the temp file for a save of file. It refuses a file whose
+// links lead to the name of the marker (see errStateIsMarker), in any case.
 func createState(root *os.Root, file string) (*stateWriter, error) {
 	path, err := target(root, file)
 	if err != nil {
 		return nil, err
+	}
+
+	if strings.EqualFold(baseOf(path), abandonedFile) {
+		return nil, fmt.Errorf("%s -> %s: %w", file, path, errStateIsMarker)
 	}
 
 	tmp := dirOf(path) + "/" + baseOf(path) + tempSuffix + "-" + rand.Text()
@@ -221,7 +233,11 @@ func removeTemps(root *os.Root, dir, name string) error {
 
 // sweepTemps is removeTemps that also reports whether the listing it reads held
 // an entry called seek, with no read of its own; an empty seek is never found.
-// It reports what the listing held when it ended, a failure included.
+// It reports what the listing held when it ended, a failure included. A name
+// that differs from seek in case only counts, whatever the volume: a volume that
+// folds case, as APFS and NTFS do by default, holds it as the same file, and one
+// that keeps case apart costs the caller one lstat of the exact name, which says
+// it is not there.
 func sweepTemps(root *os.Root, dir, name, seek string) (bool, error) {
 	d, err := root.Open(dir)
 	if err != nil {
@@ -242,7 +258,7 @@ func sweepTemps(root *os.Root, dir, name, seek string) (bool, error) {
 	)
 
 	for _, entry := range entries {
-		found = found || seek != "" && entry.Name() == seek
+		found = found || seek != "" && strings.EqualFold(entry.Name(), seek)
 
 		if entry.Name() != temp && !strings.HasPrefix(entry.Name(), prefix) {
 			continue
