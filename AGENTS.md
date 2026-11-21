@@ -24,6 +24,8 @@ make build               # bin/gostack
 make tidy-check          # go mod tidy -diff in go.mod and tools/go.mod
 make gen                 # regenerate internal/api from specs/
 make gen-check           # gen, then fail on any change under internal/api
+make features            # regenerate docs/features.md from the registered services and the parity ledger
+make features-check      # fail when docs/features.md differs from what features would write
 make fuzz                # every Fuzz* function; FUZZTIME=5s sets the time each
 make parity              # LocalStack's tests against GOSTACK_IMAGE; SERVICES=sqs,sts
 make parity-baseline     # the same tests against LocalStack itself, from ../localstack

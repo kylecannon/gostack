@@ -75,6 +75,14 @@ func (p *Provider) StopReplicationToReplica(
 	return p.Unimplemented.StopReplicationToReplica(ctx, in)
 }
 
+// Stubs names the operations whose methods check the request and then answer
+// 501: StopReplicationToReplica and ValidateResourcePolicy. service.Implemented
+// leaves them out of the operations it counts, so GET /_gostack/services and
+// docs/features.md list them as not implemented.
+func (*Provider) Stubs() []string {
+	return []string{"StopReplicationToReplica", "ValidateResourcePolicy"}
+}
+
 // DeleteResourcePolicy removes the policy; a secret without one is left as it
 // is.
 func (p *Provider) DeleteResourcePolicy(
