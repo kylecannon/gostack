@@ -76,6 +76,19 @@ var _ Update = (*UpdateExpr)(nil)
 // reserved words, function names, a repeated clause, path depth, undefined
 // names, overlapping paths, and last each action's values and operands.
 func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*UpdateExpr, error) {
+	return ParseUpdateRanked(text, subs, used, nil)
+}
+
+// ParseUpdateRanked is ParseUpdate for an expression compiled from a PartiQL
+// UPDATE, whose actions the expression writes clause by clause where the
+// statement lists them in its own order. rank[i] is the place in the statement
+// of the i-th action written. DynamoDB Local adds a statement's paths to its
+// overlap trie first to last, where it adds an UpdateExpression's last to
+// first, so the pair an overlap names depends on that order (SQ-395). A rank
+// that is not one place for each action is ignored.
+func ParseUpdateRanked(
+	text string, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
 	base, err := newParser(updateExpression, text)
 	if err != nil {
 		return nil, err
@@ -102,12 +115,14 @@ func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*Up
 		return nil, err
 	}
 
-	return updateResolve(p, subs, used)
+	return updateResolve(p, subs, used, rank)
 }
 
 // updateResolve substitutes the placeholders of a parsed expression and runs
 // the checks that need them.
-func updateResolve(p *updateParser, subs Substitutions, used map[string]struct{}) (*UpdateExpr, error) {
+func updateResolve(
+	p *updateParser, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
 	err := updateResolveNames(p, subs.Names, used)
 	if err != nil {
 		return nil, err
@@ -118,7 +133,7 @@ func updateResolve(p *updateParser, subs Substitutions, used map[string]struct{}
 		u.paths[i] = act.target.path
 	}
 
-	err = updateCheckOverlap(u.paths)
+	err = updateCheckOverlap(u.paths, rank)
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +272,11 @@ func updateResolveNames(p *updateParser, names map[string]string, used map[strin
 
 // updateCheckOverlap refuses two action paths where one is a prefix of the
 // other (overlap) or where one names a map key and the other a list index at
-// the same step (conflict), naming the pair DynamoDB Local does.
-func updateCheckOverlap(paths []Path) error {
-	c := findPathClash(paths)
+// the same step (conflict), naming the pair DynamoDB Local does. The trie takes
+// the paths last to first, as written, or in the order rank gives, first to
+// last.
+func updateCheckOverlap(paths []Path, rank []int) error {
+	c := findPathClash(rankedPaths(paths, rank))
 	switch {
 	case c == nil:
 		return nil
@@ -268,6 +285,28 @@ func updateCheckOverlap(paths []Path) error {
 	default:
 		return value.Invalid(msgUpdateOverlap + updatePathPair(c.one, c.two))
 	}
+}
+
+// rankedPaths is paths laid out for findPathClash, which takes them last to
+// first, so that it takes them in ascending order of rank. Without a rank that
+// is a permutation of the paths, it is paths as written.
+func rankedPaths(paths []Path, rank []int) []Path {
+	if len(rank) != len(paths) {
+		return paths
+	}
+
+	out := make([]Path, len(paths))
+	placed := make([]bool, len(paths))
+
+	for i, r := range rank {
+		if r < 0 || r >= len(out) || placed[r] {
+			return paths
+		}
+
+		out[len(out)-1-r], placed[r] = paths[i], true
+	}
+
+	return out
 }
 
 func updatePathPair(a, b Path) string {
