@@ -48,7 +48,7 @@ type providers struct {
 func newProviders(cfg *config.Config, changed func(name string)) *providers {
 	p := &providers{
 		s3:  s3.New(liveSettings(cfg, s3Settings), blob.NewEphemeral(blob.DefaultSpillDir)),
-		sns: sns.New(liveSettings(cfg, snsSettings)),
+		sns: sns.New(liveSettings(cfg, snsSettings), changed),
 	}
 	p.regs = registrations(cfg, changed, p.s3, p.sns)
 

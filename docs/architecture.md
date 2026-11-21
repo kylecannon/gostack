@@ -1819,6 +1819,54 @@ Kinesis. The state is two files, LocalStack's split:
   this shape. `bin/gostack` loading that file, saving once and shutting down
   peaks at 1.46 GB resident (`/usr/bin/time -l`).
 
+**SNS.** `PERSIST_SNS=1` persists SNS alone, at `<base>/sns/store.{json,bin}`.
+LocalStack's `API_DEPENDENCIES` has no `sns` entry, so the queues SNS delivers
+to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
+
+- Saved, per account and region: topics with their attributes and data
+  protection policy; subscriptions with their attributes, filter policy text,
+  confirmation state and token (the token map and each topic's index are built
+  again from them, and the policy is parsed again with the body scope, story
+  log entry 3); platform applications and endpoints with their creation
+  numbers; SMS attributes; the messages `/_aws/sns/platform-endpoint-messages`
+  and `/_aws/sns/sms-messages` list. Per account: tags, in the order their keys
+  were first set, and opted-out numbers. Per process: the last FIFO sequence
+  number, which a restore never moves back. Per FIFO topic: the deduplication
+  window, each id with the message id and sequence number a repeat answers
+  with and the time it was taken; a restore drops the entries the five-minute
+  window has passed, so a repeat inside the window is still not delivered
+  after a restart. A string that is not valid UTF-8 is kept as its bytes, as
+  S3's are. This is defensive: a message sent with `%FF` reached SNS as
+  that text, not as the byte.
+- Not saved: deliveries queued in a lane or in flight, and the signing key
+  pair, which each process makes again. The shutdown rule: the drain of the
+  in-process calls, between the first and second shutdown saves, waits for
+  every queued delivery, to SQS and to HTTP, until the shutdown's `Calls`
+  deadline, so a delivery made then is in the queue the second save writes.
+  `Close` then cuts what is left at once and logs `SNS deliveries dropped`
+  with the count. Nothing cut is replayed after a restart; LocalStack does not
+  replay either. A FIFO publish takes its deduplication id before its delivery
+  is queued, so the id of a delivery cut at `Close` is in the saved window: the
+  same id published again after the restart, inside five minutes of the first
+  publish, answers as a repeat and is not delivered. The publish was
+  acknowledged, and AWS deduplication holds across its own outages.
+- `Mutating` leaves out `Publish` and `PublishBatch`. A publish marks SNS
+  dirty itself only when it changes saved state: a FIFO publish that takes a
+  new deduplication id, and one that records a message for an endpoint or a
+  number. A publish to a standard topic whose subscribers are queues or URLs
+  leaves SNS clean. The developer routes that delete recorded messages or add
+  an opted-out number mark it too.
+- Snapshot copies each State under its read lock, each topic and subscription
+  under its own lock in turn, and each FIFO topic's window under the window's
+  lock once the State's is let go, since a FIFO publish records into the State
+  while it holds the window's lock. Restore checks the whole file first: a
+  subscription to a topic the State does not hold, two subscriptions of a
+  topic to one endpoint, a token held twice or a deduplication id held twice
+  refuses it and leaves SNS empty. A window entry older than the one before
+  it, from a wall clock that stepped back, takes that one's time, and one
+  later than the restore's clock takes the restore's time, so it leaves the
+  window five minutes after the restart and holds back no id taken after it.
+
 **Format:**
 
 - gostack's own versioned format at `<base>/<service>/store.{json,bin}`, plus
@@ -2014,6 +2062,53 @@ and SubjectPublicKeyInfo DER, which `crypto/x509` cannot. RFC 5649 key wrap
 (`keywrap.go`, for `ImportKeyMaterial`) and LocalStack's CMS envelope for a
 `Recipient` (`envelope.go`) are written in the package against published test
 vectors.
+
+### SNS (`internal/service/sns`)
+
+LocalStack implements SNS itself, with no moto (`localstack-core/localstack/services/sns/`
+at 8b9a79f). gostack ports its 36 operations; the other 6 of the API's 42 (the
+SMS sandbox and `ListOriginationNumbers`) answer 501 through the generated
+`Unimplemented`, and `GET /_gostack/services` reports 36 of 42
+(`Test_implemented`). What it answers differently is in `docs/compat.md`, the
+SNS sections.
+
+| Package | Holds |
+|---|---|
+| `filter` | Filter policies: the JSON check, the parse on a scope (`MessageAttributes` or `MessageBody`) and the match. A parsed `Policy` is not saved; persistence keeps the policy text and parses it again. |
+| `envelope` | The JSON body a subscriber receives, its signature (SignatureVersion 1 and 2) and the `Signer`, which holds the process's one key pair and serves its certificate. |
+
+**State.** A `State` per account and region in a `store.Bundle` holds the
+topics, the subscriptions with their confirmation tokens and filter policy
+text, the platform applications and endpoints, the SMS attributes and the
+messages recorded for endpoints and phone numbers. An `AccountState` per account
+holds what LocalStack keeps across regions: tags and opted-out numbers. A
+`Topic` keeps an index of its subscriptions, sorted by creation, under its own
+lock; a FIFO topic keeps its ordering lock and its deduplication window.
+Persistence is under "Persistence", SNS.
+
+**Publish.** `Publish` and `PublishBatch` check the request, then fan the
+message out (`fanOut` in `deliver.go`):
+
+1. The topic's confirmed SQS, HTTP and HTTPS subscriptions are read, each
+   under its lock, into a snapshot. Messages to platform endpoints and phone
+   numbers are recorded, not sent.
+2. Each subscription's filter policy is matched against the message's
+   attributes or its body, on the scope the subscription names. The body is
+   parsed once a publish, for every subscription that filters on it.
+3. A matching subscription gets the raw message or the envelope. The envelope
+   is signed once a publish for each content (`envelopeFor`): a
+   `MessageStructure=json` message can give each protocol its own, and every
+   subscriber of the same content shares one signature, since only
+   `UnsubscribeURL` differs and it is not signed.
+4. The deliveries are added to their lanes under the topic's lock, and a FIFO
+   topic's under its FIFO lock as well, after the deduplication check
+   (`publishFIFO`). The publish lets go of both and only then starts the
+   lanes (`lanes.dispatch`), and answers 200 without waiting for any delivery.
+
+The lanes, the in-process calls to SQS, the dead-letter path and the drain at
+shutdown are under "SNS delivery"; the outbound HTTP client under "SNS delivery
+to HTTP and HTTPS". The system bench loads this path through `sns/publish`
+(`bench/doc.go`, "The SNS matrix").
 
 ## Dependencies
 

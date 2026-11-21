@@ -15,8 +15,9 @@ import (
 const dedupWindow = 5 * time.Minute
 
 // fifoTopic is what a FIFO topic keeps besides its attributes: the lock that
-// orders its publishes and the deduplication ids it has seen. It is not
-// persisted: a restart forgets the window, as SQS's own window is kept.
+// orders its publishes and the deduplication ids it has seen. The ids are
+// persisted with their times, so a restart inside the window still
+// deduplicates (snapshot.go).
 type fifoTopic struct {
 	// mu is held from a publish's deduplication check to the queueing of its
 	// deliveries in their lanes, so the deliveries to one queue keep publish
@@ -83,6 +84,11 @@ func (p *Provider) publishFIFO(rc *request.Context, t *Topic, msgs []*message) [
 		f.seen[key] = published{id: msg.id, sequence: msg.sequence, at: now}
 		f.order = append(f.order, key)
 		fresh = append(fresh, msg)
+	}
+
+	if len(fresh) > 0 {
+		// The window is saved state: a restart keeps deduplicating.
+		p.markChanged()
 	}
 
 	return p.fanOut(rc, t, fresh)

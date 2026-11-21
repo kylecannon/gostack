@@ -142,7 +142,7 @@ func notification(version string) *envelope.Message {
 // versions. A second Signer on the serving path would sign with a key the
 // served certificate does not hold, and the verification would fail.
 func Test_Provider_certificateVerifiesItsEnvelopes(t *testing.T) {
-	provider := sns.New(func() sns.Settings { return sns.Settings{Host: "localhost.localstack.cloud:4566"} })
+	provider := sns.New(func() sns.Settings { return sns.Settings{Host: "localhost.localstack.cloud:4566"} }, nil)
 	server := signingServer(t, provider)
 
 	got := fetch(t, server, http.MethodGet, envelope.CertPath)
@@ -166,7 +166,7 @@ func Test_Provider_certificateVerifiesItsEnvelopes(t *testing.T) {
 	})
 
 	t.Run("another Provider has its own certificate", func(t *testing.T) {
-		other := signingServer(t, sns.New(nil))
+		other := signingServer(t, sns.New(nil, nil))
 		otherPEM := fetch(t, other, http.MethodGet, envelope.CertPath)
 
 		assert.NotEqual(t, got.body, otherPEM.body, "each Provider owns one Signer, so one key pair")
@@ -176,7 +176,7 @@ func Test_Provider_certificateVerifiesItsEnvelopes(t *testing.T) {
 // Test_Provider_certificateRoute checks the methods the route answers and that
 // SNS_CERT_URL_HOST does not move it.
 func Test_Provider_certificateRoute(t *testing.T) {
-	server := signingServer(t, sns.New(func() sns.Settings { return sns.Settings{CertURLHost: certHost} }))
+	server := signingServer(t, sns.New(func() sns.Settings { return sns.Settings{CertURLHost: certHost} }, nil))
 
 	t.Run("GET returns the certificate", func(t *testing.T) {
 		got := fetch(t, server, http.MethodGet, envelope.CertPath)
@@ -228,7 +228,7 @@ func Test_Provider_Envelope_certURLHost(t *testing.T) {
 
 	current.Store(&sns.Settings{Host: "stack.test:4566"})
 
-	provider := sns.New(func() sns.Settings { return *current.Load() })
+	provider := sns.New(func() sns.Settings { return *current.Load() }, nil)
 
 	certURL := func(t *testing.T) string {
 		t.Helper()

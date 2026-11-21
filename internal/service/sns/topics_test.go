@@ -45,7 +45,7 @@ func newClient(t *testing.T) *client {
 	t.Helper()
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
-		[]service.Registration{sns.New(nil).Registration()}, nil, nil)
+		[]service.Registration{sns.New(nil, nil).Registration()}, nil, nil)
 	require.NoError(t, err)
 
 	server := httptest.NewServer(g.Handler())
