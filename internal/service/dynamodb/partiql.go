@@ -25,7 +25,7 @@ const codeConditionFailed = "ConditionalCheckFailedException"
 func (p *Provider) ExecuteStatement(
 	ctx context.Context, in *api.ExecuteStatementInput,
 ) (*api.ExecuteStatementOutput, error) {
-	out, err := p.runStatement(ctx, in)
+	out, err := p.runStatement(forStatement(ctx), in)
 	if err != nil {
 		return nil, statementFailure(err)
 	}
@@ -437,15 +437,11 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 		return nil, nil, fmt.Errorf("statement: %w", err)
 	}
 
-	// The image holds a SELECT's paths to no size, so the list its read runs
-	// with is held to the limit here, after the overlap check, and answers as
-	// any statement's expression does. Nested paths add nothing to it (SQ-417).
+	// The image holds a SELECT's paths to no size, and so does the read this
+	// list goes to, which parses it with no size of its own (forStatement).
+	// Nested paths add nothing to it: the read keeps the whole top-level
+	// attribute and shapeItems takes the paths from it.
 	text := strings.Join(top, ", ")
-
-	err = expression.CheckProjectionSize(text)
-	if err != nil {
-		return nil, nil, fmt.Errorf("statement: %w", err)
-	}
 
 	if !nested {
 		return &text, nil, nil
@@ -472,7 +468,19 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 		return item
 	}
 
-	out := make(value.Item, len(paths))
+	// A short list names mostly what the item holds, so the result is sized
+	// for it, and a map that grows instead costs a narrow SELECT an allocation
+	// and 204 bytes an item (SQ-452). Most of a long list names nothing the item
+	// holds, and a map sized for it costs every item the list's length
+	// (SQ-412), so a long list is counted against the item first and the map
+	// sized for what it holds: no more than the list's length, and a map that
+	// grows from small to that costs 21% more (SQ-456).
+	size := len(paths)
+	if size > shapeHintMax {
+		size = heldPaths(item, paths)
+	}
+
+	out := make(value.Item, size)
 
 	for _, path := range paths {
 		if v, ok := lookupPath(item, path); ok {
@@ -481,6 +489,23 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 	}
 
 	return out
+}
+
+// shapeHintMax is the longest list shapeItem sizes its result for without
+// counting what the item holds of it.
+const shapeHintMax = 32
+
+// heldPaths is how many of paths item holds.
+func heldPaths(item value.Item, paths []partiql.Path) int {
+	n := 0
+
+	for _, path := range paths {
+		if _, ok := lookupPath(item, path); ok {
+			n++
+		}
+	}
+
+	return n
 }
 
 // lookupPath is the value at path in item.
