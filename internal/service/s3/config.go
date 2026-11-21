@@ -383,8 +383,7 @@ func (b *Bucket) enforcesOwner() bool {
 		deref(b.OwnershipControls.Rules[0].ObjectOwnership) == ownershipEnforced
 }
 
-// GetBucketEncryption returns the bucket's default encryption. A bucket whose
-// configuration was deleted answers with the SSE-S3 default S3 applies anyway.
+// GetBucketEncryption returns the bucket's default encryption.
 func (p *Provider) GetBucketEncryption(
 	ctx context.Context, in *s3api.GetBucketEncryptionInput,
 ) (*s3api.GetBucketEncryptionOutput, error) {
@@ -402,10 +401,6 @@ func (p *Provider) GetBucketEncryption(
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	if out.ServerSideEncryptionConfiguration == nil {
-		out.ServerSideEncryptionConfiguration = defaultEncryptionConfiguration()
 	}
 
 	return out, nil
@@ -451,7 +446,10 @@ func (p *Provider) PutBucketEncryption(
 	return &s3api.PutBucketEncryptionOutput{}, nil
 }
 
-// DeleteBucketEncryption removes the configuration; deleting none succeeds.
+// DeleteBucketEncryption resets the bucket to the SSE-S3 default every bucket
+// starts with, as AWS documents, so a later GetBucketEncryption answers it and
+// a write is encrypted with it; LocalStack answers no rule and leaves a write
+// unencrypted. Deleting an unconfigured bucket succeeds.
 func (p *Provider) DeleteBucketEncryption(
 	ctx context.Context, in *s3api.DeleteBucketEncryptionInput,
 ) (*s3api.DeleteBucketEncryptionOutput, error) {
@@ -461,7 +459,7 @@ func (p *Provider) DeleteBucketEncryption(
 	}
 
 	err = b.writeConfig(func() error {
-		b.Encryption, b.EncryptionConfigured = nil, false
+		b.Encryption, b.EncryptionConfigured = defaultEncryptionConfiguration(), false
 
 		return nil
 	})
