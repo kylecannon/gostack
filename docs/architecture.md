@@ -788,6 +788,13 @@ queue.
   calls), which the next answer gives to the parked lanes in the order they
   were parked before its own lane sends again. A stuck destination holds one
   client worker; the others serve every other lane.
+- **Signing key.** The first `CreateTopic`, or a `Restore` that holds a topic,
+  starts making the RSA-2048 key in one background goroutine, once per
+  process. Nothing makes it at start or for a provider that never has a topic,
+  and a publish that signs before it is ready waits for that generation. A GET
+  of the signing certificate makes the key too, on a provider with no topic,
+  and answers 200: the certificate request needs the pair, so it waits for the
+  same generation as a publish.
 - **Shutdown.** SNS has no `Shutdown` function: nothing waits for room, so
   nothing needs letting go. While any SQS delivery is in a lane, the lanes hold
   one count in the hub's pending count (`inproc.Client.Hold`), so `Hub.Drain`
