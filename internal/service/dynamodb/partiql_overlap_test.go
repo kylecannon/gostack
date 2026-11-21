@@ -102,8 +102,10 @@ func Test_partiql_updateOverlapPairInABatchAndATransaction(t *testing.T) {
 
 // selectLongRows are what the LocalStack image answered for a SELECT of
 // hundreds of paths (SQ-395). It holds a SELECT list to no size, so a list of
-// 769 or more paths is checked for overlap as a short one is, where a
-// ProjectionExpression of the same paths is refused for its size first.
+// 602 or more distinct top-level attributes (the 4,096 characters of a
+// ProjectionExpression are `#n0, #n1, ...`, 7N-112 for N of 602 or more) is
+// checked for overlap as a short one is, where a ProjectionExpression of the
+// same paths is refused for its size first.
 //
 //nolint:lll // each row holds the exact pair the LocalStack image named
 var selectLongRows = []struct {
@@ -197,4 +199,66 @@ func Test_partiql_selectOverlapPair(t *testing.T) {
 	}
 
 	run(t, s, steps)
+}
+
+// selectList is the SELECT list of n attributes named prefix0 to prefix(n-1).
+func selectList(prefix string, n int) string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = prefix + strconv.Itoa(i)
+	}
+
+	return strings.Join(names, ",")
+}
+
+// Test_partiql_selectListSize: the image holds a SELECT to no size, so its list
+// of attributes is refused for its size where gostack's read runs with it. The
+// `#n0, #n1, ...` list a read runs with passes 4,096 characters at 602 distinct
+// top-level attributes (SQ-417), and each surface answers the size as it did
+// before a SELECT list was checked unbounded: ExecuteStatement with the
+// message, BatchExecuteStatement in the statement's own error with no table
+// name, ExecuteTransaction with the statement's place in front of it.
+func Test_partiql_selectListSize(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pover"))
+
+	const msg = "Expression size has exceeded the maximum allowed size;"
+
+	over := jsonString("SELECT " + selectList("k", 602) + " FROM pover WHERE id = 'a'")
+
+	got := s.call(t, usEast1, opStatement, `{"Statement":`+over+`}`)
+	require.Equal(t, http.StatusBadRequest, got.status, got.body)
+	require.JSONEq(t, validation(msg), got.body)
+
+	got = s.call(t, usEast1, opBatchStmt, `{"Statements":[{"Statement":`+over+`}]}`)
+	require.Equal(t, http.StatusOK, got.status, got.body)
+	require.JSONEq(t, `{"Responses":[{"Error":{"Code":"ValidationError","Message":`+jsonString(msg)+`}}]}`, got.body)
+
+	got = s.call(t, usEast1, opTransaction, `{"TransactStatements":[{"Statement":`+over+`}]}`)
+	require.Equal(t, http.StatusBadRequest, got.status, got.body)
+	require.JSONEq(t, validation("Validation failed in TransactStatements[0]: "+msg), got.body)
+}
+
+// Test_partiql_selectListWithinSize: 601 distinct top-level attributes is the
+// longest list the read takes, and paths below the top level add nothing to
+// it: a list of 1,000 of them under one attribute is answered, as the image
+// answers it (SQ-417).
+func Test_partiql_selectListWithinSize(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pover"))
+	s.ok(t, "PutItem", `{"TableName":"pover","Item":{"id":{"S":"a"},"k0":{"S":"x"}}}`)
+
+	for name, list := range map[string]string{"top level": selectList("k", 601), "nested": selectList("a.k", 1000)} {
+		src := jsonString("SELECT " + list + " FROM pover WHERE id = 'a'")
+
+		for _, call := range []struct{ op, body string }{
+			{opStatement, `{"Statement":` + src + `}`},
+			{opBatchStmt, `{"Statements":[{"Statement":` + src + `}]}`},
+			{opTransaction, `{"TransactStatements":[{"Statement":` + src + `}]}`},
+		} {
+			got := s.call(t, usEast1, call.op, call.body)
+			require.Equal(t, http.StatusOK, got.status, "%s %s: %s", name, call.op, got.body)
+			require.NotContains(t, got.body, "Error", "%s %s", name, call.op)
+		}
+	}
 }

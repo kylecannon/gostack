@@ -124,9 +124,10 @@ func (p *parser) enter() error {
 
 func (p *parser) leave() { p.depth-- }
 
-// newParser is the one way into every parser of the package: it refuses an
-// empty or oversized expression before lexing, since the size cap is what
-// bounds a parser's work and recursion, and then splits src into tokens.
+// newParser is the way into the parser of an expression a request sends: it
+// refuses an empty or oversized expression before lexing, since the size cap is
+// what bounds a parser's work and recursion, and then splits src into tokens.
+// The paths of a PartiQL SELECT come in through newUnboundedParser.
 func newParser(kind Kind, src string) (*parser, error) {
 	err := checkSize(kind, src)
 	if err != nil {

@@ -50,6 +50,14 @@ func ParseStatementProjection(src string, subs Substitutions, used map[string]st
 	return parseProjectionFrom(newUnboundedParser(ProjectionExpression, src), subs, used)
 }
 
+// CheckProjectionSize refuses a ProjectionExpression that is empty or over the
+// size limit, as ParseProjection does before it reads anything. A PartiQL SELECT
+// holds the top-level list its read runs with to it, after
+// ParseStatementProjection has checked the paths for overlap.
+func CheckProjectionSize(src string) error {
+	return checkSize(ProjectionExpression, src)
+}
+
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
 func parseProjectionFrom(p *parser, subs Substitutions, used map[string]struct{}) (Projection, error) {
 	ops, err := p.parsePathList()

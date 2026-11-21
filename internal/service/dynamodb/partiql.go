@@ -437,7 +437,16 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 		return nil, nil, fmt.Errorf("statement: %w", err)
 	}
 
+	// The image holds a SELECT's paths to no size, so the list its read runs
+	// with is held to the limit here, after the overlap check, and answers as
+	// any statement's expression does. Nested paths add nothing to it (SQ-417).
 	text := strings.Join(top, ", ")
+
+	err = expression.CheckProjectionSize(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("statement: %w", err)
+	}
+
 	if !nested {
 		return &text, nil, nil
 	}
