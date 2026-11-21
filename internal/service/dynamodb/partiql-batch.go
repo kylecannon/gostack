@@ -71,7 +71,7 @@ func (c caller) compileRead(
 			return nil, err
 		}
 
-		err = checkStatementExprs(r.attributeNames(), r.attributeValues(), &filter, nil)
+		err = checkStatementExprs(r.attributeNames(), r.attributeValues(), &filter, nil, nil)
 		if err != nil {
 			return nil, err
 		}
