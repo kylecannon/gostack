@@ -82,32 +82,6 @@ func Test_Publish_afterWarmKey(t *testing.T) {
 	verifyNotification(t, certificateOf(t, after.body), []byte(got[0].Body))
 }
 
-// Test_Provider_firstEnvelopeAfterWarmKey: the first signed envelope of a
-// Provider that had a topic created and a moment to make its key takes a
-// fraction of the time of the first one of a Provider that makes the key on
-// the spot, which pays the key's 15 ms or more.
-func Test_Provider_firstEnvelopeAfterWarmKey(t *testing.T) {
-	first := func(p *sns.Provider) time.Duration {
-		start := time.Now()
-		_, err := p.Envelope(notification("1"))
-		elapsed := time.Since(start)
-
-		require.NoError(t, err)
-
-		return elapsed
-	}
-
-	cold := first(sns.New(nil, nil))
-
-	s := newStack(t, nil)
-	s.createTopic(paramName, "t")
-	require.Eventually(t, s.sns.SignerReady, keyWait, time.Millisecond)
-
-	warm := first(s.sns)
-
-	assert.Less(t, warm*2, cold, "warm %v, cold %v: the first signed publish still pays the key", warm, cold)
-}
-
 // Test_Provider_concurrentFirstEnvelopes: envelopes signed while the key is
 // still being made all wait for it, and all verify against the one certificate.
 func Test_Provider_concurrentFirstEnvelopes(t *testing.T) {

@@ -163,6 +163,16 @@ func BenchmarkRestore(b *testing.B) {
 
 			p := sns.New(nil, nil)
 
+			// The first Restore starts the signing key; it runs before the timed
+			// loop, which starts at its first b.Loop call, so the key is not made
+			// inside it.
+			err = p.Restore(bytes.NewReader(saved.Bytes()))
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			awaitSigningKey(b, p)
+
 			b.SetBytes(int64(saved.Len()))
 			b.ReportAllocs()
 
