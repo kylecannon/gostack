@@ -2115,6 +2115,71 @@ shutdown are under "SNS delivery"; the outbound HTTP client under "SNS delivery
 to HTTP and HTTPS". The system bench loads this path through `sns/publish`
 (`bench/doc.go`, "The SNS matrix").
 
+### Secrets Manager (`internal/service/secretsmanager`)
+
+LocalStack's Secrets Manager is moto's with about 980 lines of patches
+(`services/secretsmanager/provider.py` at 8b9a79f), and gostack ports both: the
+patches and the moto behavior they leave in place, sized against moto-ext
+5.1.25. All 23 operations of the API are implemented, so `GET
+/_gostack/services` reports 23 of 23 (`Test_implemented`). Rotation that needs
+Lambda ends with `ResourceNotFoundException` and the secret as it was, because
+Lambda is not a service yet. What it answers differently is in `docs/compat.md`,
+"Secrets Manager".
+
+**State.** A `State` per account and region in a `store.Bundle` holds the
+secrets, each with its versions, their staging labels, its policy, tags,
+rotation setting and replica links, under its own lock. A replica is a record
+in the region it was replicated to that reads through to its primary.
+`GetSecretValue` stamps `LastAccessedDate` with the day and tells persistence
+(`notifyChanged`) only when the day changes, so it is not in the `Mutating`
+list. Persistence writes every version's value unencrypted, as LocalStack does.
+
+**The join with SSM.** A parameter named `/aws/reference/secretsmanager/<id>`
+is a secret. SSM reads it through its own in-process client, which
+`Registration.Bind` hands the gateway's internal handler: a json 1.1
+`secretsmanager.GetSecretValue` call as the caller, in the caller's account and
+region. SSM imports nothing of this package and reaches none of its state.
+
+### SSM Parameter Store (`internal/service/ssm`)
+
+LocalStack's SSM provider is a thin layer over moto (`services/ssm/provider.py`
+at 8b9a79f): five operations of its own, the rest moto's. gostack builds
+Parameter Store, 17 of the API's 146 operations (`Test_implemented`): the
+parameter operations, labels, tags for parameters, and the maintenance-window
+records moto keeps. The other 129 answer 501 through the generated
+`Unimplemented` and are listed by `GET /_gostack/services`. What it answers
+differently is in `docs/compat.md`, "SSM Parameter Store".
+
+**State.** A `State` per account and region in a `store.Bundle` holds every
+parameter as its list of versions, oldest first, with labels on versions and
+tags on the name. A `SecureString` is stored as moto stores it,
+`kms:<key id>:<value>`; nothing calls KMS.
+
+**Secrets Manager references.** `GetParameter` and `GetParameters` hand a name
+under `/aws/reference/secretsmanager/` to `secretParameter`
+(`secret-reference.go`), which calls Secrets Manager's `GetSecretValue` through
+the in-process client and returns the secret as a `Parameter`: its
+`SecretString` as the value, type `SecureString`, the secret's own ARN,
+`SourceResult` the answer as JSON, and `LastModifiedDate` the creation time in
+whole seconds. A name takes a trailing selector, `:AWSCURRENT`, `:AWSPREVIOUS`, a
+staging label or a VersionId, and the `Parameter` answers the `Name` without it
+and the `Selector` with its colon. A selector with a symbol other than letters,
+numbers, `.`, `-` and `_` is not found and no call is made. One of 32 to 64
+characters is sent as `VersionId` and, on `ResourceNotFoundException`, as
+`VersionStage`; any other is a `VersionStage`. `GetParameters` reads the ARN form of a reference name as
+`GetParameter` does. The secret is read whatever `WithDecryption` says. Any
+client error of `GetSecretValue` (no such secret, one marked for deletion, no
+such version, an id Secrets Manager refuses, a secret the caller may not read)
+answers `ParameterNotFound` from `GetParameter` and lands in `InvalidParameters`
+for `GetParameters`; only a failure of the call itself is a 500. A gateway that
+serves no Secrets Manager answers the same, as for a secret nothing holds. An id
+that is an ARN reads the ARN's region, and another account's secret is read only
+as Secrets Manager's own rule allows: a secret under the default key is not
+readable from another account. The call is declared on the registration
+(`Bind`), so SSM runs without Secrets Manager and the pair run together. The
+system bench loads this path through `ssm/reference` (`bench/doc.go`, "The
+Secrets Manager and SSM matrix").
+
 ## Dependencies
 
 A dependency enters `go.mod` with the code that uses it. Nothing else without a
