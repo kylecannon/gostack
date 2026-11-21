@@ -422,7 +422,8 @@ func encodeJSON(v any) ([]byte, error) {
 // delivery is asynchronous: a queue that is gone, or an unbound client, costs
 // a log line and nothing else, as it does in LocalStack. The queue's ARN is the
 // call's lane, so the events for one queue arrive in the order they were
-// raised, and a queue that is slow to take them holds up no other.
+// raised, and a queue that is slow to take them holds up no other. The client's
+// queue has no bound, so only a closed one (the shutdown) refuses the event.
 func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 	queueARN := deref(queue.QueueArn)
 
@@ -453,7 +454,7 @@ func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 		logDelivery(ev.bucket, "queue", arn.resource, resp, err)
 	})
 	if !queued {
-		slog.Warn("S3 notification dropped: the delivery queue is full or closed", "bucket", ev.bucket, "queue", arn.resource)
+		slog.Warn("S3 notification dropped: the delivery queue is closed", "bucket", ev.bucket, "queue", arn.resource)
 	}
 }
 
@@ -486,7 +487,7 @@ func (p *Provider) sendTopicEvent(ev *event, topic *s3api.TopicConfiguration) {
 		logDelivery(ev.bucket, "topic", topicARN, resp, err)
 	})
 	if !queued {
-		slog.Warn("S3 notification dropped: the delivery queue is full or closed", "bucket", ev.bucket, "topic", topicARN)
+		slog.Warn("S3 notification dropped: the delivery queue is closed", "bucket", ev.bucket, "topic", topicARN)
 	}
 }
 

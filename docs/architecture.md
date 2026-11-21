@@ -709,7 +709,9 @@ canonical, nothing set after the status) and the body.
   the events of a bulk delete, from crowding out client requests. Workers
   start with a waiting call and exit when none waits, so nothing runs while
   idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and refuses
-  the next; each queued call has 30 seconds.
+  the next, except a client made by `inproc.NewUnbounded`, which holds any
+  number and refuses only after `Close` (S3's notification client: an event
+  is never dropped because others wait); each queued call has 30 seconds.
 
 A call made before `Bind` gives the client a handler returns `ErrNotBound`. A
 handler that panics, as the gateway does to abort a response whose status it
@@ -720,7 +722,13 @@ notifications to SQS and SNS. Each event to a queue is a `SendMessage` as the
 bucket's owner, in the lane of the queue's ARN; each event to a topic is a
 query-protocol `Publish` in the lane of the topic's ARN. So the events for one
 queue or topic arrive in the order they were raised and a slow one holds up no
-other. S3 names the calls itself and imports neither service's package.
+other. S3's client is unbounded (`inproc.NewUnbounded`), so no event is
+dropped because others wait, as LocalStack's notifier executor drops none, and
+a PUT never waits for delivery; the memory held grows with the events not yet
+delivered. At shutdown the events still queued get the hub's drain budget
+(`Calls`), and past it `Hub.Drain` cuts them and logs the count. SNS keeps its
+own bounded client, whose lanes park a delivery that finds the queue full. S3
+names the calls itself and imports neither service's package.
 
 `cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
 the calls through the gateway's `InternalHandler`: the root router with each

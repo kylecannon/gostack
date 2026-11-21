@@ -2,7 +2,6 @@ package s3_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,18 +21,30 @@ import (
 // queue is subscribed to, across the payload axis and at concurrency 1 and 16,
 // for example
 //
-//	BenchmarkPutObjectNotified/target=topic/payload=1KiB/concurrency=16
+//	BenchmarkPutObjectNotified/target=topic-envelope/payload=1KiB/concurrency=16
 //
-// One iteration is the PUTs of every worker at once plus the wait until each
-// event has reached the queue, so ns/op is the time from a put to its event
-// being on the queue, per sixteen puts at concurrency 16. The queue is not read:
-// it holds every event of the run, and the wait polls its depth.
+// The targets are the queue itself, a topic whose subscription takes the message
+// raw (topic-raw), and a topic whose subscription is left at its default, so
+// that SNS signs an envelope for each message (topic-envelope, about a
+// millisecond of the topic's lane per event).
+//
+// One iteration is the PUTs of every worker at once. Delivery is asynchronous,
+// so the events a run raised and has not delivered are part of its cost: the
+// timer runs again after the loop for the one wait until the queue holds every
+// event, and ns/op is the whole run, delivery included, per iteration. Waiting
+// in each iteration put a GetQueueAttributes round trip and a timer in the
+// timed loop, and hid the delivery behind them. The queue is not read: it holds
+// every event of the run.
 
 const (
-	notifiedTargetQueue  = "queue"
-	notifiedTargetTopic  = "topic"
-	notifiedPollInterval = 200 * time.Microsecond
-	notifiedDeadline     = 30 * time.Second
+	notifiedTargetQueue         = "queue"
+	notifiedTargetTopicRaw      = "topic-raw"
+	notifiedTargetTopicEnvelope = "topic-envelope"
+	notifiedPollInterval        = time.Millisecond
+	// notifiedStall is how long the queue's depth may stand still before the
+	// wait gives up: a backlog takes as long as it takes, a delivery that has
+	// stopped does not.
+	notifiedStall = 30 * time.Second
 
 	benchScope      = "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/"
 	benchScopeEnd   = "/aws4_request, SignedHeaders=host, Signature=0"
@@ -109,7 +120,7 @@ func (s *objectBenchServer) queueDepth(b *testing.B) int {
 
 // notifiedServer serves S3, SQS and SNS, with the bucket's notifications going to
 // target: the queue itself, or a topic the queue is subscribed to with raw
-// delivery.
+// delivery or with the default one, an envelope.
 func notifiedServer(b *testing.B, target string) *objectBenchServer {
 	b.Helper()
 
@@ -129,9 +140,15 @@ func notifiedServer(b *testing.B, target string) *objectBenchServer {
 	config := `<NotificationConfiguration><QueueConfiguration><Queue>` + notifyARN + `</Queue>` + createdEvents +
 		`</QueueConfiguration></NotificationConfiguration>`
 
-	if target == notifiedTargetTopic {
+	if target != notifiedTargetQueue {
+		var attrs url.Values
+
+		if target == notifiedTargetTopicRaw {
+			attrs = rawDelivery
+		}
+
 		s.snsCall(b, snsForm("CreateTopic", url.Values{fieldTopicName: {notifyTopic}}))
-		s.snsCall(b, subscribeForm(rawDelivery))
+		s.snsCall(b, subscribeForm(attrs))
 
 		config = topicConfig(notifyTopicARN, "")
 	}
@@ -154,7 +171,7 @@ func notifiedServer(b *testing.B, target string) *objectBenchServer {
 }
 
 func BenchmarkPutObjectNotified(b *testing.B) {
-	for _, target := range []string{notifiedTargetQueue, notifiedTargetTopic} {
+	for _, target := range []string{notifiedTargetQueue, notifiedTargetTopicRaw, notifiedTargetTopicEnvelope} {
 		for _, payload := range benchPayloads[:2] {
 			for _, workers := range benchConcurrency {
 				name := fmt.Sprintf("target=%s/payload=%s/concurrency=%d", target, payload.name, workers)
@@ -180,26 +197,39 @@ func BenchmarkPutObjectNotified(b *testing.B) {
 						require.NoError(b, err)
 
 						delivered += workers
-						waitForDepth(b, s, delivered)
 					}
+
+					// Loop stopped the timer. The wait for the last event is part of the
+					// run, and the only one: the loop itself polls nothing.
+					b.StartTimer()
+					waitForDepth(b, s, delivered)
 				})
 			}
 		}
 	}
 }
 
-// waitForDepth polls the queue until it holds want messages.
+// waitForDepth polls the queue until it holds want messages, and fails when its
+// depth has not moved for notifiedStall.
 func waitForDepth(b *testing.B, s *objectBenchServer, want int) {
 	b.Helper()
 
-	ctx, cancel := context.WithTimeout(b.Context(), notifiedDeadline)
-	defer cancel()
+	last, movedAt := -1, time.Now()
 
-	for s.queueDepth(b) < want {
-		select {
-		case <-ctx.Done():
-			require.FailNow(b, "events did not reach the queue", "want %d", want)
-		case <-time.After(notifiedPollInterval):
+	for {
+		depth := s.queueDepth(b)
+		if depth >= want {
+			return
 		}
+
+		if depth != last {
+			last, movedAt = depth, time.Now()
+		}
+
+		if time.Since(movedAt) > notifiedStall {
+			require.FailNow(b, "events did not reach the queue", "want %d, have %d", want, depth)
+		}
+
+		time.Sleep(notifiedPollInterval)
 	}
 }
