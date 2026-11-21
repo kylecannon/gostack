@@ -567,6 +567,11 @@ func (d *bucketData) bucket() (*Bucket, error) {
 		IntelligentTiering: d.IntelligentTiering, LifecycleMinObjectSize: d.LifecycleMinObjectSize,
 	}
 
+	if b.Encryption == nil {
+		// A bucket saved after a DeleteBucketEncryption that left none.
+		b.Encryption = defaultEncryptionConfiguration()
+	}
+
 	for _, saved := range d.Objects {
 		if _, twice := b.Objects[saved.Key]; twice {
 			return nil, fmt.Errorf("the key %q twice", saved.Key)

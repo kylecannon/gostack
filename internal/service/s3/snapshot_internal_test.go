@@ -241,6 +241,25 @@ func Test_Restore_RebuildsTheKeyIndexes(t *testing.T) {
 	assert.Empty(t, empty.keys)
 }
 
+// Test_Restore_GivesABucketSavedWithoutEncryptionTheDefault restores a bucket
+// whose snapshot has no default encryption, as an older build saved one after
+// DeleteBucketEncryption: it is back at SSE-S3, as a deleted one is now.
+func Test_Restore_GivesABucketSavedWithoutEncryptionTheDefault(t *testing.T) {
+	first := newSnapshotProvider(t)
+	b := newBucket("plain", "111111111111", regionUSEast1, "", nil)
+	b.Encryption = nil
+
+	_, claimed := first.addBucket(b)
+	require.True(t, claimed)
+
+	second := newSnapshotProvider(t)
+	require.NoError(t, second.Restore(bytes.NewReader(snapshotOf(t, first))))
+
+	restored := second.state("111111111111").get("plain")
+	require.NotNil(t, restored)
+	assert.Equal(t, defaultEncryptionConfiguration(), restored.Encryption)
+}
+
 // Test_Restore_MovesTheVersionSequencePastRestoredIDs makes a version made
 // after a restore sort after every restored one.
 func Test_Restore_MovesTheVersionSequencePastRestoredIDs(t *testing.T) {
