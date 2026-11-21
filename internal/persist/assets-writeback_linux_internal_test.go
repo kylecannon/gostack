@@ -40,7 +40,7 @@ func newFaultFixture(t *testing.T) *syncFixture {
 	}
 
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(base, time.Hour, logs))
 	n := &namer{}
 	e.Register(syncService, n)
 
