@@ -2,10 +2,13 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
+
+	"github.com/kylecannon/gostack/internal/awserr"
 )
 
 // DefaultMaxBody is the cap on a request body that is not streamed, when
@@ -206,4 +209,16 @@ func OverBody(n int) bool {
 	limit := MaxBody()
 
 	return limit > 0 && int64(n) > limit
+}
+
+// BodyTooLarge is the answer of a json service to a request body over MaxBody:
+// 413 RequestEntityTooLarge, with a message that names the limit in bytes and
+// the variable that sets it. LocalStack has no cap, so no image answer exists.
+func BodyTooLarge() *awserr.Error {
+	return &awserr.Error{
+		Code: "RequestEntityTooLarge",
+		Message: fmt.Sprintf("The request body is over the limit of %d bytes. "+
+			"GOSTACK_MAX_REQUEST_BODY sets the limit.", MaxBody()),
+		StatusCode: http.StatusRequestEntityTooLarge, Fault: awserr.FaultSender,
+	}
 }
