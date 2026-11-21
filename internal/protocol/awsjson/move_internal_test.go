@@ -1,11 +1,13 @@
 package awsjson
 
 import (
+	"context"
 	"math"
 	"reflect"
 	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/stretchr/testify/assert"
@@ -241,5 +243,67 @@ func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 
 	_, _, err = DecodeWithin[denseValue](broken, budget, plainHold{})
 	require.NotNil(t, err)
+	requireLaneFree(t)
+}
+
+// Test_DecodeWithin_NoDenseBodyWhileABodyWaits: while a request waits for
+// room under the in-flight bound, a body past DecodeBudget is answered as a
+// service at protocol.DecodeFactor answers it, ErrTooLarge, at once and holding
+// nothing, so that the queue drains as fast as it does when such bodies are
+// refused. Once nothing waits, the same body is served.
+func Test_DecodeWithin_NoDenseBodyWhileABodyWaits(t *testing.T) {
+	withMemoryLimit(t, 8<<30)
+
+	bound, _ := protocol.InFlight()
+
+	t.Cleanup(func() {
+		protocol.SetInFlight(bound)
+		protocol.SetBodyWait(protocol.DefaultBodyWait)
+	})
+
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	protocol.SetBodyWait(time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	// The first hold takes the bound less one body; the second waits for it.
+	var first, second protocol.DecodeHold
+
+	_, err := first.Cover(ctx, 1<<40)
+	require.NoError(t, err)
+
+	waited := make(chan error, 1)
+
+	go func() {
+		_, err := second.Cover(ctx, 1<<40)
+		waited <- err
+	}()
+
+	require.Eventually(t, protocol.BodiesWait, 10*time.Second, time.Millisecond,
+		"the second hold waits for the bound")
+
+	body := denseBody(300_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+
+	refused := &recordingHold{}
+	t.Cleanup(refused.release)
+
+	_, _, decodeErr := DecodeWithin[denseValue](body, budget, refused)
+	assert.Same(t, ErrTooLarge, decodeErr, "a body waits for the bound: main's answer")
+	assert.Empty(t, refused.steps, "nothing is reserved and the pool is kept")
+
+	first.Release()
+	require.NoError(t, <-waited, "the waiting hold is granted")
+	second.Release()
+
+	served := &recordingHold{}
+	t.Cleanup(served.release)
+
+	_, _, decodeErr = DecodeWithin[denseValue](body, budget, served)
+	require.Nil(t, decodeErr, "nothing waits: the dense body is served")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, served.steps)
+
+	served.release()
 	requireLaneFree(t)
 }

@@ -159,8 +159,16 @@ var errNoRoom = errors.New("no room for the body on the heap")
 // hold of the in-flight bound, so that the room other requests' bodies wait
 // for is free again as soon as it would be were the body refused. It fails
 // with errNoRoom, holding what it held, when another body has the lane or the
-// heap has no room: the answer at protocol.DecodeFactor, without waiting.
+// heap has no room: the answer at protocol.DecodeFactor, without waiting. It
+// fails the same way, before taking the lane, while any request waits for room
+// under the in-flight bound (protocol.BodiesWait): the queue then drains one
+// body at a time, and a dense body walked and decoded beside it, or walked to
+// its end only to be refused, slows what every waiting request waits on.
 func moveBody(body []byte, r *reservations) error {
+	if protocol.BodiesWait() {
+		return errNoRoom
+	}
+
 	lane, release, ok := protocol.TakeDenseLane(int64(len(body)))
 	if !ok {
 		return errNoRoom

@@ -148,6 +148,20 @@ func InFlight() (bound, held int64) {
 	return pool.capacity, pool.used
 }
 
+// BodiesWait reports whether a request body, or a decoding, waits for room
+// under the in-flight bound now. It is false when there is no bound.
+func BodiesWait() bool {
+	pool := inFlight.Load()
+	if pool == nil {
+		return false
+	}
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	return len(pool.growing)+len(pool.starting) > 0
+}
+
 // SetBodyWait sets how long a body waits for room under the bound. A test that
 // changes it puts the old value back.
 func SetBodyWait(wait time.Duration) {

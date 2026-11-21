@@ -1,9 +1,11 @@
 package protocol
 
 import (
+	"context"
 	"math"
 	"runtime/debug"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -180,6 +182,48 @@ func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
 	nextRelease()
 	assert.False(t, denseLane.Load())
 	assert.Zero(t, heap.reserved)
+}
+
+// Test_BodiesWait_InEitherQueue: BodiesWait reports a body or a decoding
+// waiting for room under the in-flight bound, in either queue, and nothing
+// once it is granted; with no bound nothing waits.
+func Test_BodiesWait_InEitherQueue(t *testing.T) {
+	old, oldWait := inFlight.Load(), bodyWait.Load()
+
+	t.Cleanup(func() {
+		inFlight.Store(old)
+		bodyWait.Store(oldWait)
+	})
+
+	SetInFlight(0)
+	assert.False(t, BodiesWait(), "no bound")
+
+	SetInFlight(DefaultInFlight)
+	SetBodyWait(time.Minute)
+
+	pool := inFlight.Load()
+
+	for _, queue := range []*[]*bodyWaiter{&pool.starting, &pool.growing} {
+		require.NoError(t, pool.acquire(context.Background(), pool.capacity, queue))
+
+		waited := make(chan error, 1)
+
+		go func() { waited <- pool.acquire(context.Background(), 1, queue) }()
+
+		require.Eventually(t, func() bool {
+			pool.mu.Lock()
+			defer pool.mu.Unlock()
+
+			return len(*queue) == 1
+		}, 10*time.Second, time.Millisecond)
+
+		assert.True(t, BodiesWait(), "a body waits for the bound")
+
+		pool.release(pool.capacity)
+		require.NoError(t, <-waited)
+		assert.False(t, BodiesWait(), "the waiter is granted")
+		pool.release(1)
+	}
 }
 
 // Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered: once a dense
