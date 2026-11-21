@@ -23,11 +23,15 @@ const (
 	FreeBody = 64 << 10
 
 	// DefaultInFlight is GOSTACK_MAX_IN_FLIGHT_BODIES when it is not set: what
-	// the bodies being buffered at once and their decoding may hold in all:
-	// four form bodies at DefaultMaxBody, or one json or xml body at it with
-	// the 32 MiB of decoding it is admitted with. One request's decoding is
-	// charged 48 MiB at most, so what a 512 MiB container holds for requests
-	// stays far below it, beside the runtime and the services' state.
+	// the bodies being buffered at once and the cost of decoding them may
+	// charge in all: four form bodies at DefaultMaxBody, or one json or xml
+	// body at it with the 32 MiB of decoding it is admitted with. One
+	// request's decoding is charged 48 MiB at most. The bound counts bytes
+	// charged, a model of what decoding allocates, and not the heap: a legal
+	// 16 MiB DynamoDB body of numbers is charged 64 MiB and keeps about 330 MiB
+	// live while it decodes. What keeps a container's memory limit from ending
+	// the process is the Go memory limit set from it at start-up (cmd/gostack,
+	// setMemoryLimit), which makes the collector work against it.
 	DefaultInFlight int64 = 64 << 20
 
 	// DefaultBodyWait is how long a body waits for room under the bound before
@@ -175,10 +179,29 @@ type bodyWaiter struct {
 // acquire takes n bytes of the pool, or waits for them in queue, which is
 // &p.growing or &p.starting.
 func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) error {
+	return p.take(ctx, 0, n, queue)
+}
+
+// regrow makes a holder of held bytes of the pool hold want, in the growing
+// queue: it takes the difference at once when the pool has room for it. When it
+// must wait, it gives back all it held and waits for all of want, holding none
+// of the pool until it is granted. A holder that waited for more while keeping
+// what it held would hold part of what the others it waits for are waiting on,
+// and a burst of them, each admitted with less than it needs, would wait on one
+// another until the wait ended and none were served; one that holds nothing
+// waits only for those ahead of it, who are served and give theirs back. It
+// holds nothing when it fails.
+func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
+	return p.take(ctx, held, want, &p.growing)
+}
+
+// take takes n bytes of the pool for a holder that holds give of them already,
+// or gives those back, and waits for all n in queue.
+func (p *bodyPool) take(ctx context.Context, give, n int64, queue *[]*bodyWaiter) error {
 	p.mu.Lock()
 
-	if len(p.growing) == 0 && len(*queue) == 0 && p.used+n <= p.capacity {
-		p.used += n
+	if len(p.growing) == 0 && len(*queue) == 0 && p.used-give+n <= p.capacity {
+		p.used += n - give
 		p.mu.Unlock()
 
 		return nil
@@ -186,6 +209,12 @@ func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) e
 
 	w := &bodyWaiter{n: n, ready: make(chan struct{})}
 	*queue = append(*queue, w)
+
+	if give > 0 {
+		p.used -= give
+		p.grant()
+	}
+
 	p.mu.Unlock()
 
 	timer := time.NewTimer(time.Duration(bodyWait.Load()))
@@ -274,12 +303,15 @@ type BodyMeter struct {
 	decode *DecodeHold
 
 	// unit is what one element of the body costs decoded (Charge.PlanUnit);
-	// elements counts the commas and opening brackets in the first FreeBody
-	// bytes read, which admit scales to the whole body. Both stay zero for a
-	// service that declares no unit.
+	// elements counts the commas and opening brackets outside json strings in
+	// the first FreeBody bytes read, which admit scales to the whole body.
+	// inString and escaped follow the quotes and backslashes across reads. All
+	// stay zero for a service that declares no unit.
 	unit     int64
 	elements int64
 	sampled  int64
+	inString bool
+	escaped  bool
 
 	// deadline sets the connection's read deadline (IdleBy); timed is whether
 	// one is set now.
@@ -464,9 +496,57 @@ func (m *BodyMeter) charge(n int64) error {
 
 // sample counts the elements in the next bytes of the body: a comma starts the
 // next list element or map entry and an opening bracket the first of a list's.
+// Text inside a json string is not structure, whatever it holds: a string of
+// comma separated values decodes to its text and no more. A quote opens or
+// closes a string unless a backslash escapes it, and where a read ends inside a
+// string, or between a backslash and what it escapes, the next read goes on
+// from there.
 func (m *BodyMeter) sample(b []byte) {
-	m.elements += int64(bytes.Count(b, []byte{','}) + bytes.Count(b, []byte{'['}))
 	m.sampled += int64(len(b))
+
+	for len(b) > 0 {
+		if m.inString {
+			b = m.skipString(b)
+
+			continue
+		}
+
+		text, rest, quoted := bytes.Cut(b, []byte{'"'})
+		m.elements += int64(bytes.Count(text, []byte{','}) + bytes.Count(text, []byte{'['}))
+		m.inString = quoted
+		b = rest
+	}
+}
+
+// skipString returns what follows the part of b that is inside the string
+// sample is in, and leaves it in the string when b ends before the string does.
+func (m *BodyMeter) skipString(b []byte) []byte {
+	for len(b) > 0 {
+		if m.escaped {
+			m.escaped = false
+			b = b[1:]
+
+			continue
+		}
+
+		i := bytes.IndexAny(b, "\"\\")
+		if i < 0 {
+			return nil
+		}
+
+		if b[i] == '\\' {
+			m.escaped = true
+			b = b[i+1:]
+
+			continue
+		}
+
+		m.inString = false
+
+		return b[i+1:]
+	}
+
+	return nil
 }
 
 // elementCost is what decoding the whole body costs for its elements, at

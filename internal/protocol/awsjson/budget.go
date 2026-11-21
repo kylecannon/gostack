@@ -67,7 +67,11 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 	}
 
 	_, herr := hold.HoldDecode(cost)
-	if herr != nil {
+
+	switch {
+	case errors.Is(herr, protocol.ErrOverMemory):
+		return ErrTooLarge
+	case herr != nil:
 		return protocol.ThrottledJSON()
 	}
 

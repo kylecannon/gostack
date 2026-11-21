@@ -295,7 +295,7 @@ Settings, all read at start-up:
 | Variable | Default | Sized for |
 |---|---|---|
 | `GOSTACK_MAX_REQUEST_BODY` | 16 MiB | The cap on a buffered body, after gzip decoding. |
-| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four form bodies at the cap, or one json or xml body at the cap with the 32 MiB of decoding it is admitted with, and room for 48 MiB of decoding at most. A 512 MiB container keeps room for the runtime and the services' state. |
+| `GOSTACK_MAX_IN_FLIGHT_BODIES` | 64 MiB | Bodies and decoding past their free allowances: four form bodies at the cap, or one json or xml body at the cap with the 32 MiB of decoding it is admitted with, and room for 48 MiB of decoding at most. It counts bytes charged and not the heap; the Go memory limit set from the container's keeps the heap inside it (see the next list). |
 | `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` | 20 s | A slow but honest client sends its next packet well within it (a stalled mobile link, a paused debugger); a client that stopped gives back its share of the pool. |
 
 How each piece is bounded, and why this way:
@@ -399,9 +399,20 @@ How each piece is bounded, and why this way:
   the past: net/http reads what is left of a short body before it writes an
   answer, and with the deadline past that read fails at once, so the answer is
   sent and the connection closed after it.
-- **`GOMEMLIMIT`** is honored by the Go runtime as it is. Deriving a default
-  from the container's memory limit is a separate decision with its own
-  trade-off (garbage collection under pressure), so nothing here sets one.
+- **The Go memory limit follows the container's.** The in-flight bound counts
+  bytes charged, a model of what decoding allocates, and not the heap: a legal
+  16 MiB DynamoDB body of numbers is charged 64 MiB and keeps about 330 MiB live
+  (below, "Memory under a container limit"). When `GOMEMLIMIT` is not set in
+  the environment and the process runs under a cgroup memory limit (v2
+  `memory.max`, v1 `memory.limit_in_bytes`, read from the process's own cgroup
+  and then the mount's root; `max`, a v1 limit of 2^60 or more and an absent
+  file mean none), start-up sets the Go memory limit to 85% of it
+  (`debug.SetMemoryLimit`, `cmd/gostack/memory-limit.go`) and logs the two
+  numbers once at INFO. A `GOMEMLIMIT` in the environment, `off` included, is
+  the user's and is left as the runtime read it. The limit is soft: it makes the
+  collector work against it, which a heap that is mostly live cannot satisfy.
+  So a decode whose cost passes twice the limit is refused (below). The limits
+  of the cgroups above the process's own are not read.
 
 Headroom: what decoding the largest legal request of each shape charges
 against `DecodeBudget` at the default factor of 2. json charges both passes;
@@ -476,9 +487,14 @@ pool admits a body with the room its decoding is planned to hold, and past
 `DecodeFactor` x length that would be the whole of a request's share for every
 body over 190 KB. So the plan is shaped by the body: the unit is the most
 an element costs (1,700, over the 1,638 measured) and the density is
-counted in the body's first 64 KiB. A body of strings is planned twice its
-length as before; a body of numbers, nests or records is planned what it will
-need, up to what one request may be charged (48 MiB by default). Before this,
+counted in the body's first 64 KiB, outside json strings: quotes and
+backslashes are followed across reads, so a string of comma separated values
+decodes to its text and is counted as text, whatever it holds. A body of
+strings is planned twice its length as before (a 65,537-byte string of CSV is
+planned 2x, not the 26 MiB its commas would plan, and a client that stops after
+64 KiB + 1 of it holds 100 KB and not 41 MiB: `Test_decodeBudget_aStringOfCommasIsPlannedAsText`);
+a body of numbers, nests or records is planned what it will need, up to what one
+request may be charged (48 MiB by default). Before this,
 32 clients sending a 1 MB `BatchWriteItem` of 25 items with a list of 60
 records each, which decodes into 8.5 MiB charged, were admitted with about
 3 MiB each, held the pool between them and waited for the rest from one
@@ -487,6 +503,31 @@ the unit removed, and the review that found it measured 27 or 28 of 32
 throttled at the 5 s wait for a body that charged 15.5 MiB. Now all 32 are
 served in 0.07 to 0.27 s, as the pool admits as many as fit and the others
 wait their turn holding nothing.
+
+Density that is not in the first 64 KiB is not planned for, and is not
+refused for it. A body planned too little (the first item's text is 70 KB, or
+every item's is 66 KB, and the records come after) finds what it needs when it
+has decoded far enough to know, and `DecodeHold.Cover` takes the difference at
+once when the pool has it. When it does not, the body gives back what it was
+planned and waits for all it needs, holding only its own bytes
+(`bodyPool.regrow`). Waiting for more while keeping what it held made a burst
+of such bodies wait on one another: each held a little of what the others
+needed, until the 5 s wait ended and most were throttled. Now 32 clients
+sending a 1 MB `BatchWriteItem` whose first 64 KiB are text, and 32 sending
+25 x (66 KB text + 60 records), are all served
+(`Test_decodeBudget_aBurstOfDenseBodiesIsServed`). The wait is a queue in order,
+bodies that hold part of the pool first, so one that cannot be served until
+another is done is throttled at the wait at worst, and the others are served.
+The protection against a client that states a length it does not send is
+unchanged: it holds what it was planned for until the idle timeout, which for a
+body whose first 64 KiB are dense is up to 48 MiB (below, Residuals).
+
+The per-separator charge depends on the shape. A list of one-entry maps,
+`{"M":{"a":{"N":"1"}}}`, is charged 2,376 per comma (108 per byte of body), over
+the unit of 1,700 a body is planned with; a list of two-entry maps 1,576 per
+separator (88 per byte). Such a body is planned 72% of what it needs and takes
+the rest as it decodes, as above, and it is within the factor of 256, so it is
+served. The unit is what plans room, not a limit; `DecodeFactor` is the limit.
 
 Memory is what a legal dense body needs, and the plan does not reduce it. A
 16 MiB body of numbers decodes into 1.6 million 160-byte values, about

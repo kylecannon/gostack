@@ -2,7 +2,9 @@ package protocol
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"runtime/debug"
 )
 
 const (
@@ -14,6 +16,37 @@ const (
 	// decodeChunk is the step a decoding's charge grows by past FreeDecode.
 	decodeChunk = 1 << 20
 )
+
+// ErrOverMemory is what HoldDecode fails with when decoding would cost more than
+// the process's memory limit can hold (overMemory). It is an ErrBusy for a
+// caller that does not tell them apart, and fails every later call too. A json
+// service answers it as a body that decodes into more than gostack allows, not
+// as a throttle, since waiting does not make room for it.
+var ErrOverMemory = fmt.Errorf("%w: decoding the body would not fit the memory limit", ErrBusy)
+
+const (
+	// costPerHeapByte is how many bytes of decode cost one byte of the heap
+	// stands for at most. The cost model charges two passes and append's
+	// regrowth: a list of {"N":"1"} is charged 1,638 bytes an element and keeps
+	// about 216 live, 7.6 to 1, and a Scan holding its parameter twice about
+	// 4 to 1.
+	costPerHeapByte = 4
+
+	// heapShare is the part of the memory limit, as a divisor, that what one
+	// decoding keeps live may take, leaving the rest to the runtime, the
+	// services' state and the garbage a collection has not yet found.
+	heapShare = 2
+)
+
+// overMemory reports whether decoding at cost would keep more of the heap
+// than heapShare of the Go memory limit allows, as the limit is now
+// (debug.SetMemoryLimit, which cmd/gostack sets from a container's). With no
+// limit nothing is over it.
+func overMemory(cost int64) bool {
+	limit := debug.SetMemoryLimit(-1)
+
+	return limit < math.MaxInt64 && cost/costPerHeapByte > limit/heapShare
+}
 
 // DecodeHolder is what a decoder charges what it holds to as it decodes a
 // request's body: request.Context, through a DecodeHold. A decoder calls
@@ -67,11 +100,20 @@ func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 		h.pool, h.room = pool, pool.capacity-pool.bodyShare()
 	}
 
+	if overMemory(cost) {
+		h.err = ErrOverMemory
+
+		return 0, h.err
+	}
+
 	want := min((cost-FreeDecode+decodeChunk-1)/decodeChunk*decodeChunk, h.room)
 	if want > h.held {
-		err := h.pool.acquire(ctx, want-h.held, &h.pool.growing)
+		// What it held when it had to wait is given back (bodyPool.regrow),
+		// so a body that was planned too little, whose density was not in the
+		// first FreeBody bytes, waits holding only its own bytes.
+		err := h.pool.regrow(ctx, h.held, want)
 		if err != nil {
-			h.err = err
+			h.held, h.err = 0, err
 
 			return 0, err
 		}
