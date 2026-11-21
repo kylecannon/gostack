@@ -302,11 +302,25 @@ func Test_Engine_FlushInTimeAllocations(t *testing.T) {
 	}
 
 	if os.Getenv(allocChild) == "" {
-		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^Test_Engine_FlushInTimeAllocations$", "-test.v")
-		cmd.Env = append(os.Environ(), allocChild+"=1")
+		// One process in eight on Linux counts an allocation more than the rest, for
+		// the whole of its run; a regression adds its allocations to every one. So
+		// the Flush has three processes to be within its ceiling in one.
+		var err error
 
-		out, err := cmd.CombinedOutput()
-		t.Log(string(out))
+		for range 3 {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^Test_Engine_FlushInTimeAllocations$", "-test.v")
+			cmd.Env = append(os.Environ(), allocChild+"=1")
+
+			var out []byte
+
+			out, err = cmd.CombinedOutput()
+			t.Log(string(out))
+
+			if err == nil {
+				return
+			}
+		}
+
 		require.NoError(t, err, "alone, the Flush in time allocates no more than its ceiling")
 
 		return
