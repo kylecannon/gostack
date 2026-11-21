@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"runtime"
 	"runtime/debug"
 	"testing"
@@ -183,6 +184,26 @@ func growthExponent(sizes []int, costs []time.Duration) float64 {
 	return (count*sumXY - sumX*sumY) / (count*sumXX - sumX*sumX)
 }
 
+// reportScale appends the figures of the test to the file named by
+// GITHUB_STEP_SUMMARY, which GitHub Actions sets for every step, so a passing CI
+// run shows them on its summary page. A passing `go test` prints nothing, and -v
+// is not used in CI. Without the variable it does nothing.
+func reportScale(t *testing.T, exponent, tail float64, costs []time.Duration) {
+	t.Helper()
+
+	path := os.Getenv("GITHUB_STEP_SUMMARY")
+	if path == "" {
+		return
+	}
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+
+	_, err = fmt.Fprintf(file, "- `%s`: exponent %.3f (limit %.2f), tail slope %.3f (limit %.2f), CPU %v\n",
+		t.Name(), exponent, scaleExponent, tail, scaleTailSlope, costs)
+	require.NoError(t, errors.Join(err, file.Close()))
+}
+
 // Test_Decoder_BatchScalesWithEntries pins the decode of a batch to near-linear
 // time. A key below another used to be found by scanning every key of the form,
 // so decoding n entries took time in n squared. The test decodes five sizes and
@@ -258,6 +279,8 @@ func Test_Decoder_BatchScalesWithEntries(t *testing.T) {
 	exponent, tail := scaleFigures(costs)
 	t.Logf("%v entries used %v of CPU: exponent %.3f, tail slope %.3f (linear is 1, quadratic is 2)",
 		scaleSizes, costs, exponent, tail)
+
+	reportScale(t, exponent, tail, costs)
 
 	assert.Less(t, exponent, scaleExponent, "the cost over all sizes")
 	assert.Less(t, tail, scaleTailSlope, "the cost between the largest size and a quarter of it")
