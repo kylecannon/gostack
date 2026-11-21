@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"ARN\":\"arn:aws:secretsmanager:us-east-1:000000000000:secret:s-AbCdEf\",\"Name\":\"s\",\"SecretBinary\":\"AAEC\",\"CreatedDate\":1700000000.5}")
