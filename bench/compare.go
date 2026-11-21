@@ -29,6 +29,14 @@ import (
 // The second rule keeps a noisy host from failing a build. A change past the
 // limit whose ranges overlap is reported as noise and does not fail.
 //
+// The first-use metric has a different second rule. A time to the first use of
+// a key generation spreads from a tenth to three times its median (RSA-2048:
+// 15 to 313 ms), so the ranges of two sets of runs overlap whether or not the
+// head's key costs twice the base's: five runs a side see the doubling 8% of the
+// time and ten or more almost never. That metric holds its runs whole
+// (startupResult.SamplesMS) and regresses when the head's runs sit above the
+// base's by a rank-sum test (rankSumZ) instead of by disjoint ranges.
+//
 // Only the gostack and gostack-slim targets are compared, on the cells both
 // files hold. LocalStack is a reference and never gates. Results from hosts
 // with different fingerprints are not comparable: compare says so and exits 0.
@@ -52,11 +60,25 @@ const (
 	limitRSS = 0.20
 	// limitStartup is how much the time to the ready line may rise.
 	limitStartup = 0.25
+	// limitFirstUse is how much the median time to a service's first use may rise.
+	limitFirstUse = 0.25
+	// rankSumLimit is the z score of the rank-sum test past which the head's runs
+	// are called slower than the base's: about 1 pair in 250 of equal sets of 30
+	// runs, the order of the 1 in 252 that five runs a side of the disjoint rule
+	// give.
+	rankSumLimit = 2.6
+	// rankSumTies is what a pair of equal runs adds to the rank-sum statistic.
+	rankSumTies = 0.5
+	// rankSumDivisor is the 12 in the variance n*m*(n+m+1)/12 of the statistic.
+	rankSumDivisor = 12
 
 	maxListed = 25
 
 	// metricStartup names the startup metric, and the cell it is held under.
 	metricStartup = "startup"
+	// metricFirstUse names the metric of a first-use measurement, held under the
+	// cell firstUseCell(service).
+	metricFirstUse = "first use"
 )
 
 // gated are the targets whose cells gate. LocalStack is reference only.
@@ -84,6 +106,45 @@ type metric struct {
 	// runs says that a side ran fewer repetitions than the run asked for, such as
 	// "head 4 of 5 runs": the overlap rule was sized for the full count.
 	runs string
+	// baseRuns and headRuns, when both are set, are the runs behind base and head,
+	// and the metric is judged by rankSumZ on them and not by the ranges.
+	baseRuns, headRuns []float64
+}
+
+// ranked reports whether the metric is judged on its whole runs.
+func (m metric) ranked() bool { return len(m.baseRuns) > 0 && len(m.headRuns) > 0 }
+
+// rankSumZ is the Mann-Whitney statistic of the metric's runs as a z score,
+// positive when the head's runs sit above the base's: the pairs in which the
+// head's run is the larger, against the half of the pairs that chance would give,
+// in units of the statistic's standard deviation. The runs are times to the
+// microsecond, so ties are rare and carry no correction.
+func (m metric) rankSumZ() float64 {
+	var wins float64
+
+	for _, h := range m.headRuns {
+		for _, b := range m.baseRuns {
+			switch {
+			case h > b:
+				wins++
+			case h == b:
+				wins += rankSumTies
+			default:
+			}
+		}
+	}
+
+	n, k := float64(len(m.baseRuns)), float64(len(m.headRuns))
+
+	return (wins - n*k/half) / math.Sqrt(n*k*(n+k+1)/rankSumDivisor)
+}
+
+// rankReach is the largest z the metric's runs can reach: that of every head run
+// above every base run. Under rankSumLimit, no head can fail the metric.
+func (m metric) rankReach() float64 {
+	n, k := float64(len(m.baseRuns)), float64(len(m.headRuns))
+
+	return n * k / half / math.Sqrt(n*k*(n+k+1)/rankSumDivisor)
 }
 
 // label is the metric's name with the runs note, for a table.
@@ -167,9 +228,14 @@ func (m metric) judge() outcome {
 	}
 }
 
-// disjointWorse reports whether the ranges of the runs do not overlap, with the
-// head on the worse side of the base.
+// disjointWorse reports whether the head's runs are apart from the base's with the
+// head on the worse side: the ranges do not overlap, or, for a metric judged on
+// its whole runs, the rank-sum test puts the head past rankSumLimit.
 func (m metric) disjointWorse() bool {
+	if m.ranked() {
+		return m.rankSumZ() >= rankSumLimit
+	}
+
 	if m.lowerIsBetter {
 		return m.head.Min > m.base.Max
 	}
@@ -179,6 +245,10 @@ func (m metric) disjointWorse() bool {
 
 // disjointBetter is the same with the head on the better side.
 func (m metric) disjointBetter() bool {
+	if m.ranked() {
+		return m.rankSumZ() <= -rankSumLimit
+	}
+
 	if m.lowerIsBetter {
 		return m.head.Max < m.base.Min
 	}
@@ -320,7 +390,7 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 		head: ht.Idle.Healthcheck.RSSBytes, lowerIsBetter: true, limit: limitRSS, scale: bytesPerMiB, unit: "MiB",
 	}
 
-	all := []metric{startup, idle}
+	all := append([]metric{startup, idle}, firstUseMetrics(bt, ht)...)
 
 	cmp.problems = append(cmp.problems, compareProblems(bt, ht, want)...)
 
@@ -372,6 +442,31 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 	}
 }
 
+// firstUseMetrics lists the first-use metric of each service the base measured.
+// A service the head did not measure is not comparable and is left out here; the
+// reason is in the head's Problems when its measurement failed. Each is a cost
+// judged on its whole runs.
+func firstUseMetrics(base, head targetResult) []metric {
+	out := make([]metric, 0, len(base.FirstUse))
+
+	for _, service := range slices.Sorted(maps.Keys(base.FirstUse)) {
+		b, h := base.FirstUse[service], head.FirstUse[service]
+		m := metric{
+			target: base.Name, cell: firstUseCell(service), name: metricFirstUse, base: b.MS, head: h.MS,
+			baseRuns: b.SamplesMS, headRuns: h.SamplesMS, lowerIsBetter: true, limit: limitFirstUse, scale: 1, unit: "ms",
+		}
+
+		if m.ranked() && m.rankReach() < rankSumLimit {
+			m.runs = fmt.Sprintf("base %d, head %d runs: too few for the rank-sum test to fail it", len(b.SamplesMS),
+				len(h.SamplesMS))
+		}
+
+		out = append(out, m)
+	}
+
+	return out
+}
+
 // compareReports writes the comparison and returns errRegression when a gated
 // metric regressed past what the accepted list holds. A pair of reports that
 // cannot be compared is explained and returns nil.
@@ -404,11 +499,12 @@ func compareReports(ctx context.Context, base, head report, accepted acceptedSet
 	}
 
 	fmt.Fprintf(&b, "Host: %s.\n\nCompared %d cells and %d metrics of the gostack targets. Limits: p50 +%.0f%%, "+
-		"p99 +%.0f%%, throughput -%.0f%%, RSS +%.0f%%, startup +%.0f%%; a latency must also rise by %.2f ms (p50) "+
-		"or %.1f ms (p99); a metric fails only when the ranges of the runs do not overlap.\n\n",
+		"p99 +%.0f%%, throughput -%.0f%%, RSS +%.0f%%, startup +%.0f%%, first use +%.0f%%; a latency must also rise by "+
+		"%.2f ms (p50) or %.1f ms (p99); a metric fails only when the ranges of the runs do not overlap, and a first "+
+		"use only when a rank-sum test of its runs puts the head past z = %.1f.\n\n",
 		head.Host.Fingerprint, cmp.compared, cmp.metrics,
 		limitP50*percentScale, limitP99*percentScale, limitThroughput*percentScale, limitRSS*percentScale,
-		limitStartup*percentScale, floorP50, floorP99)
+		limitStartup*percentScale, limitFirstUse*percentScale, floorP50, floorP99, rankSumLimit)
 
 	table(&b, "Regressions", cmp.regressions)
 	notes(&b, cmp.regressions)

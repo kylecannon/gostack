@@ -75,7 +75,7 @@ type agenticRun struct {
 // loadgenMain runs inside the load generator container.
 func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: bench loadgen cell|agentic -service NAME [flags]")
+		return errors.New("usage: bench loadgen cell|agentic|first -service NAME [flags]")
 	}
 
 	var (
@@ -88,8 +88,10 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = cellCommand(ctx, args[1:])
 	case "agentic":
 		result, err = agenticCommand(ctx, args[1:])
+	case "first":
+		result, err = firstUseCommand(ctx, args[1:])
 	default:
-		return fmt.Errorf("unknown workload %q, want cell or agentic", args[0])
+		return fmt.Errorf("unknown workload %q, want cell, agentic or first", args[0])
 	}
 
 	if err != nil {
