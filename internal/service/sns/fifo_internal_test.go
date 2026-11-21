@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // windowFixture is a FIFO topic whose window holds n ids, id i taken i gaps
@@ -82,10 +83,11 @@ func Test_fifoTopic_expire_allocates_nothing(t *testing.T) {
 	assert.Equal(t, "dedup-id-of-a-usual-length-101", f.order[0], "the oldest id left is the first one kept")
 }
 
-// Test_fifoTopic_expire_frees_what_it_expires: once the window has passed
-// its ids, the memory they held is released, not kept until the topic's next
-// publish or for good. A map keeps its table after its entries are deleted,
-// so expire builds a smaller one.
+// Test_fifoTopic_expire_frees_what_it_expires: when expire runs, the memory of
+// the ids it drops is released, not kept for good. A map keeps its table after
+// its entries are deleted, so expire builds a smaller one. Expire runs in a
+// publish and in a save, never on a timer: a topic that goes idle keeps its
+// window until its next publish or save.
 func Test_fifoTopic_expire_frees_what_it_expires(t *testing.T) {
 	const live = 200_000
 
@@ -108,6 +110,65 @@ func Test_fifoTopic_expire_frees_what_it_expires(t *testing.T) {
 	assert.Less(t, kept, grown/4, "the heap still holds %d of the %d bytes the window grew by", kept, grown)
 
 	runtime.KeepAlive(f)
+}
+
+// Test_fifoTopic_save_writes_only_the_window: a save writes the ids the window
+// holds at that moment, not the ones it has passed and no publish has yet
+// dropped.
+func Test_fifoTopic_save_writes_only_the_window(t *testing.T) {
+	f, base := windowFixture(10, time.Second)
+
+	// Ids 0..5 are five minutes or more old; 6..9 are not.
+	window := f.save(base.Add(dedupWindow + 5*time.Second))
+
+	assert.Len(t, window, 4)
+	assert.Equal(t, "dedup-id-of-a-usual-length-6", window[0].Key)
+	assert.Equal(t, "dedup-id-of-a-usual-length-9", window[3].Key)
+	assert.Len(t, f.seen, 4, "what the save left out the topic forgot")
+
+	assert.Nil(t, f.save(base.Add(time.Hour)), "an idle hour later nothing is saved")
+}
+
+// Test_fifoTopic_save_gives_back_an_idle_window: a topic that took a burst
+// and then went idle still holds the burst, as nothing runs on a timer, until
+// its next publish or save. A save drops the ids the window has passed, so it
+// writes none of them and the burst's memory is released.
+func Test_fifoTopic_save_gives_back_an_idle_window(t *testing.T) {
+	const live = 200_000
+
+	before := liveHeap()
+	f, base := windowFixture(live, time.Microsecond)
+	grown := int64(liveHeap()) - int64(before)
+
+	if grown < 10<<20 {
+		t.Fatalf("a window of %d ids grew the heap by only %d bytes", live, grown)
+	}
+
+	assert.Nil(t, f.save(base.Add(time.Hour)))
+
+	kept := int64(liveHeap()) - int64(before)
+
+	assert.Less(t, kept, grown/4, "the heap still holds %d of the %d bytes the window grew by", kept, grown)
+
+	runtime.KeepAlive(f)
+}
+
+// Test_fifoTopic_build_keeps_the_window_on_the_monotonic_clock: a restored id
+// is placed as long ago as its saved wall time says, from a now that carries
+// the monotonic clock, so the window keeps its five minutes if the wall clock
+// steps back later in the run, as it does for the ids the run takes.
+func Test_fifoTopic_build_keeps_the_window_on_the_monotonic_clock(t *testing.T) {
+	var f fifoTopic
+
+	now := time.Now()
+	saved := now.Add(-time.Minute).Round(0)
+
+	require.NoError(t, f.build([]windowEntry{{Key: "k", ID: "m", Sequence: "1", At: saved}}, now))
+
+	at := f.seen["k"].at
+
+	assert.True(t, at.Equal(saved), "the id is as old as it was saved")
+	assert.Contains(t, at.String(), " m=", "its time carries a monotonic reading")
 }
 
 // liveHeap is the bytes of heap in use once the collector has run.

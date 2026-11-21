@@ -1,6 +1,7 @@
 package sns_test
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"strconv"
@@ -19,8 +20,9 @@ const (
 	fifoNoGroup    = "Invalid parameter: The MessageGroupId parameter is required for FIFO topics"
 	fifoNoDedup    = "Invalid parameter: The topic should either have ContentBasedDeduplication enabled or " +
 		"MessageDeduplicationId provided explicitly"
-	noDefault    = "Invalid parameter: Message Structure - No default entry in JSON message body"
-	emptyMessage = "Invalid parameter: Empty message"
+	noDefault     = "Invalid parameter: Message Structure - No default entry in JSON message body"
+	emptyMessage  = "Invalid parameter: Empty message"
+	attrEntryType = "MessageAttributes.entry.1.Value.DataType"
 )
 
 func Test_Provider_Publish_validation(t *testing.T) {
@@ -220,6 +222,22 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 			status: http.StatusBadRequest, code: "BatchRequestTooLong",
 			message: "The length of all the messages put together is more than the limit.",
 		},
+		{
+			// An empty Message is taken as any other is (the image answers
+			// this 400 too): its attributes count in the total.
+			name: "batch too long with an empty entry's attribute",
+			params: batch(topic, entry(1, "1", strings.Repeat("x", 262_144)),
+				entry(2, "2", "", attrEntryName, "k", attrEntryType, typeString, attrEntryString, strings.Repeat("a", 100))),
+			status: http.StatusBadRequest, code: "BatchRequestTooLong",
+			message: "The length of all the messages put together is more than the limit.",
+		},
+		{
+			// An empty Message under MessageStructure json is a body that
+			// does not parse, as for a Publish.
+			name: "empty message under json", params: batch(topic, entry(1, "1", "", paramStructure, valueStructure)),
+			status: http.StatusBadRequest, code: invalidParameter,
+			message: "Invalid parameter: Message Structure - JSON message body failed to parse",
+		},
 	}
 
 	for _, tt := range tests {
@@ -282,20 +300,30 @@ func Test_Provider_PublishBatch_standard(t *testing.T) {
 	assert.ElementsMatch(t, []string{"one", "two"}, []string{msgs[0].Body, msgs[1].Body})
 }
 
-// Test_Provider_PublishBatch_empty_message: an entry with no Message, or an
-// empty one, is answered as Failed with InvalidParameter and published to no
-// one, as Publish refuses an empty message. SQS would refuse the empty body
-// and the entry would have been reported Successful for a message that was
-// never delivered. The entries beside it are published.
-func Test_Provider_PublishBatch_empty_message(t *testing.T) {
+// noMessage is batch entry n with an Id and the members, and no Message member.
+func noMessage(n int, id string, members ...string) []string {
+	p := "PublishBatchRequestEntries.member." + strconv.Itoa(n) + "."
+	params := []string{p + "Id", id}
+
+	for i := 0; i+1 < len(members); i += 2 {
+		params = append(params, p+members[i], members[i+1])
+	}
+
+	return params
+}
+
+// Test_Provider_PublishBatch_missing_message: an entry with no Message member
+// is answered as Failed with InvalidParameter and published to no one; the
+// model marks Message required, and LocalStack's answer is a 500 for the whole
+// call. The entries beside it are published.
+func Test_Provider_PublishBatch_missing_message(t *testing.T) {
 	s := newStack(t, nil)
 	topic := s.createTopic(paramName, "t")
 	q := s.createQueue(account, region, "q", nil)
 	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
 
-	noMessage := []string{"PublishBatchRequestEntries.member.2.Id", "b"}
-
-	out := s.publishBatch(batch(topic, entry(1, "a", "one"), noMessage, entry(3, "c", ""), entry(4, "d", "four"))...)
+	out := s.publishBatch(batch(topic,
+		entry(1, "a", "alpha"), noMessage(2, "b"), noMessage(3, "c"), entry(4, "d", "delta"))...)
 
 	require.Len(t, out.Successful, 2)
 	assert.Equal(t, "a", out.Successful[0].ID)
@@ -307,28 +335,64 @@ func Test_Provider_PublishBatch_empty_message(t *testing.T) {
 	}, out.Failed.Entries)
 
 	msgs := q.await(2)
-	assert.ElementsMatch(t, []string{"one", "four"}, []string{msgs[0].Body, msgs[1].Body})
-	assert.Empty(t, q.receive(0), "the empty entries were not sent")
+	assert.ElementsMatch(t, []string{"alpha", "delta"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, q.receive(0), "the entries with no Message were not sent")
 }
 
-// Test_Provider_PublishBatch_only_empty_messages: a batch whose every entry
+// Test_Provider_PublishBatch_only_missing_messages: a batch whose every entry
 // fails answers 200 with an empty Successful and publishes nothing, on a FIFO
 // topic too.
-func Test_Provider_PublishBatch_only_empty_messages(t *testing.T) {
+func Test_Provider_PublishBatch_only_missing_messages(t *testing.T) {
 	s := newStack(t, nil)
 	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
 	q := s.createQueue(account, region, "q.fifo", map[string]string{attrFifoQueue: textTrue})
 	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
 
 	out := s.publishBatch(batch(topic,
-		entry(1, "a", "", paramGroup, "g", paramDedup, "1"),
-		entry(2, "b", "", paramGroup, "g", paramDedup, "2"),
+		noMessage(1, "a", paramGroup, "g", paramDedup, "1"),
+		noMessage(2, "b", paramGroup, "g", paramDedup, "2"),
 	)...)
 
 	assert.Empty(t, out.Successful)
 	require.NotNil(t, out.Failed)
 	assert.Len(t, out.Failed.Entries, 2)
 	assert.Empty(t, q.receive(0))
+}
+
+// Test_Provider_PublishBatch_empty_message: an empty Message is taken as
+// LocalStack takes it, as any other text. The entry is Successful, a
+// subscriber without raw delivery is sent the envelope with "Message": "", and
+// only a raw SQS delivery is refused, for the empty body SQS will not take.
+func Test_Provider_PublishBatch_empty_message(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	raw := s.createQueue(account, region, "raw", nil)
+	enveloped := s.createQueue(account, region, "enveloped", nil)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	out := s.publishBatch(batch(topic, entry(1, "a", "beta"), entry(2, "b", ""), entry(3, "c", "gamma"))...)
+
+	require.Len(t, out.Successful, 3)
+	assert.Empty(t, out.Failed.Entries)
+
+	got := make([]string, 0, 3)
+
+	for _, m := range enveloped.await(3) {
+		var env struct {
+			Message string `json:"Message"`
+		}
+
+		require.NoError(t, json.Unmarshal([]byte(m.Body), &env), m.Body)
+
+		got = append(got, env.Message)
+	}
+
+	assert.ElementsMatch(t, []string{"beta", "", "gamma"}, got)
+
+	msgs := raw.await(2)
+	assert.ElementsMatch(t, []string{"beta", "gamma"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, raw.receive(0), "SQS refused the empty body of a raw delivery")
 }
 
 // Test_Provider_PublishBatch_fifo publishes a batch whose third entry repeats

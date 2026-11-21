@@ -281,6 +281,21 @@ A feature is not done until its benchmarks cover the variants it can be called
 with. A change that adds or alters a feature adds or updates its rows in the
 same PR. A missing row is a review blocker.
 
+A micro benchmark cell has to be one the gate can compare: a run of it at the
+gate's benchtime (`BENCH_TIME`, 500 ms) reaches at least 50 iterations, which
+is about 10 ms an iteration or less, because fewer runs than that are too few
+for benchstat to gate on. A cell that clears 50 by a narrow margin, under 100
+where it was measured, is left out too, as the gate's runner may be slower.
+The rule covers every benchmark in a package, not only its feature cells.
+A cell that does not reach it is made smaller (fewer subscribers, lanes or
+messages) until it does, or it is left out, and a cell left out is not a
+missing row: the payload axis is covered by the widest cell that reaches the
+count. A benchmark whose one iteration is a one-time cost, such as a key
+generation or a process start, cannot be sized to reach it and does not belong
+in the micro benchmarks. The cell's own comment names the cells left out and
+the iterations they reached; `go test -run '^$' -bench . -benchtime=500ms
+-count=1` prints the count of each.
+
 | Axis | Values |
 |---|---|
 | Payload | small (under 1 KiB), medium (about 64 KiB), and the service's maximum |

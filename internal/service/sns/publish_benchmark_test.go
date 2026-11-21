@@ -27,6 +27,8 @@ var benchSubscribers = []int{1, 10, 100}
 const (
 	name256B   = "256B"
 	name256KiB = "256KiB"
+	// deliveryRaw is the name of a raw-delivery cell.
+	deliveryRaw = "raw"
 )
 
 const (
@@ -74,7 +76,7 @@ func (c publishCell) name() string {
 	}
 
 	if c.raw {
-		delivery = "raw"
+		delivery = deliveryRaw
 	}
 
 	if c.filter {
@@ -194,28 +196,32 @@ var publishPayloads = []struct {
 }
 
 // A cell runs only when one run of it reaches 50 iterations in the benchmark
-// job's 500 ms: fewer than that is too few for benchstat to gate on. That rules
-// out the 100-subscriber cells above the smallest payload, which take 40 to
-// 105 ms a publish, and the 256 KiB envelope cells at 10 subscribers, which
-// write ten bodies of 256 KiB (11 to 21 ms). What is left still spans the
-// matrix: three payloads at 1 and 10 subscribers, 100 subscribers at the
-// small one, raw and envelope, standard and FIFO.
+// job's 500 ms: fewer than that is too few for benchstat to gate on (the rule
+// is in docs/standards.md, Benchmarks), and a cell that gets there by a narrow
+// margin is left out too, as the gate's runner may be slower than the machine
+// it was measured on. That rules out 100 subscribers at 256 KiB (40 to 105 ms a
+// publish) and the envelope cells that write a signed body for every
+// subscriber at 100 subscribers above 256 B and at 10 at 256 KiB (about 100
+// iterations, 10 to 100 on a busy machine). What is left still spans the
+// matrix: three payloads at 1 and 10 subscribers, 100 subscribers at 256 B and
+// at 16 KiB raw, raw and envelope, standard and FIFO.
 const (
-	// widestFanOut is the subscriber count that runs the small payload only.
+	// widestFanOut is the subscriber count that runs the small payload, and
+	// the typical one raw.
 	widestFanOut = 100
 	// bulkFanOut is the one that skips the largest payload's envelope cells.
 	bulkFanOut = 10
 )
 
-// publishCells are BenchmarkPublish's single-publish cells, 32 of them.
+// publishCells are BenchmarkPublish's single-publish cells.
 func publishCells() []publishCell {
-	cells := make([]publishCell, 0, 32)
+	cells := make([]publishCell, 0, 40)
 
 	for _, subscribers := range benchSubscribers {
 		for i, payload := range publishPayloads {
 			small, largest := i == 0, i == len(publishPayloads)-1
 
-			if subscribers == widestFanOut && !small {
+			if subscribers == widestFanOut && largest {
 				continue
 			}
 
@@ -223,7 +229,7 @@ func publishCells() []publishCell {
 				base := publishCell{subscribers: subscribers, fifo: fifo, payload: payload.size, size: payload.name}
 
 				for _, raw := range []bool{false, true} {
-					if subscribers == bulkFanOut && largest && !raw {
+					if !raw && (subscribers == bulkFanOut && largest || subscribers == widestFanOut && !small) {
 						continue
 					}
 

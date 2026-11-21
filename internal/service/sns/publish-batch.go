@@ -16,8 +16,8 @@ const (
 	// batchEntryInvalid is the Code of a Failed entry that is refused as
 	// InvalidParameter is.
 	batchEntryInvalid = "InvalidParameter"
-	// msgEmptyMessage is why a Publish, and a batch entry, with no message
-	// text is refused.
+	// msgEmptyMessage is why a Publish with no message text is refused, and
+	// the text of a batch entry that has no Message member.
 	msgEmptyMessage = "Invalid parameter: Empty message"
 )
 
@@ -26,8 +26,8 @@ const (
 // entry ids, then each entry in turn and the total size. A failed check fails
 // the whole call, as LocalStack and, by the aws.validated
 // test_publish_batch_exceptions, AWS answer. The one check that fails an
-// entry alone is an empty Message: the entry is answered in Failed and the
-// others are published (docs/compat.md).
+// entry alone is a missing Message member: the entry is answered in Failed and
+// the others are published (docs/compat.md).
 //
 // Every delivery is sent as the queue's account, as a single Publish is:
 // LocalStack sends a batch so and a single publish as its default account,
@@ -91,8 +91,9 @@ func (p *Provider) PublishBatch(ctx context.Context, in *api.PublishBatchInput) 
 
 // batchOutput answers each entry: Successful with its message's id and, on a
 // FIFO topic, where publishFIFO gave the message a sequence number, that
-// number; or Failed, when the entry had no message to publish. msgs holds a
-// message for each entry in the same order, nil for one that failed.
+// number; or Failed, when the entry had no Message member and so no message to
+// publish. msgs holds a message for each entry in the same order, nil for one
+// that failed.
 func batchOutput(entries []api.PublishBatchRequestEntry, msgs []*message) *api.PublishBatchOutput {
 	out := &api.PublishBatchOutput{
 		Successful: make([]api.PublishBatchResultEntry, 0, len(msgs)),
@@ -169,8 +170,8 @@ func validBatchID(id string) bool {
 }
 
 // batchMessages checks each entry in turn, as LocalStack does, then the total
-// size, and returns the entries' messages for t, in entry order. An entry
-// with an empty Message has no message: its place is nil.
+// size, and returns the entries' messages for t, in entry order. An entry with
+// no Message member has no message: its place is nil.
 func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message, error) {
 	fifo := strings.HasSuffix(t.ARN, fifoSuffix)
 	now := time.Now()
@@ -185,11 +186,14 @@ func batchMessages(t *Topic, entries []api.PublishBatchRequestEntry) ([]*message
 			return nil, err
 		}
 
-		// An entry with no Message, or an empty one, has no message and
-		// fails alone. The model marks Message required, SQS refuses an
-		// empty body, and LocalStack answers such an entry Successful, or
-		// 500 when the member is missing, for a message nobody can receive.
-		if deref(e.Message) != "" {
+		// An entry with no Message member has no message and fails alone:
+		// the model marks Message required and LocalStack answers the whole
+		// call 500. An empty Message is not that. LocalStack takes it as it
+		// does one space, so it counts its attributes in the total, reads it
+		// as a body that does not parse under MessageStructure json, and
+		// sends the envelope "Message": "" to a subscriber without raw
+		// delivery (only SQS refuses an empty body, for raw delivery).
+		if e.Message != nil {
 			msgs[i], err = batchMessage(e)
 			if err != nil {
 				return nil, err

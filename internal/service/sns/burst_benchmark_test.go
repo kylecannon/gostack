@@ -3,6 +3,7 @@ package sns_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,27 +34,45 @@ import (
 //
 // A dead-letter call built while the lock is held shows in all four.
 //
-//	BenchmarkBurst/protocol=http/lanes=64/perlane=16/payload=256KiB
+// The cells are sized to reach 50 iterations in the benchmark job's 500 ms
+// (docs/standards.md, Benchmarks): 64 lanes of 16 deliveries took 12 ms an
+// operation over SQS and 22 to 771 ms over HTTP, 1 to 44 iterations. A burst
+// over HTTP costs a connection and a POST each, so it runs fewer lanes, and
+// still takes 17 to 20 ms at 256 KiB (25 to 34 iterations): that cell is left
+// out, and the burst at 256 KiB is the SQS one.
+//
+//	BenchmarkBurst/protocol=sqs/lanes=16/perlane=4/payload=256KiB
 func BenchmarkBurst(b *testing.B) {
 	for _, protocol := range []string{protocolHTTP, protocolSQS} {
-		for _, payload := range burstPayloads {
-			name := "protocol=" + protocol + "/lanes=64/perlane=16/payload=" + payload.name
+		lanes, perLane := burstSQSLanes, burstSQSPerLane
+		if protocol == protocolHTTP {
+			lanes, perLane = burstHTTPLanes, burstHTTPPerLane
+		}
+
+		for i, payload := range burstPayloads {
+			if protocol == protocolHTTP && i == len(burstPayloads)-1 {
+				continue
+			}
+
+			name := fmt.Sprintf("protocol=%s/lanes=%d/perlane=%d/payload=%s", protocol, lanes, perLane, payload.name)
 
 			b.Run(name, func(b *testing.B) {
-				benchBurst(b, protocol, burstLanes, burstPerLane, payload.size)
+				benchBurst(b, protocol, lanes, perLane, payload.size)
 			})
 		}
 	}
 }
 
 const (
-	burstLanes   = 64
-	burstPerLane = 16
-	burstTopic   = "burst"
-	burstVictim  = "burst-victim"
-	burstDLQ     = "burst-dlq"
-	burstMissing = "burst-missing-"
-	burstWait    = 2 * time.Minute
+	burstSQSLanes    = 16
+	burstSQSPerLane  = 4
+	burstHTTPLanes   = 8
+	burstHTTPPerLane = 2
+	burstTopic       = "burst"
+	burstVictim      = "burst-victim"
+	burstDLQ         = "burst-dlq"
+	burstMissing     = "burst-missing-"
+	burstWait        = 2 * time.Minute
 	// burstHead is how much of a SendMessage the stub reads to tell a dead
 	// letter from a victim's delivery: the start of its QueueUrl.
 	burstHead = 160
