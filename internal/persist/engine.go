@@ -46,6 +46,9 @@ type Engine struct {
 	loadFormats []Format
 	cfg         Config
 	log         *slog.Logger
+	// markBudget is the time one round of abandoned-save markers has (see
+	// markAbandoned). Tests replace it.
+	markBudget time.Duration
 
 	// sem is held by whatever reads or writes the state files: one flush or one
 	// load. A flush during a load would snapshot a service that Restore has
@@ -180,6 +183,7 @@ func New(cfg Config) *Engine {
 		loadFormats: cfg.loadFormats(),
 		cfg:         cfg,
 		log:         cmp.Or(cfg.Logger, slog.Default()),
+		markBudget:  markBudget,
 		sem:         make(chan struct{}, 1),
 	}
 	e.cfg.Services = maps.Clone(cfg.Services)
@@ -352,6 +356,10 @@ func (e *Engine) MarkDirty(service string) {
 // whose follower it holds, is saved after it, so no service is saved by two
 // flushes at once and a follower is still saved only right after its leader.
 //
+// A Flush whose ctx ends at a deadline marks the services it did not save for
+// the next start (see abandonedFile), as it ends, and also when it ends waiting
+// for sem: the dirty services nothing holds are marked then.
+//
 // A panic of a service's Snapshot is recovered: the save fails, and saving is
 // off for the service until restart. A panic of its [Committer] or [Leader]
 // passes through Flush to its caller, after the flush ended: the services it
@@ -364,6 +372,9 @@ func (e *Engine) Flush(ctx context.Context) error {
 
 	shared, err := e.acquire(ctx, lend)
 	if err != nil {
+		// Not a single service was tried, and a deadline cost the changes of them all.
+		e.markWaiting(ctx, err)
+
 		return fmt.Errorf("flush: %w", err)
 	}
 
@@ -554,6 +565,8 @@ func (e *Engine) flushShared(ctx context.Context) ([]outcome, error) {
 
 	waitErr := e.unshare(ctx)
 	if waitErr != nil {
+		e.markWaiting(ctx, waitErr)
+
 		return results, errors.Join(err, fmt.Errorf("flush: %w", waitErr))
 	}
 
@@ -564,6 +577,7 @@ func (e *Engine) flushShared(ctx context.Context) ([]outcome, error) {
 
 		if err == nil && e.anyDirty() {
 			err = fmt.Errorf("flush: %w", ctx.Err())
+			e.markWaiting(ctx, err)
 		}
 
 		return results, err
@@ -1071,23 +1085,53 @@ func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) 
 		}
 	}()
 
+	// The next start is told of what the deadline cuts when it comes, not when the
+	// uninterruptible work the flush is in returns (see abandonedFile). It is
+	// ended before the flush returns, and before interrupt settles the services.
+	endMark := e.markAtDeadline(ctx, run)
+	defer endMark()
+
 	err := e.writeAll(ctx, run, pending)
 	ended = true
 
+	endMark()
+
 	if ranOutOfTime(ctx, err) {
-		names := make([]string, 0, len(run.failed))
-		for _, u := range run.failed {
-			names = append(names, u.name)
-		}
-
-		e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved",
-			"services", names)
-
-		// The process is likely on its way out, so the next start has to be told.
-		e.markAbandoned(names)
+		e.logAbandoned(ctx, run.failed)
 	}
 
 	return run.results, err
+}
+
+// logAbandoned logs the services of a flush that ran out of time and did not
+// save, and marks for the next start the ones the deadline cut. A service whose
+// save failed for a reason of its own is named with the cause and not marked: a
+// marker says a deadline cost its changes, and its warning advises a longer
+// SHUTDOWN_TIMEOUT, which would not have saved it. A follower whose leader was
+// not saved is cut with it.
+func (e *Engine) logAbandoned(ctx context.Context, failed []unsaved) {
+	var (
+		cut   []string
+		other []string
+	)
+
+	for _, u := range failed {
+		if ranOutOfTime(ctx, u.err) || errors.Is(u.err, errLeaderUnsaved) {
+			cut = append(cut, u.name)
+		} else {
+			other = append(other, u.name+": "+u.err.Error())
+		}
+	}
+
+	attrs := []any{"services", cut}
+	if len(other) > 0 {
+		attrs = append(attrs, "failed_for_other_reasons", other)
+	}
+
+	e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved", attrs...)
+
+	// The process is likely on its way out, so the next start has to be told.
+	e.markAbandoned(ctx, cut)
 }
 
 // ranOutOfTime reports whether err, a flush's error, holds the end of a

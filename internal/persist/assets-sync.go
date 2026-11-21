@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"syscall"
 )
 
 // syncWorkers is how many fsyncs a per-file sync runs at once.
@@ -55,6 +56,8 @@ func syncFile(f *os.File) error {
 // after every path is synced and only if ctx has not ended. It returns the sync
 // errors when there are any, and otherwise ctx's error when ctx ended before
 // every path was synced, so a failed sync is never taken for a sync cut short.
+// An open of the assets directory for the flush that fails wraps errNotOpened,
+// as a per-file open does (see flushDrive).
 func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error {
 	if a.fsDir != nil {
 		err := a.fsync(a.fsDir)
@@ -99,11 +102,18 @@ func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error
 }
 
 // flushDrive runs the sync mode's final flush on the assets directory, or does
-// nothing when the mode has none. Every error of it is a failed sync, final
-// like an fsync's: the drive may have dropped what it was asked to flush, and
-// reports that once. An open that fails is no exception: it leaves the flush
-// undone, with the paths it was to cover not known to be on the drive, and no
-// later sync can tell.
+// nothing when the mode has none. An error of the flush itself is a failed
+// sync, final like an fsync's: the drive may have dropped what it was asked to
+// flush, and reports that once. The exception is ENOTSUP, which a filesystem
+// with no drive flush, such as an SMB mount, answers: the directory is fsynced
+// with the mode's own sync instead, as [os.File.Sync] does on macOS (Go 1.27.4,
+// internal/poll/fd_fsync_darwin.go, which falls back on ENOTSUP alone; go#64215).
+//
+// An open that fails is no failed sync. It leaves the flush undone, but it
+// wraps errNotOpened as a per-file open does: every path of the save was
+// fsynced before it, so the ids stay pending and the next save fsyncs them
+// again and flushes. A descriptor missing for a moment (EMFILE, ENFILE) costs
+// one save and no write.
 func (a *Assets) flushDrive() error {
 	if a.flush == nil {
 		return nil
@@ -111,10 +121,14 @@ func (a *Assets) flushDrive() error {
 
 	dir, err := a.root.Open(".")
 	if err != nil {
-		return fmt.Errorf("open the assets dir to flush the drive: %w", err)
+		return fmt.Errorf("open the assets dir to flush the drive: %w: %w", errNotOpened, err)
 	}
 
 	err = a.flush(dir)
+	if errors.Is(err, syscall.ENOTSUP) {
+		err = a.fsync(dir)
+	}
+
 	if err != nil {
 		_ = dir.Close()
 

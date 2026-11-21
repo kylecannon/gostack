@@ -18,18 +18,21 @@ import (
 // Go's [os.File.Sync] is F_FULLFSYNC on macOS, which flushes the drive's whole
 // write cache, so a save with N pending assets paid N+M cache flushes. A
 // shutdown save of 3,000 assets then ran past its 4.5 s deadline and was
-// abandoned (SQ-424); with one flush it takes 0.17 s.
+// abandoned (SQ-424); with one flush the whole shutdown takes 0.21 to 0.27 s.
 //
-// The durability argument is Apple's own, from fsync(2): the call hands the
-// file's data to the drive, which "may" keep it in its write cache, and
-// "F_FULLFSYNC ... asks the drive to flush all buffered data to permanent
-// storage". That is every write the drive has been given, not only the ones for
-// the descriptor, so one F_FULLFSYNC after all the fsyncs have returned makes
-// all of them permanent, which is what a snapshot's rename needs before it
-// names them. The order is the same as with a flush per file: no rename before
-// the last flush returned. fsync(2) still reports an error of its own file, so
-// a lost write is still found per file, and the flush's own error is final like
-// any other (see flushDrive).
+// The durability argument is Apple's own. fsync(2) says the call hands the
+// file's data to the drive, which may keep it in its write cache. The guarantee
+// across files is in fcntl(2): "F_FULLFSYNC Does the same thing as fsync(2)
+// then asks the drive to flush all buffered data to the permanent storage
+// device (arg is ignored). As this drains the entire queue of the device and
+// acts as a barrier, data that had been fsync'd on the same device before is
+// guaranteed to be persisted when this call returns." So one F_FULLFSYNC after
+// all the fsyncs have returned makes all of them permanent, which is what a
+// snapshot's rename needs before it names them. The order is the same as with a
+// flush per file: no rename before the last flush returned. fsync(2) still
+// reports an error of its own file, so a lost write is still found per file,
+// and the flush's own error is final like any other (see flushDrive), except
+// ENOTSUP, where the directory is fsynced instead, as Go's own Sync does.
 //
 // F_BARRIERFSYNC is not used. It orders writes against later ones without
 // flushing the cache, so it does not make the assets permanent before the
@@ -47,9 +50,10 @@ func fsyncFile(f *os.File) error {
 }
 
 // fullFsync flushes the drive's write cache with F_FULLFSYNC, on the descriptor
-// f. It does what [os.File.Sync] does here, and is called by name so a change
-// to how Go syncs a file cannot turn the one flush a save runs into a no-op or
-// the one per file back.
+// f. It does what [os.File.Sync] does here, except that it leaves the fallback
+// on ENOTSUP to flushDrive, and is called by name so a change to how Go syncs a
+// file cannot turn the one flush a save runs into a no-op or the one per file
+// back.
 func fullFsync(f *os.File) error {
 	return control(f, "F_FULLFSYNC", func(fd int) error {
 		_, err := unix.FcntlInt(uintptr(fd), unix.F_FULLFSYNC, 0)

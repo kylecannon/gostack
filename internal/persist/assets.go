@@ -165,9 +165,10 @@ var (
 	// sync of its assets failed.
 	errSyncFailed = errors.New("an asset sync failed")
 	// errNotOpened is wrapped by the error of a per-file sync that could not
-	// open a path, for EACCES, EMFILE, ENFILE or EINTR: nothing was written
-	// back, so the save fails and its ids wait for the next one, but no write
-	// is lost.
+	// open a path, and by that of a final drive flush that could not open the
+	// assets directory, for EACCES, EMFILE, ENFILE or EINTR: nothing was written
+	// back, or every path was fsynced and only the flush is left, so the save
+	// fails and its ids wait for the next one, but no write is lost.
 	errNotOpened = errors.New("could not be opened to sync")
 	// errReleased is the error of a sync after Close released the assets.
 	errReleased = errors.New("the assets are closed")

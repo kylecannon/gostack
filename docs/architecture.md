@@ -1480,25 +1480,50 @@ is untouched.
   4.93 s, and 10,000 the same. Only in the macOS build, each asset and each
   directory gets plain `fsync(2)`, 8 at a time, and one `F_FULLFSYNC` on
   `assets/.gostack` runs after the last of them returned and before the
-  snapshot is renamed; the same 3,000 objects take 0.17 s. Apple's
-  `fsync(2)` page says `fsync` hands the data to the drive, which may hold it in
-  its cache, and that `F_FULLFSYNC` "asks the drive to flush all buffered data
-  to permanent storage". That is all data already handed to the drive, not only
-  the descriptor's, so the one flush after the last fsync makes every asset and
-  directory permanent before the rename, the order a flush per file gave.
-  `F_BARRIERFSYNC` only orders writes without flushing, so it is not enough.
-  An error of that flush, or of opening `assets/.gostack` for it, is a failed
-  sync like an fsync's, with everything the section says of one: final, the
-  service turns off. A save whose deadline passes before the flush starts does
-  not run it, and keeps its ids pending. Linux and the other systems are
-  unchanged.
+  snapshot is renamed; the whole shutdown of the same 3,000 objects then takes
+  0.21 to 0.27 s (two runs of SQ-424's curve; 100 objects 36 ms, 1,000 objects
+  93 ms, 10,000 objects 755 ms). Apple's `fsync(2)` page says `fsync` hands the
+  data to the drive, which may hold it in its cache. The guarantee across files
+  is in `fcntl(2)`: "F_FULLFSYNC Does the same thing as fsync(2) then asks the
+  drive to flush all buffered data to the permanent storage device (arg is
+  ignored). As this drains the entire queue of the device and acts as a barrier,
+  data that had been fsync'd on the same device before is guaranteed to be
+  persisted when this call returns." So the one flush after the last fsync makes
+  every asset and directory permanent before the rename, the order a flush per
+  file gave. `F_BARRIERFSYNC` only orders writes without flushing, so it is not
+  enough. An error the flush itself returns is a failed sync like an fsync's,
+  with everything the section says of one: final, the service turns off. Two
+  things are not that. A filesystem with no drive flush answers `ENOTSUP`, as an
+  SMB mount does, and the save then fsyncs `assets/.gostack` instead and
+  succeeds, as Go's `File.Sync` does on macOS (`internal/poll/fd_fsync_darwin.go`
+  in Go 1.27.4, which falls back on `ENOTSUP` alone, go#64215). And a failure to
+  open `assets/.gostack` for the flush, such as no descriptor left for a moment,
+  fails the save like a per-file open that fails: every path was fsynced, the
+  ids stay pending, and the next save fsyncs them again and flushes. A save
+  whose deadline passes before the flush starts does not run it, and keeps its
+  ids pending. Linux and the other systems are unchanged.
 - **An abandoned save is marked for the next start** (SQ-427). A save that runs
   out of time loses every change since the last completed save, and the
-  process that abandoned it is on its way out. When a flush gives up at its
-  deadline, it writes `<base>/<service>/.gostack-save-abandoned` for each
-  service it did not save, and fsyncs it and its directory, before it
-  returns. A save of the service that completes removes the marker, after it
-  renames the snapshot; a shutdown whose saves all complete leaves none. The
+  process that abandoned it is on its way out. When a flush's deadline comes,
+  it writes `<base>/<service>/.gostack-save-abandoned` for each service it holds
+  and has not saved, at that moment and not when the work it is in returns: a
+  `Snapshot` cannot be cut short, and one that outlasts the deadline outlasts
+  the kill after it. A `Flush` that ends at its deadline waiting for the running
+  flush or a `Load` marks the dirty services nothing holds, and lends its
+  deadline to the timed flush, which marks the ones it holds. The markers of a
+  round are written one after the other, then fsynced with their directories
+  at once, and the round returns after 60 ms at the latest, which keeps the one
+  at `Close`, 100 ms before the kill, clear of it. For 8 services on an Apple M1
+  Max the last marker existed after 1.4 to 1.9 ms and the fsyncs ended after 82
+  to 102 ms. A service that has a marker is skipped, so the second round of a
+  shutdown costs a `lstat` each, 0.6 ms for 8. The marker is created with
+  `O_EXCL`, so a link planted at its path has nothing written through it, and
+  counts as the marker. A service whose save failed for a reason of its own is
+  not marked: the flush's warning names it and its cause apart from the services
+  the deadline cut, and the advice to raise `SHUTDOWN_TIMEOUT` is for those. A
+  save of the service that completes removes the marker, after it renames the
+  snapshot, so a service whose `Snapshot` returned after the deadline and then
+  saved ends with none; a shutdown whose saves all complete leaves none. The
   startup `Load` logs one warning for the services that have a marker, at warn:
   `persist: a save was abandoned at its deadline before this start, so what
   changed after the last completed save is lost` with `services=[s3]` and
@@ -1506,8 +1531,8 @@ is untouched.
   service's newest state file, or `never` when it has none. The marker stays
   until a save completes, so each start says so until then. A marker that cannot
   be written or removed is logged and changes nothing else; a crash between a
-  completed save's rename and the removal leaves one warning too many, never
-  one too few.
+  completed save's rename and the removal, or a deadline that falls while a
+  save renames, leaves one warning too many, never one too few.
 - Save order: a flush saves in two passes, each in the same order. Services
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last
@@ -1648,7 +1673,11 @@ is untouched.
   smaller `PERSIST_FREQUENCY` leaves less unsaved when the stop comes. The
   loss is logged as an error from the shutdown save, and, when the shutdown's
   own save ran and was cut short, a warning that it was abandoned at its
-  deadline. A timed save the shutdown cancelled logs nothing of its own.
+  deadline. A timed save the shutdown lent its deadline to, when it waited for
+  that save, is cancelled by it and logs the same warning and writes the same
+  markers for the services it held and did not save (see the abandoned-save
+  marker above); only a timed save that a `Load` preempted logs
+  nothing of its own.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where

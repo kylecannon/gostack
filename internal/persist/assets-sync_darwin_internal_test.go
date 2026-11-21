@@ -127,18 +127,3 @@ func Test_Assets_DarwinFlushFailureFailsTheSave(t *testing.T) {
 	assert.False(t, f.e.Enabled(syncService), "health reports the service not persisted")
 	assert.Len(t, f.logs.errors(), 1)
 }
-
-// Test_Assets_DarwinFlushOpenFailureIsFinal checks that a flush whose open of
-// the assets directory fails is a failed sync, not one that left the ids to the
-// next save: the drive was not asked to flush what the fsyncs handed it.
-func Test_Assets_DarwinFlushOpenFailureIsFinal(t *testing.T) {
-	f := newSyncFixture(t, time.Hour)
-
-	require.NoError(t, f.a.root.Close())
-
-	err := f.a.syncPending(t.Context(), nil)
-	require.Error(t, err)
-	require.NotErrorIs(t, err, errNotOpened)
-	require.ErrorIs(t, err, os.ErrClosed)
-	assert.Error(t, syncFailure(err), "the sync counts as failed")
-}
