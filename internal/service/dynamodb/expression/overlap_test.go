@@ -1,6 +1,7 @@
 package expression_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 )
 
 const (
+	pairParentFirst = "path one: [a], path two: [a, b]"
+
 	overlapWith  = "overlap with each other; must remove or rewrite one of these paths; "
 	conflictWith = "conflict with each other; must remove or rewrite one of these paths; "
 )
@@ -71,6 +74,61 @@ func Test_ParseProjection_OverlapPair(t *testing.T) {
 			wantMessage(t, err, "Invalid ProjectionExpression: Two document paths "+tt.want)
 		})
 	}
+}
+
+// Test_ParseUpdateRanked_OverlapPair: a PartiQL UPDATE writes its actions
+// clause by clause, and DynamoDB Local adds them to its trie in the order the
+// statement lists them, first to last (SQ-395). Here the statement lists
+// "a" and then "a.b", which the expression also writes in that order.
+func Test_ParseUpdateRanked_OverlapPair(t *testing.T) {
+	t.Parallel()
+
+	const expr = "SET a = :v, a.b = :v"
+
+	for _, tt := range []struct {
+		name string
+		rank []int
+		want string
+	}{
+		{"no rank, last to first", nil, pairParentFirst},
+		{"statement order", []int{0, 1}, "path one: [a, b], path two: [a]"},
+		{"reversed order", []int{1, 0}, pairParentFirst},
+		{"too few places", []int{0}, pairParentFirst},
+		{"a place twice", []int{0, 0}, pairParentFirst},
+		{"a place out of range", []int{0, 2}, pairParentFirst},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := expression.ParseUpdateRanked(expr, autoSubs(expr), nil, tt.rank)
+			requireUpdateError(t, err, "Invalid UpdateExpression: Two document paths "+overlapWith+tt.want)
+		})
+	}
+}
+
+// Test_ParseStatementProjection: a SELECT list is held to no size, so 800 paths
+// are checked for overlap, where a ProjectionExpression of them is refused for
+// its size first (SQ-395).
+func Test_ParseStatementProjection(t *testing.T) {
+	t.Parallel()
+
+	paths := make([]string, 800)
+	for i := range paths {
+		paths[i] = "k" + strconv.Itoa(i)
+	}
+
+	src := strings.Join(paths, ", ")
+	subs, used := autoSubs(src), map[string]struct{}{}
+
+	_, err := expression.ParseProjection(src, subs, used)
+	wantMessage(t, err, "Invalid ProjectionExpression: Expression size has exceeded the maximum allowed size;")
+
+	_, err = expression.ParseStatementProjection(src, subs, used)
+	wantMessage(t, err, "")
+
+	_, err = expression.ParseStatementProjection("k3.q, "+src, subs, used)
+	wantMessage(t, err, "Invalid ProjectionExpression: Two document paths "+overlapWith+
+		"path one: [k3, q], path two: [k751]")
 }
 
 // Test_ParseUpdate_OverlapPairUnicode: the bucket of a name is its UTF-16
