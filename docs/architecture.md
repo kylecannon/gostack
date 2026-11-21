@@ -652,21 +652,23 @@ container's: 435 MiB under `--memory 512m` and 217.6 MiB under
 `protocol.HeapSlack` (48 MiB) below it, so a dense decode has 323 MiB of
 room at 512 MiB and 105 MiB at 256 MiB, less whatever is already live.
 
-Measured in Docker (SQ-459, image built from d8c9133 against `main` at
-630a1d3): 19 bodies, the SQ-457 shapes (lists of one-entry and empty maps,
+Measured in Docker (SQ-459, image built from b017d36 against `main` at
+efb006b): 19 bodies, the SQ-457 shapes (lists of one-entry and empty maps,
 chains of maps and lists 31 deep, 2,400 attributes an item, string, number
 and binary sets) and SQ-449's (25 items of 42,000 and 64,000 numbers, a Scan
 of 330,000 strings, of 1,600,000 numbers and of a 900,000-entry map), each
 sent 1, 2, 8 and 64 at once to a missing table and each round sent twice;
 the `BatchWriteItem` bodies also once each, twice, to an existing table.
-Under `--memory 512m` with `--memory-swap 512m`, with swap, and under
-`--memory 256m`:
+Under `--memory 512m` with `--memory-swap 512m`, with swap, under
+`--memory 256m`, and with no `--memory` (the VM's `MemTotal` was 24.5 GiB,
+so a Go limit of 20.8 GiB):
 
 | Config | OOM kills | Peak cgroup memory, `main` | Peak, branch | Served past `main` |
 |---|---|---|---|---|
-| 512 MiB, swap | 0 | 113 MiB | 457 MiB | 18 |
-| 512 MiB, no swap | 0 | 151 MiB | 462 MiB | 18 |
-| 256 MiB, no swap | 0 | 133 MiB | 114 MiB | 0 |
+| 512 MiB, swap | 0 | 142 MiB | 459 MiB | 18 |
+| 512 MiB, no swap | 0 | 130 MiB | 460 MiB | 18 |
+| 256 MiB, no swap | 0 | 127 MiB | 115 MiB | 0 |
+| no limit | 0 | 144 MiB | 1,349 MiB | 56 |
 
 `main` answers every one of these bodies 400 `SerializationException`. At
 512 MiB the branch serves one 330,000-string Scan and one 900,000-entry map
@@ -676,15 +678,18 @@ answer), and the first `BatchWriteItem` of 25 items of 42,000 numbers, and of
 because the first's items are now live. Nothing else is served: the 25 x
 64,000-number body's bound (about 330 MiB live) does not fit the room. At
 256 MiB nothing past the decode budget fits, so every answer is `main`'s.
+With no limit every Scan is served at least once a round at every
+concurrency, and every `BatchWriteItem` to the existing table is served on
+both sends, the 25 x 64,000-number body included.
 No row answers worse than `main`. A round where a body is decoded takes
 longer than `main`'s refusal: the 900,000-entry Scan at 64 at once takes 8.4
 to 9.5 s against under 1.1 s, and 8 bodies of 39,000 attributes, one of them
 decoded and answered `ResourceNotFoundException`, 1.65 s against 0.15 s.
 
-`HeapSlack` stays 48 MiB on these numbers: the highest peak, 462 MiB, sits
-50 MiB under the 512 MiB container limit, and what the runtime holds outside
+`HeapSlack` stays 48 MiB on these numbers: the highest peak under a limit, 460 MiB, sits
+52 MiB under the 512 MiB container limit, and what the runtime holds outside
 the heap's objects (stacks, span overhead, the collector's own structures)
-is the gap between the Go limit and that peak, 27 MiB.
+is the gap between the Go limit and that peak, 25 MiB.
 
 ### Protocol details with explicit tests
 
