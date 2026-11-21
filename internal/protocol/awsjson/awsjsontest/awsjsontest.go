@@ -42,22 +42,50 @@ func CheckCoverage(t *testing.T, outputs map[string]any) {
 	}
 }
 
-// CheckRandom compares the generated encoder with v2 on n random values of
-// each output type, from a fixed seed.
+// CheckRandom compares the generated encoder with v2 on values of each
+// output type: one with every member the filler can reach set, n random
+// values whose strings are all valid UTF-8, which neither side may refuse,
+// and n random values with invalid UTF-8 among them, which both must refuse
+// alike. All are from a fixed seed. It fails when a member the filler can
+// reach was never set in a value both sides wrote, so that every member's name
+// and place are compared.
 func CheckRandom(t *testing.T, outputs map[string]any, n int) {
 	t.Helper()
 
 	rng := rand.NewChaCha8([32]byte{})
 	data := make([]byte, dataSize)
+	full := bytes.Repeat([]byte{fullByte}, fullSize)
+	reachable := map[string]bool{}
+	set := map[string]bool{}
 
 	for _, op := range sortedKeys(outputs) {
-		for range n {
-			_, _ = rng.Read(data)
+		reachableMembers(reflect.TypeOf(outputs[op]), reachable)
 
-			err := Compare(outputs[op], data)
+		check := func(data []byte, valid bool) {
+			v, err := compare(outputs[op], data, valid)
 			if err != nil {
 				t.Fatalf("%s: %v", op, err)
 			}
+
+			if v.IsValid() {
+				markSet(v, set)
+			}
+		}
+
+		check(full, true)
+
+		for range n {
+			_, _ = rng.Read(data)
+			check(data, true)
+
+			_, _ = rng.Read(data)
+			check(data, false)
+		}
+	}
+
+	for _, member := range sortedKeys(reachable) {
+		if !set[member] {
+			t.Errorf("member %s was never set in a value both sides wrote", member)
 		}
 	}
 }
@@ -89,35 +117,52 @@ func Fuzz(f *testing.F, outputs map[string]any) {
 
 		op := ops[int(data[0])%len(ops)]
 
-		err := Compare(outputs[op], data[1:])
+		_, err := compare(outputs[op], data[1:], false)
 		if err != nil {
 			t.Fatalf("%s: %v", op, err)
 		}
 	})
 }
 
-// Compare builds a value of out's type from data and fails when the generated
-// encoder and v2 disagree on it: different json, or one refusing it.
-func Compare(out any, data []byte) error {
+// compare builds a value of out's type from data and fails when the generated
+// encoder and v2 disagree on it: different json, or one refusing it. With
+// valid, every string is valid UTF-8 and a refusal fails too. It returns the
+// value when both sides wrote it.
+func compare(out any, data []byte, valid bool) (reflect.Value, error) {
 	typ := reflect.TypeOf(out)
 	if typ.Kind() != reflect.Pointer {
-		return fmt.Errorf("output %T is not a pointer", out)
+		return reflect.Value{}, fmt.Errorf("output %T is not a pointer", out)
 	}
 
 	v := reflect.New(typ.Elem())
-	(&filler{data: data}).fill(v.Elem(), 0)
+	(&filler{data: data, valid: valid}).fill(v.Elem(), 0)
 
 	a, ok := reflect.TypeAssert[awsjson.Appender](v)
 	if !ok {
-		return fmt.Errorf("output %T has no generated json encoder", out)
+		return reflect.Value{}, fmt.Errorf("output %T has no generated json encoder", out)
 	}
 
-	want, wantErr := awsjson.MarshalReflect(v.Interface())
+	err := compareValue(a, v.Interface(), typ, valid)
+
+	switch {
+	case errors.Is(err, errBothRefused):
+		return reflect.Value{}, nil
+	case err != nil:
+		return reflect.Value{}, err
+	default:
+		return v, nil
+	}
+}
+
+func compareValue(a awsjson.Appender, v any, typ reflect.Type, valid bool) error {
+	want, wantErr := awsjson.MarshalReflect(v)
 	got, gotErr := a.AppendJSON([]byte("prefix"))
 
 	switch {
+	case wantErr != nil && gotErr != nil && valid:
+		return fmt.Errorf("both refused a value with valid UTF-8: v2 %w, encoder %w", wantErr, gotErr)
 	case wantErr != nil && gotErr != nil:
-		return nil //nolint:nilerr // both refuse it, and Encode then sends v2's error
+		return errBothRefused
 	case wantErr != nil:
 		return fmt.Errorf("v2 refused the value (%w) and the encoder wrote %s", wantErr, got)
 	case gotErr != nil:
@@ -128,126 +173,11 @@ func Compare(out any, data []byte) error {
 
 	got = got[len("prefix"):]
 
-	if !Equal(got, want) {
+	if !Equal(got, want, typ) {
 		return fmt.Errorf("json differs\n got %s\nwant %s", got, want)
 	}
 
 	return nil
-}
-
-// Equal reports whether a and b are the same json byte for byte, except for
-// the order of object members, which v2 writes in Go's map order. Every
-// string, number and literal must match as written, escapes included.
-func Equal(a, b []byte) bool {
-	if bytes.Equal(a, b) {
-		return true
-	}
-
-	if len(a) != len(b) {
-		return false
-	}
-
-	na, errA := parse(a)
-	nb, errB := parse(b)
-
-	return errA == nil && errB == nil && na.equal(nb)
-}
-
-type node struct {
-	raw     string
-	items   []node
-	members map[string]node
-}
-
-func (n node) equal(o node) bool {
-	if n.raw != o.raw || len(n.items) != len(o.items) || len(n.members) != len(o.members) {
-		return false
-	}
-
-	for i := range n.items {
-		if !n.items[i].equal(o.items[i]) {
-			return false
-		}
-	}
-
-	for name, m := range n.members {
-		om, ok := o.members[name]
-		if !ok || !m.equal(om) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func parse(b []byte) (node, error) {
-	dec := jsontext.NewDecoder(bytes.NewReader(b))
-
-	return readNode(dec)
-}
-
-func readNode(dec *jsontext.Decoder) (node, error) {
-	switch dec.PeekKind() {
-	case '{':
-		return readObject(dec)
-	case '[':
-		_, err := dec.ReadToken()
-		if err != nil {
-			return node{}, err //nolint:wrapcheck // the test reports it
-		}
-
-		n := node{raw: "["}
-
-		for dec.PeekKind() != ']' {
-			item, itemErr := readNode(dec)
-			if itemErr != nil {
-				return node{}, itemErr
-			}
-
-			n.items = append(n.items, item)
-		}
-
-		_, err = dec.ReadToken()
-
-		return n, err //nolint:wrapcheck // the test reports it
-	default:
-		v, err := dec.ReadValue()
-
-		return node{raw: string(v)}, err //nolint:wrapcheck // the test reports it
-	}
-}
-
-func readObject(dec *jsontext.Decoder) (node, error) {
-	_, err := dec.ReadToken()
-	if err != nil {
-		return node{}, err //nolint:wrapcheck // the test reports it
-	}
-
-	n := node{raw: "{", members: map[string]node{}}
-
-	for dec.PeekKind() != '}' {
-		name, nameErr := dec.ReadValue()
-		if nameErr != nil {
-			return node{}, nameErr //nolint:wrapcheck // the test reports it
-		}
-
-		key := string(name)
-
-		m, memberErr := readNode(dec)
-		if memberErr != nil {
-			return node{}, memberErr
-		}
-
-		if _, dup := n.members[key]; dup {
-			return node{}, errors.New("duplicate member " + key)
-		}
-
-		n.members[key] = m
-	}
-
-	_, err = dec.ReadToken()
-
-	return n, err //nolint:wrapcheck // the test reports it
 }
 
 // The sizes and spans of the random values.
@@ -274,6 +204,8 @@ const (
 	dataSize        = 4096
 	seedRepeats     = 64
 	longSeedRepeats = 128
+	fullByte        = 2       // the byte of the value with every member set
+	fullSize        = 1 << 20 // its bytes, more than the deepest value reads
 	coin            = 2
 	floatKinds      = 4
 	timeKinds       = 4
@@ -285,6 +217,8 @@ const (
 type filler struct {
 	data []byte
 	pos  int
+	// valid makes every string valid UTF-8.
+	valid bool
 }
 
 func (f *filler) byte() byte {
@@ -440,7 +374,12 @@ var stringKinds = []func(f *filler) string{
 }
 
 func (f *filler) string() string {
-	return stringKinds[f.below(len(stringKinds))](f)
+	s := stringKinds[f.below(len(stringKinds))](f)
+	if f.valid {
+		s = strings.ToValidUTF8(s, "?")
+	}
+
+	return s
 }
 
 // fixedFloats are the floats v2 formats apart, and NaN and the infinities,
@@ -495,7 +434,7 @@ func (f *filler) fillDocument(v reflect.Value) {
 	}
 }
 
-func sortedKeys(m map[string]any) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
