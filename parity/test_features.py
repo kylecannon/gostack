@@ -8,8 +8,13 @@ facts; these tests hold the generator's rules and the committed page's links.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 import features
 import ledger
@@ -30,6 +35,7 @@ SERVICES = [
     {"name": "dynamodb", "compat": ["DynamoDB"]},
     {"name": "dynamodbstreams", "compat": ["DynamoDB Streams"]},
     {"name": "ecr", "providers_only": True},
+    {"name": "events"},
     {"name": "opensearch", "deferred": "The engine is deferred."},
     {"name": "sqs", "compat": ["SQS"]},
     {"name": "sts", "compat": ["STS"]},
@@ -114,6 +120,15 @@ class StatusTest(unittest.TestCase):
     def test_an_exclusion_that_waits_on_a_service_gostack_does_not_serve_is_not_stale(self) -> None:
         rows = sqs_rows(("pass", "pass", ""), ("excluded", "excluded", "depends-on:lambda"))
         self.assertEqual(status_of([SQS_ALL], rows), "Complete")
+
+    def test_an_exclusion_names_events_as_eventbridge_or_events(self) -> None:
+        events = fact("events", ["PutEvents"], ["PutEvents"])
+        for reason in ("depends-on:events", "depends-on:eventbridge"):
+            rows = sqs_rows(("pass", "pass", ""), ("excluded", "excluded", reason))
+            self.assertEqual(status_of([SQS_ALL, events], rows), "In progress", reason)
+
+    def test_a_reason_with_text_after_the_service_still_names_it(self) -> None:
+        self.assertEqual(features.depends_on(row("excluded", "excluded", "depends-on:kms (describe_key)")), "kms")
 
     def test_a_ledger_with_no_test_localstack_passes_is_in_progress(self) -> None:
         for rows in (sqs_rows(("fail", "pass", "")), sqs_rows(("excluded", "excluded", "x")), sqs_rows((None, "pass", ""))):
@@ -286,6 +301,11 @@ class CommittedFilesTest(unittest.TestCase):
         marked = [service["name"] for service in self.services if service.get("providers_only")]
         self.assertEqual(marked, ["cdk", "certificatemanager", "ecr", "kinesisfirehose"])
 
+    def test_every_service_an_exclusion_waits_on_is_listed(self) -> None:
+        listed = {features.lookup_name(service) for service in self.services}
+        targets = {features.depends_on(entry) for entry in ledger.load_ledger(ledger.LEDGER).values()} - {None}
+        self.assertLessEqual(targets, listed)
+
     def test_every_service_of_the_ledger_is_listed(self) -> None:
         listed = {features.lookup_name(service) for service in self.services}
         self.assertLessEqual(set(ledger.split_by_service(ledger.load_ledger(ledger.LEDGER))), listed)
@@ -298,6 +318,51 @@ class CommittedFilesTest(unittest.TestCase):
             self.assertTrue(links, f"the page links to {document}.md")
             for anchor in links:
                 self.assertIn(anchor, known, f"{document}.md has no anchor #{anchor}")
+
+
+WARNING = "warning: docs/features.md was not refreshed; run make features"
+
+
+class RefreshTest(unittest.TestCase):
+    """The features refresh after a parity run (Makefile FEATURES_REFRESH)."""
+
+    def dry_run(self, target: str, ci: str | None) -> str:
+        env = {k: v for k, v in os.environ.items() if k != "CI"}
+        if ci is not None:
+            env["CI"] = ci
+        done = subprocess.run(["make", "-n", target, "DRY_RUN="], cwd=ledger.ROOT, env=env, capture_output=True, text=True, check=False)
+        return done.stdout
+
+    def setUp(self) -> None:
+        if shutil.which("make") is None:
+            self.skipTest("make is not installed")
+
+    def test_only_ci_true_skips_the_refresh(self) -> None:
+        for target in ("parity", "parity-baseline", "parity-prune"):
+            for ci in (None, "false", "1", ""):
+                self.assertIn(WARNING, self.dry_run(target, ci), f"{target} CI={ci!r}")
+            self.assertNotIn(WARNING, self.dry_run(target, "true"), f"{target} CI=true")
+
+    def test_a_dry_run_of_parity_prune_does_not_refresh(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "CI"}
+        done = subprocess.run(["make", "-n", "parity-prune", "DRY_RUN=1"], cwd=ledger.ROOT, env=env, capture_output=True, text=True, check=False)
+        self.assertNotIn(WARNING, done.stdout)
+
+    def test_a_failing_refresh_prints_one_warning_and_exits_0(self) -> None:
+        refresh = next(line for line in self.dry_run("parity", None).splitlines() if WARNING in line)
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_go = Path(tmp) / "go"
+            fake_go.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_go.chmod(0o755)
+            env = {**os.environ, "PATH": f"{tmp}{os.pathsep}{os.environ['PATH']}"}
+            done = subprocess.run(["sh", "-c", refresh], cwd=ledger.ROOT, env=env, capture_output=True, text=True, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual((done.stdout + done.stderr).strip().splitlines(), [WARNING])
+
+
+class ReadmeTest(unittest.TestCase):
+    def test_the_readme_links_the_features_page(self) -> None:
+        self.assertIn("(docs/features.md)", (ledger.ROOT / "README.md").read_text(encoding="utf-8"))
 
 
 # The 39 directories under localstack-core/localstack/services at 8b9a79f.

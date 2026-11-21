@@ -123,9 +123,15 @@ def compat_mentions(services: list[dict], compat: str) -> dict[str, list[tuple[s
     return found
 
 
+# The ledger's reasons spell a service two ways: eventbridge and events (the
+# s3 and ssm exclusions) are the same service, which gostack knows as events.
+DEPENDENCY_ALIASES = {"eventbridge": "events"}
+
+
 def depends_on(row: dict) -> str | None:
-    match = DEPENDS_ON.fullmatch(row["reason"] or "") if row["localstack"] == "excluded" else None
-    return match.group(1) if match else None
+    """The service an excluded row waits on, as gostack names it."""
+    match = DEPENDS_ON.match(row["reason"] or "") if row["localstack"] == "excluded" else None
+    return DEPENDENCY_ALIASES.get(match.group(1), match.group(1)) if match else None
 
 
 def missing_operations(fact: dict) -> list[str] | None:
