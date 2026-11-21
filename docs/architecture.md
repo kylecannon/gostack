@@ -486,10 +486,21 @@ charges the rest in steps as it decodes. So 32 clients at once sending a
 (`Test_decodeBudget_aBurstOfDenseBodiesIsServedOrThrottled`), and nothing
 served before this budget is refused, throttled longer or slowed by it.
 
-A body charged past `DecodeBudget`, which every other service refuses, is not
-charged to the pool. It is decoded only when the heap it keeps fits under the
-Go memory limit, and refused with the decode budget's answer (`400
-SerializationException`, "decodes into more than gostack allows") otherwise:
+A body charged past `DecodeBudget`, which every other service refuses, holds
+the pool only as long as a refused one does. Its walk passes `DecodeBudget`
+at the point where every other service's walk stops and refuses it; there
+the body's own bytes are reserved on the heap (`protocol.ReserveHeap` of its
+length, kept until the request is answered) and the request gives back what
+its body and its planned decoding hold of the pool (`awsjson`'s `moveBody`,
+`protocol.HeapKeeper.ReleasePool`), so a smaller request waiting for the pool
+is admitted as soon as it would be were the body refused. A body whose bytes
+find no room is refused there, holding the pool until it is answered as a
+refused body does. The heap's objects count the body too while it is live,
+so the reservation counts it twice, which only refuses earlier. The rest of
+the walk and the decode then run on the heap alone. The body is decoded only
+when the heap it keeps fits under the Go memory limit, and refused with the
+decode budget's answer (`400 SerializationException`, "decodes into more
+than gostack allows") otherwise:
 
 1. The walk that charges the body also bounds the heap its decoded value
    keeps (`awsjson`'s `walker.heap`, `internal/protocol/awsjson/heap.go`), by
@@ -512,9 +523,13 @@ SerializationException`, "decodes into more than gostack allows") otherwise:
    garbage stands in the way (`/gc/heap/live:bytes` would fit), one request
    at a time runs a collection and reads again. Reading and reserving are one
    step under a lock, so decodes at once each see the others' reservations.
-3. The reservation is kept until the request is answered
-   (`protocol.HeapKeeper`, the request's `Charge`), so what the handler builds
-   from the value stays counted while it works.
+3. Both reservations, the body's and the decode's, are kept until the
+   request is answered (`protocol.HeapKeeper`, the request's `Charge`), so
+   what the handler builds from the value stays counted while it works.
+   `Test_Charge_AccountingStaysExact` runs the pool's accounting stress with
+   the move, a refused move and a client gone between the move and the
+   decode, and holds the pool within its bound, a moved body at none of it,
+   and the pool and the reservations at zero at the end.
 4. With no Go memory limit (no container limit and no `GOMEMLIMIT`) such a
    body is refused, as it was before: nothing proves it fits.
 
