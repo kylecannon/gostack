@@ -298,6 +298,15 @@ own comment names the cells left out and the time an operation took (or the
 iterations it reached); `go test -run '^$' -bench . -benchtime=500ms -count=3`
 prints both for each.
 
+A cell's time does not depend on the cells that ran before it. The collector
+paces itself by the live heap, so a cell that leaves what it recorded held, for
+as long as its engine lives, gives every later cell a larger heap goal and
+fewer collections, and dropping a cell from the matrix then moves the rows
+after it. A benchmark that keeps state across its cells discards what a cell
+recorded when the cell ends (`BenchmarkPublishEndpoint` and
+`BenchmarkPublishSMS` do, in `deviceBench.run`), and the collection that the
+testing package runs before each cell then frees it.
+
 | Axis | Values |
 |---|---|
 | Payload | small (under 1 KiB), medium (about 64 KiB), and the service's maximum |

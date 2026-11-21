@@ -168,6 +168,16 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 			b.StartTimer()
 		}
 	}
+
+	// The loop has stopped the timer. Up to benchClearEvery iterations of
+	// recorded messages are still held, for as long as the provider lives, which
+	// is the whole benchmark, and the collector paces itself by what is held:
+	// before this, the cells after a 256 KiB one began with 329 to 1,428 MiB
+	// held (darwin/arm64, 500 ms cells) against 3 to 8 now, and collected 0 to
+	// 0.04 times an operation against 0.004 to 0.2. A cell's time then depended
+	// on which cells ran before it, tooSlowToGate's among them. The collection
+	// the testing package runs before each cell frees what is dropped here.
+	d.clear()
 }
 
 // tooSlowToGate is true for the cells that do not reach the 50 iterations in
