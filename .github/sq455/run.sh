@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# SQ-455/SQ-458 scratch measurement. Never merged. Builds the arms of the sqs
-# benchmark binary and runs them interleaved, ROUNDS rounds, each run relinked
-# with a new -randlayout seed, the way `make bench-ab` does.
-#   base        b15da1d (main)
-#   baseframe16 base + 16 unused bytes in formReader: serveAWS frame 0x250
-#   new         base + sq458.patch (SQ-458: generated json encoders that quote
-#               strings in runs)
-#   newframe16  new + the same 16 unused bytes in formReader
-# Wanted: new and newframe16 flat on AMD Zen 3/4, where base and baseframe16
-# differ; new not slower than base on any row on any CPU.
+# SQ-460 scratch measurement for PR #54. Never merged. Builds the arms of the
+# internal/persist benchmark binary and runs BenchmarkSQSFlush's 64 KiB rows
+# (queues=10/messages=100 and queues=1000/messages=1) interleaved, ROUNDS
+# rounds, each run relinked with a new -randlayout seed, the way `make bench-ab`
+# does.
+#   base       b15da1d, origin/main when PR #54 last merged it
+#   head54     f249254, PR #54's head: base + mounts.go, the mount warning, and
+#              Engine.mountWarn sync.Once in front of Engine.loaded
+#   basefield  base + only the `mountWarn sync.Once` field in Engine
+#   fixed      head54 + fixed.patch (SQ-460): no sync.Once, Load warns at the
+#              startup Load that loaded already tells
+# Wanted: fixed within the bench gate against base on every CPU model.
 set -euo pipefail
 
 ROUNDS=${ROUNDS:-10}
 BASE_SHA=b15da1dc172713bc7e2b071fa0f30d76d31b517a
+HEAD54_SHA=f2492548fdc4e0bb07b03fb925cc505698e654f2
 REPO=${REPO:-$PWD}
 PATCHES=${PATCHES:-$REPO/.github/sq455}
-W=$RUNNER_TEMP/sq455
+W=${RUNNER_TEMP:?}/sq455
 OUT=$W/out
-BENCH='^BenchmarkReceiveMessage$/^proto=(json|query)$/^queue=standard$/^max=1$/^payload=(256B|64KiB|1MiB)$'
-read -r -a ARMS <<<"${ARMS:-base baseframe16 new newframe16}"
+BENCH='^BenchmarkSQSFlush$/^queues=(10|1000)$/^messages=(100|1)$/^body=64KiB$'
+read -r -a ARMS <<<"${ARMS:-base head54 basefield fixed}"
 N=${#ARMS[@]}
 
 mkdir -p "$W" "$OUT/prof" "$OUT/bin"
@@ -32,27 +35,35 @@ mkdir -p "$W" "$OUT/prof" "$OUT/bin"
 	go version
 } | tee "$OUT/host.txt"
 
-git -C "$REPO" fetch --no-tags origin "$BASE_SHA"
+git -C "$REPO" fetch --no-tags origin "$BASE_SHA" "$HEAD54_SHA"
 
 for arm in "${ARMS[@]}"; do
 	mkdir -p "$W/$arm"
-	git -C "$REPO" archive "$BASE_SHA" | tar -x -C "$W/$arm"
 	case $arm in
-		new*) (cd "$W/$arm" && git apply "$PATCHES/sq458.patch") ;;
+		base | basefield) sha=$BASE_SHA ;;
+		*) sha=$HEAD54_SHA ;;
 	esac
+	git -C "$REPO" archive "$sha" | tar -x -C "$W/$arm"
 	case $arm in
-		*frame*) perl -0pi -e "s/(\tvals url.Values\n)/\$1\t_    [${arm##*frame}]byte\n/" "$W/$arm/internal/gateway/dispatch.go" ;;
+		basefield) perl -0pi -e 's/(\t\/\/ loaded is true once)/\tmountWarn sync.Once\n$1/' "$W/$arm/internal/persist/engine.go" ;;
+		fixed) (cd "$W/$arm" && git apply "$PATCHES/fixed.patch") ;;
 	esac
 done
 
+grep -c 'mountWarn sync.Once' "$W"/*/internal/persist/engine.go | tee "$OUT/field.txt"
+
 build() { # arm layout-seed output
-	(cd "$W/$1" && go test -c -vet=off ${2:+-ldflags=-randlayout=$2} -o "$3" ./internal/service/sqs)
+	(cd "$W/$1" && go test -c -vet=off ${2:+-ldflags=-randlayout=$2} -o "$3" ./internal/persist)
 }
 
 for arm in "${ARMS[@]}"; do
 	build "$arm" "" "$OUT/bin/$arm.test"
-	frame=$(go tool objdump -s 'gateway.\(\*Gateway\).serveAWS$' "$OUT/bin/$arm.test" | grep -oE 'SUBQ \$0x[0-9a-f]+, SP' | head -1 || true)
-	echo "$arm serveAWS $frame" | tee -a "$OUT/layout.txt"
+	# Every Engine method's frame and size at the default layout, and the
+	# benchmark's own function, for a frame shift between the arms.
+	go tool objdump -s 'persist\.\(\*Engine\)\.' "$OUT/bin/$arm.test" |
+		grep -E '^TEXT|SUBQ \$0x[0-9a-f]+, SP|SUBQ \$[0-9]+, SP|SUB \$[0-9]+, RSP|SUB \$0x[0-9a-f]+, RSP' >"$OUT/frames-$arm.txt" || true
+	go tool nm -size -sort address "$OUT/bin/$arm.test" | grep 'persist\.(\*Engine)\.' >"$OUT/nm-$arm.txt" || true
+	echo "$arm Engine methods: $(wc -l <"$OUT/nm-$arm.txt")" | tee -a "$OUT/layout.txt"
 done
 
 for r in $(seq 1 "$ROUNDS"); do
@@ -65,8 +76,8 @@ for r in $(seq 1 "$ROUNDS"); do
 		seed=$((r * 10 + i + 1))
 		bin=$W/bin-$arm-$r.test
 		build "$arm" "$seed" "$bin"
-		(cd "$W/$arm/internal/service/sqs" && "$bin" -test.run '^$' -test.bench "$BENCH" -test.benchmem \
-			-test.benchtime=500ms -test.count=1 -test.timeout=30m \
+		(cd "$W/$arm/internal/persist" && "$bin" -test.run '^$' -test.bench "$BENCH" -test.benchmem \
+			-test.benchtime=1s -test.count=1 -test.timeout=30m \
 			-test.cpuprofile "$OUT/prof/$arm-r$r.prof" </dev/null) >>"$OUT/$arm.txt"
 		rm -f "$bin"
 	done
@@ -77,8 +88,13 @@ compare() { # a b
 	benchstat "$1=$OUT/$1.txt" "$2=$OUT/$2.txt" | tee -a "$OUT/benchstat.txt"
 }
 
-compare base baseframe16
-compare new newframe16
-compare base new
-compare baseframe16 newframe16
-cat "$OUT/layout.txt" "$OUT/benchstat.txt" >>"$GITHUB_STEP_SUMMARY"
+compare base head54
+compare base basefield
+compare base fixed
+compare head54 fixed
+{
+	echo '```'
+	grep -m1 'model name' /proc/cpuinfo || true
+	cat "$OUT/layout.txt" "$OUT/benchstat.txt"
+	echo '```'
+} >>"${GITHUB_STEP_SUMMARY:-/dev/null}"
