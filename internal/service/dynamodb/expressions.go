@@ -106,11 +106,17 @@ func (x *exprs) projection(src *string) (expression.Projection, error) {
 
 // update parses an UpdateExpression, or returns nil when src is nil.
 func (x *exprs) update(src *string) (*expression.UpdateExpr, error) {
+	return x.updateRanked(src, nil)
+}
+
+// updateRanked is update for an expression compiled from a PartiQL UPDATE, whose
+// actions rank puts in the statement's order (expression.ParseUpdateRanked).
+func (x *exprs) updateRanked(src *string, rank []int) (*expression.UpdateExpr, error) {
 	if src == nil {
 		return nil, nil //nolint:nilnil // no expression
 	}
 
-	u, err := expression.ParseUpdate(*src, x.subs, x.used)
+	u, err := expression.ParseUpdateRanked(*src, x.subs, x.used, rank)
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}

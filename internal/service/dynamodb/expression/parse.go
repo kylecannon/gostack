@@ -124,16 +124,23 @@ func (p *parser) enter() error {
 
 func (p *parser) leave() { p.depth-- }
 
-// newParser is the one way into every parser of the package: it refuses an
-// empty or oversized expression before lexing, since the size cap is what
-// bounds a parser's work and recursion, and then splits src into tokens.
+// newParser is the way into the parser of an expression a request sends: it
+// refuses an empty or oversized expression before lexing, since the size cap is
+// what bounds a parser's work and recursion, and then splits src into tokens.
+// The paths of a PartiQL SELECT come in through newUnboundedParser.
 func newParser(kind Kind, src string) (*parser, error) {
 	err := checkSize(kind, src)
 	if err != nil {
 		return nil, err
 	}
 
-	return &parser{src: src, toks: lex(src), kind: kind}, nil
+	return newUnboundedParser(kind, src), nil
+}
+
+// newUnboundedParser splits src into tokens without holding it to a size. Its
+// caller bounds src.
+func newUnboundedParser(kind Kind, src string) *parser {
+	return &parser{src: src, toks: lex(src), kind: kind}
 }
 
 // checkSize refuses an empty or oversized expression. DynamoDB Local names the
