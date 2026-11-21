@@ -16,6 +16,15 @@ import (
 // mountinfoPath is where the kernel lists the mounts of this process.
 const mountinfoPath = "/proc/self/mountinfo"
 
+// File-system type names as the kernel reports them in mountinfo and as the
+// syncfs log names them.
+const (
+	fsExt4  = "ext4"
+	fsXFS   = "xfs"
+	fsTmpfs = "tmpfs"
+	fsRamfs = "ramfs"
+)
+
 // mount is one line of /proc/self/mountinfo, as far as the checks read it.
 type mount struct {
 	// root is the path inside the filesystem that is mounted at the point.
@@ -123,7 +132,7 @@ func placed(find lookup, dir string) placement {
 		}
 
 		switch {
-		case m.fstype == "tmpfs" || m.fstype == "ramfs":
+		case m.fstype == fsTmpfs || m.fstype == fsRamfs:
 			return inMemory
 		case anonymousVolume.MatchString(m.root):
 			return onAnonymous

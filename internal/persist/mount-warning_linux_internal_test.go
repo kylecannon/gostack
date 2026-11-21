@@ -73,7 +73,7 @@ func Test_placed_Mountinfo(t *testing.T) {
 		switch {
 		case !found:
 			assert.Equal(t, onRoot, placed(find, dir))
-		case fstype == "tmpfs" || fstype == "ramfs":
+		case fstype == fsTmpfs || fstype == fsRamfs:
 			assert.Equal(t, inMemory, placed(find, dir))
 		default:
 			assert.Contains(t, []placement{onVolume, onAnonymous}, placed(find, dir))

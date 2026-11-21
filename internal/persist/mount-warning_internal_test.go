@@ -129,9 +129,9 @@ too short
 
 	assert.Equal(t, map[string]mount{
 		"/proc":       {root: "/", fstype: "proc"},
-		"/with space": {root: "/", fstype: "ext4"},
-		"/dev/shm":    {root: "/", fstype: "tmpfs"},
-		"/twice":      {root: "/sup", fstype: "xfs"},
+		"/with space": {root: "/", fstype: fsExt4},
+		"/dev/shm":    {root: "/", fstype: fsTmpfs},
+		"/twice":      {root: "/sup", fstype: fsXFS},
 	}, got, "optional fields are skipped, an escape read, a line with no type left out, the later of two mounts kept")
 }
 
