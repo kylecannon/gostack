@@ -92,6 +92,7 @@ type updateParser struct {
 	paths     []*updatePathExpr
 	pathNames []token
 	calls     []*updateOperand
+	sums      int   // the + and - written, which with the calls are the operators maxOperators counts
 	index     error // the first list index out of range, reported after the parse
 }
 
@@ -193,6 +194,8 @@ func (p *updateParser) setValue() (*updateOperand, error) {
 	}
 
 	p.next()
+
+	p.sums++
 
 	right, err := p.operand(false)
 	if err != nil {

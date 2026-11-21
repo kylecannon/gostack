@@ -21,42 +21,51 @@ const (
 // exprs is the expressions of one request: its placeholders, and the ones its
 // expressions have used so far. Every expression a handler parses goes through
 // it, so CheckSubstitutions runs first and CheckUnused runs once across all of
-// them, and every expression kind passes its parser's size check before it is
-// lexed.
+// them, and every expression kind a caller sends passes its parser's size check
+// before it is lexed.
 type exprs struct {
 	subs expression.Substitutions
 	used map[string]struct{}
-	// statement is an expression set that a PartiQL statement compiled: its
-	// projection and update parse held to no size of their own, as the image
-	// holds the statement alone, to 8,192 bytes (SQ-412).
-	statement bool
+	from origin
 }
 
-// statementKey marks the context of a request a PartiQL statement compiled to.
-type statementKey struct{}
+// origin is who wrote the expressions of a request: a caller, whose every
+// expression is held to its size, or a PartiQL statement compiled to the call.
+// DynamoDB Local bounds the statement's own text, 8,192 bytes, and no
+// expression it is compiled to: a WHERE of 4,172 characters, a SELECT of 602
+// attributes and an UPDATE of 300 actions are all answered (SQ-412, SQ-452).
+// Every parser of an expression takes it, so a new way into one cannot leave it
+// out; only ExecuteStatement, BatchExecuteStatement and ExecuteTransaction
+// mark their calls with forStatement.
+type origin int
+
+const (
+	fromRequest origin = iota
+	fromStatement
+)
+
+// originKey marks the context of a call a PartiQL statement compiled to.
+type originKey struct{}
 
 // forStatement marks ctx for the item operations a PartiQL statement runs as.
-// DynamoDB Local bounds the statement's text and not the ProjectionExpression
-// or UpdateExpression it is read through, so those two parse here with no size
-// of their own; every other expression, and every request a caller sends, is
-// held to its size as before.
 func forStatement(ctx context.Context) context.Context {
-	return context.WithValue(ctx, statementKey{}, true)
+	return context.WithValue(ctx, originKey{}, fromStatement)
 }
 
-// isStatement reports whether ctx is marked by forStatement.
-func isStatement(ctx context.Context) bool {
-	statement, _ := ctx.Value(statementKey{}).(bool)
+// originOf is the origin of the call ctx belongs to.
+func originOf(ctx context.Context) origin {
+	from, _ := ctx.Value(originKey{}).(origin)
 
-	return statement
+	return from
 }
 
-// newExprs checks a request's placeholders. hasExpr is whether the request
-// gives any expression; valuesUsable whether it gives one that can name a
-// :value, and nullMembers the members DynamoDB Local's message names when it
-// does not.
+// newExprs checks a request's placeholders. from is who wrote its expressions;
+// hasExpr is whether the request gives any expression; valuesUsable whether it
+// gives one that can name a :value, and nullMembers the members DynamoDB
+// Local's message names when it does not.
 func newExprs(
-	names map[string]string, values map[string]api.AttributeValue, hasExpr, valuesUsable bool, nullMembers string,
+	from origin, names map[string]string, values map[string]api.AttributeValue, hasExpr, valuesUsable bool,
+	nullMembers string,
 ) (*exprs, error) {
 	err := checkUsable(names, values, hasExpr, valuesUsable, nullMembers)
 	if err != nil {
@@ -66,6 +75,7 @@ func newExprs(
 	x := &exprs{
 		subs: expression.Substitutions{Names: names, Values: values},
 		used: make(map[string]struct{}, len(names)+len(values)),
+		from: from,
 	}
 
 	err = expression.CheckSubstitutions(x.subs)
@@ -104,7 +114,12 @@ func (x *exprs) condition(kind expression.Kind, src *string) (expression.Conditi
 		return nil, nil //nolint:nilnil // no expression
 	}
 
-	c, err := expression.ParseCondition(kind, *src, x.subs, x.used)
+	parse := expression.ParseCondition
+	if x.from == fromStatement {
+		parse = expression.ParseStatementCondition
+	}
+
+	c, err := parse(kind, *src, x.subs, x.used)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", kind, err)
 	}
@@ -121,7 +136,7 @@ func (x *exprs) projection(src *string) (expression.Projection, error) {
 	}
 
 	parse := expression.ParseProjection
-	if x.statement {
+	if x.from == fromStatement {
 		parse = expression.ParseStatementProjection
 	}
 
@@ -146,7 +161,7 @@ func (x *exprs) updateRanked(src *string, rank []int) (*expression.UpdateExpr, e
 	}
 
 	parse := expression.ParseUpdateRanked
-	if x.statement {
+	if x.from == fromStatement {
 		parse = expression.ParseStatementUpdate
 	}
 

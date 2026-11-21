@@ -50,8 +50,10 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 
 	root := api.AttributeValue{M: item}
 
+	var copied copies
+
 	for _, act := range u.order {
-		err = updateAt(&root, act.target.path, updateFinalFor(act, results[act]))
+		err = updateAt(&root, act.target.path, &copied, updateFinalFor(act, results[act]))
 		if err != nil {
 			return nil, err
 		}
@@ -73,14 +75,34 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 // value.MaxDepth levels: a value that fits an ExpressionAttributeValues can
 // be one level too deep once it sits inside the item, and so can a list_append
 // or a SET at a nested path. Only the attributes an action wrote can have
-// grown, and the walk stops at the limit.
+// grown, and the walk stops at the limit. An attribute is walked once however
+// many actions wrote below it: 1,000 SET actions under one map walked it 1,000
+// times (SQ-452).
 func (u *UpdateExpr) checkNesting(item value.Item) error {
+	var walked map[string]struct{}
+
 	for _, act := range u.order {
 		if act.clause == updateRemove || act.clause == updateDelete {
 			continue
 		}
 
-		v := item[act.target.path[0].Name]
+		name := act.target.path[0].Name
+
+		// A path of one element names an attribute no other action writes
+		// below, since no path is a prefix of another.
+		if len(act.target.path) > 1 {
+			if _, done := walked[name]; done {
+				continue
+			}
+
+			if walked == nil {
+				walked = make(map[string]struct{})
+			}
+
+			walked[name] = struct{}{}
+		}
+
+		v := item[name]
 		if value.TooDeep(&v) {
 			return value.Invalid(msgUpdateTooDeep)
 		}
@@ -278,10 +300,37 @@ func updateFinalFor(act *updateAction, v api.AttributeValue) updateFinal {
 	}
 }
 
+// copies records, by the path to each, the maps and lists an Apply has already
+// copied, so that the actions under one of them change the copy and a thousand
+// of them under one map copy it once and not a thousand times (SQ-452). No
+// action path is a prefix of another (updateCheckOverlap), so a copy is never
+// replaced by a later action: what a path names is the copy its first action
+// made. The zero value is an empty record.
+type copies struct {
+	done bool
+	next map[PathElement]*copies
+}
+
+// at is the record of the element el below c.
+func (c *copies) at(el PathElement) *copies {
+	n, ok := c.next[el]
+	if !ok {
+		if c.next == nil {
+			c.next = make(map[PathElement]*copies)
+		}
+
+		n = new(copies)
+		c.next[el] = n
+	}
+
+	return n
+}
+
 // updateAt walks path from parent, which the update owns, copying every map or
-// list it passes through so old is never changed, and runs final on the last
-// step. A step through a missing value, or one of the wrong kind, is refused.
-func updateAt(parent *api.AttributeValue, path Path, final updateFinal) error {
+// list it passes through that copied does not already hold, so old is never
+// changed, and runs final on the last step. A step through a missing value, or
+// one of the wrong kind, is refused.
+func updateAt(parent *api.AttributeValue, path Path, copied *copies, final updateFinal) error {
 	if len(path) == 1 {
 		return final(parent, path[0])
 	}
@@ -291,16 +340,24 @@ func updateAt(parent *api.AttributeValue, path Path, final updateFinal) error {
 		return value.Invalid(msgUpdateInvalidPath)
 	}
 
+	own := copied.at(path[0])
+
 	switch {
 	case path[1].Name != "" && child.M != nil:
-		child = api.AttributeValue{M: maps.Clone(child.M)}
+		if !own.done {
+			child = api.AttributeValue{M: maps.Clone(child.M)}
+		}
 	case path[1].Name == "" && child.L != nil:
-		child = api.AttributeValue{L: slices.Clone(child.L)}
+		if !own.done {
+			child = api.AttributeValue{L: slices.Clone(child.L)}
+		}
 	default:
 		return value.Invalid(msgUpdateInvalidPath)
 	}
 
-	err := updateAt(&child, path[1:], final)
+	own.done = true
+
+	err := updateAt(&child, path[1:], own, final)
 	if err != nil {
 		return err
 	}

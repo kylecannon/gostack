@@ -475,6 +475,11 @@ caller's account and region, as LocalStack does.
   accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
   first to last in the statement's order. A `SELECT` list is checked for overlap
   whatever its size, and a list that overlaps is answered with the overlap.
+- A PartiQL statement's text is held to 8,192 bytes, and the expressions it
+  compiles to to the 300 operators and 100 `IN` operands of any expression and
+  to no size, as in the image. One difference is left: a `WHERE` of 4,000
+  parentheses nested (an 8,055-byte statement) is answered `500 Internal Server
+  Error` by the image, where it answered 3,000 deep, and gostack answers it.
 
 ## DynamoDB batches and transactions
 

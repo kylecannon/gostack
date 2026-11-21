@@ -29,14 +29,21 @@ const (
 	// maxNesting bounds the recursion of every parser in the package. An
 	// expression within maxExpressionSize cannot nest deeper, since each level
 	// takes at least one character, so the bound never refuses what DynamoDB
-	// accepts; it keeps a parser's stack bounded if it is ever handed a longer
-	// text.
+	// accepts. The text a PartiQL statement compiles to is held to no size, but
+	// the statement's own 8,192 bytes take at least two for each level, so it
+	// cannot nest deeper either (SQ-452); the bound keeps a parser's stack
+	// bounded whatever it is handed.
 	maxNesting = maxExpressionSize
 )
 
 // msgTooLarge is the size message without the size, as DynamoDB Local answers
 // it for ProjectionExpression and UpdateExpression.
 const msgTooLarge = "Expression size has exceeded the maximum allowed size;"
+
+// msgTooManyOperators is DynamoDB Local's refusal of an expression of more than
+// maxOperators operators. It names 301, maxOperators+1, whatever the count is:
+// the count stops at the first operator past the limit.
+const msgTooManyOperators = "The expression contains too many operators; operator count: 301"
 
 // tooLarge reports whether src is over maxExpressionSize UTF-16 code units, and
 // its length in them.
@@ -127,8 +134,8 @@ func (p *parser) leave() { p.depth-- }
 // newParser is the way into the parser of an expression a request sends: it
 // refuses an empty or oversized expression before lexing, since the size cap is
 // what bounds a parser's work and recursion, and then splits src into tokens.
-// The paths of a PartiQL SELECT and the actions of a PartiQL UPDATE come in
-// through newUnboundedParser.
+// The paths of a PartiQL SELECT, the actions of a PartiQL UPDATE and the WHERE
+// of any statement come in through newUnboundedParser.
 func newParser(kind Kind, src string) (*parser, error) {
 	err := checkSize(kind, src)
 	if err != nil {

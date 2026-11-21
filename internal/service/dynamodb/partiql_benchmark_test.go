@@ -78,6 +78,48 @@ func BenchmarkPartiQLSelectWidth(b *testing.B) {
 	}
 }
 
+// BenchmarkPartiQLSelectNarrow is BenchmarkPartiQLSelectWidth's nested shape for
+// a list the items hold all of: n items whose map has k0 to k29, read through
+// the first `paths` of them. The result of each item is as wide as the list, so
+// what it costs is the map each result is built in. Names carry the axes, for
+// example
+//
+//	BenchmarkPartiQLSelectNarrow/items=100/paths=10/concurrency=16
+func BenchmarkPartiQLSelectNarrow(b *testing.B) {
+	const held = 30
+
+	members := make([]string, held)
+	for i := range members {
+		members[i] = `"k` + strconv.Itoa(i) + `":{"S":"x"}`
+	}
+
+	const n = 100
+
+	s := newStack(b)
+	s.ok(b, opCreate, readTable)
+
+	for i := range n {
+		s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
+			`"},"m":{"M":{`+strings.Join(members, ",")+`}}}}`)
+	}
+
+	for _, paths := range []int{1, 3, 10, 30} {
+		cell := selectCell{
+			readUnkeyed, viaStatement, opStatement, stmt("SELECT " + selectList("m.k", paths) + " FROM bench"), n,
+		}
+
+		for _, workers := range readConcurrency {
+			b.Run(fmt.Sprintf("items=%d/paths=%d/concurrency=%d", n, paths, workers), func(b *testing.B) {
+				b.ReportAllocs()
+
+				for b.Loop() {
+					require.NoError(b, fanOutErr(workers, func(int) error { return s.selectAll(b, cell) }))
+				}
+			})
+		}
+	}
+}
+
 // BenchmarkPartiQLUpdateWidth is an UPDATE through ExecuteStatement by the
 // number of SET actions it lists, one item to each of its concurrent callers.
 // Names carry the axes, for example

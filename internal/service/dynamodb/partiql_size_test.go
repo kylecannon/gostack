@@ -11,15 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The image holds a PartiQL statement to its own 8,192 bytes and to nothing
-// else: the SELECT list and the UPDATE actions of a statement run through a
-// ProjectionExpression and an UpdateExpression that no size limit holds, where
-// a request sent to the item operations is refused past 4,096 characters
-// (SQ-412). The rows are what the LocalStack image answered, except those of
-// Test_partiql_selectWideListGlobalIndex, which pin gostack's documented answer
-// where the image refuses. They were checked in a differential of 1,222
-// statements against the image, with a global index that projects some
-// attributes asked only for the ones it projects.
+// The image holds a PartiQL statement to its own 8,192 bytes and puts no size
+// on the expressions it compiles to: the SELECT list and the UPDATE actions of
+// a statement run through a ProjectionExpression and an UpdateExpression, and
+// its WHERE through a condition, that no size limit holds, where a request sent
+// to the item operations is refused past 4,096 characters (SQ-412, SQ-452).
+// Those expressions keep the limits that are not about size, 300 operators and
+// 100 IN operands, which partiql_limits_test.go pins with the rows for the
+// WHERE and the operators. The rows here are what the LocalStack image
+// answered, except those of Test_partiql_selectWideListGlobalIndex, which pin
+// gostack's documented answer where the image refuses. They were checked in a
+// differential of 1,222 statements against the image, with a global index that
+// projects some attributes asked only for the ones it projects.
 
 // wideSizes are the lengths of a SELECT list the tests take. 602 distinct
 // top-level attributes was the first the read refused (SQ-417).

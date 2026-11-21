@@ -170,12 +170,10 @@ func (w *writeStatement) checkExpressions() error {
 func checkStatementExprs(
 	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int,
 ) error {
-	x, err := newExprs(names, values, true, true, "")
+	x, err := newExprs(fromStatement, names, values, true, true, "")
 	if err != nil {
 		return err
 	}
-
-	x.statement = true
 
 	_, err = x.updateRanked(update, rank)
 	if err != nil {

@@ -123,9 +123,7 @@ func (p *Provider) queryTarget(ctx context.Context, in *api.QueryInput) (*tableE
 		return nil, nil, err
 	}
 
-	r.statement = isStatement(ctx)
-
-	r.name, r.legacy = name, legacy
+	r.name, r.legacy, r.from = name, legacy, originOf(ctx)
 
 	return e, r, nil
 }
@@ -238,12 +236,11 @@ func (r *reader) parseQuery(in *api.QueryInput) (*expression.KeyText, error) {
 		valuesUsable = in.FilterExpression != nil
 	}
 
-	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, valuesUsable, msgNullExprs)
+	x, err := newExprs(r.from, in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, valuesUsable,
+		msgNullExprs)
 	if err != nil {
 		return nil, err
 	}
-
-	x.statement = r.statement
 
 	r.filter, err = x.condition(expression.FilterExpression, in.FilterExpression)
 	if err != nil {

@@ -468,9 +468,17 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 		return item
 	}
 
-	// No size is given: most of a long list names nothing the item holds, and
-	// a map sized for the list costs every item the list's length (SQ-412).
-	out := make(value.Item)
+	// A short list names mostly what the item holds, so the result is sized
+	// for it, and a map that grows instead costs a narrow SELECT an allocation
+	// and 204 bytes an item (SQ-452). Most of a long list names nothing the item
+	// holds, and a map sized for it costs every item the list's length
+	// (SQ-412).
+	var size int
+	if len(paths) <= shapeHintMax {
+		size = len(paths)
+	}
+
+	out := make(value.Item, size)
 
 	for _, path := range paths {
 		if v, ok := lookupPath(item, path); ok {
@@ -480,6 +488,9 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 
 	return out
 }
+
+// shapeHintMax is the longest list shapeItem sizes its result for.
+const shapeHintMax = 32
 
 // lookupPath is the value at path in item.
 func lookupPath(item value.Item, path partiql.Path) (api.AttributeValue, bool) {

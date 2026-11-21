@@ -215,10 +215,8 @@ type caller struct {
 	state   *State
 	// shared is DYNAMODB_SHARE_DB, as the call read it.
 	shared bool
-	// statement is a request a PartiQL statement compiled to, whose
-	// ProjectionExpression and UpdateExpression no size limit holds
-	// (forStatement).
-	statement bool
+	// from is who wrote the call's expressions (originOf).
+	from origin
 }
 
 // caller returns the caller of the request in ctx.
@@ -228,9 +226,7 @@ func (p *Provider) caller(ctx context.Context) caller {
 		rc = &request.Context{AccountID: sharedAccount, Region: usEast1}
 	}
 
-	c := caller{
-		account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB, statement: isStatement(ctx),
-	}
+	c := caller{account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB, from: originOf(ctx)}
 
 	if c.shared {
 		c.state = p.states.Get(sharedAccount, sharedRegion)

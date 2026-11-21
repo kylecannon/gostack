@@ -1969,6 +1969,17 @@ under `attribute_exists`, and `ExecuteTransaction` a `TransactGetItems` or
 `TransactWriteItems`. PartiQL has no write path or reader of its own, so its
 writes reach streams and persistence like any other.
 
+DynamoDB Local holds a statement to its own 8,192 bytes and holds the
+expressions it compiles to no size: a `WHERE` that renders to 4,172
+characters, a `SELECT` of 700 attributes and an `UPDATE` of 600 `SET` actions
+are answered, where a request's expression is refused past 4,096 characters.
+`ExecuteStatement`, `BatchExecuteStatement` and `ExecuteTransaction` mark the
+context of the calls they make (`forStatement`), and every expression parse
+takes the `origin` that marks it (`newExprs`), so a call a caller sends keeps
+the limit and a new way to parse an expression has to say which it is. The
+count of 300 operators, which DynamoDB Local applies to an `UpdateExpression`
+and a condition alike, and the 100 operands of an `IN` hold for both.
+
 **Streams.** A table with a stream registers a `table.Observer`, which the
 engine calls under the table's write lock for every `Change` that changed
 something, so records are numbered in the order the writes applied. The
