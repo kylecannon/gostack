@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/http"
 	"reflect"
-	"slices"
 	"sync"
 
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -50,30 +49,20 @@ var ErrTooLarge = &awserr.Error{
 // heap reservation and no longer hold the in-flight bound, when hold is a
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
 // holds the bound no longer than one refused there. One body at a time is
-// past the budget (protocol.TakeDenseLane): another that passes it meanwhile is
-// refused with ErrTooLarge where its walk passes it. Each reservation lasts
-// until the request is answered when hold keeps it (HeapKeeper.KeepHeap), and
-// until the body is decoded otherwise.
+// walked and decoded past the budget (protocol.TakeDenseLane): another that
+// passes it meanwhile is refused with ErrTooLarge where its walk passes it.
+// The lane is given back as soon as DecodeWithin returns, on every path. Each
+// reservation lasts until the request is answered when hold keeps it
+// (HeapKeeper.KeepHeap), and until the body is decoded otherwise.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
 	bound := decodePasses * int64(len(body)) * p.perByte
 	if bound > budget || (hold != nil && bound > protocol.FreeDecode) {
-		var reserved []func()
+		r := &reservations{hold: hold}
+		defer r.end()
 
-		defer func() {
-			for _, release := range slices.Backward(reserved) {
-				release()
-			}
-		}()
-
-		keep := func(release func()) {
-			if keeper, ok := hold.(protocol.HeapKeeper); !ok || !keeper.KeepHeap(release) {
-				reserved = append(reserved, release)
-			}
-		}
-
-		err := chargeDecode(body, p, budget, hold, keep)
+		err := chargeDecode(body, p, budget, r)
 		if err != nil {
 			return nil, false, err
 		}
@@ -82,15 +71,45 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 	return DecodeLenient[T](body)
 }
 
+// reservations is what one DecodeWithin holds past the in-flight bound: the
+// dense lane, while the body is walked and decoded, and the heap reservations
+// its request's HeapKeeper does not keep.
+type reservations struct {
+	hold     protocol.DecodeHolder
+	lane     func()
+	reserved []func()
+}
+
+// keep hands release, a heap reservation's, to the request's HeapKeeper, to
+// run when the request is answered, or else runs it at end.
+func (r *reservations) keep(release func()) {
+	if keeper, ok := r.hold.(protocol.HeapKeeper); !ok || !keeper.KeepHeap(release) {
+		r.reserved = append(r.reserved, release)
+	}
+}
+
+// end runs when decoding has returned, whatever it returned: it gives back the
+// dense lane and the reservations no HeapKeeper took.
+func (r *reservations) end() {
+	if r.lane != nil {
+		r.lane()
+	}
+
+	for _, release := range r.reserved {
+		release()
+	}
+}
+
 // chargeDecode refuses body with ErrTooLarge when decoding it as p plans it
 // would pass budget, and otherwise charges what both passes hold past
 // protocol.FreeDecode to hold, when there is one. A body charged past
 // protocol.DecodeBudget reserves heap instead (DecodeWithin), first for its
 // own bytes once the walk passes DecodeBudget (moveBody), then for what the
-// walk bounds decoding it to keep; keep takes each reservation's release.
-func chargeDecode(
-	body []byte, p *plan, budget int64, hold protocol.DecodeHolder, keep func(release func()),
-) *awserr.Error {
+// walk bounds decoding it to keep; r takes the lane and each reservation's
+// release.
+func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.Error {
+	hold := r.hold
+
 	unwalked := int64(math.MaxInt64)
 	if hold != nil {
 		unwalked = protocol.FreeDecode
@@ -98,7 +117,7 @@ func chargeDecode(
 
 	var move func() error
 	if hold != nil && budget > protocol.DecodeBudget(len(body)) {
-		move = func() error { return moveBody(body, hold, keep) }
+		move = func() error { return moveBody(body, r) }
 	}
 
 	cost, heap, err := decodeCost(body, p, budget, unwalked, move)
@@ -115,7 +134,7 @@ func chargeDecode(
 			return ErrTooLarge
 		}
 
-		keep(release)
+		r.keep(release)
 
 		return nil
 	}
@@ -134,22 +153,23 @@ var errNoRoom = errors.New("no room for the body on the heap")
 
 // moveBody runs when the walk of body passes protocol.DecodeBudget, where it
 // would stop for a service without its own factor. It takes the dense lane
-// with the body's own bytes reserved on the heap (protocol.TakeDenseLane), so
-// that the lane is held until the reservation is given back, and, when hold
-// is a protocol.HeapKeeper, gives back what the body and its decoding hold of
-// the in-flight bound, so that the room other requests' bodies wait for is
-// free again as soon as it would be were the body refused. It fails with
-// errNoRoom, holding what it held, when another body has the lane or the heap
-// has no room: the answer at protocol.DecodeFactor, without waiting.
-func moveBody(body []byte, hold protocol.DecodeHolder, keep func(release func())) error {
-	release, ok := protocol.TakeDenseLane(int64(len(body)))
+// with the body's own bytes reserved on the heap (protocol.TakeDenseLane), the
+// lane until decoding returns and the reservation as r keeps it, and, when the
+// hold is a protocol.HeapKeeper, gives back what the body and its decoding
+// hold of the in-flight bound, so that the room other requests' bodies wait
+// for is free again as soon as it would be were the body refused. It fails
+// with errNoRoom, holding what it held, when another body has the lane or the
+// heap has no room: the answer at protocol.DecodeFactor, without waiting.
+func moveBody(body []byte, r *reservations) error {
+	lane, release, ok := protocol.TakeDenseLane(int64(len(body)))
 	if !ok {
 		return errNoRoom
 	}
 
-	keep(release)
+	r.lane = lane
+	r.keep(release)
 
-	if keeper, ok := hold.(protocol.HeapKeeper); ok {
+	if keeper, ok := r.hold.(protocol.HeapKeeper); ok {
 		keeper.ReleasePool()
 	}
 

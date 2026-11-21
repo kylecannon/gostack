@@ -51,7 +51,7 @@ func (b *patternBody) Read(p []byte) (int, error) {
 // requests.
 type accountingTally struct {
 	bad, busy, served, most, moved, refusedMove, heldAfterMove atomic.Int64
-	lanes, mostLanes                                           atomic.Int64
+	lanes, mostLanes, overlap, reservationGone                 atomic.Int64
 }
 
 // holdLane counts a request that took the dense lane, and the most that held
@@ -88,10 +88,12 @@ func (a *accountingTally) observe(c *Charge, m *BodyMeter) {
 // path of one decoded past DecodeBudget (awsjson's moveBody): take the dense
 // lane with the body's bytes reserved on the heap (TakeDenseLane), give back
 // the pool, sometimes lose the client before the walk, then reserve the walk's
-// estimate; a move refused, for the lane or the heap, keeps the pool until the
-// request is released. The pool never passes its bound, a moved body holds
-// none of it, no two requests hold the lane at once, and the pool, the heap
-// and the lane end empty.
+// estimate and give back the lane, keeping the reservations until the request
+// is released; a move refused, for the lane or the heap, keeps the pool until
+// the request is released. The pool never passes its bound, a moved body holds
+// none of it, no two requests hold the lane at once, a decoded body keeps its
+// reservation after the lane, another takes the lane while it is answered,
+// and the pool, the heap and the lane end empty.
 func Test_Charge_AccountingStaysExact(t *testing.T) {
 	old, oldWait, oldMax := inFlight.Load(), bodyWait.Load(), MaxBody()
 	oldLimit := debug.SetMemoryLimit(-1)
@@ -143,8 +145,8 @@ func Test_Charge_AccountingStaysExact(t *testing.T) {
 			heap.mu.Unlock()
 
 			bound, held := InFlight()
-			t.Logf("bound=%d served=%d busy=%d moved=%d refused-move=%d", bound,
-				tally.served.Load(), tally.busy.Load(), tally.moved.Load(), tally.refusedMove.Load())
+			t.Logf("bound=%d served=%d busy=%d moved=%d refused-move=%d overlap=%d", bound,
+				tally.served.Load(), tally.busy.Load(), tally.moved.Load(), tally.refusedMove.Load(), tally.overlap.Load())
 
 			assert.Zero(t, held, "the pool ends empty")
 			assert.Zero(t, left, "every heap reservation is given back")
@@ -156,6 +158,8 @@ func Test_Charge_AccountingStaysExact(t *testing.T) {
 			assert.Positive(t, tally.moved.Load(), "some bodies are moved")
 			assert.Positive(t, tally.refusedMove.Load(), "some moves are refused")
 			assert.Equal(t, int64(1), tally.mostLanes.Load(), "one request at a time holds the lane")
+			assert.Zero(t, tally.reservationGone.Load(), "the body's reservation outlives the lane")
+			assert.Positive(t, tally.overlap.Load(), "a dense body takes the lane while another is answered")
 			assert.False(t, denseLane.Load(), "the lane ends free")
 		})
 	}
@@ -179,6 +183,10 @@ func accountingClient(seed, maxBody int64, tally *accountingTally) {
 		case errors.Is(err, io.EOF):
 			tally.served.Add(1)
 			accountingDecode(r, c, m, cancel, tally)
+
+			if r.Intn(4) == 0 {
+				time.Sleep(time.Duration(r.Intn(3)) * time.Millisecond) // the response is written
+			}
 		default:
 		}
 
@@ -272,7 +280,7 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 		move = math.MaxInt64 / 4 // a body the heap never has room for
 	}
 
-	release, ok := TakeDenseLane(move)
+	lane, release, ok := TakeDenseLane(move)
 	if !ok {
 		tally.refusedMove.Add(1)
 
@@ -281,10 +289,29 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 
 	tally.moved.Add(1)
 	tally.holdLane()
-	c.KeepHeap(func() {
+
+	// Decoding returns, on every path, and gives back the lane at once
+	// (awsjson's reservations.end); the body's reservation stays with the
+	// request until it is answered, and while it is, another dense body can
+	// take the lane, unless a third is decoding.
+	defer func() {
 		tally.lanes.Add(-1)
-		release()
-	})
+		lane()
+
+		if len(c.heap) == 0 {
+			tally.reservationGone.Add(1)
+		}
+
+		if next, nextRelease, ok := TakeDenseLane(0); ok {
+			tally.holdLane()
+			tally.overlap.Add(1)
+			tally.lanes.Add(-1)
+			next()
+			nextRelease()
+		}
+	}()
+
+	c.KeepHeap(release)
 	c.ReleasePool()
 
 	if m.held != 0 || c.decode.held != 0 {

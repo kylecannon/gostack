@@ -98,38 +98,36 @@ func ReserveHeap(estimate int64) (release func(), ok bool) {
 	}, true
 }
 
-// denseLane is held by the one body at a time that is decoded past
+// denseLane is held by the one body at a time that is walked and decoded past
 // DecodeBudget (TakeDenseLane).
 var denseLane atomic.Bool
 
 // TakeDenseLane is ReserveHeap(n) for a body whose decoding passes
 // DecodeBudget, the only kind of body decoded off the in-flight bound: such a
-// body first takes the process's one dense lane, so at most one of them is on
-// the heap at a time and none waits for another. It reports false, holding
-// nothing, when another body has the lane or the heap has no room for n; the
-// decoder then answers as a service at DecodeFactor does. Otherwise release
-// gives back the reservation and then the lane; it runs once however often it
-// is called.
-func TakeDenseLane(n int64) (release func(), ok bool) {
+// body first takes the process's one dense lane, so at most one of them is
+// walked and decoded at a time and none waits for another. It reports false,
+// holding nothing, when another body has the lane or the heap has no room for
+// n; the decoder then answers as a service at DecodeFactor does. Otherwise
+// lane gives back the lane, which the decoder does as soon as decoding
+// returns, and runs once however often it is called; release gives back the
+// reservation, which lasts as ReserveHeap's does, until the request is
+// answered, so the lane bounds the decodes at once and the reservation the
+// heap.
+func TakeDenseLane(n int64) (lane, release func(), ok bool) {
 	if !denseLane.CompareAndSwap(false, true) {
-		return nil, false
+		return nil, nil, false
 	}
 
-	reserved, ok := ReserveHeap(n)
+	release, ok = ReserveHeap(n)
 	if !ok {
 		denseLane.Store(false)
 
-		return nil, false
+		return nil, nil, false
 	}
 
 	var once sync.Once
 
-	return func() {
-		once.Do(func() {
-			reserved()
-			denseLane.Store(false)
-		})
-	}, true
+	return func() { once.Do(func() { denseLane.Store(false) }) }, release, true
 }
 
 // tryReserve reserves estimate when the heap's objects, what is reserved and

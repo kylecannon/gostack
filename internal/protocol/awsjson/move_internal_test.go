@@ -143,8 +143,9 @@ func Test_DecodeWithin_ARefusedMoveIsMainsAnswer(t *testing.T) {
 func requireLaneFree(t *testing.T) {
 	t.Helper()
 
-	release, ok := protocol.TakeDenseLane(0)
+	lane, release, ok := protocol.TakeDenseLane(0)
 	require.True(t, ok, "the dense lane is free")
+	lane()
 	release()
 }
 
@@ -154,13 +155,15 @@ type plainHold struct{}
 
 func (plainHold) HoldDecode(int64) (int64, error) { return math.MaxInt64, nil }
 
-// Test_DecodeWithin_OneDenseBodyAtATime: while one body decoded past
-// DecodeBudget keeps its reservations, a second one is answered as a service
-// at protocol.DecodeFactor answers it, ErrTooLarge, at once and holding
-// nothing; once the first request is released, a third is served. Only a
-// body whose walk passes DecodeBudget reserves heap, so only one taking the
-// lane does: a body not walked costs at most FreeDecode past its own bytes
-// twice, under DecodeSlack.
+// Test_DecodeWithin_OneDenseBodyAtATime: while another body holds the dense
+// lane, a body past DecodeBudget is answered as a service at
+// protocol.DecodeFactor answers it, ErrTooLarge, at once and holding nothing.
+// Once the lane is free it is served, and gives the lane back when it is
+// decoded while its request keeps its reservations, so a second dense body
+// is served while the first is still being answered. Only a body whose walk
+// passes DecodeBudget reserves heap, so only one taking the lane does: a body
+// not walked costs at most FreeDecode past its own bytes twice, under
+// DecodeSlack.
 func Test_DecodeWithin_OneDenseBodyAtATime(t *testing.T) {
 	withMemoryLimit(t, 8<<30)
 	require.Less(t, int64(protocol.FreeDecode), int64(protocol.DecodeSlack),
@@ -169,37 +172,45 @@ func Test_DecodeWithin_OneDenseBodyAtATime(t *testing.T) {
 	body := denseBody(300_000)
 	budget := protocol.DecodeBudgetAt(len(body), 256)
 
+	lane, release, ok := protocol.TakeDenseLane(0)
+	require.True(t, ok)
+
+	refused := &recordingHold{}
+	t.Cleanup(refused.release)
+
+	_, _, err := DecodeWithin[denseValue](body, budget, refused)
+	assert.Same(t, ErrTooLarge, err, "the lane is taken: main's answer")
+	assert.Empty(t, refused.steps, "nothing is reserved and the pool is kept")
+
+	lane()
+	release()
+
 	first := &recordingHold{}
 	t.Cleanup(first.release)
 
-	_, _, err := DecodeWithin[denseValue](body, budget, first)
-	require.Nil(t, err)
+	_, _, err = DecodeWithin[denseValue](body, budget, first)
+	require.Nil(t, err, "the lane is free again")
 	require.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, first.steps)
+	assert.Len(t, first.kept, 2, "the request keeps both reservations")
+	requireLaneFree(t)
 
 	second := &recordingHold{}
 	t.Cleanup(second.release)
 
 	_, _, err = DecodeWithin[denseValue](body, budget, second)
-	assert.Same(t, ErrTooLarge, err, "the lane is taken: main's answer")
-	assert.Empty(t, second.steps, "nothing is reserved and the pool is kept")
+	require.Nil(t, err, "served while the first request is still answered")
+	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, second.steps)
 
 	first.release()
-
-	third := &recordingHold{}
-	t.Cleanup(third.release)
-
-	_, _, err = DecodeWithin[denseValue](body, budget, third)
-	require.Nil(t, err, "the lane is free again")
-	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, third.steps)
-
-	third.release()
+	second.release()
 	requireLaneFree(t)
 }
 
 // Test_DecodeWithin_TheLaneIsFreeAfterEveryPath: a body that took the dense
-// lane gives it back with its reservations whatever happens after the move: a
-// walk that then passes the service's budget, a body that is not valid json,
-// and a holder that keeps nothing, decoded or refused.
+// lane gives it back as soon as DecodeWithin returns, whatever happens after
+// the move, while a HeapKeeper still keeps its reservations: a walk that then
+// passes the service's budget, a body that is not valid json, and a holder
+// that keeps nothing, decoded or refused.
 func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 	withMemoryLimit(t, 8<<30)
 
@@ -211,8 +222,6 @@ func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 	_, _, err := DecodeWithin[denseValue](body, protocol.DecodeBudgetAt(len(body), 3), hold)
 	assert.Same(t, ErrTooLarge, err, "past the service's own budget after the move")
 	assert.Equal(t, []string{stepKeep, stepReleasePool}, hold.steps)
-
-	hold.release()
 	requireLaneFree(t)
 
 	broken := body[:len(body)-2]
@@ -224,8 +233,6 @@ func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 	_, _, err = DecodeWithin[denseValue](broken, budget, hold)
 	require.NotNil(t, err, "not valid json")
 	assert.Equal(t, []string{stepKeep, stepReleasePool, stepKeep}, hold.steps)
-
-	hold.release()
 	requireLaneFree(t)
 
 	_, _, err = DecodeWithin[denseValue](body, protocol.DecodeBudgetAt(len(body), 256), plainHold{})
