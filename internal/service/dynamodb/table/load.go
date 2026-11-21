@@ -183,6 +183,7 @@ func (t *Table) loadPrimary(items []value.Item) error {
 }
 
 // sortKey is the encoded range key value of item under key, empty without one.
+// It shares the bytes of the item's string or binary.
 func sortKey(key KeySchema, item value.Item) string {
 	if !key.HasRange() {
 		return ""
@@ -190,7 +191,7 @@ func sortKey(key KeySchema, item value.Item) string {
 
 	r := item[key.Range.Name]
 
-	return value.SortKey(&r)
+	return value.SortKeyUntyped(&r)
 }
 
 // fill puts in the empty store s an entry, made by add, for each item that

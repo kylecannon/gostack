@@ -435,15 +435,22 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 		return Change{Old: old}, err
 	}
 
+	// The entry of the updated item takes its range key from the item, whose
+	// bytes it shares, and not from key, which is the request's.
+	var newRng string
+
 	if updated != nil {
 		err := t.CheckItem(updated)
 		if err != nil {
 			return Change{Old: old}, err
 		}
 
-		if h, s := t.primaryKey(updated); h != hash || (s != "" && s != rng) {
+		h, s := t.primaryKey(updated)
+		if h != hash || (s != "" && s != rng) {
 			return Change{Old: old}, errKeyChanged
 		}
+
+		newRng = s
 	}
 
 	if old != nil {
@@ -451,7 +458,7 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 	}
 
 	if updated != nil {
-		t.store(hash, rng, updated)
+		t.store(hash, newRng, updated)
 	}
 
 	change := Change{Old: old, New: updated, Expired: expired}
@@ -518,7 +525,7 @@ func bounds(p *partition, cond SortCondition) (int, int) {
 		return 0, n
 	}
 
-	v := value.SortKey(&cond.Values[0])
+	v := value.SortKeyUntyped(&cond.Values[0])
 	firstGE := func(x string) int {
 		return sort.Search(n, func(i int) bool { return p.entries[i].sort >= x })
 	}
@@ -542,12 +549,13 @@ func bounds(p *partition, cond SortCondition) (int, int) {
 			return 0, 0
 		}
 
-		return firstGE(v), max(firstGE(v), firstGT(value.SortKey(&cond.Values[1])))
+		return firstGE(v), max(firstGE(v), firstGT(value.SortKeyUntyped(&cond.Values[1])))
 	case SortBeginsWith:
 		lo := firstGE(v)
 		hi := lo
 
-		for hi < n && value.SortKeyHasPrefix(p.entries[hi].sort, v) {
+		// A number has no prefix: begins_with takes a string or a binary.
+		for hi < n && cond.Values[0].N == nil && strings.HasPrefix(p.entries[hi].sort, v) {
 			hi++
 		}
 

@@ -9,9 +9,10 @@ import (
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
-// entry is one item in a partition: its range key value as value.SortKey
-// encodes it, empty for a key without one, and, in an index, the encoded table
-// key, which orders items with the same index key and tells them apart.
+// entry is one item in a partition: its range key value as value.SortKeyUntyped
+// encodes it, which the type of the table's or index's range key fixes, empty
+// for a key without one, and, in an index, the encoded table key, which orders
+// items with the same index key and tells them apart.
 type entry struct {
 	sort string
 	tie  string

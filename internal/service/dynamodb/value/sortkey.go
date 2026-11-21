@@ -1,6 +1,8 @@
 package value
 
 import (
+	"unsafe"
+
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 )
 
@@ -13,9 +15,9 @@ const (
 	sortEnd      byte = 0xFF
 )
 
-// maxNumberKey is the longest key of a number: the type's letter, the sign and
-// the exponent, 38 digits two to a byte, and the end.
-const maxNumberKey = 1 + 2 + maxDigits/2 + 1
+// maxNumberKey is the longest key of a number: the sign and the exponent, 38
+// digits two to a byte, and the end.
+const maxNumberKey = 2 + maxDigits/2 + 1
 
 // sortExpBias moves the exponent of a number, from -129 to 126 as ParseNumber
 // admits it, onto 0 to 255, so it takes one byte.
@@ -24,28 +26,48 @@ const sortExpBias = 129
 // bitsPerDigit is the width of one packed decimal digit; two share a byte.
 const bitsPerDigit = 4
 
-// SortKey encodes a scalar key value as a string whose byte order is the order
-// of Compare for two values of one type: the type's letter, then the value. A
-// string or binary follows as it is. A number follows as its sign, then its
+// SortKeyUntyped encodes a scalar key value as a string whose byte order is
+// the order of Compare for two values of one type, which is all that a table or
+// an index orders: the type of its range key is fixed by its schema, so no
+// letter tells it. A string is its own string, shared and not copied. A binary
+// is its own bytes, shared as a string. A number is its sign, then its
 // exponent and its digits packed two to a byte, the whole of a negative number
 // inverted so that the larger magnitude sorts first and closed by a byte
-// above any digit pair. Two values of different types order by their letters,
-// as Compare orders them by name. A value that is not an S, N or B has the
-// empty key.
+// above any digit pair. A value that is not an S, N or B has the empty key.
 //
 // A partition of many items keeps this string in each entry, in place of the
-// value, which would hold the whole of an AttributeValue. The numbers must be
-// canonical, as Validate leaves them.
-func SortKey(v *api.AttributeValue) string {
+// value, which would hold the whole of an AttributeValue. A string or binary
+// key then costs an entry no more than the pointer it was before, however long
+// it is. The numbers must be canonical, as Validate leaves them.
+func SortKeyUntyped(v *api.AttributeValue) string {
 	switch {
 	case v.S != nil:
-		return TypeS + *v.S
+		return *v.S
 	case v.B != nil:
-		return TypeB + string(v.B)
+		if len(v.B) == 0 {
+			return ""
+		}
+
+		// The key and the binary share their bytes, which cannot change under
+		// the key: a binary is stored in an item, a stored item is never
+		// written to, and the key of a lookup is dropped with the request.
+		return unsafe.String(unsafe.SliceData(v.B), len(v.B)) //nolint:gosec // G103: see above
 	case v.N != nil:
 		var buf [maxNumberKey]byte
 
-		return string(appendNumberKey(append(buf[:0], TypeN...), *v.N))
+		return string(appendNumberKey(buf[:0], *v.N))
+	default:
+		return ""
+	}
+}
+
+// SortKey is SortKeyUntyped with the type's letter first, so that the keys of
+// values of different types order by their letters, as Compare orders the
+// types by name. A value that is not an S, N or B has the empty key.
+func SortKey(v *api.AttributeValue) string {
+	switch {
+	case v.S != nil, v.B != nil, v.N != nil:
+		return Type(v) + SortKeyUntyped(v)
 	default:
 		return ""
 	}
