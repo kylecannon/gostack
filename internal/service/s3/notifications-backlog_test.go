@@ -140,10 +140,12 @@ func (n *notifyStack) depthOf(queue string) int {
 	return depth
 }
 
-// blockSlow holds, until release closes or the call is cancelled, every
-// notification S3 sends to the slow queue and the slow topic, and answers the
-// others at once. A call cancelled is answered 500 and never reaches the
-// service.
+// blockSlow holds, until release closes, every notification S3 sends to the slow
+// queue and the slow topic, and answers the others at once. Only the test lets
+// a held call go: neither its context ending, which inproc's 30 s call timeout
+// and the shutdown's cut both do, nor the time the PUTs take, answers it, so a
+// slow PUT phase cannot turn the head event of a held lane into a 500. A held
+// call goes on to the service once let go, as a call that had never timed out.
 func blockSlow(release <-chan struct{}) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -159,13 +161,9 @@ func blockSlow(release <-chan struct{}) func(http.Handler) http.Handler {
 			slow := toSlowQueue || toSlowTopic
 
 			if slow {
-				select {
-				case <-release:
-				case <-r.Context().Done():
-					http.Error(w, "cancelled", http.StatusInternalServerError)
+				<-release
 
-					return
-				}
+				r = r.WithContext(context.WithoutCancel(r.Context()))
 			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
@@ -233,12 +231,13 @@ func TestNotificationsAreNeverDroppedForTheNumberWaiting(t *testing.T) {
 
 	n.setupBacklog()
 
-	started := time.Now()
-
+	// A PUT that waited for delivery would never return: the two slow
+	// destinations are held until the test lets them go, after this call.
 	require.Equal(t, backlogPuts, n.putMany(strings.TrimPrefix(notifyBucket, "/"), backlogPuts),
 		"every PUT is answered 200 while two destinations hold %d events each", backlogPuts)
-	assert.Less(t, time.Since(started), 30*time.Second, "a PUT does not wait for delivery")
 
+	// The waits below are guards against a hang, not bounds on how long delivery
+	// takes: each event is delivered as soon as its destination is free.
 	require.Eventually(t, func() bool { return n.depthOf(notifyQueue) == backlogPuts },
 		60*time.Second, 10*time.Millisecond, "the fast queue gets every event while the other two destinations are held")
 	assert.Zero(t, n.depthOf(slowDirect))

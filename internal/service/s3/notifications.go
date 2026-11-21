@@ -288,10 +288,21 @@ func testEvent(ctx context.Context, b *Bucket) ([]byte, error) {
 		requestID = rc.RequestID
 	}
 
-	return encodeJSON(map[string]any{
-		"Service": "Amazon S3", "Event": "s3:TestEvent", "Time": time.Now().UTC().Format(eventTimeFormat),
-		"Bucket": b.Name, "RequestId": requestID, "HostId": recordHostID,
+	return encodeJSON(testEventDocument{
+		Service: "Amazon S3", Event: "s3:TestEvent", Time: time.Now().UTC().Format(eventTimeFormat),
+		Bucket: b.Name, RequestID: requestID, HostID: recordHostID,
 	})
+}
+
+// testEventDocument is the s3:TestEvent JSON, its members in the order
+// LocalStack's _get_test_payload writes them.
+type testEventDocument struct {
+	Service   string `json:"Service"`
+	Event     string `json:"Event"`
+	Time      string `json:"Time"`
+	Bucket    string `json:"Bucket"`
+	RequestID string `json:"RequestId"`
+	HostID    string `json:"HostId"`
 }
 
 // verifyTopic asks SNS whether the topic exists, as the owner of its ARN, and

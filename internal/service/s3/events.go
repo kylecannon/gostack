@@ -274,8 +274,9 @@ func matchesFilter(filter *s3api.NotificationConfigurationFilter, key string) bo
 	return true
 }
 
-// The record is the JSON S3 sends. The members are in the order LocalStack
-// writes them.
+// The record is the JSON S3 sends. Every member is a struct, never a map, so
+// that the members are in the order LocalStack writes them: a map encodes
+// sorted.
 type eventRecord struct {
 	EventVersion      string            `json:"eventVersion"`
 	EventSource       string            `json:"eventSource"`
@@ -283,14 +284,23 @@ type eventRecord struct {
 	EventTime         string            `json:"eventTime"`
 	EventName         string            `json:"eventName"`
 	UserIdentity      principal         `json:"userIdentity"`
-	RequestParameters map[string]string `json:"requestParameters"`
-	ResponseElements  map[string]string `json:"responseElements"`
+	RequestParameters requestParameters `json:"requestParameters"`
+	ResponseElements  responseElements  `json:"responseElements"`
 	S3                eventS3           `json:"s3"`
 	GlacierEventData  *glacierEvent     `json:"glacierEventData,omitempty"`
 }
 
 type principal struct {
 	PrincipalID string `json:"principalId"`
+}
+
+type requestParameters struct {
+	SourceIPAddress string `json:"sourceIPAddress"`
+}
+
+type responseElements struct {
+	RequestID string `json:"x-amz-request-id"`
+	ID2       string `json:"x-amz-id-2"`
 }
 
 type eventS3 struct {
@@ -340,8 +350,8 @@ func (ev *event) record(configID string) eventRecord {
 		AWSRegion:         ev.bucketRegion,
 		EventName:         strings.TrimPrefix(ev.name, "s3:"),
 		UserIdentity:      principal{PrincipalID: recordPrincipal},
-		RequestParameters: map[string]string{"sourceIPAddress": recordSourceIP},
-		ResponseElements:  map[string]string{"x-amz-request-id": shortID(), "x-amz-id-2": recordHostID},
+		RequestParameters: requestParameters{SourceIPAddress: recordSourceIP},
+		ResponseElements:  responseElements{RequestID: shortID(), ID2: recordHostID},
 		S3: eventS3{
 			SchemaVersion:   recordSchemaVersion,
 			ConfigurationID: configID,
