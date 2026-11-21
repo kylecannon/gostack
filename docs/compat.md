@@ -474,7 +474,21 @@ caller's account and region, as LocalStack does.
   more sibling names share one hash bucket (names crafted to collide), the
   image's table resizes or treeifies in a way gostack does not model, and the
   message may name a different second path. The request is rejected or
-  accepted the same either way.
+  accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
+  first to last in the statement's order. A `SELECT` list is checked for overlap
+  whatever its size, and a list that overlaps is answered with the overlap. The
+  image holds a `SELECT` to no size of its own, so one of 602 or more distinct
+  top-level attributes is accepted there. gostack reads with a
+  `ProjectionExpression` of those attributes, which the 4,096-character limit
+  bounds: it is `#n0, #n1, ...`, 7N-112 characters for N of 602 or more, so 602
+  is the first to be refused. Paths below the top level add nothing to it: a
+  list of any number of paths under one attribute, as long as the statement's
+  8,192 bytes hold it, is accepted, as in the image. The refusal is
+  `Expression size has exceeded the maximum allowed size;`: `400` from
+  ExecuteStatement, a `ValidationError` in the statement's `Error` from
+  BatchExecuteStatement, and `400` with
+  `Validation failed in TransactStatements[0]: ` before it from
+  ExecuteTransaction.
 
 ## DynamoDB batches and transactions
 
