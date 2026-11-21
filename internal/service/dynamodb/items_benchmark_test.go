@@ -1,6 +1,7 @@
 package dynamodb_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,10 +16,15 @@ import (
 // concurrency. Sub-benchmark names carry the axes, for example
 //
 //	BenchmarkPutItem/payload=4KiB/concurrency=16
+//	BenchmarkGetItem/payload=399KiB/concurrency=1/text=cjk
 //
 // At concurrency 16 one iteration is 16 simultaneous calls, each on its own
 // key, so ns/op and the byte rate are per sixteen calls. The largest payload
 // keeps the item just under DynamoDB's 400 KB limit.
+//
+// GetItem also has a text axis, at concurrency 1: the item's string is
+// non-ASCII or escape-dense text, which json quotes differently from the
+// ASCII of the other cells. Its value changes nothing else a call does.
 
 var (
 	itemPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}, {"399KiB", 399 << 10}}
@@ -26,6 +32,29 @@ var (
 )
 
 const benchTable = "bench"
+
+// itemText is a point on the text axis: whole units of the text, then ASCII
+// to make up the size.
+type itemText struct {
+	name string
+	unit string
+}
+
+// itemTexts are two-byte Latin among ASCII, three-byte CJK, four-byte emoji,
+// and json text, a third of it escaped quotes.
+var itemTexts = []itemText{
+	{"latin", "caf\u00e9 na\u00efve "},
+	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
+	{"emoji", "\U0001f389\U0001f680\u2728"},
+	{"json", `{"k":"v","n":1},`},
+}
+
+// itemTextPayloads are the sizes of the text cells.
+var itemTextPayloads = itemPayloads[1:]
+
+func (t itemText) value(n int) string {
+	return strings.Repeat(t.unit, n/len(t.unit)) + strings.Repeat("x", n%len(t.unit))
+}
 
 type itemPayload struct {
 	name string
@@ -58,8 +87,17 @@ func itemMatrixOn(
 
 // putBody is a PutItem body for the item keyed k-worker with a d of size bytes.
 func putBody(worker, size int) string {
-	return fmt.Sprintf(`{"TableName":%q,"Item":{"id":{"S":"k-%d"},"d":{"S":%q}}}`,
-		benchTable, worker, strings.Repeat("x", size))
+	return putValue(worker, strings.Repeat("x", size))
+}
+
+// putValue is a PutItem body for the item keyed k-worker with d the string d.
+func putValue(worker int, d string) string {
+	value, err := json.Marshal(d)
+	if err != nil {
+		panic(err)
+	}
+
+	return fmt.Sprintf(`{"TableName":%q,"Item":{"id":{"S":"k-%d"},"d":{"S":%s}}}`, benchTable, worker, value)
 }
 
 // getBody is a GetItem body for the item keyed k-worker.
@@ -135,4 +173,23 @@ func BenchmarkGetItem(b *testing.B) {
 			require.NoError(b, s.fanOut(b, opGet, workers, func(worker int) string { return bodies[worker] }))
 		}
 	})
+
+	for _, p := range itemTextPayloads {
+		for _, text := range itemTexts {
+			b.Run(fmt.Sprintf("payload=%s/concurrency=1/text=%s", p.name, text.name), func(b *testing.B) {
+				s := newStack(b)
+				s.ok(b, opCreate, hashTable(benchTable))
+				s.ok(b, opPut, putValue(0, text.value(p.size)))
+
+				body := getBody(0)
+
+				b.SetBytes(int64(p.size))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					s.ok(b, opGet, body)
+				}
+			})
+		}
+	}
 }

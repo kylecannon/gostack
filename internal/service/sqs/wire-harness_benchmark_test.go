@@ -70,6 +70,33 @@ func benchBody(n int) string {
 	return strings.Repeat("abcdefghijklmnopqrstuvwxyz0123456789", n/36+1)[:n]
 }
 
+// benchText is a point on the text axis: what a body is made of. The zero
+// value is benchBody's ASCII, and its cells keep the names they had before the
+// axis.
+type benchText struct {
+	name string
+	unit string
+}
+
+// benchTexts are the bodies that quote differently in json: two-byte Latin
+// among ASCII, three-byte CJK, four-byte emoji, and json text, a third of it
+// escaped quotes.
+var benchTexts = []benchText{
+	{"latin", "caf\u00e9 na\u00efve "},
+	{"cjk", "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8"},
+	{"emoji", "\U0001f389\U0001f680\u2728"},
+	{"json", `{"k":"v","n":1},`},
+}
+
+// body is n bytes of the text: whole units, then ASCII to make up the size.
+func (t benchText) body(n int) string {
+	if t.unit == "" {
+		return benchBody(n)
+	}
+
+	return strings.Repeat(t.unit, n/len(t.unit)) + strings.Repeat("x", n%len(t.unit))
+}
+
 // benchEnv is the provider behind the real gateway.
 type benchEnv struct {
 	b        *testing.B
@@ -158,8 +185,12 @@ func attributes(n int) map[string]sqsapi.MessageAttributeValue {
 // benchmark can have many messages in flight at once, as a busy queue has.
 func (e *benchEnv) fill(url string, kind queueKind, count, bodyBytes, attrs, groups int) {
 	e.b.Helper()
+	e.fillBody(url, kind, count, benchBody(bodyBytes), attrs, groups)
+}
 
-	body := benchBody(bodyBytes)
+// fillBody is fill with a body of the caller's.
+func (e *benchEnv) fillBody(url string, kind queueKind, count int, body string, attrs, groups int) {
+	e.b.Helper()
 
 	// The provider keeps the map it is given and never changes it, so the
 	// messages share one, as they share the body.
