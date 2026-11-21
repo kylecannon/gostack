@@ -28,10 +28,9 @@ var errNotSingle = errors.New("not a single-item select")
 
 // readStatement is a single-item SELECT compiled to a GetItem.
 type readStatement struct {
-	table   string
-	key     value.Item
-	get     *api.GetItemInput
-	aliases []partiql.Path
+	table string
+	key   value.Item
+	get   *api.GetItemInput
 }
 
 // compileRead compiles a SELECT that reads one item by its full key and
@@ -79,13 +78,21 @@ func (c caller) compileRead(
 		return nil, errNotSingle
 	}
 
-	projected, aliases, err := projection(stmt.Projection, r)
+	projected, nested, err := projection(stmt.Projection, r)
 	if err != nil {
 		return nil, err
 	}
 
+	if nested != nil {
+		// A batch and a transaction answer the item the GetItem keeps, the
+		// paths below the top level in the structure they have there, where
+		// ExecuteStatement answers each under its alias (verification/SQ-439
+		// probe3).
+		projected = wholePaths(nested, r)
+	}
+
 	return &readStatement{
-		table: name, key: key, aliases: aliases,
+		table: name, key: key,
 		get: &api.GetItemInput{
 			TableName: &name, Key: key, ProjectionExpression: projected, ConsistentRead: consistent,
 			ExpressionAttributeNames: r.attributeNames(),
@@ -127,7 +134,7 @@ func (p *Provider) BatchExecuteStatement(
 
 		var dup bool
 
-		if stmt.stmt != nil {
+		if stmt.err == nil {
 			key, table := c.compileBatch(&b, stmt.stmt, &in.Statements[i])
 			if key != nil {
 				k := itemKeyString(table, key)
@@ -158,18 +165,22 @@ type parsedStatement struct {
 }
 
 // parseBatch parses a batch's statements and makes the checks on the whole
-// batch: no empty statement, at most 25, reads and writes not mixed.
+// batch, statement by statement in order, as the image does: an empty or long
+// statement, and one that mixes reads and writes with those before it, refuse
+// the call where it stands; then at most 25 (SQ-467 image-probe.log).
 func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 	if len(reqs) == 0 {
 		return nil, value.Invalid(msgStatementEmpty)
 	}
 
 	out := make([]parsedStatement, len(reqs))
-	reads, writes := 0, 0
+	mix := mixing{msg: msgBatchMixed}
+	reads := false
 
 	for i := range reqs {
-		if reqs[i].Statement == nil {
-			return nil, value.Invalid(msgStatementEmpty)
+		err := checkStatementText(reqs[i].Statement, msgStatementEmpty)
+		if err != nil {
+			return nil, err
 		}
 
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, false)
@@ -181,22 +192,19 @@ func parseBatch(reqs []api.BatchStatementRequest) ([]parsedStatement, error) {
 
 		out[i] = parsedStatement{stmt: stmt, err: err}
 
-		switch {
-		case err != nil:
-		case stmt.Kind == partiql.Select:
-			reads++
-		default:
-			writes++
+		mixed := mix.check(stmt)
+		if mixed != nil {
+			return nil, mixed
 		}
+
+		reads = reads || (stmt != nil && stmt.Kind == partiql.Select)
 	}
 
 	switch {
-	case len(reqs) > maxBatchWrites && reads > 0:
+	case len(reqs) > maxBatchWrites && reads:
 		return nil, value.Invalid(msgBatchReads)
 	case len(reqs) > maxBatchWrites:
 		return nil, value.Invalid(msgBatchWrites)
-	case reads > 0 && writes > 0:
-		return nil, value.Invalid(msgBatchMixed)
 	default:
 		return out, nil
 	}
@@ -259,7 +267,7 @@ func (p *Provider) runBatch(ctx context.Context, b *batchStatement) api.BatchSta
 			return batchError(err, b.read.table)
 		}
 
-		return api.BatchStatementResponse{TableName: &b.read.table, Item: shapeItem(out.Item, b.read.aliases)}
+		return api.BatchStatementResponse{TableName: &b.read.table, Item: out.Item}
 	default:
 		item, _, err := p.runWrite(ctx, b.write, nil)
 		if err != nil {

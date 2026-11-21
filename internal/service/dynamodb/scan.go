@@ -109,9 +109,7 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 		return err
 	}
 
-	r.decideFetch(topNames(r.projection))
-
-	return nil
+	return r.checkProjection()
 }
 
 // scanTarget finds the table and index a Scan reads and makes the checks that
