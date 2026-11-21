@@ -9,6 +9,7 @@ import (
 	"github.com/kylecannon/gostack/internal/account"
 	ssmapi "github.com/kylecannon/gostack/internal/api/ssm"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/store"
@@ -22,13 +23,16 @@ type Provider struct {
 	states *store.Bundle[State]
 	// now is the clock, replaced in tests.
 	now func() timeNow
+	// client reads the secrets that /aws/reference/secretsmanager/ names stand
+	// for, through the gateway.
+	client *inproc.Client
 }
 
 var _ ssmapi.Handler = (*Provider)(nil)
 
 // New returns a Provider with no parameters.
 func New() *Provider {
-	return &Provider{states: store.NewBundle(newState, (*State).reset), now: wallClock}
+	return &Provider{states: store.NewBundle(newState, (*State).reset), now: wallClock, client: inproc.New()}
 }
 
 // Registration describes SSM to the gateway: the generated dispatcher in front
@@ -40,6 +44,7 @@ func (p *Provider) Registration() service.Registration {
 		Mutating: mutating,
 		Persist:  p,
 		Reset:    p.Reset,
+		Bind:     p.client.Bind,
 		Handler:  p,
 	}
 }

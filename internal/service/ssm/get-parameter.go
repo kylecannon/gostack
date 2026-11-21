@@ -29,6 +29,10 @@ func (p *Provider) GetParameter(ctx context.Context, in *ssmapi.GetParameterInpu
 		return nil, err
 	}
 
+	if id, ok := secretReference(name); ok {
+		return p.getSecretParameter(ctx, &c, in, name, id)
+	}
+
 	s := c.state
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -58,6 +62,15 @@ func (p *Provider) GetParameters(
 		return nil, err
 	}
 
+	if hasSecretReference(in.Names) {
+		err = namesLimit(in.Names)
+		if err != nil {
+			return nil, err
+		}
+
+		return p.getParametersAndSecrets(ctx, &c, in)
+	}
+
 	names := make([]string, len(in.Names))
 	for i, requested := range in.Names {
 		names[i], err = normalizeReadName(requested)
@@ -66,9 +79,9 @@ func (p *Provider) GetParameters(
 		}
 	}
 
-	if len(names) > maxGetParametersNames {
-		return nil, ssmapi.NewValidationException("1 validation error detected: Value '[" + strings.Join(names, ", ") +
-			"]' at 'names' failed to satisfy constraint: Member must have length less than or equal to 10.")
+	err = namesLimit(names)
+	if err != nil {
+		return nil, err
 	}
 
 	s := c.state
