@@ -312,8 +312,8 @@ How each piece is bounded, and why this way:
   budget with a plan per Go type before unmarshalling; rest-xml charges each
   token and each append as it decodes, following `InputOffset`; query charges
   128 bytes (`query.PairCost`) per pair before parsing. A service whose legal
-  requests amplify more declares its own factor when it lands: DynamoDB's
-  `AttributeValue` lists reach about 18 times their size.
+  requests amplify more declares its own factor, and DynamoDB does: see
+  "DynamoDB's decode budget" below.
 - **Types that decode themselves** are free leaves only when listed
   (`protocol.Time`, ISO8601, RFC822); any other is planned through its fields
   or charged as an untyped value. `Test_Plan_EveryUnmarshalerInTheAPIIsKnown`
@@ -375,8 +375,14 @@ How each piece is bounded, and why this way:
   The plan follows the reader that arms the meter: json and xml plan twice
   the body (`protocol.TextDecode`: json decodes twice, xml charges its text
   twice) plus `FreeBody` for structure; a query form plans nothing, since its
-  pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
-  dense with elements, charges the rest in steps as it decodes. A body of
+  pairs cost less than `FreeDecode`. A service that declares
+  `Registration.DecodeUnit` (DynamoDB) has the commas and opening brackets in
+  the body's first `FreeBody` bytes counted as it is read, and the plan adds
+  that density times the body's length times the unit, so a body dense with
+  elements is admitted with the room it will need and a body of text is not.
+  The gateway hands the unit to the request's meter at dispatch
+  (`Charge.PlanUnit`). A body whose decoding passes its plan, one
+  dense with elements that the sample did not show, charges the rest in steps as it decodes. A body of
   unknown length (chunked or gzip) is charged in doubling steps of what has
   arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
   ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
@@ -417,6 +423,84 @@ The tightest is `CompleteMultipartUpload` with all five checksums on each of
 10,000 parts, which no SDK sends (an upload uses one algorithm): it decodes
 with 23% of its budget to spare. It needs the factor: on `DecodeSlack` alone
 it would be refused (1.09 of 16 MiB).
+
+#### DynamoDB's decode budget
+
+Every DynamoDB operation that takes an `AttributeValue` (a 160-byte
+structure however few bytes it takes on the wire) declares
+`DecodeFactor` 256 and `DecodeUnit` 1,700 in
+`internal/service/dynamodb/provider.go`. The rule is that every request
+AWS accepts by size is admitted: an item up to 400 KB, a `BatchWriteItem` of 25
+items in 16 MiB, a `TransactWriteItems` of 100 actions in 4 MB. Charged is
+what both passes of the generated decoder hold, measured with a hold that
+records it (`awsjson.DecodeWithin`), for a body of the smallest values in
+a list at 400 KB of item:
+
+| Shape of the list or map | Body per element | Charged / body | Charged per `,` or `[` |
+|---|---|---|---|
+| lists nested to the 32-level limit, `{"L":[` x 30 around `{"S":""}` | 8 per level | 199x | 1,601 |
+| `{"S":""}`, `{"B":""}`, `{"L":[]}`, `{"M":{}}` | 9 to 10 | 178x | 1,600 to 1,636 |
+| `{"N":"1"}` | 10 | 164x | 1,638 |
+| `{"NS":["1"]}`, `{"SS":["a"]}` | 13 | 136x | 883 |
+| `{"BOOL":true}`, `{"NULL":true}` | 14 | 114x | 1,602 |
+| 22,000 attributes `"aN":{"N":"1"}` | 19 | 42x | 786 |
+| a map of `{"BOOL":true}` | 21 | 33x | 750 |
+
+The amplification is the same whatever the operation, since each takes the same
+value, so the bound is the shape and not the call. Nesting is the worst:
+one element in a list costs 800 per pass (a slice element at five times its
+160 bytes) and an opening bracket is 8 bytes, 200 times, which is the most
+any list reaches; a nest cannot pass 32 levels, so no legal body passes 200.
+`DecodeFactor` 256 leaves 28% to spare. Past it nothing is legal: a list of
+`{}` (an `AttributeValue` that sets no member) costs 533 times its bytes, and
+100,000 of them are refused with 400 `SerializationException` after a walk
+that allocates under a quarter of what decoding them would
+(`Test_decodeBudget_pastTheLimitsIsRefusedBeforeDecoding`). Over the cap the
+body is refused as one over the cap (413) at any density.
+
+Each operation's densest legal body is served
+(`Test_decodeBudget_worstLegalBody`): `PutItem` of a 400 KB item as 130,000
+numbers (1.3 MB) and as 3,000 nests (0.75 MB); `BatchWriteItem` of 25
+items as 58,000 numbers each (14.5 MB, under the 16 MiB cap, 2.4 GB
+charged); `TransactWriteItems` of 100 actions of 12,000 numbers each
+(12 MB); `UpdateItem`, `Query`, `Scan` and `ExecuteStatement` with a
+1.3 MB value. An `ExclusiveStartKey` is a key, up to 2,048 bytes of hash and
+1,024 of range, and decodes to nothing; a dense value in it is admitted and
+answered by the handler as any key of the wrong shape
+(`Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler`).
+`dynamodbstreams` takes only strings of at most 2,048 bytes and a limit, so it
+keeps the default factor.
+
+A fixed factor says what a body may cost, not what it is admitted with. The
+pool admits a body with the room its decoding is planned to hold, and past
+`DecodeFactor` x length that would be the whole of a request's share for every
+body over 190 KB. So the plan is shaped by the body: the unit is the most
+an element costs (1,700, over the 1,638 measured) and the density is
+counted in the body's first 64 KiB. A body of strings is planned twice its
+length as before; a body of numbers, nests or records is planned what it will
+need, up to what one request may be charged (48 MiB by default). Before this,
+32 clients sending a 1 MB `BatchWriteItem` of 25 items with a list of 60
+records each, which decodes into 8.5 MiB charged, were admitted with about
+3 MiB each, held the pool between them and waited for the rest from one
+another: `Test_decodeBudget_aBurstOfDenseBodiesIsServed` fails that way with
+the unit removed, and the review that found it measured 27 or 28 of 32
+throttled at the 5 s wait for a body that charged 15.5 MiB. Now all 32 are
+served in 0.07 to 0.27 s, as the pool admits as many as fit and the others
+wait their turn holding nothing.
+
+Memory is what a legal dense body needs, and the plan does not reduce it. A
+16 MiB body of numbers decodes into 1.6 million 160-byte values, about
+256 MB live and about 1.5 GB of RSS once the collector has run behind it. 64
+such bodies sent at once to a fresh process (a `Scan` filter, so nothing is
+stored): the pool admits one at a time, 3 are served and 61 are throttled at
+the 5 s wait, and the process peaks at 1.5 GB RSS (1.1 GB with
+`GOMEMLIMIT=400MiB`); lists nested to the limit, 4 served and 60 throttled at
+1.0 GB; 16 MiB of strings, 33 served and 31 throttled at 368 MiB, as strings
+cost no more than twice their length. So the 512 MiB container the in-flight
+bound is sized for serves ordinary DynamoDB requests and dense ones up to a
+few MB; a deployment that expects 16 MiB of small values needs about 2 GB. The
+items such a body stores are the same size again (an item of 130,000 numbers
+is 21 MB in a table), which is the table's, not the request's.
 
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.

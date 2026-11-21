@@ -77,9 +77,20 @@ type Registration struct {
 	// body may cost before the request is refused as too large
 	// (protocol.DecodeBudgetAt). Zero is protocol.DecodeFactor, which every
 	// legal S3, SQS and STS request stays far below. A service whose legal
-	// requests decode into more, such as DynamoDB's lists of small
-	// AttributeValues at about 18 times their bytes, sets its own.
+	// requests decode into more sets its own: DynamoDB's lists nested to its
+	// depth limit are charged 200 bytes for each byte of body, so it
+	// declares 256.
 	DecodeFactor int
+	// DecodeUnit is the most one list element or map entry of a json body
+	// costs decoded, both passes counted. The gateway counts the commas and
+	// opening brackets in the first protocol.FreeBody bytes of a body that
+	// states its length and admits it with the room that many elements per
+	// byte would need for all of it, not only the default twice its length
+	// (protocol.BodyMeter). A service whose bodies are dense with small values
+	// (DynamoDB's AttributeValue) declares it, so that a burst of them is
+	// admitted in turn and not all part way. Zero plans nothing beyond the
+	// default.
+	DecodeUnit int
 
 	// ClaimHost reports whether a request to host is the service's, before any
 	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a

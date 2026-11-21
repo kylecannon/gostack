@@ -57,6 +57,17 @@ func (c *Charge) HoldDecode(cost int64) (int64, error) {
 	return c.decode.Cover(c.ctx, cost)
 }
 
+// PlanUnit tells the request's body meter what one list element or map entry of
+// its body costs decoded, the most (service.Registration.DecodeUnit), before the
+// body is read. The gateway calls it once the request's service is known. A nil
+// Charge, a request with no meter and a unit of zero or less leave the plan as
+// it is.
+func (c *Charge) PlanUnit(unit int64) {
+	if c != nil && c.meter != nil && unit > 0 {
+		c.meter.unit = unit
+	}
+}
+
 // ExemptDecode makes the request's decoding charge nothing, for an internal
 // request (request.IsInternal).
 func (c *Charge) ExemptDecode() {

@@ -123,8 +123,23 @@ func (p *Provider) Registration() service.Registration {
 		Close:    p.close,
 		Persist:  p,
 		Handler:  p,
+		// Every operation takes AttributeValues, which decode into 160-byte
+		// structures however few bytes they take on the wire. The most any
+		// legal request is charged is 200 bytes for each byte of its body, a
+		// list nested to the 32-level limit (8 bytes and 1,600 charged for
+		// each level), so 256 admits every request the size limits allow with
+		// 28% to spare. A list element or map entry is charged at most 1,638
+		// bytes (a list of {"N":"1"}), so 1,700 is the unit a body is admitted
+		// with. docs/architecture.md, Request memory, has the measurements.
+		DecodeFactor: decodeFactor,
+		DecodeUnit:   decodeUnit,
 	}
 }
+
+const (
+	decodeFactor = 256
+	decodeUnit   = 1700
+)
 
 // streamsChanged tells persistence that a stream record was written.
 func (p *Provider) streamsChanged() {

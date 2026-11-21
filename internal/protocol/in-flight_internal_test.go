@@ -238,6 +238,62 @@ func Test_BodyMeter_DecodeRoomByReader(t *testing.T) {
 	assert.Zero(t, held, "a body that stopped arriving gives back its bytes and its decode room")
 }
 
+// Test_BodyMeter_PlansTheServicesElementCost: a service that declares what one
+// element costs (Charge.PlanUnit) has its bodies admitted with the room their
+// elements would need at the density of their first FreeBody bytes. A body
+// with no elements is planned as any other json body, a dense one up to what a
+// request may be charged, a service that declares nothing is planned as before,
+// and a body whose length is not stated is not sampled.
+func Test_BodyMeter_PlansTheServicesElementCost(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, 100*time.Millisecond)
+
+	const size = 1 << 20
+
+	bound, _ := InFlight()
+	room := bound - (DefaultMaxBody + 1)
+
+	held := func(content []byte, length, unit int64) int64 {
+		c := new(Charge)
+		ctx := WithCharge(t.Context(), c)
+		m := NewBodyMeter(ctx, io.NopCloser(bytes.NewReader(content)), length)
+		require.NotNil(t, m)
+		c.Meter(m)
+		c.PlanUnit(unit)
+		ArmBody(ctx)
+
+		_, err := ReadBody(m, length)
+		require.NoError(t, err)
+
+		_, used := InFlight()
+
+		ReleaseBody(ctx)
+
+		return used
+	}
+
+	sparse := bytes.Repeat([]byte("a"), size)
+	dense := bytes.Repeat([]byte(`{"N":"1"},`), size/10)
+	dense = append(dense, sparse[:size-len(dense)]...)
+	// FreeBody bytes of text, then elements: the sample sees only the text.
+	late := append(bytes.Repeat([]byte("a"), FreeBody), dense[:size-FreeBody]...)
+
+	const unit = 1700
+
+	plain := held(sparse, size, 0)
+	assert.Equal(t, plain, held(dense, size, 0), "a service that declares no unit is planned as before")
+	assert.Equal(t, plain, held(sparse, size, unit), "a body with no elements is planned as before")
+	assert.Equal(t, plain, held(late, size, unit), "only the first FreeBody bytes are sampled")
+	assert.Equal(t, int64(size)+room, held(dense, size, unit), "a dense body is planned up to what a request may hold")
+	assert.Equal(t, int64(size), held(dense, -1, unit), "a body of unknown length is charged what it read, not sampled")
+
+	// Between: one element in 100 bytes costs 1,700 bytes of 100.
+	between := bytes.Repeat(append(bytes.Repeat([]byte("a"), 99), ','), size/100)
+	got := held(between, size, unit)
+	assert.Greater(t, got, plain)
+	assert.Less(t, got, int64(size)+room)
+}
+
 // Test_BodyMeter_UnknownLengthKeepsWhatItRead: a body of unknown length a few
 // bytes past a doubling step is charged twice what it read while it is read,
 // as ReadBody's buffers are, and only what it read once it ends.

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -272,6 +273,14 @@ type BodyMeter struct {
 	plan   int64
 	decode *DecodeHold
 
+	// unit is what one element of the body costs decoded (Charge.PlanUnit);
+	// elements counts the commas and opening brackets in the first FreeBody
+	// bytes read, which admit scales to the whole body. Both stay zero for a
+	// service that declares no unit.
+	unit     int64
+	elements int64
+	sampled  int64
+
 	// deadline sets the connection's read deadline (IdleBy); timed is whether
 	// one is set now.
 	deadline func(time.Time) error
@@ -343,6 +352,10 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 
 	if !m.armed || m.done {
 		return n, err
+	}
+
+	if m.unit > 0 && m.held == 0 && m.length > 0 && m.read < FreeBody {
+		m.sample(p[:min(int64(n), FreeBody-m.read)])
 	}
 
 	if n > 0 {
@@ -449,6 +462,28 @@ func (m *BodyMeter) charge(n int64) error {
 	return nil
 }
 
+// sample counts the elements in the next bytes of the body: a comma starts the
+// next list element or map entry and an opening bracket the first of a list's.
+func (m *BodyMeter) sample(b []byte) {
+	m.elements += int64(bytes.Count(b, []byte{','}) + bytes.Count(b, []byte{'['}))
+	m.sampled += int64(len(b))
+}
+
+// elementCost is what decoding the whole body costs for its elements, at
+// the density of the first FreeBody bytes (Charge.PlanUnit): that many elements
+// for each byte sampled, each at the declared unit. A body sampled sparse is
+// planned no more than its text; one sampled dense is planned what it would
+// need, up to what a request may be charged (DecodeHold.planned).
+func (m *BodyMeter) elementCost() int64 {
+	if m.unit <= 0 || m.sampled <= 0 {
+		return 0
+	}
+
+	const most = float64(1 << 50)
+
+	return int64(min(float64(m.elements)*float64(m.unit)*float64(m.length)/float64(m.sampled), most))
+}
+
 // admit charges a body that states its length all of it, and the room its
 // decoding is planned to hold (DecodeHold.planned), in one step, in the order
 // bodies arrive: a body that holds part of the bound never waits for more while
@@ -459,7 +494,7 @@ func (m *BodyMeter) admit() error {
 
 	var room int64
 	if m.decode != nil && m.length < m.most {
-		room = m.decode.planned(m.pool, m.plan*m.length+FreeBody)
+		room = m.decode.planned(m.pool, m.plan*m.length+FreeBody+m.elementCost())
 	}
 
 	busy := m.pool.acquire(m.ctx, want+room, &m.pool.starting)
