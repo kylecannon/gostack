@@ -393,7 +393,7 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return data.parts[k] == nil })
 	}
 
-	first, startSort, startTie := 0, (*api.AttributeValue)(nil), ""
+	first, startSort, startTie := 0, "", ""
 
 	var startHash string
 
@@ -441,7 +441,7 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 			return Change{Old: old}, err
 		}
 
-		if h, s := t.primaryKey(updated); h != hash || (s != nil && value.Compare(s, rng) != 0) {
+		if h, s := t.primaryKey(updated); h != hash || (s != "" && s != rng) {
 			return Change{Old: old}, errKeyChanged
 		}
 	}
@@ -500,13 +500,8 @@ func (t *Table) source(indexName string) (*store, KeySchema, error) {
 
 // position returns the range value and tie of an exclusive start key in the
 // table or index read.
-func (t *Table) position(indexName string, key KeySchema, start value.Item) (*api.AttributeValue, string) {
-	var sortValue *api.AttributeValue
-
-	if key.HasRange() {
-		v := start[key.Range.Name]
-		sortValue = &v
-	}
+func (t *Table) position(indexName string, key KeySchema, start value.Item) (string, string) {
+	sortValue := sortKey(key, start)
 
 	if indexName == "" {
 		return sortValue, ""
@@ -519,16 +514,16 @@ func (t *Table) position(indexName string, key KeySchema, start value.Item) (*ap
 // cond.
 func bounds(p *partition, cond SortCondition) (int, int) {
 	n := len(p.entries)
-	if cond.Op == SortAny || len(cond.Values) == 0 || n == 0 || p.entries[0].sort == nil {
+	if cond.Op == SortAny || len(cond.Values) == 0 || n == 0 || p.entries[0].sort == "" {
 		return 0, n
 	}
 
-	v := &cond.Values[0]
-	firstGE := func(x *api.AttributeValue) int {
-		return sort.Search(n, func(i int) bool { return value.Compare(p.entries[i].sort, x) >= 0 })
+	v := value.SortKey(&cond.Values[0])
+	firstGE := func(x string) int {
+		return sort.Search(n, func(i int) bool { return p.entries[i].sort >= x })
 	}
-	firstGT := func(x *api.AttributeValue) int {
-		return sort.Search(n, func(i int) bool { return value.Compare(p.entries[i].sort, x) > 0 })
+	firstGT := func(x string) int {
+		return sort.Search(n, func(i int) bool { return p.entries[i].sort > x })
 	}
 
 	switch cond.Op {
@@ -547,12 +542,12 @@ func bounds(p *partition, cond SortCondition) (int, int) {
 			return 0, 0
 		}
 
-		return firstGE(v), max(firstGE(v), firstGT(&cond.Values[1]))
+		return firstGE(v), max(firstGE(v), firstGT(value.SortKey(&cond.Values[1])))
 	case SortBeginsWith:
 		lo := firstGE(v)
 		hi := lo
 
-		for hi < n && hasPrefix(p.entries[hi].sort, v) {
+		for hi < n && value.SortKeyHasPrefix(p.entries[hi].sort, v) {
 			hi++
 		}
 
@@ -601,17 +596,12 @@ func hasPrefix(v, prefix *api.AttributeValue) bool {
 	}
 }
 
-// primaryKey returns the encoded hash value of item's table key and its range
-// value, nil for a table without one.
-func (t *Table) primaryKey(item value.Item) (string, *api.AttributeValue) {
+// primaryKey returns the encoded hash value of item's table key and its
+// encoded range value, empty for a table without one.
+func (t *Table) primaryKey(item value.Item) (string, string) {
 	h := item[t.key.Hash.Name]
-	if !t.key.HasRange() {
-		return value.KeyString(&h), nil
-	}
 
-	r := item[t.key.Range.Name]
-
-	return value.KeyString(&h), &r
+	return value.KeyString(&h), sortKey(t.key, item)
 }
 
 // tie is the encoded table key of item, which orders it within an index.
@@ -626,7 +616,7 @@ func (t *Table) tie(item value.Item) string {
 	return encodeKey(&h, &r)
 }
 
-func (t *Table) store(hash string, rng *api.AttributeValue, item value.Item) {
+func (t *Table) store(hash, rng string, item value.Item) {
 	size := value.ItemSize(item)
 
 	t.primary.put(hash, entry{sort: rng, item: item})
@@ -642,7 +632,7 @@ func (t *Table) store(hash string, rng *api.AttributeValue, item value.Item) {
 	}
 }
 
-func (t *Table) unstore(hash string, rng *api.AttributeValue, item value.Item) {
+func (t *Table) unstore(hash, rng string, item value.Item) {
 	size := value.ItemSize(item)
 
 	t.primary.remove(hash, rng, "")
@@ -658,11 +648,11 @@ func (t *Table) unstore(hash string, rng *api.AttributeValue, item value.Item) {
 	}
 }
 
-// indexKey returns the encoded index hash value and the index range value of
-// item, and false when the item is not in the index (indexed).
-func indexKey(spec *IndexSpec, item value.Item) (string, *api.AttributeValue, bool) {
+// indexKey returns the encoded index hash value and the encoded index range
+// value of item, and false when the item is not in the index (indexed).
+func indexKey(spec *IndexSpec, item value.Item) (string, string, bool) {
 	if !indexed(spec, item) {
-		return "", nil, false
+		return "", "", false
 	}
 
 	h := item[spec.Key.Hash.Name]

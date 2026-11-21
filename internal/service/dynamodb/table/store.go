@@ -6,23 +6,22 @@ import (
 	"sort"
 	"strings"
 
-	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
-// entry is one item in a partition: its range key value, nil for a key without
-// one, and, in an index, the encoded table key, which orders items with the
-// same index key and tells them apart.
+// entry is one item in a partition: its range key value as value.SortKey
+// encodes it, empty for a key without one, and, in an index, the encoded table
+// key, which orders items with the same index key and tells them apart.
 type entry struct {
-	sort *api.AttributeValue
+	sort string
 	tie  string
 	item value.Item
 }
 
 // compare orders entries by range key value, then by tie.
-func (e *entry) compare(sortKey *api.AttributeValue, tie string) int {
-	if e.sort != nil && sortKey != nil {
-		if c := value.Compare(e.sort, sortKey); c != 0 {
+func (e *entry) compare(sortKey, tie string) int {
+	if e.sort != "" && sortKey != "" {
+		if c := strings.Compare(e.sort, sortKey); c != 0 {
 			return c
 		}
 	}
@@ -37,7 +36,7 @@ type partition struct {
 
 // searchFirst returns the position of the first entry of p not before
 // (sortKey, tie).
-func searchFirst(p *partition, sortKey *api.AttributeValue, tie string) int {
+func searchFirst(p *partition, sortKey, tie string) int {
 	return sort.Search(len(p.entries), func(i int) bool { return p.entries[i].compare(sortKey, tie) >= 0 })
 }
 
@@ -54,7 +53,7 @@ func newStore() store {
 	return store{parts: make(map[string]*partition), sorted: true}
 }
 
-func (s *store) get(hash string, sortKey *api.AttributeValue, tie string) value.Item {
+func (s *store) get(hash, sortKey, tie string) value.Item {
 	p := s.parts[hash]
 	if p == nil {
 		return nil
@@ -89,7 +88,7 @@ func (s *store) put(hash string, e entry) {
 
 // remove drops the entry with this range value and tie, and its partition when
 // it was the last.
-func (s *store) remove(hash string, sortKey *api.AttributeValue, tie string) {
+func (s *store) remove(hash, sortKey, tie string) {
 	p := s.parts[hash]
 	if p == nil {
 		return
