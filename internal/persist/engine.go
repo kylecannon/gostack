@@ -140,10 +140,6 @@ type tracked struct {
 	// takes it, nor its leader (see takeDirty).
 	owner   *flushRun
 	started bool
-	// renamed is true once the owner's save has renamed the service's snapshot
-	// into place, which is when the abandoned-save marker is no longer needed for
-	// it (see unsavedLocked). It is meaningful while a flush holds the service.
-	renamed bool
 	// retryAt is when the service's failed save may be tried again by the timer:
 	// the backoff after it ended. It is zero after a save. A service backs off
 	// alone, so a failing one never holds back another's save.
@@ -382,8 +378,8 @@ func (e *Engine) MarkDirty(service string) {
 // within that long of its end, and at the flush's end before that: a Flush that
 // is in time allocates nothing for it. It marks the same when it ends waiting for
 // sem. A Flush that has a deadline marks as well, at it, the services another
-// Flush holds and has not yet renamed, whatever that Flush's ctx: one with no
-// deadline, or one that comes after this kill, would not mark them in time.
+// Flush holds, whatever that Flush's ctx: one with no deadline, or one that comes
+// after this kill, would not mark them in time.
 //
 // A panic of a service's Snapshot is recovered: the save fails, and saving is
 // off for the service until restart. A panic of its [Committer] or [Leader]
@@ -1333,7 +1329,7 @@ func (e *Engine) takeDirty(by flushBy, run *flushRun) []pendingService {
 			e.dirtyAgain = true
 		default:
 			from[name] = t.owner
-			t.dirty, t.owner, t.started, t.renamed = false, run, false, false
+			t.dirty, t.owner, t.started = false, run, false
 			taken[name] = true
 			run.holding[name] = pendingService{
 				name: name, snap: t.snap, assets: t.assets, took: t.took, moved: from[name] != nil,
@@ -2183,22 +2179,6 @@ func (e *Engine) measured(service string, took time.Duration) {
 	}
 }
 
-// markRenamed records, once the save of service has no state file left to
-// rename (left is zero), that it has renamed its snapshot into place: from then
-// a deadline marks nothing for it (see unsavedLocked), though the flush still
-// holds it. The save calls it before the listing that looks for a marker, so a
-// marker written after the listing is written after the record (see
-// dropIfRenamed).
-func (e *Engine) markRenamed(service string, left int) {
-	if left > 0 {
-		return
-	}
-
-	e.mu.Lock()
-	e.services[service].renamed = true
-	e.mu.Unlock()
-}
-
 // rename renames a service's snapshot over its state files, removes the ones of
 // formats that are no longer listed, and fsyncs the directories it changed.
 // Every asset the snapshot names is synced by then. A save a Load or
@@ -2222,8 +2202,6 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 
 			return err
 		}
-
-		e.markRenamed(s.p.name, len(s.writers)-1-i)
 
 		dir := dirOf(w.target)
 

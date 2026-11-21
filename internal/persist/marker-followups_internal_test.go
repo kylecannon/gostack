@@ -3,7 +3,6 @@ package persist
 import (
 	"context"
 	"io"
-	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -23,8 +22,8 @@ import (
 // The tests here are the follow-ups of PR #56's review (SQ-465): a ctx with no
 // deadline that ends with a deadline's cause, a marker whose name differs in
 // case, a Stop behind a Flush that has a deadline later than its own or none, a
-// held service whose save has renamed, and a state file linked to the marker's
-// name.
+// held service that changes after its save has renamed, and a state file linked
+// to the marker's name.
 
 // markerOf returns where the marker of service is in dir.
 func markerOf(dir, service string) string {
@@ -52,24 +51,6 @@ func watchState(e *Engine) (runs, armed int, timed bool) {
 	}
 
 	return len(e.slow.runs), armed, e.slow.timed
-}
-
-// startAbandonWarnings returns the warnings that say a save was abandoned, which
-// an engine on dir logs as it loads its services. It counts none of the others
-// the start logs.
-func startAbandonWarnings(t *testing.T, dir string, services ...string) []string {
-	t.Helper()
-
-	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
-
-	for _, name := range services {
-		e.Register(name, &stateSnap{})
-	}
-
-	require.NoError(t, e.Load(t.Context()))
-
-	return abandonWarnings(logs.all())
 }
 
 // Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause checks
@@ -412,13 +393,16 @@ func (c *committingSnap) Committed() {
 	<-c.gate
 }
 
-// Test_Engine_DeadlineMarksNothingForAServiceWhoseSaveHasRenamed checks that a
-// deadline that comes after a save renamed its snapshot into place, and before
-// the flush that made it lets go of the service, marks no service: its state is
-// on disk, so a marker would be a warning at the next start for a loss there is
-// not. It is the deadline of a Stop that waits behind the flush, and the Stop's
-// own, which marks what it holds.
-func Test_Engine_DeadlineMarksNothingForAServiceWhoseSaveHasRenamed(t *testing.T) {
+// Test_Engine_DeadlineMarksAServiceChangedWhileItsSavedFlushStillHoldsIt checks
+// that a service whose save has renamed its snapshot into place, and that the
+// flush that saved it still holds, is marked when a Stop's deadline comes, so a
+// change made after the deadline and before the kill is named at the next start.
+// The marker beside the save it renamed is at worst one warning too many for a
+// service nothing changes; with a change it is the only thing that tells of the
+// loss, and a deadline that dropped it for a service the flush held would have
+// left the change unmarked. The Stop is the one that holds the service, or one
+// that waits behind the flush that does.
+func Test_Engine_DeadlineMarksAServiceChangedWhileItsSavedFlushStillHoldsIt(t *testing.T) {
 	for _, own := range []bool{false, true} {
 		t.Run("own="+strconv.FormatBool(own), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -452,42 +436,17 @@ func Test_Engine_DeadlineMarksNothingForAServiceWhoseSaveHasRenamed(t *testing.T
 				got, err := os.ReadFile(filepath.Join(dir, "aaa", FormatJSON.fileName()))
 				require.NoError(t, err)
 				assert.Equal(t, renamedState, string(got), "the save is on disk")
-				assert.NoFileExists(t, markerOf(dir, "aaa"), "so there is no loss to mark")
+
+				e.MarkDirty("aaa") // after the deadline, before the kill
+				synctest.Wait()
+
+				assert.FileExists(t, markerOf(dir, "aaa"), "the change is lost at the kill, so it is marked")
 
 				close(c.gate)
 				t.Log("the holder ended with:", <-done)
-
-				assert.Empty(t, startAbandonWarnings(t, dir, "aaa"), "and the next start says nothing")
 			})
 		})
 	}
-}
-
-// Test_Engine_MarkerWrittenForAServiceThatRenamedIsDropped checks that a marker
-// written for a service whose save has renamed its snapshot into place since the
-// services were chosen is removed, as the save's listing for one had passed by
-// then and would never remove it, and that one for a service changed since, or
-// that has not renamed, stays. It is the race of a ctx that ends at the instant
-// the Snapshot does, made without the race: the flag the save sets is set by
-// hand.
-func Test_Engine_MarkerWrittenForAServiceThatRenamedIsDropped(t *testing.T) {
-	dir := t.TempDir()
-	e := New(quietConfig(dir, time.Hour))
-
-	for _, name := range []string{"renamed", "changed", "unsaved"} {
-		e.Register(name, &stateSnap{state: name})
-	}
-
-	e.mu.Lock()
-	e.services["renamed"].renamed = true
-	e.services["changed"].renamed, e.services["changed"].dirty = true, true
-	e.mu.Unlock()
-
-	e.markAbandoned(t.Context(), []string{"renamed", "changed", "unsaved"})
-
-	assert.NoFileExists(t, markerOf(dir, "renamed"), "its state is on disk")
-	assert.FileExists(t, markerOf(dir, "changed"), "changed since the save, which is lost")
-	assert.FileExists(t, markerOf(dir, "unsaved"), "no save of it renamed")
 }
 
 // Test_Engine_FlushRefusesAStateFileLinkedToTheMarker checks that a state file

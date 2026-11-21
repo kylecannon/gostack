@@ -207,36 +207,10 @@ func (e *Engine) writeMarkers(ctx context.Context, root *os.Root, services []str
 
 		if m != nil {
 			marked = append(marked, m)
-
-			e.dropIfRenamed(root, service)
 		}
 	}
 
 	return marked
-}
-
-// dropIfRenamed removes the marker just written for service when the service's
-// save has renamed its snapshot into place since the services to mark were
-// chosen, and nothing has changed it: the save listed the directory for a marker
-// before this one was there, so it would never remove it, and its state is on
-// disk. The save records the rename before it lists the directory (see
-// markRenamed): a marker whose check comes before the record was written before
-// the listing, and the save removes it, and one whose check comes after sees the
-// record, and this removes it.
-func (e *Engine) dropIfRenamed(root *os.Root, service string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	t, ok := e.services[service]
-	if !ok || !t.renamed || t.dirty {
-		return
-	}
-
-	err := removeIfPresent(root, abandonedPath(service))
-	if err != nil {
-		e.log.Warn("persist: the marker of a save that completed could not be removed; "+
-			"the next start warns until a save removes it", "service", service, "error", err)
-	}
 }
 
 // marker is a marker written and not yet fsynced.
@@ -416,8 +390,8 @@ const markWatchAfter = 50 * time.Millisecond
 // (SQ-461): a ctx that can end is left to the slowWatch, which watches it once
 // the flush has lasted [markWatchAfter], and a ctx that cannot end is never
 // watched. A service that saves anyway, as one whose Snapshot returns after the
-// deadline does, has its marker removed by that save (see clearAbandoned), or by
-// the marking that finds the save has renamed (see dropIfRenamed).
+// deadline does, has its marker removed by that save (see clearAbandoned); a
+// marker written while the save renames is at worst one warning too many.
 func (e *Engine) markAtDeadline(ctx context.Context, run *flushRun) {
 	if run.by == byTimer {
 		return
@@ -637,9 +611,7 @@ func (e *Engine) markUnsaved(ctx context.Context, run *flushRun, cut []string) {
 // deadline that flush has, since the kill this deadline stands for may come
 // before the deadline of its own, or it has none, as a request's save (POST
 // /_gostack/state/save) has; and every service that is dirty, which a change
-// since its last save, or since the snapshot a save took, left unsaved. A held
-// service whose save has renamed its snapshot into place is none of these: its
-// state is on disk, and a marker beside it would be a warning too many. A
+// since its last save, or since the snapshot a save took, left unsaved. A
 // service run lost for a reason of its own is not one of them, though it is
 // dirty again: its warning names it, and a longer SHUTDOWN_TIMEOUT would not
 // have saved it (see logAbandoned). The caller holds mu.
@@ -652,7 +624,7 @@ func (e *Engine) unsavedLocked(ctx context.Context, run *flushRun) []string {
 			continue
 		}
 
-		held := t.owner != nil && !t.renamed &&
+		held := t.owner != nil &&
 			(t.owner == run || lends && t.owner.by == byTimer || t.owner.by == byHand)
 
 		if held || t.dirty && !run.lostToOwnFaultLocked(ctx, name) {

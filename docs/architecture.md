@@ -1583,9 +1583,8 @@ is untouched.
   another `Flush` holds is marked for this one, whatever deadline that call has:
   the save of `POST /_gostack/state/save` has none, and a `Stop` behind it would
   otherwise leave the service it is stuck in unmarked, and one with a deadline
-  later than the `Stop`'s would be marked only after the kill. A held service
-  whose save has renamed its snapshot into place is not marked: its state is on
-  disk. A flush whose save of a service failed for a reason of
+  later than the `Stop`'s would be marked only after the kill. A flush whose
+  save of a service failed for a reason of
   its own, and a `Follower` whose leader did, is not marked: the flush's warning
   names it with its cause, apart from the services the deadline cut, and the
   advice to raise `SHUTDOWN_TIMEOUT` is for those. A `Flush` that ends at its
@@ -1665,13 +1664,8 @@ is untouched.
   service's newest state file, or `never` when it has none. The marker stays
   until a save completes, so each start says so until then. A marker that cannot
   be written or removed is logged and changes nothing else. A crash between a
-  completed save's rename and the removal of the marker leaves one warning too
-  many. A deadline that falls while a save renames leaves none: a save records
-  the rename before it lists the directory, so a marker written before the
-  listing is removed by the save, and one checked after the record is removed
-  by the writer. On Linux tmpfs, 600 flushes whose context ended with a
-  deadline's cause at the instant their `Snapshot` ended left 199 markers beside
-  a completed save before this, and none in six runs after. Every service that
+  completed save's rename and the removal of the marker, or a deadline that
+  falls while a save renames, leaves one warning too many. Every service that
   is held or dirty when a round runs is marked, within the round's time, so a
   change made before the deadline's round is never one too few. One made after
   the flush's last round, or while the budget was spent, is not marked.
