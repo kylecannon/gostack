@@ -125,6 +125,7 @@ func (p *Provider) deleteEndpointMessages(w http.ResponseWriter, r *http.Request
 	}
 	st.mu.Unlock()
 
+	p.markChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -200,6 +201,7 @@ func (p *Provider) deleteSMSMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	st.mu.Unlock()
 
+	p.markChanged()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -236,6 +238,8 @@ func (p *Provider) optOutPhoneNumber(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
 		a.optedOut[*body.PhoneNumber] = struct{}{}
 		a.mu.Unlock()
+
+		p.markChanged()
 	}
 
 	w.WriteHeader(http.StatusOK)

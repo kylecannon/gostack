@@ -50,7 +50,7 @@ type stack struct {
 func newStack(t *testing.T, wrap func(http.Handler) http.Handler) *stack {
 	t.Helper()
 
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{} }, func(string) {})
 
 	t.Cleanup(queues.Close)

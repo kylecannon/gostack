@@ -29,7 +29,7 @@ func BenchmarkSigningCertificate(b *testing.B) {
 }
 
 func benchCertificate(b *testing.B, method string, workers int) {
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{listenAny}} },
 		[]service.Registration{provider.Registration()}, provider.MountProtocol, nil)

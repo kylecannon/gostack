@@ -103,23 +103,23 @@ type PlatformEndpoint struct {
 // A member that does not apply is empty.
 type RecordedMessage struct {
 	// PhoneNumber is the number an SMS went to.
-	PhoneNumber string
+	PhoneNumber string `json:",omitzero"`
 	// TargetARN is the platform endpoint a message went to.
-	TargetARN string
+	TargetARN string `json:",omitzero"`
 	// TopicARN is the topic the message was published to.
-	TopicARN string
+	TopicARN string `json:",omitzero"`
 	// SubscriptionARN is the subscription that delivered the message.
-	SubscriptionARN string
+	SubscriptionARN string `json:",omitzero"`
 	// MessageID is the message ID Publish returned.
-	MessageID string
+	MessageID string `json:",omitzero"`
 	// Message is the message body for the protocol.
-	Message string
+	Message string `json:",omitzero"`
 	// MessageAttributes are the message attributes by name.
-	MessageAttributes map[string]MessageAttribute
+	MessageAttributes map[string]MessageAttribute `json:",omitzero"`
 	// MessageStructure is "json" when the message held one body per protocol.
-	MessageStructure string
+	MessageStructure string `json:",omitzero"`
 	// Subject is the message subject.
-	Subject string
+	Subject string `json:",omitzero"`
 }
 
 // MessageAttribute is one message attribute.
@@ -127,7 +127,7 @@ type MessageAttribute struct {
 	// DataType is String, Number or Binary, with an optional custom suffix.
 	DataType string
 	// StringValue is the value of a String or Number attribute.
-	StringValue string
+	StringValue string `json:",omitzero"`
 	// BinaryValue is the value of a Binary attribute.
-	BinaryValue []byte
+	BinaryValue []byte `json:",omitzero"`
 }

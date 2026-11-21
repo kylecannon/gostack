@@ -94,6 +94,7 @@ func (p *Provider) Publish(ctx context.Context, in *api.PublishInput) (*api.Publ
 
 	if phone := deref(in.PhoneNumber); phone != "" {
 		recordSMS(p.regions.Get(rc.AccountID, rc.Region), phone, msg)
+		p.markChanged()
 
 		return &api.PublishOutput{MessageId: new(msg.id)}, nil
 	}
@@ -116,6 +117,8 @@ func (p *Provider) publishToEndpoint(rc *request.Context, arn string, msg *messa
 	if err != nil {
 		return nil, err
 	}
+
+	p.markChanged()
 
 	return &api.PublishOutput{MessageId: new(msg.id)}, nil
 }

@@ -12,7 +12,7 @@ import (
 // the 42 operations of its API, the other six (SMS sandbox phone numbers and
 // origination numbers) answering 501 through the generated Unimplemented.
 func Test_implemented(t *testing.T) {
-	reg := New(nil).Registration()
+	reg := New(nil, nil).Registration()
 
 	implemented, ok := service.Implemented(reg.Handler, api.Operations, api.OperationMethod)
 	require.True(t, ok, "the registration must hand GET /_gostack/services its handler")

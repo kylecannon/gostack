@@ -66,7 +66,7 @@ func newHTTPBench(b *testing.B, subscribers int, attrs ...string) *publishBench 
 	}))
 	b.Cleanup(endpoint.Close)
 
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 	b.Cleanup(func() { provider.Close(b.Context()) })
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{listenAny}} },

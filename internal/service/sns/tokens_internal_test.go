@@ -117,7 +117,7 @@ func Test_Provider_subscriptionTokens(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := New(func() Settings { return tt.settings })
+			p := New(func() Settings { return tt.settings }, nil)
 			st := p.regions.Get("000000000000", "us-east-1")
 			topic := &Topic{ARN: "arn:aws:sns:us-east-1:000000000000:t"}
 			sub := &Subscription{
@@ -169,7 +169,7 @@ func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
 	}
 
 	for _, disabled := range []bool{false, true} {
-		p := New(func() Settings { return Settings{DisableCompatPaths: disabled} })
+		p := New(func() Settings { return Settings{DisableCompatPaths: disabled} }, nil)
 		r := chi.NewRouter()
 		p.mountDeveloperAPI(r)
 
@@ -192,7 +192,7 @@ func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
 // token the developer endpoint returns confirms it through an unsigned
 // ConfirmSubscription, the SubscribeURL of its confirmation message.
 func Test_Provider_confirmByToken(t *testing.T) {
-	p := New(nil)
+	p := New(nil, nil)
 	reg := p.Registration()
 	reg.Mount = p.mountDeveloperAPI
 

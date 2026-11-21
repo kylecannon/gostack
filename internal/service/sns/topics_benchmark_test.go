@@ -41,7 +41,7 @@ type benchGateway struct {
 func newBenchGateway(b *testing.B) *benchGateway {
 	b.Helper()
 
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
 		[]service.Registration{provider.Registration()}, nil, nil)

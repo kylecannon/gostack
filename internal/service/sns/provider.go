@@ -23,6 +23,11 @@ type Provider struct {
 	api.Unimplemented
 
 	settings func() Settings
+	// changed is told "sns" when a change persistence saves comes from a call
+	// Mutating does not mark: a publish that records a message or moves a FIFO
+	// topic's window, and the developer routes that change recorded messages
+	// or opted-out numbers. It is nil when nothing listens.
+	changed func(name string)
 	// regions holds each account's state in each region.
 	regions *store.Bundle[State]
 	// accounts holds each account's state across regions, under
@@ -47,14 +52,16 @@ var _ api.Handler = (*Provider)(nil)
 
 // New returns a Provider with no topics. settings is called on every call that
 // needs it, so a configuration change applies to the next one. A nil settings
-// gives the zero Settings.
-func New(settings func() Settings) *Provider {
+// gives the zero Settings. changed is called with "sns" when state persistence
+// saves changes outside a call Mutating marks; it may be nil.
+func New(settings func() Settings, changed func(name string)) *Provider {
 	if settings == nil {
 		settings = func() Settings { return Settings{} }
 	}
 
 	p := &Provider{
 		settings: settings,
+		changed:  changed,
 		regions:  store.NewBundle(newState, (*State).reset),
 		accounts: store.NewBundle(newAccountState, (*AccountState).reset),
 		signer:   new(envelope.Signer),
@@ -85,6 +92,7 @@ func (p *Provider) Registration() service.Registration {
 		Handler:  p,
 		Serve:    p.serve,
 		Mutating: mutating,
+		Persist:  p,
 		Reset:    p.Reset,
 		Close:    p.Close,
 		Bind:     p.Bind,
@@ -120,10 +128,25 @@ func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
 
 // mutating is the persistence rule of SNS: every operation changes state but
 // the ones that only read it. CheckIfPhoneNumberIsOptedOut reads, though its
-// name does not say so.
+// name does not say so. Publish and PublishBatch change saved state only when
+// they record a message or publish to a FIFO topic, and report that
+// themselves through markChanged, so a publish to a standard topic's queues
+// leaves persistence idle.
 func mutating(operation string) bool {
-	return operation != "CheckIfPhoneNumberIsOptedOut" &&
-		!strings.HasPrefix(operation, "Get") && !strings.HasPrefix(operation, "List")
+	switch operation {
+	case "CheckIfPhoneNumberIsOptedOut", "Publish", "PublishBatch":
+		return false
+	}
+
+	return !strings.HasPrefix(operation, "Get") && !strings.HasPrefix(operation, "List")
+}
+
+// markChanged tells persistence that SNS changed, for a change no mutating call
+// reports.
+func (p *Provider) markChanged() {
+	if p.changed != nil {
+		p.changed(api.Metadata.Name)
+	}
 }
 
 // stateAt returns the state of an account and region named by the caller,

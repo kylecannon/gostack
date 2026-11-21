@@ -96,7 +96,7 @@ type burstRun struct {
 func newBurst(b *testing.B, protocol string, lanes, perLane, size int) (*burstRun, func()) {
 	b.Helper()
 
-	provider := sns.New(nil)
+	provider := sns.New(nil, nil)
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{listenAny}} },
 		[]service.Registration{provider.Registration()}, nil, nil)
