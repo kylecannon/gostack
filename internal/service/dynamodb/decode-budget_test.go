@@ -426,7 +426,7 @@ func Test_decodeBudget_aStringOfCommasIsPlannedAsText(t *testing.T) {
 
 // Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused: in a process with a
 // Go memory limit (a container's, set at start-up from its own), a body that
-// would keep more than half of it live as it decodes is answered at once with
+// would keep more than it live as it decodes is answered at once with
 // the decode budget's answer and nothing is decoded, not decoded until the
 // container's OOM killer ends the process. The same body is served with room.
 func Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused(t *testing.T) {
@@ -442,10 +442,10 @@ func Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("dense"))
 
-	// 130,000 numbers are charged 213 MB and keep about 28 MB live.
+	// 130,000 numbers in one list are charged 421 MB and keep about 28 MB live, 44 MB at their peak.
 	body := `{"TableName":"dense","Item":` + denseItem("q", numberList(numbers)) + `}`
 
-	debug.SetMemoryLimit(48 << 20)
+	debug.SetMemoryLimit(32 << 20)
 
 	got := s.call(t, usEast1, opPut, body)
 	assert.Equal(t, http.StatusBadRequest, got.status, got.body)
@@ -458,6 +458,51 @@ func Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused(t *testing.T) {
 
 	_, held := protocol.InFlight()
 	assert.Zero(t, held, "every request gives back what it held")
+}
+
+// Test_decodeBudget_oneLongListPeaksHigherThanManyShortOnes: under one Go
+// memory limit, 130,000 numbers in a single list are refused, because the
+// slice a long list grows from is alive beside the one it grows into, and the
+// same 130,000 spread over a batch's 25 short lists are decoded, as the
+// 25 x 64,000 numbers of SQ-445's body were in a 512 MiB container. The batch
+// is refused for its missing table, after it was decoded.
+func Test_decodeBudget_oneLongListPeaksHigherThanManyShortOnes(t *testing.T) {
+	protocol.SetInFlight(protocol.DefaultInFlight)
+
+	old := debug.SetMemoryLimit(-1)
+
+	t.Cleanup(func() {
+		debug.SetMemoryLimit(old)
+		protocol.SetInFlight(0)
+	})
+
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("dense"))
+
+	scan := `{"TableName":"dense","FilterExpression":"l = :v","ExpressionAttributeValues":{":v":{"L":[` +
+		numberList(numbers) + `]}}}`
+
+	short := make([]string, 0, batchItems)
+	for i := range batchItems {
+		short = append(short, `{"PutRequest":{"Item":`+denseItem(fmt.Sprint("b", i), numberList(numbers/batchItems))+`}}`)
+	}
+
+	batch := `{"RequestItems":{"nope":[` + strings.Join(short, ",") + `]}}`
+
+	debug.SetMemoryLimit(40 << 20)
+
+	got := s.call(t, usEast1, opScan, scan)
+	assert.Equal(t, http.StatusBadRequest, got.status, got.body)
+	assert.Contains(t, got.body, "more than gostack allows")
+
+	got = s.call(t, usEast1, opBatchWrite, batch)
+	assert.Equal(t, http.StatusBadRequest, got.status, got.body)
+	assert.Contains(t, got.body, "ResourceNotFoundException", "decoded, and refused for its table")
+
+	debug.SetMemoryLimit(512 << 20)
+
+	got = s.call(t, usEast1, opScan, scan)
+	assert.Equal(t, http.StatusOK, got.status, got.body[:min(len(got.body), 300)])
 }
 
 // signJSON makes req a json call to operation by the test account.

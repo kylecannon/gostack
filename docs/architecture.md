@@ -411,7 +411,8 @@ How each piece is bounded, and why this way:
   numbers once at INFO. A `GOMEMLIMIT` in the environment, `off` included, is
   the user's and is left as the runtime read it. The limit is soft: it makes the
   collector work against it, which a heap that is mostly live cannot satisfy.
-  So a decode whose cost passes twice the limit is refused (below). The limits
+  So a decode that would keep more of the heap than the limit is refused as a
+  last resort (below). The limits
   of the cgroups above the process's own are not read.
 
 Headroom: what decoding the largest legal request of each shape charges
@@ -552,32 +553,57 @@ in 1.6 million allocations and keeps 329 MiB live after a collection, because
 time, five times its final size in all. Three things keep that from ending the
 process under `docker run --memory`:
 
-1. The Go memory limit follows the container's (above). On the built image at
-   `--memory 512m --memory-swap 512m`, the body sent 1, 2, 8 and 64 at once was
-   never killed, and the process peaked at 432 to 442 MiB of cgroup memory.
-   Without the limit two of them were killed (exit 137), as the review of
-   SQ-298 found.
-2. A decode whose cost passes twice the Go memory limit is refused with the
-   decode budget's answer (`400 SerializationException`, "decodes into more than
-   gostack allows"), not decoded: `protocol.ErrOverMemory`. The cost is charged
-   at 4 to 8 bytes for each byte the heap keeps (1,638 for a `{"N":"1"}` that
-   keeps 216; a `Scan` that holds its parameter twice about 4 to 1), and a decode
-   may keep half the limit. A 16 MiB `Scan` filter of numbers needs about
-   610 MiB, so with the limit alone it was killed at 512 MiB without swap and
-   ran into the container's limit and its swap with it. The refusal costs
-   nothing without a limit: a process with no container limit and no `GOMEMLIMIT`
-   refuses nothing. In a 512 MiB container (limit 435 MiB) bodies of numbers
-   over about 5 MB are refused; in 256 MiB (limit 217 MiB) over about 2.8 MB; in
-   2 GiB none the 16 MiB cap admits.
+1. The Go memory limit follows the container's (above). Without it, two of
+   the bodies at once were killed (exit 137) at `--memory 512m --memory-swap
+   512m`, as the review of SQ-298 found.
+2. A decode that would keep more of the heap at its peak than the Go memory
+   limit allows is refused, as a last resort for a body that cannot fit, with
+   the decode budget's answer (`400 SerializationException`, "decodes into more
+   than gostack allows"), not decoded: `protocol.OverMemory`, asked by
+   `awsjson`'s `chargeDecode`. Its cost is charged at 8 bytes for each byte of
+   heap, and the cost of the body's largest list is charged again, because a
+   list grown by `append` holds the slice it grew from beside the one it grew
+   into. That is 7.6 to 1 for a body of many short lists (a `{"N":"1"}` is
+   charged 1,638 and keeps 216) and 4.4 to 1 for one long list, which is what
+   the measurements below separate: the same 1.6 million numbers, 25 lists of
+   64,000 in a `BatchWriteItem` keep 329 MiB live and are served in a 512 MiB
+   container, and one list of them in a `Scan` filter peaks over 540 MiB and
+   killed it (it was killed at `--memory 512m --memory-swap 512m` with the
+   limit alone). The refusal costs nothing without a limit: a process with no
+   container limit and no `GOMEMLIMIT` refuses nothing. In a 2 GiB container
+   none the 16 MiB cap admits is refused. AWS has no such refusal
+   (docs/compat.md, Request memory limits).
 3. The pool admits one such body at a time, as before (48 MiB of room for
    each), so the heaps of two never add.
+
+Measured on the built image (`make image`, the tree at SQ-449's commit), the
+body sent 1, 2, 8 and 64 at once, each rung on a fresh container; "served"
+is a decode that reached the table check, so `ResourceNotFoundException` for
+the missing table, and every request was answered. No container was
+OOM-killed (`oom_kill 0`, exit code 0, the health check answered after each
+rung). Peak is the cgroup's `memory.peak`, in MiB.
+
+| container | body | 1 | 2 | 8 | 64 | peak |
+| --- | --- | --- | --- | --- | --- | --- |
+| 512 MiB, swap on and off | `BatchWriteItem` 25 x 64,000 numbers, 15.26 MiB | served | served | served | 10 served, 54 throttled | 398 to 420 |
+| 512 MiB, swap on and off | `Scan` filter of 1.6 million numbers, 15.26 MiB | refused | refused | refused | 31 to 33 refused, rest throttled | 43 to 93 |
+| 512 MiB, swap on and off | `Scan` filter of 330,000 strings, 14.16 MiB | served | | served | 24 to 27 served, rest throttled | 259 to 331 |
+| 256 MiB, no swap | `BatchWriteItem` 25 x 64,000 numbers | refused | refused | refused | 31 refused, 33 throttled | 42 to 93 |
+| 256 MiB, no swap | `Scan` filter of 1.6 million numbers | refused | refused | refused | 28 refused, 36 throttled | 43 to 87 |
+| 256 MiB, no swap | `Scan` filter of 330,000 strings | served | | served | 23 served, 41 throttled | 223 to 243 |
+
+The 256 MiB container (limit 217 MiB) cannot hold the 329 MiB the batch
+keeps live, so it refuses it; the strings body peaks within 13 MiB of the
+container's limit and is not killed. A client that sends while it reads sees
+a throttle answered before its body is all sent as a broken pipe.
 
 The decoder's waste, the slice growth above, is not cut: `encoding/json/v2`
 grows the slice and a type's own `UnmarshalJSONFrom` could size it, but
 `AttributeValue` is generated, and a per-type unmarshaler added to the decode
 options costs a lookup for every value of every DynamoDB request, which the
 benchmark gate would count. The packed item storage that makes a stored item
-smaller removes the 160 bytes as well, and is its own ticket.
+smaller (SQ-442) decodes straight into its compact form and removes the
+160 bytes as well.
 
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"math"
-	"runtime/debug"
 	"sync"
 	"testing"
 	"time"
@@ -233,52 +231,4 @@ func Test_DecodeHold_PlannedTooLittleWaitsHoldingOnlyItsBody(t *testing.T) {
 
 	_, err = hold.Cover(t.Context(), 30<<20)
 	require.ErrorIs(t, err, ErrBusy, "and it fails the same way after")
-}
-
-// Test_DecodeHold_PastTheMemoryLimitFailsWithErrOverMemory: with a Go memory
-// limit set, a decode that would keep more than half of it live fails at once,
-// and with ErrBusy as well for a caller that does not tell them apart; with no
-// limit, or one it fits, the hold is charged as before.
-func Test_DecodeHold_PastTheMemoryLimitFailsWithErrOverMemory(t *testing.T) {
-	SetMaxBody(DefaultMaxBody)
-	withBound(t, DefaultInFlight, 100*time.Millisecond)
-
-	const cost = 400 << 20 // about 100 MiB of heap
-
-	old := debug.SetMemoryLimit(-1)
-
-	t.Cleanup(func() { debug.SetMemoryLimit(old) })
-
-	for _, tt := range []struct {
-		name    string
-		limit   int64
-		refused bool
-	}{
-		{"no limit", math.MaxInt64, false},
-		{"a limit that half of holds it", 256 << 20, false},
-		{"a limit that half of does not", 150 << 20, true},
-	} {
-		debug.SetMemoryLimit(tt.limit)
-
-		var hold DecodeHold
-
-		_, err := hold.Cover(t.Context(), cost)
-
-		if !tt.refused {
-			require.NoError(t, err, tt.name)
-			hold.Release()
-
-			continue
-		}
-
-		require.ErrorIs(t, err, ErrOverMemory, tt.name)
-		require.ErrorIs(t, err, ErrBusy, tt.name)
-
-		_, err = hold.Cover(t.Context(), 2<<20)
-		require.ErrorIs(t, err, ErrOverMemory, "and it fails the same way after")
-		hold.Release()
-	}
-
-	_, held := InFlight()
-	assert.Zero(t, held)
 }

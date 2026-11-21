@@ -53,25 +53,28 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 }
 
 // chargeDecode refuses body with ErrTooLarge when decoding it as p plans it
-// would pass budget, and otherwise charges what both passes hold past
-// protocol.FreeDecode to hold, when there is one.
+// would pass budget, or would keep more of the heap at its peak than the Go
+// memory limit allows (protocol.OverMemory), and otherwise charges what both
+// passes hold past protocol.FreeDecode to hold, when there is one.
 func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder) *awserr.Error {
 	unwalked := int64(math.MaxInt64)
 	if hold != nil {
 		unwalked = protocol.FreeDecode
 	}
 
-	cost, err := decodeCost(body, p, budget, unwalked)
+	cost, largest, err := decodeCost(body, p, budget, unwalked)
 	if err != nil || hold == nil || cost <= protocol.FreeDecode {
 		return err
 	}
 
-	_, herr := hold.HoldDecode(cost)
-
-	switch {
-	case errors.Is(herr, protocol.ErrOverMemory):
+	// A slice's copies are alive together at its peak, so the largest slice
+	// counts twice: what one long list keeps beyond many short ones.
+	if protocol.OverMemory(cost + largest) {
 		return ErrTooLarge
-	case herr != nil:
+	}
+
+	_, herr := hold.HoldDecode(cost)
+	if herr != nil {
 		return protocol.ThrottledJSON()
 	}
 
@@ -79,7 +82,8 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 }
 
 // decodeCost is what both passes of decoding body as p plans it hold at most,
-// or ErrTooLarge when that passes budget.
+// and the most its largest slice holds of that, or ErrTooLarge when the cost
+// passes budget. The largest is zero for a body that is not walked.
 //
 // It first bounds the cost from the body's shape without reading it as json
 // (structureUnits): its text costs at most its bytes, and only the separators
@@ -88,20 +92,20 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 // and protocol.FreeDecode when the bound is charged, so the charge is at
 // most FreeDecode beyond the body's own bytes. Any other body is walked token by
 // token (walkCost), which is as costly as decoding it.
-func decodeCost(body []byte, p *plan, budget, unwalked int64) (int64, *awserr.Error) {
+func decodeCost(body []byte, p *plan, budget, unwalked int64) (cost, largest int64, err *awserr.Error) {
 	structure := decodePasses * structureUnits(body) * p.perUnit
 	bound := decodePasses*int64(len(body)) + structure
 
 	if bound <= budget && structure <= unwalked {
-		return bound, nil
+		return bound, 0, nil
 	}
 
-	cost, over := walkCost(body, p, budget/decodePasses)
+	walked, largest, over := walkCost(body, p, budget/decodePasses)
 	if over {
-		return 0, ErrTooLarge
+		return 0, 0, ErrTooLarge
 	}
 
-	return decodePasses * cost, nil
+	return decodePasses * walked, decodePasses * largest, nil
 }
 
 // structureUnits is how many places in body a value can begin at: after a
@@ -373,24 +377,29 @@ var errOverBudget = errors.New("over budget")
 // cost more than budget. A body that is not valid json reports false: the
 // decode that follows refuses it, having decoded no more than the walk read.
 // walkCost walks body as p plans it and returns what one pass of decoding it
-// holds, or reports over once that passes budget.
-func walkCost(body []byte, p *plan, budget int64) (int64, bool) {
+// holds and what its largest slice of that is, or reports over once the cost
+// passes budget.
+func walkCost(body []byte, p *plan, budget int64) (cost, largest int64, over bool) {
 	w := walker{
 		dec:   jsontext.NewDecoder(bytes.NewBuffer(body), jsontext.AllowDuplicateNames(true)),
 		limit: budget,
 	}
 
 	if errors.Is(w.value(p), errOverBudget) {
-		return 0, true
+		return 0, 0, true
 	}
 
-	return w.cost, false
+	return w.cost, w.largest, false
 }
 
 type walker struct {
 	dec         *jsontext.Decoder
 	cost, limit int64
-	name        []byte
+	// largest is the most one slice was charged for: its copies, one beyond
+	// the other, are all it holds at its peak, which a heap of many small
+	// slices never reaches.
+	largest int64
+	name    []byte
 }
 
 func (w *walker) charge(n int64) error {
@@ -493,17 +502,23 @@ func (w *walker) array(p *plan) error {
 		return err //nolint:wrapcheck // only errOverBudget is looked at
 	}
 
+	var elements int64
+
 	for kind := w.dec.PeekKind(); kind != ']' && kind != 0; kind = w.dec.PeekKind() {
 		err = w.charge(appendCost * p.size)
 		if err != nil {
 			return err
 		}
 
+		elements++
+
 		err = w.value(p.elem)
 		if err != nil {
 			return err
 		}
 	}
+
+	w.largest = max(w.largest, elements*appendCost*p.size)
 
 	_, err = w.dec.ReadToken()
 
