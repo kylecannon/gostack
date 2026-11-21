@@ -267,10 +267,14 @@
 // so the ranges of a head that generates two keys and a base that generates one
 // still overlap (5 runs a side see the doubling 8% of the time, 10 or more
 // almost never). It fails when its median rose past 25% and a rank-sum
-// (Mann-Whitney) test of the runs puts the head past z = 2.6. A simulation on
-// 150 measured key generations gives, at 30 runs a side, a false alarm for 0.4%
-// of pairs of equal sets (the order of the 1 in 252 of five runs a side on
-// disjoint ranges) and a flag for 99% of doublings. LocalStack never gates. A result carries a host
+// (Mann-Whitney) test of the runs puts the head past z = 2.6. Resampling 150
+// measured key generations gives, at 30 runs a side, a false alarm for about
+// 0.5% of pairs of equal sets (1 in 215, the order of the 1 in 252 that five
+// runs a side give on disjoint ranges), a flag for about 90% of doublings and
+// for about 37% of rises of 50%. A one-time cost caught nine times in ten is
+// worth the minute the runs take, so the count stays. LocalStack never gates;
+// its first-use time includes loading its SNS provider, so it is a reference
+// and not the same work. A result carries a host
 // fingerprint (OS, architecture, CPU count, Docker version, OrbStack); results
 // with different fingerprints are not compared, and compare says so and exits 0.
 // `bench run -compare-dir bench/results` runs the same comparison after the

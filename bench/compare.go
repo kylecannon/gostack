@@ -63,9 +63,10 @@ const (
 	// limitFirstUse is how much the median time to a service's first use may rise.
 	limitFirstUse = 0.25
 	// rankSumLimit is the z score of the rank-sum test past which the head's runs
-	// are called slower than the base's: about 1 pair in 250 of equal sets of 30
-	// runs, the order of the 1 in 252 that five runs a side of the disjoint rule
-	// give.
+	// are called slower than the base's. Resampling 150 measured key generations,
+	// 30 runs a side give a false alarm for about 1 pair in 215 of equal sets, the
+	// order of the 1 in 252 that five runs a side of the disjoint rule give, and
+	// a flag for about 90% of doublings and 37% of rises of 50%.
 	rankSumLimit = 2.6
 	// rankSumTies is what a pair of equal runs adds to the rank-sum statistic.
 	rankSumTies = 0.5
@@ -147,13 +148,24 @@ func (m metric) rankReach() float64 {
 	return n * k / half / math.Sqrt(n*k*(n+k+1)/rankSumDivisor)
 }
 
-// label is the metric's name with the runs note, for a table.
+// label is the metric's name with the runs note, for a table. A metric judged on
+// its whole runs also says so, with the z score the judgment used.
 func (m metric) label() string {
-	if m.runs == "" {
+	var notes []string
+
+	if m.runs != "" {
+		notes = append(notes, m.runs)
+	}
+
+	if m.ranked() {
+		notes = append(notes, fmt.Sprintf("rank-sum z = %+.1f", m.rankSumZ()))
+	}
+
+	if len(notes) == 0 {
 		return m.name
 	}
 
-	return m.name + " (" + m.runs + ")"
+	return m.name + " (" + strings.Join(notes, "; ") + ")"
 }
 
 // matches reports whether a system entry of the accepted list names the metric.
@@ -233,7 +245,11 @@ func (m metric) judge() outcome {
 // its whole runs, the rank-sum test puts the head past rankSumLimit.
 func (m metric) disjointWorse() bool {
 	if m.ranked() {
-		return m.rankSumZ() >= rankSumLimit
+		if m.lowerIsBetter {
+			return m.rankSumZ() >= rankSumLimit
+		}
+
+		return m.rankSumZ() <= -rankSumLimit
 	}
 
 	if m.lowerIsBetter {
@@ -246,7 +262,11 @@ func (m metric) disjointWorse() bool {
 // disjointBetter is the same with the head on the better side.
 func (m metric) disjointBetter() bool {
 	if m.ranked() {
-		return m.rankSumZ() <= -rankSumLimit
+		if m.lowerIsBetter {
+			return m.rankSumZ() <= -rankSumLimit
+		}
+
+		return m.rankSumZ() >= rankSumLimit
 	}
 
 	if m.lowerIsBetter {
@@ -443,9 +463,10 @@ func (cmp *comparison) addTarget(base, head report, bt, ht targetResult, want ex
 }
 
 // firstUseMetrics lists the first-use metric of each service the base measured.
-// A service the head did not measure is not comparable and is left out here; the
-// reason is in the head's Problems when its measurement failed. Each is a cost
-// judged on its whole runs.
+// A service the head did not measure has no runs and a zero median, so
+// addTarget finds it not comparable and does not count it; the reason is in the
+// head's Problems when its measurement failed. Each is a cost judged on its
+// whole runs.
 func firstUseMetrics(base, head targetResult) []metric {
 	out := make([]metric, 0, len(base.FirstUse))
 

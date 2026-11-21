@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -264,9 +265,10 @@ func createQueue(ctx context.Context, queues *sqs.Client, name string,
 // FirstUse times the first signed publish of a target that has just started:
 // CreateTopic, which starts making SNS's signing key, Subscribe of a queue with
 // the envelope, Publish, and the receive of the delivery, whose signature is
-// checked to be there. The queue exists before the clock starts, so the time is
-// SNS's: SQS's first use is not in it. The first delivery waits for the key, so
-// the time is the key generation, one RSA-2048 key, and the few calls around it.
+// checked to be there and not empty. The queue exists before the clock starts,
+// so the time is SNS's: SQS's first use is not in it. The first delivery waits
+// for the key, so the time is the key generation, one RSA-2048 key, and the few
+// calls around it.
 func (publishWorkload) FirstUse(ctx context.Context, c client) (time.Duration, error) {
 	queues := newSQSClient(c.endpoint, 1)
 	sc := snsClient{http: &http.Client{Transport: newTransport(1)}, endpoint: c.endpoint}
@@ -306,11 +308,23 @@ func (publishWorkload) FirstUse(ctx context.Context, c client) (time.Duration, e
 		return 0, err
 	}
 
-	if !strings.Contains(delivery, `"Signature"`) {
+	if !isSigned(delivery) {
 		return 0, fmt.Errorf("%w: the delivery is not a signed envelope: %.*s", errSNS, formErrorHead, delivery)
 	}
 
 	return took, nil
+}
+
+// isSigned reports whether a delivery is an envelope with a signature in it: a
+// JSON document whose Signature is not empty. An envelope that names an empty
+// Signature is what an unsigned delivery looks like, and the time it took proves
+// no key was used.
+func isSigned(delivery string) bool {
+	var envelope struct {
+		Signature string `json:"Signature"`
+	}
+
+	return json.Unmarshal([]byte(delivery), &envelope) == nil && envelope.Signature != ""
 }
 
 // firstDelivery waits for the first message of a queue, as take does, and

@@ -319,8 +319,13 @@ func (o *options) check() error {
 		return fmt.Errorf("-profile %q: want %s or %s", o.profile, profileFull, profileQuick)
 	}
 
-	if o.reps < 1 || o.startupRuns < 1 || o.firstUseRuns < 1 || o.idleRuns < 1 {
-		return errors.New("-reps, -startup-runs, -first-use-runs and -idle-runs must be at least 1")
+	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
+		return errors.New("-reps, -startup-runs and -idle-runs must be at least 1")
+	}
+
+	if o.firstUseRuns < minFirstUseRuns {
+		return fmt.Errorf("-first-use-runs %d: want at least %d, the fewest a side with which the rank-sum test can "+
+			"fail a first use", o.firstUseRuns, minFirstUseRuns)
 	}
 
 	return nil

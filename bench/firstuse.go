@@ -23,10 +23,17 @@ import (
 // compare gate judges this metric on them (compare.go, "rankSumZ").
 
 const (
+	// loadgenFirst is the loadgen command that times a first use.
+	loadgenFirst = "first"
 	// defaultFirstUseRuns is how many containers a side starts to time a first
-	// use. A key generation takes 15 to 300 ms, so no fewer than about 30 runs
-	// tell a doubled one from chance: docs/standards.md has the numbers.
+	// use. A key generation takes 15 to 300 ms, so the runs of a side overlap
+	// whatever the key costs, and it takes about 30 to flag a doubled one nine
+	// times in ten (rankSumLimit, compare.go, has the numbers).
 	defaultFirstUseRuns = 30
+	// minFirstUseRuns is the fewest runs a side may have: five a side are the
+	// first count at which every head run above every base run reaches
+	// rankSumLimit (rankReach), so fewer could never fail a first use.
+	minFirstUseRuns = 5
 	// firstUseTimeout is the longest `loadgen first` may take.
 	firstUseTimeout = 2 * time.Minute
 )
@@ -154,7 +161,7 @@ func (r *runner) firstUseRun(ctx context.Context, t target, w firstUseWorkload) 
 
 	var run firstUseRun
 
-	err = r.loadgen(ctx, inst.name, firstUseTimeout, &run, "first", "-service", w.Service())
+	err = r.loadgen(ctx, inst.name, firstUseTimeout, &run, loadgenFirst, "-service", w.Service())
 	if err != nil {
 		return 0, err
 	}

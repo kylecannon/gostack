@@ -88,7 +88,7 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = cellCommand(ctx, args[1:])
 	case "agentic":
 		result, err = agenticCommand(ctx, args[1:])
-	case "first":
+	case loadgenFirst:
 		result, err = firstUseCommand(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown workload %q, want cell, agentic or first", args[0])

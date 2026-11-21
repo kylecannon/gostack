@@ -2,8 +2,18 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,8 +22,9 @@ import (
 
 // testRuns is how many runs a side of these tests has.
 const (
-	testRuns    = 30
-	serviceFlag = "-service"
+	testRuns     = 30
+	serviceFlag  = "-service"
+	endpointFlag = "-endpoint"
 )
 
 // ramp is testRuns runs from start, step apart.
@@ -43,7 +54,7 @@ func Test_loadgen_first_times_a_signed_sns_delivery(t *testing.T) {
 
 	var out bytes.Buffer
 
-	err := loadgenMain(t.Context(), []string{"first", serviceFlag, serviceSNS, "-endpoint", c.endpoint}, &out)
+	err := loadgenMain(t.Context(), []string{loadgenFirst, serviceFlag, serviceSNS, endpointFlag, c.endpoint}, &out)
 	require.NoError(t, err)
 
 	var run firstUseRun
@@ -52,10 +63,111 @@ func Test_loadgen_first_times_a_signed_sns_delivery(t *testing.T) {
 	assert.Positive(t, run.Micros, "the clock ran from CreateTopic to the signed delivery")
 }
 
+// A delivery that names an empty Signature is what an unsigned envelope looks
+// like, and the time to it proves no key was made: the run fails. The gateway
+// answers the receive with a real signed delivery, so a proxy in front of it
+// empties the signature, the one thing the check reads.
+func Test_loadgen_first_refuses_a_delivery_with_an_empty_signature(t *testing.T) {
+	c := snsServer(t)
+
+	upstream, err := url.Parse(c.endpoint)
+	require.NoError(t, err)
+
+	var blanked atomic.Int64
+
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		answer, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("read the answer: %w", readErr)
+		}
+
+		answer, ok := blankSignature(answer)
+		if ok {
+			blanked.Add(1)
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(answer))
+		resp.ContentLength = int64(len(answer))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(answer)))
+
+		return nil
+	}
+
+	front := httptest.NewServer(proxy)
+	t.Cleanup(front.Close)
+
+	var out bytes.Buffer
+
+	err = loadgenMain(t.Context(), []string{loadgenFirst, serviceFlag, serviceSNS, endpointFlag, front.URL}, &out)
+
+	require.ErrorIs(t, err, errSNS)
+	require.ErrorContains(t, err, "not a signed envelope")
+	assert.Positive(t, blanked.Load(), "the delivery was signed until the proxy emptied it")
+	assert.Empty(t, out.String())
+}
+
+// signedField is the Signature of an envelope as the gateway writes it.
+var signedField = regexp.MustCompile(`"Signature": "[^"]*"`)
+
+// blankSignature empties the Signature of every delivery in a ReceiveMessage
+// answer, and states the MD5 of the changed body, which the SQS client checks.
+// ok is false, and the answer unchanged, for anything else.
+func blankSignature(answer []byte) ([]byte, bool) {
+	var doc map[string]any
+
+	if json.Unmarshal(answer, &doc) != nil {
+		return answer, false
+	}
+
+	messages, _ := doc["Messages"].([]any)
+	blanked := false
+
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		body, _ := msg["Body"].(string)
+
+		emptied := signedField.ReplaceAllString(body, `"Signature": ""`)
+		if emptied == body {
+			continue
+		}
+
+		msg["Body"] = emptied
+		msg["MD5OfBody"] = fmt.Sprintf("%x", md5.Sum([]byte(emptied)))
+		blanked = true
+	}
+
+	if !blanked {
+		return answer, false
+	}
+
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return answer, false
+	}
+
+	return out, true
+}
+
+func Test_isSigned_wants_a_non_empty_signature_in_a_json_envelope(t *testing.T) {
+	for _, tt := range []struct {
+		name, delivery string
+		want           bool
+	}{
+		{name: "a signature", delivery: `{"Type":"Notification","Signature":"abc="}`, want: true},
+		{name: "an empty signature", delivery: `{"Type":"Notification","Signature":""}`},
+		{name: "no signature", delivery: `{"Type":"Notification","Message":"first"}`},
+		{name: "not an envelope", delivery: `first`},
+		{name: "the word in a message", delivery: `{"Message":"\"Signature\""}`},
+	} {
+		assert.Equal(t, tt.want, isSigned(tt.delivery), tt.name)
+	}
+}
+
 func Test_loadgen_first_refuses_a_service_with_no_first_use(t *testing.T) {
 	var out bytes.Buffer
 
-	err := loadgenMain(t.Context(), []string{"first", serviceFlag, serviceSQS}, &out)
+	err := loadgenMain(t.Context(), []string{loadgenFirst, serviceFlag, serviceSQS}, &out)
 
 	require.ErrorIs(t, err, errNoWorkload)
 	assert.Empty(t, out.String())
@@ -89,6 +201,25 @@ func Test_compare_a_doubled_first_use_fails_though_the_ranges_overlap(t *testing
 	assert.Contains(t, out, "### Regressions (1)")
 	assert.Contains(t, out, "first use")
 	assert.Contains(t, out, firstUseCell(serviceSNS))
+	assert.Contains(t, out, "rank-sum z = +", "the row says which rule judged it, and the z score it reached")
+}
+
+// The rank-sum rule serves any metric that holds its runs, so it must read the
+// direction the way the ranges do: for a throughput the runs falling is the
+// regression.
+func Test_rank_sum_rule_reads_a_throughput_by_its_direction(t *testing.T) {
+	slow, fast := ramp(100, 3), ramp(1000, 3)
+	rank := func(base, head []float64, lowerIsBetter bool) metric {
+		return metric{
+			baseRuns: base, headRuns: head, base: spreadOf(base), head: spreadOf(head),
+			lowerIsBetter: lowerIsBetter, limit: limitFirstUse, scale: 1,
+		}
+	}
+
+	assert.Equal(t, worse, rank(slow, fast, true).judge(), "a cost that rose is worse")
+	assert.Equal(t, improved, rank(fast, slow, true).judge(), "a cost that fell is better")
+	assert.Equal(t, worse, rank(fast, slow, false).judge(), "a throughput that fell is worse")
+	assert.Equal(t, improved, rank(slow, fast, false).judge(), "a throughput that rose is better")
 }
 
 // The accepted list holds a first use regression by cell and metric name, and a
@@ -185,9 +316,22 @@ func Test_first_use_is_written_to_the_result_and_the_report(t *testing.T) {
 	assert.NotContains(t, testReport(hostA).markdown(), "## First use")
 }
 
-func Test_options_refuse_no_first_use_runs(t *testing.T) {
-	_, err := parseOptions([]string{"-first-use-runs", "0"})
-	require.Error(t, err)
+// Below five runs a side, no head can reach the rank-sum limit: a run count
+// that could never fail a first use is refused when the flags are read.
+func Test_options_refuse_too_few_first_use_runs_to_fail_one(t *testing.T) {
+	for _, runs := range []string{"0", "1", "4"} {
+		_, err := parseOptions([]string{"-first-use-runs", runs})
+		require.ErrorContains(t, err, "-first-use-runs "+runs, runs)
+	}
+
+	_, err := parseOptions([]string{"-first-use-runs", strconv.Itoa(minFirstUseRuns)})
+	require.NoError(t, err)
+
+	few := metric{baseRuns: ramp(0, 1)[:minFirstUseRuns], headRuns: ramp(0, 1)[:minFirstUseRuns]}
+	assert.GreaterOrEqual(t, few.rankReach(), rankSumLimit, "the least count can still fail a metric")
+
+	short := metric{baseRuns: ramp(0, 1)[:minFirstUseRuns-1], headRuns: ramp(0, 1)[:minFirstUseRuns-1]}
+	assert.Less(t, short.rankReach(), rankSumLimit, "one fewer cannot")
 
 	opts, err := parseOptions(nil)
 	require.NoError(t, err)
