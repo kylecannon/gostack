@@ -751,10 +751,10 @@ queue.
   waiting for any of them, and no delivery is refused or dropped for lack of
   room while the server runs. The cost is memory: every delivery waiting for
   a slow or stuck destination stays in its lane, body included, until the
-  destination answers, and nothing caps that. A delivery to an HTTP endpoint
-  that has a dead-letter queue also holds its dead-letter call, built when
-  the message was published, so it costs 1.5 to 8 times the message
-  (SQ-327 owns reducing that). Publish answers 200 with its
+  destination answers, and nothing caps that. A waiting delivery holds one
+  body: its dead-letter call is built only if the delivery fails, so a
+  dead-letter queue adds nothing to the memory of a delivery that waits.
+  Publish answers 200 with its
   MessageId whatever happens to the deliveries.
 - **Failure.** A delivery the destination refuses (the queue is gone, or the
   send fails) goes to the tail of its subscription's dead-letter queue's lane,
@@ -1264,11 +1264,19 @@ cites the lines.
   same flush. It waits out its leader's backoff and is due no sooner than its
   leader, and its own backoff leaves the leader to be saved alone. A follower
   left unsaved because its leader was not saved is dirty again with no
-  failure counted.
+  failure counted. A follower whose leader is not persisted
+  (`PERSIST_DYNAMODB=0` with dynamodbstreams on) is registered without it and
+  is never saved, by timer or by hand, and `Flush` reports no error for it.
 - Of a service's run of failed saves the log shows the first in full, each one
-  whose error differs from the one before, every tenth with the count, and
+  whose failure differs from the one before's, every tenth with the count, and
   `save recovered after N failures` when a save succeeds, each line with the
-  service's name.
+  service's name. A failure is the set of the leaf errors of the save's error,
+  each with the text of the wraps around it and with random temp names
+  replaced (the error text holds a temp file's random name, so the text alone
+  would differ at every retry). The innermost cause alone would hide a new
+  failure behind an old one with the same errno, `EACCES` creating a temp file
+  and then `EACCES` opening the base directory, and the order of the errors in
+  a join is not a change.
 
 **Loading and unloadable files:**
 
@@ -1289,6 +1297,37 @@ cites the lines.
   that service: it starts empty, as an unsafe service does, so it never runs a
   state the engine will not save, and its assets are neither swept nor used (S3
   keeps its bodies in memory).
+- A base directory that exists and cannot be opened (`EACCES`, `EIO`, a stale
+  mount) at the startup `Load`, the first one of the process, turns saving and
+  loading off for every registered service until the process restarts, with one
+  logged error: the services start empty, and the first save after the fault
+  clears would replace the state files nobody read. S3 keeps its bodies in
+  memory then, and writes no asset. A missing base directory is a fresh start.
+  A later `Load` (`POST /_gostack/state/load`) that cannot open the base
+  directory answers 500 with that error and changes nothing: the services hold
+  the state they had, keep saving, and `/_gostack/health` reports them as it did.
+- A `Snapshot` that panics fails the save of its own service and turns saving
+  and loading off for that service until the process restarts, as a failed
+  sync does: the panic may have left a lock of the service held, and a retry
+  or the `Restore` of a later `Load` would wait for it inside the guard, so
+  the engine never calls the service again, its `Followed(false)` included. It
+  is logged once, with the stack, `/_gostack/health` reports `persisted: false`
+  for the service, and the other services in the flush, and every flush after,
+  still save.
+- A panic in a `Committer` or a `Leader`, which is not in a `Snapshot`, ends
+  the flush it passes through before it goes on: each service the flush took
+  and did not save is dirty again, each leader told its follower is saved is
+  told the flush is over, the guard is released and the timer is armed. On the
+  timer's flush it is logged with its stack and the process goes on; a `Flush`
+  by hand, which the shutdown's `Stop` and `Close` end with, lets it pass to its
+  caller, such as the HTTP server's recovery of the `POST /_gostack/state/save`
+  handler, so `Flush` is not free of panics. The service that was under way
+  fails with a backoff, so a panic at every flush does not make the timer spin.
+  A leader's `Followed(false)` that panics while the flush ends is logged with
+  its stack and does not stop the rest of the cleanup. At shutdown, `cmd/gostack`
+  recovers a panic from the engine's `Stop`, `Flush` or `Close`, logs it with
+  its stack, and still runs the saves and the `Close` after it; `Close` releases
+  the assets even when its own `Stop` panicked.
 
 **Confinement.** Every state file operation goes through an `os.Root` opened on
 the base directory: reads, temp files, fsync, renames, moving a file aside and
@@ -1306,8 +1345,11 @@ outside the base directory.
   nor saved, as above. The link and whatever it points at are left alone.
 - A temp file is created with `O_EXCL` under a random name, so a file or link
   planted under a temp name is never opened. Leftover temp files, from a crash
-  or planted, are deleted after the next save; a link among them is removed as a
-  link.
+  or planted, are deleted after the next save, and by Load, which removes the
+  temp files of each service's state files in every format, beside the file
+  and, for a state file that is a link, beside the file the links lead to,
+  where a save puts its temp file; only temp names of the state file's own name
+  go. A link among them is removed as a link.
 - A link whose target fails to load is the one moved aside; its target is
   untouched.
 
@@ -1425,6 +1467,10 @@ is untouched.
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last
   `Snapshot` in this process took less time goes first, then name order. A
+  follower and its leader (see load order) are one unit that goes by the larger
+  of their two times, with the leader first and the follower right after it, so
+  a slow dynamodbstreams does not run before faster services whatever dynamodb's
+  own time. A
   service a `Load` restored has the time its `Restore` took as that figure
   until its next `Snapshot`, so a large S3 goes last from a restart's first
   flush; a service neither restored nor snapshotted counts as zero, so with no
@@ -1432,8 +1478,14 @@ is untouched.
   `Snapshot` first. A `Snapshot`, like a sync,
   cannot be interrupted, and S3's grows with its objects (about 3 µs each), so
   without the measured order a large S3 with nothing pending would take a
-  short shutdown save's whole deadline before SQS or STS is written. The
-  first pass takes
+  short shutdown save's whole deadline before SQS or STS is written. When the
+  budget is too small for every dirty service, the order does not save them
+  all: the write of the service ordered last is lost, either way. A pair
+  that goes by the larger of its two times takes the sum of them, so a faster
+  service behind it can lose its write to a pair that is slower than it was
+  ordered for, and a fast leader behind a service faster than its slow
+  follower waits for that service. The order is a heuristic for the usual
+  budget, not a guarantee under a short one. The first pass takes
   every service's snapshot into temp files and renames at once each one whose
   assets have nothing to sync, and no earlier sync to wait for, when its
   `Snapshot` returns: services with no assets among them. It defers the
@@ -1451,7 +1503,46 @@ is untouched.
   The services share that one deadline, so two services with assets to sync
   would share its time in order; S3 is the only one today.
 - A shutdown or a save by hand (`POST /_gostack/state/save`) that finds the
-  timed save running lends it its own deadline and waits. A `Snapshot` cannot
+  timed save writing first saves, beside it and at once, every dirty service
+  whose save the timed save has not begun (SQ-384): one it did not take, one
+  it has finished, and one it took and has not reached yet, queued behind
+  another service's slow `Snapshot` or sync. A queued one moves to the save
+  beside it, and the timed save skips it when it gets there. A service moves
+  only from the timed save to a save by hand, never back, so the timed save
+  never takes what a save that joined it took first. The save by hand saves the
+  services it moved before its own, so one with no measured `Snapshot` yet,
+  however slow, never queues them behind itself. A
+  moved service the save by hand does not reach before its deadline was never
+  tried: it is dirty again, counted as no failure and with no backoff. A save
+  by hand that comes while a `Load` or reset waits does not join the timed
+  save: it waits behind them, as it did before SQ-384, so the load restores
+  what was on disk when it was called. Once the timed save has
+  begun a service's save, it holds the service until that save ends, renamed
+  or not, so a service it has already renamed is free again while it is still
+  in a slow `Snapshot` or sync of another. It also holds the leader of a
+  follower it holds: dynamodb renamed but dynamodbstreams not yet snapshotted is one unit,
+  so no save beside it puts a newer table on disk ahead of a streams file cut
+  from the older one, and a follower is still saved only right after its
+  leader's rename in the same save. dynamodb and dynamodbstreams move
+  together or not at all: once the timed save has begun dynamodb's save,
+  dynamodbstreams stays with it. The timed save tells dynamodb
+  `Followed(false)` when the pair's saves end, before it frees them, so its
+  end never drops the cut of a save beside it that took the pair next. Two
+  saves never hold one service, so
+  each state file still has one writer. The timed save holds the save guard
+  shared: a load or reset waits for both, and the last of them to end frees
+  it. A `Snapshot` or sync cannot be cut short, so this is what keeps a
+  timed save inside dynamodb's long `Snapshot`, or stuck in the S3 asset
+  sync, from costing the shutdown the SQS write acknowledged after it began,
+  or the one it took with dynamodb and had not reached. So a timed save stuck
+  in a slow sync holds the shutdown until the shutdown's deadline and no
+  longer: the shutdown returns then with every other service saved and only
+  the service whose save the timed save had begun still unsaved, and the
+  follower pinned with it: dynamodbstreams stays unsaved alongside dynamodb
+  while dynamodb's save had begun, since it is saved only right after
+  dynamodb's rename.
+  Only then does the waiter turn to what the timed save holds: it lends the
+  timed save its own deadline and waits. A `Snapshot` cannot
   be cut short, so cancelling the timed save would throw away a snapshot
   already taken and make the shutdown take a second one. The timed save
   finishes, or is cancelled when the waiter's deadline passes; of several
@@ -1491,12 +1582,15 @@ is untouched.
   the removal of bodies the loaded state does not name, the load marks the
   service dirty and arms the timer, whose save deletes them once the load is
   done.
-  So a timed save stuck in a slow sync holds the shutdown until the
-  shutdown's deadline and no longer: the shutdown returns then with what the
-  timed save held still unsaved. A shutdown whose save ran out of time still
-  makes the last flush after `Close`, with what is left of `Close`'s time.
+- A shutdown whose save ran out of time still makes the last flush after
+  `Close`, with what is left of `Close`'s time. That flush is skipped when a
+  service's `Close` ran `Close`'s deadline out, since a flush under an
+  ended deadline renames nothing.
 - Stated limit: writes acknowledged since the last save are lost at
-  `docker stop` when the shutdown save takes longer than its window, and the
+  `docker stop` when the shutdown save takes longer than its window for the
+  service itself: its own `Snapshot` or sync, or the one a timed save is
+  taking of it, outlasts the window. A service whose save the timed save has
+  not begun is saved beside it (SQ-384). The
   last state file on disk is what the next start loads. The window is `Save`
   minus `Work` in the shutdown table: 1.125 s to 4.5 s at the default
   `SHUTDOWN_TIMEOUT=5`. A sync writes back what every writer on the same
@@ -1646,10 +1740,11 @@ Kinesis. The state is two files, LocalStack's split:
   whether a dynamodbstreams save follows it in the flush (`persist.Leader`):
   with `PERSIST_DYNAMODBSTREAMS=0`, or dynamodbstreams in its own backoff,
   the cut copies no records. The copy is dropped once the streams snapshot
-  has written it, and at the end of every flush that copied it whatever
-  happened (the engine tells dynamodb `Followed(false)`: a failed table save,
-  a streams save that failed before its snapshot, a flush cancelled between
-  the two saves, Stop's flush), or at the next cut, so it lives for one flush
+  has written it, and once both saves of the pair have ended in every flush
+  that copied it whatever happened (the engine tells dynamodb
+  `Followed(false)` before it frees the pair for another flush: a failed
+  table save, a streams save that failed before its snapshot, a flush
+  cancelled between the two saves, Stop's flush), or at the next cut, so it lives for one flush
   and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
   the item images are shared with the shard. A shard at its bound holds at
   most `MaxBytes / RecordOverhead`, about 1,048,576 records, so the copy is
@@ -1676,8 +1771,9 @@ Kinesis. The state is two files, LocalStack's split:
   records back into the shards of the tables dynamodb restored. The engine
   takes the order from a declaration, `persist.Follower`, which the
   dynamodbstreams snapshotter implements, not from the names. A flush saves
-  dynamodbstreams only right after it renamed dynamodb's file, whatever their
-  last durations and whether or not a stream record marked it, so the
+  dynamodbstreams only right after it renamed dynamodb's file, whether or not
+  a stream record marked it, and puts the pair among the other services by
+  the larger of their last durations, so the
   streams file is of the cut the table file holds and never of a later one.
   A kill between the table file's commit and the streams file's commit
   restores the table with fewer stream records: each shard written since the

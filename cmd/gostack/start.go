@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -134,7 +135,7 @@ func loadState(ctx context.Context, services *providers, eng *persist.Engine) er
 		return fmt.Errorf("load persisted state: %w", err)
 	}
 
-	services.useAssets(eng, assets)
+	services.useAssets(eng, assets, err)
 
 	return nil
 }
@@ -348,6 +349,28 @@ type saver struct {
 	services *providers
 	first    sync.Once
 	rest     sync.Once
+
+	// logged is the text of the last save error logged, so a failure every save
+	// repeats, such as a base dir the startup load refused, is logged once.
+	logMu  sync.Mutex
+	logged string
+}
+
+// logSave logs err, a save's error, unless it is nil or the error last logged.
+func (s *saver) logSave(err error) {
+	if err == nil {
+		return
+	}
+
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+
+	if err.Error() == s.logged {
+		return
+	}
+
+	s.logged = err.Error()
+	slog.Error("save persisted state", "error", err)
 }
 
 // saveFirst writes the state that changed, until ctx ends: the save that runs
@@ -357,11 +380,24 @@ type saver struct {
 // saves that follow. A write cut short keeps the old file.
 func (s *saver) saveFirst(ctx context.Context) {
 	s.first.Do(func() {
-		err := s.eng.Stop(ctx)
-		if err != nil {
-			slog.Error("save persisted state", "error", err)
-		}
+		s.step("stop", func() error { return s.eng.Stop(ctx) })
 	})
+}
+
+// step runs one of the shutdown's calls into the engine and logs its error. A
+// panic of it, from a service's Committer or Leader, passes through the engine
+// to here: it is logged with its stack, and the steps after it still run, so
+// the services behind it are saved and the assets released.
+func (s *saver) step(name string, call func() error) {
+	defer func() {
+		r := recover()
+		if r != nil {
+			slog.Error("persisting state panicked; the steps after it still run",
+				"step", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+
+	s.logSave(call())
 }
 
 // save makes saveFirst when it has not run, and then writes what changed since,
@@ -388,20 +424,19 @@ func (s *saver) save(saveCtx, closeCtx context.Context) {
 		// A first save that ran out of time has said so; this one would only
 		// fail the same way.
 		if saveCtx.Err() == nil {
-			err := s.eng.Flush(saveCtx)
-			if err != nil {
-				slog.Error("save persisted state", "error", err)
-			}
+			s.step("flush", func() error { return s.eng.Flush(saveCtx) })
 		}
 
+		// closeServices reports false only once closeCtx has ended, and a flush
+		// under an ended context writes nothing
+		// (Test_Engine_Close_PastItsDeadlineWritesNothing), so the skip costs no
+		// save. What was acknowledged before the shutdown does not wait for this
+		// flush: Stop saves it, beside a timed save that is under way.
 		if !s.closeServices(closeCtx) {
 			return
 		}
 
-		err := s.eng.Close(closeCtx)
-		if err != nil {
-			slog.Error("save persisted state", "error", err)
-		}
+		s.step("close", func() error { return s.eng.Close(closeCtx) })
 	})
 }
 
