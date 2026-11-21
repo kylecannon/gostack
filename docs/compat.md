@@ -443,19 +443,67 @@ caller's account and region, as LocalStack does.
 - An `AttributeUpdates` `ADD` or `DELETE` of a number set: gostack compares the
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
-- A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project, and a PartiQL `SELECT` of one with such
-  an attribute in its list, at any length: LocalStack answers "Global secondary
-  index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal on a `Query` and a
-  `Scan`.
-- `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
-  parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
-  not have empty statement." / "The statement was empty." and prefixes the
-  count message with "Validation failed in TransactStatements[i]: "; gostack's
-  texts differ. `BatchExecuteStatement` with an unknown
-  `ReturnValuesOnConditionCheckFailure` answers `500 InternalFailure` in the
-  image and `200` here with the statement answered.
+- A global index read that names an attribute the index does not project
+  (`ProjectionExpression`, `AttributesToGet`, a PartiQL `SELECT` list, and a
+  `Query` filter) is refused with the image's messages, as the Query and Scan
+  pages say ("you can only request attributes that are projected into the
+  index. Global secondary index queries cannot fetch attributes from the
+  parent table."). The attributes are listed in the image's order, which is
+  that of the `HashSet` it lists them from: by bucket of the set. Where two
+  names fall in one bucket the image lists them in the order the set was
+  filled, which gostack sorts by text, so a list of any length can order two
+  names differently (seen from five names, and at 15 and 18); the same names,
+  the same status. A `Query` filter lists them by name.
+- A filter on an attribute an index does not project, where the image does not
+  refuse it: a `Scan` of a global index and a statement's `WHERE` on one, which
+  the image evaluates against the table's item and gostack against the
+  index's, as the Query and Scan pages say a global index cannot fetch from
+  the table; a `Scan` or a statement's `WHERE` on a local index, which gostack
+  evaluates against the index's item as well, where the image evaluates the
+  table's; and a `Query` filter on a local index, which the image refuses
+  ("Secondary index X does not project one or more filter attributes") and
+  gostack answers.
+- A SELECT of paths in one list at different elements, as in `l[1][0],
+  l[2].z`: ExecuteStatement keys a path through an element past the first by
+  that element, and answers the elements the SELECT names together. The image
+  also drops a later such path from the answer (`l[1].p, l[2].q.r` answers
+  `l[1]` alone), and keys a path whose element comes after one that moved
+  back by its full path (`l[1][0], l[0]` answers `l[0]` and `l[1][0]`);
+  gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
+  through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
+  key, `l[1]`, which holds one value in both. When the paths share a key the
+  image keeps one path by an order gostack does not reproduce (no rule we
+  know fits every statement probed), and gostack keeps the first in name order that the item holds, with what that
+  path names and nothing of the others; either way the answer is a path the
+  statement names, never a value of a path it does not. An attribute named by
+  the key itself (`"l[1]"`) keeps it in both. A statement with one path, or
+  with all its paths in the first element they name, answers as the image
+  does.
+- A path step written `m['x']` (the image answers it as `m.x`), a projection
+  alias (`SELECT a AS z`, which the image refuses with "Aliasing is not
+  supported") and a block comment (`/* ... */`, which the image reads as white
+  space, where `--` comments are read by both): gostack's statement parser does
+  not read them, and answers "Statement wasn't well formed". None is new; all
+  are outside the projection work above. A statement with one of them in a
+  batch or a transaction is no kind for the check that refuses reads and writes
+  together, where the image counts it as the kind it is.
+- A statement in a batch or a transaction whose key is over 2,048 bytes (a hash
+  key) or 1,024 bytes (a range key): the image answers a batch statement's
+  `ValidationError` with no `TableName` and a transaction's with a
+  `CancellationReasons` entry for it; gostack names the table in the batch's
+  answer and answers the transaction with the message alone.
+- `EXISTS(...)` around an expression other than a `SELECT` (`EXISTS(garbage)`,
+  `EXISTS(NULL)`) inside `ExecuteTransaction`: the image answers "Unsupported
+  operation in transaction."; gostack answers "Statement wasn't well formed".
+  Outside a transaction both answer that EXISTS is only for
+  `ExecuteTransaction`.
+- `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
+  within ExecuteTransaction must specify the primary key in the where clause.";
+  the image answers "Reads on indices are not supported within transactions.".
+  `BatchExecuteStatement` with an unknown `ReturnValuesOnConditionCheckFailure`
+  answers a `500 InternalFailure` for a write in the image (a LocalStack
+  crash), `200` with the statement answered for a read; gostack answers the
+  statement's `ValidationError` for both.
 - A legacy filter or `Expected` with two or more invalid conditions: gostack
   names the first in attribute-name order, the image the first in the request's
   JSON order, which the decoded map does not keep. With one invalid condition

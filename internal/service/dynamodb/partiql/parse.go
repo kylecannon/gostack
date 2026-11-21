@@ -8,6 +8,10 @@ import (
 // Error is a statement DynamoDB refuses, with DynamoDB Local's message.
 type Error struct {
 	Message string
+	// ExistsOnly is set on a statement that is not well formed but is an
+	// EXISTS around an expression, which a caller outside a transaction refuses
+	// as an EXISTS (existsOperand).
+	ExistsOnly bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -18,6 +22,10 @@ const MsgNotWellFormed = "Statement wasn't well formed, can't be processed: "
 // errMalformed is the sentinel a parse step returns for a statement that
 // does not parse; Parse turns it into the message naming the statement.
 var errMalformed = &Error{}
+
+// errExistsExpression is the sentinel for an EXISTS around an expression, a
+// statement Parse refuses as not well formed with ExistsOnly set.
+var errExistsExpression = &Error{}
 
 // atError is a message that names the token at.
 func atError(msg string, at Pos) *Error {
@@ -44,6 +52,10 @@ func Parse(src string) (*Statement, error) {
 
 	if err == errMalformed { //nolint:errorlint // the sentinel itself, never wrapped
 		return nil, &Error{Message: MsgNotWellFormed + src}
+	}
+
+	if err == errExistsExpression { //nolint:errorlint // the sentinel itself, never wrapped
+		return nil, &Error{Message: MsgNotWellFormed + src, ExistsOnly: true}
 	}
 
 	if err != nil {
@@ -445,13 +457,15 @@ func (p *parser) returning(s *Statement) error {
 
 func (p *parser) existsStatement() (*Statement, error) {
 	err := p.expect("(")
-	if err == nil {
-		err = p.keyword("SELECT")
-	}
-
 	if err != nil {
 		return nil, err
 	}
+
+	if !p.peek().is("SELECT") {
+		return nil, p.existsOperand()
+	}
+
+	p.i++
 
 	s, err := p.selectStatement()
 	if err == nil {
@@ -465,6 +479,42 @@ func (p *parser) existsStatement() (*Statement, error) {
 	s.Kind = Exists
 
 	return s, nil
+}
+
+// existsOperand reads what follows `EXISTS(` when it is not a SELECT, and
+// returns the error for it. The image reads `EXISTS(...)` as a call of a
+// function around an expression, so a statement that is one, empty or around
+// anything but UPDATE, DELETE or FROM, is an EXISTS it can refuse outside a
+// transaction (NULL, TRUE, NOT a, INSERT INTO ... and a name all are), where an
+// EXISTS around one of those, or with something after it, is not well formed
+// (verification/SQ-439 round3 exists-cand.log, 78 statements probed).
+func (p *parser) existsOperand() error {
+	first := p.peek()
+	if first.kind == tokEOF || first.is("UPDATE") || first.is("DELETE") || first.is("FROM") {
+		return errMalformed
+	}
+
+	for depth := 1; depth > 0; p.i++ {
+		switch t := p.peek(); {
+		case t.kind == tokEOF:
+			return errMalformed
+		case t.punct("("):
+			depth++
+		case t.punct(")"):
+			depth--
+		default:
+		}
+	}
+
+	if p.peek().punct(";") {
+		p.i++
+	}
+
+	if p.peek().kind != tokEOF {
+		return errMalformed
+	}
+
+	return errExistsExpression
 }
 
 // path reads a document path: a name, then .name and [n] steps.

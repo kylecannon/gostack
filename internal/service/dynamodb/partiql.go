@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -80,8 +81,55 @@ func (p *Provider) runStatement(
 	return out, nil
 }
 
+// checkStatementText makes the check a batch and a transaction make of each
+// statement as it takes it up, before they parse it: it is given and holds at
+// most 8,192 bytes, or the whole call is refused. empty is the message for a
+// statement missing or empty.
+func checkStatementText(src *string, empty string) error {
+	switch {
+	case src == nil || *src == "":
+		return value.Invalid(empty)
+	case len(*src) > maxStatementBytes:
+		return value.Invalid(msgStatementLong)
+	default:
+		return nil
+	}
+}
+
+// mixing refuses the call at the first statement that is a read where the
+// first was a write, or the other way, as the image does: before it looks at
+// the statements after that one, and so before an empty or long one among them,
+// and whatever is wrong with the statement itself but its syntax (SQ-467
+// image-probe.log). A statement that did not parse has no kind.
+type mixing struct {
+	seen  bool
+	reads bool
+	msg   string
+}
+
+// check refuses stmt when it mixes reads and writes with the statements
+// before it.
+func (m *mixing) check(stmt *partiql.Statement) error {
+	if stmt == nil {
+		return nil
+	}
+
+	reads := stmt.Kind == partiql.Select
+
+	switch {
+	case !m.seen:
+		m.seen, m.reads = true, reads
+	case reads != m.reads:
+		return value.Invalid(m.msg)
+	default:
+	}
+
+	return nil
+}
+
 // parseStatement parses a request's statement and checks it has a value for
-// each of its parameters. An EXISTS parses only where exists allows it, in a
+// each of its parameters; one that does not is returned with the error, as it
+// has a kind (mixing). An EXISTS parses only where exists allows it, in a
 // transaction.
 //
 //nolint:revive // flag-parameter: whether the operation runs EXISTS
@@ -96,18 +144,32 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 
 	stmt, err := partiql.Parse(*src)
 	if err != nil {
-		return nil, statementError(err)
+		return nil, parseFailure(err, exists)
 	}
 
 	if stmt.Kind == partiql.Exists && !exists {
-		return nil, value.Invalid(partiql.MsgNotWellFormed + *src)
+		return nil, value.Invalid(msgExistsOnlyTx)
 	}
 
 	if stmt.Params > len(params) {
-		return nil, value.Invalid(partiql.MsgParamCount)
+		return stmt, value.Invalid(partiql.MsgParamCount)
 	}
 
 	return stmt, nil
+}
+
+// parseFailure is the answer to a statement that did not parse. Outside a
+// transaction (exists false) an EXISTS around an expression is refused as an
+// EXISTS, where inside one it is not well formed.
+//
+//nolint:revive // flag-parameter: whether the operation runs EXISTS
+func parseFailure(err error, exists bool) error {
+	pe, ok := errors.AsType[*partiql.Error](err)
+	if ok && pe.ExistsOnly && !exists {
+		return value.Invalid(msgExistsOnlyTx)
+	}
+
+	return statementError(err)
 }
 
 // executeSelect runs a SELECT as a Query or a Scan.
@@ -450,6 +512,18 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 	return &text, paths, nil
 }
 
+// wholePaths renders paths as a ProjectionExpression of the paths themselves.
+func wholePaths(paths []partiql.Path, r *render) *string {
+	texts := make([]string, len(paths))
+	for i, path := range paths {
+		texts[i] = r.path(path)
+	}
+
+	text := strings.Join(texts, ", ")
+
+	return &text
+}
+
 // shapeItems puts each projected path of items under its alias; with no
 // paths, items are as read. It never returns nil, so an empty result is [].
 func shapeItems(items []map[string]api.AttributeValue, paths []partiql.Path) []map[string]api.AttributeValue {
@@ -482,11 +556,21 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 
 	out := make(value.Item, size)
 
+	var cuts cutPaths
+
 	for _, path := range paths {
+		if i := indexCut(path); i > 0 {
+			cuts.add(path, i)
+
+			continue
+		}
+
 		if v, ok := lookupPath(item, path); ok {
 			out[path.Alias()] = v
 		}
 	}
+
+	cuts.put(out, item)
 
 	return out
 }

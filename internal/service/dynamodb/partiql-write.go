@@ -16,6 +16,9 @@ import (
 const (
 	msgStatementEmpty  = "The statement was empty."
 	msgExistsCondition = "EXISTS() must contain a single item read with additional condition"
+	// msgExistsOnlyTx refuses an EXISTS outside ExecuteTransaction, in the
+	// image's words, which name no statement (SQ-467 image-probe.log).
+	msgExistsOnlyTx = "EXISTS can only be used in ExecuteTransaction write requests."
 )
 
 // conditionFailedError is a ConditionalCheckFailedException that carries the item
