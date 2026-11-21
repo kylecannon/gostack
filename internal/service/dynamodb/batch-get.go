@@ -163,7 +163,7 @@ func (c caller) checkBatchGetTable(name string, request api.KeysAndAttributes) (
 		return batchGet{}, err
 	}
 
-	x, err := newExprs(request.ExpressionAttributeNames, nil, request.ProjectionExpression != nil, false, "")
+	x, err := newExprs(c.from, request.ExpressionAttributeNames, nil, request.ProjectionExpression != nil, false, "")
 	if err != nil {
 		return batchGet{}, err
 	}
