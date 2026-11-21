@@ -137,11 +137,11 @@ func (p *Provider) notifyRestore(ctx context.Context, b *Bucket, key string, v *
 	p.raise(ctx, b, key, v, eventRestoreComplete)
 }
 
-// raise delivers the event to every queue the bucket's configuration sends it
-// to. name overrides the event the operation maps to.
+// raise delivers the event to every queue and topic the bucket's configuration
+// sends it to. name overrides the event the operation maps to.
 func (p *Provider) raise(ctx context.Context, b *Bucket, key string, v *Version, name string) {
 	cfg := b.notificationConfig()
-	if cfg == nil || len(cfg.QueueConfigurations) == 0 || !p.client.Bound() {
+	if cfg == nil || len(cfg.QueueConfigurations)+len(cfg.TopicConfigurations) == 0 || !p.client.Bound() {
 		return
 	}
 
@@ -167,6 +167,15 @@ func (p *Provider) raise(ctx context.Context, b *Bucket, key string, v *Version,
 		}
 
 		p.sendEvent(&ev, queue)
+	}
+
+	for i := range cfg.TopicConfigurations {
+		topic := &cfg.TopicConfigurations[i]
+		if !matchesEvent(topic.Events, name) || !matchesFilter(topic.Filter, ev.key) {
+			continue
+		}
+
+		p.sendTopicEvent(&ev, topic)
 	}
 }
 
@@ -265,8 +274,9 @@ func matchesFilter(filter *s3api.NotificationConfigurationFilter, key string) bo
 	return true
 }
 
-// The record is the JSON S3 sends. The members are in the order LocalStack
-// writes them.
+// The record is the JSON S3 sends. Every member is a struct, never a map, so
+// that the members are in the order LocalStack writes them: a map encodes
+// sorted.
 type eventRecord struct {
 	EventVersion      string            `json:"eventVersion"`
 	EventSource       string            `json:"eventSource"`
@@ -274,14 +284,23 @@ type eventRecord struct {
 	EventTime         string            `json:"eventTime"`
 	EventName         string            `json:"eventName"`
 	UserIdentity      principal         `json:"userIdentity"`
-	RequestParameters map[string]string `json:"requestParameters"`
-	ResponseElements  map[string]string `json:"responseElements"`
+	RequestParameters requestParameters `json:"requestParameters"`
+	ResponseElements  responseElements  `json:"responseElements"`
 	S3                eventS3           `json:"s3"`
 	GlacierEventData  *glacierEvent     `json:"glacierEventData,omitempty"`
 }
 
 type principal struct {
 	PrincipalID string `json:"principalId"`
+}
+
+type requestParameters struct {
+	SourceIPAddress string `json:"sourceIPAddress"`
+}
+
+type responseElements struct {
+	RequestID string `json:"x-amz-request-id"`
+	ID2       string `json:"x-amz-id-2"`
 }
 
 type eventS3 struct {
@@ -331,8 +350,8 @@ func (ev *event) record(configID string) eventRecord {
 		AWSRegion:         ev.bucketRegion,
 		EventName:         strings.TrimPrefix(ev.name, "s3:"),
 		UserIdentity:      principal{PrincipalID: recordPrincipal},
-		RequestParameters: map[string]string{"sourceIPAddress": recordSourceIP},
-		ResponseElements:  map[string]string{"x-amz-request-id": shortID(), "x-amz-id-2": recordHostID},
+		RequestParameters: requestParameters{SourceIPAddress: recordSourceIP},
+		ResponseElements:  responseElements{RequestID: shortID(), ID2: recordHostID},
 		S3: eventS3{
 			SchemaVersion:   recordSchemaVersion,
 			ConfigurationID: configID,
@@ -413,7 +432,8 @@ func encodeJSON(v any) ([]byte, error) {
 // delivery is asynchronous: a queue that is gone, or an unbound client, costs
 // a log line and nothing else, as it does in LocalStack. The queue's ARN is the
 // call's lane, so the events for one queue arrive in the order they were
-// raised, and a queue that is slow to take them holds up no other.
+// raised, and a queue that is slow to take them holds up no other. The client's
+// queue has no bound, so only a closed one (the shutdown) refuses the event.
 func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 	queueARN := deref(queue.QueueArn)
 
@@ -441,22 +461,56 @@ func (p *Provider) sendEvent(ev *event, queue *s3api.QueueConfiguration) {
 	call.Lane = queueARN
 
 	queued := p.client.Enqueue(call, func(resp inproc.Response, err error) {
-		logDelivery(ev.bucket, arn.resource, resp, err)
+		logDelivery(ev.bucket, "queue", arn.resource, resp, err)
 	})
 	if !queued {
-		slog.Warn("S3 notification dropped: the delivery queue is full or closed", "bucket", ev.bucket, "queue", arn.resource)
+		slog.Warn("S3 notification dropped: the delivery queue is closed", "bucket", ev.bucket, "queue", arn.resource)
 	}
 }
 
-// logDelivery records a notification that SQS did not take.
-func logDelivery(bucket, queue string, resp inproc.Response, err error) {
+// sendTopicEvent queues the event's message for one topic configuration, as an
+// SNS Publish with the subject S3 gives every notification. It is asynchronous
+// as sendEvent is: a topic that is gone costs a log line. The topic's ARN is the
+// call's lane, so the events for one topic are published in the order they were
+// raised, and SNS fans each out to its subscribers before the next is taken.
+func (p *Provider) sendTopicEvent(ev *event, topic *s3api.TopicConfiguration) {
+	topicARN := deref(topic.TopicArn)
+
+	arn := parseARN(topicARN)
+	if arn.err != nil {
+		slog.Error("S3 notification skipped: unparseable topic ARN", "bucket", ev.bucket, "arn", topicARN)
+
+		return
+	}
+
+	body, err := encodeJSON(notification{Records: []eventRecord{ev.record(deref(topic.Id))}})
 	if err != nil {
-		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, "queue", queue, "error", err)
+		slog.Error("S3 notification skipped: cannot encode the event", "bucket", ev.bucket, "error", err)
+
+		return
+	}
+
+	call := publishCall(arn, ev.account, topicARN, string(body))
+	call.Lane = topicARN
+
+	queued := p.client.Enqueue(call, func(resp inproc.Response, err error) {
+		logDelivery(ev.bucket, "topic", topicARN, resp, err)
+	})
+	if !queued {
+		slog.Warn("S3 notification dropped: the delivery queue is closed", "bucket", ev.bucket, "topic", topicARN)
+	}
+}
+
+// logDelivery records a notification that its target did not take. kind is
+// "queue" or "topic" and names the log member that holds target.
+func logDelivery(bucket, kind, target string, resp inproc.Response, err error) {
+	if err != nil {
+		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, kind, target, "error", err)
 
 		return
 	}
 
 	if !resp.OK() {
-		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, "queue", queue, "status", resp.Status)
+		slog.Error("Unable to send notification for S3 bucket", "bucket", bucket, kind, target, "status", resp.Status)
 	}
 }

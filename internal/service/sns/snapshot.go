@@ -368,6 +368,11 @@ func (p *Provider) Restore(r io.Reader) error {
 		s.applications, s.endpoints, s.appNext, s.endpointNext = b.applications, b.endpoints, b.appNext, b.endpointNext
 		s.endpointMessages, s.smsAttributes, s.smsMessages = b.endpointMessages, b.smsAttributes, b.smsMessages
 		s.mu.Unlock()
+
+		if len(b.topics) > 0 {
+			// A restored topic can be published to without a CreateTopic first.
+			p.signer.Warm()
+		}
 	}
 
 	for _, b := range read.accounts {

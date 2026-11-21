@@ -4,8 +4,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/service/sns/envelope"
@@ -23,6 +26,28 @@ func failingEndpoint(t *testing.T) string {
 	t.Cleanup(srv.Close)
 
 	return srv.URL
+}
+
+// lockFreesSoon reports whether mu can be taken within 2 s. A lock the caller
+// holds never frees until the build returns, while another goroutine (a lane
+// finishing, a dispatch) releases it within microseconds, so one TryLock would
+// fail at random where this fails only for a caller-held lock.
+func lockFreesSoon(mu *sync.Mutex) bool {
+	deadline := time.Now().Add(2 * time.Second)
+
+	for {
+		if mu.TryLock() {
+			mu.Unlock()
+
+			return true
+		}
+
+		if time.Now().After(deadline) {
+			return false
+		}
+
+		runtime.Gosched()
+	}
 }
 
 // httpJob is an HTTP delivery to endpoint whose dead-letter call is dlq.
@@ -78,10 +103,7 @@ func Test_lanes_httpDeadLetterBuiltOutsideLock(t *testing.T) {
 	j := httpJob(failingEndpoint(t), func() inproc.Call {
 		built.Add(1)
 
-		if p.lanes.mu.TryLock() {
-			lockFree.Store(true)
-			p.lanes.mu.Unlock()
-		}
+		lockFree.Store(lockFreesSoon(&p.lanes.mu))
 
 		return laneCall("dlq", `"dead"`)
 	})
@@ -124,10 +146,7 @@ func Test_lanes_queueDeadLetterBuiltOutsideLock(t *testing.T) {
 	queueJob(t, p, &job{call: laneCall("q", `"primary"`), dlq: func() inproc.Call {
 		built.Add(1)
 
-		if p.lanes.mu.TryLock() {
-			lockFree.Store(true)
-			p.lanes.mu.Unlock()
-		}
+		lockFree.Store(lockFreesSoon(&p.lanes.mu))
 
 		return laneCall("dlq", `"dead"`)
 	}})

@@ -11,7 +11,7 @@ import (
 
 const (
 	// MaxQueued is how many calls Enqueue holds, waiting to start, before it
-	// refuses the next.
+	// refuses the next, for every client but one made by NewUnbounded.
 	MaxQueued = 4096
 
 	// MaxInFlight is how many queued calls run at once. A call is served in
@@ -62,6 +62,9 @@ type queue struct {
 	// answered by the handler.
 	running int
 	closed  bool
+	// unbounded lifts the MaxQueued refusal. NewUnbounded sets it once, before
+	// the client is used.
+	unbounded bool
 	// cut counts the calls that were never served because the queue was shut:
 	// those queued when it shut, those running then that were not answered
 	// with a 2xx after all, and those Enqueue refused after.
@@ -95,7 +98,7 @@ func laneKey(call Call) string {
 // not be made or whose handler panicked or called runtime.Goexit (ErrAborted).
 // A done that panics is logged, and the queue goes on. The queue holds MaxQueued calls
 // waiting to start: past that, and after Close, Enqueue refuses the call and
-// reports false.
+// reports false. A client made by NewUnbounded refuses only after Close.
 //
 // Calls in one lane (laneKey: the call's Lane, or else its destination) run one
 // at a time, in the order they were queued. Calls in different lanes run at
@@ -118,7 +121,7 @@ func (c *Client) Enqueue(call Call, done func(Response, error)) bool {
 		return false
 	}
 
-	if q.queued >= MaxQueued {
+	if q.queued >= MaxQueued && !q.unbounded {
 		return false
 	}
 
