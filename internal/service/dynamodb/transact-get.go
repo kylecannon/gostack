@@ -166,7 +166,7 @@ func (c caller) checkGet(position int, get *api.Get, tables map[string]*tableEnt
 		return txGet{}, fmt.Errorf("transaction get key: %w", err)
 	}
 
-	x, err := newExprs(get.ExpressionAttributeNames, nil, get.ProjectionExpression != nil, false, "")
+	x, err := newExprs(c.from, get.ExpressionAttributeNames, nil, get.ProjectionExpression != nil, false, "")
 	if err != nil {
 		return txGet{}, err
 	}

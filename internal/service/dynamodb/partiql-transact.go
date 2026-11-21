@@ -39,6 +39,7 @@ const codeTokenMismatch = "IdempotentParameterMismatchException" //nolint:gosec 
 func (p *Provider) ExecuteTransaction(
 	ctx context.Context, in *api.ExecuteTransactionInput,
 ) (*api.ExecuteTransactionOutput, error) {
+	ctx = forStatement(ctx)
 	stmts, reads, err := parseTransaction(in.TransactStatements)
 	if err != nil {
 		return nil, err

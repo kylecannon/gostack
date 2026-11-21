@@ -139,6 +139,19 @@ func New() *Client {
 	return &Client{queue: queue{ctx: ctx, cancel: cancel}}
 }
 
+// NewUnbounded is New for a caller that must not drop a call because others
+// wait: its queue holds any number of waiting calls and Enqueue refuses only
+// after Close. The backlog costs memory in proportion to the calls queued faster
+// than their destinations answer them, and it ends at shutdown, where
+// Hub.Drain cuts what is left and logs the count. Lanes, the order within one
+// and MaxInFlight are as for New.
+func NewUnbounded() *Client {
+	c := New()
+	c.queue.unbounded = true
+
+	return c
+}
+
 // Bind sets the handler calls are served through, normally the gateway's
 // InternalHandler, through a Hub. When h is a Hub, the client joins it, so the
 // hub's Drain covers its queue.
