@@ -19,7 +19,7 @@
     {"name": "kinesis"},
     {"name": "kinesisfirehose", "ledger": "firehose", "providers_only": true},
     {"name": "kms", "compat": ["KMS"]},
-    {"name": "lambda"},
+    {"name": "lambda_", "ledger": "lambda"},
     {"name": "logs"},
     {"name": "opensearch", "deferred": "The control-plane API is in scope and the real engine is deferred (docs/architecture.md, Scope)."},
     {"name": "redshift"},

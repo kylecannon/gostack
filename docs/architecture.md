@@ -2266,11 +2266,10 @@ vectors.
 ### SNS (`internal/service/sns`)
 
 LocalStack implements SNS itself, with no moto (`localstack-core/localstack/services/sns/`
-at 8b9a79f). gostack ports its 36 operations; the other 6 of the API's 42 (the
-SMS sandbox and `ListOriginationNumbers`) answer 501 through the generated
-`Unimplemented`, and `GET /_gostack/services` reports 36 of 42
-(`Test_implemented`). What it answers differently is in `docs/compat.md`, the
-SNS sections.
+at 8b9a79f). gostack ports its operations; an operation of the API it does not
+build answers 501 through the generated `Unimplemented`. The operations in each
+set are in `docs/features.md`. What it answers differently is in
+`docs/compat.md`, the SNS sections.
 
 | Package | Holds |
 |---|---|
@@ -2315,10 +2314,10 @@ to HTTP and HTTPS". The system bench loads this path through `sns/publish`
 LocalStack's Secrets Manager is moto's with about 980 lines of patches
 (`services/secretsmanager/provider.py` at 8b9a79f), and gostack ports both: the
 patches and the moto behavior they leave in place, sized against moto-ext
-5.1.25. 21 of the API's 23 operations are implemented. `ValidateResourcePolicy`
-and `StopReplicationToReplica` check the `SecretId` as LocalStack does and then
-answer 501, which `Provider.Stubs` declares, so `GET /_gostack/services` reports
-21 of 23 (`Test_implemented`). Rotation that needs
+5.1.25. `ValidateResourcePolicy` and `StopReplicationToReplica` check the
+`SecretId` as LocalStack does and then answer 501, which `Provider.Stubs`
+declares, so `GET /_gostack/services` and `docs/features.md` leave them out of
+the implemented operations. Rotation that needs
 Lambda ends with `ResourceNotFoundException` and the secret as it was, because
 Lambda is not a service yet. What it answers differently is in `docs/compat.md`,
 "Secrets Manager".
@@ -2341,11 +2340,10 @@ region. SSM imports nothing of this package and reaches none of its state.
 
 LocalStack's SSM provider is a thin layer over moto (`services/ssm/provider.py`
 at 8b9a79f): five operations of its own, the rest moto's. gostack builds
-Parameter Store, 17 of the API's 146 operations (`Test_implemented`): the
-parameter operations, labels, tags for parameters, and the maintenance-window
-records moto keeps. The other 129 answer 501 through the generated
-`Unimplemented` and are listed by `GET /_gostack/services`. What it answers
-differently is in `docs/compat.md`, "SSM Parameter Store".
+Parameter Store: the parameter operations, labels, tags for parameters, and the
+maintenance-window records moto keeps. The rest of the API answers 501 through
+the generated `Unimplemented`; `docs/features.md` lists both sets. What it
+answers differently is in `docs/compat.md`, "SSM Parameter Store".
 
 **State.** A `State` per account and region in a `store.Bundle` holds every
 parameter as its list of versions, oldest first, with labels on versions and

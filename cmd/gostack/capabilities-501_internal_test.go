@@ -4,9 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +32,8 @@ const probeTimeout = 10 * time.Second
 // answers501 calls the method of handler for operation with an empty input and
 // reports whether it answered the generated 501 (awserr.NotImplemented). A
 // panic, which an empty request can cause in a method that expects a decoded
-// field, is not a 501: the method has code of its own.
+// field, comes back as the error: the method has code of its own, but the probe
+// cannot say what it answers, so the test fails on it.
 func answers501(handler reflect.Value, method reflect.Method, name, operation string) (is501 bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
@@ -83,9 +91,7 @@ func Test_serviceTable_Capabilities_noCountedOperationAnswers501(t *testing.T) {
 				require.True(t, found, "%s has a method for %s", capability.Name, operation)
 
 				is501, probeErr := answers501(handler, method, capability.Name, operation)
-				if probeErr != nil {
-					t.Logf("%s %s: %v", capability.Name, operation, probeErr)
-				}
+				require.NoError(t, probeErr, "%s %s", capability.Name, operation)
 
 				return is501
 			}
@@ -137,4 +143,108 @@ func Test_serviceTable_Capabilities_stubsAreNotCounted(t *testing.T) {
 	}
 
 	require.Fail(t, "secretsmanager is not registered")
+}
+
+// Test_serviceStubs_matchTheUnimplementedCalls holds, for every service
+// directory under internal/service, that the operations its code hands to the
+// generated Unimplemented (a call of the form x.Unimplemented.Op(...)) are
+// exactly the operations its Provider names in Stubs. A method that gains such
+// a call without a Stubs entry would be counted as implemented by a reading of
+// the methods alone, and an entry whose call was removed would hide an
+// operation that works. The probe above would also catch both, but only for
+// the operations it can call with an empty request; this reads the source.
+func Test_serviceStubs_matchTheUnimplementedCalls(t *testing.T) {
+	cfg, err := config.Load()
+	require.NoError(t, err)
+
+	declared := map[string][]string{}
+
+	for _, reg := range newProviders(cfg, func(string) {}).regs {
+		handlerType := reflect.TypeOf(reg.Handler)
+		for handlerType.Kind() == reflect.Pointer {
+			handlerType = handlerType.Elem()
+		}
+
+		stubber, isStubber := reg.Handler.(service.Stubber)
+		if !isStubber {
+			continue
+		}
+
+		dir := path.Base(handlerType.PkgPath())
+		declared[dir] = append(declared[dir], stubber.Stubs()...)
+	}
+
+	called := map[string][]string{}
+	root := filepath.Join("..", "..", "internal", "service")
+
+	err = filepath.WalkDir(root, func(file string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if entry.IsDir() || !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
+			return nil
+		}
+
+		parsed, parseErr := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if parseErr != nil {
+			return fmt.Errorf("parse %s: %w", file, parseErr)
+		}
+
+		rel, relErr := filepath.Rel(root, file)
+		if relErr != nil {
+			return fmt.Errorf("relative path of %s: %w", file, relErr)
+		}
+
+		dir, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			if operation, found := unimplementedCall(node); found {
+				called[dir] = append(called[dir], operation)
+			}
+
+			return true
+		})
+
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, called, "no call of Unimplemented found: the scan is not reading the services")
+
+	dirs := map[string]bool{}
+	for dir := range called {
+		dirs[dir] = true
+	}
+
+	for dir := range declared {
+		dirs[dir] = true
+	}
+
+	for dir := range dirs {
+		assert.ElementsMatch(t, called[dir], declared[dir],
+			"%s: the operations its code hands to Unimplemented (first list) differ from its Stubs (second)", dir)
+	}
+}
+
+// unimplementedCall reports the operation of a call of the form
+// x.Unimplemented.Operation(...), which is how a method answers 501 through
+// the generated struct it embeds.
+func unimplementedCall(node ast.Node) (operation string, found bool) {
+	call, isCall := node.(*ast.CallExpr)
+	if !isCall {
+		return "", false
+	}
+
+	method, isSelector := call.Fun.(*ast.SelectorExpr)
+	if !isSelector {
+		return "", false
+	}
+
+	embedded, isEmbedded := method.X.(*ast.SelectorExpr)
+	if !isEmbedded || embedded.Sel.Name != "Unimplemented" {
+		return "", false
+	}
+
+	return method.Sel.Name, true
 }

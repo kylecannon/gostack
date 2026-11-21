@@ -152,9 +152,11 @@ def assess(fact: dict | None, rows: list[dict] | None, registered: set[str]) -> 
       no ledger; no test LocalStack passes.
     - Parity done: code, every test LocalStack passes also passes, and no such
       exclusion.
-    - Complete: Parity done, and no operation answers 501.
+    - Complete: Parity done, and every operation of the API is implemented, so
+      none is a declared stub or left to the generated Unimplemented.
 
-    A test LocalStack does not pass, or excluded, counts toward none of these.
+    Only a test LocalStack passes counts toward Parity done and Complete; an
+    excluded test, or one LocalStack does not pass, never makes a service either.
     A service whose implemented operations are not known is not Complete."""
     if fact is None:
         return NOT_STARTED, []
@@ -249,12 +251,9 @@ def marks(entry: dict) -> list[str]:
 
 
 def mark_sentences(entry: dict) -> list[str]:
-    name = entry["name"]
     found = []
     if "deferred" in entry:
         found.append(entry["deferred"])
-    if entry.get("providers_only"):
-        found.append(f"LocalStack's `{name}` directory holds only CloudFormation resource providers.")
     return found
 
 
@@ -307,9 +306,11 @@ def render(commit: str, services: list[dict], facts: dict[str, dict], rows: dict
         "an excluded test that waits on a service gostack now serves; no parity ledger; no test LocalStack passes. |",
         f"| {PARITY_DONE} | The service has code, every test LocalStack passes also passes on gostack, and no excluded test "
         "waits on a service gostack serves. Some operations may still answer 501. |",
-        f"| {COMPLETE} | {PARITY_DONE}, and no operation answers 501. |",
+        f"| {COMPLETE} | {PARITY_DONE}, and every operation of the API is implemented: no operation is a declared stub "
+        "or left to the generated `Unimplemented`. |",
         "",
-        "Excluded tests and tests LocalStack does not pass count toward no status. "
+        "Only tests LocalStack passes count toward Parity done and Complete. Excluded tests, and tests LocalStack "
+        "does not pass, never make a service either. "
         f"A service marked \"{ENGINE_DEFERRED}\" has its control-plane API in scope and its engine not "
         "(`docs/architecture.md`, Scope); the mark stays once the service is built. "
         "An operation a service does not implement answers 501.",
@@ -363,7 +364,8 @@ def render(commit: str, services: list[dict], facts: dict[str, dict], rows: dict
     for entry in uncoded:
         service = entry["service"]
         extra = mark_sentences(service)
-        out.append(f"- {service['name']}: {NOT_STARTED_REASON}" + (" " + " ".join(extra) if extra else ""))
+        reason = f"{PROVIDERS_ONLY}." if service.get("providers_only") else NOT_STARTED_REASON
+        out.append(f"- {service['name']}: {reason}" + (" " + " ".join(extra) if extra else ""))
     if not uncoded:
         out.append("None.")
     return "\n".join(out) + "\n"

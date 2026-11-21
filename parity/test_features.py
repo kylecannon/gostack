@@ -154,6 +154,15 @@ class StatusTest(unittest.TestCase):
         )
         self.assertEqual(status_of([SQS_ALL], rows), "Complete")
 
+    def test_the_legend_says_only_passing_tests_make_a_service_done_and_defines_complete_by_implementation(self) -> None:
+        legend = render([SQS_FACT]).split("## Legend")[1].split("## Contents")[0]
+        self.assertIn("Only tests LocalStack passes count toward Parity done and Complete.", legend)
+        self.assertIn("never make a service either", legend)
+        self.assertNotIn("count toward no status", legend)
+        complete = next(line for line in legend.splitlines() if line.startswith("| Complete |"))
+        self.assertIn("no operation is a declared stub", complete)
+        self.assertNotIn("answers 501", complete)
+
     def test_the_excluded_tests_are_counted_and_linked_to_their_row(self) -> None:
         rows = sqs_rows(("pass", "pass", ""), ("excluded", "excluded", "x"), ("excluded", "excluded", "y"))
         cells = summary_row(render([SQS_ALL], rows), "sqs")
@@ -222,9 +231,18 @@ class NamingTest(unittest.TestCase):
     def test_a_directory_of_resource_providers_only_takes_no_facts_and_says_so(self) -> None:
         page = render([SQS_FACT])
         self.assertEqual(summary_row(page, "ecr")[1:6:4], ["Not started", "CloudFormation resource providers only"])
-        self.assertIn("- ecr: No code yet. LocalStack's `ecr` directory holds only CloudFormation resource providers.", page)
+        self.assertIn("- ecr: CloudFormation resource providers only.", page)
+        self.assertNotIn("- ecr: No code yet", page)
         with self.assertRaisesRegex(features.FeaturesError, "ecr"):
             render([fact("ecr", ["X"], ["X"])])
+
+    def test_lambda_is_listed_by_its_directory_name_and_takes_the_ledger_of_lambda(self) -> None:
+        services = [{"name": "lambda_", "ledger": "lambda"}]
+        lambda_fact = fact("lambda", ["Invoke"], ["Invoke"])
+        rows = {"tests/aws/services/lambda_/test_l.py::T::a": row("pass", "pass")}
+        page = features.render("8b9a79f", services, {"lambda": lambda_fact}, rows, '<a id="lambda"></a>', COMPAT)
+        self.assertEqual(summary_row(page, "lambda_")[1:5], ["Complete", "1 of 1", "[0](parity.md#lambda)", "[row](parity.md#lambda)"])
+        self.assertEqual(page.count("### lambda_\n"), 1)
 
 
 class LinksTest(unittest.TestCase):
@@ -385,7 +403,7 @@ LOCALSTACK_SERVICE_DIRECTORIES = [
     "kinesis",
     "kinesisfirehose",
     "kms",
-    "lambda",
+    "lambda_",
     "logs",
     "opensearch",
     "redshift",

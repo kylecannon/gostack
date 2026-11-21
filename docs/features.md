@@ -11,9 +11,9 @@ The services are the 39 directories under `localstack-core/localstack/services` 
 | Not started | The service has no code. |
 | In progress | The service has code and any of: a test LocalStack passes that gostack does not pass; an excluded test that waits on a service gostack now serves; no parity ledger; no test LocalStack passes. |
 | Parity done | The service has code, every test LocalStack passes also passes on gostack, and no excluded test waits on a service gostack serves. Some operations may still answer 501. |
-| Complete | Parity done, and no operation answers 501. |
+| Complete | Parity done, and every operation of the API is implemented: no operation is a declared stub or left to the generated `Unimplemented`. |
 
-Excluded tests and tests LocalStack does not pass count toward no status. A service marked "engine deferred" has its control-plane API in scope and its engine not (`docs/architecture.md`, Scope); the mark stays once the service is built. An operation a service does not implement answers 501.
+Only tests LocalStack passes count toward Parity done and Complete. Excluded tests, and tests LocalStack does not pass, never make a service either. A service marked "engine deferred" has its control-plane API in scope and its engine not (`docs/architecture.md`, Scope); the mark stays once the service is built. An operation a service does not implement answers 501.
 
 ## Contents
 
@@ -51,7 +51,7 @@ Excluded tests and tests LocalStack does not pass count toward no status. A serv
 | [kinesis](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [kinesisfirehose](#services-with-no-code) | Not started | n/a | n/a | no ledger | CloudFormation resource providers only |
 | [kms](#kms) | Parity done | 45 of 53 | [0](parity.md#kms) | [row](parity.md#kms) |  |
-| [lambda](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
+| [lambda_](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [logs](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [opensearch](#services-with-no-code) | Not started | n/a | n/a | no ledger | engine deferred |
 | [redshift](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
@@ -414,20 +414,20 @@ Other headings of compat.md with a table row under them that names sts: [Gateway
 
 - acm: No code yet.
 - apigateway: No code yet.
-- cdk: No code yet. LocalStack's `cdk` directory holds only CloudFormation resource providers.
-- certificatemanager: No code yet. LocalStack's `certificatemanager` directory holds only CloudFormation resource providers.
+- cdk: CloudFormation resource providers only.
+- certificatemanager: CloudFormation resource providers only.
 - cloudformation: No code yet.
 - cloudwatch: No code yet.
 - configservice: No code yet.
 - ec2: No code yet.
-- ecr: No code yet. LocalStack's `ecr` directory holds only CloudFormation resource providers.
+- ecr: CloudFormation resource providers only.
 - es: No code yet. The control-plane API is in scope and the real engine is deferred (docs/architecture.md, Scope).
 - events: No code yet.
 - firehose: No code yet.
 - iam: No code yet.
 - kinesis: No code yet.
-- kinesisfirehose: No code yet. LocalStack's `kinesisfirehose` directory holds only CloudFormation resource providers.
-- lambda: No code yet.
+- kinesisfirehose: CloudFormation resource providers only.
+- lambda_: No code yet.
 - logs: No code yet.
 - opensearch: No code yet. The control-plane API is in scope and the real engine is deferred (docs/architecture.md, Scope).
 - redshift: No code yet.
