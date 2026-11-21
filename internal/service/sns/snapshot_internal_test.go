@@ -91,8 +91,12 @@ func Test_snapshot_data_covers_every_field_of_the_state(t *testing.T) {
 	}.check(t, reflect.TypeFor[Topic](), reflect.TypeFor[topicData]())
 
 	snapshotPlan{
-		saved:   map[string]string{"seen": "Key"},
-		skipped: map[string]string{"mu": reasonLock, "order": "the order of the window"},
+		saved: map[string]string{"seen": "Key"},
+		skipped: map[string]string{
+			"mu":    reasonLock,
+			"order": "the order of the window",
+			"peak":  "the room to give back, counted again from what restores",
+		},
 	}.check(t, reflect.TypeFor[fifoTopic](), reflect.TypeFor[windowEntry]())
 
 	snapshotPlan{

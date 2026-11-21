@@ -3,6 +3,7 @@ package sns_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,27 +34,46 @@ import (
 //
 // A dead-letter call built while the lock is held shows in all four.
 //
-//	BenchmarkBurst/protocol=http/lanes=64/perlane=16/payload=256KiB
+// The cells are sized to take at most 10 ms an operation (docs/standards.md,
+// Benchmarks): 64 lanes of 16 deliveries took 12 ms over SQS and 22 to 771 ms
+// over HTTP. A burst over HTTP costs a connection and a POST each, so it runs
+// fewer lanes, and still takes 17 to 20 ms at 256 KiB: that cell is left out,
+// and the burst at 256 KiB is the SQS one. As kept, SQS 16 lanes of 4 took
+// 3.3 ms at 32 KiB and 3.3 ms at 256 KiB, and HTTP 8 lanes of 2 at 32 KiB 6.9
+// ms, each the slowest of three runs.
+//
+//	BenchmarkBurst/protocol=sqs/lanes=16/perlane=4/payload=256KiB
 func BenchmarkBurst(b *testing.B) {
 	for _, protocol := range []string{protocolHTTP, protocolSQS} {
-		for _, payload := range burstPayloads {
-			name := "protocol=" + protocol + "/lanes=64/perlane=16/payload=" + payload.name
+		lanes, perLane := burstSQSLanes, burstSQSPerLane
+		if protocol == protocolHTTP {
+			lanes, perLane = burstHTTPLanes, burstHTTPPerLane
+		}
+
+		for i, payload := range burstPayloads {
+			if protocol == protocolHTTP && i == len(burstPayloads)-1 {
+				continue
+			}
+
+			name := fmt.Sprintf("protocol=%s/lanes=%d/perlane=%d/payload=%s", protocol, lanes, perLane, payload.name)
 
 			b.Run(name, func(b *testing.B) {
-				benchBurst(b, protocol, burstLanes, burstPerLane, payload.size)
+				benchBurst(b, protocol, lanes, perLane, payload.size)
 			})
 		}
 	}
 }
 
 const (
-	burstLanes   = 64
-	burstPerLane = 16
-	burstTopic   = "burst"
-	burstVictim  = "burst-victim"
-	burstDLQ     = "burst-dlq"
-	burstMissing = "burst-missing-"
-	burstWait    = 2 * time.Minute
+	burstSQSLanes    = 16
+	burstSQSPerLane  = 4
+	burstHTTPLanes   = 8
+	burstHTTPPerLane = 2
+	burstTopic       = "burst"
+	burstVictim      = "burst-victim"
+	burstDLQ         = "burst-dlq"
+	burstMissing     = "burst-missing-"
+	burstWait        = 2 * time.Minute
 	// burstHead is how much of a SendMessage the stub reads to tell a dead
 	// letter from a victim's delivery: the start of its QueueUrl.
 	burstHead = 160
@@ -72,7 +92,7 @@ var burstPayloads = []struct {
 	size int
 }{
 	{"32KiB", 32000},
-	{"256KiB", 262140},
+	{name256KiB, 262140},
 }
 
 // burstRun is SNS with a lane for each of lanes subscriptions, HTTP endpoints
