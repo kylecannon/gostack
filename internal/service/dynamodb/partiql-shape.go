@@ -80,12 +80,19 @@ func findElement(elements []*cutPath, element partiql.Path) *cutPath {
 // put adds to out the value of each key, the element item holds at its path
 // with only what the paths below it name. Two paths through different lists
 // can take one key (`m.l[1].p, n.l[1].q` are both `l[1]`), and a key holds one
-// value: the image answers the one of the first path in name order that item
-// holds, whole, with nothing of the others (verification/SQ-467,
-// docs/compat.md), so what is answered is always what a path of the statement
-// names.
+// value. The image keeps one path by an order gostack does not reproduce
+// (verification/SQ-470: no rule fits every statement probed); gostack keeps
+// the first in name order that item holds, whole, with nothing of the others,
+// so what is answered is always what a path of the statement names
+// (docs/compat.md).
 func (c *cutPaths) put(out, item value.Item) {
 	for _, key := range c.keys {
+		// An attribute the SELECT names by that very name (`"l[1]"`) holds the
+		// key, as it does on the image and did before paths were cut.
+		if _, named := out[key]; named {
+			continue
+		}
+
 		elements := c.cuts[key]
 		if len(elements) > 1 {
 			slices.SortFunc(elements, func(a, b *cutPath) int { return comparePaths(a.element, b.element) })

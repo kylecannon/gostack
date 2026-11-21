@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -143,7 +144,7 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 
 	stmt, err := partiql.Parse(*src)
 	if err != nil {
-		return nil, statementError(err)
+		return nil, parseFailure(err, exists)
 	}
 
 	if stmt.Kind == partiql.Exists && !exists {
@@ -155,6 +156,20 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 	}
 
 	return stmt, nil
+}
+
+// parseFailure is the answer to a statement that did not parse. Outside a
+// transaction (exists false) an EXISTS around an expression is refused as an
+// EXISTS, where inside one it is not well formed.
+//
+//nolint:revive // flag-parameter: whether the operation runs EXISTS
+func parseFailure(err error, exists bool) error {
+	pe, ok := errors.AsType[*partiql.Error](err)
+	if ok && pe.ExistsOnly && !exists {
+		return value.Invalid(msgExistsOnlyTx)
+	}
+
+	return statementError(err)
 }
 
 // executeSelect runs a SELECT as a Query or a Scan.

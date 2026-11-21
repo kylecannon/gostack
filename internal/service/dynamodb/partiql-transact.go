@@ -54,10 +54,12 @@ func (p *Provider) ExecuteTransaction(
 
 // txStatements are a transaction's parsed statements. A statement whose
 // parameters do not match, or that has a RETURNING clause, is refused when its
-// turn to compile comes (refused).
+// turn to compile comes (refused). The image looks a RETURNING statement's
+// table and key up before it refuses the clause, so returning marks those.
 type txStatements struct {
-	stmts   []*partiql.Statement
-	refused []error
+	stmts     []*partiql.Statement
+	refused   []error
+	returning []bool
 	// reads is whether they are all SELECTs.
 	reads bool
 }
@@ -77,7 +79,10 @@ func parseTransaction(reqs []api.ParameterizedStatement) (*txStatements, error) 
 	default:
 	}
 
-	out := &txStatements{stmts: make([]*partiql.Statement, len(reqs)), refused: make([]error, len(reqs))}
+	out := &txStatements{
+		stmts: make([]*partiql.Statement, len(reqs)), refused: make([]error, len(reqs)),
+		returning: make([]bool, len(reqs)),
+	}
 	mix := mixing{msg: msgTxMixed}
 
 	for i := range reqs {
@@ -95,6 +100,7 @@ func parseTransaction(reqs []api.ParameterizedStatement) (*txStatements, error) 
 			return nil, err
 		case stmt.Returning != partiql.ReturnNone:
 			out.refused[i] = txFailed(i, msgTxReturning)
+			out.returning[i] = true
 		default:
 		}
 
@@ -173,11 +179,11 @@ func (p *Provider) transactWrites(
 	items := make([]api.TransactWriteItem, len(stmts))
 
 	for i, stmt := range stmts {
-		if parsed.refused[i] != nil {
-			return nil, parsed.refused[i]
-		}
-
 		req := &in.TransactStatements[i]
+
+		if parsed.refused[i] != nil {
+			return nil, c.refuseTxStatement(parsed, i, len(stmts), req.Parameters)
+		}
 
 		// DynamoDB Local reads the statement's ReturnValuesOnConditionCheckFailure
 		// last, after the statement compiles (probed, SQ-331), and names the
@@ -216,6 +222,25 @@ func (p *Provider) transactWrites(
 	}
 
 	return &api.ExecuteTransactionOutput{Responses: []api.ItemResponse{}, ConsumedCapacity: out.ConsumedCapacity}, nil
+}
+
+// refuseTxStatement is the refusal of statement i of n. The image looks a
+// RETURNING statement's table up, and then its whole key in the WHERE clause,
+// before it refuses the clause, so a missing table and a partial key answer
+// first (verification/SQ-470 r2ord-cand.log "t URN", r3-cand.log "t URNK");
+// the rest of the statement is left unchecked, as a key-type error or an
+// update of a key attribute does not change the refusal ("t URKEY").
+func (c caller) refuseTxStatement(parsed *txStatements, i, n int, params []api.AttributeValue) error {
+	if !parsed.returning[i] {
+		return parsed.refused[i]
+	}
+
+	_, err := c.compileWrite(parsed.stmts[i], params, false)
+	if _, shaped := errors.AsType[*shapeError](err); shaped || isCode(err, codeNotFound) {
+		return txCompileError(i, n, err)
+	}
+
+	return parsed.refused[i]
 }
 
 // txCompileError answers statement i of n failing to compile, as DynamoDB

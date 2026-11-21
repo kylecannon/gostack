@@ -467,13 +467,15 @@ caller's account and region, as LocalStack does.
   back by its full path (`l[1][0], l[0]` answers `l[0]` and `l[1][0]`);
   gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
   through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
-  key, `l[1]`, which holds one value in both: gostack answers the first path
-  in name order that the item holds, with what that path names and nothing of
-  the others, as the image did for every such statement probed (name order
-  `l`, `m`, `n`; the image's own order for names it was not probed on may
-  differ), and never a value of a path the statement does not name. A
-  statement with one path, or with all its paths in the first element they
-  name, answers as the image does.
+  key, `l[1]`, which holds one value in both. When the paths share a key the
+  image keeps one path by an order gostack does not reproduce (it fits 101 of
+  the 102 two-path statements probed, and is not a rule we know), and
+  gostack keeps the first in name order that the item holds, with what that
+  path names and nothing of the others; either way the answer is a path the
+  statement names, never a value of a path it does not. An attribute named by
+  the key itself (`"l[1]"`) keeps it in both. A statement with one path, or
+  with all its paths in the first element they name, answers as the image
+  does.
 - A path step written `m['x']` (the image answers it as `m.x`), a projection
   alias (`SELECT a AS z`, which the image refuses with "Aliasing is not
   supported") and a block comment (`/* ... */`, which the image reads as white

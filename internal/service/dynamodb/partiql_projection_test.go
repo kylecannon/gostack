@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The rows below are the answers of the LocalStack image (gostack-parity-
@@ -383,10 +385,12 @@ func Test_partiql_existsOutsideTransaction(t *testing.T) {
 }
 
 // Test_partiql_cutPathsDistinctLists: two paths of a SELECT through the same
-// index of different lists take one key, `l[1]`, which holds one value. The
-// image answers the first path in name order, whole, and never a value of a
-// path the statement does not name; the rows are its answers (verification/
-// SQ-467 image-probe.log).
+// index of different lists take one key, `l[1]`, which holds one value. When
+// they share a key the image keeps one path by an order gostack does not
+// reproduce; gostack keeps the first in name order that the item holds, whole,
+// and never a value of a path the statement does not name. The rows are
+// gostack's answers, which agree with the image's on the statements probed
+// except where the next test says (verification/SQ-467 image-probe.log).
 func Test_partiql_cutPathsDistinctLists(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pcut"))
@@ -410,8 +414,8 @@ func Test_partiql_cutPathsDistinctLists(t *testing.T) {
 		{"m.l[1], l[1].p", element(l1p)},
 		{"l[1], m.l[1].p", element(l1p + `,"q":{"S":"l1q"},"z":{"S":"l1z"}`)},
 		{"m.l[2].p, m.l[2].q", `{"Items":[{"l[2]":{"M":{"p":{"S":"m2p"},"q":{"S":"m2q"}}}}]}`},
-		// Name order, not the order of a Java hash set (it holds "p" before
-		// "o"), and the next path when the first holds no such element.
+		// Name order, which is not always the image's pick (Test_partiql_
+		// cutPathsFloor), and the next path when the first holds no such element.
 		{"o.l[1].x, p.l[1].y", element(`"x":{"S":"o1x"}`)},
 		{"p.l[1].y, o.l[1].x", element(`"x":{"S":"o1x"}`)},
 		{"o.l[5].x, p.l[1].y", element(`"y":{"S":"p1y"}`)},
@@ -420,5 +424,155 @@ func Test_partiql_cutPathsDistinctLists(t *testing.T) {
 		for _, where := range []string{" FROM pcut", " FROM pcut WHERE id = `a`"} {
 			run(t, s, []step{{c.sel + where, opStatement, stmt("SELECT " + c.sel + where), http.StatusOK, c.want}})
 		}
+	}
+}
+
+// cutList is the item a Test_partiql_cutPathsFloor path n.l[1].f reads: element
+// 1 of n's list holds x and y, each of them n1x and n1y.
+func cutList(n string) string {
+	return `{"M":{"l":{"L":[{"M":{"x":{"S":"` + n + `0x"}}},{"M":{"x":{"S":"` + n + `1x"},"y":{"S":"` + n + `1y"}}}]}}}`
+}
+
+// Test_partiql_cutPathsFloor: when two paths through the same index of
+// different lists take one key, the image keeps one of them by an order gostack
+// does not reproduce (101 of the 102 statements probed fit the top-level name
+// with the lower (String.hashCode()+1)&15, the later path on a tie; the row that
+// does not is beta with b, verification/SQ-470 r2cut-cand.log, r3-cand.log).
+// gostack keeps the first in name order. What the two share, and what this
+// holds them to, is that the answer is one named path's value, whole, and
+// nothing of the other: never a value of a path the statement does not name.
+// The rows are statements the image answered, in either order of the paths.
+func Test_partiql_cutPathsFloor(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pord"))
+
+	var item strings.Builder
+
+	item.WriteString(`{"TableName":"pord","Item":{"id":{"S":"a"}`)
+
+	for _, n := range []string{"a", "n", "o", "p", "aa", "zz", "x9", "x10"} {
+		item.WriteString(`,"` + n + `":` + cutList(n))
+	}
+
+	s.ok(t, opPut, item.String()+`}}`)
+
+	type path struct{ name, field string }
+
+	text := func(p path) string { return p.name + ".l[1]." + p.field }
+	answer := func(p path) string {
+		return `{"Items":[{"l[1]":{"M":{"` + p.field + `":{"S":"` + p.name + `1` + p.field + `"}}}}]}`
+	}
+
+	for _, c := range [][2]path{
+		{{"a", "x"}, {"p", "y"}},
+		{{"a", "x"}, {"o", "y"}},
+		{{"n", "x"}, {"o", "y"}},
+		{{"o", "x"}, {"p", "y"}},
+		{{"x9", "x"}, {"x10", "y"}},
+		{{"zz", "x"}, {"x9", "y"}},
+		{{"aa", "x"}, {"zz", "y"}},
+		{{"aa", "x"}, {"p", "y"}},
+	} {
+		for _, order := range [][2]path{c, {c[1], c[0]}} {
+			sel := text(order[0]) + ", " + text(order[1])
+
+			t.Run(sel, func(t *testing.T) {
+				got := s.call(t, usEast1, opStatement, stmt("SELECT "+sel+" FROM pord WHERE id = `a`"))
+				require.Equal(t, http.StatusOK, got.status, got.body)
+				require.Contains(t, []string{answer(order[0]), answer(order[1])}, got.body)
+			})
+		}
+	}
+}
+
+// Test_partiql_cutKeyKeepsNamedAttribute: an attribute whose own name is l[1],
+// selected beside a path cut at l[1], keeps its key: the image answers the
+// attribute, and so did gostack before paths were cut.
+func Test_partiql_cutKeyKeepsNamedAttribute(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("plit"))
+	s.ok(t, opPut, `{"TableName":"plit","Item":{"id":{"S":"a"},"l[1]":{"S":"lit"},`+
+		`"m":{"M":{"l":{"L":[{"M":{"p":{"S":"m0p"}}},{"M":{"p":{"S":"m1p"},"q":{"S":"m1q"}}}]}}},`+
+		`"l":{"L":[{"M":{"p":{"S":"l0p"}}},{"M":{"p":{"S":"l1p"},"q":{"S":"l1q"}}}]}}}`)
+
+	for _, sel := range []string{`"l[1]", m.l[1].p`, `m.l[1].p, "l[1]"`, `"l[1]", l[1].q`} {
+		t.Run(sel, func(t *testing.T) {
+			got := s.call(t, usEast1, opStatement, stmt("SELECT "+sel+" FROM plit WHERE id = `a`"))
+			require.Equal(t, http.StatusOK, got.status, got.body)
+			require.JSONEq(t, `{"Items":[{"l[1]":{"S":"lit"}}]}`, got.body)
+		})
+	}
+}
+
+// Test_partiql_transactionReturningAfterTable: the image looks a statement up
+// (its table, then the whole key in its WHERE) before it refuses a RETURNING
+// clause (verification/SQ-470 r2ord-cand.log "t URN", r3-cand.log "t URNK",
+// "t DRN", "t URN UP"); a key-type error does not change the refusal.
+func Test_partiql_transactionReturningAfterTable(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, `{"TableName":"prng","KeySchema":[{"AttributeName":"id","KeyType":"HASH"},`+
+		`{"AttributeName":"sk","KeyType":"RANGE"}],"AttributeDefinitions":[{"AttributeName":"id","AttributeType":"S"},`+
+		`{"AttributeName":"sk","AttributeType":"S"}],"BillingMode":"PAY_PER_REQUEST"}`)
+
+	const (
+		retNope  = "UPDATE nope SET q = 1 WHERE id = `w` RETURNING ALL NEW *"
+		delNope  = "DELETE FROM nope WHERE id = `w` RETURNING ALL OLD *"
+		retNoKey = "UPDATE prng SET q = 1 WHERE id = `w1` RETURNING ALL NEW *"
+		retHeld  = "UPDATE prng SET q = 1 WHERE id = `w1` AND sk = `x` RETURNING ALL NEW *"
+		short    = "UPDATE prng SET q = ? WHERE id = `w1` AND sk = `x`"
+		okUpdate = "UPDATE prng SET q = 1 WHERE id = `w5` AND sk = `x`"
+		keyMsg   = "Where clause does not contain a mandatory equality on all key attributes"
+		retMsg   = "RETURNING clause is not supported in ExecuteTransaction."
+		notFound = `"__type":"ResourceNotFound`
+	)
+
+	for _, c := range []struct {
+		name, body, want string
+	}{
+		{"returning on a missing table", transaction(retNope), notFound},
+		{"delete returning on a missing table", transaction(delNope), notFound},
+		{"returning on a missing table, then a mismatch", transaction(retNope, short), notFound},
+		{"returning without the whole key", transaction(retNoKey), keyMsg},
+		{"a statement, then returning without the whole key", transaction(okUpdate, retNoKey), keyMsg},
+		{"returning with the whole key", transaction(retHeld), retMsg},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := s.call(t, usEast1, opTransaction, c.body)
+			require.Equal(t, http.StatusBadRequest, got.status, got.body)
+			require.Contains(t, got.body, c.want)
+		})
+	}
+}
+
+// Test_partiql_existsMalformedOutsideTransaction: the image refuses an EXISTS
+// around an expression outside a transaction in the same words whatever is
+// inside it (verification/SQ-470 r2ord-cand.log "e EXG", "e EXISTS()", "b EXG"),
+// and an EXISTS around a statement, or with something after it, is not well
+// formed ("e EXISTS(UPDATE)", "e EXT").
+func Test_partiql_existsMalformedOutsideTransaction(t *testing.T) {
+	s := newStack(t)
+
+	const only = "EXISTS can only be used in ExecuteTransaction write requests."
+
+	for _, src := range []string{"EXISTS(garbage)", "EXISTS()", "EXISTS(a = (1 + 2))"} {
+		t.Run(src, func(t *testing.T) {
+			got := s.call(t, usEast1, opStatement, stmt(src))
+			require.Equal(t, http.StatusBadRequest, got.status, got.body)
+			require.Equal(t, validation(only), got.body)
+		})
+	}
+
+	t.Run("batch", func(t *testing.T) {
+		got := s.call(t, usEast1, opBatchStmt, `{"Statements":[`+stmt("EXISTS(garbage)")+`]}`)
+		require.Equal(t, http.StatusOK, got.status, got.body)
+		require.Contains(t, got.body, only)
+	})
+
+	for _, src := range []string{"EXISTS", "EXISTS(UPDATE t SET a = 1)", "EXISTS(garbage) garbage", "EXISTS(garbage"} {
+		t.Run(src, func(t *testing.T) {
+			got := s.call(t, usEast1, opStatement, stmt(src))
+			require.Equal(t, http.StatusBadRequest, got.status, got.body)
+			require.Equal(t, validation("Statement wasn't well formed, can't be processed: "+src), got.body)
+		})
 	}
 }
