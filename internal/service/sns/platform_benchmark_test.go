@@ -168,6 +168,25 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 			b.StartTimer()
 		}
 	}
+
+	// The loop has stopped the timer. Up to benchClearEvery iterations of
+	// recorded messages are still held, for as long as the provider lives, which
+	// is the whole benchmark, and the collector paces itself by what is held:
+	// before this, the cells after a 256 KiB one began with 329 to 1,428 MiB
+	// held (darwin/arm64, 500 ms cells) against 3 to 8 now, and collected 0 to
+	// 0.04 times an operation against 0.004 to 0.2. A cell's time then depended
+	// on which cells ran before it, tooSlowToGate's among them. The collection
+	// the testing package runs before each cell frees what is dropped here.
+	d.clear()
+}
+
+// tooSlowToGate is true for the cells that do not reach the 50 iterations in
+// the benchmark job's 500 ms that a cell needs to be gated on: 16 workers at
+// 256 KiB took 10 to 38 ms an iteration, and 5 of the 12 endpoint and sms cells
+// there ran 15 to 46 times. Those cells run at one worker, which still spans
+// every other axis.
+func tooSlowToGate(payload, workers int) bool {
+	return workers > 1 && payload > benchPayloads[0].size
 }
 
 // BenchmarkPublishEndpoint publishes to a platform endpoint with and without
@@ -180,6 +199,10 @@ func BenchmarkPublishEndpoint(b *testing.B) {
 			for _, structure := range []string{"plain", valueStructure} {
 				for _, payload := range benchPayloads {
 					for _, workers := range benchConcurrency {
+						if tooSlowToGate(payload.size, workers) {
+							continue
+						}
+
 						name := fmt.Sprintf("route=%s/endpoints=%d/structure=%s/payload=%s/concurrency=%d",
 							route, endpoints, structure, payload.name, workers)
 
@@ -224,6 +247,10 @@ func BenchmarkPublishSMS(b *testing.B) {
 
 			for _, payload := range benchPayloads {
 				for _, workers := range benchConcurrency {
+					if tooSlowToGate(payload.size, workers) {
+						continue
+					}
+
 					name := fmt.Sprintf("route=%s/numbers=%d/payload=%s/concurrency=%d",
 						route, numbers, payload.name, workers)
 

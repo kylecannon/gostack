@@ -179,11 +179,12 @@ func (p *Provider) Snapshot(w io.Writer) error {
 // the States and the accounts in key order.
 func (p *Provider) save() snapshotData {
 	data := snapshotData{States: []stateData{}, Accounts: []accountData{}}
+	now := p.now()
 
 	p.regions.Range(func(account, region string, s *State) bool {
 		saved, topics := s.save(account, region)
 		for i, t := range topics {
-			saved.Topics[i].Window = t.fifo.save()
+			saved.Topics[i].Window = t.fifo.save(now)
 		}
 
 		if !saved.empty() {
@@ -284,11 +285,18 @@ func (t *Topic) save() topicData {
 	}
 }
 
-// save copies a FIFO topic's window, oldest first. It is nil for a topic that
-// took no publish.
-func (f *fifoTopic) save() []windowEntry {
+// save copies a FIFO topic's window as of now, oldest first: the ids the
+// window has passed are forgotten first, so a topic that went idle after a
+// burst writes nothing it no longer deduplicates, and gives its memory back.
+// Each entry's time is now less the entry's age, the age measured on the
+// monotonic clock the window runs on, so a wall clock that stepped since the
+// id was taken does not change how old the saved entry is. It is nil for a
+// topic with nothing in the window.
+func (f *fifoTopic) save(now time.Time) []windowEntry {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	f.expire(now)
 
 	if len(f.order) == 0 {
 		return nil
@@ -297,7 +305,7 @@ func (f *fifoTopic) save() []windowEntry {
 	window := make([]windowEntry, len(f.order))
 	for i, key := range f.order {
 		seen := f.seen[key]
-		window[i] = windowEntry{Key: key, ID: seen.id, Sequence: seen.sequence, At: seen.at}
+		window[i] = windowEntry{Key: key, ID: seen.id, Sequence: seen.sequence, At: now.Add(-now.Sub(seen.at))}
 	}
 
 	return window
@@ -539,16 +547,18 @@ func (b *builtState) buildTopics(saved []topicData, now time.Time) error {
 // takes now: it would otherwise outlive the window and, as expire stops at the
 // first entry it keeps, hold every id taken after the restart past it too.
 func (f *fifoTopic) build(saved []windowEntry, now time.Time) error {
-	for i, entry := range saved {
-		if i > 0 && entry.At.Before(saved[i-1].At) {
-			entry.At = saved[i-1].At
+	var previous time.Time
+
+	for _, entry := range saved {
+		if entry.At.Before(previous) {
+			entry.At = previous
 		}
 
 		if entry.At.After(now) {
 			entry.At = now
 		}
 
-		saved[i].At = entry.At
+		previous = entry.At
 
 		if _, ok := f.seen[entry.Key]; ok {
 			return fmt.Errorf("deduplication id %q appears twice", entry.Key)
@@ -558,7 +568,11 @@ func (f *fifoTopic) build(saved []windowEntry, now time.Time) error {
 			f.seen = make(map[string]published, len(saved))
 		}
 
-		f.seen[entry.Key] = published{id: entry.ID, sequence: entry.Sequence, at: entry.At}
+		// The saved time is a wall time. It is kept as how long ago it was
+		// from now, which carries now's monotonic reading: the clock may step
+		// back while this run lasts, and the window must keep measuring five
+		// minutes of it, as it does for the ids this run takes.
+		f.seen[entry.Key] = published{id: entry.ID, sequence: entry.Sequence, at: now.Add(-now.Sub(entry.At))}
 		f.order = append(f.order, entry.Key)
 	}
 

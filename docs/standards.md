@@ -281,6 +281,32 @@ A feature is not done until its benchmarks cover the variants it can be called
 with. A change that adds or alters a feature adds or updates its rows in the
 same PR. A missing row is a review blocker.
 
+A micro benchmark cell has to be one the gate can compare: one operation of it
+finishes in at most 10 ms, so that a run at the gate's benchtime
+(`BENCH_TIME`, 500 ms) makes at least 50 iterations, the fewest benchstat can
+gate on. A cell is held to it with room to spare, because the gate's runner
+may be slower than the machine it was measured on: its slowest operation over
+three runs at the gate's benchtime is the number to check, and the cell is
+resized or left out when that is near the limit. The rule covers every
+benchmark in a package, not only its feature cells. A cell over the limit is
+made smaller (fewer subscribers, lanes or messages) until it is under, or it
+is left out, and a cell left out is not a missing row: the payload axis is
+covered by the widest cell that is under the limit. A benchmark whose one
+operation is a one-time cost, such as a key generation or a process start,
+cannot be sized to it and does not belong in the micro benchmarks. The cell's
+own comment names the cells left out and the time an operation took (or the
+iterations it reached); `go test -run '^$' -bench . -benchtime=500ms -count=3`
+prints both for each.
+
+A cell's time does not depend on the cells that ran before it. The collector
+paces itself by the live heap, so a cell that leaves what it recorded held, for
+as long as its engine lives, gives every later cell a larger heap goal and
+fewer collections, and dropping a cell from the matrix then moves the rows
+after it. A benchmark that keeps state across its cells discards what a cell
+recorded when the cell ends (`BenchmarkPublishEndpoint` and
+`BenchmarkPublishSMS` do, in `deviceBench.run`), and the collection that the
+testing package runs before each cell then frees it.
+
 | Axis | Values |
 |---|---|
 | Payload | small (under 1 KiB), medium (about 64 KiB), and the service's maximum |
