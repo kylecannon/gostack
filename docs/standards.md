@@ -442,6 +442,15 @@ passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
 
+The time to the first signed SNS publish, which a micro benchmark cannot hold
+(the signing key is made once a process, so an iteration costs a key generation
+and never reaches the 50 iterations the gate asks of one), is measured here: one
+fresh container a run, `-first-use-runs` (30) of them a side, and `bench
+compare` holds it as the cell `first-use/sns`, metric `first use`, by a
+rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
+is measured" and "The gate"). `make bench-system-quick` shows it under "First
+use".
+
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose
 container exited or was removed fails, and is recorded in the cell's

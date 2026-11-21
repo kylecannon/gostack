@@ -74,6 +74,7 @@ type settings struct {
 	Services         []string `json:"services,omitempty"`
 	Notes            []string `json:"notes,omitempty"`
 	StartupRuns      int      `json:"startup_runs"`
+	FirstUseRuns     int      `json:"first_use_runs,omitempty"`
 	IdleRuns         int      `json:"idle_runs"`
 	SettleSeconds    float64  `json:"settle_seconds"`
 	IdleSeconds      float64  `json:"idle_seconds"`
@@ -240,9 +241,14 @@ type targetResult struct {
 	Idle       idleResult            `json:"idle"`
 	Cells      []cellResult          `json:"cells"`
 	Agentic    map[string]agenticRun `json:"agentic,omitempty"`
-	Problems   []string              `json:"problems,omitempty"`
+	// FirstUse is by service: the time to its first use on a container that has
+	// just started, one run for each container, with the runs kept whole.
+	FirstUse map[string]startupResult `json:"first_use,omitempty"`
+	Problems []string                 `json:"problems,omitempty"`
 }
 
+// startupResult is the runs of a timing taken once for each container, in
+// milliseconds, and their spread: the time to the ready line, or a first use.
 type startupResult struct {
 	SamplesMS []float64 `json:"samples_ms"`
 	MS        spread    `json:"ms"`
@@ -415,6 +421,7 @@ func (r report) markdown() string {
 	}
 
 	r.agenticTable(&b)
+	r.firstUseTable(&b)
 	r.notes(&b)
 	r.flags(&b)
 	r.problemList(&b)
@@ -567,6 +574,32 @@ func (r report) agenticTable(b *strings.Builder) {
 	}
 
 	fmt.Fprintln(b)
+}
+
+// firstUseTable lists the time to the first use of what a service makes once per
+// process, a row for each target and service that has one. It writes nothing when
+// no target has any.
+func (r report) firstUseTable(b *strings.Builder) {
+	var rows []string
+
+	for _, t := range r.Targets {
+		for _, service := range slices.Sorted(maps.Keys(t.FirstUse)) {
+			u := t.FirstUse[service]
+			rows = append(rows, fmt.Sprintf("| %s | %s | %d | %.1f ms | %.1f - %.1f ms |", t.Name, firstUseCell(service),
+				len(u.SamplesMS), u.MS.Median, u.MS.Min, u.MS.Max))
+		}
+	}
+
+	if len(rows) == 0 {
+		return
+	}
+
+	b.WriteString("## First use\n\n")
+	b.WriteString("Time to the first use of what a service makes once per process, on a container that has just " +
+		"started: for SNS, from CreateTopic to the signed delivery taken off the subscribed queue. One run for each " +
+		"container.\n\n")
+	b.WriteString("| Target | Measurement | Runs | Median | Range |\n|---|---|---:|---:|---:|\n")
+	b.WriteString(strings.Join(rows, "\n") + "\n\n")
 }
 
 // opNames lists the operations of the cell in report order.

@@ -93,6 +93,7 @@ type options struct {
 	baseCommit       string
 	baseOut          string
 	startupRuns      int
+	firstUseRuns     int
 	idleRuns         int
 	reps             int
 	settle           time.Duration
@@ -301,6 +302,8 @@ func (o *options) bind(flags *flag.FlagSet) {
 	flags.StringVar(&o.baseCommit, "base-commit", "", "the commit -base-image was built from")
 	flags.StringVar(&o.baseOut, "base-out", "", "directory for the result file of -base-image")
 	flags.IntVar(&o.startupRuns, "startup-runs", defaultStartups, "containers started to take the median startup time")
+	flags.IntVar(&o.firstUseRuns, "first-use-runs", defaultFirstUseRuns,
+		"containers started to time a service's first use (SNS: the first signed publish)")
 	flags.IntVar(&o.idleRuns, "idle-runs", defaultIdleRuns, "containers measured for each idle variant")
 	flags.IntVar(&o.reps, "reps", defaultReps, "times each cell runs")
 	flags.DurationVar(&o.settle, "settle", 0, "wait after ready before the idle window (default by profile)")
@@ -318,6 +321,11 @@ func (o *options) check() error {
 
 	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
 		return errors.New("-reps, -startup-runs and -idle-runs must be at least 1")
+	}
+
+	if o.firstUseRuns < minFirstUseRuns {
+		return fmt.Errorf("-first-use-runs %d: want at least %d, the fewest a side with which the rank-sum test can "+
+			"fail a first use", o.firstUseRuns, minFirstUseRuns)
 	}
 
 	return nil
@@ -532,7 +540,7 @@ func (r *runner) header(ctx context.Context) (report, error) {
 		},
 		Settings: settings{
 			Profile: r.opts.profile, Services: r.opts.services, Notes: r.opts.notes,
-			StartupRuns: r.opts.startupRuns, IdleRuns: r.opts.idleRuns,
+			StartupRuns: r.opts.startupRuns, FirstUseRuns: r.opts.firstUseRuns, IdleRuns: r.opts.idleRuns,
 			SettleSeconds: r.opts.settle.Seconds(), IdleSeconds: r.opts.idle.Seconds(),
 			CellSeconds: r.opts.duration.Seconds(), Reps: r.opts.reps,
 			Cycles: r.opts.cycles, CycleConcurrency: r.opts.cycleConcurrency,
@@ -623,6 +631,8 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 		res[s].Startup = startups[s]
 		res[s].problem("startup", errs[s])
 	}
+
+	r.firstUseAll(ctx, sides, res)
 
 	r.idleVariant(ctx, sides, res, variantHealthcheck)
 

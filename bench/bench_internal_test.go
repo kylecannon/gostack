@@ -438,7 +438,7 @@ func Test_parseCell_reads_the_cell_from_the_flags(t *testing.T) {
 
 	req, err := parseCell([]string{
 		"-service", "sqs", "-workload", "messaging", "-payload", "65536", "-concurrency", "64",
-		opt, "queue=fifo", opt, "shape=batch", opt, "proto=query", "-duration", "3s", "-endpoint", "http://x:1",
+		opt, "queue=fifo", opt, "shape=batch", opt, "proto=query", "-duration", "3s", endpointFlag, "http://x:1",
 	})
 	require.NoError(t, err)
 
