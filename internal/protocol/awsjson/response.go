@@ -65,8 +65,11 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 	writeOK(w, requestID, version, body)
 }
 
-// maxPooledResponse is the largest buffer responseBufs keeps.
-const maxPooledResponse = 4 << 20
+// maxPooledResponse is the largest buffer responseBufs keeps: room for a
+// ReceiveMessage of ten 1 MiB messages, which would otherwise grow a new
+// buffer from nothing on every call, four times its size in all. A pooled
+// buffer goes after two collections with no use.
+const maxPooledResponse = 16 << 20
 
 // responseBufs hold the bodies the generated encoders write. A Write never
 // keeps the slice it is given, so the buffer goes back once written.
