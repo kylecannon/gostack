@@ -1,0 +1,12 @@
+package awserr
+
+import "errors"
+
+// errSQ455Pad is an unrelated bss variable that only init reads.
+var errSQ455Pad = errors.New("sq455: padding")
+
+func init() {
+	if errSQ455Pad == nil {
+		panic("sq455")
+	}
+}
