@@ -2162,8 +2162,11 @@ the in-process client and returns the secret as a `Parameter`: its
 `SecretString` as the value, type `SecureString`, the secret's own ARN,
 `SourceResult` the answer as JSON, and `LastModifiedDate` the creation time in
 whole seconds. A name takes a trailing selector, `:AWSCURRENT`, `:AWSPREVIOUS`, a
-staging label or a VersionId, which becomes the call's `VersionStage` or
-`VersionId`. `GetParameters` reads the ARN form of a reference name as
+staging label or a VersionId, and the `Parameter` answers the `Name` without it
+and the `Selector` with its colon. A selector with a symbol other than letters,
+numbers, `.`, `-` and `_` is not found and no call is made. One of 32 to 64
+characters is sent as `VersionId` and, on `ResourceNotFoundException`, as
+`VersionStage`; any other is a `VersionStage`. `GetParameters` reads the ARN form of a reference name as
 `GetParameter` does. The secret is read whatever `WithDecryption` says. Any
 client error of `GetSecretValue` (no such secret, one marked for deletion, no
 such version, an id Secrets Manager refuses, a secret the caller may not read)

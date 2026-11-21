@@ -20,16 +20,21 @@ import (
 )
 
 const (
-	referencePrefix = "/aws/reference/secretsmanager/"
-	secretValue     = "my_secret"
-	regionEast      = "us-east-1"
-	regionWest      = "eu-west-2"
-	fieldSecretID   = "SecretId"
-	fieldDecrypt    = "WithDecryption"
-	keySourceResult = "SourceResult"
-	keyARN          = "ARN"
-	fieldToken      = "ClientRequestToken"
-	secretVanished  = "vanished"
+	referencePrefix   = "/aws/reference/secretsmanager/"
+	secretValue       = "my_secret"
+	regionEast        = "us-east-1"
+	regionWest        = "eu-west-2"
+	fieldSecretID     = "SecretId"
+	fieldDecrypt      = "WithDecryption"
+	keySourceResult   = "SourceResult"
+	keyARN            = "ARN"
+	keySelector       = "Selector"
+	fieldVersionStage = "VersionStage"
+	// idMin and idMax bound the length at which a selector may be a VersionId.
+	idMin          = 32
+	idMax          = 64
+	fieldToken     = "ClientRequestToken"
+	secretVanished = "vanished"
 
 	fieldSecretString = "SecretString"
 	valueOne          = "one"
@@ -291,11 +296,14 @@ func Test_secretReference_selectors(t *testing.T) {
 		status, out := j.parameter(kGetParameter, regionEast, obj{kName: name, fieldDecrypt: true})
 		require.Equal(t, http.StatusOK, status, "%s: %v", name, out)
 		require.Equal(t, want, param(out)[kValue], name)
-		require.Equal(t, name, param(out)[kName], "the requested spelling")
+		require.Equal(t, referencePrefix+"s1", param(out)[kName], "the Name has no selector")
+		require.Equal(t, ":"+selector, param(out)[keySelector], "the Selector has its colon")
 
 		status, out = j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}, fieldDecrypt: true})
 		require.Equal(t, http.StatusOK, status, "%s: %v", name, out)
 		require.Equal(t, want, entry(list(out, kParameters), 0)[kValue], name)
+		require.Equal(t, referencePrefix+"s1", entry(list(out, kParameters), 0)[kName])
+		require.Equal(t, ":"+selector, entry(list(out, kParameters), 0)[keySelector])
 		require.Empty(t, list(out, kInvalidParameters))
 	}
 
@@ -308,6 +316,156 @@ func Test_secretReference_selectors(t *testing.T) {
 		_, out := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}, fieldDecrypt: true})
 		require.Equal(t, []any{name}, list(out, kInvalidParameters), name)
 	}
+}
+
+// refRead reads reference name through GetParameter and GetParameters and
+// requires both to answer want as its value, returning the GetParameter answer.
+func (j *joined) refRead(name, want string) map[string]any {
+	j.t.Helper()
+
+	status, out := j.parameter(kGetParameter, regionEast, obj{kName: name})
+	require.Equal(j.t, http.StatusOK, status, "%s: %v", name, out)
+	require.Equal(j.t, want, param(out)[kValue], name)
+
+	status, many := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}})
+	require.Equal(j.t, http.StatusOK, status, "%s: %v", name, many)
+	require.Empty(j.t, list(many, kInvalidParameters), name)
+	require.Equal(j.t, want, entry(list(many, kParameters), 0)[kValue], name)
+
+	return param(out)
+}
+
+// refMissing requires GetParameter to answer ParameterNotFound and GetParameters
+// to list name in InvalidParameters.
+func (j *joined) refMissing(name string) {
+	j.t.Helper()
+
+	j.parameterFails(kGetParameter, regionEast, obj{kName: name}, kParameterNotFound)
+
+	status, out := j.parameter(kGetParameters, regionEast, obj{fieldNames: []string{name}})
+	require.Equal(j.t, http.StatusOK, status, "%s: %v", name, out)
+	require.Equal(j.t, []any{name}, list(out, kInvalidParameters), name)
+}
+
+// moveStage puts label on the version versionID of secret s1.
+func (j *joined) moveStage(label, versionID string) {
+	j.t.Helper()
+
+	j.secret("UpdateSecretVersionStage", obj{fieldSecretID: "s1", fieldVersionStage: label, "MoveToVersionId": versionID})
+}
+
+// A selector of 32 to 64 characters is tried as a VersionId and, when no version
+// has that id, as a staging label: a label of that length reads its version.
+func Test_secretReference_longLabelsReadTheirVersion(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	first, _, _ := stagedSecret(j)
+
+	for _, label := range []string{
+		"3971cef0a1b2c3d4e5f60718293a4b5c6d7e8f90",
+		"0f8fad5b-d9cb-469f-a165-70867728950e",
+		"release-candidate-2026-11-20-build-0042",
+		strings.Repeat("a", idMin),
+		strings.Repeat("b", idMax),
+		"v1.2.3.0000000000000000000000000000000",
+		strings.Repeat("c", idMin-1),
+		strings.Repeat("d", idMax+1),
+	} {
+		j.moveStage(label, first)
+
+		got := j.refRead(referencePrefix+"s1:"+label, valueOne)
+		require.Equal(t, referencePrefix+"s1", got[kName])
+		require.Equal(t, ":"+label, got[keySelector])
+	}
+}
+
+// A VersionId a caller chose with ClientRequestToken may hold underscores and
+// periods, so it is not read by its characters.
+func Test_secretReference_versionIDsOfAnyCharacters(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	j.createSecret("ids", valueOne)
+
+	for i, id := range []string{
+		"build_2026_11_20_release_candidate_0042",
+		"v1.2.3.0000000000000000000000000000000",
+		strings.Repeat("A-9_.", 12) + "Z",
+	} {
+		value := fmt.Sprintf("value-%d", i)
+		j.secret("PutSecretValue", obj{fieldSecretID: "ids", fieldSecretString: value, fieldToken: id})
+
+		j.refRead(referencePrefix+"ids:"+id, value)
+	}
+}
+
+// A label equal to the id of another version reads that version: the selector
+// is tried as an id first.
+func Test_secretReference_labelEqualToAnotherVersionsID(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	first, second, _ := stagedSecret(j)
+
+	// Put the id of the first version on the second as a label.
+	j.moveStage(first, second)
+
+	status, out := j.do("secretsmanager", "secretsmanager.GetSecretValue", regionEast,
+		obj{fieldSecretID: "s1", fieldVersionStage: first})
+	require.Equal(t, http.StatusOK, status, "%v", out)
+	require.Equal(t, valueTwo, out[fieldSecretString], "as a label it is the second version")
+
+	j.refRead(referencePrefix+"s1:"+first, valueOne)
+}
+
+// A selector with a symbol outside letters, numbers, ".", "-" and "_" fails,
+// though Secrets Manager holds a version with that label.
+func Test_secretReference_symbolsFailTheReference(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	first, _, _ := stagedSecret(j)
+
+	for _, selector := range []string{"rc+1", idWithSpace, "x/y", "a@b", "a=b", "a,b"} {
+		status, _ := j.do("secretsmanager", "secretsmanager.UpdateSecretVersionStage", regionEast,
+			obj{fieldSecretID: "s1", fieldVersionStage: selector, "MoveToVersionId": first})
+
+		j.refMissing(referencePrefix + "s1:" + selector)
+
+		require.Equal(t, http.StatusOK, status, "Secrets Manager takes the label %q", selector)
+	}
+}
+
+// A reference with no selector has no Selector; its Name is the requested one.
+func Test_secretReference_noSelectorNoSelectorField(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	j.createSecret("plain", secretValue)
+
+	got := j.refRead(referencePrefix+"plain", secretValue)
+	require.Equal(t, referencePrefix+"plain", got[kName])
+	require.NotContains(t, got, keySelector)
+}
+
+// A secret named arn, or one whose id starts with "arn:" and is not a whole ARN,
+// keeps its selector.
+func Test_secretReference_aSecretNamedARN(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	j.createSecret("arn", valueOne)
+	j.secret("PutSecretValue", obj{fieldSecretID: "arn", fieldSecretString: valueTwo, fieldToken: newToken()})
+
+	got := j.refRead(referencePrefix+"arn:AWSCURRENT", valueTwo)
+	require.Equal(t, referencePrefix+"arn", got[kName])
+	require.Equal(t, ":AWSCURRENT", got[keySelector])
+
+	j.refRead(referencePrefix+"arn:AWSPREVIOUS", valueOne)
+	j.refRead(referencePrefix+"arn", valueTwo)
+	j.refMissing(referencePrefix + "arn:nolabel")
+	j.refMissing(referencePrefix + "arn:aws:secretsmanager:a:b")
+}
+
+// The ARN form of a name with a selector is named without it too.
+func Test_secretReference_arnFormWithSelector(t *testing.T) {
+	j := newJoined(t, bothServices()...)
+	stagedSecret(j)
+
+	byARN := "arn:aws:ssm:us-east-1:000000000000:parameter" + referencePrefix + "s1:AWSPREVIOUS"
+
+	got := j.refRead(byARN, valueOne)
+	require.Equal(t, referencePrefix+"s1", got[kName])
+	require.Equal(t, ":AWSPREVIOUS", got[keySelector])
 }
 
 // The ARN of a secret takes a selector after its eighth field.
