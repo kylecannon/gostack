@@ -4,6 +4,7 @@ package persist
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +40,7 @@ func newFaultFixture(t *testing.T) *syncFixture {
 	}
 
 	logs := &warnings{}
-	e := New(warnConfig(base, time.Hour, logs))
+	e := New(Config{PersistVarSet: true, BaseDir: base, Frequency: time.Hour, Logger: slog.New(logs)})
 	n := &namer{}
 	e.Register(syncService, n)
 
