@@ -1588,7 +1588,9 @@ is untouched.
   deadline and 117 with one on darwin (105 and 114 on Linux), the 9 more that
   `Test_Engine_FlushInTimeAllocations` pins with the whole.
   A context with no deadline that can end is registered with a timer the engine
-  keeps, which arms a watch of it only once the flush has lasted 50 ms: one
+  keeps, which arms a watch of it only once the flush has lasted 50 ms, at 4 or 5
+  allocations that flush then takes (`make bench-ab` on `SQSFlush` with 100
+  messages of 64 KiB, which lasts 100 ms: 6338 allocations, 6342 with it): one
   that ends with a deadline's cause, as a `context.WithCancelCause` context can,
   is marked within 50 ms of its end, with a `Snapshot` still running, and at the
   flush's end when that comes first
