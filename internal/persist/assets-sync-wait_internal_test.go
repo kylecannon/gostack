@@ -33,7 +33,7 @@ func newSyncFixture(t *testing.T, freq time.Duration) *syncFixture {
 
 	dir := t.TempDir()
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: freq, Logger: slog.New(logs)})
+	e := New(warnConfig(dir, freq, logs))
 	n := &namer{}
 	e.Register(syncService, n)
 
