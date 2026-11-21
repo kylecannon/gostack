@@ -311,7 +311,8 @@ What S3 does not do, or does in part, so a client's expectations can be set.
 |---|---|---|
 | `SelectObjectContent` | Answers | `501 NotImplemented`. No test covers it. |
 | KMS | Validates and creates keys | As LocalStack: an `aws:kms` write with no key id gets a key S3 has KMS make on first use, with `CreateKey` and the description "Default key that protects my S3 objects when no other key is defined", one per account and region, kept in S3's persisted state. It is not `alias/aws/s3`, which names another key in KMS. `aws:kms:dsse` gets no managed key. With `S3_SKIP_KMS_KEY_VALIDATION=0` the key a `PutObject`, `CopyObject` or `CreateMultipartUpload` names, and the key of the object a `GetObject` reads, are looked up with `DescribeKey`: a missing key answers `400 KMS.NotFoundException` with KMS's message, a disabled one `KMS.DisabledException`, one pending deletion `KMS.KMSInvalidStateException`; any other typed 4xx error KMS answers passes as `400 KMS.<type>`, as AWS S3 prefixes KMS errors, while a 5xx answer, typed or not, and an answer with no error type are `500 InternalError` (LocalStack answers 500 for every KMS error but `NotFoundException`, `aws/handlers/service.py`, which is copied for a 5xx and not for a refusal). Its usage and spec are not checked, and a POST upload, a bucket's default key and `HeadObject` are never checked, as in LocalStack. A key ARN in another region than the bucket answers `400 KMS.NotFoundException`, "Invalid arn `<region>`", for an `aws:kms` write with or without the check; `aws:kms:dsse` keeps it as sent without the check, as LocalStack calls `get_kms_key_arn` for `aws:kms` alone. A `CopyObject` resolves its target's encryption after its source has been read and checked, then the object lock and the ACL, as LocalStack does: a missing source answers `404 NoSuchKey` whatever the encryption headers, a bad `x-amz-acl` with another region's `aws:kms` key answers `400 KMS.NotFoundException`, and a copy whose source condition or SSE-C check fails makes no managed key. With `S3_SKIP_KMS_KEY_VALIDATION=0` the key the request names is checked before the source is read, as LocalStack does, so a missing source with a key KMS lacks answers `400`, not `404`. A copy that fails on `If-None-Match`, `If-Match` or the metadata size, which come after the encryption is resolved, still makes the managed key, as LocalStack does. A bucket's `aws:kms:dsse` default rule gives an object no key, so there is none for `GetObject` to check, as in LocalStack. The managed key is S3's own state: with `PERSIST_S3=1` and `PERSIST_KMS=0` the next process still holds the ARN of a key its KMS no longer has, so a `PutObject` answers 200 with that old ARN, as LocalStack does, and a `GetObject` answers `400 KMS.NotFoundException` once `S3_SKIP_KMS_KEY_VALIDATION=0`. An object written before the managed key was made by KMS carries the ARN gostack then derived from the account and region, which no KMS holds, so that `GetObject` answers the same under the check. A key id sent with `AES256`, or with no algorithm and no default encryption of the bucket to give one, is dropped: the object has no key, where LocalStack keeps it and, with the check on, looks it up on `GetObject`. Object bodies are not encrypted, and the encryption context is not stored. |
-| Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS only. SNS, Lambda and EventBridge targets are accepted and stored, and nothing is sent. |
+| Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS and SNS. Lambda and EventBridge targets are accepted and stored, and nothing is sent. A topic target gets an SNS `Publish` made in process, as the bucket's owner in the region of the topic's ARN, with the record LocalStack sends as the message and the subject `Amazon S3 Notification`; the calls for one topic run in the order the events were raised, and SNS puts each on its subscribers' lanes before it takes the next, so one key's events reach a subscribed queue in order. Unless `SkipDestinationValidation` is set, `PutBucketNotificationConfiguration` asks SNS for the topic's attributes (`400 InvalidArgument`, "Unable to validate the following destination configurations", argument value "The destination topic does not exist") and publishes the `s3:TestEvent` document to it, answering "Permissions on the destination topic do not allow S3 to publish notifications from this bucket" when SNS refuses it, as it does for a FIFO topic, which needs a message group. The topic's access policy is not read. The request's `X-Amzn-Trace-Id` goes to a queue as its trace header and is not sent to a topic, as in LocalStack. An event is delivered after the request is answered and is never dropped because others wait: S3's delivery queue has no bound, as LocalStack's notifier executor has none, and each queue and each topic is a lane of its own, so one that is slow or stuck holds up no other destination and the PUTs behind it never wait. The cost is memory in proportion to the events not yet delivered: measured on darwin, each waiting event holds about 1.6 to 1.8 KB of heap (a queue target 1.6 KB, a topic target 1.8 KB) and 3.6 to 4.1 KB of resident memory, so 1,000,000 waiting events are about 3.4 to 3.9 GB. At shutdown the queued events get the budget of the hub's drain of in-process calls (`Calls`, inside `SHUTDOWN_TIMEOUT`); past it the rest are cut and the count is logged, "in-process calls cut at shutdown", as SNS logs the deliveries it drops. A topic that signs an envelope for its subscribers (the default; `RawMessageDelivery` off) is the slow destination to expect: SNS spends about a millisecond signing each, and its lane runs one at a time. |
+| S3 event documents: the JSON of a queue's body and of a topic's `Message` | `json.dumps` with its default separators, `", "` and `": "`. The `s3:TestEvent` document has `Service` first, then `Event`, `Time`, `Bucket`, `RequestId`, `HostId` | Compact: no space after `,` or `:`. Every member of both documents is in LocalStack's order, for every event S3 sends, in a queue's body, in a topic's raw message and in the `Message` of an envelope: in a `Records` document `x-amz-request-id` comes before `x-amz-id-2`, and `glacierEventData` is last on a completed restore. Parsed, every document is the same as LocalStack's | A client that parses the body sees no difference; one that compares the text sees the separators. The separators are left as they are. Found by SQ-419; the member order by SQ-432 |
 
 ## S3 wire details
 
@@ -437,9 +438,11 @@ caller's account and region, as LocalStack does.
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
 - A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project: LocalStack answers "Global secondary
+  attribute the index does not project, and a PartiQL `SELECT` of one with such
+  an attribute in its list, at any length: LocalStack answers "Global secondary
   index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal in both.
+  attribute. `AttributesToGet` gets the image's refusal on a `Query` and a
+  `Scan`.
 - `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
   parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
   not have empty statement." / "The statement was empty." and prefixes the
@@ -474,19 +477,28 @@ caller's account and region, as LocalStack does.
   message may name a different second path. The request is rejected or
   accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
   first to last in the statement's order. A `SELECT` list is checked for overlap
-  whatever its size, and a list that overlaps is answered with the overlap. The
-  image holds a `SELECT` to no size of its own, so one of 602 or more distinct
-  top-level attributes is accepted there. gostack reads with a
-  `ProjectionExpression` of those attributes, which the 4,096-character limit
-  bounds: it is `#n0, #n1, ...`, 7N-112 characters for N of 602 or more, so 602
-  is the first to be refused. Paths below the top level add nothing to it: a
-  list of any number of paths under one attribute, as long as the statement's
-  8,192 bytes hold it, is accepted, as in the image. The refusal is
-  `Expression size has exceeded the maximum allowed size;`: `400` from
-  ExecuteStatement, a `ValidationError` in the statement's `Error` from
-  BatchExecuteStatement, and `400` with
-  `Validation failed in TransactStatements[0]: ` before it from
-  ExecuteTransaction.
+  whatever its size, and a list that overlaps is answered with the overlap.
+- A PartiQL statement's text is held to 8,192 bytes, and the expressions it
+  compiles to to no size, as in the image; the 300 operators and 100 `IN`
+  operands of any expression hold for it. A `WHERE` of 4,000 parentheses nested
+  (an 8,055-byte statement) is answered `500 Internal Server Error` by the
+  image, where it answered 3,000 deep, and gostack answers it.
+- Arithmetic chained in one action of a PartiQL `UPDATE`, `SET a = a + 1 + 1`
+  or `SET a = (a + 1) + 1`, and a `list_append` inside a `list_append`: the
+  image applies them, and counts each `+` and `list_append` toward the 300
+  operators. gostack compiles the statement to an `UpdateExpression`, which
+  takes one `+` or `-` in an action and `list_append` only as its whole value,
+  and answers `Syntax error` or "The function is not allowed to be used this
+  way in an expression" at any count (probed in SQ-452).
+- The operators of a PartiQL statement's `WHERE` that are counted: the image
+  counts every one written, the key equality and the `AND` after it included.
+  gostack counts the condition the statement compiles to, which holds neither
+  for a `DELETE`, a `SELECT` of one hash key or an `EXISTS`, so `WHERE id = 'a'
+  AND (` 150 comparisons joined by `OR` `)` is refused by the image at 301
+  operators and answered by gostack, 2 apart on a table with a hash key only (a
+  range key was not probed). An `UPDATE` adds an `attribute_exists` and an
+  `AND` to its condition, which stand in for them, and is refused at the same
+  count.
 
 ## DynamoDB batches and transactions
 

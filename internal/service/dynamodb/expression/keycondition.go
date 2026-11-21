@@ -62,7 +62,12 @@ type KeyText struct {
 // ParseKeyConditionText parses a KeyConditionExpression and makes the checks
 // every condition makes.
 func ParseKeyConditionText(src string, subs Substitutions, used map[string]struct{}) (*KeyText, error) {
-	c, _, err := parseChecked(KeyConditionExpression, src, subs, used)
+	p, err := newParser(KeyConditionExpression, src)
+	if err != nil {
+		return nil, err
+	}
+
+	c, _, err := parseChecked(p, subs, used)
 	if err != nil {
 		return nil, err
 	}

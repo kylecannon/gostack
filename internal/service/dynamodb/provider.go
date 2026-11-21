@@ -226,6 +226,8 @@ type caller struct {
 	state   *State
 	// shared is DYNAMODB_SHARE_DB, as the call read it.
 	shared bool
+	// from is who wrote the call's expressions (originOf).
+	from origin
 }
 
 // caller returns the caller of the request in ctx.
@@ -235,7 +237,8 @@ func (p *Provider) caller(ctx context.Context) caller {
 		rc = &request.Context{AccountID: sharedAccount, Region: usEast1}
 	}
 
-	c := caller{account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB}
+	c := caller{account: rc.AccountID, region: regionName(rc.Region), shared: p.settings().ShareDB, from: originOf(ctx)}
+
 	if c.shared {
 		c.state = p.states.Get(sharedAccount, sharedRegion)
 	} else {
