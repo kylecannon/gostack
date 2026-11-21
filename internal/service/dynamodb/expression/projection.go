@@ -36,6 +36,22 @@ func ParseProjection(src string, subs Substitutions, used map[string]struct{}) (
 		return nil, err
 	}
 
+	return parseProjectionFrom(p, subs, used)
+}
+
+// ParseStatementProjection is ParseProjection for the paths of a PartiQL
+// SELECT, which DynamoDB Local holds to no size of their own: a SELECT of 800
+// paths whose text runs past a ProjectionExpression's 4,096 code units is
+// checked for overlap as any other, and the statement's own 8,192 bytes bound
+// the text (SQ-395).
+//
+//nolint:ireturn // the parsed forms are the interfaces expression.go declares
+func ParseStatementProjection(src string, subs Substitutions, used map[string]struct{}) (Projection, error) {
+	return parseProjectionFrom(newUnboundedParser(ProjectionExpression, src), subs, used)
+}
+
+//nolint:ireturn // the parsed forms are the interfaces expression.go declares
+func parseProjectionFrom(p *parser, subs Substitutions, used map[string]struct{}) (Projection, error) {
 	ops, err := p.parsePathList()
 	if err != nil {
 		return nil, err

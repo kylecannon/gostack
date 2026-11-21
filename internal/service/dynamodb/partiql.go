@@ -431,7 +431,7 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 		}
 	}
 
-	_, err := expression.ParseProjection(strings.Join(full, ", "),
+	_, err := expression.ParseStatementProjection(strings.Join(full, ", "),
 		expression.Substitutions{Names: whole.attributeNames()}, map[string]struct{}{})
 	if err != nil {
 		return nil, nil, fmt.Errorf("statement: %w", err)

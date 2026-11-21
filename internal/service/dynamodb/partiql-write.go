@@ -48,8 +48,11 @@ type writeStatement struct {
 	key    value.Item
 	put    *api.PutItemInput
 	update *api.UpdateItemInput
-	del    *api.DeleteItemInput
-	check  *api.ConditionCheck
+	// rank is where each action of update's expression stands in the UPDATE
+	// statement, which lists them in a different order.
+	rank  []int
+	del   *api.DeleteItemInput
+	check *api.ConditionCheck
 }
 
 // compileWrite compiles a write statement against its table. returnOld is
@@ -158,20 +161,21 @@ func (w *writeStatement) checkExpressions() error {
 		return nil
 	}
 
-	return checkStatementExprs(names, values, cond, update)
+	return checkStatementExprs(names, values, cond, update, w.rank)
 }
 
 // checkStatementExprs parses a compiled statement's condition and update
-// expressions over its placeholders.
+// expressions over its placeholders. rank is where the update's actions stand
+// in the statement.
 func checkStatementExprs(
-	names map[string]string, values map[string]api.AttributeValue, cond, update *string,
+	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int,
 ) error {
 	x, err := newExprs(names, values, true, true, "")
 	if err != nil {
 		return err
 	}
 
-	_, err = x.update(update)
+	_, err = x.updateRanked(update, rank)
 	if err != nil {
 		return err
 	}
@@ -221,10 +225,12 @@ var returnModes = map[partiql.Returning]string{
 func (w *writeStatement) compileUpdate(
 	stmt *partiql.Statement, hash string, cond, onFailure *string, r *render,
 ) error {
-	update, err := r.update(stmt.Actions)
+	update, rank, err := r.update(stmt.Actions)
 	if err != nil {
 		return err
 	}
+
+	w.rank = rank
 
 	exists := "attribute_exists(" + r.path(partiql.Path{{Name: hash}}) + ")"
 	if cond != nil {
