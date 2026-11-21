@@ -350,10 +350,6 @@ func uploadEncryptionRequest(in *s3api.CreateMultipartUploadInput) encryptionReq
 // an AES256 object already has. The caller holds b.mu, or the bucket's lock is
 // already held by the same call.
 func copyAllowedInPlace(b *Bucket, source *Version) bool {
-	if b.Encryption == nil {
-		return false
-	}
-
 	untouchedDefault := !b.EncryptionConfigured && source.ServerSideEncryption == sseAES256
 
 	return !untouchedDefault
