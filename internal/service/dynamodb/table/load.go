@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -183,15 +182,16 @@ func (t *Table) loadPrimary(items []value.Item) error {
 	return nil
 }
 
-// sortKey is the range key value of item under key, nil without one.
-func sortKey(key KeySchema, item value.Item) *api.AttributeValue {
+// sortKey is the encoded range key value of item under key, empty without one.
+// It shares the bytes of the item's string or binary.
+func sortKey(key KeySchema, item value.Item) string {
 	if !key.HasRange() {
-		return nil
+		return ""
 	}
 
 	r := item[key.Range.Name]
 
-	return &r
+	return value.SortKeyUntyped(&r)
 }
 
 // fill puts in the empty store s an entry, made by add, for each item that
