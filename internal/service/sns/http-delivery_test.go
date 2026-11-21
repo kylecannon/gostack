@@ -519,6 +519,11 @@ func Test_Provider_HTTP_slowEndpointDoesNotDelayQueue(t *testing.T) {
 	const n = 1000
 
 	s := newStack(t, nil)
+	// The endpoint holds the first notification for the whole publish loop.
+	// postTimeout would cut it when that loop runs past 10 s on a loaded
+	// machine, fail it, and send the next while the endpoint's handler still
+	// blocks: two in its hits, though the lane kept one at a time.
+	s.sns.SetPostTimeout(time.Hour)
 
 	release := make(chan struct{})
 	e := newEndpoint(t, func(_ http.ResponseWriter, r *http.Request) {
@@ -526,6 +531,11 @@ func Test_Provider_HTTP_slowEndpointDoesNotDelayQueue(t *testing.T) {
 			<-release
 		}
 	})
+	// After the endpoint's cleanup in order, so before it in time: a failed
+	// assertion still lets the held delivery go.
+	let := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(let)
+
 	topic := s.createTopic(paramName, "t")
 	s.confirmHTTP(topic, e)
 
@@ -542,7 +552,7 @@ func Test_Provider_HTTP_slowEndpointDoesNotDelayQueue(t *testing.T) {
 	assert.Len(t, got, n)
 	assert.Len(t, e.hits, 1, "the endpoint has one delivery at a time")
 
-	close(release)
+	let()
 
 	for range n {
 		e.next(t)
