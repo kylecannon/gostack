@@ -70,6 +70,9 @@ func (p *Provider) CreateTopic(ctx context.Context, in *api.CreateTopicInput) (*
 	}
 
 	st.add(newTopic(rc, name, arn, attrs, in.DataProtectionPolicy))
+	// A topic can have subscribers that need signed messages, so the key starts
+	// now; the publish that needs it waits for what is already under way.
+	p.signer.Warm()
 
 	if len(tags) > 0 {
 		account.update(arn, tags)

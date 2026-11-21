@@ -130,6 +130,11 @@ func newBurst(b *testing.B, protocol string, lanes, perLane, size int) (*burstRu
 
 	r.must(queryForm("CreateTopic", paramName, burstTopic).Encode())
 	r.must(queryForm("CreateTopic", paramName, burstVictim).Encode())
+
+	// CreateTopic starts the signing key; the burst is not timed with it still
+	// running on another core.
+	awaitSigningKey(b, provider)
+
 	r.must(queryForm(opSubscribe, paramTopicArn, r.victim, paramProtocol, protocolSQS,
 		paramEndpoint, "arn:aws:sqs:"+region+":"+account+":burst-healthy", attrKey1, attrRaw, attrValue1, textTrue).Encode())
 
@@ -148,8 +153,8 @@ func newBurst(b *testing.B, protocol string, lanes, perLane, size int) (*burstRu
 			"Attributes.entry.2.value", policy).Encode())
 	}
 
-	// One publish to each topic before the clock starts, so the signer's key
-	// pair, made on first use, is not timed.
+	// One publish before the clock starts, so the first signed publish's
+	// one-off work is not timed.
 	r.must(queryForm(opPublish, paramTopicArn, r.victim, paramMessage, "warm").Encode())
 
 	message := strings.Repeat(burstChunk, size/len(burstChunk))
