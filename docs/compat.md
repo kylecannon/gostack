@@ -92,6 +92,10 @@ S3 persists its buckets, objects, versions and uploads in progress, bodies inclu
 
 S3 writes acknowledged since the last save are lost at `docker stop` when the shutdown save takes longer than its window. It does when another writer has a lot of data unsynced on the same volume. Raise `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose `stop_grace_period`) raised to match, to widen the window, and lower `PERSIST_FREQUENCY` to leave less unsaved. Persistence with no volume mounted at `PERSIST_BASE_DIR` lands on the container's own overlay layer and takes the slower per-file sync path. The startup log names the filesystem and the sync path for each service (`persist: asset sync`). The window, the measurements and the filesystems that get each path are in `architecture.md`, Persistence, Assets.
 
+When a save runs out of its window, gostack says so at the next start. localstack-persist has no counterpart: it has no save deadline of its own to run out of. The flush writes a marker file, `<PERSIST_BASE_DIR>/<service>/.gostack-save-abandoned`, for each service the window cut off or left with a change unsaved, the moment it ends, so it is on disk even when the save is inside work that cannot be cut short. The startup logs one warning naming those services and the time of the last completed save of each: `persist: a save was abandoned at its deadline before this start, so what changed after the last completed save is lost`. The restart loads that save. A marker written and not yet fsynced when the process is killed can be lost by a power cut, which loses the warning and never state. A save that completes removes the marker, unless the service changed since the save took its snapshot, and then the next save that finds it unchanged does; a shutdown that saves everything leaves none. Delete a marker to silence the warning for a data directory you mean to keep as it is (`architecture.md`, Persistence, Assets).
+
+On macOS, S3's shutdown save no longer runs out of time for a thousand objects: each body gets a plain `fsync` and the drive's cache is flushed once per save, not once per body (`architecture.md`, Persistence, Assets). Linux is unchanged.
+
 SSM persists every parameter with all its versions, labels and tags, and its maintenance windows. A `SecureString` is written as it is stored, `kms:<key id>:<plaintext>` with `alias/aws/ssm` as the default key id, so its plaintext is on disk in the clear. No KMS call encrypts it, as in LocalStack.
 
 KMS persists every key with its metadata, state, deletion date, policy, tags, rotation setting and replica links, its aliases and grants, and the import tokens `GetParametersForImport` handed out with their wrapping keys, as LocalStack's `KmsStore` holds them. Key material is written in plaintext, as LocalStack pickles it: the current material, every material a rotated key still decrypts with, imported material and material pending rotation, and the private key of every RSA and elliptic-curve key, in `<PERSIST_BASE_DIR>/kms/store.json` (or `store.bin` with `PERSIST_FORMAT=binary`). Anyone who can read that file can decrypt and sign as every key, so treat the persistence directory as holding secrets. gostack creates the file readable by its owner only (mode 0600). A file whose key material does not match the digest saved beside it is refused and moved aside, so a damaged file never restores a key that decrypts nothing it encrypted. A deletion date, rotation date or import expiry is only reported after a restart, as before it: nothing in gostack or LocalStack deletes or rotates a key when its date comes.
@@ -436,9 +440,11 @@ caller's account and region, as LocalStack does.
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
 - A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project: LocalStack answers "Global secondary
+  attribute the index does not project, and a PartiQL `SELECT` of one with such
+  an attribute in its list, at any length: LocalStack answers "Global secondary
   index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal in both.
+  attribute. `AttributesToGet` gets the image's refusal on a `Query` and a
+  `Scan`.
 - `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
   parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
   not have empty statement." / "The statement was empty." and prefixes the
@@ -473,19 +479,28 @@ caller's account and region, as LocalStack does.
   message may name a different second path. The request is rejected or
   accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
   first to last in the statement's order. A `SELECT` list is checked for overlap
-  whatever its size, and a list that overlaps is answered with the overlap. The
-  image holds a `SELECT` to no size of its own, so one of 602 or more distinct
-  top-level attributes is accepted there. gostack reads with a
-  `ProjectionExpression` of those attributes, which the 4,096-character limit
-  bounds: it is `#n0, #n1, ...`, 7N-112 characters for N of 602 or more, so 602
-  is the first to be refused. Paths below the top level add nothing to it: a
-  list of any number of paths under one attribute, as long as the statement's
-  8,192 bytes hold it, is accepted, as in the image. The refusal is
-  `Expression size has exceeded the maximum allowed size;`: `400` from
-  ExecuteStatement, a `ValidationError` in the statement's `Error` from
-  BatchExecuteStatement, and `400` with
-  `Validation failed in TransactStatements[0]: ` before it from
-  ExecuteTransaction.
+  whatever its size, and a list that overlaps is answered with the overlap.
+- A PartiQL statement's text is held to 8,192 bytes, and the expressions it
+  compiles to to no size, as in the image; the 300 operators and 100 `IN`
+  operands of any expression hold for it. A `WHERE` of 4,000 parentheses nested
+  (an 8,055-byte statement) is answered `500 Internal Server Error` by the
+  image, where it answered 3,000 deep, and gostack answers it.
+- Arithmetic chained in one action of a PartiQL `UPDATE`, `SET a = a + 1 + 1`
+  or `SET a = (a + 1) + 1`, and a `list_append` inside a `list_append`: the
+  image applies them, and counts each `+` and `list_append` toward the 300
+  operators. gostack compiles the statement to an `UpdateExpression`, which
+  takes one `+` or `-` in an action and `list_append` only as its whole value,
+  and answers `Syntax error` or "The function is not allowed to be used this
+  way in an expression" at any count (probed in SQ-452).
+- The operators of a PartiQL statement's `WHERE` that are counted: the image
+  counts every one written, the key equality and the `AND` after it included.
+  gostack counts the condition the statement compiles to, which holds neither
+  for a `DELETE`, a `SELECT` of one hash key or an `EXISTS`, so `WHERE id = 'a'
+  AND (` 150 comparisons joined by `OR` `)` is refused by the image at 301
+  operators and answered by gostack, 2 apart on a table with a hash key only (a
+  range key was not probed). An `UPDATE` adds an `attribute_exists` and an
+  `AND` to its condition, which stand in for them, and is refused at the same
+  count.
 
 ## DynamoDB batches and transactions
 

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/partiql"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
@@ -57,6 +58,11 @@ func CutRecords(p *Provider) int {
 	}
 
 	return n
+}
+
+// ShapeResult is the result item a SELECT of the paths gives for item.
+func ShapeResult(item value.Item, paths []partiql.Path) value.Item {
+	return shapeItem(item, paths)
 }
 
 // Shard returns the latest stream shard of the test account's table in
