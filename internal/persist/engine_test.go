@@ -814,6 +814,9 @@ func Test_Engine_Load(t *testing.T) {
 
 			cfg := baseCfg(base)
 			cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+			// The temp dir is on the root filesystem of a container, which Load
+			// warns of; this test is about what Load says of the files.
+			cfg.MountDetector = func(string) bool { return true }
 
 			e := persist.New(cfg)
 			s, other := &fake{}, &fake{state: "state:untouched"}

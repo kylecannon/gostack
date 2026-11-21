@@ -10,7 +10,9 @@ import (
 
 // Test_partiql_readsWholeItem: a SELECT * run through BatchExecuteStatement
 // or ExecuteTransaction answers the whole item, a projection the paths it
-// names (verification/SQ-229 probe2, "batch capacity" and "tx reads").
+// names in the structure they have in the item, as a GetItem's does, where
+// ExecuteStatement keys each under its alias (verification/SQ-229 probe2,
+// "batch capacity" and "tx reads"; SQ-439 probe3).
 func Test_partiql_readsWholeItem(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pwhole"))
@@ -25,7 +27,7 @@ func Test_partiql_readsWholeItem(t *testing.T) {
 		},
 		{
 			"batch projection", opBatchStmt, `{"Statements":[{"Statement":"SELECT n, m.k FROM pwhole WHERE id = 'a'"}]}`,
-			http.StatusOK, `{"Responses":[{"TableName":"pwhole","Item":{"n":{"N":"1"},"k":{"S":"v"}}}]}`,
+			http.StatusOK, `{"Responses":[{"TableName":"pwhole","Item":{"n":{"N":"1"},"m":{"M":{"k":{"S":"v"}}}}}]}`,
 		},
 		{
 			"transaction star", opTransaction, `{"TransactStatements":[{"Statement":"SELECT * FROM pwhole WHERE id = 'a'"},` +

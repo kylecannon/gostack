@@ -27,7 +27,7 @@ func benchAssets(b *testing.B) (*persist.Assets, string) {
 	b.Helper()
 
 	dir := b.TempDir()
-	e := persist.New(baseCfg(dir))
+	e := benchEngine(dir, flushEvery)
 	e.Register(shelfService, newShelf())
 
 	a, err := e.Assets(shelfService)
@@ -92,7 +92,7 @@ func BenchmarkSavePendingAssets(b *testing.B) {
 				b.StopTimer()
 
 				run++
-				e := persist.New(baseCfg(filepath.Join(base, strconv.Itoa(run))))
+				e := benchEngine(filepath.Join(base, strconv.Itoa(run)), flushEvery)
 				s := newShelf()
 				e.Register(shelfService, s)
 

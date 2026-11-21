@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,7 +205,7 @@ func Test_Engine_Flush_APanicInFollowedFailsTheLeaderWithABackoff(t *testing.T) 
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 		e.Register(ddb, leaderFollowedPanics{&stateSnap{state: tablesState}})
 		e.Register(ddbStream, streamFollower{&stateSnap{state: recordsState}})
 		e.MarkDirty(ddb)
@@ -235,7 +234,7 @@ func Test_Engine_Timer_APanicOutsideSnapshotIsLoggedAndTheNextFlushSaves(t *test
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 		e.Register("a-bad", panicsOnCommit{&stateSnap{state: badState}})
 		e.Register("b-good", &stateSnap{state: "good"})
 		e.MarkDirty("a-bad")
@@ -265,7 +264,7 @@ func Test_Engine_Timer_APanickingSnapshotTurnsItsServiceOffAndIsLoggedOnce(t *te
 	synctest.Test(t, func(t *testing.T) {
 		dir := t.TempDir()
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 		good := &stateSnap{state: goodState}
 		e.Register("a-bad", panicsAlways{&stateSnap{state: "v1"}})
 		e.Register("b-good", good)
@@ -339,7 +338,7 @@ func Test_Engine_Load_ALaterLoadThatCannotOpenTheBaseDirChangesNothing(t *testin
 	dir := filepath.Join(t.TempDir(), "base")
 	file := filepath.Join(dir, "svc", FormatJSON.fileName())
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(dir, time.Hour, logs))
 	s := &stateSnap{state: "v1"}
 	e.Register("svc", s)
 	require.NoError(t, e.Load(t.Context()))
@@ -378,7 +377,7 @@ func Test_Engine_Load_AStartupRefusalIsLoggedOnce(t *testing.T) {
 	defer func() { _ = os.Chmod(dir, 0o700) }()
 
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(dir, time.Hour, logs))
 	e.Register("svc", &stateSnap{})
 
 	require.ErrorIs(t, e.Load(t.Context()), ErrUnsafe)
@@ -400,7 +399,7 @@ func Test_Engine_SameFailureIsNotHiddenBehindTheSameErrno(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "base")
 		svc := filepath.Join(dir, "svc")
 		logs := &warnings{}
-		e := New(Config{PersistVarSet: true, BaseDir: dir, Frequency: 10 * time.Millisecond, Logger: slog.New(logs)})
+		e := New(warnConfig(dir, 10*time.Millisecond, logs))
 		s := &stateSnap{state: "v1"}
 		e.Register("svc", s)
 		e.MarkDirty("svc")

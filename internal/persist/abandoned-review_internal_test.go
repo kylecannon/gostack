@@ -2,7 +2,6 @@ package persist
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +23,7 @@ func reviewEngine(t *testing.T, freq time.Duration) (*Engine, string, *warnings)
 	dir := t.TempDir()
 	logs := &warnings{}
 
-	return New(Config{PersistVarSet: true, BaseDir: dir, Frequency: freq, Logger: slog.New(logs)}), dir, logs
+	return New(warnConfig(dir, freq, logs)), dir, logs
 }
 
 // markedIn reports whether service has a marker in dir.
@@ -43,7 +42,7 @@ func startWarnings(t *testing.T, dir string, names ...string) []string {
 	require.NoError(t, os.CopyFS(copied, os.DirFS(dir)))
 
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: copied, Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(copied, time.Hour, logs))
 
 	for _, name := range names {
 		e.Register(name, &stateSnap{})

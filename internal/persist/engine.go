@@ -481,6 +481,12 @@ func (e *Engine) Load(ctx context.Context) error {
 
 	e.mu.Unlock()
 
+	// Only the startup Load, the first to open the base dir, tells of a state
+	// dir where saved state does not last: a later Load finds loaded set.
+	if startup {
+		e.warnUnmounted()
+	}
+
 	names := afterLeaders(slices.Sorted(maps.Keys(safe)), func(name string) (string, string) {
 		return name, follows(safe[name].snap)
 	})
@@ -562,6 +568,10 @@ func (e *Engine) openFailed(err error) error {
 
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		if startup {
+			e.warnUnmounted()
+		}
+
 		return e.unsafeErr()
 	case startup:
 		e.refuseAll(err)

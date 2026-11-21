@@ -50,11 +50,11 @@ func Test_syncChoice(t *testing.T) {
 		wantName string
 		wantFS   bool
 	}{
-		{name: "ext4", magic: unix.EXT4_SUPER_MAGIC, wantName: "ext4", wantFS: true},
-		{name: "xfs", magic: unix.XFS_SUPER_MAGIC, wantName: "xfs", wantFS: true},
+		{name: fsExt4, magic: unix.EXT4_SUPER_MAGIC, wantName: fsExt4, wantFS: true},
+		{name: fsXFS, magic: unix.XFS_SUPER_MAGIC, wantName: fsXFS, wantFS: true},
 		{name: "btrfs", magic: unix.BTRFS_SUPER_MAGIC, wantName: "btrfs", wantFS: true},
-		{name: "tmpfs", magic: unix.TMPFS_MAGIC, wantName: "tmpfs", wantFS: true},
-		{name: "ramfs", magic: unix.RAMFS_MAGIC, wantName: "ramfs", wantFS: true},
+		{name: fsTmpfs, magic: unix.TMPFS_MAGIC, wantName: fsTmpfs, wantFS: true},
+		{name: fsRamfs, magic: unix.RAMFS_MAGIC, wantName: fsRamfs, wantFS: true},
 		{name: "overlay", magic: unix.OVERLAYFS_SUPER_MAGIC, wantName: "overlay"},
 		{name: "fuse", magic: unix.FUSE_SUPER_MAGIC, wantName: "fuse"},
 		{name: "unknown", magic: 0x1234abcd, wantName: "0x1234abcd"},

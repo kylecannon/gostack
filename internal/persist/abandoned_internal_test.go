@@ -2,7 +2,6 @@ package persist
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +29,7 @@ func (f *syncFixture) restart(t *testing.T) []string {
 	t.Helper()
 
 	logs := &warnings{}
-	e := New(Config{PersistVarSet: true, BaseDir: f.e.BaseDir(), Frequency: time.Hour, Logger: slog.New(logs)})
+	e := New(warnConfig(f.e.BaseDir(), time.Hour, logs))
 	e.Register(syncService, &namer{})
 	require.NoError(t, e.Load(t.Context()))
 

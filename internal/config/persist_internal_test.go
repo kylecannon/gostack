@@ -269,6 +269,20 @@ func Test_Config_PersistConfig(t *testing.T) {
 
 		require.Equal(t, persist.StateDir, persist.New(cfg.PersistConfig()).BaseDir())
 	})
+
+	t.Run("InContainer follows in_docker", func(t *testing.T) {
+		isolate(t)
+
+		out, err := newConfig(nil, dockerProbe{fsys: fstest.MapFS{}})
+		require.NoError(t, err)
+		require.False(t, out.PersistConfig().InContainer, "no container marker")
+
+		t.Setenv(varOverrideInDocker, valueOne)
+
+		in, err := newConfig(nil, dockerProbe{fsys: fstest.MapFS{}})
+		require.NoError(t, err)
+		require.True(t, in.PersistConfig().InContainer, "OVERRIDE_IN_DOCKER=1")
+	})
 }
 
 // Test_parsePersistFrequency_PythonFloat checks PERSIST_FREQUENCY against what
