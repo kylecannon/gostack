@@ -127,13 +127,16 @@ func (g *generator) emitServe(p *printer) {
 // answers 500 for a query call with no Action, so this one differs from it.
 // A form that was cut, over the body cap or without room, may have lost its
 // Action: it is answered as the form error a call with its Action in the URL
-// gets, by this service's writer.
+// gets, by this service's writer. A context with no request has no form to have
+// been cut, so it is answered MissingAction.
 func emitMissingAction(p *printer) {
 	p.f("\tif rc.Operation == \"\" && rc.Protocol == protocol.KindQuery {")
-	p.f("\t\t_, formErr := query.RequestFormHeld(rc.Request, rc)")
-	p.f("\t\tif cut := query.CutFormAnswer(formErr); cut != nil {")
-	p.f("\t\t\twriteError(w, rc, cut)")
-	p.f("\t\t\treturn")
+	p.f("\t\tif rc.Request != nil {")
+	p.f("\t\t\t_, formErr := query.RequestFormHeld(rc.Request, rc)")
+	p.f("\t\t\tif cut := query.CutFormAnswer(formErr); cut != nil {")
+	p.f("\t\t\t\twriteError(w, rc, cut)")
+	p.f("\t\t\t\treturn")
+	p.f("\t\t\t}")
 	p.f("\t\t}")
 	p.f("\t\twriteError(w, rc, &awserr.Error{")
 	p.f("\t\t\tCode: \"MissingAction\",")

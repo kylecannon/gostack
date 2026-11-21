@@ -190,8 +190,12 @@ func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err er
 // Last, a form body that was cut (query.ErrFormCut) hid the Action that would
 // have named the service, so the call is a query call that no service can be
 // named for. It is answered as the form error a query call with its Action in
-// the URL gets, in the query protocol. A signing scope that names a registered
-// service leaves the 404: that service speaks json and the call has no target.
+// the URL gets, in the query protocol. A signing scope that several registered
+// services share (dynamodb and dynamodbstreams, which sign as "dynamodb")
+// leaves the 404: those services speak json and the call has no target to tell
+// them apart. A scope that names one registered service never gets here: that
+// service is the call's, and its generated serve answers (kms, ssm and
+// secretsmanager answer 400 InvalidAction).
 func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request, form *formReader) {
 	if match, ok := g.table.Unregistered(r); ok {
 		rc := &request.Context{Service: match.Service, Protocol: match.Protocol, RequestID: newRequestID(), Request: r}
@@ -228,9 +232,10 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request, form *
 }
 
 // signedForRegistered reports whether the signing name of r's Authorization
-// header is a registered service's. When detection still finds no service for
-// such a request, the service the scope names speaks json and the request has
-// no target to say it is a json call.
+// header is a registered service's. Detection settles on a scope that one
+// service holds, so it reaches here only for a scope that several share
+// (dynamodb): their services speak json and the request has no target to say
+// which of them it is.
 func (g *Gateway) signedForRegistered(r *http.Request) bool {
 	cred, _ := account.FromAuthorization(r)
 

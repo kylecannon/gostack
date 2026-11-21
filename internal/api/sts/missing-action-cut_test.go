@@ -2,13 +2,31 @@ package sts_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/api/sts"
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/assert"
 )
+
+// Test_Serve_NoActionNoRequest: a query call with no Action and no request has
+// no form to have been cut. It answers MissingAction and does not read the nil
+// request, as before the cut-form check.
+func Test_Serve_NoActionNoRequest(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	sts.Serve(&provider{}, rec, &request.Context{
+		Service: "sts", Protocol: protocol.KindQuery, AccountID: "000000000000",
+		Region: "us-east-1", RequestID: "req-1",
+	})
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "<Code>MissingAction</Code>")
+}
 
 // Test_Serve_NoActionCutForm: a query call with no Action in rc, whose form
 // could not be read whole because its body is over the body cap, hid an Action

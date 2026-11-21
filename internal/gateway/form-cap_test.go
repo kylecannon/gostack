@@ -19,6 +19,7 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -204,7 +205,8 @@ func jsonServiceRegistration(name string) service.Registration {
 // answer was the 404 any unrouted call gets: an unregistered service's call is
 // still 501 in its own protocol, a preflight is still 200 when preflight
 // processing is off, the internal paths are still 404, and so is a call signed
-// for a registered json service it does not name by target. The 404 of a call
+// for json services that share a signing name, as dynamodb and dynamodbstreams
+// do, and that it does not name by target. The 404 of a call
 // that names no service by anything else is what the form error replaces.
 func Test_Gateway_formOverCapKeepsRefusalOrder(t *testing.T) {
 	settings := newSettings(func(s *gateway.Settings) { s.DisablePreflightProcessing = true })
@@ -245,7 +247,7 @@ func Test_Gateway_formOverCapKeepsRefusalOrder(t *testing.T) {
 			headers: map[string]string{headerType: formType}, status: http.StatusNotFound, contains: notFoundText,
 		},
 		{
-			name: "registered json service, no target", method: http.MethodPost, target: localhost,
+			name: "json services sharing a scope, no target", method: http.MethodPost, target: localhost,
 			headers: map[string]string{headerType: formType, headerAuth: signed("test", usEast1, "shared")},
 			status:  http.StatusNotFound, contains: notFoundText,
 		},
@@ -486,6 +488,29 @@ func Test_Gateway_formBusy(t *testing.T) {
 		assert.Equal(t, nameSQS, resp.Header.Get(headerServedBy), "the service writes it, so its Accept wrapper sees it")
 	})
 
+	// Twenty thousand bare pairs, then the Action: the body is small enough to
+	// be read, but the pairs cost more to decode than the pool has room for, so
+	// the Action is found only when the generated serve charges the decode to
+	// the call (rc), not to nothing.
+	manyLast := strings.Repeat("a&", 20000) + "Action=GetCallerIdentity&Version=2011-06-15"
+
+	t.Run("signed, many pairs, Action last", func(t *testing.T) {
+		headers := map[string]string{headerType: formType, headerAuth: signed("test", usEast1, nameSTS)}
+		resp, got := post(t, "/", manyLast, headers)
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, got)
+		assert.Contains(t, got, "<Code>Throttling</Code>")
+		assert.NotContains(t, got, "MissingAction")
+	})
+
+	t.Run("unsigned, many pairs, Action last", func(t *testing.T) {
+		resp, got := post(t, "/", manyLast, map[string]string{headerType: formType})
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, got)
+		assert.Contains(t, got, "<Code>Throttling</Code>")
+		assert.NotContains(t, got, "MissingAction")
+	})
+
 	t.Run("signed, Action in the URL", func(t *testing.T) {
 		headers := map[string]string{headerType: formType, headerAuth: signed("test", usEast1, nameSTS)}
 		resp, got := post(t, "/?Action=GetCallerIdentity", big, headers)
@@ -501,4 +526,25 @@ func Test_Gateway_formBusy(t *testing.T) {
 		assert.Equal(t, http.StatusNotImplemented, resp.StatusCode, got)
 		assert.NotContains(t, got, "Throttling")
 	})
+}
+
+// Test_Gateway_formBusyQueueURL: a form posted to a queue URL when the bodies
+// in flight leave it no room is answered MalformedQueryString by the SQS
+// provider's own route (serveQueueURL), not Throttling: that route reports any
+// failure to read the form as the one error.
+func Test_Gateway_formBusyQueueURL(t *testing.T) {
+	provider := sqs.New(func() sqs.Settings {
+		return sqs.Settings{EndpointStrategy: sqs.StrategyStandard, Host: "localhost.localstack.cloud:4566"}
+	}, nil)
+
+	handler := newGateway(t, newSettings(), []service.Registration{provider.Registration()}).Handler()
+	fillInFlight(t, 50*time.Millisecond)
+
+	body := formOf(t, "ListQueues", "2012-11-05", 100<<10)
+	headers := map[string]string{headerType: formType, headerAuth: signed("test", usEast1, nameSQS)}
+	resp, got := call(t, handler, newRequest(t, http.MethodPost, "http://localhost:4566/000000000000/q", body, headers))
+
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, got)
+	assert.Contains(t, got, "<Code>"+malformedQuery+"</Code>")
+	assert.NotContains(t, got, "Throttling")
 }

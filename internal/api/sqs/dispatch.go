@@ -44,10 +44,12 @@ func ServeValidated(h Handler, w http.ResponseWriter, rc *request.Context) {
 
 func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {
 	if rc.Operation == "" && rc.Protocol == protocol.KindQuery {
-		_, formErr := query.RequestFormHeld(rc.Request, rc)
-		if cut := query.CutFormAnswer(formErr); cut != nil {
-			writeError(w, rc, cut)
-			return
+		if rc.Request != nil {
+			_, formErr := query.RequestFormHeld(rc.Request, rc)
+			if cut := query.CutFormAnswer(formErr); cut != nil {
+				writeError(w, rc, cut)
+				return
+			}
 		}
 		writeError(w, rc, &awserr.Error{
 			Code:       "MissingAction",

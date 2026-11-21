@@ -183,8 +183,11 @@ names writes it, so its namespace and its `Accept` handling apply: the generated
 `serve` reads the form (`query.CutFormAnswer`) before it answers `MissingAction`.
 Only when no service can be named does the gateway write it, in the query protocol
 with no namespace, as the last step of `refuseUnclaimed`: after an unregistered
-service's 501, a preflight's 200 and an internal path's 404, and not for a scope
-that names a registered json service, which keeps the 404. Text that is only not
+service's 501, a preflight's 200 and an internal path's 404, and not for the
+`dynamodb` scope, which DynamoDB and DynamoDB Streams share and which keeps the
+404. A scope one json service holds (KMS, SSM, Secrets Manager) names that
+service, whose generated `serve` answers `400 InvalidAction` in
+`application/x-amz-json-1.1`. Text that is only not
 UTF-8 loses no pair (`query.ErrFormCut` is not wrapped), so it answers as any form
 with no Action does.
 
