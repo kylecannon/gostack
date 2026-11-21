@@ -19,7 +19,28 @@ var comparators = map[tokKind]string{
 //
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
 func ParseCondition(kind Kind, src string, subs Substitutions, used map[string]struct{}) (Condition, error) {
-	c, r, err := parseChecked(kind, src, subs, used)
+	p, err := newParser(kind, src)
+	if err != nil {
+		return nil, err
+	}
+
+	return conditionFrom(p, subs, used)
+}
+
+// ParseStatementCondition is ParseCondition for the WHERE of a PartiQL
+// statement, which DynamoDB Local holds to no size of its own: a SELECT whose
+// WHERE is six IN lists of 100 values renders to 4,172 characters and is
+// answered, the statement's own 8,192 bytes bounding the text (SQ-452). The
+// operator count and every other check apply to it as to any condition.
+//
+//nolint:ireturn // the parsed forms are the interfaces expression.go declares
+func ParseStatementCondition(kind Kind, src string, subs Substitutions, used map[string]struct{}) (Condition, error) {
+	return conditionFrom(newUnboundedParser(kind, src), subs, used)
+}
+
+//nolint:ireturn // as ParseCondition
+func conditionFrom(p *parser, subs Substitutions, used map[string]struct{}) (Condition, error) {
+	c, r, err := parseChecked(p, subs, used)
 	if err != nil {
 		return nil, err
 	}
@@ -29,12 +50,7 @@ func ParseCondition(kind Kind, src string, subs Substitutions, used map[string]s
 
 // parseChecked parses a condition grammar expression and runs the checks every
 // condition-grammar member shares.
-func parseChecked(kind Kind, src string, subs Substitutions, used map[string]struct{}) (*cond, *resolver, error) {
-	p, err := newParser(kind, src)
-	if err != nil {
-		return nil, nil, err
-	}
-
+func parseChecked(p *parser, subs Substitutions, used map[string]struct{}) (*cond, *resolver, error) {
 	c, err := p.parseCondition()
 	if err != nil {
 		return nil, nil, err
@@ -48,7 +64,7 @@ func parseChecked(kind Kind, src string, subs Substitutions, used map[string]str
 	}
 
 	if n := countOperators(c); n > maxOperators {
-		return nil, nil, r.fail("The expression contains too many operators; operator count: " + strconv.Itoa(maxOperators+1))
+		return nil, nil, r.fail(msgTooManyOperators)
 	}
 
 	err = r.resolveCond(c)

@@ -106,6 +106,7 @@ type batchStatement struct {
 func (p *Provider) BatchExecuteStatement(
 	ctx context.Context, in *api.BatchExecuteStatementInput,
 ) (*api.BatchExecuteStatementOutput, error) {
+	ctx = forStatement(ctx)
 	stmts, err := parseBatch(in.Statements)
 	if err != nil {
 		return nil, err

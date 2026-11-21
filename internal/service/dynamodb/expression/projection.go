@@ -42,20 +42,12 @@ func ParseProjection(src string, subs Substitutions, used map[string]struct{}) (
 // ParseStatementProjection is ParseProjection for the paths of a PartiQL
 // SELECT, which DynamoDB Local holds to no size of their own: a SELECT of 800
 // paths whose text runs past a ProjectionExpression's 4,096 code units is
-// checked for overlap as any other, and the statement's own 8,192 bytes bound
-// the text (SQ-395).
+// checked for overlap as any other and read as any other, the statement's own
+// 8,192 bytes bounding the text (SQ-395, SQ-412).
 //
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
 func ParseStatementProjection(src string, subs Substitutions, used map[string]struct{}) (Projection, error) {
 	return parseProjectionFrom(newUnboundedParser(ProjectionExpression, src), subs, used)
-}
-
-// CheckProjectionSize refuses a ProjectionExpression that is empty or over the
-// size limit, as ParseProjection does before it reads anything. A PartiQL SELECT
-// holds the top-level list its read runs with to it, after
-// ParseStatementProjection has checked the paths for overlap.
-func CheckProjectionSize(src string) error {
-	return checkSize(ProjectionExpression, src)
 }
 
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
@@ -209,8 +201,26 @@ func (pr *projection) Apply(item value.Item) value.Item {
 	return pr.root.applyMap(item)
 }
 
+// applyMap walks whichever of the projected names and the map's own is the
+// shorter, so a projection of a thousand names costs an item of ten attributes
+// ten lookups and no more than its own size in memory (SQ-412).
 func (n *projNode) applyMap(m map[string]api.AttributeValue) map[string]api.AttributeValue {
-	out := make(map[string]api.AttributeValue, len(n.names))
+	out := make(map[string]api.AttributeValue, min(len(n.names), len(m)))
+
+	if len(m) < len(n.names) {
+		for name, v := range m {
+			c, ok := n.names[name]
+			if !ok {
+				continue
+			}
+
+			if r, ok := c.apply(&v); ok {
+				out[name] = r
+			}
+		}
+
+		return out
+	}
 
 	for name, c := range n.names {
 		v, ok := m[name]

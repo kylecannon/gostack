@@ -24,7 +24,7 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	plan, err := planUpdate(e, in)
+	plan, err := planUpdate(originOf(ctx), e, in)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ type updatePlan struct {
 // does: the entries of Expected, ReturnValues, the mix with expressions,
 // placeholders no expression uses, the key, the ConditionalOperator, the
 // expressions, and last the enum of ReturnValuesOnConditionCheckFailure.
-func planUpdate(e *tableEntry, in *api.UpdateItemInput) (*updatePlan, error) {
+func planUpdate(from origin, e *tableEntry, in *api.UpdateItemInput) (*updatePlan, error) {
 	tests, err := expectedTests(in.Expected)
 	if err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func planUpdate(e *tableEntry, in *api.UpdateItemInput) (*updatePlan, error) {
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	plan.update, plan.guard.cond, err = updateExpressions(in, tests)
+	plan.update, plan.guard.cond, err = updateExpressions(from, in, tests)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func planUpdate(e *tableEntry, in *api.UpdateItemInput) (*updatePlan, error) {
 //
 //nolint:ireturn // the parsed condition is the expression package's interface
 func updateExpressions(
-	in *api.UpdateItemInput, tests []expression.LegacyTest,
+	from origin, in *api.UpdateItemInput, tests []expression.LegacyTest,
 ) (*expression.UpdateExpr, expression.Condition, error) {
 	legacy, err := expectedCondition(tests, in.ConditionalOperator)
 	if err != nil {
@@ -137,7 +137,7 @@ func updateExpressions(
 
 	hasExpr := in.UpdateExpression != nil || in.ConditionExpression != nil
 
-	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, hasExpr, msgUpdateNull)
+	x, err := newExprs(from, in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr, hasExpr, msgUpdateNull)
 	if err != nil {
 		return nil, nil, err
 	}

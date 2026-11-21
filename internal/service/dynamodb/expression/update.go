@@ -74,7 +74,8 @@ var _ Update = (*UpdateExpr)(nil)
 // CheckUnused. An error is DynamoDB's ValidationException for the first
 // problem, in the order DynamoDB checks: the syntax and list index range, then
 // reserved words, function names, a repeated clause, path depth, undefined
-// names, overlapping paths, and last each action's values and operands.
+// names, overlapping paths, each action's values and operands, and last the
+// operator count.
 func ParseUpdate(text string, subs Substitutions, used map[string]struct{}) (*UpdateExpr, error) {
 	return ParseUpdateRanked(text, subs, used, nil)
 }
@@ -94,9 +95,29 @@ func ParseUpdateRanked(
 		return nil, err
 	}
 
+	return parseUpdateFrom(base, subs, used, rank)
+}
+
+// ParseStatementUpdate is ParseUpdateRanked for the actions of a PartiQL UPDATE,
+// which DynamoDB Local holds to no size of their own: an UPDATE of 300 SET
+// actions compiles to an UpdateExpression past an expression's 4,096 code
+// units and is applied, the statement's own 8,192 bytes bounding the text
+// (SQ-412). The operator count holds as for any UpdateExpression: 300 operators
+// are applied and 301 refused (SQ-452).
+func ParseStatementUpdate(
+	text string, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
+	return parseUpdateFrom(newUnboundedParser(updateExpression, text), subs, used, rank)
+}
+
+// parseUpdateFrom parses base, the tokens of an UpdateExpression its caller has
+// held to a size or knows to be bounded.
+func parseUpdateFrom(
+	base *parser, subs Substitutions, used map[string]struct{}, rank []int,
+) (*UpdateExpr, error) {
 	p := &updateParser{parser: base}
 
-	err = p.parse()
+	err := p.parse()
 	if err == nil {
 		err = p.index
 	}
@@ -149,6 +170,13 @@ func updateResolve(
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	// DynamoDB Local counts the operators last, after every action's own checks
+	// (probed in SQ-452): each + and - and each function call is one, and a
+	// plain SET, REMOVE, ADD, DELETE and the elements of a path are none.
+	if p.sums+len(p.calls) > maxOperators {
+		return nil, invalid(updateExpression, msgTooManyOperators)
 	}
 
 	u.order = updateOrder(p.actions)
