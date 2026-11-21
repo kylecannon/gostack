@@ -20,8 +20,9 @@ type pathClash struct {
 // DynamoDB Local names the path being added as path one, and as path two the
 // first leaf reached by taking, at every level from the map that held the
 // clash down, the first entry of that level's java.util.HashMap (SQ-333). A
-// PartiQL SELECT adds its paths first to last, so its caller passes them
-// reversed.
+// PartiQL SELECT and a PartiQL UPDATE add their paths first to last, so a
+// SELECT's caller passes them reversed and an UPDATE's are laid out by
+// rankedPaths (SQ-395).
 func findPathClash(paths []Path) *pathClash {
 	if len(paths) < minClashPaths {
 		return nil
