@@ -4,7 +4,6 @@ package persist
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
