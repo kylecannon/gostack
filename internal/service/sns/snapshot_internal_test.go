@@ -2,12 +2,16 @@ package sns
 
 import (
 	"bytes"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"fmt"
 	"maps"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,6 +148,9 @@ func Test_snapshot_data_covers_every_field_of_the_rest(t *testing.T) {
 // fuzzNow is the clock of the fuzz target, so a window entry it restores
 // expires the same way on every run.
 var fuzzNow = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// usEast1 is the region of the states the tests below build.
+const usEast1 = "us-east-1"
 
 // fuzzProvider is a Provider whose sequence starts at zero and whose clock is
 // fuzzNow, so what a restore leaves depends on the file alone.
@@ -335,4 +342,178 @@ func Test_restore_keeps_a_newer_sequence(t *testing.T) {
 
 	require.NoError(t, p.Restore(strings.NewReader(fuzzSeed)))
 	assert.Equal(t, uint64(100), p.sequence.Load())
+}
+
+// Test_restore_takes_a_window_saved_ahead_of_the_clock: the clock can step
+// back across a restart. The entry saved ahead of the restore's clock takes
+// that clock's time, so the window passes it 5 min after the restore, and an
+// id taken after the restore is taken again 5 min later instead of waiting
+// behind the saved entry.
+func Test_restore_takes_a_window_saved_ahead_of_the_clock(t *testing.T) {
+	const arn = "arn:aws:sns:us-east-1:000000000000:w.fifo"
+
+	start := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	rc := &request.Context{AccountID: "000000000000", Region: usEast1}
+
+	for _, ahead := range []time.Duration{30 * time.Second, time.Hour, 24 * time.Hour} {
+		t.Run(ahead.String(), func(t *testing.T) {
+			saving := New(nil, nil)
+			saving.now = func() time.Time { return start.Add(ahead) }
+
+			st := saving.regions.Get(rc.AccountID, rc.Region)
+			st.mu.Lock()
+			st.add(&Topic{Name: "w.fifo", ARN: arn, Attributes: map[string]string{}})
+			topic := st.topics[arn]
+			st.mu.Unlock()
+
+			saving.publishFIFO(rc, topic, []*message{{id: "id-1", text: "a", dedupID: "d1"}})
+
+			now := start
+			p := New(nil, nil)
+			p.now = func() time.Time { return now }
+			require.NoError(t, p.Restore(bytes.NewReader(snapshotOf(t, saving))))
+
+			restored := p.regions.Get(rc.AccountID, rc.Region).topics[arn]
+			require.NotNil(t, restored)
+			assert.Equal(t, start, restored.fifo.seen["d1"].at, "the entry saved ahead takes the restore's time")
+
+			p.publishFIFO(rc, restored, []*message{{id: "id-2", text: "b", dedupID: "d2"}})
+
+			now = start.Add(dedupWindow)
+			repeat := &message{id: "id-3", text: "b", dedupID: "d2"}
+			p.publishFIFO(rc, restored, []*message{repeat})
+
+			assert.Equal(t, "id-3", repeat.id, "d2 is taken again once the window has passed it")
+			assert.Equal(t, []string{"d2"}, restored.fifo.order, "the window holds only the id taken again")
+		})
+	}
+}
+
+// requireFilled fails for each field of v, or of a value v holds, that is
+// zero: a field the fixture leaves zero goes through a restore the same
+// whether the restore keeps it or not. A pointer only has to be set; what it
+// points at may be zero, as a pointer to the empty string is a value a caller
+// sets.
+func requireFilled(t *testing.T, path string, v reflect.Value) {
+	t.Helper()
+
+	switch v.Kind() {
+	case reflect.Pointer:
+		if v.IsNil() {
+			t.Errorf("%s is not set", path)
+		}
+	case reflect.Slice, reflect.Map:
+		if v.Len() == 0 {
+			t.Errorf("%s is empty", path)
+
+			return
+		}
+
+		if v.Kind() == reflect.Slice {
+			for i := range v.Len() {
+				requireFilled(t, fmt.Sprintf("%s[%d]", path, i), v.Index(i))
+			}
+
+			return
+		}
+
+		for iter := v.MapRange(); iter.Next(); {
+			requireFilled(t, fmt.Sprintf("%s[%v]", path, iter.Key()), iter.Value())
+		}
+	case reflect.Struct:
+		if v.Type().PkgPath() != reflect.TypeFor[snapshotData]().PkgPath() {
+			if v.IsZero() {
+				t.Errorf("%s is zero", path)
+			}
+
+			return
+		}
+
+		for i := range v.NumField() {
+			requireFilled(t, path+"."+v.Type().Field(i).Name, v.Field(i))
+		}
+	default:
+		if v.IsZero() {
+			t.Errorf("%s is zero", path)
+		}
+	}
+}
+
+// filledSnapshot holds a value in every field of the snapshot types: the
+// pointers a caller can set to the empty string point at it on one
+// subscription and the data protection policy, and at text on the other
+// subscription.
+func filledSnapshot() snapshotData {
+	const (
+		topicARN    = "arn:aws:sns:us-east-1:000000000000:f.fifo"
+		appARN      = "arn:aws:sns:us-east-1:000000000000:app/ADM/a"
+		endpointARN = "arn:aws:sns:us-east-1:000000000000:endpoint/ADM/a/e"
+	)
+
+	empty, role, policy := "", "arn:aws:iam::000000000000:role/r", `{"healthyRetryPolicy":{"numRetries":1}}`
+	message := RecordedMessage{
+		PhoneNumber: "+15550000000", TargetARN: endpointARN, TopicARN: topicARN, SubscriptionARN: topicARN + ":1",
+		MessageID: "m1", Message: "hi", MessageStructure: "json", Subject: "s",
+		MessageAttributes: map[string]MessageAttribute{"a": {DataType: "Binary", StringValue: "x", BinaryValue: []byte{1}}},
+	}
+	subscription := func(n, token string, roleARN, delivery *string) subscriptionData {
+		return subscriptionData{
+			Token: token, TopicARN: topicARN, Endpoint: "arn:aws:sqs:us-east-1:000000000000:q" + n, Protocol: "sqs",
+			ARN: topicARN + ":" + n, PendingConfirmation: "false", Owner: "000000000000", SubscriptionPrincipal: "p",
+			FilterPolicy: `{"color":["red"]}`, FilterPolicyScope: "MessageAttributes", RawMessageDelivery: valueTrue,
+			ConfirmationWasAuthenticated: valueTrue, SubscriptionRoleARN: roleARN, DeliveryPolicy: delivery,
+			RedrivePolicy: `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:dlq"}`,
+		}
+	}
+
+	return snapshotData{
+		Sequence: 7,
+		States: []stateData{{
+			Account: "000000000000", Region: usEast1,
+			Topics: []topicData{{
+				Name: "f.fifo", ARN: topicARN, Attributes: map[string]string{"FifoTopic": valueTrue},
+				DataProtectionPolicy: &empty,
+				Window:               []windowEntry{{Key: "d1", ID: "m1", Sequence: "7", At: fuzzNow.Add(-time.Minute)}},
+			}},
+			Subscriptions: []subscriptionData{
+				subscription("1", "aa", &empty, &empty),
+				subscription("2", "bb", &role, &policy),
+			},
+			Applications: []applicationData{{
+				Seq: 1, ARN: appARN, Attributes: map[string]string{"x": "y"}, Endpoints: map[string]string{"tok": endpointARN},
+			}},
+			ApplicationNext: 2,
+			Endpoints: []endpointData{{
+				Seq: 1, ARN: endpointARN, ApplicationARN: appARN, Attributes: map[string]string{"Enabled": valueTrue},
+			}},
+			EndpointNext:     2,
+			EndpointMessages: []endpointMessages{{ARN: endpointARN, Messages: []RecordedMessage{message}}},
+			SMSAttributes:    map[string]string{"DefaultSenderID": "s"},
+			SMSMessages:      []RecordedMessage{message},
+		}},
+		Accounts: []accountData{{
+			Account:  "000000000000",
+			Tags:     []resourceTags{{ARN: topicARN, Tags: []tagData{{Key: "k", Value: "v"}}}},
+			OptedOut: []string{"+15550000001"},
+		}},
+	}
+}
+
+// Test_restore_keeps_every_value restores a snapshot that holds a value in
+// every field and saves it again: each field comes back as the value it held,
+// so a field the encoding drops fails here, where comparing a snapshot's bytes
+// with its restore's cannot see it.
+func Test_restore_keeps_every_value(t *testing.T) {
+	want := filledSnapshot()
+	requireFilled(t, "snapshotData", reflect.ValueOf(want))
+
+	var file bytes.Buffer
+
+	err := json.MarshalEncode(jsontext.NewEncoder(&file, snapshotOptions),
+		&snapshotFile{Version: snapshotVersion, Data: want}, snapshotOptions)
+	require.NoError(t, err)
+
+	p := fuzzProvider()
+	require.NoError(t, p.Restore(&file))
+	assert.Equal(t, want, p.save())
 }

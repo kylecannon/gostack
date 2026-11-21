@@ -83,7 +83,7 @@ type topicData struct {
 	Name                 string            `json:"name"`
 	ARN                  string            `json:"arn"`
 	Attributes           map[string]string `json:"attributes"`
-	DataProtectionPolicy *string           `json:"dataProtectionPolicy,omitempty"`
+	DataProtectionPolicy *string           `json:"dataProtectionPolicy,omitzero"`
 	Window               []windowEntry     `json:"window,omitempty"`
 }
 
@@ -111,8 +111,8 @@ type subscriptionData struct {
 	FilterPolicyScope            string  `json:"filterPolicyScope"`
 	RawMessageDelivery           string  `json:"rawMessageDelivery"`
 	ConfirmationWasAuthenticated string  `json:"confirmationWasAuthenticated,omitempty"`
-	SubscriptionRoleARN          *string `json:"subscriptionRoleArn,omitempty"`
-	DeliveryPolicy               *string `json:"deliveryPolicy,omitempty"`
+	SubscriptionRoleARN          *string `json:"subscriptionRoleArn,omitzero"`
+	DeliveryPolicy               *string `json:"deliveryPolicy,omitzero"`
 	RedrivePolicy                string  `json:"redrivePolicy,omitempty"`
 }
 
@@ -165,7 +165,20 @@ type tagData struct {
 // window's lock while it records into the State. Encoding happens with no lock
 // held. Deliveries waiting in a lane are not state and are not saved.
 func (p *Provider) Snapshot(w io.Writer) error {
-	file := snapshotFile{Version: snapshotVersion, Data: snapshotData{States: []stateData{}, Accounts: []accountData{}}}
+	file := snapshotFile{Version: snapshotVersion, Data: p.save()}
+
+	err := json.MarshalEncode(jsontext.NewEncoder(w, snapshotOptions), &file, snapshotOptions)
+	if err != nil {
+		return fmt.Errorf("write sns snapshot: %w", err)
+	}
+
+	return nil
+}
+
+// save copies the SNS state of every account, as Snapshot encodes it, with
+// the States and the accounts in key order.
+func (p *Provider) save() snapshotData {
+	data := snapshotData{States: []stateData{}, Accounts: []accountData{}}
 
 	p.regions.Range(func(account, region string, s *State) bool {
 		saved, topics := s.save(account, region)
@@ -174,7 +187,7 @@ func (p *Provider) Snapshot(w io.Writer) error {
 		}
 
 		if !saved.empty() {
-			file.Data.States = append(file.Data.States, saved)
+			data.States = append(data.States, saved)
 		}
 
 		return true
@@ -182,26 +195,21 @@ func (p *Provider) Snapshot(w io.Writer) error {
 
 	p.accounts.Range(func(account, _ string, a *AccountState) bool {
 		if saved := a.save(account); len(saved.Tags) > 0 || len(saved.OptedOut) > 0 {
-			file.Data.Accounts = append(file.Data.Accounts, saved)
+			data.Accounts = append(data.Accounts, saved)
 		}
 
 		return true
 	})
 
 	// Read after the windows, so no saved window holds a number past it.
-	file.Data.Sequence = p.sequence.Load()
+	data.Sequence = p.sequence.Load()
 
-	slices.SortFunc(file.Data.States, func(a, b stateData) int {
+	slices.SortFunc(data.States, func(a, b stateData) int {
 		return cmp.Or(strings.Compare(a.Account, b.Account), strings.Compare(a.Region, b.Region))
 	})
-	slices.SortFunc(file.Data.Accounts, func(a, b accountData) int { return strings.Compare(a.Account, b.Account) })
+	slices.SortFunc(data.Accounts, func(a, b accountData) int { return strings.Compare(a.Account, b.Account) })
 
-	err := json.MarshalEncode(jsontext.NewEncoder(w, snapshotOptions), &file, snapshotOptions)
-	if err != nil {
-		return fmt.Errorf("write sns snapshot: %w", err)
-	}
-
-	return nil
+	return data
 }
 
 func (d *stateData) empty() bool {
@@ -338,7 +346,8 @@ func (a *AccountState) save(account string) accountData {
 // Restore replaces the SNS state of every account with what r holds. It
 // implements persist.Snapshotter. The snapshot is read and checked whole before
 // anything changes; one that is not valid leaves SNS empty. A window entry
-// older than the deduplication window is dropped, and the FIFO sequence moves
+// older than the deduplication window is dropped, one later than now takes
+// now, and the FIFO sequence moves
 // past the saved one.
 func (p *Provider) Restore(r io.Reader) error {
 	read, err := readSnapshot(r, p.now())
@@ -520,13 +529,21 @@ func (b *builtState) buildTopics(saved []topicData, now time.Time) error {
 // build puts a saved window in place, without the entries the window has
 // passed by now. The times are the wall clock's, which can step back between
 // two publishes, so an entry older than the one before it takes that one's
-// time: the order is the order the ids were taken in, which expire walks.
+// time: the order is the order the ids were taken in, which expire walks. The
+// clock can also step back across the restart, so an entry later than now
+// takes now: it would otherwise outlive the window and, as expire stops at the
+// first entry it keeps, hold every id taken after the restart past it too.
 func (f *fifoTopic) build(saved []windowEntry, now time.Time) error {
 	for i, entry := range saved {
 		if i > 0 && entry.At.Before(saved[i-1].At) {
 			entry.At = saved[i-1].At
-			saved[i].At = entry.At
 		}
+
+		if entry.At.After(now) {
+			entry.At = now
+		}
+
+		saved[i].At = entry.At
 
 		if _, ok := f.seen[entry.Key]; ok {
 			return fmt.Errorf("deduplication id %q appears twice", entry.Key)

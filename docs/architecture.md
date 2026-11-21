@@ -1845,7 +1845,11 @@ to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
   deadline, so a delivery made then is in the queue the second save writes.
   `Close` then cuts what is left at once and logs `SNS deliveries dropped`
   with the count. Nothing cut is replayed after a restart; LocalStack does not
-  replay either.
+  replay either. A FIFO publish takes its deduplication id before its delivery
+  is queued, so the id of a delivery cut at `Close` is in the saved window: the
+  same id published again after the restart, inside five minutes of the first
+  publish, answers as a repeat and is not delivered. The publish was
+  acknowledged, and AWS deduplication holds across its own outages.
 - `Mutating` leaves out `Publish` and `PublishBatch`. A publish marks SNS
   dirty itself only when it changes saved state: a FIFO publish that takes a
   new deduplication id, and one that records a message for an endpoint or a
@@ -1859,7 +1863,9 @@ to persist only with `PERSIST_SQS=1` (or `PERSIST_DEFAULT`).
   subscription to a topic the State does not hold, two subscriptions of a
   topic to one endpoint, a token held twice or a deduplication id held twice
   refuses it and leaves SNS empty. A window entry older than the one before
-  it, from a wall clock that stepped back, takes that one's time.
+  it, from a wall clock that stepped back, takes that one's time, and one
+  later than the restore's clock takes the restore's time, so it leaves the
+  window five minutes after the restart and holds back no id taken after it.
 
 **Format:**
 
