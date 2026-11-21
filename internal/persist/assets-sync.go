@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"syscall"
 )
 
 // syncWorkers is how many fsyncs a per-file sync runs at once.
@@ -28,13 +29,20 @@ type syncMode struct {
 	// sync makes what it is given durable: with dir set, the whole filesystem
 	// dir is on, otherwise one file or directory.
 	sync func(f *os.File) error
+	// flush, when not nil, makes everything one save's per-file syncs handed
+	// to the drive durable, with one call on the assets directory. A platform
+	// whose fsync leaves the data in the drive's write cache sets it, and its
+	// sync then must not flush that cache itself, once per file.
+	flush func(f *os.File) error
 	// fs names the filesystem the assets are on, for the log.
 	fs string
 }
 
-// syncFile fsyncs one file or directory. On macOS Go's Sync is F_FULLFSYNC. A
-// file's writeback error is reported once, so a failed fsync is final; see
-// [Assets].
+// syncFile fsyncs one file or directory with [os.File.Sync]. On Linux and the
+// other unixes that is fsync(2). On macOS it is F_FULLFSYNC, a flush of the
+// whole drive cache, which is why macOS does not use it for each asset (see
+// chooseSync). A file's writeback error is reported once, so a failed fsync is
+// final; see [Assets].
 func syncFile(f *os.File) error {
 	return f.Sync() //nolint:wrapcheck // syncPath wraps it with the path
 }
@@ -44,9 +52,12 @@ func syncFile(f *os.File) error {
 // which needs neither the ids nor their directories and cannot be interrupted:
 // sync stops waiting for it when ctx ends. Otherwise it fsyncs each asset that
 // is still there, then the directory of each, and starts no fsync once ctx
-// ends. It returns the sync errors when there are any, and otherwise ctx's
-// error when ctx ended before every path was synced, so a failed sync is never
-// taken for a sync cut short.
+// ends. When the mode has a final flush it runs once, on the assets directory,
+// after every path is synced and only if ctx has not ended. It returns the sync
+// errors when there are any, and otherwise ctx's error when ctx ended before
+// every path was synced, so a failed sync is never taken for a sync cut short.
+// An open of the assets directory for the flush that fails wraps errNotOpened,
+// as a per-file open does (see flushDrive).
 func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error {
 	if a.fsDir != nil {
 		err := a.fsync(a.fsDir)
@@ -83,7 +94,53 @@ func (a *Assets) syncPending(ctx context.Context, ids map[string]struct{}) error
 		return err
 	}
 
-	return ctx.Err() //nolint:wrapcheck // sync wraps it
+	if ctx.Err() != nil {
+		return ctx.Err() //nolint:wrapcheck // sync wraps it
+	}
+
+	return a.flushDrive()
+}
+
+// flushDrive runs the sync mode's final flush on the assets directory, or does
+// nothing when the mode has none. An error of the flush itself is a failed
+// sync, final like an fsync's: the drive may have dropped what it was asked to
+// flush, and reports that once. The exception is ENOTSUP, which a filesystem
+// with no drive flush, such as an SMB mount, answers: the directory is fsynced
+// with the mode's own sync instead, as [os.File.Sync] does on macOS (Go 1.27.4,
+// internal/poll/fd_fsync_darwin.go, which falls back on ENOTSUP alone; go#64215).
+//
+// An open that fails is no failed sync. It leaves the flush undone, but it
+// wraps errNotOpened as a per-file open does: every path of the save was
+// fsynced before it, so the ids stay pending and the next save fsyncs them
+// again and flushes. A descriptor missing for a moment (EMFILE, ENFILE) costs
+// one save and no write.
+func (a *Assets) flushDrive() error {
+	if a.flush == nil {
+		return nil
+	}
+
+	dir, err := a.root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open the assets dir to flush the drive: %w: %w", errNotOpened, err)
+	}
+
+	err = a.flush(dir)
+	if errors.Is(err, syscall.ENOTSUP) {
+		err = a.fsync(dir)
+	}
+
+	if err != nil {
+		_ = dir.Close()
+
+		return fmt.Errorf("flush the drive: %w", err)
+	}
+
+	err = dir.Close()
+	if err != nil {
+		return fmt.Errorf("close the assets dir after flushing the drive: %w", err)
+	}
+
+	return nil
 }
 
 // syncPaths fsyncs paths, syncWorkers at a time, and returns the ones that are
