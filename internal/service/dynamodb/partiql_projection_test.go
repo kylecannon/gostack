@@ -130,7 +130,8 @@ func Test_globalIndex_refusesUnprojectedFilter(t *testing.T) {
 
 // Test_partiql_batchStatementTexts: a statement of a BatchExecuteStatement over
 // 8,192 bytes or empty is refused for the whole call, wherever it stands and
-// before any statement's syntax (SQ-439 probe3, probe4).
+// before any statement's syntax; where it stands among the other whole-call
+// refusals is Test_partiql_batchOrder's (SQ-439 probe3, probe4).
 func Test_partiql_batchStatementTexts(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pbt"))
