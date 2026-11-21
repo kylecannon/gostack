@@ -10,6 +10,9 @@
 #            runtime.mheap_ and the runtime's other bss lands 32 bytes on, at
 #            mod 64 = 32, as in head
 #   headpad  head + the same var: runtime.mheap_ back at mod 64 = 0, as in base
+#   baseframe16 base + 16 unused bytes in formReader: serveAWS frame 0x250, as head
+#   headframe48 head + 48 unused bytes in formReader: serveAWS frame 0x280 (base + 64)
+#   headframe32 head + 32 unused bytes in formReader: serveAWS frame 0x270 (base + 48)
 set -euo pipefail
 
 ROUNDS=${ROUNDS:-10}
@@ -20,7 +23,7 @@ PATCHES=${PATCHES:-$REPO/.github/sq455}
 W=$RUNNER_TEMP/sq455
 OUT=$W/out
 BENCH='^BenchmarkReceiveMessage$/^proto=(json|query)$/^queue=standard$/^max=1$/^payload=(256B|64KiB|1MiB)$'
-read -r -a ARMS <<<"${ARMS:-base head basepad headpad}"
+read -r -a ARMS <<<"${ARMS:-base head baseframe16 headframe48 headframe32}"
 N=${#ARMS[@]}
 
 mkdir -p "$W" "$OUT/prof" "$OUT/bin"
@@ -46,6 +49,7 @@ for arm in "${ARMS[@]}"; do
 		errfield) (cd "$W/$arm" && git apply -p2 "$PATCHES/errfield.patch") ;;
 		errvar) (cd "$W/$arm" && git apply -p2 "$PATCHES/errvar.patch") ;;
 		*pad) cp "$PATCHES/sq455pad.go.txt" "$W/$arm/internal/awserr/sq455pad.go" ;;
+		*frame*) perl -0pi -e "s/(\tvals url.Values\n)/\$1\t_    [${arm##*frame}]byte\n/" "$W/$arm/internal/gateway/dispatch.go" ;;
 	esac
 done
 
@@ -55,7 +59,8 @@ build() { # arm layout-seed output
 
 for arm in "${ARMS[@]}"; do
 	build "$arm" "" "$OUT/bin/$arm.test"
-	echo "$arm $(go tool nm -size -sort address "$OUT/bin/$arm.test" | awk '$4=="runtime.mheap_"{print "runtime.mheap_", $1}')" | tee -a "$OUT/layout.txt"
+	frame=$(go tool objdump -s 'gateway.\(\*Gateway\).serveAWS$' "$OUT/bin/$arm.test" | grep -oE 'SUBQ \$0x[0-9a-f]+, SP' | head -1 || true)
+	echo "$arm serveAWS $frame" | tee -a "$OUT/layout.txt"
 done
 
 for r in $(seq 1 "$ROUNDS"); do
