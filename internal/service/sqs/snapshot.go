@@ -96,7 +96,7 @@ func (p *Provider) Snapshot(w io.Writer) error {
 
 	file.sort()
 
-	err = json.MarshalEncode(jsontext.NewEncoder(w, snapshotOptions), &file, snapshotOptions)
+	err = writeSnapshot(w, &file)
 	if err != nil {
 		return fmt.Errorf("write sqs snapshot: %w", err)
 	}
