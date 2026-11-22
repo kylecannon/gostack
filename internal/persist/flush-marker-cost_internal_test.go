@@ -26,10 +26,11 @@ func markerPath(dir string) string {
 // did, whatever seek is.
 func Test_sweepTemps(t *testing.T) {
 	const (
-		mark  = abandonedFile
-		state = "state.json"
-		temp  = state + tempSuffix + "-1"
-		other = "other.json" + tempSuffix + "-1"
+		mark   = abandonedFile
+		folded = ".GOSTACK-SAVE-ABANDONED"
+		state  = "state.json"
+		temp   = state + tempSuffix + "-1"
+		other  = "other.json" + tempSuffix + "-1"
 	)
 
 	tests := []struct {
@@ -43,6 +44,7 @@ func Test_sweepTemps(t *testing.T) {
 		{"no marker", mark, []string{state, temp}, false, []string{state}},
 		{"no seek", "", []string{state, mark}, false, []string{state, mark}},
 		{"a temp file of another name stays", mark, []string{other}, false, []string{other}},
+		{"marker in another case", mark, []string{state, folded}, true, []string{state, folded}},
 	}
 
 	for _, tt := range tests {
@@ -148,19 +150,20 @@ func Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline(t *testing.T) {
 	run := newFlushRun(e, byHand)
 
 	assert.Zero(t, testing.AllocsPerRun(100, func() {
-		end := e.markAtDeadline(t.Context(), run)
-		end()
-		end()
+		e.markAtDeadline(t.Context(), run)
+		run.endMark()
+		run.endMark()
 	}), "no deadline, nothing to arm")
 
 	assert.False(t, hasDeadline(t.Context()))
+	assert.Empty(t, e.slow.runs, "a flush that ended is not watched")
 
 	timed, cancel := context.WithTimeout(t.Context(), time.Hour)
 	defer cancel()
 
 	assert.NotZero(t, testing.AllocsPerRun(10, func() {
-		end := e.markAtDeadline(timed, run)
-		end()
+		e.markAtDeadline(timed, run)
+		run.endMark()
 	}), "a deadline arms it")
 	assert.True(t, hasDeadline(timed))
 }

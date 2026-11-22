@@ -87,7 +87,7 @@ Persistence: state saved when `PERSIST_DYNAMODB` is on.
 
 Headings of [compat.md](compat.md) that name dynamodb: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB until KMS](compat.md#dynamodb-until-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
 
-Other headings of compat.md with a table row under them that names dynamodb: [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [DynamoDB Streams](compat.md#dynamodb-streams).
+Other headings of compat.md with a table row under them that names dynamodb: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [DynamoDB Streams](compat.md#dynamodb-streams).
 
 **Implemented (36)**
 
@@ -131,7 +131,7 @@ Persistence: state saved when `PERSIST_DYNAMODBSTREAMS` is on.
 
 Headings of [compat.md](compat.md) that name dynamodbstreams: [DynamoDB Streams](compat.md#dynamodb-streams).
 
-Other headings of compat.md with a table row under them that names dynamodbstreams: [Where gostack follows AWS](compat.md#where-gostack-follows-aws).
+Other headings of compat.md with a table row under them that names dynamodbstreams: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws).
 
 **Implemented (4)**
 
@@ -153,7 +153,7 @@ Persistence: state saved when `PERSIST_KMS` is on.
 
 Headings of [compat.md](compat.md) that name kms: [KMS](compat.md#kms), [DynamoDB until KMS](compat.md#dynamodb-until-kms).
 
-Other headings of compat.md with a table row under them that names kms: [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [S3 default encryption](compat.md#s3-default-encryption), [S3 limits](compat.md#s3-limits), [DynamoDB operations](compat.md#dynamodb-operations), [SSM Parameter Store](compat.md#ssm-parameter-store).
+Other headings of compat.md with a table row under them that names kms: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [S3 default encryption](compat.md#s3-default-encryption), [S3 limits](compat.md#s3-limits), [DynamoDB operations](compat.md#dynamodb-operations), [SSM Parameter Store](compat.md#ssm-parameter-store).
 
 **Implemented (45)**
 
@@ -244,7 +244,7 @@ Persistence: state saved when `PERSIST_SECRETSMANAGER` is on.
 
 Headings of [compat.md](compat.md) that name secretsmanager: [Secrets Manager](compat.md#secrets-manager).
 
-Other headings of compat.md with a table row under them that names secretsmanager: [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [SSM Parameter Store](compat.md#ssm-parameter-store).
+Other headings of compat.md with a table row under them that names secretsmanager: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [SSM Parameter Store](compat.md#ssm-parameter-store).
 
 **Implemented (21)**
 
@@ -352,7 +352,7 @@ Persistence: state saved when `PERSIST_SSM` is on.
 
 Headings of [compat.md](compat.md) that name ssm: [SSM Parameter Store](compat.md#ssm-parameter-store).
 
-Other headings of compat.md with a table row under them that names ssm: [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [KMS](compat.md#kms).
+Other headings of compat.md with a table row under them that names ssm: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [KMS](compat.md#kms).
 
 **Implemented (17)**
 

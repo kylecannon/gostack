@@ -176,10 +176,22 @@ type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
 decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
 services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
-query form whose Action is in the URL or whose path is an SQS queue URL. A form
-that carries its Action in the body answers `MissingAction` (400) with a SigV4
-`Authorization` header and 404 without one: the gateway reads it to find the
-Action and drops the read error.
+query form, wherever its Action is. A form that carries its Action in the body
+is read by the gateway to find the Action. When that read fails (the body is over
+the cap, cannot be read, holds more pairs than the decode budget allows, or finds
+no room under the in-flight bound), the Action may be lost, and the answer is
+`MalformedQueryString`, or `Throttling` for no room. The service the signing scope
+names writes it, so its namespace and its `Accept` handling apply: the generated
+`serve` reads the form (`query.CutFormAnswer`) before it answers `MissingAction`.
+Only when no service can be named does the gateway write it, in the query protocol
+with no namespace, as the last step of `refuseUnclaimed`: after an unregistered
+service's 501, a preflight's 200 and an internal path's 404, and not for the
+`dynamodb` scope, which DynamoDB and DynamoDB Streams share and which keeps the
+404. A scope one json service holds (KMS, SSM, Secrets Manager) names that
+service, whose generated `serve` answers `400 InvalidAction` in
+`application/x-amz-json-1.1`. Text that is only not
+UTF-8 loses no pair (`query.ErrFormCut` is not wrapped), so it answers as any form
+with no Action does.
 
 ### How chi is used
 
@@ -1862,8 +1874,11 @@ is untouched.
   writes those markers itself and does not return before they are written.
   What the flush's end finds dirty is marked then, so a change made after the
   deadline's round is named if the flush ends before the kill. A service that
-  another `Flush` holds has that call's deadline, and is marked for this one
-  only when it is dirty. A flush whose save of a service failed for a reason of
+  another `Flush` holds is marked for this one, whatever deadline that call has:
+  the save of `POST /_gostack/state/save` has none, and a `Stop` behind it would
+  otherwise leave the service it is stuck in unmarked, and one with a deadline
+  later than the `Stop`'s would be marked only after the kill. A flush whose
+  save of a service failed for a reason of
   its own, and a `Follower` whose leader did, is not marked: the flush's warning
   names it with its cause, apart from the services the deadline cut, and the
   advice to raise `SHUTDOWN_TIMEOUT` is for those. A `Flush` that ends at its
@@ -1899,13 +1914,39 @@ is untouched.
   the marker stays and the next save that finds the service unchanged removes
   it. A save looks for the marker in the listing of the service's directory
   that it reads anyway to remove the temp files of its state file, and looks
-  by itself only when a link leads the state file to another directory. A
-  flush in time allocates nothing for the marker (SQ-461): a request marks
-  nothing, a flush whose context has no deadline arms no marking at its
-  deadline and shares no budget between its rounds, and a flush with one pays
-  for the arming alone. Such a flush marks when it ends, so a `Snapshot` that
-  outlasts a deadline it was never given is marked after it returns, and each
-  round of it has the whole budget. `BenchmarkSavePendingAssets/pending=100` on
+  by itself only when a link leads the state file to another directory. The
+  listing takes a name that differs from the marker's in case only, whatever the
+  volume: a volume that folds case, as APFS does by default, holds it as the
+  marker, and one that keeps case apart costs the save one `lstat` that finds
+  nothing. A state file that is a link to a file with the marker's name is
+  refused with an error, and the file behind it is left alone, since the save
+  would rename its snapshot onto it and then remove it as the marker. The
+  refusal is by the base name of where the link leads, in any directory and in
+  any case, so a link into a sub directory, or to the name in another case on a
+  volume that keeps case apart, is refused though it is nobody's marker.
+  A flush in time allocates nothing for the marker (SQ-461): a request marks
+  nothing, and a flush whose context has no deadline arms no marking at its
+  deadline and shares no budget between its rounds. One with a deadline pays
+  for the arming, the allowance and the `AfterFunc` that watches the context:
+  a change to one service and its `Flush` took 108 allocations without a
+  deadline and 117 with one on darwin, in a plain build and under the race
+  detector alike. On Linux it is 105 and 114 under the race detector, which
+  `make test` always runs with, and 104 and 113 in a plain build or a
+  benchmark. The 9 more are what `Test_Engine_FlushInTimeAllocations` pins, with
+  the whole: the least of 60 single flushes in a process of its own must equal
+  the race-build figure, so a Go release that takes an allocation out fails it
+  until the figure is updated, and a plain build is held to it as a ceiling.
+  A context with no deadline that can end is registered with a timer the engine
+  keeps, which arms a watch of it only once the flush has lasted 50 ms, at 4 or 5
+  allocations that flush then takes (`make bench-ab` on `SQSFlush` with 100
+  messages of 64 KiB, which lasts 100 ms: 6338 allocations, 6342 with it): one
+  that ends with a deadline's cause, as a `context.WithCancelCause` context can,
+  is marked within 50 ms of its end, with a `Snapshot` still running, and at the
+  flush's end when that comes first
+  (`Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause`). No
+  caller in the tree ends one so, since shutdown's context has a deadline and a
+  request's ends `Canceled`. Each round of such a flush has the whole budget.
+  `BenchmarkSavePendingAssets/pending=100` on
   tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
   marker; the first version of the marker took 174, and PR #56's benchmark gate
   read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/kylecannon/gostack/internal/account"
@@ -16,6 +17,7 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/query"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/route"
+	"github.com/kylecannon/gostack/internal/service"
 )
 
 const (
@@ -50,7 +52,7 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		g.refuseDetection(w, r, err)
+		g.refuseDetection(w, r, err, form)
 
 		return
 	}
@@ -161,12 +163,12 @@ func defaultMutating(operation string) bool {
 }
 
 // refuseDetection answers a request that no single service claims.
-func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error) {
+func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err error, form *formReader) {
 	var ambiguous *route.AmbiguousError
 
 	switch {
 	case errors.Is(err, route.ErrNoService):
-		g.refuseUnclaimed(w, r)
+		g.refuseUnclaimed(w, r, form)
 	case errors.As(err, &ambiguous), errors.Is(err, route.ErrProtocol):
 		slog.WarnContext(r.Context(), "cannot route request", "error", err)
 		writeFailure(w, http.StatusBadRequest, failure{Error: "Bad Request", Message: err.Error()})
@@ -184,7 +186,17 @@ func (g *Gateway) refuseDetection(w http.ResponseWriter, r *http.Request, err er
 // CorsEnforcer in aws/handlers/cors.py answers it with 204 only when the setting
 // is off, otherwise it goes down the handler chain and LocalStack's chain ends it
 // that way, where any other request ends in 404. Internal paths keep their 404.
-func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
+//
+// Last, a form body that was cut (query.ErrFormCut) hid the Action that would
+// have named the service, so the call is a query call that no service can be
+// named for. It is answered as the form error a query call with its Action in
+// the URL gets, in the query protocol. A signing scope that several registered
+// services share (dynamodb and dynamodbstreams, which sign as "dynamodb")
+// leaves the 404: those services speak json and the call has no target to tell
+// them apart. A scope that names one registered service never gets here: that
+// service is the call's, and its generated serve answers (kms, ssm and
+// secretsmanager answer 400 InvalidAction).
+func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request, form *formReader) {
 	if match, ok := g.table.Unregistered(r); ok {
 		rc := &request.Context{Service: match.Service, Protocol: match.Protocol, RequestID: newRequestID(), Request: r}
 
@@ -206,7 +218,31 @@ func (g *Gateway) refuseUnclaimed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isInternalPath(r.URL.Path) && !g.signedForRegistered(r) {
+		cut := query.CutFormAnswer(form.formErr())
+		if cut != nil {
+			rc := &request.Context{Protocol: protocol.KindQuery, RequestID: newRequestID(), Request: r}
+			writeAWSError(w, rc, cut)
+
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusNotFound, []byte(notFoundBody))
+}
+
+// signedForRegistered reports whether the signing name of r's Authorization
+// header is a registered service's. Detection settles on a scope that one
+// service holds, so it reaches here only for a scope that several share
+// (dynamodb): their services speak json and the request has no target to say
+// which of them it is.
+func (g *Gateway) signedForRegistered(r *http.Request) bool {
+	cred, _ := account.FromAuthorization(r)
+
+	return cred.SigningName != "" &&
+		slices.ContainsFunc(g.regs, func(reg service.Registration) bool {
+			return reg.Metadata.SigningName == cred.SigningName
+		})
 }
 
 // formReader gives the query string and form body parameters of a request, the
@@ -217,17 +253,27 @@ type formReader struct {
 	hold protocol.DecodeHolder
 	done bool
 	vals url.Values
+	err  error
 }
 
 func (f *formReader) values() url.Values {
 	if !f.done {
 		f.done = true
 		// A request that cannot be read whole still has the parameters that
-		// read cleanly. The service answers the failure when it reads the form.
-		f.vals, _ = query.RequestFormHeld(f.r, f.hold)
+		// read cleanly. The service answers the failure when it reads the form,
+		// unless the failure took the Action with it: formErr tells that.
+		f.vals, f.err = query.RequestFormHeld(f.r, f.hold)
 	}
 
 	return f.vals
+}
+
+// formErr is the error of reading the form, which is read now if it has not
+// been. query.CutFormAnswer tells whether it took pairs, the Action among them.
+func (f *formReader) formErr() error {
+	f.values()
+
+	return f.err
 }
 
 // newRequestID returns a random UUID, version 4.
