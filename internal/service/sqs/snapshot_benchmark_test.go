@@ -14,7 +14,7 @@ import (
 // "Benchmarks"): saving and loading a queue of 100000 messages of 200 bytes with
 // two attributes each, a tenth of them in flight. A FIFO queue spreads them over
 // 1000 groups. The rows of many small queues are BenchmarkSQSSnapshot and
-// BenchmarkSQSRestore in internal/persist.
+// BenchmarkSQSRestoreExact in internal/persist.
 //
 // Besides the time, a row reports:
 //
