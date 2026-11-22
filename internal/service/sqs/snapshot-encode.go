@@ -36,10 +36,11 @@ const snapshotFlushSize = 64 << 10
 
 // snapshotBufferSize is the room the writer starts with. A file of a few queues
 // fits in it, so a small snapshot does not pay for a buffer of the flush size;
-// a larger one grows the buffer as it fills, up to the flush size and one entry.
+// a larger one grows the buffer as it fills, up to the flush size and one member.
 const snapshotBufferSize = 4 << 10
 
-// snapshotWriter appends a snapshot to buf and writes buf out between entries.
+// snapshotWriter appends a snapshot to buf and writes buf out between the
+// members of a list or a map.
 type snapshotWriter struct {
 	w   io.Writer
 	buf []byte

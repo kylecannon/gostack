@@ -113,12 +113,39 @@ func (g *generator) fillStruct(t testing.TB, v reflect.Value) {
 		return
 	}
 
-	for _, field := range v.Fields() {
-		// A member that is not exported is not in the file.
-		if field.CanSet() {
+	// A struct that is not time.Time and shows nothing to the file is a member
+	// whose value the writer would have to learn, as netip.Addr's text is. A
+	// member of such a type is not skipped by accident.
+	if g.fillMembers(t, v) == 0 {
+		t.Fatalf("fill sees no exported member in a %s", v.Type())
+	}
+}
+
+// fillMembers sets the members of the struct v that encoding/json shows, and
+// returns how many it set: the exported members, and the members of an embedded
+// struct, which json promotes whether or not the embedded type is exported. A
+// member that is not exported and not embedded is not in the file.
+func (g *generator) fillMembers(t testing.TB, v reflect.Value) int {
+	t.Helper()
+
+	set := 0
+
+	for member, field := range v.Fields() {
+		switch {
+		case member.Anonymous && member.Type.Kind() == reflect.Struct && member.Type != timeType:
+			set += g.fillMembers(t, field)
+		case member.Anonymous && !member.IsExported():
+			t.Fatalf("fill cannot reach the members of an embedded unexported %s", member.Type)
+		case member.IsExported():
 			g.fill(t, field)
+
+			set++
+		default:
+			// Not exported and not embedded: not in the file.
 		}
 	}
+
+	return set
 }
 
 // Test_writeSnapshot_matchesV2OverEveryMember is Test_writeSnapshot_matchesV2OverRandomState

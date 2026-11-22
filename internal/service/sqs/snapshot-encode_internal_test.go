@@ -378,18 +378,22 @@ func Test_writeSnapshot_refusesWhatV2Refuses(t *testing.T) {
 	}
 }
 
-// chunkWriter keeps what it is given and how it came.
+// chunkWriter keeps what it is given and how it came. calls counts every Write,
+// the one that fails included; chunks holds the writes that succeeded.
 type chunkWriter struct {
 	bytes.Buffer
 
 	chunks []int
+	calls  int
 	failAt int
 }
 
 var errChunk = errors.New("disk full")
 
 func (w *chunkWriter) Write(p []byte) (int, error) {
-	if w.failAt > 0 && len(w.chunks)+1 >= w.failAt {
+	w.calls++
+
+	if w.failAt > 0 && w.calls >= w.failAt {
 		return 0, errChunk
 	}
 
@@ -523,7 +527,8 @@ func Test_writeSnapshot_stopsAtTheFirstWriteError(t *testing.T) {
 
 	err := writeSnapshot(&w, bigFile())
 	require.ErrorIs(t, err, errChunk)
-	require.Len(t, w.chunks, 2, "nothing is written after a write fails")
+	require.Equal(t, 3, w.calls, "no Write follows the one that failed")
+	require.Len(t, w.chunks, 2)
 }
 
 func FuzzWriteSnapshot(f *testing.F) {
