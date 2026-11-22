@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -429,6 +430,34 @@ func Test_writeSnapshot_writesALargeFileInPieces(t *testing.T) {
 	// at most that and one entry.
 	entry := f.Data.States[0].Queues[0].Contents.Entries[0]
 	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+len(entry.Message.Body)+1000)
+}
+
+// Test_writeSnapshot_writesManyDedupRecordsInPieces covers the records of a FIFO
+// queue's deduplication window, which a flush at each entry does not reach: a
+// window of 100000 records must go out as it is written, not as one buffer.
+func Test_writeSnapshot_writesManyDedupRecordsInPieces(t *testing.T) {
+	t.Parallel()
+
+	dedup := make([]dedupData, 20000)
+	for i := range dedup {
+		dedup[i] = dedupData{
+			Key: "deduplication-id-" + strconv.Itoa(i), Original: "message-id", Sequence: "18900000000000000000",
+		}
+	}
+
+	f := &snapshotFile{Version: snapshotVersion, Data: snapshotData{States: []stateData{
+		{Account: "a", Region: "r", Queues: []queueData{{Name: "q", FIFO: true, Contents: contentsData{Dedup: dedup}}}},
+	}}}
+
+	want, err := marshalWithV2(f)
+	require.NoError(t, err)
+
+	var w chunkWriter
+
+	require.NoError(t, writeSnapshot(&w, f))
+	require.Equal(t, want, w.Bytes())
+	require.Greater(t, w.Len(), 10*snapshotFlushSize)
+	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+1000, "pieces: %v", w.chunks)
 }
 
 func slicesMax(s []int) int {

@@ -16,6 +16,11 @@ import (
 // delayed messages, deduplication records and move tasks, with every deadline
 // in 2099 so that the restore settles nothing. The restored state saves as the
 // file it was loaded from.
+//
+// Provenance: main at ee10a0b restores this file and saves it back to the same
+// bytes. That was checked by adding this test and the file to a tree of that
+// commit and running go test -race -run Test_Restore_loadsASnapshotMainWrote
+// ./internal/service/sqs there, so the file is one main's writer produces.
 func Test_Restore_loadsASnapshotMainWrote(t *testing.T) {
 	saved, err := os.ReadFile("testdata/snapshot-main.json")
 	require.NoError(t, err)

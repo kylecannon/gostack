@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -34,9 +33,10 @@ import (
 // entry.
 const snapshotFlushSize = 64 << 10
 
-// snapshotBufferSize is the room the writer starts with, which holds a piece
-// and a message of ordinary size.
-const snapshotBufferSize = 2 * snapshotFlushSize
+// snapshotBufferSize is the room the writer starts with. A file of a few queues
+// fits in it, so a small snapshot does not pay for a buffer of the flush size;
+// a larger one grows the buffer as it fills, up to the flush size and one entry.
+const snapshotBufferSize = 4 << 10
 
 // snapshotWriter appends a snapshot to buf and writes buf out between entries.
 type snapshotWriter struct {
@@ -259,6 +259,8 @@ func (s *snapshotWriter) contents(d *contentsData) {
 }
 
 func (s *snapshotWriter) dedup(d *dedupData) {
+	_ = s.flush(snapshotFlushSize)
+
 	o := s.object()
 	o.text("key", d.Key)
 	o.text("original", d.Original)
@@ -338,25 +340,43 @@ func (s *snapshotWriter) moveTask(d *moveTaskData) {
 
 // attributes writes the message attributes of a message.
 func (s *snapshotWriter) attributes(m map[string]sqsapi.MessageAttributeValue) {
-	writeMap(s, m, s.attribute)
+	writeMap(s, m, func(v sqsapi.MessageAttributeValue) { s.attribute(&v) })
 }
 
 // strings writes a map of strings.
 func (s *snapshotWriter) strings(m map[string]string) {
-	writeMap(s, m, func(v *string) { s.buf = awsjson.AppendQuote(s.buf, *v) })
+	writeMap(s, m, func(v string) { s.buf = awsjson.AppendQuote(s.buf, v) })
 }
 
 // times writes a map of times.
 func (s *snapshotWriter) times(m map[string]time.Time) {
-	writeMap(s, m, func(v *time.Time) { s.time(*v) })
+	writeMap(s, m, func(v time.Time) { s.time(v) })
 }
+
+// mapNamesOnStack is how many member names writeMap sorts in an array on the
+// stack: a message has a few attributes.
+const mapNamesOnStack = 16
 
 // writeMap writes m as an object with its names in order, as v2 does under
 // Deterministic: the names are sorted as they are, before they are quoted. A
 // name that is not valid UTF-8 is mangled by the quoting, and v2 refuses two
 // that come out the same, so v2 writes such a map.
-func writeMap[V any](s *snapshotWriter, m map[string]V, value func(*V)) {
-	names := slices.Sorted(maps.Keys(m))
+//
+// value takes the member by value: a pointer to a local handed to a function
+// value is taken to escape, and every member would be allocated.
+func writeMap[V any](s *snapshotWriter, m map[string]V, value func(V)) {
+	var room [mapNamesOnStack]string
+
+	names := room[:0]
+	if len(m) > len(room) {
+		names = make([]string, 0, len(m))
+	}
+
+	for name := range m {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
 
 	if slices.ContainsFunc(names, func(name string) bool { return !utf8.ValidString(name) }) {
 		s.v2(m)
@@ -374,8 +394,7 @@ func writeMap[V any](s *snapshotWriter, m map[string]V, value func(*V)) {
 		s.buf = awsjson.AppendQuote(s.buf, name)
 		s.buf = append(s.buf, ':')
 
-		v := m[name]
-		value(&v)
+		value(m[name])
 	}
 
 	s.buf = append(s.buf, '}')
