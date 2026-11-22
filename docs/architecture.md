@@ -532,8 +532,10 @@ written by hand.
   InternalError instead (`Writer.EncodedMember` marks it), because v2 would
   write it without that member. The generator fails on an option shape no
   output reaches, a sibling name a member already has, a service with a
-  protocol beside json, and a struct v2 writes for its timestamps that holds
-  a sibling or reaches a struct that does. 11 of DynamoDB's 13 response
+  protocol beside json, and a struct below an operation output that v2 writes
+  for its timestamps and that holds a sibling or reaches a struct that does.
+  Errors are always written by v2, so a sibling below an error is never read;
+  handlers set the typed member there. 11 of DynamoDB's 13 response
   members of `AttributeMap` have a sibling. `ConditionalCheckFailedException.Item`
   and `CancellationReason.Item` (in `TransactionCanceledException`) have none,
   because v2 writes errors.

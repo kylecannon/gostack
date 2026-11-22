@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -110,6 +111,51 @@ func Test_markEncoded_off(t *testing.T) {
 	require.NotContains(t, test, "CheckEncoded")
 }
 
+// A struct v2 writes for its timestamps generates when no struct below it has
+// an encoded member, though the output holding it has one.
+func Test_markEncoded_timestamps(t *testing.T) {
+	t.Parallel()
+
+	stamp := `,"Stamp":{"type":"timestamp","timestampFormat":"iso8601"}`
+
+	tests := []struct {
+		name    string
+		members string
+		shapes  string
+		holder  string
+	}{
+		{
+			name: "struct with no sibling below", members: `,"Stamped":{"shape":"Stamped"}`,
+			shapes: stamp + `,"Stamped":{"type":"structure","members":{"When":{"shape":"Stamp"},"Name":{"shape":"String"}}}`,
+			holder: "Stamped",
+		},
+		{
+			name: "self-recursive struct", members: `,"Node":{"shape":"Node"}`,
+			shapes: stamp + `,"Node":{"type":"structure","members":{"Next":{"shape":"Node"},"When":{"shape":"Stamp"}}}`,
+			holder: "Node",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			g, err := encodedGenerator(t, protoJSON, tt.members, tt.shapes,
+				serviceOptions{EncodedShapes: []string{itemMap}})
+			require.NoError(t, err)
+
+			st := g.structs[tt.holder]
+			require.NotNil(t, st)
+			require.NotEmpty(t, timeFields(st))
+			require.Empty(t, g.encodedHolder(st, map[string]bool{}))
+
+			out := g.structs["GetOutput"]
+			require.NotNil(t, out)
+			require.True(t, slices.ContainsFunc(out.fields, func(f *field) bool { return f.encoded != nil }))
+		})
+	}
+}
+
 func Test_markEncoded_errors(t *testing.T) {
 	t.Parallel()
 
@@ -140,7 +186,7 @@ func Test_markEncoded_errors(t *testing.T) {
 		{
 			name: "struct v2 writes", protocol: protoJSON, opts: item, members: timestamp,
 			shapes:  `,"Stamp":{"type":"timestamp","timestampFormat":"iso8601"}`,
-			wantErr: "GetOutput: v2 writes the struct for its timestamps, and GetOutput below it",
+			wantErr: "GetOutput: v2 writes the struct for its timestamps, and it has an encoded member",
 		},
 		{
 			// Outer has no encoded member, but v2 writes the Wrapped in its list.

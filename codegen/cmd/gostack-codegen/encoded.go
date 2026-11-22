@@ -56,7 +56,11 @@ func (g *generator) markEncoded() error {
 			continue
 		}
 
-		if holder := g.encodedHolder(st, map[string]bool{}); holder != "" {
+		switch holder := g.encodedHolder(st, map[string]bool{}); holder {
+		case "":
+		case st.goName:
+			return fmt.Errorf("%s: v2 writes the struct for its timestamps, and it has an encoded member", st.goName)
+		default:
 			return fmt.Errorf("%s: v2 writes the struct for its timestamps, and %s below it has an encoded member",
 				st.goName, holder)
 		}
