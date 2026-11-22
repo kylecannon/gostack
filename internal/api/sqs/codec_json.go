@@ -151,3 +151,788 @@ func decodeTagQueueJSON(body []byte) (*TagQueueInput, *awserr.Error) {
 func decodeUntagQueueJSON(body []byte) (*UntagQueueInput, *awserr.Error) {
 	return awsjson.Decode[UntagQueueInput](body)
 }
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *AddPermissionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONAddPermissionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CancelMessageMoveTaskOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCancelMessageMoveTaskOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ChangeMessageVisibilityBatchOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONChangeMessageVisibilityBatchOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ChangeMessageVisibilityOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONChangeMessageVisibilityOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CreateQueueOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCreateQueueOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteMessageBatchOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteMessageBatchOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteMessageOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteMessageOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteQueueOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteQueueOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetQueueAttributesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetQueueAttributesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetQueueUrlOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetQueueUrlOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListDeadLetterSourceQueuesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListDeadLetterSourceQueuesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListMessageMoveTasksOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListMessageMoveTasksOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListQueueTagsOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListQueueTagsOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListQueuesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListQueuesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *PurgeQueueOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONPurgeQueueOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ReceiveMessageOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONReceiveMessageOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *RemovePermissionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONRemovePermissionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *SendMessageBatchOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONSendMessageBatchOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *SendMessageOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONSendMessageOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *SetQueueAttributesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONSetQueueAttributesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *StartMessageMoveTaskOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONStartMessageMoveTaskOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *TagQueueOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONTagQueueOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UntagQueueOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUntagQueueOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// appendJSONAddPermissionOutput appends v as a json object.
+func appendJSONAddPermissionOutput(w *awsjson.Writer, v *AddPermissionOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONBatchResultErrorEntry appends v as a json object.
+func appendJSONBatchResultErrorEntry(w *awsjson.Writer, v *BatchResultErrorEntry) {
+	start := w.ObjectStart()
+	if v.Id != nil {
+		w.Raw(`,"Id":`)
+		w.String(*v.Id)
+	}
+	if v.SenderFault != nil {
+		w.Raw(`,"SenderFault":`)
+		w.Bool(*v.SenderFault)
+	}
+	if v.Code != nil {
+		w.Raw(`,"Code":`)
+		w.String(*v.Code)
+	}
+	if v.Message != nil {
+		w.Raw(`,"Message":`)
+		w.String(*v.Message)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONCancelMessageMoveTaskOutput appends v as a json object.
+func appendJSONCancelMessageMoveTaskOutput(w *awsjson.Writer, v *CancelMessageMoveTaskOutput) {
+	start := w.ObjectStart()
+	if v.ApproximateNumberOfMessagesMoved != nil {
+		w.Raw(`,"ApproximateNumberOfMessagesMoved":`)
+		w.Int64(*v.ApproximateNumberOfMessagesMoved)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONChangeMessageVisibilityBatchOutput appends v as a json object.
+func appendJSONChangeMessageVisibilityBatchOutput(w *awsjson.Writer, v *ChangeMessageVisibilityBatchOutput) {
+	start := w.ObjectStart()
+	if v.Successful != nil {
+		w.Raw(`,"Successful":`)
+		w.Byte('[')
+		for i0 := range v.Successful {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONChangeMessageVisibilityBatchResultEntry(w, &v.Successful[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Failed != nil {
+		w.Raw(`,"Failed":`)
+		w.Byte('[')
+		for i0 := range v.Failed {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONBatchResultErrorEntry(w, &v.Failed[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONChangeMessageVisibilityBatchResultEntry appends v as a json object.
+func appendJSONChangeMessageVisibilityBatchResultEntry(w *awsjson.Writer, v *ChangeMessageVisibilityBatchResultEntry) {
+	start := w.ObjectStart()
+	if v.Id != nil {
+		w.Raw(`,"Id":`)
+		w.String(*v.Id)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONChangeMessageVisibilityOutput appends v as a json object.
+func appendJSONChangeMessageVisibilityOutput(w *awsjson.Writer, v *ChangeMessageVisibilityOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONCreateQueueOutput appends v as a json object.
+func appendJSONCreateQueueOutput(w *awsjson.Writer, v *CreateQueueOutput) {
+	start := w.ObjectStart()
+	if v.QueueUrl != nil {
+		w.Raw(`,"QueueUrl":`)
+		w.String(*v.QueueUrl)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteMessageBatchOutput appends v as a json object.
+func appendJSONDeleteMessageBatchOutput(w *awsjson.Writer, v *DeleteMessageBatchOutput) {
+	start := w.ObjectStart()
+	if v.Successful != nil {
+		w.Raw(`,"Successful":`)
+		w.Byte('[')
+		for i0 := range v.Successful {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONDeleteMessageBatchResultEntry(w, &v.Successful[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Failed != nil {
+		w.Raw(`,"Failed":`)
+		w.Byte('[')
+		for i0 := range v.Failed {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONBatchResultErrorEntry(w, &v.Failed[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteMessageBatchResultEntry appends v as a json object.
+func appendJSONDeleteMessageBatchResultEntry(w *awsjson.Writer, v *DeleteMessageBatchResultEntry) {
+	start := w.ObjectStart()
+	if v.Id != nil {
+		w.Raw(`,"Id":`)
+		w.String(*v.Id)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteMessageOutput appends v as a json object.
+func appendJSONDeleteMessageOutput(w *awsjson.Writer, v *DeleteMessageOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteQueueOutput appends v as a json object.
+func appendJSONDeleteQueueOutput(w *awsjson.Writer, v *DeleteQueueOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetQueueAttributesOutput appends v as a json object.
+func appendJSONGetQueueAttributesOutput(w *awsjson.Writer, v *GetQueueAttributesOutput) {
+	start := w.ObjectStart()
+	if v.Attributes != nil {
+		w.Raw(`,"Attributes":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.Attributes {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			w.String(e0)
+		}
+		w.Byte('}')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetQueueUrlOutput appends v as a json object.
+func appendJSONGetQueueUrlOutput(w *awsjson.Writer, v *GetQueueUrlOutput) {
+	start := w.ObjectStart()
+	if v.QueueUrl != nil {
+		w.Raw(`,"QueueUrl":`)
+		w.String(*v.QueueUrl)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListDeadLetterSourceQueuesOutput appends v as a json object.
+func appendJSONListDeadLetterSourceQueuesOutput(w *awsjson.Writer, v *ListDeadLetterSourceQueuesOutput) {
+	start := w.ObjectStart()
+	if v.QueueUrls != nil {
+		w.Raw(`,"queueUrls":`)
+		w.Byte('[')
+		for i0 := range v.QueueUrls {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.QueueUrls[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextToken != nil {
+		w.Raw(`,"NextToken":`)
+		w.String(*v.NextToken)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListMessageMoveTasksOutput appends v as a json object.
+func appendJSONListMessageMoveTasksOutput(w *awsjson.Writer, v *ListMessageMoveTasksOutput) {
+	start := w.ObjectStart()
+	if v.Results != nil {
+		w.Raw(`,"Results":`)
+		w.Byte('[')
+		for i0 := range v.Results {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONListMessageMoveTasksResultEntry(w, &v.Results[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListMessageMoveTasksResultEntry appends v as a json object.
+func appendJSONListMessageMoveTasksResultEntry(w *awsjson.Writer, v *ListMessageMoveTasksResultEntry) {
+	start := w.ObjectStart()
+	if v.TaskHandle != nil {
+		w.Raw(`,"TaskHandle":`)
+		w.String(*v.TaskHandle)
+	}
+	if v.Status != nil {
+		w.Raw(`,"Status":`)
+		w.String(*v.Status)
+	}
+	if v.SourceArn != nil {
+		w.Raw(`,"SourceArn":`)
+		w.String(*v.SourceArn)
+	}
+	if v.DestinationArn != nil {
+		w.Raw(`,"DestinationArn":`)
+		w.String(*v.DestinationArn)
+	}
+	if v.MaxNumberOfMessagesPerSecond != nil {
+		w.Raw(`,"MaxNumberOfMessagesPerSecond":`)
+		w.Int32(*v.MaxNumberOfMessagesPerSecond)
+	}
+	if v.ApproximateNumberOfMessagesMoved != nil {
+		w.Raw(`,"ApproximateNumberOfMessagesMoved":`)
+		w.Int64(*v.ApproximateNumberOfMessagesMoved)
+	}
+	if v.ApproximateNumberOfMessagesToMove != nil {
+		w.Raw(`,"ApproximateNumberOfMessagesToMove":`)
+		w.Int64(*v.ApproximateNumberOfMessagesToMove)
+	}
+	if v.FailureReason != nil {
+		w.Raw(`,"FailureReason":`)
+		w.String(*v.FailureReason)
+	}
+	if v.StartedTimestamp != nil {
+		w.Raw(`,"StartedTimestamp":`)
+		w.Int64(*v.StartedTimestamp)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListQueueTagsOutput appends v as a json object.
+func appendJSONListQueueTagsOutput(w *awsjson.Writer, v *ListQueueTagsOutput) {
+	start := w.ObjectStart()
+	if v.Tags != nil {
+		w.Raw(`,"Tags":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.Tags {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			w.String(e0)
+		}
+		w.Byte('}')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListQueuesOutput appends v as a json object.
+func appendJSONListQueuesOutput(w *awsjson.Writer, v *ListQueuesOutput) {
+	start := w.ObjectStart()
+	if v.QueueUrls != nil {
+		w.Raw(`,"QueueUrls":`)
+		w.Byte('[')
+		for i0 := range v.QueueUrls {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.QueueUrls[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextToken != nil {
+		w.Raw(`,"NextToken":`)
+		w.String(*v.NextToken)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONMessage appends v as a json object.
+func appendJSONMessage(w *awsjson.Writer, v *Message) {
+	start := w.ObjectStart()
+	if v.MessageId != nil {
+		w.Raw(`,"MessageId":`)
+		w.String(*v.MessageId)
+	}
+	if v.ReceiptHandle != nil {
+		w.Raw(`,"ReceiptHandle":`)
+		w.String(*v.ReceiptHandle)
+	}
+	if v.MD5OfBody != nil {
+		w.Raw(`,"MD5OfBody":`)
+		w.String(*v.MD5OfBody)
+	}
+	if v.Body != nil {
+		w.Raw(`,"Body":`)
+		w.String(*v.Body)
+	}
+	if v.Attributes != nil {
+		w.Raw(`,"Attributes":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.Attributes {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			w.String(e0)
+		}
+		w.Byte('}')
+	}
+	if v.MD5OfMessageAttributes != nil {
+		w.Raw(`,"MD5OfMessageAttributes":`)
+		w.String(*v.MD5OfMessageAttributes)
+	}
+	if v.MessageAttributes != nil {
+		w.Raw(`,"MessageAttributes":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.MessageAttributes {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			appendJSONMessageAttributeValue(w, &e0)
+		}
+		w.Byte('}')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONMessageAttributeValue appends v as a json object.
+func appendJSONMessageAttributeValue(w *awsjson.Writer, v *MessageAttributeValue) {
+	start := w.ObjectStart()
+	if v.StringValue != nil {
+		w.Raw(`,"StringValue":`)
+		w.String(*v.StringValue)
+	}
+	if v.BinaryValue != nil {
+		w.Raw(`,"BinaryValue":`)
+		w.Blob(v.BinaryValue)
+	}
+	if v.StringListValues != nil {
+		w.Raw(`,"StringListValues":`)
+		w.Byte('[')
+		for i0 := range v.StringListValues {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.StringListValues[i0])
+		}
+		w.Byte(']')
+	}
+	if v.BinaryListValues != nil {
+		w.Raw(`,"BinaryListValues":`)
+		w.Byte('[')
+		for i0 := range v.BinaryListValues {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.Blob(v.BinaryListValues[i0])
+		}
+		w.Byte(']')
+	}
+	if v.DataType != nil {
+		w.Raw(`,"DataType":`)
+		w.String(*v.DataType)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONPurgeQueueOutput appends v as a json object.
+func appendJSONPurgeQueueOutput(w *awsjson.Writer, v *PurgeQueueOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONReceiveMessageOutput appends v as a json object.
+func appendJSONReceiveMessageOutput(w *awsjson.Writer, v *ReceiveMessageOutput) {
+	start := w.ObjectStart()
+	if v.Messages != nil {
+		w.Raw(`,"Messages":`)
+		w.Byte('[')
+		for i0 := range v.Messages {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONMessage(w, &v.Messages[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONRemovePermissionOutput appends v as a json object.
+func appendJSONRemovePermissionOutput(w *awsjson.Writer, v *RemovePermissionOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONSendMessageBatchOutput appends v as a json object.
+func appendJSONSendMessageBatchOutput(w *awsjson.Writer, v *SendMessageBatchOutput) {
+	start := w.ObjectStart()
+	if v.Successful != nil {
+		w.Raw(`,"Successful":`)
+		w.Byte('[')
+		for i0 := range v.Successful {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONSendMessageBatchResultEntry(w, &v.Successful[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Failed != nil {
+		w.Raw(`,"Failed":`)
+		w.Byte('[')
+		for i0 := range v.Failed {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONBatchResultErrorEntry(w, &v.Failed[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONSendMessageBatchResultEntry appends v as a json object.
+func appendJSONSendMessageBatchResultEntry(w *awsjson.Writer, v *SendMessageBatchResultEntry) {
+	start := w.ObjectStart()
+	if v.Id != nil {
+		w.Raw(`,"Id":`)
+		w.String(*v.Id)
+	}
+	if v.MessageId != nil {
+		w.Raw(`,"MessageId":`)
+		w.String(*v.MessageId)
+	}
+	if v.MD5OfMessageBody != nil {
+		w.Raw(`,"MD5OfMessageBody":`)
+		w.String(*v.MD5OfMessageBody)
+	}
+	if v.MD5OfMessageAttributes != nil {
+		w.Raw(`,"MD5OfMessageAttributes":`)
+		w.String(*v.MD5OfMessageAttributes)
+	}
+	if v.MD5OfMessageSystemAttributes != nil {
+		w.Raw(`,"MD5OfMessageSystemAttributes":`)
+		w.String(*v.MD5OfMessageSystemAttributes)
+	}
+	if v.SequenceNumber != nil {
+		w.Raw(`,"SequenceNumber":`)
+		w.String(*v.SequenceNumber)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONSendMessageOutput appends v as a json object.
+func appendJSONSendMessageOutput(w *awsjson.Writer, v *SendMessageOutput) {
+	start := w.ObjectStart()
+	if v.MD5OfMessageBody != nil {
+		w.Raw(`,"MD5OfMessageBody":`)
+		w.String(*v.MD5OfMessageBody)
+	}
+	if v.MD5OfMessageAttributes != nil {
+		w.Raw(`,"MD5OfMessageAttributes":`)
+		w.String(*v.MD5OfMessageAttributes)
+	}
+	if v.MD5OfMessageSystemAttributes != nil {
+		w.Raw(`,"MD5OfMessageSystemAttributes":`)
+		w.String(*v.MD5OfMessageSystemAttributes)
+	}
+	if v.MessageId != nil {
+		w.Raw(`,"MessageId":`)
+		w.String(*v.MessageId)
+	}
+	if v.SequenceNumber != nil {
+		w.Raw(`,"SequenceNumber":`)
+		w.String(*v.SequenceNumber)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONSetQueueAttributesOutput appends v as a json object.
+func appendJSONSetQueueAttributesOutput(w *awsjson.Writer, v *SetQueueAttributesOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONStartMessageMoveTaskOutput appends v as a json object.
+func appendJSONStartMessageMoveTaskOutput(w *awsjson.Writer, v *StartMessageMoveTaskOutput) {
+	start := w.ObjectStart()
+	if v.TaskHandle != nil {
+		w.Raw(`,"TaskHandle":`)
+		w.String(*v.TaskHandle)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONTagQueueOutput appends v as a json object.
+func appendJSONTagQueueOutput(w *awsjson.Writer, v *TagQueueOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUntagQueueOutput appends v as a json object.
+func appendJSONUntagQueueOutput(w *awsjson.Writer, v *UntagQueueOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}

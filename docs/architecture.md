@@ -477,7 +477,29 @@ written by hand.
   quirks are custom marshalers on generated types, on the streaming v2
   interfaces (`MarshalJSONTo`, `UnmarshalJSONFrom`): epoch-second timestamps,
   base64 blobs, and `__type` error codes. One option set in
-  `internal/protocol/awsjson` serves every encode and decode.
+  `internal/protocol/awsjson` serves every encode and decode. The responses
+  of the json services are written by generated encoders instead of v2's
+  reflection: each output type has an `AppendJSON` that `WriteResponse`
+  calls, and each struct below an output an `appendJSON<Struct>` function,
+  the one place its members are written, through `awsjson.Writer`. Their bytes
+  are v2's for the same value; the generated `codec_json_test.go` of each
+  service checks that every output has an encoder and compares the two on
+  random values (`TestJSONEncodeMatchesV2`, `FuzzJSONEncode`). A value v2
+  refuses (invalid UTF-8) goes to v2, which writes its own error. Documents and
+  structs with non-epoch timestamps stay on v2 per value. Strings are quoted
+  by scanning eight bytes at a time and copying each clean run whole: v2's
+  per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
+  4 its cost moved up to 38% with a 16-byte change in a caller's frame
+  (SQ-455). rest-json and error bodies still go through v2.
+- **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
+  generated encoder writes into a reused buffer, given back once the body is
+  written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go
+  to a stack that holds at most 32 MiB of them, and apart from it the
+  largest buffer given back that is bigger than 32 MiB, so that one large
+  body called for again does not grow its buffer from nothing each time.
+  Every GC cycle a cleanup checks whether a json response took or gave back
+  a large buffer since the cycle before; when none did, it drops them all,
+  so an idle server holds them for at most two collections.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
