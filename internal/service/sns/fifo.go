@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/kylecannon/gostack/internal/request"
 )
@@ -135,59 +134,4 @@ func (f *fifoTopic) expire(now time.Time) {
 
 		f.seen, f.order, f.peak = seen, slices.Clone(f.order), len(seen)
 	}
-}
-
-const hexDigits = "0123456789abcdef"
-
-// appendJSONString writes s as a JSON string. Invalid UTF-8 becomes U+FFFD.
-func appendJSONString(b []byte, s string) []byte {
-	b = append(b, '"')
-	start := 0
-
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c >= utf8.RuneSelf {
-			r, size := utf8.DecodeRuneInString(s[i:])
-			if r == utf8.RuneError && size == 1 {
-				b = append(b, s[start:i]...)
-				b = append(b, `�`...)
-				i++
-				start = i
-
-				continue
-			}
-
-			i += size
-
-			continue
-		}
-
-		if c >= ' ' && c != '"' && c != '\\' {
-			i++
-
-			continue
-		}
-
-		b = append(b, s[start:i]...)
-
-		switch c {
-		case '"', '\\':
-			b = append(b, '\\', c)
-		case '\n':
-			b = append(b, '\\', 'n')
-		case '\r':
-			b = append(b, '\\', 'r')
-		case '\t':
-			b = append(b, '\\', 't')
-		default:
-			b = append(b, '\\', 'u', '0', '0', hexDigits[c>>4], hexDigits[c&0xf])
-		}
-
-		i++
-		start = i
-	}
-
-	b = append(b, s[start:]...)
-
-	return append(b, '"')
 }
