@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/protocol/heaptest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,6 +100,7 @@ func numberAttributes(id string, n int) string {
 // the room of protocol.UnknownMemory; a body whose heap does not fit that room
 // is still refused.
 func Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts(t *testing.T) {
+	heaptest.Settle(t)
 	noMemoryLimit(t)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 	t.Cleanup(func() { protocol.SetInFlight(0) })
@@ -232,6 +234,8 @@ func Test_decodeBudget_noMemoryLimitServesTheDensestBatches(t *testing.T) {
 		{"25 x 1,800 maps nested 30 deep", mapChain, 1_800},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			heaptest.Settle(t)
+
 			body := denseBatch("dense", tt.element, tt.count)
 			require.Greater(t, len(body), 15<<20, "the batch is near the cap")
 			require.Less(t, int64(len(body)), protocol.DefaultMaxBody)
@@ -254,6 +258,7 @@ func Test_decodeBudget_noMemoryLimitServesTheDensestBatches(t *testing.T) {
 // a table that does exist is served, though the last collection ran while the
 // first one's value was live.
 func Test_decodeBudget_aBodyAfterOneThatDiedIsServed(t *testing.T) {
+	heaptest.Settle(t) // here only: the test is that the second body needs no collection before it
 	noMemoryLimit(t)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 	t.Cleanup(func() { protocol.SetInFlight(0) })
@@ -411,6 +416,7 @@ func Test_decodeBudget_worstLegalBody(t *testing.T) {
 // answers ValidationException, as it does for any key of the wrong shape, and
 // the budget does not.
 func Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler(t *testing.T) {
+	heaptest.Settle(t)
 	noMemoryLimit(t)
 
 	s := newStack(t)
@@ -679,6 +685,7 @@ func Test_decodeBudget_aStringOfCommasIsPlannedAsText(t *testing.T) {
 // the decode budget's answer and nothing is decoded, not decoded until the
 // container's OOM killer ends the process. The same body is served with room.
 func Test_decodeBudget_whatTheMemoryLimitCannotHoldIsRefused(t *testing.T) {
+	heaptest.Settle(t)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 
 	old := debug.SetMemoryLimit(-1)

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kylecannon/gostack/internal/protocol/heaptest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -115,6 +116,8 @@ func Test_Charge_AccountingStaysExact(t *testing.T) {
 		{"cap 1 MiB, bound 4 MiB", 1 << 20, 4 << 20},
 	} {
 		t.Run(cfg.name, func(t *testing.T) {
+			heaptest.Settle(t) // the room below is built on the heap's objects
+
 			SetMaxBody(cfg.maxBody)
 			SetInFlight(cfg.bound)
 			SetBodyWait(20 * time.Millisecond)

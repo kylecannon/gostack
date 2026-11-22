@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/protocol/heaptest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -261,6 +262,8 @@ func Test_DecodeWithin_TheLaneIsFreeAfterEveryPath(t *testing.T) {
 // holding nothing and keeping the pool, instead of being walked to its end
 // and refused by the final reservation. With room for both it is served.
 func Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark(t *testing.T) {
+	heaptest.Settle(t) // the room below is built on what is live
+
 	body := denseBody(3_000_000)
 	budget := protocol.DecodeBudgetAt(len(body), 256)
 
