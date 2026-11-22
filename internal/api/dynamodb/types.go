@@ -4,6 +4,7 @@ package dynamodb
 
 import (
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
 // ArchivalSummary is a structure of the dynamodb API.
@@ -175,15 +176,17 @@ type BatchGetItemInput struct {
 // BatchGetItemOutput is a structure of the dynamodb API.
 type BatchGetItemOutput struct {
 	Responses        map[string][]map[string]AttributeValue `json:"Responses,omitzero"`
+	ResponsesJSON    map[string][]awsjson.Encoded           `json:"-"`
 	UnprocessedKeys  map[string]KeysAndAttributes           `json:"UnprocessedKeys,omitzero"`
 	ConsumedCapacity []ConsumedCapacity                     `json:"ConsumedCapacity,omitzero"`
 }
 
 // BatchStatementError is a structure of the dynamodb API.
 type BatchStatementError struct {
-	Code    *string                   `json:"Code,omitzero"`
-	Message *string                   `json:"Message,omitzero"`
-	Item    map[string]AttributeValue `json:"Item,omitzero"`
+	Code     *string                   `json:"Code,omitzero"`
+	Message  *string                   `json:"Message,omitzero"`
+	Item     map[string]AttributeValue `json:"Item,omitzero"`
+	ItemJSON awsjson.Encoded           `json:"-"`
 }
 
 // BatchStatementRequest is a structure of the dynamodb API.
@@ -199,6 +202,7 @@ type BatchStatementResponse struct {
 	Error     *BatchStatementError      `json:"Error,omitzero"`
 	TableName *string                   `json:"TableName,omitzero"`
 	Item      map[string]AttributeValue `json:"Item,omitzero"`
+	ItemJSON  awsjson.Encoded           `json:"-"`
 }
 
 // BatchWriteItemInput is a structure of the dynamodb API.
@@ -413,6 +417,7 @@ type DeleteItemInput struct {
 // DeleteItemOutput is a structure of the dynamodb API.
 type DeleteItemOutput struct {
 	Attributes            map[string]AttributeValue `json:"Attributes,omitzero"`
+	AttributesJSON        awsjson.Encoded           `json:"-"`
 	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitzero"`
 	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitzero"`
 }
@@ -616,6 +621,7 @@ type ExecuteStatementInput struct {
 // ExecuteStatementOutput is a structure of the dynamodb API.
 type ExecuteStatementOutput struct {
 	Items            []map[string]AttributeValue `json:"Items,omitzero"`
+	ItemsJSON        []awsjson.Encoded           `json:"-"`
 	NextToken        *string                     `json:"NextToken,omitzero"`
 	ConsumedCapacity *ConsumedCapacity           `json:"ConsumedCapacity,omitzero"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitzero"`
@@ -722,6 +728,7 @@ type GetItemInput struct {
 // GetItemOutput is a structure of the dynamodb API.
 type GetItemOutput struct {
 	Item             map[string]AttributeValue `json:"Item,omitzero"`
+	ItemJSON         awsjson.Encoded           `json:"-"`
 	ConsumedCapacity *ConsumedCapacity         `json:"ConsumedCapacity,omitzero"`
 }
 
@@ -894,7 +901,8 @@ type ItemCollectionMetrics struct {
 
 // ItemResponse is a structure of the dynamodb API.
 type ItemResponse struct {
-	Item map[string]AttributeValue `json:"Item,omitzero"`
+	Item     map[string]AttributeValue `json:"Item,omitzero"`
+	ItemJSON awsjson.Encoded           `json:"-"`
 }
 
 // KeySchemaElement is a structure of the dynamodb API.
@@ -1142,6 +1150,7 @@ type PutItemInput struct {
 // PutItemOutput is a structure of the dynamodb API.
 type PutItemOutput struct {
 	Attributes            map[string]AttributeValue `json:"Attributes,omitzero"`
+	AttributesJSON        awsjson.Encoded           `json:"-"`
 	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitzero"`
 	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitzero"`
 }
@@ -1188,6 +1197,7 @@ type QueryInput struct {
 // QueryOutput is a structure of the dynamodb API.
 type QueryOutput struct {
 	Items            []map[string]AttributeValue `json:"Items,omitzero"`
+	ItemsJSON        []awsjson.Encoded           `json:"-"`
 	Count            *int32                      `json:"Count,omitzero"`
 	ScannedCount     *int32                      `json:"ScannedCount,omitzero"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitzero"`
@@ -1407,6 +1417,7 @@ type ScanInput struct {
 // ScanOutput is a structure of the dynamodb API.
 type ScanOutput struct {
 	Items            []map[string]AttributeValue `json:"Items,omitzero"`
+	ItemsJSON        []awsjson.Encoded           `json:"-"`
 	Count            *int32                      `json:"Count,omitzero"`
 	ScannedCount     *int32                      `json:"ScannedCount,omitzero"`
 	LastEvaluatedKey map[string]AttributeValue   `json:"LastEvaluatedKey,omitzero"`
@@ -1690,6 +1701,7 @@ type UpdateItemInput struct {
 // UpdateItemOutput is a structure of the dynamodb API.
 type UpdateItemOutput struct {
 	Attributes            map[string]AttributeValue `json:"Attributes,omitzero"`
+	AttributesJSON        awsjson.Encoded           `json:"-"`
 	ConsumedCapacity      *ConsumedCapacity         `json:"ConsumedCapacity,omitzero"`
 	ItemCollectionMetrics *ItemCollectionMetrics    `json:"ItemCollectionMetrics,omitzero"`
 }

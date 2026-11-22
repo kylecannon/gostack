@@ -32,6 +32,12 @@ func (g *generator) typesFile() (string, error) {
 			}
 
 			p.f("\t%s %s `json:\"%s,omitzero\"`", f.goName, f.typ, f.jsonName)
+
+			// The json encoder writes an encoded sibling in place of its member
+			// when it is set: awsjson.Encoded.
+			if e := f.encoded; e != nil {
+				p.f("\t%s %s `json:\"-\"`", e.goName, e.typ)
+			}
 		}
 
 		p.f("}")

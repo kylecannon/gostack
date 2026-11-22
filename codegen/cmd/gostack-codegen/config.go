@@ -49,6 +49,13 @@ type serviceOptions struct {
 	// service treats as one, and that get MembersSet as well: DynamoDB's
 	// AttributeValue.
 	UnionShapes []string
+	// EncodedShapes are shapes whose value an operation output can carry
+	// already encoded as json (docs/architecture.md, "Pre-encoded values"). A
+	// member of an encoded struct whose shape is one of them, or a list or map
+	// that holds one, gets a sibling field, its Go name with JSON appended,
+	// that holds awsjson.Encoded in place of each such value. A json service
+	// only; a shape no member reaches fails generation.
+	EncodedShapes []string
 	// Validation gives every operation input a Validate method that checks the
 	// model traits its Checks list and answers every failure at once in AWS's
 	// "N validation errors detected" message. The generated dispatch never
@@ -123,6 +130,9 @@ var serviceTable = map[string]serviceOptions{
 		// An AttributeValue sets exactly one of its members, which the model
 		// does not say: DynamoDB answers a ValidationException for none or two.
 		UnionShapes: []string{"AttributeValue"},
+		// A stored item can be written straight from its json: GetItem's Item,
+		// Query's and Scan's Items, BatchGetItem's Responses.
+		EncodedShapes: []string{"AttributeMap"},
 		Validation: &validation{Checks: map[string]check{
 			// test_dynamodb_execute_statement_empy_parameter, invalid-param-error.
 			"ExecuteStatementInput.Parameters": checkMin,

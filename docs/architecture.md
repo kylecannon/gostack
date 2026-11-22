@@ -491,6 +491,32 @@ written by hand.
   per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
   4 its cost moved up to 38% with a 16-byte change in a caller's frame
   (SQ-455). rest-json and error bodies still go through v2.
+- **Pre-encoded values:** a json service's `EncodedShapes` option in
+  `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
+  response can carry already encoded; DynamoDB names `AttributeMap`. Every
+  member of a struct below an output whose shape is one of them, or a list or
+  map that holds one, gets a sibling field, its name with `JSON` appended and
+  tagged `json:"-"`, of the same list and map structure with
+  `awsjson.Encoded` (`[]byte`) in place of each encoded value:
+  `GetItemOutput.ItemJSON awsjson.Encoded`, `QueryOutput.ItemsJSON` and
+  `ScanOutput.ItemsJSON []awsjson.Encoded`,
+  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`. The
+  generated encoder writes the sibling in place of the member when it is set
+  (a list or map when not nil, a single value when not empty) and the member
+  otherwise; each `awsjson.Encoded` is appended to the response buffer as it
+  is, with no copy of its own, no reflection and no check. Its bytes are the
+  caller's to keep valid: exactly one json value, as v2 writes the typed
+  value. An empty one inside a list or map writes `null`, as a nil map does.
+  Decoding, v2 and the typed fields are unchanged, so a handler that never
+  sets a sibling writes what it wrote before, and a service without the
+  option generates the same code. v2 never sees a sibling, which is safe
+  because `WriteResponse` falls back to v2 only when the encoder refuses a
+  typed value, and v2 refuses that value too. The generator fails on an
+  option shape no output reaches, a sibling name a member already has, and a
+  member of a struct v2 writes for its timestamps.
+  `TestJSONEncodedMatchesTyped` in the service's generated test moves random
+  typed values into their siblings, each marshaled by v2, and compares the
+  json with v2's for the typed value.
 - **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
   generated encoder writes into a reused buffer, given back once the body is
   written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go

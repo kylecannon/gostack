@@ -35,7 +35,7 @@ func walkMembers(typ reflect.Type, depth int, out map[string]bool, seen map[dept
 		}
 	case reflect.Struct:
 		for f := range typ.Fields() {
-			if settable(f.Type, depth) {
+			if settable(f.Type, depth) && !holdsEncoded(f.Type) {
 				out[typ.Name()+"."+f.Name] = true
 				walkMembers(f.Type, depth, out, seen)
 			}

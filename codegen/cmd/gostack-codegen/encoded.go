@@ -1,0 +1,129 @@
+package main
+
+import (
+	"fmt"
+	"slices"
+
+	"github.com/kylecannon/gostack/codegen/spec"
+)
+
+// encodedField is the sibling of a member that holds its value already encoded
+// as json: awsjson.Encoded in place of each value of a shape the service's
+// EncodedShapes names, inside the same lists and maps as the member's own type.
+type encodedField struct {
+	goName string
+	typ    string
+	// leaf marks a member whose own shape is the encoded one, so the sibling
+	// is a single awsjson.Encoded rather than a list or map of them.
+	leaf bool
+}
+
+// encodedSuffix ends the Go name of a member's encoded sibling.
+const encodedSuffix = "JSON"
+
+// encodedGoType is the Go type of one pre-encoded value.
+const encodedGoType = "awsjson.Encoded"
+
+// markEncoded gives an encoded sibling to each member of a struct below an
+// operation output whose shape is one of the service's EncodedShapes, or a
+// list or map that holds one. Only the generated json encoder writes it;
+// v2 and every decoder skip it.
+func (g *generator) markEncoded() error {
+	if len(g.opts.EncodedShapes) == 0 {
+		return nil
+	}
+
+	if !g.hasProtocol(protoJSON) || g.isRest() {
+		return fmt.Errorf("the EncodedShapes option needs the json protocol, not %v", g.protocols)
+	}
+
+	reached := map[string]bool{}
+
+	for _, st := range g.jsonEncodedStructs() {
+		err := g.markEncodedStruct(st, reached)
+		if err != nil {
+			return fmt.Errorf("%s: %w", st.goName, err)
+		}
+	}
+
+	for _, name := range g.opts.EncodedShapes {
+		if g.p.Shapes[name] == nil {
+			return fmt.Errorf("encoded shape %s is not a shape of the model", name)
+		}
+
+		if !reached[name] {
+			return fmt.Errorf("encoded shape %s is no member of an operation output", name)
+		}
+	}
+
+	return nil
+}
+
+func (g *generator) markEncodedStruct(st *structType, reached map[string]bool) error {
+	for _, f := range st.fields {
+		if !inJSONBody(st, f) {
+			continue
+		}
+
+		typ, shape, err := g.encodedType(f.pair.p)
+		if err != nil {
+			return fmt.Errorf("member %s: %w", f.member, err)
+		}
+
+		if shape == "" {
+			continue
+		}
+
+		reached[shape] = true
+
+		if len(timeFields(st)) > 0 {
+			return fmt.Errorf("member %s is encoded, and v2 writes the struct for its timestamps", f.member)
+		}
+
+		name := f.goName + encodedSuffix
+		if name == unionMethod || slices.ContainsFunc(st.fields, func(o *field) bool { return o.goName == name }) {
+			return fmt.Errorf("the encoded sibling %s of member %s is taken", name, f.member)
+		}
+
+		f.encoded = &encodedField{goName: name, typ: typ, leaf: typ == encodedGoType}
+	}
+
+	return nil
+}
+
+// encodedType returns the Go type of the encoded sibling of a value of r, and
+// the encoded shape it holds; an empty shape means r holds none. It follows
+// lists and maps, not structures: a structure below has siblings of its own.
+func (g *generator) encodedType(r ref) (string, string, error) {
+	if slices.Contains(g.opts.EncodedShapes, r.name) {
+		return encodedGoType, r.name, nil
+	}
+
+	var (
+		elem   *spec.Ref
+		prefix string
+	)
+
+	switch {
+	case r.shape.Document:
+		return "", "", nil
+	case r.shape.Type == spec.TypeList:
+		elem, prefix = r.shape.Member, "[]"
+	case r.shape.Type == spec.TypeMap:
+		elem, prefix = r.shape.Value, "map[string]"
+	default:
+		return "", "", nil
+	}
+
+	er, err := resolve(g.p, elem)
+	if err != nil {
+		return "", "", err
+	}
+
+	typ, shape, err := g.encodedType(er)
+	if shape == "" || err != nil {
+		return "", "", err
+	}
+
+	return prefix + typ, shape, nil
+}
