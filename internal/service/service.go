@@ -77,8 +77,11 @@ type Registration struct {
 	// body may cost before the request is refused as too large
 	// (protocol.DecodeBudgetAt). Zero is protocol.DecodeFactor, which every
 	// legal S3, SQS and STS request stays far below. A service whose legal
-	// requests decode into more, such as DynamoDB's lists of small
-	// AttributeValues at about 18 times their bytes, sets its own.
+	// requests decode into more sets its own: DynamoDB's lists nested to its
+	// depth limit are charged 200 bytes for each byte of body, so it declares
+	// 256. A json body charged more than protocol.DecodeFactor allows is
+	// decoded only when the Go memory limit has room for the heap it keeps
+	// (awsjson.DecodeWithin, protocol.ReserveHeap), and is refused otherwise.
 	DecodeFactor int
 
 	// ClaimHost reports whether a request to host is the service's, before any

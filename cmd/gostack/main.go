@@ -58,6 +58,10 @@ func run() int {
 		return supervise(cfg)
 	}
 
+	// Only the process that serves holds request bodies; the supervisor above
+	// holds none.
+	applyMemoryLimit()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
