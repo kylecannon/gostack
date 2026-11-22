@@ -1287,7 +1287,32 @@ func appendJSONBatchExecuteStatementOutput(w *awsjson.Writer, v *BatchExecuteSta
 // appendJSONBatchGetItemOutput appends v as a json object.
 func appendJSONBatchGetItemOutput(w *awsjson.Writer, v *BatchGetItemOutput) {
 	start := w.ObjectStart()
-	if v.Responses != nil {
+	if v.ResponsesJSON != nil {
+		w.EncodedMember(`,"Responses":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.ResponsesJSON {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			if e0 == nil {
+				w.Null()
+			} else {
+				w.Byte('[')
+				for i1 := range e0 {
+					if i1 > 0 {
+						w.Byte(',')
+					}
+					w.Encoded(e0[i1])
+				}
+				w.Byte(']')
+			}
+		}
+		w.Byte('}')
+	} else if v.Responses != nil {
 		w.Raw(`,"Responses":`)
 		w.Byte('{')
 		first0 := true
@@ -1368,7 +1393,10 @@ func appendJSONBatchStatementError(w *awsjson.Writer, v *BatchStatementError) {
 		w.Raw(`,"Message":`)
 		w.String(*v.Message)
 	}
-	if v.Item != nil {
+	if len(v.ItemJSON) != 0 {
+		w.EncodedMember(`,"Item":`)
+		w.Encoded(v.ItemJSON)
+	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
 		w.Byte('{')
 		first0 := true
@@ -1397,7 +1425,10 @@ func appendJSONBatchStatementResponse(w *awsjson.Writer, v *BatchStatementRespon
 		w.Raw(`,"TableName":`)
 		w.String(*v.TableName)
 	}
-	if v.Item != nil {
+	if len(v.ItemJSON) != 0 {
+		w.EncodedMember(`,"Item":`)
+		w.Encoded(v.ItemJSON)
+	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
 		w.Byte('{')
 		first0 := true
@@ -1672,7 +1703,10 @@ func appendJSONDeleteBackupOutput(w *awsjson.Writer, v *DeleteBackupOutput) {
 // appendJSONDeleteItemOutput appends v as a json object.
 func appendJSONDeleteItemOutput(w *awsjson.Writer, v *DeleteItemOutput) {
 	start := w.ObjectStart()
-	if v.Attributes != nil {
+	if len(v.AttributesJSON) != 0 {
+		w.EncodedMember(`,"Attributes":`)
+		w.Encoded(v.AttributesJSON)
+	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)
 		w.Byte('{')
 		first0 := true
@@ -1968,7 +2002,17 @@ func appendJSONEndpoint(w *awsjson.Writer, v *Endpoint) {
 // appendJSONExecuteStatementOutput appends v as a json object.
 func appendJSONExecuteStatementOutput(w *awsjson.Writer, v *ExecuteStatementOutput) {
 	start := w.ObjectStart()
-	if v.Items != nil {
+	if v.ItemsJSON != nil {
+		w.EncodedMember(`,"Items":`)
+		w.Byte('[')
+		for i0 := range v.ItemsJSON {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.Encoded(v.ItemsJSON[i0])
+		}
+		w.Byte(']')
+	} else if v.Items != nil {
 		w.Raw(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.Items {
@@ -2183,7 +2227,10 @@ func appendJSONFailureException(w *awsjson.Writer, v *FailureException) {
 // appendJSONGetItemOutput appends v as a json object.
 func appendJSONGetItemOutput(w *awsjson.Writer, v *GetItemOutput) {
 	start := w.ObjectStart()
-	if v.Item != nil {
+	if len(v.ItemJSON) != 0 {
+		w.EncodedMember(`,"Item":`)
+		w.Encoded(v.ItemJSON)
+	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
 		w.Byte('{')
 		first0 := true
@@ -2625,7 +2672,10 @@ func appendJSONItemCollectionMetrics(w *awsjson.Writer, v *ItemCollectionMetrics
 // appendJSONItemResponse appends v as a json object.
 func appendJSONItemResponse(w *awsjson.Writer, v *ItemResponse) {
 	start := w.ObjectStart()
-	if v.Item != nil {
+	if len(v.ItemJSON) != 0 {
+		w.EncodedMember(`,"Item":`)
+		w.Encoded(v.ItemJSON)
+	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
 		w.Byte('{')
 		first0 := true
@@ -2972,52 +3022,6 @@ func appendJSONLocalSecondaryIndexInfo(w *awsjson.Writer, v *LocalSecondaryIndex
 	if v.Projection != nil {
 		w.Raw(`,"Projection":`)
 		appendJSONProjection(w, v.Projection)
-	}
-	w.ObjectEnd(start)
-}
-
-// appendJSONOnDemandThroughput appends v as a json object.
-func appendJSONOnDemandThroughput(w *awsjson.Writer, v *OnDemandThroughput) {
-	start := w.ObjectStart()
-	if v.MaxReadRequestUnits != nil {
-		w.Raw(`,"MaxReadRequestUnits":`)
-		w.Int64(*v.MaxReadRequestUnits)
-	}
-	if v.MaxWriteRequestUnits != nil {
-		w.Raw(`,"MaxWriteRequestUnits":`)
-		w.Int64(*v.MaxWriteRequestUnits)
-	}
-	w.ObjectEnd(start)
-}
-
-// appendJSONOnDemandThroughputOverride appends v as a json object.
-func appendJSONOnDemandThroughputOverride(w *awsjson.Writer, v *OnDemandThroughputOverride) {
-	start := w.ObjectStart()
-	if v.MaxReadRequestUnits != nil {
-		w.Raw(`,"MaxReadRequestUnits":`)
-		w.Int64(*v.MaxReadRequestUnits)
-	}
-	w.ObjectEnd(start)
-}
-
-// appendJSONPointInTimeRecoveryDescription appends v as a json object.
-func appendJSONPointInTimeRecoveryDescription(w *awsjson.Writer, v *PointInTimeRecoveryDescription) {
-	start := w.ObjectStart()
-	if v.PointInTimeRecoveryStatus != nil {
-		w.Raw(`,"PointInTimeRecoveryStatus":`)
-		w.String(*v.PointInTimeRecoveryStatus)
-	}
-	if v.RecoveryPeriodInDays != nil {
-		w.Raw(`,"RecoveryPeriodInDays":`)
-		w.Int32(*v.RecoveryPeriodInDays)
-	}
-	if v.EarliestRestorableDateTime != nil && !v.EarliestRestorableDateTime.IsZero() {
-		w.Raw(`,"EarliestRestorableDateTime":`)
-		w.Time(v.EarliestRestorableDateTime)
-	}
-	if v.LatestRestorableDateTime != nil && !v.LatestRestorableDateTime.IsZero() {
-		w.Raw(`,"LatestRestorableDateTime":`)
-		w.Time(v.LatestRestorableDateTime)
 	}
 	w.ObjectEnd(start)
 }

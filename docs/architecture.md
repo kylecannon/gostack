@@ -503,6 +503,47 @@ written by hand.
   per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
   4 its cost moved up to 38% with a 16-byte change in a caller's frame
   (SQ-455). rest-json and error bodies still go through v2.
+- **Pre-encoded values:** a json service's `EncodedShapes` option in
+  `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
+  response can carry already encoded; DynamoDB names `AttributeMap`. Every
+  member of a struct below an output whose shape is one of them, or a list or
+  map that holds one, gets a sibling field, its name with `JSON` appended and
+  tagged `json:"-"`, of the same list and map structure with
+  `awsjson.Encoded` (`[]byte`) in place of each encoded value:
+  `GetItemOutput.ItemJSON awsjson.Encoded`, `QueryOutput.ItemsJSON` and
+  `ScanOutput.ItemsJSON []awsjson.Encoded`,
+  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`. The
+  generated encoder writes the sibling in place of the member when it is set
+  (a list or map when not nil, a single value when not empty) and the member
+  otherwise; each `awsjson.Encoded` is appended to the response buffer as it
+  is, with no copy of its own, no reflection and no check. Its bytes are the
+  caller's to keep valid: exactly one json value, as v2 writes the typed
+  value. An empty one inside a list or map writes `null`, as a nil map does.
+  Decoding, v2 and the typed fields are unchanged, so a handler that never
+  sets a sibling writes what it wrote before, and a service without the
+  option generates the same code. Only the generated wire encoder reads a
+  sibling: Go code that reads another handler's output, and every v2 path,
+  sees the typed member, nil when the sibling carries the value. The caller
+  owns the bytes' UTF-8 and json validity, which the typed path checks and
+  this one does not, and keeps them unchanged until `WriteResponse` returns.
+  `WriteResponse` and `Encode` fall back to v2 when the encoder refuses a
+  value, invalid UTF-8 in a typed string or map key, and v2 refuses it too.
+  A value that also holds a member written from its sibling answers
+  InternalError instead (`Writer.EncodedMember` marks it), because v2 would
+  write it without that member. The generator fails on an option shape no
+  output reaches, a sibling name a member already has, a service with a
+  protocol beside json, and a struct below an operation output that v2 writes
+  for its timestamps and that holds a sibling or reaches a struct that does.
+  Errors are always written by v2, so a sibling below an error is never read;
+  handlers set the typed member there. 11 of DynamoDB's 13 response
+  members of `AttributeMap` have a sibling. `ConditionalCheckFailedException.Item`
+  and `CancellationReason.Item` (in `TransactionCanceledException`) have none,
+  because v2 writes errors.
+  `TestJSONEncodedMatchesTyped` in the service's generated test moves random
+  typed values into their siblings, each marshaled by v2, and compares the
+  json with v2's for the typed value. `BenchmarkEncode*` in
+  `internal/api/dynamodb` writes GetItem, Query, BatchGetItem and
+  TransactGetItems outputs in both forms.
 - **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
   generated encoder writes into a reused buffer, given back once the body is
   written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go

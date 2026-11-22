@@ -6,6 +6,52 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
+// appendJSONOnDemandThroughput appends v as a json object.
+func appendJSONOnDemandThroughput(w *awsjson.Writer, v *OnDemandThroughput) {
+	start := w.ObjectStart()
+	if v.MaxReadRequestUnits != nil {
+		w.Raw(`,"MaxReadRequestUnits":`)
+		w.Int64(*v.MaxReadRequestUnits)
+	}
+	if v.MaxWriteRequestUnits != nil {
+		w.Raw(`,"MaxWriteRequestUnits":`)
+		w.Int64(*v.MaxWriteRequestUnits)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONOnDemandThroughputOverride appends v as a json object.
+func appendJSONOnDemandThroughputOverride(w *awsjson.Writer, v *OnDemandThroughputOverride) {
+	start := w.ObjectStart()
+	if v.MaxReadRequestUnits != nil {
+		w.Raw(`,"MaxReadRequestUnits":`)
+		w.Int64(*v.MaxReadRequestUnits)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONPointInTimeRecoveryDescription appends v as a json object.
+func appendJSONPointInTimeRecoveryDescription(w *awsjson.Writer, v *PointInTimeRecoveryDescription) {
+	start := w.ObjectStart()
+	if v.PointInTimeRecoveryStatus != nil {
+		w.Raw(`,"PointInTimeRecoveryStatus":`)
+		w.String(*v.PointInTimeRecoveryStatus)
+	}
+	if v.RecoveryPeriodInDays != nil {
+		w.Raw(`,"RecoveryPeriodInDays":`)
+		w.Int32(*v.RecoveryPeriodInDays)
+	}
+	if v.EarliestRestorableDateTime != nil && !v.EarliestRestorableDateTime.IsZero() {
+		w.Raw(`,"EarliestRestorableDateTime":`)
+		w.Time(v.EarliestRestorableDateTime)
+	}
+	if v.LatestRestorableDateTime != nil && !v.LatestRestorableDateTime.IsZero() {
+		w.Raw(`,"LatestRestorableDateTime":`)
+		w.Time(v.LatestRestorableDateTime)
+	}
+	w.ObjectEnd(start)
+}
+
 // appendJSONProjection appends v as a json object.
 func appendJSONProjection(w *awsjson.Writer, v *Projection) {
 	start := w.ObjectStart()
@@ -80,7 +126,10 @@ func appendJSONProvisionedThroughputOverride(w *awsjson.Writer, v *ProvisionedTh
 // appendJSONPutItemOutput appends v as a json object.
 func appendJSONPutItemOutput(w *awsjson.Writer, v *PutItemOutput) {
 	start := w.ObjectStart()
-	if v.Attributes != nil {
+	if len(v.AttributesJSON) != 0 {
+		w.EncodedMember(`,"Attributes":`)
+		w.Encoded(v.AttributesJSON)
+	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)
 		w.Byte('{')
 		first0 := true
@@ -140,7 +189,17 @@ func appendJSONPutResourcePolicyOutput(w *awsjson.Writer, v *PutResourcePolicyOu
 // appendJSONQueryOutput appends v as a json object.
 func appendJSONQueryOutput(w *awsjson.Writer, v *QueryOutput) {
 	start := w.ObjectStart()
-	if v.Items != nil {
+	if v.ItemsJSON != nil {
+		w.EncodedMember(`,"Items":`)
+		w.Byte('[')
+		for i0 := range v.ItemsJSON {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.Encoded(v.ItemsJSON[i0])
+		}
+		w.Byte(']')
+	} else if v.Items != nil {
 		w.Raw(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.Items {
@@ -526,7 +585,17 @@ func appendJSONSSESpecification(w *awsjson.Writer, v *SSESpecification) {
 // appendJSONScanOutput appends v as a json object.
 func appendJSONScanOutput(w *awsjson.Writer, v *ScanOutput) {
 	start := w.ObjectStart()
-	if v.Items != nil {
+	if v.ItemsJSON != nil {
+		w.EncodedMember(`,"Items":`)
+		w.Byte('[')
+		for i0 := range v.ItemsJSON {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.Encoded(v.ItemsJSON[i0])
+		}
+		w.Byte(']')
+	} else if v.Items != nil {
 		w.Raw(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.Items {
@@ -1156,7 +1225,10 @@ func appendJSONUpdateGlobalTableSettingsOutput(w *awsjson.Writer, v *UpdateGloba
 // appendJSONUpdateItemOutput appends v as a json object.
 func appendJSONUpdateItemOutput(w *awsjson.Writer, v *UpdateItemOutput) {
 	start := w.ObjectStart()
-	if v.Attributes != nil {
+	if len(v.AttributesJSON) != 0 {
+		w.EncodedMember(`,"Attributes":`)
+		w.Encoded(v.AttributesJSON)
+	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)
 		w.Byte('{')
 		first0 := true

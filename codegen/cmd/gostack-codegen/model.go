@@ -80,6 +80,9 @@ type field struct {
 	pair      pair
 	hasQuery  bool
 	queryName string
+	// encoded is the sibling that holds the member's value already encoded
+	// as json, or nil: see markEncoded.
+	encoded *encodedField
 }
 
 // structType is one generated struct.
@@ -305,7 +308,12 @@ func (g *generator) build() error {
 		return err
 	}
 
-	return g.markUnions()
+	err = g.markUnions()
+	if err != nil {
+		return err
+	}
+
+	return g.markEncoded()
 }
 
 // unionMethod is the method a union struct gets. No member of one may have

@@ -1,6 +1,7 @@
 package awsjson
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,7 +48,15 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 	encode := Encode
 
 	if a, ok := out.(Appender); ok {
-		if writeAppended(w, requestID, version, a) {
+		err := writeAppended(w, requestID, version, a)
+		if err == nil {
+			return
+		}
+
+		// v2 would write the value without its pre-encoded members.
+		if errors.Is(err, errEncodedRefused) {
+			WriteError(w, nil, requestID, encodeError(err), ErrorOptions{})
+
 			return
 		}
 
@@ -73,8 +82,9 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 
 // writeAppended writes a's json as the body of a 200 response, from a reused
 // buffer: a Write never keeps the slice it is given, so the buffer goes back
-// once written. It writes nothing and returns false when a refuses its value.
-func writeAppended(w http.ResponseWriter, requestID, version string, a Appender) bool {
+// once written. It writes nothing and returns a's error when a refuses its
+// value.
+func writeAppended(w http.ResponseWriter, requestID, version string, a Appender) error {
 	bp := getBuffer()
 
 	body, err := a.AppendJSON(*bp)
@@ -85,7 +95,7 @@ func writeAppended(w http.ResponseWriter, requestID, version string, a Appender)
 	*bp = body
 	putBuffer(bp)
 
-	return err == nil
+	return err //nolint:wrapcheck // WriteResponse reads errEncodedRefused from it
 }
 
 func writeOK(w http.ResponseWriter, requestID, version string, body []byte) {

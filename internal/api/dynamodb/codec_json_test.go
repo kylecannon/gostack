@@ -79,6 +79,11 @@ func TestJSONEncodeMatchesV2(t *testing.T) {
 	awsjsontest.CheckRandom(t, jsonOutputs, 100)
 }
 
+func TestJSONEncodedMatchesTyped(t *testing.T) {
+	t.Parallel()
+	awsjsontest.CheckEncoded(t, jsonOutputs, 100)
+}
+
 func FuzzJSONEncode(f *testing.F) {
 	awsjsontest.Fuzz(f, jsonOutputs)
 }
