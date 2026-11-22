@@ -29,8 +29,9 @@ import (
 // bytes and the errors stay v2's.
 
 // snapshotFlushSize is how much of the file the writer holds before it hands it
-// to the io.Writer. A message goes in whole, so the buffer is this size and one
-// entry.
+// to the io.Writer. The writer checks before each member of a list or of a map,
+// so the buffer is this size and one member: a message with its body and
+// attributes, a deduplication record, a group id.
 const snapshotFlushSize = 64 << 10
 
 // snapshotBufferSize is the room the writer starts with. A file of a few queues
@@ -84,12 +85,15 @@ func (s *snapshotWriter) flush(minimum int) error {
 
 // list writes n items as a json array, [] for none, as v2 writes a nil or empty
 // slice. A member that is omitted when its list is empty is left out by the
-// caller.
+// caller. It hands the buffer to the writer before an item once the buffer has
+// passed the flush size, so no list, however long, is held whole: the entries
+// of a queue, its deduplication records, the group ids of a FIFO queue, the
+// receipt handles, the move tasks.
 func (s *snapshotWriter) list(n int, item func(i int)) {
 	s.buf = append(s.buf, '[')
 
 	for i := range n {
-		if s.err != nil {
+		if s.flush(snapshotFlushSize) != nil {
 			return
 		}
 
@@ -238,7 +242,6 @@ func (s *snapshotWriter) queue(d *queueData) {
 	o.member("contents")
 	s.contents(&d.Contents)
 	o.end()
-	_ = s.flush(snapshotFlushSize)
 }
 
 func (s *snapshotWriter) contents(d *contentsData) {
@@ -259,8 +262,6 @@ func (s *snapshotWriter) contents(d *contentsData) {
 }
 
 func (s *snapshotWriter) dedup(d *dedupData) {
-	_ = s.flush(snapshotFlushSize)
-
 	o := s.object()
 	o.text("key", d.Key)
 	o.text("original", d.Original)
@@ -271,8 +272,6 @@ func (s *snapshotWriter) dedup(d *dedupData) {
 
 // entry writes one message entry, or null for the nil pointer of a null entry.
 func (s *snapshotWriter) entry(d *entryData) {
-	_ = s.flush(snapshotFlushSize)
-
 	if d == nil {
 		s.buf = append(s.buf, "null"...)
 
@@ -362,6 +361,9 @@ const mapNamesOnStack = 16
 // name that is not valid UTF-8 is mangled by the quoting, and v2 refuses two
 // that come out the same, so v2 writes such a map.
 //
+// Like list, it hands the buffer to the writer before a member once the buffer
+// has passed the flush size: the names deleted lately are not bounded.
+//
 // value takes the member by value: a pointer to a local handed to a function
 // value is taken to escape, and every member would be allocated.
 func writeMap[V any](s *snapshotWriter, m map[string]V, value func(V)) {
@@ -387,6 +389,10 @@ func writeMap[V any](s *snapshotWriter, m map[string]V, value func(V)) {
 	s.buf = append(s.buf, '{')
 
 	for i, name := range names {
+		if s.flush(snapshotFlushSize) != nil {
+			return
+		}
+
 		if i > 0 {
 			s.buf = append(s.buf, ',')
 		}

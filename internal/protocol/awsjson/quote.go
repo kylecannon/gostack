@@ -23,6 +23,11 @@ const (
 // sequence is written as U+FFFD, and no error is reported. It is the quoter for
 // output that must not fail on a string a client sent, such as a snapshot file;
 // the response encoders refuse invalid UTF-8 and use appendStrictQuote.
+//
+// dst must not overlap s: the quoted bytes are written into dst's spare room
+// while s is still being read, so a string that shares memory with that room,
+// such as one made from dst[len(dst):cap(dst)] with unsafe, would be
+// overwritten before it was read.
 func AppendQuote(dst []byte, s string) []byte {
 	out, ok := appendStrictQuote(dst, s)
 	if ok {

@@ -432,32 +432,79 @@ func Test_writeSnapshot_writesALargeFileInPieces(t *testing.T) {
 	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+len(entry.Message.Body)+1000)
 }
 
-// Test_writeSnapshot_writesManyDedupRecordsInPieces covers the records of a FIFO
-// queue's deduplication window, which a flush at each entry does not reach: a
-// window of 100000 records must go out as it is written, not as one buffer.
-func Test_writeSnapshot_writesManyDedupRecordsInPieces(t *testing.T) {
+// manyMembers is how long a list of the file is in the tests of its pieces.
+const manyMembers = 100_000
+
+// manyNames is a hundred thousand names, each unique and a few bytes long.
+func manyNames(prefix string) []string {
+	names := make([]string, manyMembers)
+	for i := range names {
+		names[i] = prefix + strconv.Itoa(i)
+	}
+
+	return names
+}
+
+// oneQueueState is a state with one queue, which holds contents.
+func oneQueueState(contents contentsData) stateData {
+	return stateData{Account: "a", Region: "r", Queues: []queueData{{Name: "q", FIFO: true, Contents: contents}}}
+}
+
+// Test_writeSnapshot_writesManyMembersInPieces covers each list and map of the
+// file that has no bound on its length: a FIFO queue's deduplication window, its
+// groups with a message ready or in flight, the receipt handles of a message, the
+// names deleted lately and the move tasks. Each, at 100000 members, must go out
+// as it is written and not as one buffer: at 4.6 MB for the groups of a queue
+// that is a write of its own, and v2 holds a few KB.
+func Test_writeSnapshot_writesManyMembersInPieces(t *testing.T) {
 	t.Parallel()
 
-	dedup := make([]dedupData, 20000)
+	dedup := make([]dedupData, manyMembers)
 	for i := range dedup {
 		dedup[i] = dedupData{
 			Key: "deduplication-id-" + strconv.Itoa(i), Original: "message-id", Sequence: "18900000000000000000",
 		}
 	}
 
-	f := &snapshotFile{Version: snapshotVersion, Data: snapshotData{States: []stateData{
-		{Account: "a", Region: "r", Queues: []queueData{{Name: "q", FIFO: true, Contents: contentsData{Dedup: dedup}}}},
-	}}}
+	deleted := make(map[string]time.Time, manyMembers)
+	for _, name := range manyNames("deleted-queue-") {
+		deleted[name] = time.Unix(1, 0).UTC()
+	}
 
-	want, err := marshalWithV2(f)
-	require.NoError(t, err)
+	tasks := make([]moveTaskData, manyMembers)
+	for i := range tasks {
+		tasks[i] = moveTaskData{
+			ID: "task-" + strconv.Itoa(i), Source: "arn:aws:sqs:us-east-1:000000000000:source", Started: time.Unix(1, 0).UTC(),
+			Order: uint64(i), Status: "COMPLETED", Moved: 1, ToMove: 1,
+		}
+	}
 
-	var w chunkWriter
+	tests := map[string]stateData{
+		"dedup":   oneQueueState(contentsData{Dedup: dedup}),
+		"ready":   oneQueueState(contentsData{Ready: manyNames("group-")}),
+		"locked":  oneQueueState(contentsData{Locked: manyNames("group-")}),
+		"handles": oneQueueState(contentsData{Entries: []*entryData{{Handles: manyNames("handle-")}}}),
+		"deleted": {Account: "a", Region: "r", Deleted: deleted},
+		"moves":   {Account: "a", Region: "r", MoveTasks: tasks},
+	}
 
-	require.NoError(t, writeSnapshot(&w, f))
-	require.Equal(t, want, w.Bytes())
-	require.Greater(t, w.Len(), 10*snapshotFlushSize)
-	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+1000, "pieces: %v", w.chunks)
+	for name, state := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := &snapshotFile{Version: snapshotVersion, Data: snapshotData{States: []stateData{state}}}
+
+			want, err := marshalWithV2(f)
+			require.NoError(t, err)
+
+			var w chunkWriter
+
+			require.NoError(t, writeSnapshot(&w, f))
+			require.Equal(t, want, w.Bytes())
+			require.Greater(t, w.Len(), 10*snapshotFlushSize)
+			require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+1000, "pieces: %v", w.chunks)
+		})
+	}
 }
 
 func slicesMax(s []int) int {
