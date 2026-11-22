@@ -85,7 +85,7 @@ func Test_ReserveHeap_WeighsTheHeapAndWhatIsReservedAgainstTheLimit(t *testing.T
 	third()
 
 	assert.Zero(t, heap.reserved, "every release gives back its reservation")
-	assert.Zero(t, *collections, "the heap was all live: no collection could make room")
+	assert.Equal(t, 3, *collections, "each refusal a collection could change collected first, the heap being all live")
 }
 
 // Test_ReserveHeap_TheMemoryCapBoundsTheLimit: a memory cap below the Go
@@ -127,7 +127,8 @@ func Test_ReserveHeap_TheMemoryCapBoundsTheLimit(t *testing.T) {
 
 // Test_ReserveHeap_CollectsWhenOnlyGarbageStandsInTheWay: objects the last
 // collection did not find live count until a collection frees them, which
-// ReserveHeap runs only when that would make room.
+// ReserveHeap runs only when it could make room: when what is reserved and
+// the estimate fit the room alone.
 func Test_ReserveHeap_CollectsWhenOnlyGarbageStandsInTheWay(t *testing.T) {
 	const live = 20 << 20
 
@@ -201,12 +202,12 @@ func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
 	room := int64(100 << 20)
 	debug.SetMemoryLimit(bound + HeapSlack + objects + room)
 
-	lane, release, ok := TakeDenseLane(room / 4)
-	require.True(t, ok, "the lane is free and the heap has room")
+	lane, release, err := TakeDenseLane(room/4, room/4)
+	require.NoError(t, err, "the lane is free and the heap has room")
 	assert.Equal(t, room/4, heap.reserved)
 
-	_, _, ok = TakeDenseLane(1)
-	assert.False(t, ok, "the lane is taken")
+	_, _, err = TakeDenseLane(1, 1)
+	require.ErrorIs(t, err, ErrDenseLaneTaken)
 	assert.Equal(t, room/4, heap.reserved, "a refused body reserves nothing")
 
 	lane()
@@ -214,12 +215,12 @@ func Test_TakeDenseLane_OneBodyAtATimeAndNoneWaits(t *testing.T) {
 	assert.Zero(t, heap.reserved)
 	assert.False(t, denseLane.Load(), "the release frees the lane")
 
-	_, _, ok = TakeDenseLane(room + 1)
-	assert.False(t, ok, "no room on the heap")
+	_, _, err = TakeDenseLane(room+1, room+1)
+	require.ErrorIs(t, err, ErrNoHeapRoom)
 	assert.False(t, denseLane.Load(), "a body with no room leaves the lane free")
 
-	nextLane, nextRelease, ok := TakeDenseLane(1)
-	require.True(t, ok)
+	nextLane, nextRelease, err := TakeDenseLane(1, 1)
+	require.NoError(t, err)
 
 	lane()
 	assert.True(t, denseLane.Load(), "a second release of the lane frees nothing")
@@ -260,8 +261,46 @@ func Test_HeapCouldFit_WeighsWhatIsLiveAndReserved(t *testing.T) {
 	assert.False(t, HeapCouldFit(room-50<<20+1))
 	release()
 
-	assert.Equal(t, 1, *collections, "only ReserveHeap collected")
+	assert.Equal(t, 3, *collections, "each refusal a collection could have changed collected first; nothing else did")
 	assert.Zero(t, heap.reserved)
+}
+
+// Test_HeapCouldFit_CollectsBeforeItRefuses: when what the last collection
+// found live leaves no room, HeapCouldFit collects and reads again, so a
+// value that died since, an earlier request's, does not refuse the body. What
+// a collection leaves live still refuses it. A body past the room with nothing
+// live is refused without a collection (HeapRoomFor).
+func Test_HeapCouldFit_CollectsBeforeItRefuses(t *testing.T) {
+	collections := fakeHeap(t, 0, 0)
+
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	room := int64(100 << 20)
+	debug.SetMemoryLimit(bound + HeapSlack + room)
+
+	// The last collection ran while 80 MiB of an earlier value were live; a
+	// collection now leaves 20 MiB.
+	live, after := int64(80<<20), int64(20<<20)
+	heap.read = func() (int64, int64) { return live, live }
+	heap.collect = func() {
+		*collections++
+		live = after
+	}
+
+	assert.True(t, HeapCouldFit(room-after), "the earlier value is garbage")
+	assert.Equal(t, 1, *collections)
+
+	assert.False(t, HeapCouldFit(room-after+1), "what is still live after a collection counts")
+	assert.Equal(t, 2, *collections)
+
+	assert.False(t, HeapRoomFor(room+1))
+	assert.False(t, HeapCouldFit(room+1), "no collection makes room past the room itself")
+	assert.Equal(t, 2, *collections, "and none runs")
+
+	assert.True(t, HeapRoomFor(room))
 }
 
 // Test_BodiesWait_InEitherQueue:BodiesWait reports a body or a decoding
@@ -352,22 +391,22 @@ func Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered(t *testing.T) {
 
 	first := &Charge{}
 
-	lane, release, ok := TakeDenseLane(room / 2)
-	require.True(t, ok)
+	lane, release, err := TakeDenseLane(room/2, room/2)
+	require.NoError(t, err)
 	first.KeepHeap(release)
 	lane() // decoded: the response is being written
 
 	assert.False(t, denseLane.Load(), "the lane is free once decoded")
 	assert.Equal(t, room/2, heap.reserved, "the reservation is still held")
 
-	_, _, ok = TakeDenseLane(room/2 + 1)
-	assert.False(t, ok, "the first body's reservation still counts")
+	_, _, err = TakeDenseLane(room/2+1, room/2+1)
+	require.ErrorIs(t, err, ErrNoHeapRoom, "the first body's reservation still counts")
 	assert.False(t, denseLane.Load())
 
 	second := &Charge{}
 
-	lane, release, ok = TakeDenseLane(room / 2)
-	require.True(t, ok, "a second body takes the lane while the first is answered")
+	lane, release, err = TakeDenseLane(room/2, room/2)
+	require.NoError(t, err, "a second body takes the lane while the first is answered")
 	second.KeepHeap(release)
 	lane()
 

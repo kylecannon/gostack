@@ -50,7 +50,9 @@ var ErrTooLarge = &awserr.Error{
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
 // holds the bound no longer than one refused there. One body at a time is
 // walked and decoded past the budget (protocol.TakeDenseLane): another that
-// passes it meanwhile is refused with ErrTooLarge where its walk passes it.
+// passes it meanwhile, or while other requests wait for room under the
+// in-flight bound, is answered protocol.ThrottledJSON where its walk passes
+// it, since it could be decoded once they are done.
 // The lane is given back as soon as DecodeWithin returns, on every path. Each
 // reservation lasts until the request is answered when hold keeps it
 // (HeapKeeper.KeepHeap), and until the body is decoded otherwise.
@@ -151,9 +153,16 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 // with the heap the walk has bounded so far and the bytes it has read.
 type moveFunc func(heap, read int64) error
 
-// errNoRoom stops a walk whose body found no room on the heap, or found the
-// dense lane taken (moveBody).
-var errNoRoom = errors.New("no room for the body on the heap")
+var (
+	// errNoRoom stops a walk whose body found no room on the heap (moveBody):
+	// the answer at protocol.DecodeFactor, ErrTooLarge.
+	errNoRoom = errors.New("no room for the body on the heap")
+	// errBusy stops a walk whose body found the dense lane taken, or requests
+	// waiting for room under the in-flight bound (moveBody): room it could
+	// have once they are done, so the answer is a throttle, which an SDK
+	// retries.
+	errBusy = errors.New("the dense lane is busy")
+)
 
 // moveBody runs when the walk of body passes protocol.DecodeBudget, where it
 // would stop for a service without its own factor. It takes the dense lane
@@ -161,22 +170,25 @@ var errNoRoom = errors.New("no room for the body on the heap")
 // lane until decoding returns and the reservation as r keeps it, and, when the
 // hold is a protocol.HeapKeeper, gives back what the body and its decoding
 // hold of the in-flight bound, so that the room other requests' bodies wait
-// for is free again as soon as it would be were the body refused. It fails
-// with errNoRoom, holding what it held, when another body has the lane or the
-// heap has no room: the answer at protocol.DecodeFactor, without waiting. It
-// fails the same way, before taking the lane, while any request would still
-// wait for room under the in-flight bound once the body gave back what it
-// holds of it (protocol.BodiesWait): the queue then drains one body at a time,
-// and a dense body walked and decoded beside it, or walked to its end only to
-// be refused, slows what every waiting request waits on. A request that waits
+// for is free again as soon as it would be were the body refused. It fails,
+// holding what it held and without waiting, with errNoRoom when the heap has
+// no room, and with errBusy when another body has the lane. It fails with
+// errBusy too, before taking the lane, while any request would still wait for
+// room under the in-flight bound once the body gave back what it holds of it
+// (protocol.BodiesWait): the queue then drains one body at a time, and a
+// dense body walked and decoded beside it, or walked to its end only to be
+// refused, slows what every waiting request waits on. A request that waits
 // only on the body's own bytes does not count: moving the body lets it in.
 //
-// It also fails when the heap could not hold the body and the heap its walk
-// would end at, projected from the heap the first read bytes of it hold, so
-// that a body the final reservation would refuse is not walked to its end
-// first. The projection only refuses early: what the walk bounds is still
-// reserved once it ends, and a body the projection admits can still be
-// refused there.
+// The heap's room is weighed for the body and the heap its walk would end at,
+// projected from the heap the first read bytes of it hold, so that a body the
+// final reservation would refuse is not walked to its end first: before
+// anything else with nothing counted live (protocol.HeapRoomFor), so a body
+// that could never fit is refused as too large at no cost, and with the lane
+// held against what is live, after a collection when the last one leaves no
+// room (protocol.HeapCouldFit). The projection only refuses early: what the
+// walk bounds is still reserved once it ends, and a body the projection
+// admits can still be refused there.
 func moveBody(body []byte, r *reservations, heap, read int64) error {
 	keeper, keeps := r.hold.(protocol.HeapKeeper)
 
@@ -185,12 +197,22 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 		own = keeper.PoolHeld()
 	}
 
-	if protocol.BodiesWait(own) || !protocol.HeapCouldFit(int64(len(body))+projectHeap(heap, read, len(body))) {
+	n := int64(len(body))
+	peak := n + projectHeap(heap, read, len(body))
+
+	switch {
+	case !protocol.HeapRoomFor(peak):
 		return errNoRoom
+	case protocol.BodiesWait(own):
+		return errBusy
 	}
 
-	lane, release, ok := protocol.TakeDenseLane(int64(len(body)))
-	if !ok {
+	lane, release, err := protocol.TakeDenseLane(n, peak)
+	if errors.Is(err, protocol.ErrDenseLaneTaken) {
+		return errBusy
+	}
+
+	if err != nil {
 		return errNoRoom
 	}
 
@@ -226,8 +248,9 @@ func projectHeap(heap, read int64, n int) int64 {
 // and protocol.FreeDecode when the bound is charged, so the charge is at
 // most FreeDecode beyond the body's own bytes. Any other body is walked token by
 // token (walkCost), which is as costly as decoding it. When move is not nil,
-// the walk runs it once its cost passes protocol.DecodeBudget (moveBody), and
-// a move that fails is ErrTooLarge too.
+// the walk runs it once its cost passes protocol.DecodeBudget (moveBody): a
+// move that finds no room is ErrTooLarge too, and one that finds the dense
+// lane busy is protocol.ThrottledJSON.
 func decodeCost(body []byte, p *plan, budget, unwalked int64, move moveFunc) (cost, heap int64, err *awserr.Error) {
 	structure := decodePasses * structureUnits(body) * p.perUnit
 	bound := decodePasses*int64(len(body)) + structure
@@ -241,8 +264,12 @@ func decodeCost(body []byte, p *plan, budget, unwalked int64, move moveFunc) (co
 		w.mark, w.move = protocol.DecodeBudget(len(body))/decodePasses, move
 	}
 
-	walked, heap, over := w.walk(p)
-	if over {
+	walked, heap, stop := w.walk(p)
+
+	switch {
+	case errors.Is(stop, errBusy):
+		return 0, 0, protocol.ThrottledJSON()
+	case stop != nil:
 		return 0, 0, ErrTooLarge
 	}
 
@@ -537,18 +564,20 @@ var errOverBudget = errors.New("over budget")
 func walkCost(body []byte, p *plan, budget int64) (cost, heap int64, over bool) {
 	w := walker{dec: newWalkDecoder(body), limit: budget}
 
-	return w.walk(p)
+	cost, heap, stop := w.walk(p)
+
+	return cost, heap, stop != nil
 }
 
-// walk is walkCost for a walker already set up; a walk whose move fails
-// (walker.mark) reports over.
-func (w *walker) walk(p *plan) (cost, heap int64, over bool) {
+// walk is walkCost for a walker already set up, which returns what stopped
+// it: errOverBudget, or the error of a move that failed (walker.mark).
+func (w *walker) walk(p *plan) (cost, heap int64, stop error) {
 	err := w.value(p)
-	if errors.Is(err, errOverBudget) || errors.Is(err, errNoRoom) {
-		return 0, 0, true
+	if errors.Is(err, errOverBudget) || errors.Is(err, errNoRoom) || errors.Is(err, errBusy) {
+		return 0, 0, err
 	}
 
-	return w.cost, w.heap + w.peak, false
+	return w.cost, w.heap + w.peak, nil
 }
 
 func newWalkDecoder(body []byte) *jsontext.Decoder {

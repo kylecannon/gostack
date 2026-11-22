@@ -280,8 +280,8 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 		move = math.MaxInt64 / 4 // a body the heap never has room for
 	}
 
-	lane, release, ok := TakeDenseLane(move)
-	if !ok {
+	lane, release, err := TakeDenseLane(move, move)
+	if err != nil {
 		tally.refusedMove.Add(1)
 
 		return
@@ -302,7 +302,8 @@ func accountingDecode(r *rand.Rand, c *Charge, m *BodyMeter, cancel context.Canc
 			tally.reservationGone.Add(1)
 		}
 
-		if next, nextRelease, ok := TakeDenseLane(0); ok {
+		next, nextRelease, err := TakeDenseLane(0, 0)
+		if err == nil {
 			tally.holdLane()
 			tally.overlap.Add(1)
 			tally.lanes.Add(-1)

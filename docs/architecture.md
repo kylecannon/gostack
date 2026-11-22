@@ -399,11 +399,14 @@ How each piece is bounded, and why this way:
   bytes charged, a model of what decoding allocates, and not the heap: a legal
   16 MiB DynamoDB body of numbers is charged 64 MiB and keeps about 330 MiB live
   (below, "Memory under a container limit"). Start-up reads the memory the
-  process may use: its cgroup memory limit (v2 `memory.max`, v1
-  `memory.limit_in_bytes`, read from the process's own cgroup and then the
-  mount's root; `max`, a v1 limit of 2^60 or more and an absent file mean
-  none), or else the machine's `MemTotal` in `/proc/meminfo`, which is what a
-  `docker run` with no `--memory` gets. When `GOMEMLIMIT` is not set in the
+  process may use: the smaller of its cgroup memory limit and the machine's
+  `MemTotal` in `/proc/meminfo`, which alone is what a `docker run` with no
+  `--memory` gets, and which wins over a `--memory` above it. The cgroup limit
+  is the smallest v2 `memory.max` of the process's own cgroup and every cgroup
+  above it up to the mount's root, all of which the kernel holds it to; only
+  when none sets one, v1 `memory.limit_in_bytes`, from the process's own
+  cgroup and then the mount's root. `max`, a v1 limit of 2^60 or more and an
+  absent file mean none. When `GOMEMLIMIT` is not set in the
   environment it sets the Go memory limit to 85% of that memory
   (`debug.SetMemoryLimit`, `cmd/gostack/memory-limit.go`) and logs the two
   numbers once at INFO. A `GOMEMLIMIT` in the environment, `off` included, is
@@ -412,8 +415,7 @@ How each piece is bounded, and why this way:
   Go limit is left unset. The limit is soft: it makes the
   collector work against it, which a heap that is mostly live cannot satisfy.
   So a decode that would keep more of the heap than the limit is refused as a
-  last resort (below). The limits
-  of the cgroups above the process's own are not read.
+  last resort (below).
 
 Headroom: what decoding the largest legal request of each shape charges
 against `DecodeBudget` at the default factor of 2. json charges both passes;
@@ -501,10 +503,12 @@ its length, kept until the request is answered) and the request gives back
 what its body and its planned decoding hold of the pool (`awsjson`'s
 `moveBody`, `protocol.HeapKeeper.ReleasePool`), so a smaller request waiting
 for the pool is admitted as soon as it would be were the body refused. A body
-that finds the lane taken by another, or no room for its bytes, is refused
-there at once, holding the pool until it is answered as a refused body does:
-nothing waits for the lane, so no dense body sits on the heap queued behind
-another. Without the lane, 64 dense senders put about 30 bodies of 10 MB on
+that finds no room for its bytes is refused there at once with the decode
+budget's answer, and one that finds the lane taken by another is answered
+`400 ThrottlingException` at once, which SDKs retry, since it fits once the
+other is decoded; either holds the pool until it is answered, as a refused
+body does. Nothing waits for the lane, so no dense body sits on the heap
+queued behind another. Without the lane, 64 dense senders put about 30 bodies of 10 MB on
 the heap at once (two at a time on the pool) and a 300 KiB `PutItem` on
 another connection took up to 1.5 s longer than without the gain. The lane
 bounds the walks and decodes past the budget at once, their CPU and the
@@ -521,7 +525,7 @@ constant, not a setting.
 The lane is taken only while no request would still wait for the in-flight
 bound once the body gave back what it holds of it (`protocol.BodiesWait`,
 either queue, in the order the pool lets them in); otherwise the body is
-refused there as every other service refuses it
+answered `400 ThrottlingException` there
 (`Test_DecodeWithin_NoDenseBodyWhileABodyWaits`). A request that waits only
 on the dense body's own bytes does not count, since the move lets it in: a
 15.5 MB dense `BatchWriteItem` sent beside a 9.75 MB sparse one was refused
@@ -534,23 +538,31 @@ them waits for the queue to drain. A dense decode beside that drain (290 to
 356 MB of heap at 512 MiB against main's 66 MB, and twice the collector's
 CPU) or a walk to the end of a body then refused (37 to 41 ms against 4 ms)
 slowed the drain, and with it a 300 KiB `PutItem` on another connection, by
-about 0.2 s (SQ-474). Under such load a dense body is answered as on main;
-one that reaches a server with nothing queued is still served. At the same
-point a body is refused, before the pool is given back, when its bytes and
-the heap its walk is projected to end at could not fit even after a
-collection (`protocol.HeapCouldFit`, what the last collection found live,
-what is reserved and the projection against the room `ReserveHeap` weighs);
-the projection scales the heap the walk bounded so far by the bytes not yet
+about 0.2 s (SQ-474). Under such load a dense body is throttled; one that
+reaches a server with nothing queued is still served. At the same point a
+body is refused, before the pool is given back, when its bytes and the heap
+its walk is projected to end at could not fit: at once, before the lane, when
+they pass the room with nothing live (`protocol.HeapRoomFor`), and with the
+lane held when they do not fit beside what is live (`protocol.HeapCouldFit`).
+What the last collection found live can be stale, a collection that ran while
+an earlier body's value was live, so when it leaves no room `HeapCouldFit`
+runs a collection, or waits for the one running, and reads again before it
+refuses: a dense body sent to a missing table and answered
+`ResourceNotFoundException`, then sent again to a table that exists, was
+refused on the first's garbage until then
+(`Test_HeapCouldFit_CollectsBeforeItRefuses`,
+`Test_decodeBudget_aBodyAfterOneThatDiedIsServed`). The projection scales the heap the walk bounded so far by the bytes not yet
 read (`Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark`). It
 only refuses earlier: a body it admits is still reserved for its walked
 bound at the end, so the bound below still covers what decoding keeps.
 The projection depends on item order: a dense item ahead of sparse ones is
 projected over the whole body and can be refused at the mark, while the same
 items with the dense one last are walked to the end and served, as contract
-C allows. Two dense bodies decoded at once get one served and
-one the answer every other service gives
-(`Test_DecodeWithin_OneDenseBodyAtATime`), and which one is served varies
-from run to run. The heap's objects count the body too while it is live,
+C allows. Two dense bodies decoded at once get one served and the other
+served too or throttled, never refused as too large
+(`Test_DecodeWithin_OneDenseBodyAtATime`,
+`Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled`), and which one
+is served first varies from run to run. The heap's objects count the body too while it is live,
 so the reservation counts it twice, which only refuses earlier. The rest of
 the walk and the decode then run on the heap alone. The body is decoded only
 when the heap it keeps fits under the Go memory limit, and refused with the
@@ -574,9 +586,12 @@ than gostack allows") otherwise:
    other decodes have reserved and the bound fit the Go memory limit less the
    in-flight bound (64 MiB, which every body and decode the pool admits stays
    under) and `protocol.HeapSlack` (48 MiB: the runtime's own structures and
-   stacks, the spans' unused room and what a handler builds). When only
-   garbage stands in the way (`/gc/heap/live:bytes` would fit), one request
-   at a time runs a collection and reads again. Reading and reserving are one
+   stacks, the spans' unused room and what a handler builds). When the heap
+   stands in the way and the bound and what is reserved would fit were
+   nothing live, it runs a collection, one request at a time while any other
+   waits for it, and reads again; `/gc/heap/live:bytes` alone does not decide
+   it, since the last collection can have run while an earlier body's value
+   was live. Reading and reserving are one
    step under a lock, so decodes at once each see the others' reservations.
 3. Both reservations, the body's and the decode's, are kept until the
    request is answered (`protocol.HeapKeeper`, the request's `Charge`), so
@@ -593,8 +608,12 @@ than gostack allows") otherwise:
    `GOMEMLIMIT` above the container's limit does not widen the room past it.
    With neither a Go limit nor a cap (darwin, where no memory is read, and
    tests) it is 85% of a fixed 1 GiB (`protocol.UnknownMemory`): 870 MiB, so
-   758 MiB of room, which every legal body fits beside an empty store
-   (`Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts`,
+   758 MiB of room, which every legal body fits beside an empty store: the
+   densest batch, 25 lists of 1,800 maps nested 30 deep, is bounded at 567
+   MiB, which with its 16 MiB of body leaves 175 MiB
+   (`Test_decodeBudget_noMemoryLimitServesTheDensestBatches`, with 25 x 64,000
+   numbers at 367 MiB and 25 x 74,000 empty maps at 453 MiB;
+   `Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts`,
    `Test_ReserveHeap_TheMemoryCapBoundsTheLimit`).
 
 `Test_heapEstimate_coversLiveHeap` decodes the shapes that broke the earlier
@@ -677,7 +696,10 @@ so a Go limit of 20.8 GiB):
 Scan a round at every concurrency (the rest of the round gets `main`'s
 answer), and the first `BatchWriteItem` of 25 items of 42,000 numbers, and of
 39,000 attributes, to the existing table; the second send of each is refused,
-because the first's items are now live. Nothing else is served: the 25 x
+because the first's items are now live. These numbers predate the collection
+before a refusal (above) and the throttle for a busy lane: a body that then
+followed one whose value had died, such as the second send of 39,000
+attributes to the missing table, could be refused on its garbage. Nothing else is served: the 25 x
 64,000-number body's bound (about 330 MiB live) does not fit the room. At
 256 MiB nothing past the decode budget fits, so every answer is `main`'s.
 With no limit every Scan is served at least once a round at every

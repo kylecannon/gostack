@@ -117,9 +117,11 @@ func Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts(t *testing.T) {
 	}
 
 	// No legal body keeps more than the 758 MiB of room the unknown memory
-	// leaves (the densest batch keeps 355 MiB), so the in-flight bound takes
-	// all but 64 MiB of it: 1,000,000 numbers in a 10 MB body keep more than
-	// that at their peak, and are refused.
+	// leaves: the densest batch, 25 lists of 1,800 maps nested 30 deep, is
+	// estimated at 567 MiB, with 16 MiB of body beside it, a margin of 175
+	// MiB (Test_decodeBudget_noMemoryLimitServesTheDensestBatches). So the
+	// in-flight bound takes all but 64 MiB of it: 1,000,000 numbers in a 10 MB
+	// body keep more than that at their peak, and are refused.
 	protocol.SetInFlight(protocol.SoftLimit(protocol.UnknownMemory) - protocol.HeapSlack - 64<<20)
 
 	got := s.call(t, usEast1, opPut, `{"TableName":"open","Item":`+denseItem("over", numberList(1_000_000))+`}`)
@@ -184,6 +186,144 @@ func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
 	assert.Zero(t, held, "every request gives back what it held")
 }
 
+// mapChain is a map nested 30 levels deep, one entry each, around a number:
+// under an item's list, the deepest DynamoDB allows.
+var mapChain = strings.Repeat(`{"M":{"a":`, 30) + oneNumber + strings.Repeat(`}}`, 30)
+
+// oneNumber is the smallest number value.
+const oneNumber = `{"N":"1"}`
+
+// denseBatch is a BatchWriteItem of 25 items to table, each a list of count
+// copies of element: the densest batches DynamoDB accepts, at 16 MiB.
+func denseBatch(table, element string, count int) string {
+	elements := strings.TrimSuffix(strings.Repeat(element+",", count), ",")
+
+	items := make([]string, 0, batchItems)
+	for i := range batchItems {
+		items = append(items, `{"PutRequest":{"Item":`+denseItem(fmt.Sprint("i", i), elements)+`}}`)
+	}
+
+	return `{"RequestItems":{"` + table + `":[` + strings.Join(items, ",") + `]}}`
+}
+
+// Test_decodeBudget_noMemoryLimitServesTheDensestBatches: with no Go memory
+// limit and no memory cap, each of the densest batches DynamoDB accepts is
+// served against the room of protocol.UnknownMemory, each beside an empty
+// store: the table the batch before it filled is deleted, its items garbage.
+func Test_decodeBudget_noMemoryLimitServesTheDensestBatches(t *testing.T) {
+	noMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	s := newStack(t)
+
+	for _, tt := range []struct {
+		name, element string
+		count         int
+	}{
+		{"25 x 64,000 numbers", oneNumber, 64_000},
+		{"25 x 74,000 empty maps", `{"M":{}}`, 74_000},
+		{"25 x 1,800 maps nested 30 deep", mapChain, 1_800},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := denseBatch("dense", tt.element, tt.count)
+			require.Greater(t, len(body), 15<<20, "the batch is near the cap")
+			require.Less(t, int64(len(body)), protocol.DefaultMaxBody)
+
+			s.ok(t, opCreate, hashTable("dense"))
+			t.Cleanup(func() { s.ok(t, "DeleteTable", `{"TableName":"dense"}`) })
+
+			got := s.call(t, usEast1, opBatchWrite, body)
+			assert.Equal(t, http.StatusOK, got.status, got.body[:min(len(got.body), 300)])
+		})
+	}
+
+	_, held := protocol.InFlight()
+	assert.Zero(t, held, "every request gives back what it held")
+}
+
+// Test_decodeBudget_aBodyAfterOneThatDiedIsServed: a dense batch sent to a
+// table that does not exist is decoded and answered ResourceNotFoundException,
+// and its value is garbage once it is answered; the same batch sent next to
+// a table that does exist is served, though the last collection ran while the
+// first one's value was live.
+func Test_decodeBudget_aBodyAfterOneThatDiedIsServed(t *testing.T) {
+	noMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("chains"))
+
+	missing := denseBatch("missing", mapChain, 1_800)
+	got := s.call(t, usEast1, opBatchWrite, missing)
+	require.Equal(t, http.StatusBadRequest, got.status)
+	require.Contains(t, got.body, "ResourceNotFoundException", "the first body is decoded")
+
+	got = s.call(t, usEast1, opBatchWrite, strings.Replace(missing, `"missing"`, `"chains"`, 1))
+	assert.Equal(t, http.StatusOK, got.status, got.body[:min(len(got.body), 300)])
+}
+
+// Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled: two dense
+// batches of 7.5 MB sent at once, round after round. One holds the dense lane
+// and is served; the other is served too or answered with a throttle, which
+// an SDK retries, and never refused as too large: it fits once the first is
+// decoded.
+func Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled(t *testing.T) {
+	const rounds = 4
+
+	roomyMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	s := newStack(t)
+	s.ok(t, opCreate, hashTable("pair"))
+
+	server := httptest.NewServer(s.handler)
+	t.Cleanup(server.Close)
+
+	body := denseBatch("pair", oneNumber, 30_000)
+	require.Greater(t, len(body), 7<<20)
+
+	for round := range rounds {
+		var (
+			wg      sync.WaitGroup
+			answers [2]string
+			status  [2]int
+		)
+
+		start := make(chan struct{})
+
+		for i := range answers {
+			wg.Go(func() {
+				<-start
+
+				status[i], answers[i] = sendTo(t, server, opBatchWrite, body)
+			})
+		}
+
+		close(start)
+		wg.Wait()
+
+		served := 0
+
+		for i := range answers {
+			switch {
+			case status[i] == http.StatusOK:
+				served++
+			case status[i] == http.StatusBadRequest && strings.Contains(answers[i], "ThrottlingException"):
+			default:
+				t.Errorf("round %d, body %d: %d %s", round, i, status[i], answers[i][:min(len(answers[i]), 200)])
+			}
+		}
+
+		assert.Positive(t, served, "round %d: one body is served", round)
+	}
+
+	_, held := protocol.InFlight()
+	assert.Zero(t, held, "every request gives back what it held")
+}
+
 // Test_decodeBudget_worstLegalBody sends, for each operation that takes
 // AttributeValues, the densest body its documented limits allow, and every one
 // is served: none is refused for decoding into more than its budget. The
@@ -191,7 +331,7 @@ func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
 // of the smallest values at 400 KB of item, and lists nested to the depth
 // limit. The batch and the transaction are the largest each admits.
 func Test_decodeBudget_worstLegalBody(t *testing.T) {
-	roomyMemoryLimit(t)
+	roomyMemoryLimit(t) // the batch's items stay live beside the transaction: 758 MiB holds each alone, not both
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("dense"))
@@ -265,7 +405,7 @@ func Test_decodeBudget_worstLegalBody(t *testing.T) {
 // answers ValidationException, as it does for any key of the wrong shape, and
 // the budget does not.
 func Test_decodeBudget_startKeyIsAdmittedAndAnsweredByTheHandler(t *testing.T) {
-	roomyMemoryLimit(t)
+	noMemoryLimit(t)
 
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("keys"))

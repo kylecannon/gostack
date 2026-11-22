@@ -154,8 +154,8 @@ func Test_DecodeWithin_ARefusedMoveIsMainsAnswer(t *testing.T) {
 func requireLaneFree(t *testing.T) {
 	t.Helper()
 
-	lane, release, ok := protocol.TakeDenseLane(0)
-	require.True(t, ok, "the dense lane is free")
+	lane, release, err := protocol.TakeDenseLane(0, 0)
+	require.NoError(t, err, "the dense lane is free")
 	lane()
 	release()
 }
@@ -167,8 +167,8 @@ type plainHold struct{}
 func (plainHold) HoldDecode(int64) (int64, error) { return math.MaxInt64, nil }
 
 // Test_DecodeWithin_OneDenseBodyAtATime: while another body holds the dense
-// lane, a body past DecodeBudget is answered as a service at
-// protocol.DecodeFactor answers it, ErrTooLarge, at once and holding nothing.
+// lane, a body past DecodeBudget is answered with a throttle, which an SDK
+// retries, at once and holding nothing.
 // Once the lane is free it is served, and gives the lane back when it is
 // decoded while its request keeps its reservations, so a second dense body
 // is served while the first is still being answered. Only a body whose walk
@@ -183,14 +183,14 @@ func Test_DecodeWithin_OneDenseBodyAtATime(t *testing.T) {
 	body := denseBody(300_000)
 	budget := protocol.DecodeBudgetAt(len(body), 256)
 
-	lane, release, ok := protocol.TakeDenseLane(0)
-	require.True(t, ok)
+	lane, release, laneErr := protocol.TakeDenseLane(0, 0)
+	require.NoError(t, laneErr)
 
 	refused := &recordingHold{}
 	t.Cleanup(refused.release)
 
 	_, _, err := DecodeWithin[denseValue](body, budget, refused)
-	assert.Same(t, ErrTooLarge, err, "the lane is taken: main's answer")
+	assert.Equal(t, protocol.ThrottledJSON(), err, "the lane is taken: a throttle")
 	assert.Empty(t, refused.steps, "nothing is reserved and the pool is kept")
 
 	lane()
@@ -300,10 +300,10 @@ func Test_DecodeWithin_ABodyTheHeapCouldNotHoldIsRefusedAtTheMark(t *testing.T) 
 }
 
 // Test_DecodeWithin_NoDenseBodyWhileABodyWaits: while a request waits for
-// room under the in-flight bound, a body past DecodeBudget is answered as a
-// service at protocol.DecodeFactor answers it, ErrTooLarge, at once and holding
-// nothing, so that the queue drains as fast as it does when such bodies are
-// refused. Once nothing waits, the same body is served.
+// room under the in-flight bound, a body past DecodeBudget is answered with a
+// throttle at once, holding nothing, so that the queue drains as fast as it
+// does when such bodies are refused. Once nothing waits, the same body is
+// served.
 func Test_DecodeWithin_NoDenseBodyWhileABodyWaits(t *testing.T) {
 	withMemoryLimit(t, 8<<30)
 
@@ -343,7 +343,7 @@ func Test_DecodeWithin_NoDenseBodyWhileABodyWaits(t *testing.T) {
 	t.Cleanup(refused.release)
 
 	_, _, decodeErr := DecodeWithin[denseValue](body, budget, refused)
-	assert.Same(t, ErrTooLarge, decodeErr, "a body waits for the bound: main's answer")
+	assert.Equal(t, protocol.ThrottledJSON(), decodeErr, "a body waits for the bound: a throttle")
 	assert.Empty(t, refused.steps, "nothing is reserved and the pool is kept")
 
 	first.Release()

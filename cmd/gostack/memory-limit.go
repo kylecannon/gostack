@@ -17,8 +17,8 @@ import (
 // limit anyone set.
 const cgroupV1Unlimited = 1 << 60
 
-// setMemoryLimit reads the memory the process may use, its cgroup's memory
-// limit or else its machine's memory (/proc/meminfo's MemTotal), and returns
+// setMemoryLimit reads the memory the process may use (processMemory), the
+// smaller of its cgroup's memory limit and its machine's memory, and returns
 // protocol.SoftLimit of it, the cap on what the decode budget takes as the Go
 // memory limit (protocol.SetMemoryCap). When GOMEMLIMIT is not set it also
 // gives the Go runtime that soft memory limit, and logs it once: the collector
@@ -30,11 +30,7 @@ const cgroupV1Unlimited = 1 << 60
 // small to keep. root is the file system root the files are read below; set is
 // debug.SetMemoryLimit.
 func setMemoryLimit(getenv func(string) string, root string, set func(int64) int64) int64 {
-	memory, source, ok := cgroupMemoryLimit(root)
-	if !ok {
-		memory, source, ok = machineMemory(root)
-	}
-
+	memory, source, ok := processMemory(root)
 	if !ok {
 		return 0
 	}
@@ -59,6 +55,25 @@ func setMemoryLimit(getenv func(string) string, root string, set func(int64) int
 		"memory_limit", soft, "memory", memory, "percent", protocol.MemoryPercent, "source", source)
 
 	return soft
+}
+
+// processMemory returns the memory the process may use, read below root, and
+// the file it came from: the smaller of its cgroup's limit (cgroupMemoryLimit)
+// and the machine's memory (machineMemory), since a limit set above the
+// machine's memory leaves the machine's. It reports false when it reads
+// neither.
+func processMemory(root string) (memory int64, source string, ok bool) {
+	limit, limitSource, limited := cgroupMemoryLimit(root)
+	machine, machineSource, known := machineMemory(root)
+
+	switch {
+	case limited && (!known || limit <= machine):
+		return limit, limitSource, true
+	case known:
+		return machine, machineSource, true
+	default:
+		return 0, "", false
+	}
 }
 
 // machineMemory returns the memory of the machine, MemTotal in /proc/meminfo
@@ -98,13 +113,14 @@ func machineMemory(root string) (memory int64, source string, ok bool) {
 
 // cgroupMemoryLimit returns the memory limit in bytes of the cgroup this
 // process runs in, read below root, and the file it came from. cgroup v2's
-// memory.max is looked for in the process's own cgroup first
-// (/proc/self/cgroup) and then at the mount's root, which is the container's
-// own cgroup when it has a namespace of its own; cgroup v1's
-// memory.limit_in_bytes the same way. The first of them that sets a limit
-// gives it: a file that says max, or no limit, or is missing, passes to the
-// next. It reports false when none sets one. The limits of the cgroups between
-// the process's own and the mount's root are not read.
+// memory.max is read in the process's own cgroup (/proc/self/cgroup) and in
+// each cgroup above it up to the mount's root, which is the container's own
+// cgroup when it has a namespace of its own; the kernel holds the process to
+// every one of them, so the smallest gives the limit. Only when none of them
+// sets one is cgroup v1's memory.limit_in_bytes looked for, in the process's
+// own cgroup and then at the mount's root, the first that sets one giving it.
+// A file that says max, or no limit, or is missing, sets none. It reports
+// false when none sets one.
 func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 	fsys, err := os.OpenRoot(root)
 	if err != nil {
@@ -116,26 +132,46 @@ func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 	own, _ := fsys.ReadFile("proc/self/cgroup")
 	v2, v1 := ownCgroups(string(own))
 
-	candidates := []string{
-		"sys/fs/cgroup" + v2 + "/memory.max",
-		"sys/fs/cgroup/memory.max",
-		"sys/fs/cgroup/memory" + v1 + "/memory.limit_in_bytes",
-		"sys/fs/cgroup/memory/memory.limit_in_bytes",
-	}
-
-	for _, file := range candidates {
-		text, err := fsys.ReadFile(file)
-		if err != nil {
-			continue
+	for dir := v2; ; dir = path.Dir(dir) {
+		if dir == "/" {
+			dir = ""
 		}
 
-		limit, ok = parseCgroupLimit(string(text))
-		if ok {
-			return limit, "/" + file, true
+		file := "sys/fs/cgroup" + dir + "/memory.max"
+		if n, set := readCgroupLimit(fsys, file); set && (!ok || n < limit) {
+			limit, source, ok = n, "/"+file, true
+		}
+
+		if dir == "" {
+			break
+		}
+	}
+
+	if ok {
+		return limit, source, true
+	}
+
+	for _, file := range []string{
+		"sys/fs/cgroup/memory" + v1 + "/memory.limit_in_bytes",
+		"sys/fs/cgroup/memory/memory.limit_in_bytes",
+	} {
+		if n, set := readCgroupLimit(fsys, file); set {
+			return n, "/" + file, true
 		}
 	}
 
 	return 0, "", false
+}
+
+// readCgroupLimit is parseCgroupLimit of file below fsys; a file it cannot
+// read sets no limit.
+func readCgroupLimit(fsys *os.Root, file string) (int64, bool) {
+	text, err := fsys.ReadFile(file)
+	if err != nil {
+		return 0, false
+	}
+
+	return parseCgroupLimit(string(text))
 }
 
 // ownCgroups returns the path of the process's cgroup in cgroup v2's hierarchy

@@ -27,6 +27,7 @@ func cgroupRoot(t *testing.T, files map[string]string) string {
 
 const (
 	container512 = "536870912\n"
+	container1Gi = "1073741824\n"
 	procCgroup   = "proc/self/cgroup"
 	rootFile     = "sys/fs/cgroup/memory.max"
 	rootMemory   = "/sys/fs/cgroup/memory.max"
@@ -83,6 +84,30 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 			wantOK:     true,
 		},
 		{
+			name: "v2 limit of a cgroup between the process's own and the mount's root",
+			files: map[string]string{
+				"sys/fs/cgroup/kubepods/pod1/memory.max":         container1Gi,
+				"sys/fs/cgroup/kubepods/pod1/gostack/memory.max": unlimited,
+				"sys/fs/cgroup/kubepods/memory.max":              unlimited,
+				procCgroup:                                       "0::/kubepods/pod1/gostack\n",
+			},
+			wantLimit:  1 << 30,
+			wantSource: "/sys/fs/cgroup/kubepods/pod1/memory.max",
+			wantOK:     true,
+		},
+		{
+			name: "v2 the smallest of the limits above the process holds it",
+			files: map[string]string{
+				"sys/fs/cgroup/kubepods/pod1/gostack/memory.max": container1Gi,
+				"sys/fs/cgroup/kubepods/pod1/memory.max":         container512,
+				rootFile:                                         "2147483648\n",
+				procCgroup:                                       "0::/kubepods/pod1/gostack\n",
+			},
+			wantLimit:  512 << 20,
+			wantSource: "/sys/fs/cgroup/kubepods/pod1/memory.max",
+			wantOK:     true,
+		},
+		{
 			name:       "v1",
 			files:      map[string]string{"sys/fs/cgroup/memory/memory.limit_in_bytes": container512},
 			wantLimit:  512 << 20,
@@ -92,7 +117,7 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 		{
 			name: "v1 in the process's own cgroup",
 			files: map[string]string{
-				"sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes": "1073741824\n",
+				"sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes": container1Gi,
 				procCgroup: "12:cpu,cpuacct:/docker/abc\n4:memory:/docker/abc\n",
 			},
 			wantLimit:  1 << 30,
@@ -201,6 +226,12 @@ func Test_setMemoryLimit(t *testing.T) {
 		{"no container limit: the machine's memory", nil, cgroupRoot(t, map[string]string{
 			rootFile: unlimited, meminfo: machine,
 		}), softTwoGi, true},
+		{"a container limit above the machine's memory: the machine's", nil, cgroupRoot(t, map[string]string{
+			rootFile: "68719476736\n", meminfo: machine, // 64 GiB on a 2 GiB machine
+		}), softTwoGi, true},
+		{"a container limit and no machine memory read", nil, cgroupRoot(t, map[string]string{
+			rootFile: container512,
+		}), soft512, true},
 		{"no container limit and no machine memory read", nil, cgroupRoot(t, nil), 0, false},
 		// 85% of 99 bytes rounds to 0, which the runtime would take as a limit
 		// of nothing.
