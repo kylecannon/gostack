@@ -155,8 +155,7 @@ func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pair"))
 
-	server := httptest.NewServer(s.handler)
-	t.Cleanup(server.Close)
+	server := serve(t, s)
 
 	dense := make([]string, 0, batchItems)
 	sparse := make([]string, 0, batchItems)
@@ -290,8 +289,7 @@ func Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("pair"))
 
-	server := httptest.NewServer(s.handler)
-	t.Cleanup(server.Close)
+	server := serve(t, s)
 
 	body := denseBatch("pair", oneNumber, 30_000)
 	require.Greater(t, len(body), 7<<20)
@@ -542,8 +540,7 @@ func serveBurst(t *testing.T, bodies []string) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("burst"))
 
-	server := httptest.NewServer(s.handler)
-	t.Cleanup(server.Close)
+	server := serve(t, s)
 
 	var (
 		wg       sync.WaitGroup
@@ -632,8 +629,7 @@ func Test_decodeBudget_aStringOfCommasIsPlannedAsText(t *testing.T) {
 	s := newStack(t)
 	s.ok(t, opCreate, hashTable("csv"))
 
-	server := httptest.NewServer(s.handler)
-	t.Cleanup(server.Close)
+	server := serve(t, s)
 
 	const size = 100_000
 
@@ -722,6 +718,24 @@ func signJSON(req *http.Request, operation string) {
 	req.Header.Set("X-Amz-Target", "DynamoDB_20120810."+operation)
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20240101/"+usEast1+
 		"/dynamodb/aws4_request, SignedHeaders=host, Signature=abc")
+}
+
+// serve serves s's gateway over HTTP until t ends. Closing the server then
+// cuts its link to the gateway: httptest.Server.Close arms a 5-second timer
+// naming the server and stops it, and a stopped timer stays in the runtime's
+// timer heap, keeping what it names, until the runtime clears it, which other
+// live timers can put off past the next test. Without the cut that timer
+// keeps the gateway and its tables alive into the tests after this one.
+func serve(t *testing.T, s *stack) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(s.handler)
+	t.Cleanup(func() {
+		server.Close()
+		server.Config.Handler = nil
+	})
+
+	return server
 }
 
 func sendTo(t *testing.T, server *httptest.Server, operation, body string) (int, string) {

@@ -29,7 +29,7 @@ func Test_decodeBudget_aDroppedGatewayIsGoneOnceTheHeapIsSettled(t *testing.T) {
 	t.Cleanup(func() { protocol.SetInFlight(0) })
 
 	func() {
-		dropped := newStack(t)
+		dropped := newStackLeftOpen(t)
 		dropped.ok(t, opCreate, hashTable("pair"))
 
 		for _, prefix := range []string{"d", "e"} {

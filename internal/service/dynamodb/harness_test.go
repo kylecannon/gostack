@@ -1,6 +1,7 @@
 package dynamodb_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,26 @@ type stack struct {
 	changed atomic.Int64
 }
 
+// newStack is a stack whose provider is closed when tb ends, as gostack closes
+// its services when it stops. A stream shard's retention timer is armed for 24
+// hours and keeps its records until it fires; Close stops it, so a finished
+// test's stream records are not carried into the tests after it.
 func newStack(tb testing.TB) *stack {
+	tb.Helper()
+
+	s := newStackLeftOpen(tb)
+	provider := s.provider
+	// tb's own context is cancelled before its cleanups run; Close only stops
+	// timers and waits on nothing.
+	tb.Cleanup(func() { provider.Registration().Close(context.Background()) })
+
+	return s
+}
+
+// newStackLeftOpen is a stack nothing closes, for a test that drops a gateway
+// on purpose: a cleanup that closes the provider would keep it reachable
+// until the test ends.
+func newStackLeftOpen(tb testing.TB) *stack {
 	tb.Helper()
 
 	s := &stack{}
