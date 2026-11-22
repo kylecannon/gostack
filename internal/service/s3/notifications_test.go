@@ -133,7 +133,7 @@ func (n *notifyStack) s3Call(method, target, body string, header map[string]stri
 		req.Header.Set(name, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(n.t, err)
 
 	defer func() { require.NoError(n.t, resp.Body.Close()) }()
@@ -160,7 +160,7 @@ func (n *notifyStack) sqsCall(operation string, params map[string]any) (int, map
 	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
 	req.Header.Set("X-Amz-Target", "AmazonSQS."+operation)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(n.t, err)
 
 	defer func() { require.NoError(n.t, resp.Body.Close()) }()
