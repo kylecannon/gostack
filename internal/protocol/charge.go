@@ -17,6 +17,7 @@ type Charge struct {
 	ctx    context.Context //nolint:containedctx // the request's, for the waits while it is decoded
 	meter  *BodyMeter
 	decode DecodeHold
+	heap   []func() // the releases of its heap reservations (KeepHeap)
 }
 
 type chargeKey struct{}
@@ -73,11 +74,43 @@ func (c *Charge) ReleaseDecode() {
 	c.decode.Release()
 }
 
+// KeepHeap is HeapKeeper: release, a heap reservation's, runs when the request
+// is released (Release).
+func (c *Charge) KeepHeap(release func()) bool {
+	c.heap = append(c.heap, release)
+
+	return true
+}
+
+// ReleasePool is HeapKeeper: it gives back what the request's body and its
+// decoding hold of the in-flight bound, and keeps the heap reservations until
+// Release.
+func (c *Charge) ReleasePool() {
+	c.ReleaseBody()
+	c.ReleaseDecode()
+}
+
+// PoolHeld is HeapKeeper: what the request's body and its decoding hold of
+// the in-flight bound now.
+func (c *Charge) PoolHeld() int64 {
+	held := c.decode.Held()
+	if c.meter != nil {
+		held += c.meter.held
+	}
+
+	return held
+}
+
 // Release gives back everything the request holds. The gateway calls it when
 // the handler returns.
 func (c *Charge) Release() {
-	c.ReleaseBody()
-	c.ReleaseDecode()
+	c.ReleasePool()
+
+	for _, release := range c.heap {
+		release()
+	}
+
+	c.heap = nil
 }
 
 // What decoding holds for each byte of an ordinary body, by the reader that
