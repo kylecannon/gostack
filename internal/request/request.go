@@ -84,12 +84,55 @@ func (rc *Context) HoldDecode(cost int64) (int64, error) {
 	return covered, nil
 }
 
+// KeepHeap is protocol.HeapKeeper: the request's protocol.Charge keeps the
+// heap reservation until the gateway releases it, when the handler returns. A
+// Context whose request carries none does not take it: the decoder releases it
+// once the body is decoded.
+func (rc *Context) KeepHeap(release func()) bool {
+	if c := rc.charge(); c != nil {
+		return c.KeepHeap(release)
+	}
+
+	return false
+}
+
+// ReleasePool is protocol.HeapKeeper: it gives back what the request's body
+// and its decoding hold of the in-flight bound, through its protocol.Charge,
+// or what HoldDecode charged to this Context's own hold.
+func (rc *Context) ReleasePool() {
+	if c := rc.charge(); c != nil {
+		c.ReleasePool()
+
+		return
+	}
+
+	rc.decode.Release()
+}
+
+// PoolHeld is protocol.HeapKeeper: what ReleasePool would give back.
+func (rc *Context) PoolHeld() int64 {
+	if c := rc.charge(); c != nil {
+		return c.PoolHeld()
+	}
+
+	return rc.decode.Held()
+}
+
 // ReleaseDecode gives back what HoldDecode charged to this Context's own hold,
 // for a request that carries no protocol.Charge. What a request with one holds
 // is given back by protocol.ReleaseBody, and by the gateway when the handler
 // returns.
 func (rc *Context) ReleaseDecode() {
 	rc.decode.Release()
+}
+
+// charge is the protocol.Charge the gateway put on the request, or nil.
+func (rc *Context) charge() *protocol.Charge {
+	if rc.Request == nil {
+		return nil
+	}
+
+	return protocol.ChargeOf(rc.Request.Context())
 }
 
 // DefaultCORS is the gateway's CORS policy, which a service that handles CORS
