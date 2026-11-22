@@ -1721,8 +1721,11 @@ is untouched.
   until the figure is updated, and a plain build is held to it as a ceiling.
   A context with no deadline that can end is registered with a timer the engine
   keeps, which arms a watch of it only once the flush has lasted 50 ms, at 4 or 5
-  allocations that flush then takes (`make bench-ab` on `SQSFlush` with 100
-  messages of 64 KiB, which lasts 100 ms: 6338 allocations, 6342 with it): one
+  allocations that flush then takes (a scratch benchmark, not a committed row:
+  10 queues of 100 messages of 64 KiB on tmpfs, linux/arm64 with 4 CPUs, a flush
+  of about 60 ms took 6340 allocations with `b.Context()` and 6335 to 6336 with
+  `context.Background()`; no `BenchmarkSQSFlushWrite` row lasts 50 ms now, so none
+  reaches the watch): one
   that ends with a deadline's cause, as a `context.WithCancelCause` context can,
   is marked within 50 ms of its end, with a `Snapshot` still running, and at the
   flush's end when that comes first

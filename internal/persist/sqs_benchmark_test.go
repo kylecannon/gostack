@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -103,6 +102,29 @@ func newFilledProvider(b *testing.B, queues, messages int) *sqsservice.Provider 
 	return p
 }
 
+// roundTripCells are the cells of BenchmarkSQSFlushWrite and
+// BenchmarkSQSRestoreExact: snapshotCells cut down to what the gate can compare.
+// One operation of a cell has to finish in 10 ms, so that a run at
+// -benchtime=500ms makes at least 50 iterations (docs/standards.md,
+// "Benchmarks"). The cells of snapshotCells that hold messages hold 62 MiB of
+// bodies, and an operation on them took 61 to 166 ms, 4 to 9 iterations. These
+// hold 2.5 MiB, the 64KiB payload kept:
+//
+//	queues=10    messages=4    (a few busy queues)
+//	queues=40    messages=1    (many queues, each with something in it)
+//
+// The cells left out are queues=10 messages=100 and queues=1000 messages=1,
+// which BenchmarkSQSSnapshot still runs. On linux/arm64 (4 cpus, tmpfs), the
+// an operation took at most 3.3 ms of flush (queues=1000 messages=0) and 4.3 ms
+// of restore (queues=40 messages=1) in three runs at -benchtime=500ms, at 135 or
+// more iterations.
+var roundTripCells = []snapshotCell{
+	{10, 0},
+	{1000, 0},
+	{10, 4},
+	{40, 1},
+}
+
 func snapshotName(queues, messages int) string {
 	name := "queues=" + strconv.Itoa(queues) + "/messages=" + strconv.Itoa(messages)
 	if messages > 0 {
@@ -140,51 +162,61 @@ func BenchmarkSQSSnapshot(b *testing.B) {
 // BenchmarkSQSFlushWrite saves the whole SQS store through the engine, as a
 // flush does, to a directory where fsync costs nothing: a tmpfs under /dev/shm,
 // or the temp dir where the host has none (macOS, or a /dev/shm too small for
-// the cell). It measures the writer: the snapshot, its encoding and the file
-// writes, and the engine's own work around them.
+// the cell). The row name ends in fs=tmpfs or fs=disk, whichever the cell ran
+// on, so a cell that fell back is never read as one that did not. It measures
+// the writer: the snapshot, its encoding and the file writes, and the engine's
+// own work around them.
 //
-// The cells that hold messages write about 64 MiB per operation. On a disk each
-// operation also fsyncs it, and that wait is the disk's: the first fsyncs after
-// a quiet period are cheap and later ones are not, so sec/op fell as the
-// iteration count rose and a faster writer, which gets more iterations from the
-// same -benchtime, read as slower (SQ-489: +17% to +28% for the same code at a
-// fixed count). Memory has no such state, so sec/op here is the same at -benchtime
-// 4x, 8x and 16x. BenchmarkSQSFlushFsync keeps the fsync path.
-//
-// Set beside BenchmarkSQSSnapshot, its B/op shows what the engine holds on top
-// of the snapshot itself.
+// On a disk each flush also fsyncs, and that wait is the disk's: the first
+// fsyncs after a quiet period are cheap and later ones are not, so with a lot
+// of data sec/op fell as the iteration count rose and a faster writer, which
+// gets more iterations from the same -benchtime, read as slower (SQ-489: +17%
+// to +28% for the same code at a fixed count). Memory has no such state.
+// BenchmarkSQSFlushFsync keeps the fsync path.
 func BenchmarkSQSFlushWrite(b *testing.B) {
-	benchFlush(b, snapshotCells, memoryDir)
+	for _, c := range roundTripCells {
+		dir, fs := memoryDir(b, flushSpace(c))
+		benchFlush(b, c, dir, "/fs="+fs)
+	}
 }
 
 // BenchmarkSQSFlushFsync is BenchmarkSQSFlushWrite on the temp dir, so each
-// flush fsyncs its file and the directory. It runs the cells with no messages,
+// flush fsyncs its file and the directory. It runs cells with no messages,
 // whose file is small enough for the disk to take it at one cost whatever the
 // iteration count. The cells that hold messages are left to the row above: their
-// fsync time is how fast the runner's disk takes 64 MiB, and that is not this
-// code.
+// fsync time is how fast the runner's disk takes their data, and that is not
+// this code.
+//
+// The 10 ms rule of roundTripCells holds for it too, and queues=1000 is left out
+// for it: on the disk of a linux/arm64 container (4 cpus, a VM's disk) an
+// operation took 7.0 to 8.1 ms, too near the limit for a runner with a slower
+// disk. The two below took 1.7 to 9.2 ms (queues=10, a 3.9 KB file: the time is
+// the disk's fsync, which swung that much between runs, and no cell is smaller)
+// and 2.4 to 5.4 ms (queues=250) in 9 runs of -benchtime=500ms with nothing else
+// using the disk, at 93 or more iterations.
 func BenchmarkSQSFlushFsync(b *testing.B) {
-	benchFlush(b, fsyncCells, func(b *testing.B, _ int64) string { return b.TempDir() })
+	for _, c := range fsyncCells {
+		benchFlush(b, c, b.TempDir(), "")
+	}
 }
 
-// fsyncCells are the cells of snapshotCells that hold no messages.
-var fsyncCells = slices.DeleteFunc(slices.Clone(snapshotCells), func(c snapshotCell) bool { return c.messages > 0 })
+var fsyncCells = []snapshotCell{{10, 0}, {250, 0}}
 
 // memoryFS is the tmpfs Linux mounts by default.
 const memoryFS = "/dev/shm"
 
 // memoryDir returns a directory with room for need bytes on a memory
-// filesystem, and the temp dir when there is none. It checks the room by
-// writing need bytes, since a container's /dev/shm is 64 MiB by default and a
-// flush that finds it full fails.
-func memoryDir(b *testing.B, need int64) string {
+// filesystem and "tmpfs", or the temp dir and "disk" when there is none. It
+// checks the room by writing need bytes, since a container's /dev/shm is 64 MiB
+// by default and a flush that finds it full fails.
+func memoryDir(b *testing.B, need int64) (dir, fs string) {
 	b.Helper()
 
 	dir, err := os.MkdirTemp(memoryFS, "gostack-bench-") //nolint:usetesting // b.TempDir cannot be placed under /dev/shm
 	if err != nil {
 		b.Logf("no %s (%v): flushes go to the temp dir and fsync", memoryFS, err)
 
-		return b.TempDir()
+		return b.TempDir(), "disk"
 	}
 
 	b.Cleanup(func() { _ = os.RemoveAll(dir) })
@@ -192,10 +224,10 @@ func memoryDir(b *testing.B, need int64) string {
 	if !hasRoom(dir, need) {
 		b.Logf("%s has no room for %d bytes: flushes go to the temp dir and fsync", memoryFS, need)
 
-		return b.TempDir()
+		return b.TempDir(), "disk"
 	}
 
-	return dir
+	return dir, "tmpfs"
 }
 
 // hasRoom reports whether dir takes need bytes.
@@ -222,58 +254,51 @@ func hasRoom(dir string, need int64) bool {
 
 // flushSpace is the room a flush of the cell needs: its new file is written
 // beside the old one, then renamed over it.
-func flushSpace(queues, messages int) int64 {
-	return 2*int64(queues)*int64(messages)*snapshotBodyBytes + 32<<20
+func flushSpace(c snapshotCell) int64 {
+	return 2*int64(c.queues)*int64(c.messages)*snapshotBodyBytes + 8<<20
 }
 
-func benchFlush(b *testing.B, cells []snapshotCell, dirFor func(b *testing.B, need int64) string) {
-	for _, c := range cells {
-		b.Run(snapshotName(c.queues, c.messages), func(b *testing.B) {
-			p := filledProvider(b, c.queues, c.messages)
-			base := dirFor(b, flushSpace(c.queues, c.messages))
+// benchFlush runs one cell of a flush benchmark with its state under dir. The
+// cell's name is the matrix name and suffix.
+//
+// The closure it runs holds this benchmark's hot loop in the stack. encoding/json/v2's
+// string quoting runs about 10% slower or faster on AMD Zen 3 and Zen 4 depending
+// on where that frame sits (SQ-455, SQ-460). The frame is 0xb0 bytes on
+// linux/amd64 (go1.27.4): `GOOS=linux GOARCH=amd64 go test -c -o persist.test
+// ./internal/persist && go tool objdump -s 'benchFlush\.func1$' persist.test`
+// prints `SUBQ $0xb0, SP`. Nothing holds it there: a local added to the closure
+// moves it, and a comparison of two commits that differ in it is a comparison of
+// frames.
+func benchFlush(b *testing.B, c snapshotCell, dir, suffix string) {
+	b.Run(snapshotName(c.queues, c.messages)+suffix, func(b *testing.B) {
+		p := filledProvider(b, c.queues, c.messages)
 
-			e := benchEngine(base, time.Hour)
-			e.Register(sqs, p)
+		e := benchEngine(dir, time.Hour)
+		e.Register(sqs, p)
 
-			flush := func() {
-				e.MarkDirty(sqs)
+		flush := func() {
+			e.MarkDirty(sqs)
 
-				err := e.Flush(b.Context())
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-
-			flush()
-
-			// pad keeps this closure's frame at 0xc8 bytes (go tool objdump on a
-			// linux/amd64 test binary shows SUBQ $0xc8, SP), which is the stack
-			// alignment main's benchmark had. encoding/json/v2's string quoting
-			// runs about 10% slower or faster on AMD Zen 3 and Zen 4 depending
-			// on stack alignment, so without the pad this benchmark measures
-			// where its frame lands instead of the code under test. Only this
-			// benchmark carries it; no production frame does.
-			var pad [1]byte
-
-			pad[len(base)%len(pad)] = 1
-
-			if pad[0] > 1 {
-				b.Fatal("unreachable")
-			}
-
-			info, err := os.Stat(filepath.Join(base, sqs, jsonFile))
+			err := e.Flush(b.Context())
 			if err != nil {
 				b.Fatal(err)
 			}
+		}
 
-			b.ReportAllocs()
-			b.SetBytes(info.Size())
+		flush()
 
-			for b.Loop() {
-				flush()
-			}
-		})
-	}
+		info, err := os.Stat(filepath.Join(dir, sqs, jsonFile))
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		b.ReportAllocs()
+		b.SetBytes(info.Size())
+
+		for b.Loop() {
+			flush()
+		}
+	})
 }
 
 // BenchmarkSQSRestoreExact loads the whole SQS store from the bytes of its
@@ -281,14 +306,16 @@ func benchFlush(b *testing.B, cells []snapshotCell, dirFor func(b *testing.B, ne
 //
 // The input is a slice of exactly the snapshot's length, and the heap is
 // collected before the timer starts. The Snapshot that builds the input grows a
-// bytes.Buffer, whose capacity depends on how the encoder writes: 144 MiB for
-// one encoder and 72 MiB for another, for the same 62 MiB of snapshot. Left as
-// it was, the heap at the first Restore was 217 MiB for one and 109 MiB for the
-// other, and the collector's pacing follows the live heap, so the row measured
-// how the input was built (SQ-489). The provider that built it is closed and
-// dropped before the timer for the same reason.
+// bytes.Buffer, whose capacity depends on how the encoder writes. At the 62 MiB
+// of snapshot the cells had before roundTripCells, that was 144 MiB for one
+// encoder and 72 MiB for another, and the heap at the first Restore 217 MiB for
+// one and 109 MiB for the other. The collector's pacing follows the live heap,
+// so the row measured how the input was built (SQ-489); the copy and the
+// collection were both needed to equalize it at that size, and the cells are
+// smaller now. The provider that built the input is closed and dropped before
+// the timer for the same reason.
 func BenchmarkSQSRestoreExact(b *testing.B) {
-	for _, c := range snapshotCells {
+	for _, c := range roundTripCells {
 		b.Run(snapshotName(c.queues, c.messages), func(b *testing.B) {
 			saved := snapshotBytes(b, c.queues, c.messages)
 

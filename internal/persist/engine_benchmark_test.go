@@ -14,8 +14,8 @@ import (
 // benchmark closure is where the benchmark's hot loop sits in the stack, and on
 // some CPUs (AMD Zen 3, Zen 4) the speed of a byte-at-a-time loop such as
 // jsonwire.AppendQuote depends on that position: adding two fields to Config
-// slowed BenchmarkSQSFlush by 11% with no change to any code it runs
-// (SQ-455, SQ-460). Building the engine here, with no inlining, keeps Config out
+// slowed BenchmarkSQSFlush, now BenchmarkSQSFlushWrite, by 11% with no change to
+// any code it runs (SQ-455, SQ-460). Building the engine here, with no inlining, keeps Config out
 // of every benchmark frame, so a field added to Config cannot move one.
 //
 //go:noinline
