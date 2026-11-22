@@ -18,7 +18,7 @@ import (
 //
 // A cell is sized to the 10 ms of docs/standards.md, so it is far smaller than
 // the lists a busy queue has, and each list in it is still several times the
-// 64 KiB the writer holds before it writes: 4000 move tasks are 0.8 MB of file,
+// 4 KiB the writer holds before it writes: 4000 move tasks are 0.8 MB of file,
 // and 2000 groups of 100 characters are 0.2 MB of ready list in a file of 1.8
 // MB. An operation took at most 2.3 ms for the groups and 1.8 ms for the tasks
 // on an M1 Max, the slowest of six runs at -benchtime=500ms. The 100000-member lists

@@ -431,9 +431,10 @@ func Test_writeSnapshot_writesALargeFileInPieces(t *testing.T) {
 	require.Greater(t, len(w.chunks), 10, "a file of %d bytes went out in %v", w.Len(), w.chunks)
 
 	// A piece is what the writer holds when it passes the flush size, so it is
-	// at most that and one entry.
-	entry := f.Data.States[0].Queues[0].Contents.Entries[0]
-	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+len(entry.Message.Body)+1000)
+	// at most that and one entry, as the entry is written: its body has escapes.
+	entry, err := json.Marshal(f.Data.States[0].Queues[0].Contents.Entries[0], snapshotOptions)
+	require.NoError(t, err)
+	require.LessOrEqual(t, slicesMax(w.chunks), snapshotFlushSize+len(entry)+1000)
 }
 
 // manyMembers is how long a list of the file is in the tests of its pieces.

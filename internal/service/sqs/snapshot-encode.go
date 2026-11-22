@@ -31,12 +31,16 @@ import (
 // snapshotFlushSize is how much of the file the writer holds before it hands it
 // to the io.Writer. The writer checks before each member of a list or of a map,
 // so the buffer is this size and one member: a message with its body and
-// attributes, a deduplication record, a group id.
-const snapshotFlushSize = 64 << 10
+// attributes, a deduplication record, a group id. It is 4 KiB, the size at which
+// json v2's encoder flushes, so a snapshot of any size costs about the bytes v2
+// allocates for it; a larger flush size made a file of a few dozen KiB allocate
+// up to 3x v2's bytes. The writer under it is persist's bufio.Writer of 64 KiB,
+// so the smaller pieces add a copy and no system call.
+const snapshotFlushSize = 4 << 10
 
-// snapshotBufferSize is the room the writer starts with. A file of a few queues
-// fits in it, so a small snapshot does not pay for a buffer of the flush size;
-// a larger one grows the buffer as it fills, up to the flush size and one member.
+// snapshotBufferSize is the room the writer starts with, the flush size. A file
+// of a few queues fits in it; a larger one grows the buffer by the member that
+// passes the flush size.
 const snapshotBufferSize = 4 << 10
 
 // snapshotWriter appends a snapshot to buf and writes buf out between the
