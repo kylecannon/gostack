@@ -41,7 +41,14 @@ const (
 // protocol.DecodeBudget, an unreadable body, or text that is not valid UTF-8.
 var ErrForm = errors.New("query: form cannot be read")
 
-var errTooManyPairs = fmt.Errorf("%w: more pairs than the decode budget allows", ErrForm)
+// ErrFormCut is wrapped by the ErrForm that leaves pairs absent or cut short, so
+// the Action of a call can be among those lost: the body could not be read, is
+// over protocol.MaxBody, holds more pairs than the decode budget allows, or the
+// bodies in flight left its pairs no room. Text that is not UTF-8 is not it:
+// every pair of that form is parsed.
+var ErrFormCut = fmt.Errorf("%w: pairs are absent or cut short", ErrForm)
+
+var errTooManyPairs = fmt.Errorf("%w: more pairs than the decode budget allows", ErrFormCut)
 
 // ParseValues parses urlencoded text the way LocalStack's werkzeug does, which
 // is Python's parse_qsl(keep_blank_values=True, errors="werkzeug.url_quote"):
@@ -173,6 +180,22 @@ func MalformedQueryString() *awserr.Error {
 	}
 }
 
+// CutFormAnswer is the answer to a call whose form read failed with err, when
+// err is ErrFormCut: its Action may be among the pairs that were lost, so the
+// call cannot be told apart from one whose form is fine. It is Throttling when
+// the bodies in flight left the pairs no room and MalformedQueryString
+// otherwise. It is nil for any other err, nil included.
+func CutFormAnswer(err error) *awserr.Error {
+	switch {
+	case !errors.Is(err, ErrFormCut):
+		return nil
+	case errors.Is(err, protocol.ErrBusy):
+		return protocol.ThrottledQuery()
+	default:
+		return MalformedQueryString()
+	}
+}
+
 // RequestForm returns the parameters of r the way werkzeug's request.values
 // does: the pairs of the URL query come first, then those of a form body, so
 // the first value of a name is the one in the URL. The body is read at most
@@ -253,13 +276,13 @@ func requestValues(r *http.Request, hold protocol.DecodeHolder) (url.Values, err
 	if err != nil {
 		values, _ := parsePairs(raw, "", nil, nil)
 
-		return values, fmt.Errorf("%w: %w", ErrForm, err)
+		return values, fmt.Errorf("%w: %w", ErrFormCut, err)
 	}
 
 	if protocol.OverBody(len(body)) {
 		values, _ := parsePairs(raw, "", nil, nil)
 
-		return values, fmt.Errorf("%w: the body is over %d bytes", ErrForm, protocol.MaxBody())
+		return values, fmt.Errorf("%w: the body is over %d bytes", ErrFormCut, protocol.MaxBody())
 	}
 
 	if !utf8.ValidString(body) {
@@ -292,7 +315,7 @@ func parsePairs(raw, body string, failure error, hold protocol.DecodeHolder) (ur
 	if cost := int64(pairs) * PairCost; hold != nil && cost > protocol.FreeDecode {
 		_, err := hold.HoldDecode(cost)
 		if err != nil {
-			failure = fmt.Errorf("%w: %w", ErrForm, err)
+			failure = fmt.Errorf("%w: %w", ErrFormCut, err)
 			limit = protocol.FreeDecode / PairCost
 		}
 	}

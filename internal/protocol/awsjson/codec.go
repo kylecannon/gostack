@@ -186,12 +186,30 @@ func UnmarshalFrom(dec *jsontext.Decoder, v any) error {
 	return nil
 }
 
-// Encode returns v as json.
+// Encode returns v as json. An Appender writes itself; anything else, and an
+// Appender that refuses a value, goes to v2, which then reports its own error.
 func Encode(v any) ([]byte, *awserr.Error) {
+	if a, ok := v.(Appender); ok {
+		b, err := a.AppendJSON(nil)
+		if err == nil {
+			return b, nil
+		}
+	}
+
+	return encodeReflect(v)
+}
+
+func encodeReflect(v any) ([]byte, *awserr.Error) {
 	b, err := marshalStrictFirst(v)
 	if err != nil {
 		return nil, awserr.Internal("response could not be encoded: " + err.Error())
 	}
 
 	return b, nil
+}
+
+// MarshalReflect returns v as v2 writes it by reflection, strict first, the
+// encoding every generated encoder matches. The encode tests compare with it.
+func MarshalReflect(v any) ([]byte, error) {
+	return marshalStrictFirst(v)
 }

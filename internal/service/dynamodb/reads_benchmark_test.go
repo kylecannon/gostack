@@ -18,12 +18,17 @@ import (
 // example
 //
 //	BenchmarkReads/items=100/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=16
+//	BenchmarkReads/items=100/payload=4KiB/text=cjk/op=Query/target=table/filter=off/concurrency=1
 //
 // One iteration reads the whole result, following LastEvaluatedKey across the
 // 1 MB pages, on each of concurrency simultaneous callers. The filter keeps
 // every item, so it adds its evaluation and not a smaller result. 500 items of
 // 4 KiB are three pages; 10,000 items made ops of 60 to 340 ms, too slow for
 // the benchstat gate's ten runs a row.
+//
+// The text cells hold non-ASCII or escape-dense strings, which json quotes
+// differently from ASCII, and only on a plain Query of 100 items: the text
+// changes nothing but the encoding of the result.
 
 var (
 	readSizes       = []int{1, 100, 500}
@@ -61,6 +66,36 @@ func BenchmarkReads(b *testing.B) {
 				readCells(b, s, n, payload.size)
 			})
 		}
+	}
+
+	const textItems = 100
+
+	for _, text := range itemTexts {
+		payload := readPayloads[1]
+
+		b.Run(fmt.Sprintf("items=%d/payload=%s/text=%s", textItems, payload.name, text.name), func(b *testing.B) {
+			s := newStack(b)
+			s.ok(b, opCreate, readTable)
+
+			data, err := json.Marshal(text.value(payload.size))
+			require.NoError(b, err)
+
+			for i := range textItems {
+				s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
+					`"},"g":{"S":"G"},"d":{"S":`+string(data)+`}}}`)
+			}
+
+			body := readBody(opQuery, "table", "")
+
+			b.Run("op=Query/target=table/filter=off/concurrency=1", func(b *testing.B) {
+				b.SetBytes(int64(textItems * payload.size))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					require.NoError(b, s.readAll(b, opQuery, body, textItems))
+				}
+			})
+		})
 	}
 }
 

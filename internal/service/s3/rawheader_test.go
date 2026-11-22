@@ -264,7 +264,7 @@ func TestAnOrdinaryGetKeepsTheConnection(t *testing.T) {
 
 		req.Header.Set("Authorization", rawAuthorization)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testClient.Do(req)
 		require.NoError(t, err)
 		require.NoError(t, resp.Body.Close())
 	}
@@ -283,7 +283,7 @@ func TestAnOrdinaryGetKeepsTheConnection(t *testing.T) {
 
 		req.Header.Set("Authorization", rawAuthorization)
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := testClient.Do(req)
 		require.NoError(t, err)
 
 		got, err := io.ReadAll(resp.Body)

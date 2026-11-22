@@ -107,7 +107,9 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   layout, the per-service files or the single `parity/ledger.json` before
   them, and fails when a service file the base has is gone.
 - `docs/parity.md` is generated from the ledger and shows percentages per
-  service.
+  service. `docs/features.md` is generated from the registered services and
+  the ledger (`make features`, `parity/features.py`) and gives each service a
+  status, the operations it implements and the ones that answer 501.
 - CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
 
 ### Spec sources (vendored into `specs/`, with a `specs/SOURCES.lock`)
@@ -158,7 +160,7 @@ specs/                       vendored botocore JSON + LocalStack patches + SOURC
 parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, demotions.yaml, scripts
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
-docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)
+docs/                        architecture.md, standards.md, parity.md and features.md (generated), compat.md (env vars)
 .github/workflows/           ci.yml, parity.yml, fuzz.yml, bench.yml, bench-system.yml, release.yml
 AGENTS.md, CLAUDE.md, Makefile, .golangci.yml, .agentic-quality
 ```
@@ -174,10 +176,22 @@ type breaks streaming S3 bodies and SDK event streams. Decoded non-streaming
 request bodies (form and json) are capped at 16 MiB, counted after gzip
 decoding. An oversized body answers `RequestEntityTooLarge` (413) on the json
 services other than SQS, and `MalformedQueryString` (400) on SQS json and on a
-query form whose Action is in the URL or whose path is an SQS queue URL. A form
-that carries its Action in the body answers `MissingAction` (400) with a SigV4
-`Authorization` header and 404 without one: the gateway reads it to find the
-Action and drops the read error.
+query form, wherever its Action is. A form that carries its Action in the body
+is read by the gateway to find the Action. When that read fails (the body is over
+the cap, cannot be read, holds more pairs than the decode budget allows, or finds
+no room under the in-flight bound), the Action may be lost, and the answer is
+`MalformedQueryString`, or `Throttling` for no room. The service the signing scope
+names writes it, so its namespace and its `Accept` handling apply: the generated
+`serve` reads the form (`query.CutFormAnswer`) before it answers `MissingAction`.
+Only when no service can be named does the gateway write it, in the query protocol
+with no namespace, as the last step of `refuseUnclaimed`: after an unregistered
+service's 501, a preflight's 200 and an internal path's 404, and not for the
+`dynamodb` scope, which DynamoDB and DynamoDB Streams share and which keeps the
+404. A scope one json service holds (KMS, SSM, Secrets Manager) names that
+service, whose generated `serve` answers `400 InvalidAction` in
+`application/x-amz-json-1.1`. Text that is only not
+UTF-8 loses no pair (`query.ErrFormCut` is not wrapped), so it answers as any form
+with no Action does.
 
 ### How chi is used
 
@@ -475,7 +489,29 @@ written by hand.
   quirks are custom marshalers on generated types, on the streaming v2
   interfaces (`MarshalJSONTo`, `UnmarshalJSONFrom`): epoch-second timestamps,
   base64 blobs, and `__type` error codes. One option set in
-  `internal/protocol/awsjson` serves every encode and decode.
+  `internal/protocol/awsjson` serves every encode and decode. The responses
+  of the json services are written by generated encoders instead of v2's
+  reflection: each output type has an `AppendJSON` that `WriteResponse`
+  calls, and each struct below an output an `appendJSON<Struct>` function,
+  the one place its members are written, through `awsjson.Writer`. Their bytes
+  are v2's for the same value; the generated `codec_json_test.go` of each
+  service checks that every output has an encoder and compares the two on
+  random values (`TestJSONEncodeMatchesV2`, `FuzzJSONEncode`). A value v2
+  refuses (invalid UTF-8) goes to v2, which writes its own error. Documents and
+  structs with non-epoch timestamps stay on v2 per value. Strings are quoted
+  by scanning eight bytes at a time and copying each clean run whole: v2's
+  per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
+  4 its cost moved up to 38% with a 16-byte change in a caller's frame
+  (SQ-455). rest-json and error bodies still go through v2.
+- **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
+  generated encoder writes into a reused buffer, given back once the body is
+  written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go
+  to a stack that holds at most 32 MiB of them, and apart from it the
+  largest buffer given back that is bigger than 32 MiB, so that one large
+  body called for again does not grow its buffer from nothing each time.
+  Every GC cycle a cleanup checks whether a json response took or gave back
+  a large buffer since the cycle before; when none did, it drops them all,
+  so an idle server holds them for at most two collections.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
@@ -2096,8 +2132,8 @@ LocalStack runs Amazon's DynamoDB Local behind its provider. gostack runs no
 JVM: the engine is Go, in five packages under `internal/service/dynamodb`, and
 the handlers beside them take LocalStack's provider (`provider.py`,
 `utils.py`, `models.py` at 8b9a79f) for what it adds over the engine. What it
-answers differently, and the 21 operations at 501, are in `docs/compat.md`,
-"DynamoDB operations" and the DynamoDB sections after it.
+answers differently is in `docs/compat.md`, "DynamoDB operations" and the
+DynamoDB sections after it; the operations at 501 are in `docs/features.md`.
 
 | Package | Holds |
 |---|---|
@@ -2215,8 +2251,8 @@ it and sorts it once.
 
 KMS follows LocalStack's own provider (`services/kms/provider.py`,
 `models.py`, `utils.py`), which uses no moto. It reads no settings. What it
-answers differently from LocalStack, and the eight operations at 501, are in
-`docs/compat.md`, "KMS".
+answers differently from LocalStack is in `docs/compat.md`, "KMS"; the
+operations at 501 are in `docs/features.md`.
 
 **Key model.** A key lives in the `State` of its account and region, in a
 `store.Bundle`. Any of its ids reaches it through one resolver: the key id, the
@@ -2293,11 +2329,10 @@ vectors.
 ### SNS (`internal/service/sns`)
 
 LocalStack implements SNS itself, with no moto (`localstack-core/localstack/services/sns/`
-at 8b9a79f). gostack ports its 36 operations; the other 6 of the API's 42 (the
-SMS sandbox and `ListOriginationNumbers`) answer 501 through the generated
-`Unimplemented`, and `GET /_gostack/services` reports 36 of 42
-(`Test_implemented`). What it answers differently is in `docs/compat.md`, the
-SNS sections.
+at 8b9a79f). gostack ports its operations; an operation of the API it does not
+build answers 501 through the generated `Unimplemented`. The operations in each
+set are in `docs/features.md`. What it answers differently is in
+`docs/compat.md`, the SNS sections.
 
 | Package | Holds |
 |---|---|
@@ -2342,8 +2377,10 @@ to HTTP and HTTPS". The system bench loads this path through `sns/publish`
 LocalStack's Secrets Manager is moto's with about 980 lines of patches
 (`services/secretsmanager/provider.py` at 8b9a79f), and gostack ports both: the
 patches and the moto behavior they leave in place, sized against moto-ext
-5.1.25. All 23 operations of the API are implemented, so `GET
-/_gostack/services` reports 23 of 23 (`Test_implemented`). Rotation that needs
+5.1.25. `ValidateResourcePolicy` and `StopReplicationToReplica` check the
+`SecretId` as LocalStack does and then answer 501, which `Provider.Stubs`
+declares, so `GET /_gostack/services` and `docs/features.md` leave them out of
+the implemented operations. Rotation that needs
 Lambda ends with `ResourceNotFoundException` and the secret as it was, because
 Lambda is not a service yet. What it answers differently is in `docs/compat.md`,
 "Secrets Manager".
@@ -2366,11 +2403,10 @@ region. SSM imports nothing of this package and reaches none of its state.
 
 LocalStack's SSM provider is a thin layer over moto (`services/ssm/provider.py`
 at 8b9a79f): five operations of its own, the rest moto's. gostack builds
-Parameter Store, 17 of the API's 146 operations (`Test_implemented`): the
-parameter operations, labels, tags for parameters, and the maintenance-window
-records moto keeps. The other 129 answer 501 through the generated
-`Unimplemented` and are listed by `GET /_gostack/services`. What it answers
-differently is in `docs/compat.md`, "SSM Parameter Store".
+Parameter Store: the parameter operations, labels, tags for parameters, and the
+maintenance-window records moto keeps. The rest of the API answers 501 through
+the generated `Unimplemented`; `docs/features.md` lists both sets. What it
+answers differently is in `docs/compat.md`, "SSM Parameter Store".
 
 **State.** A `State` per account and region in a `store.Bundle` holds every
 parameter as its list of versions, oldest first, with labels on versions and

@@ -6,7 +6,8 @@ import (
 
 // jsonFile writes the json codec: the protocol constants, one decode function
 // for each operation, and the marshalers of the structs that hold a timestamp
-// in a form other than epoch seconds. The types carry json tags, so
+// in a form other than epoch seconds, and the encoders of the outputs
+// (emit_jsonenc.go). The types carry json tags, so
 // encoding/json/v2 does the rest.
 func (g *generator) jsonFile() (string, error) {
 	if !g.hasProtocol(protoJSON) {
@@ -36,6 +37,11 @@ func (g *generator) jsonFile() (string, error) {
 
 	for _, st := range g.sortedStructs() {
 		emitTimeMarshalers(p, st)
+	}
+
+	err := g.emitJSONEncoders(p)
+	if err != nil {
+		return "", err
 	}
 
 	return p.buf.String(), nil

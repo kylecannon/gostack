@@ -99,7 +99,7 @@ func TestLargeObjectStreamsEndToEnd(t *testing.T) {
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, "+
 		"SignedHeaders=host, Signature=0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(t, err)
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -109,7 +109,7 @@ func TestLargeObjectStreamsEndToEnd(t *testing.T) {
 
 	getReq.Header.Set("Authorization", req.Header.Get("Authorization"))
 
-	got, err := http.DefaultClient.Do(getReq)
+	got, err := testClient.Do(getReq)
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, got.Body.Close()) }()

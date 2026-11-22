@@ -37,3 +37,429 @@ func decodeGetShardIteratorJSON(body []byte) (*GetShardIteratorInput, *awserr.Er
 func decodeListStreamsJSON(body []byte) (*ListStreamsInput, *awserr.Error) {
 	return awsjson.Decode[ListStreamsInput](body)
 }
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DescribeStreamOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDescribeStreamOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetRecordsOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetRecordsOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetShardIteratorOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetShardIteratorOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListStreamsOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListStreamsOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// appendJSONAttributeValue appends v as a json object.
+func appendJSONAttributeValue(w *awsjson.Writer, v *AttributeValue) {
+	start := w.ObjectStart()
+	if v.S != nil {
+		w.Raw(`,"S":`)
+		w.String(*v.S)
+	}
+	if v.N != nil {
+		w.Raw(`,"N":`)
+		w.String(*v.N)
+	}
+	if v.B != nil {
+		w.Raw(`,"B":`)
+		w.Blob(v.B)
+	}
+	if v.SS != nil {
+		w.Raw(`,"SS":`)
+		w.Byte('[')
+		for i0 := range v.SS {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.SS[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NS != nil {
+		w.Raw(`,"NS":`)
+		w.Byte('[')
+		for i0 := range v.NS {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.NS[i0])
+		}
+		w.Byte(']')
+	}
+	if v.BS != nil {
+		w.Raw(`,"BS":`)
+		w.Byte('[')
+		for i0 := range v.BS {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.Blob(v.BS[i0])
+		}
+		w.Byte(']')
+	}
+	if v.M != nil {
+		w.Raw(`,"M":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.M {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			appendJSONAttributeValue(w, &e0)
+		}
+		w.Byte('}')
+	}
+	if v.L != nil {
+		w.Raw(`,"L":`)
+		w.Byte('[')
+		for i0 := range v.L {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONAttributeValue(w, &v.L[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NULL != nil {
+		w.Raw(`,"NULL":`)
+		w.Bool(*v.NULL)
+	}
+	if v.BOOL != nil {
+		w.Raw(`,"BOOL":`)
+		w.Bool(*v.BOOL)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDescribeStreamOutput appends v as a json object.
+func appendJSONDescribeStreamOutput(w *awsjson.Writer, v *DescribeStreamOutput) {
+	start := w.ObjectStart()
+	if v.StreamDescription != nil {
+		w.Raw(`,"StreamDescription":`)
+		appendJSONStreamDescription(w, v.StreamDescription)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetRecordsOutput appends v as a json object.
+func appendJSONGetRecordsOutput(w *awsjson.Writer, v *GetRecordsOutput) {
+	start := w.ObjectStart()
+	if v.Records != nil {
+		w.Raw(`,"Records":`)
+		w.Byte('[')
+		for i0 := range v.Records {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONRecord(w, &v.Records[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextShardIterator != nil {
+		w.Raw(`,"NextShardIterator":`)
+		w.String(*v.NextShardIterator)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetShardIteratorOutput appends v as a json object.
+func appendJSONGetShardIteratorOutput(w *awsjson.Writer, v *GetShardIteratorOutput) {
+	start := w.ObjectStart()
+	if v.ShardIterator != nil {
+		w.Raw(`,"ShardIterator":`)
+		w.String(*v.ShardIterator)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONIdentity appends v as a json object.
+func appendJSONIdentity(w *awsjson.Writer, v *Identity) {
+	start := w.ObjectStart()
+	if v.PrincipalId != nil {
+		w.Raw(`,"PrincipalId":`)
+		w.String(*v.PrincipalId)
+	}
+	if v.Type != nil {
+		w.Raw(`,"Type":`)
+		w.String(*v.Type)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONKeySchemaElement appends v as a json object.
+func appendJSONKeySchemaElement(w *awsjson.Writer, v *KeySchemaElement) {
+	start := w.ObjectStart()
+	if v.AttributeName != nil {
+		w.Raw(`,"AttributeName":`)
+		w.String(*v.AttributeName)
+	}
+	if v.KeyType != nil {
+		w.Raw(`,"KeyType":`)
+		w.String(*v.KeyType)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListStreamsOutput appends v as a json object.
+func appendJSONListStreamsOutput(w *awsjson.Writer, v *ListStreamsOutput) {
+	start := w.ObjectStart()
+	if v.Streams != nil {
+		w.Raw(`,"Streams":`)
+		w.Byte('[')
+		for i0 := range v.Streams {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONStream(w, &v.Streams[i0])
+		}
+		w.Byte(']')
+	}
+	if v.LastEvaluatedStreamArn != nil {
+		w.Raw(`,"LastEvaluatedStreamArn":`)
+		w.String(*v.LastEvaluatedStreamArn)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONRecord appends v as a json object.
+func appendJSONRecord(w *awsjson.Writer, v *Record) {
+	start := w.ObjectStart()
+	if v.EventID != nil {
+		w.Raw(`,"eventID":`)
+		w.String(*v.EventID)
+	}
+	if v.EventName != nil {
+		w.Raw(`,"eventName":`)
+		w.String(*v.EventName)
+	}
+	if v.EventVersion != nil {
+		w.Raw(`,"eventVersion":`)
+		w.String(*v.EventVersion)
+	}
+	if v.EventSource != nil {
+		w.Raw(`,"eventSource":`)
+		w.String(*v.EventSource)
+	}
+	if v.AwsRegion != nil {
+		w.Raw(`,"awsRegion":`)
+		w.String(*v.AwsRegion)
+	}
+	if v.Dynamodb != nil {
+		w.Raw(`,"dynamodb":`)
+		appendJSONStreamRecord(w, v.Dynamodb)
+	}
+	if v.UserIdentity != nil {
+		w.Raw(`,"userIdentity":`)
+		appendJSONIdentity(w, v.UserIdentity)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONSequenceNumberRange appends v as a json object.
+func appendJSONSequenceNumberRange(w *awsjson.Writer, v *SequenceNumberRange) {
+	start := w.ObjectStart()
+	if v.StartingSequenceNumber != nil {
+		w.Raw(`,"StartingSequenceNumber":`)
+		w.String(*v.StartingSequenceNumber)
+	}
+	if v.EndingSequenceNumber != nil {
+		w.Raw(`,"EndingSequenceNumber":`)
+		w.String(*v.EndingSequenceNumber)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONShard appends v as a json object.
+func appendJSONShard(w *awsjson.Writer, v *Shard) {
+	start := w.ObjectStart()
+	if v.ShardId != nil {
+		w.Raw(`,"ShardId":`)
+		w.String(*v.ShardId)
+	}
+	if v.SequenceNumberRange != nil {
+		w.Raw(`,"SequenceNumberRange":`)
+		appendJSONSequenceNumberRange(w, v.SequenceNumberRange)
+	}
+	if v.ParentShardId != nil {
+		w.Raw(`,"ParentShardId":`)
+		w.String(*v.ParentShardId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONStream appends v as a json object.
+func appendJSONStream(w *awsjson.Writer, v *Stream) {
+	start := w.ObjectStart()
+	if v.StreamArn != nil {
+		w.Raw(`,"StreamArn":`)
+		w.String(*v.StreamArn)
+	}
+	if v.TableName != nil {
+		w.Raw(`,"TableName":`)
+		w.String(*v.TableName)
+	}
+	if v.StreamLabel != nil {
+		w.Raw(`,"StreamLabel":`)
+		w.String(*v.StreamLabel)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONStreamDescription appends v as a json object.
+func appendJSONStreamDescription(w *awsjson.Writer, v *StreamDescription) {
+	start := w.ObjectStart()
+	if v.StreamArn != nil {
+		w.Raw(`,"StreamArn":`)
+		w.String(*v.StreamArn)
+	}
+	if v.StreamLabel != nil {
+		w.Raw(`,"StreamLabel":`)
+		w.String(*v.StreamLabel)
+	}
+	if v.StreamStatus != nil {
+		w.Raw(`,"StreamStatus":`)
+		w.String(*v.StreamStatus)
+	}
+	if v.StreamViewType != nil {
+		w.Raw(`,"StreamViewType":`)
+		w.String(*v.StreamViewType)
+	}
+	if v.CreationRequestDateTime != nil && !v.CreationRequestDateTime.IsZero() {
+		w.Raw(`,"CreationRequestDateTime":`)
+		w.Time(v.CreationRequestDateTime)
+	}
+	if v.TableName != nil {
+		w.Raw(`,"TableName":`)
+		w.String(*v.TableName)
+	}
+	if v.KeySchema != nil {
+		w.Raw(`,"KeySchema":`)
+		w.Byte('[')
+		for i0 := range v.KeySchema {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONKeySchemaElement(w, &v.KeySchema[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Shards != nil {
+		w.Raw(`,"Shards":`)
+		w.Byte('[')
+		for i0 := range v.Shards {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONShard(w, &v.Shards[i0])
+		}
+		w.Byte(']')
+	}
+	if v.LastEvaluatedShardId != nil {
+		w.Raw(`,"LastEvaluatedShardId":`)
+		w.String(*v.LastEvaluatedShardId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONStreamRecord appends v as a json object.
+func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
+	start := w.ObjectStart()
+	if v.ApproximateCreationDateTime != nil && !v.ApproximateCreationDateTime.IsZero() {
+		w.Raw(`,"ApproximateCreationDateTime":`)
+		w.Time(v.ApproximateCreationDateTime)
+	}
+	if v.Keys != nil {
+		w.Raw(`,"Keys":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.Keys {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			appendJSONAttributeValue(w, &e0)
+		}
+		w.Byte('}')
+	}
+	if v.NewImage != nil {
+		w.Raw(`,"NewImage":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.NewImage {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			appendJSONAttributeValue(w, &e0)
+		}
+		w.Byte('}')
+	}
+	if v.OldImage != nil {
+		w.Raw(`,"OldImage":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.OldImage {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			appendJSONAttributeValue(w, &e0)
+		}
+		w.Byte('}')
+	}
+	if v.SequenceNumber != nil {
+		w.Raw(`,"SequenceNumber":`)
+		w.String(*v.SequenceNumber)
+	}
+	if v.SizeBytes != nil {
+		w.Raw(`,"SizeBytes":`)
+		w.Int64(*v.SizeBytes)
+	}
+	if v.StreamViewType != nil {
+		w.Raw(`,"StreamViewType":`)
+		w.String(*v.StreamViewType)
+	}
+	w.ObjectEnd(start)
+}

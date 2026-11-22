@@ -2,9 +2,11 @@ package awsjson_test
 
 import (
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const typeJSON11 = "application/x-amz-json-1.1"
+const (
+	typeJSON10 = "application/x-amz-json-1.0"
+	typeJSON11 = "application/x-amz-json-1.1"
+)
 
 type sample struct {
 	Name    *string           `json:"Name,omitzero"`
@@ -142,7 +147,7 @@ func Test_WriteResponse(t *testing.T) {
 		hdr := map[string][]string(rec.Header())
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, []string{"application/x-amz-json-1.0"}, hdr["Content-Type"])
+		assert.Equal(t, []string{typeJSON10}, hdr["Content-Type"])
 		assert.Equal(t, []string{"req-1"}, hdr["x-amzn-RequestId"])
 		assert.JSONEq(t, `{"Name":"n"}`, rec.Body.String())
 	})
@@ -156,6 +161,58 @@ func Test_WriteResponse(t *testing.T) {
 		assert.Equal(t, []string{typeJSON11}, map[string][]string(rec.Header())["Content-Type"])
 		assert.JSONEq(t, `{}`, rec.Body.String())
 	})
+
+	t.Run("writes each appended body whole as the pool buffer is reused", func(t *testing.T) {
+		t.Parallel()
+
+		for _, size := range []int{1 << 20, 10, 5 << 20, 0} {
+			body := strings.Repeat("b", size)
+
+			rec := httptest.NewRecorder()
+			awsjson.WriteResponse(rec, "req-1", "1.0", &appended{Body: body})
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, []string{typeJSON10}, map[string][]string(rec.Header())["Content-Type"])
+			assert.Equal(t, `{"Body":"`+body+`"}`, rec.Body.String())
+		}
+	})
+
+	t.Run("sends v2's own error when the appender refuses the value", func(t *testing.T) {
+		t.Parallel()
+
+		out := &appended{Body: "bad \xff"}
+
+		_, v2Err := awsjson.MarshalReflect(out)
+		require.Error(t, v2Err)
+
+		rec := httptest.NewRecorder()
+		awsjson.WriteResponse(rec, "req-1", "1.0", out)
+
+		var body struct {
+			Type    string `json:"__type"`
+			Message string `json:"message"`
+		}
+
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Equal(t, "response could not be encoded: "+v2Err.Error(), body.Message)
+	})
+}
+
+// appended has a hand-written AppendJSON in the form the generator writes, for
+// the one member v2 writes by reflection.
+type appended struct {
+	Body string `json:"Body"`
+}
+
+func (a *appended) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	start := w.ObjectStart()
+	w.Raw(`,"Body":`)
+	w.String(a.Body)
+	w.ObjectEnd(start)
+
+	return w.Result() //nolint:wrapcheck // as the generated AppendJSON returns it
 }
 
 func Test_WriteError(t *testing.T) {
@@ -224,7 +281,7 @@ func Test_WriteError(t *testing.T) {
 			hdr := map[string][]string(rec.Header())
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Equal(t, []string{"application/x-amz-json-1.0"}, hdr["Content-Type"])
+			assert.Equal(t, []string{typeJSON10}, hdr["Content-Type"])
 			assert.Equal(t, []string{"req-2"}, hdr["x-amzn-RequestId"])
 			assert.Equal(t, []string{tt.giveErr.Code}, hdr["X-Amzn-Errortype"])
 			assert.Equal(t, tt.wantQuery, hdr["x-amzn-query-error"])

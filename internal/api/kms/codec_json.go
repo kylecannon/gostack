@@ -331,3 +331,1852 @@ func decodeVerifyJSON(body []byte) (*VerifyInput, *awserr.Error) {
 func decodeVerifyMacJSON(body []byte) (*VerifyMacInput, *awserr.Error) {
 	return awsjson.Decode[VerifyMacInput](body)
 }
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CancelKeyDeletionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCancelKeyDeletionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ConnectCustomKeyStoreOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONConnectCustomKeyStoreOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CreateAliasOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCreateAliasOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CreateCustomKeyStoreOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCreateCustomKeyStoreOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CreateGrantOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCreateGrantOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *CreateKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONCreateKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DecryptOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDecryptOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteAliasOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteAliasOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteCustomKeyStoreOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteCustomKeyStoreOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeleteImportedKeyMaterialOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeleteImportedKeyMaterialOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DeriveSharedSecretOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDeriveSharedSecretOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DescribeCustomKeyStoresOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDescribeCustomKeyStoresOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DescribeKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDescribeKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DisableKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDisableKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DisableKeyRotationOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDisableKeyRotationOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *DisconnectCustomKeyStoreOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONDisconnectCustomKeyStoreOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *EnableKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONEnableKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *EnableKeyRotationOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONEnableKeyRotationOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *EncryptOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONEncryptOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateDataKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateDataKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateDataKeyPairOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateDataKeyPairOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateDataKeyPairWithoutPlaintextOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateDataKeyPairWithoutPlaintextOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateDataKeyWithoutPlaintextOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateDataKeyWithoutPlaintextOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateMacOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateMacOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GenerateRandomOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGenerateRandomOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetKeyPolicyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetKeyPolicyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetKeyRotationStatusOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetKeyRotationStatusOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetParametersForImportOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetParametersForImportOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *GetPublicKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONGetPublicKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ImportKeyMaterialOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONImportKeyMaterialOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListAliasesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListAliasesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListGrantsResponse) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListGrantsResponse(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListKeyPoliciesOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListKeyPoliciesOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListKeyRotationsOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListKeyRotationsOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListKeysOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListKeysOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ListResourceTagsOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONListResourceTagsOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *PutKeyPolicyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONPutKeyPolicyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ReEncryptOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONReEncryptOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ReplicateKeyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONReplicateKeyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *RetireGrantOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONRetireGrantOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *RevokeGrantOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONRevokeGrantOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *RotateKeyOnDemandOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONRotateKeyOnDemandOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *ScheduleKeyDeletionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONScheduleKeyDeletionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *SignOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONSignOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *TagResourceOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONTagResourceOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UntagResourceOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUntagResourceOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UpdateAliasOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUpdateAliasOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UpdateCustomKeyStoreOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUpdateCustomKeyStoreOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UpdateKeyDescriptionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUpdateKeyDescriptionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *UpdatePrimaryRegionOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONUpdatePrimaryRegionOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *VerifyMacOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONVerifyMacOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// AppendJSON appends v as json, as encoding/json/v2 writes it.
+func (v *VerifyOutput) AppendJSON(b []byte) ([]byte, error) {
+	w := awsjson.NewWriter(b)
+	if v == nil {
+		w.Null()
+	} else {
+		appendJSONVerifyOutput(&w, v)
+	}
+	return w.Result()
+}
+
+// appendJSONAliasListEntry appends v as a json object.
+func appendJSONAliasListEntry(w *awsjson.Writer, v *AliasListEntry) {
+	start := w.ObjectStart()
+	if v.AliasName != nil {
+		w.Raw(`,"AliasName":`)
+		w.String(*v.AliasName)
+	}
+	if v.AliasArn != nil {
+		w.Raw(`,"AliasArn":`)
+		w.String(*v.AliasArn)
+	}
+	if v.TargetKeyId != nil {
+		w.Raw(`,"TargetKeyId":`)
+		w.String(*v.TargetKeyId)
+	}
+	if v.CreationDate != nil && !v.CreationDate.IsZero() {
+		w.Raw(`,"CreationDate":`)
+		w.Time(v.CreationDate)
+	}
+	if v.LastUpdatedDate != nil && !v.LastUpdatedDate.IsZero() {
+		w.Raw(`,"LastUpdatedDate":`)
+		w.Time(v.LastUpdatedDate)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONCancelKeyDeletionOutput appends v as a json object.
+func appendJSONCancelKeyDeletionOutput(w *awsjson.Writer, v *CancelKeyDeletionOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONConnectCustomKeyStoreOutput appends v as a json object.
+func appendJSONConnectCustomKeyStoreOutput(w *awsjson.Writer, v *ConnectCustomKeyStoreOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONCreateAliasOutput appends v as a json object.
+func appendJSONCreateAliasOutput(w *awsjson.Writer, v *CreateAliasOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONCreateCustomKeyStoreOutput appends v as a json object.
+func appendJSONCreateCustomKeyStoreOutput(w *awsjson.Writer, v *CreateCustomKeyStoreOutput) {
+	start := w.ObjectStart()
+	if v.CustomKeyStoreId != nil {
+		w.Raw(`,"CustomKeyStoreId":`)
+		w.String(*v.CustomKeyStoreId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONCreateGrantOutput appends v as a json object.
+func appendJSONCreateGrantOutput(w *awsjson.Writer, v *CreateGrantOutput) {
+	start := w.ObjectStart()
+	if v.GrantToken != nil {
+		w.Raw(`,"GrantToken":`)
+		w.String(*v.GrantToken)
+	}
+	if v.GrantId != nil {
+		w.Raw(`,"GrantId":`)
+		w.String(*v.GrantId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONCreateKeyOutput appends v as a json object.
+func appendJSONCreateKeyOutput(w *awsjson.Writer, v *CreateKeyOutput) {
+	start := w.ObjectStart()
+	if v.KeyMetadata != nil {
+		w.Raw(`,"KeyMetadata":`)
+		appendJSONKeyMetadata(w, v.KeyMetadata)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONCustomKeyStoresListEntry appends v as a json object.
+func appendJSONCustomKeyStoresListEntry(w *awsjson.Writer, v *CustomKeyStoresListEntry) {
+	start := w.ObjectStart()
+	if v.CustomKeyStoreId != nil {
+		w.Raw(`,"CustomKeyStoreId":`)
+		w.String(*v.CustomKeyStoreId)
+	}
+	if v.CustomKeyStoreName != nil {
+		w.Raw(`,"CustomKeyStoreName":`)
+		w.String(*v.CustomKeyStoreName)
+	}
+	if v.CloudHsmClusterId != nil {
+		w.Raw(`,"CloudHsmClusterId":`)
+		w.String(*v.CloudHsmClusterId)
+	}
+	if v.TrustAnchorCertificate != nil {
+		w.Raw(`,"TrustAnchorCertificate":`)
+		w.String(*v.TrustAnchorCertificate)
+	}
+	if v.ConnectionState != nil {
+		w.Raw(`,"ConnectionState":`)
+		w.String(*v.ConnectionState)
+	}
+	if v.ConnectionErrorCode != nil {
+		w.Raw(`,"ConnectionErrorCode":`)
+		w.String(*v.ConnectionErrorCode)
+	}
+	if v.CreationDate != nil && !v.CreationDate.IsZero() {
+		w.Raw(`,"CreationDate":`)
+		w.Time(v.CreationDate)
+	}
+	if v.CustomKeyStoreType != nil {
+		w.Raw(`,"CustomKeyStoreType":`)
+		w.String(*v.CustomKeyStoreType)
+	}
+	if v.XksProxyConfiguration != nil {
+		w.Raw(`,"XksProxyConfiguration":`)
+		appendJSONXksProxyConfigurationType(w, v.XksProxyConfiguration)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDecryptOutput appends v as a json object.
+func appendJSONDecryptOutput(w *awsjson.Writer, v *DecryptOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.Plaintext != nil {
+		w.Raw(`,"Plaintext":`)
+		w.Blob(v.Plaintext)
+	}
+	if v.EncryptionAlgorithm != nil {
+		w.Raw(`,"EncryptionAlgorithm":`)
+		w.String(*v.EncryptionAlgorithm)
+	}
+	if v.CiphertextForRecipient != nil {
+		w.Raw(`,"CiphertextForRecipient":`)
+		w.Blob(v.CiphertextForRecipient)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteAliasOutput appends v as a json object.
+func appendJSONDeleteAliasOutput(w *awsjson.Writer, v *DeleteAliasOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteCustomKeyStoreOutput appends v as a json object.
+func appendJSONDeleteCustomKeyStoreOutput(w *awsjson.Writer, v *DeleteCustomKeyStoreOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeleteImportedKeyMaterialOutput appends v as a json object.
+func appendJSONDeleteImportedKeyMaterialOutput(w *awsjson.Writer, v *DeleteImportedKeyMaterialOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDeriveSharedSecretOutput appends v as a json object.
+func appendJSONDeriveSharedSecretOutput(w *awsjson.Writer, v *DeriveSharedSecretOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.SharedSecret != nil {
+		w.Raw(`,"SharedSecret":`)
+		w.Blob(v.SharedSecret)
+	}
+	if v.CiphertextForRecipient != nil {
+		w.Raw(`,"CiphertextForRecipient":`)
+		w.Blob(v.CiphertextForRecipient)
+	}
+	if v.KeyAgreementAlgorithm != nil {
+		w.Raw(`,"KeyAgreementAlgorithm":`)
+		w.String(*v.KeyAgreementAlgorithm)
+	}
+	if v.KeyOrigin != nil {
+		w.Raw(`,"KeyOrigin":`)
+		w.String(*v.KeyOrigin)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDescribeCustomKeyStoresOutput appends v as a json object.
+func appendJSONDescribeCustomKeyStoresOutput(w *awsjson.Writer, v *DescribeCustomKeyStoresOutput) {
+	start := w.ObjectStart()
+	if v.CustomKeyStores != nil {
+		w.Raw(`,"CustomKeyStores":`)
+		w.Byte('[')
+		for i0 := range v.CustomKeyStores {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONCustomKeyStoresListEntry(w, &v.CustomKeyStores[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDescribeKeyOutput appends v as a json object.
+func appendJSONDescribeKeyOutput(w *awsjson.Writer, v *DescribeKeyOutput) {
+	start := w.ObjectStart()
+	if v.KeyMetadata != nil {
+		w.Raw(`,"KeyMetadata":`)
+		appendJSONKeyMetadata(w, v.KeyMetadata)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONDisableKeyOutput appends v as a json object.
+func appendJSONDisableKeyOutput(w *awsjson.Writer, v *DisableKeyOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONDisableKeyRotationOutput appends v as a json object.
+func appendJSONDisableKeyRotationOutput(w *awsjson.Writer, v *DisableKeyRotationOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONDisconnectCustomKeyStoreOutput appends v as a json object.
+func appendJSONDisconnectCustomKeyStoreOutput(w *awsjson.Writer, v *DisconnectCustomKeyStoreOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONEnableKeyOutput appends v as a json object.
+func appendJSONEnableKeyOutput(w *awsjson.Writer, v *EnableKeyOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONEnableKeyRotationOutput appends v as a json object.
+func appendJSONEnableKeyRotationOutput(w *awsjson.Writer, v *EnableKeyRotationOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONEncryptOutput appends v as a json object.
+func appendJSONEncryptOutput(w *awsjson.Writer, v *EncryptOutput) {
+	start := w.ObjectStart()
+	if v.CiphertextBlob != nil {
+		w.Raw(`,"CiphertextBlob":`)
+		w.Blob(v.CiphertextBlob)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.EncryptionAlgorithm != nil {
+		w.Raw(`,"EncryptionAlgorithm":`)
+		w.String(*v.EncryptionAlgorithm)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateDataKeyOutput appends v as a json object.
+func appendJSONGenerateDataKeyOutput(w *awsjson.Writer, v *GenerateDataKeyOutput) {
+	start := w.ObjectStart()
+	if v.CiphertextBlob != nil {
+		w.Raw(`,"CiphertextBlob":`)
+		w.Blob(v.CiphertextBlob)
+	}
+	if v.Plaintext != nil {
+		w.Raw(`,"Plaintext":`)
+		w.Blob(v.Plaintext)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.CiphertextForRecipient != nil {
+		w.Raw(`,"CiphertextForRecipient":`)
+		w.Blob(v.CiphertextForRecipient)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateDataKeyPairOutput appends v as a json object.
+func appendJSONGenerateDataKeyPairOutput(w *awsjson.Writer, v *GenerateDataKeyPairOutput) {
+	start := w.ObjectStart()
+	if v.PrivateKeyCiphertextBlob != nil {
+		w.Raw(`,"PrivateKeyCiphertextBlob":`)
+		w.Blob(v.PrivateKeyCiphertextBlob)
+	}
+	if v.PrivateKeyPlaintext != nil {
+		w.Raw(`,"PrivateKeyPlaintext":`)
+		w.Blob(v.PrivateKeyPlaintext)
+	}
+	if v.PublicKey != nil {
+		w.Raw(`,"PublicKey":`)
+		w.Blob(v.PublicKey)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyPairSpec != nil {
+		w.Raw(`,"KeyPairSpec":`)
+		w.String(*v.KeyPairSpec)
+	}
+	if v.CiphertextForRecipient != nil {
+		w.Raw(`,"CiphertextForRecipient":`)
+		w.Blob(v.CiphertextForRecipient)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateDataKeyPairWithoutPlaintextOutput appends v as a json object.
+func appendJSONGenerateDataKeyPairWithoutPlaintextOutput(w *awsjson.Writer, v *GenerateDataKeyPairWithoutPlaintextOutput) {
+	start := w.ObjectStart()
+	if v.PrivateKeyCiphertextBlob != nil {
+		w.Raw(`,"PrivateKeyCiphertextBlob":`)
+		w.Blob(v.PrivateKeyCiphertextBlob)
+	}
+	if v.PublicKey != nil {
+		w.Raw(`,"PublicKey":`)
+		w.Blob(v.PublicKey)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyPairSpec != nil {
+		w.Raw(`,"KeyPairSpec":`)
+		w.String(*v.KeyPairSpec)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateDataKeyWithoutPlaintextOutput appends v as a json object.
+func appendJSONGenerateDataKeyWithoutPlaintextOutput(w *awsjson.Writer, v *GenerateDataKeyWithoutPlaintextOutput) {
+	start := w.ObjectStart()
+	if v.CiphertextBlob != nil {
+		w.Raw(`,"CiphertextBlob":`)
+		w.Blob(v.CiphertextBlob)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateMacOutput appends v as a json object.
+func appendJSONGenerateMacOutput(w *awsjson.Writer, v *GenerateMacOutput) {
+	start := w.ObjectStart()
+	if v.Mac != nil {
+		w.Raw(`,"Mac":`)
+		w.Blob(v.Mac)
+	}
+	if v.MacAlgorithm != nil {
+		w.Raw(`,"MacAlgorithm":`)
+		w.String(*v.MacAlgorithm)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGenerateRandomOutput appends v as a json object.
+func appendJSONGenerateRandomOutput(w *awsjson.Writer, v *GenerateRandomOutput) {
+	start := w.ObjectStart()
+	if v.Plaintext != nil {
+		w.Raw(`,"Plaintext":`)
+		w.Blob(v.Plaintext)
+	}
+	if v.CiphertextForRecipient != nil {
+		w.Raw(`,"CiphertextForRecipient":`)
+		w.Blob(v.CiphertextForRecipient)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetKeyPolicyOutput appends v as a json object.
+func appendJSONGetKeyPolicyOutput(w *awsjson.Writer, v *GetKeyPolicyOutput) {
+	start := w.ObjectStart()
+	if v.Policy != nil {
+		w.Raw(`,"Policy":`)
+		w.String(*v.Policy)
+	}
+	if v.PolicyName != nil {
+		w.Raw(`,"PolicyName":`)
+		w.String(*v.PolicyName)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetKeyRotationStatusOutput appends v as a json object.
+func appendJSONGetKeyRotationStatusOutput(w *awsjson.Writer, v *GetKeyRotationStatusOutput) {
+	start := w.ObjectStart()
+	if v.KeyRotationEnabled != nil {
+		w.Raw(`,"KeyRotationEnabled":`)
+		w.Bool(*v.KeyRotationEnabled)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.RotationPeriodInDays != nil {
+		w.Raw(`,"RotationPeriodInDays":`)
+		w.Int32(*v.RotationPeriodInDays)
+	}
+	if v.NextRotationDate != nil && !v.NextRotationDate.IsZero() {
+		w.Raw(`,"NextRotationDate":`)
+		w.Time(v.NextRotationDate)
+	}
+	if v.OnDemandRotationStartDate != nil && !v.OnDemandRotationStartDate.IsZero() {
+		w.Raw(`,"OnDemandRotationStartDate":`)
+		w.Time(v.OnDemandRotationStartDate)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetParametersForImportOutput appends v as a json object.
+func appendJSONGetParametersForImportOutput(w *awsjson.Writer, v *GetParametersForImportOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.ImportToken != nil {
+		w.Raw(`,"ImportToken":`)
+		w.Blob(v.ImportToken)
+	}
+	if v.PublicKey != nil {
+		w.Raw(`,"PublicKey":`)
+		w.Blob(v.PublicKey)
+	}
+	if v.ParametersValidTo != nil && !v.ParametersValidTo.IsZero() {
+		w.Raw(`,"ParametersValidTo":`)
+		w.Time(v.ParametersValidTo)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGetPublicKeyOutput appends v as a json object.
+func appendJSONGetPublicKeyOutput(w *awsjson.Writer, v *GetPublicKeyOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.PublicKey != nil {
+		w.Raw(`,"PublicKey":`)
+		w.Blob(v.PublicKey)
+	}
+	if v.CustomerMasterKeySpec != nil {
+		w.Raw(`,"CustomerMasterKeySpec":`)
+		w.String(*v.CustomerMasterKeySpec)
+	}
+	if v.KeySpec != nil {
+		w.Raw(`,"KeySpec":`)
+		w.String(*v.KeySpec)
+	}
+	if v.KeyUsage != nil {
+		w.Raw(`,"KeyUsage":`)
+		w.String(*v.KeyUsage)
+	}
+	if v.EncryptionAlgorithms != nil {
+		w.Raw(`,"EncryptionAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.EncryptionAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.EncryptionAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.SigningAlgorithms != nil {
+		w.Raw(`,"SigningAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.SigningAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.SigningAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.KeyAgreementAlgorithms != nil {
+		w.Raw(`,"KeyAgreementAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.KeyAgreementAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.KeyAgreementAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGrantConstraints appends v as a json object.
+func appendJSONGrantConstraints(w *awsjson.Writer, v *GrantConstraints) {
+	start := w.ObjectStart()
+	if v.EncryptionContextSubset != nil {
+		w.Raw(`,"EncryptionContextSubset":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.EncryptionContextSubset {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			w.String(e0)
+		}
+		w.Byte('}')
+	}
+	if v.EncryptionContextEquals != nil {
+		w.Raw(`,"EncryptionContextEquals":`)
+		w.Byte('{')
+		first0 := true
+		for k0, e0 := range v.EncryptionContextEquals {
+			if !first0 {
+				w.Byte(',')
+			}
+			first0 = false
+			w.String(k0)
+			w.Byte(':')
+			w.String(e0)
+		}
+		w.Byte('}')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONGrantListEntry appends v as a json object.
+func appendJSONGrantListEntry(w *awsjson.Writer, v *GrantListEntry) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.GrantId != nil {
+		w.Raw(`,"GrantId":`)
+		w.String(*v.GrantId)
+	}
+	if v.Name != nil {
+		w.Raw(`,"Name":`)
+		w.String(*v.Name)
+	}
+	if v.CreationDate != nil && !v.CreationDate.IsZero() {
+		w.Raw(`,"CreationDate":`)
+		w.Time(v.CreationDate)
+	}
+	if v.GranteePrincipal != nil {
+		w.Raw(`,"GranteePrincipal":`)
+		w.String(*v.GranteePrincipal)
+	}
+	if v.RetiringPrincipal != nil {
+		w.Raw(`,"RetiringPrincipal":`)
+		w.String(*v.RetiringPrincipal)
+	}
+	if v.IssuingAccount != nil {
+		w.Raw(`,"IssuingAccount":`)
+		w.String(*v.IssuingAccount)
+	}
+	if v.Operations != nil {
+		w.Raw(`,"Operations":`)
+		w.Byte('[')
+		for i0 := range v.Operations {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.Operations[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Constraints != nil {
+		w.Raw(`,"Constraints":`)
+		appendJSONGrantConstraints(w, v.Constraints)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONImportKeyMaterialOutput appends v as a json object.
+func appendJSONImportKeyMaterialOutput(w *awsjson.Writer, v *ImportKeyMaterialOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONKeyListEntry appends v as a json object.
+func appendJSONKeyListEntry(w *awsjson.Writer, v *KeyListEntry) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyArn != nil {
+		w.Raw(`,"KeyArn":`)
+		w.String(*v.KeyArn)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONKeyMetadata appends v as a json object.
+func appendJSONKeyMetadata(w *awsjson.Writer, v *KeyMetadata) {
+	start := w.ObjectStart()
+	if v.AWSAccountId != nil {
+		w.Raw(`,"AWSAccountId":`)
+		w.String(*v.AWSAccountId)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.Arn != nil {
+		w.Raw(`,"Arn":`)
+		w.String(*v.Arn)
+	}
+	if v.CreationDate != nil && !v.CreationDate.IsZero() {
+		w.Raw(`,"CreationDate":`)
+		w.Time(v.CreationDate)
+	}
+	if v.Enabled != nil {
+		w.Raw(`,"Enabled":`)
+		w.Bool(*v.Enabled)
+	}
+	if v.Description != nil {
+		w.Raw(`,"Description":`)
+		w.String(*v.Description)
+	}
+	if v.KeyUsage != nil {
+		w.Raw(`,"KeyUsage":`)
+		w.String(*v.KeyUsage)
+	}
+	if v.KeyState != nil {
+		w.Raw(`,"KeyState":`)
+		w.String(*v.KeyState)
+	}
+	if v.DeletionDate != nil && !v.DeletionDate.IsZero() {
+		w.Raw(`,"DeletionDate":`)
+		w.Time(v.DeletionDate)
+	}
+	if v.ValidTo != nil && !v.ValidTo.IsZero() {
+		w.Raw(`,"ValidTo":`)
+		w.Time(v.ValidTo)
+	}
+	if v.Origin != nil {
+		w.Raw(`,"Origin":`)
+		w.String(*v.Origin)
+	}
+	if v.CustomKeyStoreId != nil {
+		w.Raw(`,"CustomKeyStoreId":`)
+		w.String(*v.CustomKeyStoreId)
+	}
+	if v.CloudHsmClusterId != nil {
+		w.Raw(`,"CloudHsmClusterId":`)
+		w.String(*v.CloudHsmClusterId)
+	}
+	if v.ExpirationModel != nil {
+		w.Raw(`,"ExpirationModel":`)
+		w.String(*v.ExpirationModel)
+	}
+	if v.KeyManager != nil {
+		w.Raw(`,"KeyManager":`)
+		w.String(*v.KeyManager)
+	}
+	if v.CustomerMasterKeySpec != nil {
+		w.Raw(`,"CustomerMasterKeySpec":`)
+		w.String(*v.CustomerMasterKeySpec)
+	}
+	if v.KeySpec != nil {
+		w.Raw(`,"KeySpec":`)
+		w.String(*v.KeySpec)
+	}
+	if v.EncryptionAlgorithms != nil {
+		w.Raw(`,"EncryptionAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.EncryptionAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.EncryptionAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.SigningAlgorithms != nil {
+		w.Raw(`,"SigningAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.SigningAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.SigningAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.KeyAgreementAlgorithms != nil {
+		w.Raw(`,"KeyAgreementAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.KeyAgreementAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.KeyAgreementAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.MultiRegion != nil {
+		w.Raw(`,"MultiRegion":`)
+		w.Bool(*v.MultiRegion)
+	}
+	if v.MultiRegionConfiguration != nil {
+		w.Raw(`,"MultiRegionConfiguration":`)
+		appendJSONMultiRegionConfiguration(w, v.MultiRegionConfiguration)
+	}
+	if v.PendingDeletionWindowInDays != nil {
+		w.Raw(`,"PendingDeletionWindowInDays":`)
+		w.Int32(*v.PendingDeletionWindowInDays)
+	}
+	if v.MacAlgorithms != nil {
+		w.Raw(`,"MacAlgorithms":`)
+		w.Byte('[')
+		for i0 := range v.MacAlgorithms {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.MacAlgorithms[i0])
+		}
+		w.Byte(']')
+	}
+	if v.XksKeyConfiguration != nil {
+		w.Raw(`,"XksKeyConfiguration":`)
+		appendJSONXksKeyConfigurationType(w, v.XksKeyConfiguration)
+	}
+	if v.CurrentKeyMaterialId != nil {
+		w.Raw(`,"CurrentKeyMaterialId":`)
+		w.String(*v.CurrentKeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListAliasesOutput appends v as a json object.
+func appendJSONListAliasesOutput(w *awsjson.Writer, v *ListAliasesOutput) {
+	start := w.ObjectStart()
+	if v.Aliases != nil {
+		w.Raw(`,"Aliases":`)
+		w.Byte('[')
+		for i0 := range v.Aliases {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONAliasListEntry(w, &v.Aliases[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListGrantsResponse appends v as a json object.
+func appendJSONListGrantsResponse(w *awsjson.Writer, v *ListGrantsResponse) {
+	start := w.ObjectStart()
+	if v.Grants != nil {
+		w.Raw(`,"Grants":`)
+		w.Byte('[')
+		for i0 := range v.Grants {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONGrantListEntry(w, &v.Grants[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListKeyPoliciesOutput appends v as a json object.
+func appendJSONListKeyPoliciesOutput(w *awsjson.Writer, v *ListKeyPoliciesOutput) {
+	start := w.ObjectStart()
+	if v.PolicyNames != nil {
+		w.Raw(`,"PolicyNames":`)
+		w.Byte('[')
+		for i0 := range v.PolicyNames {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			w.String(v.PolicyNames[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListKeyRotationsOutput appends v as a json object.
+func appendJSONListKeyRotationsOutput(w *awsjson.Writer, v *ListKeyRotationsOutput) {
+	start := w.ObjectStart()
+	if v.Rotations != nil {
+		w.Raw(`,"Rotations":`)
+		w.Byte('[')
+		for i0 := range v.Rotations {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONRotationsListEntry(w, &v.Rotations[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListKeysOutput appends v as a json object.
+func appendJSONListKeysOutput(w *awsjson.Writer, v *ListKeysOutput) {
+	start := w.ObjectStart()
+	if v.Keys != nil {
+		w.Raw(`,"Keys":`)
+		w.Byte('[')
+		for i0 := range v.Keys {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONKeyListEntry(w, &v.Keys[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONListResourceTagsOutput appends v as a json object.
+func appendJSONListResourceTagsOutput(w *awsjson.Writer, v *ListResourceTagsOutput) {
+	start := w.ObjectStart()
+	if v.Tags != nil {
+		w.Raw(`,"Tags":`)
+		w.Byte('[')
+		for i0 := range v.Tags {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONTag(w, &v.Tags[i0])
+		}
+		w.Byte(']')
+	}
+	if v.NextMarker != nil {
+		w.Raw(`,"NextMarker":`)
+		w.String(*v.NextMarker)
+	}
+	if v.Truncated != nil {
+		w.Raw(`,"Truncated":`)
+		w.Bool(*v.Truncated)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONMultiRegionConfiguration appends v as a json object.
+func appendJSONMultiRegionConfiguration(w *awsjson.Writer, v *MultiRegionConfiguration) {
+	start := w.ObjectStart()
+	if v.MultiRegionKeyType != nil {
+		w.Raw(`,"MultiRegionKeyType":`)
+		w.String(*v.MultiRegionKeyType)
+	}
+	if v.PrimaryKey != nil {
+		w.Raw(`,"PrimaryKey":`)
+		appendJSONMultiRegionKey(w, v.PrimaryKey)
+	}
+	if v.ReplicaKeys != nil {
+		w.Raw(`,"ReplicaKeys":`)
+		w.Byte('[')
+		for i0 := range v.ReplicaKeys {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONMultiRegionKey(w, &v.ReplicaKeys[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONMultiRegionKey appends v as a json object.
+func appendJSONMultiRegionKey(w *awsjson.Writer, v *MultiRegionKey) {
+	start := w.ObjectStart()
+	if v.Arn != nil {
+		w.Raw(`,"Arn":`)
+		w.String(*v.Arn)
+	}
+	if v.Region != nil {
+		w.Raw(`,"Region":`)
+		w.String(*v.Region)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONPutKeyPolicyOutput appends v as a json object.
+func appendJSONPutKeyPolicyOutput(w *awsjson.Writer, v *PutKeyPolicyOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONReEncryptOutput appends v as a json object.
+func appendJSONReEncryptOutput(w *awsjson.Writer, v *ReEncryptOutput) {
+	start := w.ObjectStart()
+	if v.CiphertextBlob != nil {
+		w.Raw(`,"CiphertextBlob":`)
+		w.Blob(v.CiphertextBlob)
+	}
+	if v.SourceKeyId != nil {
+		w.Raw(`,"SourceKeyId":`)
+		w.String(*v.SourceKeyId)
+	}
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.SourceEncryptionAlgorithm != nil {
+		w.Raw(`,"SourceEncryptionAlgorithm":`)
+		w.String(*v.SourceEncryptionAlgorithm)
+	}
+	if v.DestinationEncryptionAlgorithm != nil {
+		w.Raw(`,"DestinationEncryptionAlgorithm":`)
+		w.String(*v.DestinationEncryptionAlgorithm)
+	}
+	if v.SourceKeyMaterialId != nil {
+		w.Raw(`,"SourceKeyMaterialId":`)
+		w.String(*v.SourceKeyMaterialId)
+	}
+	if v.DestinationKeyMaterialId != nil {
+		w.Raw(`,"DestinationKeyMaterialId":`)
+		w.String(*v.DestinationKeyMaterialId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONReplicateKeyOutput appends v as a json object.
+func appendJSONReplicateKeyOutput(w *awsjson.Writer, v *ReplicateKeyOutput) {
+	start := w.ObjectStart()
+	if v.ReplicaKeyMetadata != nil {
+		w.Raw(`,"ReplicaKeyMetadata":`)
+		appendJSONKeyMetadata(w, v.ReplicaKeyMetadata)
+	}
+	if v.ReplicaPolicy != nil {
+		w.Raw(`,"ReplicaPolicy":`)
+		w.String(*v.ReplicaPolicy)
+	}
+	if v.ReplicaTags != nil {
+		w.Raw(`,"ReplicaTags":`)
+		w.Byte('[')
+		for i0 := range v.ReplicaTags {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONTag(w, &v.ReplicaTags[i0])
+		}
+		w.Byte(']')
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONRetireGrantOutput appends v as a json object.
+func appendJSONRetireGrantOutput(w *awsjson.Writer, v *RetireGrantOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONRevokeGrantOutput appends v as a json object.
+func appendJSONRevokeGrantOutput(w *awsjson.Writer, v *RevokeGrantOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONRotateKeyOnDemandOutput appends v as a json object.
+func appendJSONRotateKeyOnDemandOutput(w *awsjson.Writer, v *RotateKeyOnDemandOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONRotationsListEntry appends v as a json object.
+func appendJSONRotationsListEntry(w *awsjson.Writer, v *RotationsListEntry) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.KeyMaterialId != nil {
+		w.Raw(`,"KeyMaterialId":`)
+		w.String(*v.KeyMaterialId)
+	}
+	if v.KeyMaterialDescription != nil {
+		w.Raw(`,"KeyMaterialDescription":`)
+		w.String(*v.KeyMaterialDescription)
+	}
+	if v.ImportState != nil {
+		w.Raw(`,"ImportState":`)
+		w.String(*v.ImportState)
+	}
+	if v.KeyMaterialState != nil {
+		w.Raw(`,"KeyMaterialState":`)
+		w.String(*v.KeyMaterialState)
+	}
+	if v.ExpirationModel != nil {
+		w.Raw(`,"ExpirationModel":`)
+		w.String(*v.ExpirationModel)
+	}
+	if v.ValidTo != nil && !v.ValidTo.IsZero() {
+		w.Raw(`,"ValidTo":`)
+		w.Time(v.ValidTo)
+	}
+	if v.RotationDate != nil && !v.RotationDate.IsZero() {
+		w.Raw(`,"RotationDate":`)
+		w.Time(v.RotationDate)
+	}
+	if v.RotationType != nil {
+		w.Raw(`,"RotationType":`)
+		w.String(*v.RotationType)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONScheduleKeyDeletionOutput appends v as a json object.
+func appendJSONScheduleKeyDeletionOutput(w *awsjson.Writer, v *ScheduleKeyDeletionOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.DeletionDate != nil && !v.DeletionDate.IsZero() {
+		w.Raw(`,"DeletionDate":`)
+		w.Time(v.DeletionDate)
+	}
+	if v.KeyState != nil {
+		w.Raw(`,"KeyState":`)
+		w.String(*v.KeyState)
+	}
+	if v.PendingWindowInDays != nil {
+		w.Raw(`,"PendingWindowInDays":`)
+		w.Int32(*v.PendingWindowInDays)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONSignOutput appends v as a json object.
+func appendJSONSignOutput(w *awsjson.Writer, v *SignOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.Signature != nil {
+		w.Raw(`,"Signature":`)
+		w.Blob(v.Signature)
+	}
+	if v.SigningAlgorithm != nil {
+		w.Raw(`,"SigningAlgorithm":`)
+		w.String(*v.SigningAlgorithm)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONTag appends v as a json object.
+func appendJSONTag(w *awsjson.Writer, v *Tag) {
+	start := w.ObjectStart()
+	if v.TagKey != nil {
+		w.Raw(`,"TagKey":`)
+		w.String(*v.TagKey)
+	}
+	if v.TagValue != nil {
+		w.Raw(`,"TagValue":`)
+		w.String(*v.TagValue)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONTagResourceOutput appends v as a json object.
+func appendJSONTagResourceOutput(w *awsjson.Writer, v *TagResourceOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUntagResourceOutput appends v as a json object.
+func appendJSONUntagResourceOutput(w *awsjson.Writer, v *UntagResourceOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUpdateAliasOutput appends v as a json object.
+func appendJSONUpdateAliasOutput(w *awsjson.Writer, v *UpdateAliasOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUpdateCustomKeyStoreOutput appends v as a json object.
+func appendJSONUpdateCustomKeyStoreOutput(w *awsjson.Writer, v *UpdateCustomKeyStoreOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUpdateKeyDescriptionOutput appends v as a json object.
+func appendJSONUpdateKeyDescriptionOutput(w *awsjson.Writer, v *UpdateKeyDescriptionOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONUpdatePrimaryRegionOutput appends v as a json object.
+func appendJSONUpdatePrimaryRegionOutput(w *awsjson.Writer, v *UpdatePrimaryRegionOutput) {
+	start := w.ObjectStart()
+	w.ObjectEnd(start)
+}
+
+// appendJSONVerifyMacOutput appends v as a json object.
+func appendJSONVerifyMacOutput(w *awsjson.Writer, v *VerifyMacOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.MacValid != nil {
+		w.Raw(`,"MacValid":`)
+		w.Bool(*v.MacValid)
+	}
+	if v.MacAlgorithm != nil {
+		w.Raw(`,"MacAlgorithm":`)
+		w.String(*v.MacAlgorithm)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONVerifyOutput appends v as a json object.
+func appendJSONVerifyOutput(w *awsjson.Writer, v *VerifyOutput) {
+	start := w.ObjectStart()
+	if v.KeyId != nil {
+		w.Raw(`,"KeyId":`)
+		w.String(*v.KeyId)
+	}
+	if v.SignatureValid != nil {
+		w.Raw(`,"SignatureValid":`)
+		w.Bool(*v.SignatureValid)
+	}
+	if v.SigningAlgorithm != nil {
+		w.Raw(`,"SigningAlgorithm":`)
+		w.String(*v.SigningAlgorithm)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONXksKeyConfigurationType appends v as a json object.
+func appendJSONXksKeyConfigurationType(w *awsjson.Writer, v *XksKeyConfigurationType) {
+	start := w.ObjectStart()
+	if v.Id != nil {
+		w.Raw(`,"Id":`)
+		w.String(*v.Id)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONXksProxyConfigurationType appends v as a json object.
+func appendJSONXksProxyConfigurationType(w *awsjson.Writer, v *XksProxyConfigurationType) {
+	start := w.ObjectStart()
+	if v.Connectivity != nil {
+		w.Raw(`,"Connectivity":`)
+		w.String(*v.Connectivity)
+	}
+	if v.AccessKeyId != nil {
+		w.Raw(`,"AccessKeyId":`)
+		w.String(*v.AccessKeyId)
+	}
+	if v.UriEndpoint != nil {
+		w.Raw(`,"UriEndpoint":`)
+		w.String(*v.UriEndpoint)
+	}
+	if v.UriPath != nil {
+		w.Raw(`,"UriPath":`)
+		w.String(*v.UriPath)
+	}
+	if v.VpcEndpointServiceName != nil {
+		w.Raw(`,"VpcEndpointServiceName":`)
+		w.String(*v.VpcEndpointServiceName)
+	}
+	if v.VpcEndpointServiceOwner != nil {
+		w.Raw(`,"VpcEndpointServiceOwner":`)
+		w.String(*v.VpcEndpointServiceOwner)
+	}
+	w.ObjectEnd(start)
+}

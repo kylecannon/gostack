@@ -44,10 +44,21 @@ type errorBody struct {
 // the map directly: Header.Set would canonicalize "x-amzn-RequestId" to
 // "X-Amzn-Requestid", and LocalStack sends the former.
 func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
+	encode := Encode
+
+	if a, ok := out.(Appender); ok {
+		if writeAppended(w, requestID, version, a) {
+			return
+		}
+
+		// a refused its value: v2 refuses it too, with its own error.
+		encode = encodeReflect
+	}
+
 	body := []byte("{}")
 
 	if out != nil {
-		encoded, err := Encode(out)
+		encoded, err := encode(out)
 		if err != nil {
 			WriteError(w, nil, requestID, err, ErrorOptions{})
 
@@ -57,6 +68,27 @@ func WriteResponse(w http.ResponseWriter, requestID, version string, out any) {
 		body = encoded
 	}
 
+	writeOK(w, requestID, version, body)
+}
+
+// writeAppended writes a's json as the body of a 200 response, from a reused
+// buffer: a Write never keeps the slice it is given, so the buffer goes back
+// once written. It writes nothing and returns false when a refuses its value.
+func writeAppended(w http.ResponseWriter, requestID, version string, a Appender) bool {
+	bp := getBuffer()
+
+	body, err := a.AppendJSON(*bp)
+	if err == nil {
+		writeOK(w, requestID, version, body)
+	}
+
+	*bp = body
+	putBuffer(bp)
+
+	return err == nil
+}
+
+func writeOK(w http.ResponseWriter, requestID, version string, body []byte) {
 	h := w.Header()
 	h["Content-Type"] = []string{"application/x-amz-json-" + version}
 	h["x-amzn-RequestId"] = []string{requestID}

@@ -99,18 +99,7 @@ func (g *generator) emitServe(p *printer) {
 	p.f("func serve(h Handler, w http.ResponseWriter, rc *request.Context, validate bool) {")
 
 	if g.hasProtocol(protoQuery) {
-		// AWS Common Errors: "MissingAction ... HTTP Status Code: 400". LocalStack
-		// answers 500 for a query call with no Action, so this one differs from it.
-		p.f("\tif rc.Operation == \"\" && rc.Protocol == protocol.KindQuery {")
-		p.f("\t\twriteError(w, rc, &awserr.Error{")
-		p.f("\t\t\tCode: \"MissingAction\",")
-		p.f("\t\t\tMessage: \"The request is missing an action or a required parameter.\",")
-		p.f("\t\t\tStatusCode: 400,")
-		p.f("\t\t\tFault: awserr.FaultSender,")
-		p.f("\t\t})")
-		p.f("\t\treturn")
-		p.f("\t}")
-		p.blank()
+		emitMissingAction(p)
 	}
 
 	p.f("\tswitch rc.Operation {")
@@ -129,6 +118,34 @@ func (g *generator) emitServe(p *printer) {
 	p.f("\t\t})")
 	p.f("\t}")
 	p.f("}")
+	p.blank()
+}
+
+// emitMissingAction writes the answer of a query call that names no Action.
+//
+// AWS Common Errors: "MissingAction ... HTTP Status Code: 400". LocalStack
+// answers 500 for a query call with no Action, so this one differs from it.
+// A form that was cut, over the body cap or without room, may have lost its
+// Action: it is answered as the form error a call with its Action in the URL
+// gets, by this service's writer. A context with no request has no form to have
+// been cut, so it is answered MissingAction.
+func emitMissingAction(p *printer) {
+	p.f("\tif rc.Operation == \"\" && rc.Protocol == protocol.KindQuery {")
+	p.f("\t\tif rc.Request != nil {")
+	p.f("\t\t\t_, formErr := query.RequestFormHeld(rc.Request, rc)")
+	p.f("\t\t\tif cut := query.CutFormAnswer(formErr); cut != nil {")
+	p.f("\t\t\t\twriteError(w, rc, cut)")
+	p.f("\t\t\t\treturn")
+	p.f("\t\t\t}")
+	p.f("\t\t}")
+	p.f("\t\twriteError(w, rc, &awserr.Error{")
+	p.f("\t\t\tCode: \"MissingAction\",")
+	p.f("\t\t\tMessage: \"The request is missing an action or a required parameter.\",")
+	p.f("\t\t\tStatusCode: 400,")
+	p.f("\t\t\tFault: awserr.FaultSender,")
+	p.f("\t\t})")
+	p.f("\t\treturn")
+	p.f("\t}")
 	p.blank()
 }
 
