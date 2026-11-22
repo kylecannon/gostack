@@ -49,6 +49,25 @@ func (w *Writer) Raw(s string) {
 	w.buf = append(w.buf, s...)
 }
 
+// Encoded is one value already encoded as json, which a generated encoder
+// appends as it is: a member whose shape the service's codegen options name
+// as pre-encoded has an Encoded sibling (docs/architecture.md, "Pre-encoded
+// values"). The bytes are the caller's and never checked: they must be exactly
+// one json value, written as encoding/json/v2 would write the typed value.
+// Empty is no value: null inside a list or a map, and an absent member.
+type Encoded []byte
+
+// Encoded appends v as it is, and null for an empty v.
+func (w *Writer) Encoded(v Encoded) {
+	if len(v) == 0 {
+		w.Null()
+
+		return
+	}
+
+	w.buf = append(w.buf, v...)
+}
+
 // Byte appends one byte of punctuation.
 func (w *Writer) Byte(c byte) {
 	w.buf = append(w.buf, c)

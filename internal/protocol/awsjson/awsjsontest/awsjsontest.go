@@ -281,8 +281,11 @@ func (f *filler) fill(v reflect.Value, depth int) {
 		v.Set(reflect.New(v.Type().Elem()))
 		f.fill(v.Elem(), depth+1)
 	case reflect.Struct:
-		for _, field := range v.Fields() {
-			f.fill(field, depth)
+		for sf, field := range v.Fields() {
+			// An encoded sibling stays nil, so the member itself is written.
+			if !holdsEncoded(sf.Type) {
+				f.fill(field, depth)
+			}
 		}
 	case reflect.Slice:
 		f.fillSlice(v, depth)

@@ -19,8 +19,11 @@ import (
 // and a struct whose timestamps take another format than epoch seconds, which
 // its generated MarshalJSONTo writes.
 //
-// Each struct's function is the one place its members are written, so a
-// struct that comes to hold its json already encoded appends it there.
+// Each struct's function is the one place its members are written, so a member
+// with an encoded sibling (markEncoded) is written there from the sibling when
+// that is set, its encoded values appended as they are, and from the member
+// otherwise. v2 skips the sibling, so the generated test moves each value into
+// it and compares with the typed form instead.
 
 // jsonEncodedStructs lists the structs below the operation outputs, sorted by
 // name.
@@ -109,6 +112,15 @@ func (g *generator) jsonTestFile() (string, error) {
 	p.f("\tawsjsontest.CheckRandom(t, jsonOutputs, %d)", jsonEncodeRounds)
 	p.f("}")
 	p.blank()
+
+	if len(g.opts.EncodedShapes) > 0 {
+		p.f("func TestJSONEncodedMatchesTyped(t *testing.T) {")
+		p.f("\tt.Parallel()")
+		p.f("\tawsjsontest.CheckEncoded(t, jsonOutputs, %d)", jsonEncodeRounds)
+		p.f("}")
+		p.blank()
+	}
+
 	p.f("func FuzzJSONEncode(f *testing.F) {")
 	p.f("\tawsjsontest.Fuzz(f, jsonOutputs)")
 	p.f("}")
@@ -162,33 +174,64 @@ func (g *generator) emitStructEncoder(p *printer, st *structType) error {
 			continue
 		}
 
-		name, err := jsonNameLiteral(f.jsonName)
-		if err != nil {
-			return err
-		}
-
-		r := f.pair.p
-		expr := "v." + f.goName
-
-		cond := expr + " != nil"
-		if r.shape.Type == spec.TypeTimestamp && !r.shape.Document {
-			cond += " && !" + expr + ".IsZero()"
-		}
-
-		p.f("\tif %s {", cond)
-		p.f("\t\tw.Raw(`,%s:`)", name)
-
-		err = g.emitJSONValue(p, r, expr, siteMember, 0, "\t\t")
+		err := g.emitMemberEncoder(p, f)
 		if err != nil {
 			return fmt.Errorf("member %s: %w", f.member, err)
 		}
-
-		p.f("\t}")
 	}
 
 	p.f("\tw.ObjectEnd(start)")
 	p.f("}")
 	p.blank()
+
+	return nil
+}
+
+// emitMemberEncoder writes the code that appends one member when it is set,
+// from its encoded sibling when the member has one and that is set.
+func (g *generator) emitMemberEncoder(p *printer, f *field) error {
+	name, err := jsonNameLiteral(f.jsonName)
+	if err != nil {
+		return err
+	}
+
+	r := f.pair.p
+	expr := "v." + f.goName
+
+	cond := expr + " != nil"
+	if r.shape.Type == spec.TypeTimestamp && !r.shape.Document {
+		cond += " && !" + expr + ".IsZero()"
+	}
+
+	if e := f.encoded; e != nil {
+		encExpr := "v." + e.goName
+
+		encCond := encExpr + " != nil"
+		if e.leaf {
+			encCond = "len(" + encExpr + ") != 0"
+		}
+
+		p.f("\tif %s {", encCond)
+		p.f("\t\tw.Raw(`,%s:`)", name)
+
+		err = g.emitJSONValue(p, r, encExpr, siteMember, 0, "\t\t", g.opts.EncodedShapes)
+		if err != nil {
+			return err
+		}
+
+		p.f("\t} else if %s {", cond)
+	} else {
+		p.f("\tif %s {", cond)
+	}
+
+	p.f("\t\tw.Raw(`,%s:`)", name)
+
+	err = g.emitJSONValue(p, r, expr, siteMember, 0, "\t\t", nil)
+	if err != nil {
+		return err
+	}
+
+	p.f("\t}")
 
 	return nil
 }
@@ -206,8 +249,18 @@ func jsonNameLiteral(name string) (string, error) {
 }
 
 // emitJSONValue writes the code that appends the value of r held in expr at
-// the given site. depth names the loop variables of nested collections.
-func (g *generator) emitJSONValue(p *printer, r ref, expr string, at site, depth int, indent string) error {
+// the given site. depth names the loop variables of nested collections. A
+// value of a shape in encoded is an awsjson.Encoded, appended as it is: expr
+// is an encoded sibling when encoded is not empty.
+func (g *generator) emitJSONValue(
+	p *printer, r ref, expr string, at site, depth int, indent string, encoded []string,
+) error {
+	if slices.Contains(encoded, r.name) {
+		p.f("%sw.Encoded(%s)", indent, expr)
+
+		return nil
+	}
+
 	if r.shape.Document {
 		p.f("%sw.Reflect(%s)", indent, expr)
 
@@ -241,9 +294,9 @@ func (g *generator) emitJSONValue(p *printer, r ref, expr string, at site, depth
 			p.f("%sappendJSON%s(w, &%s)", indent, g.goTypeName(r.name), expr)
 		}
 	case spec.TypeList:
-		return g.emitJSONList(p, r, expr, at, depth, indent)
+		return g.emitJSONList(p, r, expr, at, depth, indent, encoded)
 	case spec.TypeMap:
-		return g.emitJSONMap(p, r, expr, at, depth, indent)
+		return g.emitJSONMap(p, r, expr, at, depth, indent, encoded)
 	default:
 		return fmt.Errorf("shape %s has unsupported type %q", r.name, r.shape.Type)
 	}
@@ -266,7 +319,9 @@ func nilAsNull(p *printer, at site, expr, indent string) (string, func()) {
 	return indent + "\t", func() { p.f("%s}", indent) }
 }
 
-func (g *generator) emitJSONList(p *printer, r ref, expr string, at site, depth int, indent string) error {
+func (g *generator) emitJSONList(
+	p *printer, r ref, expr string, at site, depth int, indent string, encoded []string,
+) error {
 	elem, err := resolve(g.p, r.shape.Member)
 	if err != nil {
 		return err
@@ -281,7 +336,7 @@ func (g *generator) emitJSONList(p *printer, r ref, expr string, at site, depth 
 	p.f("%s\t\tw.Byte(',')", in)
 	p.f("%s\t}", in)
 
-	err = g.emitJSONValue(p, elem, fmt.Sprintf("%s[%s]", expr, i), siteElement, depth+1, in+"\t")
+	err = g.emitJSONValue(p, elem, fmt.Sprintf("%s[%s]", expr, i), siteElement, depth+1, in+"\t", encoded)
 	if err != nil {
 		return err
 	}
@@ -293,7 +348,9 @@ func (g *generator) emitJSONList(p *printer, r ref, expr string, at site, depth 
 	return nil
 }
 
-func (g *generator) emitJSONMap(p *printer, r ref, expr string, at site, depth int, indent string) error {
+func (g *generator) emitJSONMap(
+	p *printer, r ref, expr string, at site, depth int, indent string, encoded []string,
+) error {
 	value, err := resolve(g.p, r.shape.Value)
 	if err != nil {
 		return err
@@ -312,7 +369,7 @@ func (g *generator) emitJSONMap(p *printer, r ref, expr string, at site, depth i
 	p.f("%s\tw.String(%s)", in, k)
 	p.f("%s\tw.Byte(':')", in)
 
-	err = g.emitJSONValue(p, value, e, siteElement, depth+1, in+"\t")
+	err = g.emitJSONValue(p, value, e, siteElement, depth+1, in+"\t", encoded)
 	if err != nil {
 		return err
 	}
