@@ -31,7 +31,11 @@ FILES ?=
 #   make parity SERVICES=sqs,sts            the same suite against GOSTACK_IMAGE
 #   make parity-check                       ledger unit tests, then fail when a gostack pass at PARITY_BASE stops passing unlisted in parity/demotions.yaml
 #   make parity-prune [DRY_RUN=1]           drop ledger rows whose test is gone from the pinned checkout, listing passing ones in parity/demotions.yaml
-# Both runs merge into parity/ledger/<service>.json and rewrite docs/parity.md.
+# Both runs merge into parity/ledger/<service>.json and rewrite docs/parity.md,
+# and then docs/features.md (make features), which states each service's status
+# from the ledger. That refresh never changes the run's exit status: when it
+# fails, for want of go or a module cache, it prints one warning line. CI=true
+# skips it: ci.yml's features-check holds the committed page.
 SERVICES ?= sqs,sts
 GOSTACK_IMAGE ?= ghcr.io/kylecannon/gostack:latest
 PARITY_BASE ?= HEAD
@@ -121,7 +125,7 @@ BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image 
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-select bench-system bench-system-quick
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check features features-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-select bench-system bench-system-quick
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -174,6 +178,24 @@ gen-check: gen
 	@untracked=$$(git ls-files --others --exclude-standard -- $(GEN_DIRS)); \
 	if [ -n "$$untracked" ]; then echo "untracked generated files:" >&2; echo "$$untracked" >&2; exit 1; fi
 
+# docs/features.md states, per service, the operations the binary implements and
+# the status the parity ledger gives it. Test_featureFacts (cmd/gostack) writes
+# the registered services' facts to a temporary file and parity/features.py
+# renders the page from it, so a page is never written by hand. features-check
+# renders the same page and fails when docs/features.md differs; it changes no
+# file.
+define run-features
+facts=$$(mktemp) && log=$$(mktemp) && trap 'rm -f "$$facts" "$$log"' EXIT && \
+{ GOSTACK_FEATURES_FACTS="$$facts" go test -race -count=1 -run '^Test_featureFacts$$' ./cmd/gostack >"$$log" 2>&1 || { cat "$$log" >&2; exit 1; }; } && \
+python3 parity/features.py $(1) --facts "$$facts"
+endef
+
+features:
+	@$(call run-features,write)
+
+features-check:
+	@$(call run-features,check)
+
 # Runs every Fuzz* function in a *_test.go file for FUZZTIME each, e.g.
 # `make fuzz FUZZTIME=5s`. go test accepts one -fuzz target and one package at a
 # time, so each target has its own invocation. A crash does not stop the loop:
@@ -197,11 +219,17 @@ toolchain:
 packages:
 	@scripts/go-packages.sh $(FILES)
 
+# The refresh of docs/features.md after a parity run: one warning line, and the
+# parity run's exit status, when it fails.
+FEATURES_REFRESH = @$(MAKE) --no-print-directory features >/dev/null 2>&1 || echo "warning: docs/features.md was not refreshed; run make features"
+
 parity:
 	parity/run.sh gostack
+	$(if $(filter true,$(CI)),,$(FEATURES_REFRESH))
 
 parity-baseline:
 	parity/run.sh localstack
+	$(if $(filter true,$(CI)),,$(FEATURES_REFRESH))
 
 # Runs the ledger's unit tests, then compares the working-tree ledger with the
 # one at PARITY_BASE (default HEAD; on a pull request CI passes the base parent
@@ -216,6 +244,7 @@ parity-check:
 # nothing (make takes a bare --dry-run for itself). LOCALSTACK_DIR picks the checkout.
 parity-prune:
 	python3 parity/ledger.py prune $(if $(LOCALSTACK_DIR),--localstack $(LOCALSTACK_DIR)) $(if $(DRY_RUN),--dry-run)
+	$(if $(or $(filter true,$(CI)),$(DRY_RUN)),,$(FEATURES_REFRESH))
 
 image:
 	$(DOCKER) build -f docker/Dockerfile $(IMAGE_BUILD_ARGS) -t $(IMAGE) .
