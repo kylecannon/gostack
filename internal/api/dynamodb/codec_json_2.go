@@ -127,7 +127,7 @@ func appendJSONProvisionedThroughputOverride(w *awsjson.Writer, v *ProvisionedTh
 func appendJSONPutItemOutput(w *awsjson.Writer, v *PutItemOutput) {
 	start := w.ObjectStart()
 	if len(v.AttributesJSON) != 0 {
-		w.Raw(`,"Attributes":`)
+		w.EncodedMember(`,"Attributes":`)
 		w.Encoded(v.AttributesJSON)
 	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)
@@ -190,7 +190,7 @@ func appendJSONPutResourcePolicyOutput(w *awsjson.Writer, v *PutResourcePolicyOu
 func appendJSONQueryOutput(w *awsjson.Writer, v *QueryOutput) {
 	start := w.ObjectStart()
 	if v.ItemsJSON != nil {
-		w.Raw(`,"Items":`)
+		w.EncodedMember(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.ItemsJSON {
 			if i0 > 0 {
@@ -586,7 +586,7 @@ func appendJSONSSESpecification(w *awsjson.Writer, v *SSESpecification) {
 func appendJSONScanOutput(w *awsjson.Writer, v *ScanOutput) {
 	start := w.ObjectStart()
 	if v.ItemsJSON != nil {
-		w.Raw(`,"Items":`)
+		w.EncodedMember(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.ItemsJSON {
 			if i0 > 0 {
@@ -1226,7 +1226,7 @@ func appendJSONUpdateGlobalTableSettingsOutput(w *awsjson.Writer, v *UpdateGloba
 func appendJSONUpdateItemOutput(w *awsjson.Writer, v *UpdateItemOutput) {
 	start := w.ObjectStart()
 	if len(v.AttributesJSON) != 0 {
-		w.Raw(`,"Attributes":`)
+		w.EncodedMember(`,"Attributes":`)
 		w.Encoded(v.AttributesJSON)
 	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)

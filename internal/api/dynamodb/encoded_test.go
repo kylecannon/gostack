@@ -1,6 +1,8 @@
 package dynamodb_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -194,6 +196,49 @@ func TestEncodedPrecedence(t *testing.T) {
 	none, err := (&dynamodb.GetItemOutput{ItemJSON: awsjson.Encoded{}}).AppendJSON(nil)
 	require.NoError(t, err)
 	require.Equal(t, `{}`, string(none))
+}
+
+// A value the encoder refuses beside a member written from its sibling answers
+// InternalError, as the typed form does: v2, which never reads a sibling,
+// would answer 200 without the member.
+func TestEncodedRefusal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		out  awsjson.Appender
+	}{
+		{"typed table name", &dynamodb.BatchGetItemOutput{
+			Responses: map[string][]map[string]dynamodb.AttributeValue{"t\xff": {flatItem}},
+		}},
+		{"encoded table name", &dynamodb.BatchGetItemOutput{
+			ResponsesJSON: map[string][]awsjson.Encoded{"t\xff": {awsjson.Encoded(flatJSON)}},
+		}},
+		{"encoded table name, no items", &dynamodb.BatchGetItemOutput{
+			ResponsesJSON: map[string][]awsjson.Encoded{"t\xff": {}},
+		}},
+		{"typed key beside encoded items", &dynamodb.QueryOutput{
+			ItemsJSON:        []awsjson.Encoded{awsjson.Encoded(flatJSON)},
+			LastEvaluatedKey: map[string]dynamodb.AttributeValue{"pk": {S: new("\xff")}},
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			awsjson.WriteResponse(rec, "rid", "1.0", tt.out)
+			require.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
+			require.Contains(t, rec.Body.String(), `"__type":"InternalError"`)
+			require.Contains(t, rec.Body.String(), "UTF-8")
+
+			body, err := awsjson.Encode(tt.out)
+			require.Nil(t, body)
+			require.NotNil(t, err)
+			require.Contains(t, err.Error(), "UTF-8")
+		})
+	}
 }
 
 // Encoded items are appended to the buffer they are given: no reflection and

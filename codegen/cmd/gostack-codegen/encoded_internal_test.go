@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/kylecannon/gostack/codegen/spec"
@@ -10,8 +11,9 @@ import (
 
 // encodedModel is a json service whose output holds an ItemMap as a member,
 // in a list and in a map of lists, and in a nested structure. %s is the
-// protocol, %s more members of GetResponse and %s more shapes.
-const encodedModel = `{"metadata":{"protocol":%q,"jsonVersion":"1.0","targetPrefix":"Enc",
+// protocol member of the metadata, %s more members of GetResponse and %s more
+// shapes.
+const encodedModel = `{"metadata":{%s,"jsonVersion":"1.0","targetPrefix":"Enc",
 	"apiVersion":"2020-01-01","endpointPrefix":"enc"},
 	"operations":{"Get":{"name":"Get","http":{"method":"POST","requestUri":"/"},
 		"input":{"shape":"GetRequest"},"output":{"shape":"GetResponse"}}},
@@ -29,10 +31,17 @@ const encodedModel = `{"metadata":{"protocol":%q,"jsonVersion":"1.0","targetPref
 // itemMap is the shape of encodedModel the tests encode.
 const itemMap = "ItemMap"
 
+// encodedGenerator builds encodedModel. protocol is one protocol, or a json
+// list of them.
 func encodedGenerator(t *testing.T, protocol, members, shapes string, opts serviceOptions) (*generator, error) {
 	t.Helper()
 
-	svc, err := spec.ParseBytes(fmt.Appendf(nil, encodedModel, protocol, members, shapes))
+	meta := fmt.Sprintf(`"protocol":%q`, protocol)
+	if strings.HasPrefix(protocol, "[") {
+		meta = `"protocols":` + protocol
+	}
+
+	svc, err := spec.ParseBytes(fmt.Appendf(nil, encodedModel, meta, members, shapes))
 	require.NoError(t, err)
 
 	return newModel("enc", opts, svc, nil)
@@ -68,8 +77,8 @@ func Test_markEncoded(t *testing.T) {
 
 	codec, err := g.jsonFile()
 	require.NoError(t, err)
-	require.Contains(t, codec, "\tif len(v.ItemJSON) != 0 {\n\t\tw.Raw(`,\"Item\":`)\n\t\tw.Encoded(v.ItemJSON)\n"+
-		"\t} else if v.Item != nil {\n")
+	require.Contains(t, codec, "\tif len(v.ItemJSON) != 0 {\n\t\tw.EncodedMember(`,\"Item\":`)\n"+
+		"\t\tw.Encoded(v.ItemJSON)\n\t} else if v.Item != nil {\n")
 	require.Contains(t, codec, "\tif v.ItemsJSON != nil {\n")
 	require.Contains(t, codec, "w.Encoded(v.ItemsJSON[i0])")
 	require.Contains(t, codec, "for k0, e0 := range v.TablesJSON {")
@@ -131,9 +140,21 @@ func Test_markEncoded_errors(t *testing.T) {
 		{
 			name: "struct v2 writes", protocol: protoJSON, opts: item, members: timestamp,
 			shapes:  `,"Stamp":{"type":"timestamp","timestampFormat":"iso8601"}`,
-			wantErr: "v2 writes the struct for its timestamps",
+			wantErr: "GetOutput: v2 writes the struct for its timestamps, and GetOutput below it",
 		},
-		{name: "rest-json", protocol: protoRestJSON, opts: item, wantErr: "needs the json protocol"},
+		{
+			// Outer has no encoded member, but v2 writes the Wrapped in its list.
+			name: "struct below one v2 writes", protocol: protoJSON, opts: item, members: `,"Outer":{"shape":"Outer"}`,
+			shapes: `,"Stamp":{"type":"timestamp","timestampFormat":"iso8601"},` +
+				`"WrappedList":{"type":"list","member":{"shape":"Wrapped"}},` +
+				`"Outer":{"type":"structure","members":{"Many":{"shape":"WrappedList"},"When":{"shape":"Stamp"}}}`,
+			wantErr: "Outer: v2 writes the struct for its timestamps, and Wrapped below it has an encoded member",
+		},
+		{name: "rest-json", protocol: protoRestJSON, opts: item, wantErr: "needs json as the only protocol"},
+		{
+			name: "json and query", protocol: `["json","query"]`, opts: item,
+			wantErr: "needs json as the only protocol, not [json query]",
+		},
 	}
 
 	for _, tt := range tests {

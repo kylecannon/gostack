@@ -212,7 +212,7 @@ func (g *generator) emitMemberEncoder(p *printer, f *field) error {
 		}
 
 		p.f("\tif %s {", encCond)
-		p.f("\t\tw.Raw(`,%s:`)", name)
+		p.f("\t\tw.EncodedMember(`,%s:`)", name)
 
 		err = g.emitJSONValue(p, r, encExpr, siteMember, 0, "\t\t", g.opts.EncodedShapes)
 		if err != nil {

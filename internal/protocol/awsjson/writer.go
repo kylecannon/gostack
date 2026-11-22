@@ -3,6 +3,7 @@ package awsjson
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 
@@ -13,7 +14,8 @@ import (
 // json service is one: AppendJSON appends the value to b, byte for byte as
 // encoding/json/v2 writes it with the options of this package, without
 // reflection. The error is the first value v2 refuses, invalid UTF-8 in a
-// string; Encode then runs v2 itself, so the error is v2's own. The encoder
+// string; Encode then runs v2 itself, so the error is v2's own, unless the
+// value holds a member written from its encoded sibling (Result). The encoder
 // does not count depth: v2 refuses a value nested past 10000 levels, and the
 // encoder writes it. No output nests that deep: DynamoDB refuses an attribute
 // value past 32 levels.
@@ -25,12 +27,20 @@ type Appender interface {
 // it too.
 var errInvalidUTF8 = errors.New("string is not valid UTF-8")
 
+// errEncodedRefused wraps the error of a value that also holds a member
+// written from its encoded sibling. v2 never reads a sibling and would write
+// the value without that member, so Encode and WriteResponse answer the error
+// instead of running v2.
+var errEncodedRefused = errors.New("a response with pre-encoded members holds a value json cannot write")
+
 // Writer appends json to a buffer for the generated encoders. Its methods
 // write what v2 writes for the same Go value. After an error it keeps
 // appending, and Result reports the first error.
 type Writer struct {
 	buf []byte
 	err error
+	// encoded is set once a member is written from its encoded sibling.
+	encoded bool
 }
 
 // NewWriter returns a Writer that appends to buf.
@@ -38,8 +48,13 @@ func NewWriter(buf []byte) Writer {
 	return Writer{buf: buf}
 }
 
-// Result returns the buffer and the first error.
+// Result returns the buffer and the first error, wrapped in errEncodedRefused
+// when a member was written from its encoded sibling.
 func (w *Writer) Result() ([]byte, error) {
+	if w.err != nil && w.encoded {
+		return w.buf, fmt.Errorf("%w: %w", errEncodedRefused, w.err)
+	}
+
 	return w.buf, w.err
 }
 
@@ -56,6 +71,13 @@ func (w *Writer) Raw(s string) {
 // one json value, written as encoding/json/v2 would write the typed value.
 // Empty is no value: null inside a list or a map, and an absent member.
 type Encoded []byte
+
+// EncodedMember appends the name of a member written from its encoded sibling,
+// a json text as Raw takes, and marks the value as holding one: see Result.
+func (w *Writer) EncodedMember(s string) {
+	w.encoded = true
+	w.buf = append(w.buf, s...)
+}
 
 // Encoded appends v as it is, and null for an empty v.
 func (w *Writer) Encoded(v Encoded) {

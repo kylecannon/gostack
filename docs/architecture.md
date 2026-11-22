@@ -521,14 +521,27 @@ written by hand.
   value. An empty one inside a list or map writes `null`, as a nil map does.
   Decoding, v2 and the typed fields are unchanged, so a handler that never
   sets a sibling writes what it wrote before, and a service without the
-  option generates the same code. v2 never sees a sibling, which is safe
-  because `WriteResponse` falls back to v2 only when the encoder refuses a
-  typed value, and v2 refuses that value too. The generator fails on an
-  option shape no output reaches, a sibling name a member already has, and a
-  member of a struct v2 writes for its timestamps.
+  option generates the same code. Only the generated wire encoder reads a
+  sibling: Go code that reads another handler's output, and every v2 path,
+  sees the typed member, nil when the sibling carries the value. The caller
+  owns the bytes' UTF-8 and json validity, which the typed path checks and
+  this one does not, and keeps them unchanged until `WriteResponse` returns.
+  `WriteResponse` and `Encode` fall back to v2 when the encoder refuses a
+  value, invalid UTF-8 in a typed string or map key, and v2 refuses it too.
+  A value that also holds a member written from its sibling answers
+  InternalError instead (`Writer.EncodedMember` marks it), because v2 would
+  write it without that member. The generator fails on an option shape no
+  output reaches, a sibling name a member already has, a service with a
+  protocol beside json, and a struct v2 writes for its timestamps that holds
+  a sibling or reaches a struct that does. 11 of DynamoDB's 13 response
+  members of `AttributeMap` have a sibling. `ConditionalCheckFailedException.Item`
+  and `CancellationReason.Item` (in `TransactionCanceledException`) have none,
+  because v2 writes errors.
   `TestJSONEncodedMatchesTyped` in the service's generated test moves random
   typed values into their siblings, each marshaled by v2, and compares the
-  json with v2's for the typed value.
+  json with v2's for the typed value. `BenchmarkEncode*` in
+  `internal/api/dynamodb` writes GetItem, Query, BatchGetItem and
+  TransactGetItems outputs in both forms.
 - **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
   generated encoder writes into a reused buffer, given back once the body is
   written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go

@@ -1288,7 +1288,7 @@ func appendJSONBatchExecuteStatementOutput(w *awsjson.Writer, v *BatchExecuteSta
 func appendJSONBatchGetItemOutput(w *awsjson.Writer, v *BatchGetItemOutput) {
 	start := w.ObjectStart()
 	if v.ResponsesJSON != nil {
-		w.Raw(`,"Responses":`)
+		w.EncodedMember(`,"Responses":`)
 		w.Byte('{')
 		first0 := true
 		for k0, e0 := range v.ResponsesJSON {
@@ -1394,7 +1394,7 @@ func appendJSONBatchStatementError(w *awsjson.Writer, v *BatchStatementError) {
 		w.String(*v.Message)
 	}
 	if len(v.ItemJSON) != 0 {
-		w.Raw(`,"Item":`)
+		w.EncodedMember(`,"Item":`)
 		w.Encoded(v.ItemJSON)
 	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
@@ -1426,7 +1426,7 @@ func appendJSONBatchStatementResponse(w *awsjson.Writer, v *BatchStatementRespon
 		w.String(*v.TableName)
 	}
 	if len(v.ItemJSON) != 0 {
-		w.Raw(`,"Item":`)
+		w.EncodedMember(`,"Item":`)
 		w.Encoded(v.ItemJSON)
 	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
@@ -1704,7 +1704,7 @@ func appendJSONDeleteBackupOutput(w *awsjson.Writer, v *DeleteBackupOutput) {
 func appendJSONDeleteItemOutput(w *awsjson.Writer, v *DeleteItemOutput) {
 	start := w.ObjectStart()
 	if len(v.AttributesJSON) != 0 {
-		w.Raw(`,"Attributes":`)
+		w.EncodedMember(`,"Attributes":`)
 		w.Encoded(v.AttributesJSON)
 	} else if v.Attributes != nil {
 		w.Raw(`,"Attributes":`)
@@ -2003,7 +2003,7 @@ func appendJSONEndpoint(w *awsjson.Writer, v *Endpoint) {
 func appendJSONExecuteStatementOutput(w *awsjson.Writer, v *ExecuteStatementOutput) {
 	start := w.ObjectStart()
 	if v.ItemsJSON != nil {
-		w.Raw(`,"Items":`)
+		w.EncodedMember(`,"Items":`)
 		w.Byte('[')
 		for i0 := range v.ItemsJSON {
 			if i0 > 0 {
@@ -2228,7 +2228,7 @@ func appendJSONFailureException(w *awsjson.Writer, v *FailureException) {
 func appendJSONGetItemOutput(w *awsjson.Writer, v *GetItemOutput) {
 	start := w.ObjectStart()
 	if len(v.ItemJSON) != 0 {
-		w.Raw(`,"Item":`)
+		w.EncodedMember(`,"Item":`)
 		w.Encoded(v.ItemJSON)
 	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
@@ -2673,7 +2673,7 @@ func appendJSONItemCollectionMetrics(w *awsjson.Writer, v *ItemCollectionMetrics
 func appendJSONItemResponse(w *awsjson.Writer, v *ItemResponse) {
 	start := w.ObjectStart()
 	if len(v.ItemJSON) != 0 {
-		w.Raw(`,"Item":`)
+		w.EncodedMember(`,"Item":`)
 		w.Encoded(v.ItemJSON)
 	} else if v.Item != nil {
 		w.Raw(`,"Item":`)
