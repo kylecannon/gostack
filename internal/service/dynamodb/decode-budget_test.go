@@ -137,8 +137,14 @@ func Test_decodeBudget_noMemoryLimitServesWhatAWSAccepts(t *testing.T) {
 // after round. The sparse body waits for room under the in-flight bound that
 // the dense body holds, and only that; the dense body is served in every
 // round, not refused for a waiter its own move lets in.
+//
+// This is the review's repro, kept as a smoke test. The refusal it caught came
+// in 4 to 5 rounds of 15, and each round decodes 1.5 million values under
+// -race, so 5 rounds keep the package inside go test's 10 minutes on CI and
+// miss that bug about one run in six. The deterministic guard is
+// awsjson's Test_DecodeWithin_ABodyWaitingOnlyOnTheDenseBodysBytesDoesNotStopIt.
 func Test_decodeBudget_aDenseBodyBesideASparseOneIsServed(t *testing.T) {
-	const rounds = 15
+	const rounds = 5
 
 	roomyMemoryLimit(t)
 	protocol.SetInFlight(protocol.DefaultInFlight)
@@ -268,9 +274,9 @@ func Test_decodeBudget_aBodyAfterOneThatDiedIsServed(t *testing.T) {
 // batches of 7.5 MB sent at once, round after round. One holds the dense lane
 // and is served; the other is served too or answered with a throttle, which
 // an SDK retries, and never refused as too large: it fits once the first is
-// decoded.
+// decoded. The 400 it caught came in every round, so two rounds are enough.
 func Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled(t *testing.T) {
-	const rounds = 4
+	const rounds = 2
 
 	roomyMemoryLimit(t)
 	protocol.SetInFlight(protocol.DefaultInFlight)
