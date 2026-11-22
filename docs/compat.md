@@ -205,15 +205,14 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 
 ### KMS
 
-LocalStack's KMS provider (`services/kms/provider.py` at 8b9a79f) answers 45 of
-the 53 operations in the model, and gostack builds the same 45. The other eight
-answer `501 InternalFailure`, "API action '`<operation>`' for service 'kms' not
-yet implemented", on both, and `/_gostack/services` reports 45 of 53:
-`ConnectCustomKeyStore`, `CreateCustomKeyStore`, `DeleteCustomKeyStore`,
-`DescribeCustomKeyStores`, `DisconnectCustomKeyStore`, `UpdateCustomKeyStore`,
-`ListKeyRotations` and `UpdatePrimaryRegion`. `DeriveSharedSecret` with a
-`Recipient` answers `501` too (its row below). All 151 KMS rows of LocalStack's
-suite pass, with no exclusions (`parity/ledger/kms.json`).
+An operation of the KMS model that gostack does not build answers `501
+InternalFailure`, "API action '`<operation>`' for service 'kms' not yet
+implemented", as LocalStack's provider (`services/kms/provider.py` at 8b9a79f)
+does for one it does not implement. [features.md](features.md#kms) lists the
+operations gostack builds and the ones that answer 501, and agrees with
+`/_gostack/services`. `DeriveSharedSecret` with a `Recipient` answers `501` too
+(its row below). Every KMS row of LocalStack's suite passes, with no exclusions
+(`parity/ledger/kms.json`).
 
 Kept from LocalStack because its tests build and read them, though AWS differs:
 
@@ -348,24 +347,18 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 LocalStack serves DynamoDB by forwarding to Amazon's DynamoDB Local, rewriting
 some requests and answers in its provider (`services/dynamodb/provider.py` at
 8b9a79f). gostack runs a native engine (`docs/architecture.md`, "DynamoDB").
-It builds 36 of the 57 operations in the model, and `/_gostack/services`
-reports 36 of 57: the 35 operations the LocalStack image answers, plus
-`DescribeEndpoints` (the row under "Where gostack follows AWS").
+[features.md](features.md#dynamodb) lists the operations it builds and the ones
+that answer `501 InternalFailure`, "API action '`<operation>`' for service
+'dynamodb' not yet implemented", and agrees with `/_gostack/services`.
+`DescribeEndpoints` is one it builds that the LocalStack image does not answer
+(the row under "Where gostack follows AWS").
 
-The other 21 answer `501 InternalFailure`, "API action '`<operation>`' for
-service 'dynamodb' not yet implemented": `CreateBackup`, `DeleteBackup`,
-`DescribeBackup`, `ListBackups`, `RestoreTableFromBackup`,
-`RestoreTableToPointInTime`, `ExportTableToPointInTime`, `DescribeExport`,
-`ListExports`, `ImportTable`, `DescribeImport`, `ListImports`,
-`GetResourcePolicy`, `PutResourcePolicy`, `DeleteResourcePolicy`,
-`DescribeGlobalTableSettings`, `UpdateGlobalTableSettings`,
-`DescribeTableReplicaAutoScaling`, `UpdateTableReplicaAutoScaling`,
-`ListContributorInsights` and `UpdateContributorInsights`. The LocalStack
-image answers `400 UnknownOperationException`, "An unknown operation was
-requested.", for the 11 of them SQ-230 probed (`verification/SQ-230/probe1b.txt`:
-the backup, export, import, resource policy, global table settings, replica
-auto scaling and contributor insights calls); the other 10 are unprobed. No
-test of LocalStack's suite calls any of the 21: a grep of
+The LocalStack image answers `400 UnknownOperationException`, "An unknown
+operation was requested.", for the 11 of those operations SQ-230 probed
+(`verification/SQ-230/probe1b.txt`: the backup, export, import, resource policy,
+global table settings, replica auto scaling and contributor insights calls); the
+other 10 that answered 501 then are unprobed. No test of LocalStack's suite
+calls any of them: a grep of
 `tests/aws/services/dynamodb` and `tests/aws/services/dynamodbstreams` at
 8b9a79f for their boto3 names (`create_backup` ... `update_contributor_insights`)
 finds none.

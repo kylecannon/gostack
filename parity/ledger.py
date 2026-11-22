@@ -1362,7 +1362,8 @@ def write_docs(ledger: dict[str, dict], path: Path) -> None:
         # baseline-only service has none, and would otherwise drag the total down.
         counts["ls_pass_run"] = counts["ls_pass"] if counts["gs_run"] else 0
         totals.update(counts)
-        rows.append(format_row(service, counts))
+        # An anchor on the row, so docs/features.md can link to it: a table row has no heading.
+        rows.append(format_row(f'<a id="{service}"></a>{service}', counts))
     rows.append(format_row("**total**", totals, show_share_of=True))
 
     path.write_text(

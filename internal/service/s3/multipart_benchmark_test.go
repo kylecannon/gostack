@@ -138,7 +138,7 @@ func benchDo(b *testing.B, method, url string, header http.Header, body []byte) 
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20250101/"+regionUSEast1+
 		"/s3/aws4_request, SignedHeaders=host, Signature=0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	must(b, err)
 
 	if resp.StatusCode != http.StatusOK {

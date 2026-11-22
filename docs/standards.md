@@ -120,9 +120,15 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   `go fix` follows the toolchain, `modernize` follows the linter's release.
 - **CI** (`ci.yml`, on every pull request and every push to main) runs
   `make fmt FMT_ARGS=--diff`, `make tidy-check`, `make gen-check`,
-  `make fix-check`, `make lint`, `make test` and `make build`.
+  `make features-check`, `make fix-check`, `make lint`, `make test` and
+  `make build`.
 - **`make gen-check`** (`ci.yml`) regenerates `internal/api` and fails on any
   modified file or untracked generated file.
+- **`make features-check`** (`ci.yml`) renders `docs/features.md` from the
+  registered services (`Test_featureFacts` in `cmd/gostack`), the parity ledger
+  and `parity/features-services.json`, and fails when the file differs. A change
+  that adds or removes an operation, or moves a ledger row, regenerates
+  `docs/features.md` with `make features` in the same commit.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
   `services` input) builds an image from GitHub's merge ref, the pull request
   head merged into its base, and runs LocalStack's own tests for the services
@@ -441,6 +447,15 @@ they came from: the scheduled run compares with the artifact the previous
 passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+The time to the first signed SNS publish, which a micro benchmark cannot hold
+(the signing key is made once a process, so an iteration costs a key generation
+and never reaches the 50 iterations the gate asks of one), is measured here: one
+fresh container a run, `-first-use-runs` (30) of them a side, and `bench
+compare` holds it as the cell `first-use/sns`, metric `first use`, by a
+rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
+is measured" and "The gate"). `make bench-system-quick` shows it under "First
+use".
 
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose

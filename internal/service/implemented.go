@@ -34,11 +34,23 @@ const (
 // [Metadata.OperationMethod].
 type lookup = func(t reflect.Type, operation string) (reflect.Method, bool)
 
+// Stubber is implemented by a handler that declares the method of an operation
+// only to check the request and then answers 501 through the generated
+// Unimplemented, as LocalStack does for an operation moto has no code for.
+// [Implemented] does not count those operations: a method that ends in a 501
+// implements nothing, however much it checks first. Stubs names them. The
+// tests of cmd/gostack call every counted operation and every stub with an
+// empty request, so a stub that gains behavior, or a counted operation that
+// answers 501, fails there.
+type Stubber interface {
+	Stubs() []string
+}
+
 // Implemented returns the operations, out of operations, that handler declares
-// itself rather than reaching through the generated Unimplemented it embeds. It
-// returns ok false, and no operations, when handler or operationMethod is nil
-// or when any of handler's methods cannot be classified, so a count is never a
-// guess.
+// itself rather than reaching through the generated Unimplemented it embeds,
+// less the ones a [Stubber] handler names. It returns ok false, and no
+// operations, when handler or operationMethod is nil or when any of handler's
+// methods cannot be classified, so a count is never a guess.
 //
 // It uses reflection, once per service when the capabilities are first asked
 // for, never on a call. Every method is looked up through operationMethod, the
@@ -62,10 +74,17 @@ func Implemented(handler any, operations []string, operationMethod lookup) (impl
 	t := reflect.TypeOf(handler)
 	implemented = []string{}
 
+	var stubs []string
+	if stubber, isStubber := handler.(Stubber); isStubber {
+		stubs = stubber.Stubs()
+	}
+
 	for _, operation := range operations {
 		switch classify(operationMethod, t, operation, nil).kind {
 		case declared:
-			implemented = append(implemented, operation)
+			if !slices.Contains(stubs, operation) {
+				implemented = append(implemented, operation)
+			}
 		case unimplemented:
 		default:
 			return nil, false

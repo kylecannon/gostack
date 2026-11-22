@@ -41,6 +41,8 @@ The Makefile sets the Go toolchain from `go.mod`. Editors and gopls need
 - [docs/standards.md](docs/standards.md): code, test and benchmark rules, and
   the gates.
 - [docs/compat.md](docs/compat.md): the environment variables gostack reads.
+- [docs/features.md](docs/features.md): what each service has built and what
+  answers 501 (generated).
 - [docs/parity.md](docs/parity.md): parity with LocalStack, per service
   (generated).
 
