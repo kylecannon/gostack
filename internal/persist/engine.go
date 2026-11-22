@@ -108,6 +108,14 @@ type Engine struct {
 	// loaded is true once a Load has opened the base dir, or found it missing: a
 	// later Load is not the startup one.
 	loaded bool
+
+	// slow watches the flushes whose ctx has no deadline but can end, and
+	// watchAfter is how long one runs before it is watched (see slowWatch). Tests
+	// replace watchAfter. They sit last so that mu, services and dirtyAgain, which
+	// MarkDirty touches, keep the offsets they had without them: ahead of mu they
+	// moved it 56 bytes, and MarkDirty read 17% slower on an x86 runner.
+	slow       slowWatch
+	watchAfter time.Duration
 }
 
 // outcome is what one flush did to one service's run of failed saves.
@@ -190,6 +198,7 @@ func New(cfg Config) *Engine {
 		markBudget:  markBudget,
 		markSync:    markerSync,
 		markFlush:   markerFlush,
+		watchAfter:  markWatchAfter,
 		sem:         make(chan struct{}, 1),
 	}
 	e.cfg.Services = maps.Clone(cfg.Services)
@@ -366,8 +375,14 @@ func (e *Engine) MarkDirty(service string) {
 // abandonedFile), when it comes and not when the Snapshot it is inside returns,
 // the services it holds and has not saved, every service that is dirty, and the
 // ones the flush by the timer holds, to which it lends the deadline then; it
-// does not return before those markers are written. It marks the same when it
-// ends waiting for sem.
+// does not return before those markers are written. A ctx with no deadline that
+// ends with a deadline's cause, as a [context.WithCancelCause] ctx can, is
+// marked for the same way once the flush has run for [markWatchAfter], so
+// within that long of its end, and at the flush's end before that: a Flush that
+// is in time allocates nothing for it. It marks the same when it ends waiting for
+// sem. A Flush that has a deadline marks as well, at it, the services another
+// Flush holds, whatever that Flush's ctx: one with no deadline, or one that comes
+// after this kill, would not mark them in time.
 //
 // A panic of a service's Snapshot is recovered: the save fails, and saving is
 // off for the service until restart. A panic of its [Committer] or [Leader]
@@ -381,7 +396,7 @@ func (e *Engine) Flush(ctx context.Context) error {
 
 	// The rounds of markers this call runs share one budget (see markAllowance),
 	// which a ctx with no deadline does not make: it costs two allocations, and
-	// such a flush marks only when it ends (see hasDeadline).
+	// such a flush has none to mark at (see hasDeadline and slowWatch).
 	if hasDeadline(ctx) {
 		ctx = withMarkAllowance(ctx)
 	}
@@ -1114,13 +1129,13 @@ func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) 
 	// The next start is told of what the deadline cuts when it comes, not when the
 	// uninterruptible work the flush is in returns (see abandonedFile). It is
 	// ended before the flush returns, and before interrupt settles the services.
-	endMark := e.markAtDeadline(ctx, run)
-	defer endMark()
+	e.markAtDeadline(ctx, run)
+	defer run.endMark()
 
 	err := e.writeAll(ctx, run, pending)
 	ended = true
 
-	endMark()
+	run.endMark()
 
 	switch {
 	case ranOutOfTime(ctx, err):
@@ -1567,6 +1582,12 @@ type flushRun struct {
 	root *os.Root
 	// by is who asked for the flush.
 	by flushBy
+	// endDeadline ends the marking armed for the ctx's deadline, and watching is
+	// true while the flush is registered with e.slow. Only the goroutine of the
+	// flush touches them. slow is what e.slow keeps of it, under its lock.
+	endDeadline func()
+	watching    bool
+	slow        slowFlush
 
 	failed []unsaved
 	errs   []error
