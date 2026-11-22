@@ -12,6 +12,7 @@ import (
 	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
@@ -137,7 +138,7 @@ func (s *snapshotWriter) flushFull() error {
 
 func (s *snapshotWriter) text(text string) { s.buf = append(s.buf, text...) }
 
-func (s *snapshotWriter) string(text string) { s.buf = appendString(s.buf, text) }
+func (s *snapshotWriter) string(text string) { s.buf = awsjson.AppendQuote(s.buf, text) }
 
 // json appends v as json v2 writes it.
 func (s *snapshotWriter) json(v any) error {

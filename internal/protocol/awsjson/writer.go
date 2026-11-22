@@ -122,7 +122,7 @@ func (w *Writer) ObjectEnd(start int) {
 func (w *Writer) String(s string) {
 	var ok bool
 
-	w.buf, ok = appendQuote(w.buf, s)
+	w.buf, ok = appendStrictQuote(w.buf, s)
 	if !ok && w.err == nil {
 		w.err = errInvalidUTF8
 	}
