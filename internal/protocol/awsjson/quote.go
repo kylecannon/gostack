@@ -2,6 +2,7 @@ package awsjson
 
 import (
 	"encoding/binary"
+	"encoding/json/jsontext"
 	"math/bits"
 	"slices"
 	"unicode/utf8"
@@ -17,7 +18,31 @@ const (
 	escapeLenShift = 56
 )
 
-// appendQuote appends s to dst as a json string, byte for byte as v2 writes
+// AppendQuote appends s to dst as a json string, byte for byte as v2 writes it
+// when it allows invalid UTF-8: each byte of s that is not part of a valid
+// sequence is written as U+FFFD, and no error is reported. It is the quoter for
+// output that must not fail on a string a client sent, such as a snapshot file;
+// the response encoders refuse invalid UTF-8 and use appendStrictQuote.
+//
+// dst must not overlap s: the quoted bytes are written into dst's spare room
+// while s is still being read, so a string that shares memory with that room,
+// such as one made from dst[len(dst):cap(dst)] with unsafe, would be
+// overwritten before it was read.
+func AppendQuote(dst []byte, s string) []byte {
+	out, ok := appendStrictQuote(dst, s)
+	if ok {
+		return out
+	}
+
+	// appendStrictQuote stopped half way and may have grown dst: cut what it wrote
+	// from the slice it returned, and let jsontext write the string with the
+	// replacement characters. Its error says only that it replaced.
+	out, _ = jsontext.AppendQuote(out[:len(dst)], s)
+
+	return out
+}
+
+// appendStrictQuote appends s to dst as a json string, byte for byte as v2 writes
 // it with the options of this package: '"', '\\' and the bytes below 0x20 are
 // escaped, \b \f \n \r \t by name and the rest as \u00xx; '<', '>', '&',
 // U+2028 and U+2029 are not. It reports false when s is not valid UTF-8, which
@@ -33,7 +58,7 @@ const (
 // back to the words after longRun plain bytes in a row, so text that alternates
 // often between ASCII and other scripts stays in it. Its loops call nothing, so
 // they keep their values in registers.
-func appendQuote(dst []byte, s string) ([]byte, bool) {
+func appendStrictQuote(dst []byte, s string) ([]byte, bool) {
 	dst = slices.Grow(dst, len(s)+len(`""`))
 	dst = append(dst, '"')
 
@@ -109,7 +134,7 @@ func decodeAt(s string, n int) int {
 	return -1
 }
 
-// longRun is how many plain bytes in a row appendQuote's byte loop takes
+// longRun is how many plain bytes in a row appendStrictQuote's byte loop takes
 // before it goes back to testing words.
 const longRun = 2 * wordBytes
 
@@ -184,7 +209,7 @@ var leads = func() (t [256]lead) {
 	return t
 }()
 
-// plainBytes is true for the bytes appendQuote writes as they are on their
+// plainBytes is true for the bytes appendStrictQuote writes as they are on their
 // own: ASCII that json does not escape.
 var plainBytes = func() (t [256]bool) {
 	for c := range utf8.RuneSelf {
@@ -217,7 +242,7 @@ func load64(s string) uint64 {
 		uint64(s[4])<<32 | uint64(s[5])<<40 | uint64(s[6])<<48 | uint64(s[7])<<56
 }
 
-// escapes holds, for each ASCII byte appendQuote escapes, its json escape in
+// escapes holds, for each ASCII byte appendStrictQuote escapes, its json escape in
 // the low bytes of a word in the order they are written, with its length in
 // the top byte; it is zero for the bytes written as they are.
 var escapes = func() (t [utf8.RuneSelf]uint64) {

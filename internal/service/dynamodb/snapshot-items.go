@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -35,7 +36,7 @@ func appendItem(dst []byte, item value.Item, names []string) ([]byte, []string) 
 			dst = append(dst, ',')
 		}
 
-		dst = appendString(dst, name)
+		dst = awsjson.AppendQuote(dst, name)
 		dst = append(dst, ':')
 		v := item[name]
 		dst = appendValue(dst, &v)
@@ -71,11 +72,11 @@ func appendMember(dst []byte, start int, name string) []byte {
 // appendScalars appends the S, N, B, NULL and BOOL members of v that are set.
 func appendScalars(dst []byte, start int, v *api.AttributeValue) []byte {
 	if v.S != nil {
-		dst = appendString(appendMember(dst, start, "S"), *v.S)
+		dst = awsjson.AppendQuote(appendMember(dst, start, "S"), *v.S)
 	}
 
 	if v.N != nil {
-		dst = appendString(appendMember(dst, start, "N"), *v.N)
+		dst = awsjson.AppendQuote(appendMember(dst, start, "N"), *v.N)
 	}
 
 	if v.B != nil {
@@ -138,14 +139,6 @@ func appendCollections(dst []byte, start int, v *api.AttributeValue) []byte {
 	return dst
 }
 
-// appendString appends s quoted. Invalid UTF-8 becomes U+FFFD, as json v2
-// writes it under AllowInvalidUTF8; the error says only that.
-func appendString(dst []byte, s string) []byte {
-	dst, _ = jsontext.AppendQuote(dst, s)
-
-	return dst
-}
-
 func appendStrings(dst []byte, list []string) []byte {
 	dst = append(dst, '[')
 
@@ -154,7 +147,7 @@ func appendStrings(dst []byte, list []string) []byte {
 			dst = append(dst, ',')
 		}
 
-		dst = appendString(dst, s)
+		dst = awsjson.AppendQuote(dst, s)
 	}
 
 	return append(dst, ']')
