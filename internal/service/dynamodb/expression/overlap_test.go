@@ -131,6 +131,38 @@ func Test_ParseStatementProjection(t *testing.T) {
 		"path one: [k3, q], path two: [k751]")
 }
 
+// Test_ParseStatementUpdate: the actions of a PartiQL UPDATE are held to no
+// size, so 400 SET actions, past the 4,096 code units of an UpdateExpression,
+// are parsed and checked for overlap, where an UpdateExpression of them is
+// refused for its size first (SQ-412).
+func Test_ParseStatementUpdate(t *testing.T) {
+	t.Parallel()
+
+	actions := make([]string, 400)
+	for i := range actions {
+		actions[i] = "u" + strconv.Itoa(i) + " = :v"
+	}
+
+	src := "SET " + strings.Join(actions, ", ")
+	subs, used := autoSubs(src), map[string]struct{}{}
+
+	_, err := expression.ParseUpdateRanked(src, subs, used, nil)
+	wantMessage(t, err, "Invalid UpdateExpression: Expression size has exceeded the maximum allowed size;")
+
+	update, err := expression.ParseStatementUpdate(src, subs, used, nil)
+	wantMessage(t, err, "")
+
+	if got := len(update.Paths()); got != 400 {
+		t.Fatalf("%d paths, want 400", got)
+	}
+
+	// Which pair the message names is the overlap tests' business.
+	_, err = expression.ParseStatementUpdate(src+", u5.q = :v", subs, used, nil)
+	if err == nil || !strings.Contains(err.Error(), "Two document paths "+overlapWith) {
+		t.Fatalf("error %v, want an overlap", err)
+	}
+}
+
 // Test_ParseUpdate_OverlapPairUnicode: the bucket of a name is its UTF-16
 // String.hashCode, so names outside ASCII, with surrogate pairs among them,
 // land where the image put them (SQ-333).

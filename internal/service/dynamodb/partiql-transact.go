@@ -39,54 +39,81 @@ const codeTokenMismatch = "IdempotentParameterMismatchException" //nolint:gosec 
 func (p *Provider) ExecuteTransaction(
 	ctx context.Context, in *api.ExecuteTransactionInput,
 ) (*api.ExecuteTransactionOutput, error) {
-	stmts, reads, err := parseTransaction(in.TransactStatements)
+	ctx = forStatement(ctx)
+	stmts, err := parseTransaction(in.TransactStatements)
 	if err != nil {
 		return nil, err
 	}
 
-	if reads {
+	if stmts.reads {
 		return p.transactReads(ctx, in, stmts)
 	}
 
 	return p.transactWrites(ctx, in, stmts)
 }
 
+// txStatements are a transaction's parsed statements. A statement whose
+// parameters do not match, or that has a RETURNING clause, is refused when its
+// turn to compile comes (refused). The image looks a RETURNING statement's
+// table and key up before it refuses the clause, so returning marks those.
+type txStatements struct {
+	stmts     []*partiql.Statement
+	refused   []error
+	returning []bool
+	// reads is whether they are all SELECTs.
+	reads bool
+}
+
 // parseTransaction parses a transaction's statements and makes the checks on
-// the whole of it. reads is whether they are all SELECTs.
-func parseTransaction(reqs []api.ParameterizedStatement) ([]*partiql.Statement, bool, error) {
+// the whole of it, statement by statement in order, as the image does: an empty
+// or long statement, a syntax error, and a statement that mixes reads and writes
+// with those before it refuse the call where it stands. A parameter mismatch
+// and a RETURNING clause are left to each statement's turn after that, with the
+// rest of what is wrong with it (SQ-467 image-probe.log).
+func parseTransaction(reqs []api.ParameterizedStatement) (*txStatements, error) {
 	switch {
 	case len(reqs) == 0:
-		return nil, false, value.Invalid(msgTxEmpty)
+		return nil, value.Invalid(msgTxEmpty)
 	case len(reqs) > maxTransactItems:
-		return nil, false, value.Invalid(msgTxTooMany)
+		return nil, value.Invalid(msgTxTooMany)
 	default:
 	}
 
-	stmts := make([]*partiql.Statement, len(reqs))
-	reads := 0
+	out := &txStatements{
+		stmts: make([]*partiql.Statement, len(reqs)), refused: make([]error, len(reqs)),
+		returning: make([]bool, len(reqs)),
+	}
+	mix := mixing{msg: msgTxMixed}
 
 	for i := range reqs {
-		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, true)
+		err := checkStatementText(reqs[i].Statement, msgTxEmpty)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 
-		if stmt.Returning != partiql.ReturnNone {
-			return nil, false, txFailed(i, msgTxReturning)
+		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, true)
+
+		switch {
+		case err != nil && messageOf(err) == partiql.MsgParamCount:
+			out.refused[i] = txFailed(i, partiql.MsgParamCount)
+		case err != nil:
+			return nil, err
+		case stmt.Returning != partiql.ReturnNone:
+			out.refused[i] = txFailed(i, msgTxReturning)
+			out.returning[i] = true
+		default:
 		}
 
-		if stmt.Kind == partiql.Select {
-			reads++
+		mixed := mix.check(stmt)
+		if mixed != nil {
+			return nil, mixed
 		}
 
-		stmts[i] = stmt
+		out.stmts[i] = stmt
+		out.reads = stmt.Kind == partiql.Select
 	}
 
-	if reads > 0 && reads < len(stmts) {
-		return nil, false, value.Invalid(msgTxMixed)
-	}
-
-	return stmts, reads > 0, nil
+	return out, nil
 }
 
 // txFailed is the message for statement i's own failure.
@@ -96,13 +123,16 @@ func txFailed(i int, msg string) error {
 
 // transactReads runs single-item SELECTs as one TransactGetItems.
 func (p *Provider) transactReads(
-	ctx context.Context, in *api.ExecuteTransactionInput, stmts []*partiql.Statement,
+	ctx context.Context, in *api.ExecuteTransactionInput, parsed *txStatements,
 ) (*api.ExecuteTransactionOutput, error) {
 	c := p.caller(ctx)
-	gets := make([]api.TransactGetItem, len(stmts))
-	aliases := make([][]partiql.Path, len(stmts))
+	gets := make([]api.TransactGetItem, len(parsed.stmts))
 
-	for i, stmt := range stmts {
+	for i, stmt := range parsed.stmts {
+		if parsed.refused[i] != nil {
+			return nil, parsed.refused[i]
+		}
+
 		read, err := c.compileRead(stmt, in.TransactStatements[i].Parameters, nil)
 		if errors.Is(err, errNotSingle) {
 			return nil, txFailed(i, msgTxSelectKey)
@@ -117,7 +147,6 @@ func (p *Provider) transactReads(
 			TableName: g.TableName, Key: g.Key, ProjectionExpression: g.ProjectionExpression,
 			ExpressionAttributeNames: g.ExpressionAttributeNames,
 		}}
-		aliases[i] = read.aliases
 	}
 
 	out, err := p.TransactGetItems(ctx, &api.TransactGetItemsInput{
@@ -125,10 +154,6 @@ func (p *Provider) transactReads(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transaction: %w", err)
-	}
-
-	for i := range out.Responses {
-		out.Responses[i].Item = shapeItem(out.Responses[i].Item, aliases[i])
 	}
 
 	return &api.ExecuteTransactionOutput{Responses: out.Responses, ConsumedCapacity: out.ConsumedCapacity}, nil
@@ -147,13 +172,18 @@ func txNotFound(err error) error {
 // TransactWriteItems: a Put that holds when the key is new, an Update, a
 // Delete and a ConditionCheck.
 func (p *Provider) transactWrites(
-	ctx context.Context, in *api.ExecuteTransactionInput, stmts []*partiql.Statement,
+	ctx context.Context, in *api.ExecuteTransactionInput, parsed *txStatements,
 ) (*api.ExecuteTransactionOutput, error) {
 	c := p.caller(ctx)
+	stmts := parsed.stmts
 	items := make([]api.TransactWriteItem, len(stmts))
 
 	for i, stmt := range stmts {
 		req := &in.TransactStatements[i]
+
+		if parsed.refused[i] != nil {
+			return nil, c.refuseTxStatement(parsed, i, len(stmts), req.Parameters)
+		}
 
 		// DynamoDB Local reads the statement's ReturnValuesOnConditionCheckFailure
 		// last, after the statement compiles (probed, SQ-331), and names the
@@ -192,6 +222,25 @@ func (p *Provider) transactWrites(
 	}
 
 	return &api.ExecuteTransactionOutput{Responses: []api.ItemResponse{}, ConsumedCapacity: out.ConsumedCapacity}, nil
+}
+
+// refuseTxStatement is the refusal of statement i of n. The image looks a
+// RETURNING statement's table up, and then its whole key in the WHERE clause,
+// before it refuses the clause, so a missing table and a partial key answer
+// first (verification/SQ-470 r2ord-cand.log "t URN", r3-cand.log "t URNK");
+// the rest of the statement is left unchecked, as a key-type error or an
+// update of a key attribute does not change the refusal ("t URKEY").
+func (c caller) refuseTxStatement(parsed *txStatements, i, n int, params []api.AttributeValue) error {
+	if !parsed.returning[i] {
+		return parsed.refused[i]
+	}
+
+	_, err := c.compileWrite(parsed.stmts[i], params, false)
+	if _, shaped := errors.AsType[*shapeError](err); shaped || isCode(err, codeNotFound) {
+		return txCompileError(i, n, err)
+	}
+
+	return parsed.refused[i]
 }
 
 // txCompileError answers statement i of n failing to compile, as DynamoDB

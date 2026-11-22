@@ -90,7 +90,9 @@ type Provider struct {
 	restored []string
 
 	// client delivers notifications, and checks their targets, through the
-	// gateway. Bind gives it the handler.
+	// gateway. Bind gives it the handler. Its queue is unbounded: no event is
+	// dropped because others wait (LocalStack's notifier executor is unbounded
+	// too); the shutdown drain cuts and counts what is left.
 	client *inproc.Client
 
 	// taken counts the responses written through a hijacked connection, which
@@ -108,7 +110,7 @@ func New(settings func() Settings, blobs blob.Store) *Provider {
 		settings: settings,
 		states:   store.NewBundle(newState, emptyState),
 		blobs:    blobs,
-		client:   inproc.New(),
+		client:   inproc.NewUnbounded(),
 	}
 }
 

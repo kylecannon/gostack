@@ -3,6 +3,8 @@ package sns
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -27,6 +29,9 @@ type fifoTopic struct {
 	seen map[string]published
 	// order is seen's ids, oldest first.
 	order []string
+	// peak is the most ids seen held at an expire since the window was last
+	// built, which says how much room it may have to give back.
+	peak int
 }
 
 // published is a message a FIFO topic took.
@@ -94,16 +99,41 @@ func (p *Provider) publishFIFO(rc *request.Context, t *Topic, msgs []*message) [
 	return p.fanOut(rc, t, fresh)
 }
 
-// expire forgets the ids published before the window. The caller holds f.mu.
+// shrinkFloor is the fewest ids a window must have held at once before expire
+// builds it smaller. Below it the memory is too little to be worth a rebuild.
+const shrinkFloor = 1024
+
+// expire forgets the ids published before the window. The ids are in the order
+// they were taken, so the expired ones are a run at the front of f.order: the
+// cost is in what expires, not in what the window keeps. The caller holds
+// f.mu.
 func (f *fifoTopic) expire(now time.Time) {
+	f.peak = max(f.peak, len(f.seen))
+
 	n := 0
 	for n < len(f.order) && now.Sub(f.seen[f.order[n]].at) >= dedupWindow {
 		delete(f.seen, f.order[n])
 		n++
 	}
 
-	if n > 0 {
-		f.order = append(f.order[:0:0], f.order[n:]...)
+	if n == 0 {
+		return
+	}
+
+	// Let go of the ids' strings now, not when append next grows the queue.
+	clear(f.order[:n])
+	f.order = f.order[n:]
+
+	// A map keeps its table after its entries are deleted, and a queue its
+	// array, so a window that held a million ids and now holds ten still owns
+	// the room for the million. Once it is down to a quarter of its peak it is
+	// built again from what is left: that copy costs what the expiries since
+	// the peak cost, so a publish's share stays constant.
+	if f.peak >= shrinkFloor && len(f.seen) <= f.peak/4 {
+		seen := make(map[string]published, len(f.seen))
+		maps.Copy(seen, f.seen)
+
+		f.seen, f.order, f.peak = seen, slices.Clone(f.order), len(seen)
 	}
 }
 

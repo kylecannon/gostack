@@ -46,6 +46,13 @@ type Engine struct {
 	loadFormats []Format
 	cfg         Config
 	log         *slog.Logger
+	// markBudget is the time the rounds of abandoned-save markers of one flush
+	// share (see markAllowance). Tests replace it.
+	markBudget time.Duration
+	// markSync makes a marker and its directory durable, and markFlush, when not
+	// nil, flushes the drive once after every marker of a round is synced (see
+	// markerSync). Tests replace them.
+	markSync, markFlush func(*os.File) error
 
 	// sem is held by whatever reads or writes the state files: one flush or one
 	// load. A flush during a load would snapshot a service that Restore has
@@ -180,6 +187,9 @@ func New(cfg Config) *Engine {
 		loadFormats: cfg.loadFormats(),
 		cfg:         cfg,
 		log:         cmp.Or(cfg.Logger, slog.Default()),
+		markBudget:  markBudget,
+		markSync:    markerSync,
+		markFlush:   markerFlush,
 		sem:         make(chan struct{}, 1),
 	}
 	e.cfg.Services = maps.Clone(cfg.Services)
@@ -352,6 +362,13 @@ func (e *Engine) MarkDirty(service string) {
 // whose follower it holds, is saved after it, so no service is saved by two
 // flushes at once and a follower is still saved only right after its leader.
 //
+// A Flush whose ctx ends at a deadline marks for the next start (see
+// abandonedFile), when it comes and not when the Snapshot it is inside returns,
+// the services it holds and has not saved, every service that is dirty, and the
+// ones the flush by the timer holds, to which it lends the deadline then; it
+// does not return before those markers are written. It marks the same when it
+// ends waiting for sem.
+//
 // A panic of a service's Snapshot is recovered: the save fails, and saving is
 // off for the service until restart. A panic of its [Committer] or [Leader]
 // passes through Flush to its caller, after the flush ended: the services it
@@ -362,8 +379,18 @@ func (e *Engine) Flush(ctx context.Context) error {
 		return nil
 	}
 
+	// The rounds of markers this call runs share one budget (see markAllowance),
+	// which a ctx with no deadline does not make: it costs two allocations, and
+	// such a flush marks only when it ends (see hasDeadline).
+	if hasDeadline(ctx) {
+		ctx = withMarkAllowance(ctx)
+	}
+
 	shared, err := e.acquire(ctx, lend)
 	if err != nil {
+		// Not a single service was tried, and a deadline cost the changes of them all.
+		e.markWaiting(ctx, err)
+
 		return fmt.Errorf("flush: %w", err)
 	}
 
@@ -426,6 +453,7 @@ func (e *Engine) Load(ctx context.Context) error {
 	defer func() { _ = root.Close() }()
 
 	e.mu.Lock()
+	startup := !e.loaded
 	e.loaded = true
 	safe := make(map[string]*tracked, len(e.services))
 
@@ -436,6 +464,12 @@ func (e *Engine) Load(ctx context.Context) error {
 	}
 
 	e.mu.Unlock()
+
+	// Only the startup Load, the first to open the base dir, tells of a state
+	// dir where saved state does not last: a later Load finds loaded set.
+	if startup {
+		e.warnUnmounted()
+	}
 
 	names := afterLeaders(slices.Sorted(maps.Keys(safe)), func(name string) (string, string) {
 		return name, follows(safe[name].snap)
@@ -448,6 +482,10 @@ func (e *Engine) Load(ctx context.Context) error {
 		}
 
 		e.loadService(root, name, safe[name])
+	}
+
+	if startup {
+		e.warnAbandoned(root, names)
 	}
 
 	e.drainRemovals(safe) //nolint:contextcheck // arms a timer, whose callback has no caller context
@@ -514,6 +552,10 @@ func (e *Engine) openFailed(err error) error {
 
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
+		if startup {
+			e.warnUnmounted()
+		}
+
 		return e.unsafeErr()
 	case startup:
 		e.refuseAll(err)
@@ -549,6 +591,8 @@ func (e *Engine) flushShared(ctx context.Context) ([]outcome, error) {
 
 	waitErr := e.unshare(ctx)
 	if waitErr != nil {
+		e.markWaiting(ctx, waitErr)
+
 		return results, errors.Join(err, fmt.Errorf("flush: %w", waitErr))
 	}
 
@@ -559,6 +603,7 @@ func (e *Engine) flushShared(ctx context.Context) ([]outcome, error) {
 
 		if err == nil && e.anyDirty() {
 			err = fmt.Errorf("flush: %w", ctx.Err())
+			e.markWaiting(ctx, err)
 		}
 
 		return results, err
@@ -1066,20 +1111,70 @@ func (e *Engine) writeDirty(ctx context.Context, by flushBy) ([]outcome, error) 
 		}
 	}()
 
+	// The next start is told of what the deadline cuts when it comes, not when the
+	// uninterruptible work the flush is in returns (see abandonedFile). It is
+	// ended before the flush returns, and before interrupt settles the services.
+	endMark := e.markAtDeadline(ctx, run)
+	defer endMark()
+
 	err := e.writeAll(ctx, run, pending)
 	ended = true
 
-	if ranOutOfTime(ctx, err) {
-		names := make([]string, 0, len(run.failed))
-		for _, u := range run.failed {
-			names = append(names, u.name)
-		}
+	endMark()
 
-		e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved",
-			"services", names)
+	switch {
+	case ranOutOfTime(ctx, err):
+		e.logAbandoned(ctx, run)
+	case run.by == byHand && ranOutOfTime(ctx, ctx.Err()):
+		// The flush saved all it took, and the deadline came after, with a service
+		// changed since: a change nothing will save.
+		e.markUnsaved(ctx, run, nil)
+	default:
+		// In time, or a flush by the timer, whose deadline is lent to it.
 	}
 
 	return run.results, err
+}
+
+// logAbandoned logs the services of a flush that ran out of time and did not
+// save, and marks for the next start the ones the deadline cut, with the ones
+// that are dirty (see unsavedLocked). A service whose save failed for a reason
+// of its own is named with the cause and not marked: a marker says a deadline
+// cost its changes, and its warning advises a longer SHUTDOWN_TIMEOUT, which
+// would not have saved it. A follower whose leader failed for a reason of its
+// own is named so, with the leader's cause; one whose leader the deadline cut,
+// or whose leader is not in the flush's failures, is cut with it.
+func (e *Engine) logAbandoned(ctx context.Context, run *flushRun) {
+	var (
+		cut   []string
+		other []string
+	)
+
+	e.mu.Lock()
+
+	for _, u := range run.failed {
+		switch {
+		case !run.ownFaultLocked(ctx, u):
+			cut = append(cut, u.name)
+		case errors.Is(u.err, errLeaderUnsaved):
+			leader := follows(u.snap)
+			other = append(other, fmt.Sprintf("%s: %s (%s: %s)", u.name, u.err, leader, run.lost[leader].err))
+		default:
+			other = append(other, u.name+": "+u.err.Error())
+		}
+	}
+
+	e.mu.Unlock()
+
+	attrs := []any{"services", cut}
+	if len(other) > 0 {
+		attrs = append(attrs, "failed_for_other_reasons", other)
+	}
+
+	e.log.Warn("persist: save abandoned at its deadline; the state files on disk are the last saved", attrs...)
+
+	// The process is likely on its way out, so the next start has to be told.
+	e.markUnsaved(ctx, run, cut)
 }
 
 // ranOutOfTime reports whether err, a flush's error, holds the end of a
@@ -1479,6 +1574,11 @@ type flushRun struct {
 	// failures, and holding the services taken whose save has not ended.
 	results []outcome
 	holding map[string]pendingService
+	// lost is what each service the flush did not save failed with, by name. It
+	// is written and read under mu, since the marking at a deadline (see
+	// markAtDeadline) reads it while the flush runs. The first loss makes it, so
+	// a flush that saves everything allocates none.
+	lost map[string]unsaved
 	// ended is true once the end of ctx is in errs.
 	ended bool
 	// committed are the services whose snapshot this flush renamed into place,
@@ -1501,6 +1601,35 @@ func newFlushRun(e *Engine, by flushBy) *flushRun {
 		e: e, by: by, committed: map[string]bool{}, deferred: map[string]bool{},
 		holding: map[string]pendingService{}, followed: map[string]Leader{},
 	}
+}
+
+// ownFaultLocked reports whether u, a service the flush did not save, was lost
+// to a failure of its own and not to the deadline of ctx: a failure that is not
+// the end of a deadline, or a [Follower] whose leader was lost to one. The
+// caller holds mu.
+func (r *flushRun) ownFaultLocked(ctx context.Context, u unsaved) bool {
+	switch {
+	case ranOutOfTime(ctx, u.err):
+		return false
+	case errors.Is(u.err, errLeaderUnsaved):
+		leader, ok := r.lost[follows(u.snap)]
+
+		return ok && r.ownFaultLocked(ctx, leader)
+	default:
+		return true
+	}
+}
+
+// lostToOwnFaultLocked is ownFaultLocked for the service called name, false when
+// the flush did not lose it, or when r is nil. The caller holds mu.
+func (r *flushRun) lostToOwnFaultLocked(ctx context.Context, name string) bool {
+	if r == nil {
+		return false
+	}
+
+	u, ok := r.lost[name]
+
+	return ok && r.ownFaultLocked(ctx, u)
 }
 
 // own begins the service's save in this flush, and reports whether the flush
@@ -1546,6 +1675,14 @@ func (r *flushRun) settle(name string, u *unsaved) bool {
 
 	if e.services[name].owner != r {
 		return false
+	}
+
+	if u != nil {
+		if r.lost == nil {
+			r.lost = map[string]unsaved{}
+		}
+
+		r.lost[name] = *u
 	}
 
 	if result, ok := e.settleLocked(name, u); ok {
@@ -2035,6 +2172,11 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 
 	dirs := []string{s.p.name}
 
+	// listed is true when a listing of the service's directory, which the sweep
+	// of a writer's temp files reads after its rename, is the answer to whether
+	// the service has a marker (see clearAbandoned); marked is that answer.
+	var listed, marked bool
+
 	for i, w := range s.writers {
 		err := w.commit()
 		if err != nil {
@@ -2043,19 +2185,31 @@ func (e *Engine) rename(ctx context.Context, root *os.Root, s *staged) error {
 			return err
 		}
 
-		err = removeTemps(root, dirOf(w.target), baseOf(w.target))
+		dir := dirOf(w.target)
+
+		seen, err := sweepTemps(root, dir, baseOf(w.target), abandonedFile)
 		if err != nil {
 			s.writers = s.writers[i+1:]
 
 			return err
 		}
 
-		if !slices.Contains(dirs, dirOf(w.target)) {
-			dirs = append(dirs, dirOf(w.target))
+		if dir == s.p.name {
+			listed, marked = true, marked || seen
+		}
+
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
 		}
 	}
 
 	s.writers = nil
+
+	// A completed save ends the loss an abandoned one left (see abandonedFile).
+	// A save with no listing of the directory looks for the marker itself.
+	if marked || !listed {
+		e.clearAbandoned(root, s.p.name)
+	}
 
 	// Formats that are no longer listed go only after the listed ones are safe.
 	for _, f := range knownFormats {

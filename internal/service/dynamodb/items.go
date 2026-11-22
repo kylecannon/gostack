@@ -60,7 +60,7 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	guard, err := putGuard(in)
+	guard, err := putGuard(originOf(ctx), in)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, err
 	}
 
-	x, err := newExprs(in.ExpressionAttributeNames, nil, in.ProjectionExpression != nil, false, "")
+	x, err := newExprs(originOf(ctx), in.ExpressionAttributeNames, nil, in.ProjectionExpression != nil, false, "")
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	guard, returnOld, err := deleteGuard(e, in)
+	guard, returnOld, err := deleteGuard(originOf(ctx), e, in)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (g *writeGuard) check(old value.Item) error {
 // Local does: the mix of Expected with expressions, placeholders no expression
 // uses, the entries of Expected, the enum of ReturnValuesOnConditionCheckFailure,
 // and then the ConditionalOperator and the ConditionExpression.
-func putGuard(in *api.PutItemInput) (*writeGuard, error) {
+func putGuard(from origin, in *api.PutItemInput) (*writeGuard, error) {
 	err := checkWriteMixed(0, in.Expected, in.ConditionalOperator, namedExpr{paramCondition, in.ConditionExpression})
 	if err == nil {
 		err = checkConditionUsable(in.ConditionExpression, in.ExpressionAttributeNames, in.ExpressionAttributeValues)
@@ -206,7 +206,7 @@ func putGuard(in *api.PutItemInput) (*writeGuard, error) {
 		return nil, err
 	}
 
-	return g, g.condition(tests, in.ConditionalOperator, in.ConditionExpression,
+	return g, g.condition(from, tests, in.ConditionalOperator, in.ConditionExpression,
 		in.ExpressionAttributeNames, in.ExpressionAttributeValues)
 }
 
@@ -216,7 +216,7 @@ func putGuard(in *api.PutItemInput) (*writeGuard, error) {
 // ReturnValuesOnConditionCheckFailure, the key, and then the
 // ConditionalOperator and the ConditionExpression. It reports whether
 // ReturnValues asks for the item deleted.
-func deleteGuard(e *tableEntry, in *api.DeleteItemInput) (*writeGuard, bool, error) {
+func deleteGuard(from origin, e *tableEntry, in *api.DeleteItemInput) (*writeGuard, bool, error) {
 	tests, err := expectedTests(in.Expected)
 	if err != nil {
 		return nil, false, err
@@ -248,7 +248,7 @@ func deleteGuard(e *tableEntry, in *api.DeleteItemInput) (*writeGuard, bool, err
 		return nil, false, fmt.Errorf("item: %w", err)
 	}
 
-	err = g.condition(tests, in.ConditionalOperator, in.ConditionExpression,
+	err = g.condition(from, tests, in.ConditionalOperator, in.ConditionExpression,
 		in.ExpressionAttributeNames, in.ExpressionAttributeValues)
 
 	return g, returnOld, err
@@ -257,14 +257,15 @@ func deleteGuard(e *tableEntry, in *api.DeleteItemInput) (*writeGuard, bool, err
 // condition sets the guard's condition: the legacy one made of the tests of
 // Expected and the ConditionalOperator, or else the ConditionExpression.
 func (g *writeGuard) condition(
-	tests []expression.LegacyTest, op, src *string, names map[string]string, values map[string]api.AttributeValue,
+	from origin, tests []expression.LegacyTest, op, src *string, names map[string]string,
+	values map[string]api.AttributeValue,
 ) error {
 	legacy, err := expectedCondition(tests, op)
 	if err != nil {
 		return err
 	}
 
-	g.cond, err = writeCondition(src, names, values)
+	g.cond, err = writeCondition(from, src, names, values)
 	if legacy != nil {
 		g.cond = legacy
 	}
@@ -285,9 +286,9 @@ func checkConditionUsable(src *string, names map[string]string, values map[strin
 //
 //nolint:ireturn // the parsed form is the expression package's interface
 func writeCondition(
-	src *string, names map[string]string, values map[string]api.AttributeValue,
+	from origin, src *string, names map[string]string, values map[string]api.AttributeValue,
 ) (expression.Condition, error) {
-	x, err := newExprs(names, values, src != nil, src != nil, msgConditionNull)
+	x, err := newExprs(from, names, values, src != nil, src != nil, msgConditionNull)
 	if err != nil {
 		return nil, err
 	}

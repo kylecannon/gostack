@@ -107,7 +107,9 @@ carries a nodeid and a reason: `requires_in_process`, `engine-deferred`,
   layout, the per-service files or the single `parity/ledger.json` before
   them, and fails when a service file the base has is gone.
 - `docs/parity.md` is generated from the ledger and shows percentages per
-  service.
+  service. `docs/features.md` is generated from the registered services and
+  the ledger (`make features`, `parity/features.py`) and gives each service a
+  status, the operations it implements and the ones that answer 501.
 - CI runs one job for the selected services; sharding with `pytest-split` and LocalStack's `.test_durations` comes with the service count that needs it.
 
 ### Spec sources (vendored into `specs/`, with a `specs/SOURCES.lock`)
@@ -158,7 +160,7 @@ specs/                       vendored botocore JSON + LocalStack patches + SOURC
 parity/                      runner Dockerfile, pytest_gostack.py, exclusions/, ledger/, demotions.yaml, scripts
 bench/                       system workloads (Go + aws-sdk-go-v2), results/*.json
 docker/                      Dockerfile (full), Dockerfile.slim
-docs/                        architecture.md, standards.md, parity.md (generated), compat.md (env vars)
+docs/                        architecture.md, standards.md, parity.md and features.md (generated), compat.md (env vars)
 .github/workflows/           ci.yml, parity.yml, fuzz.yml, bench.yml, bench-system.yml, release.yml
 AGENTS.md, CLAUDE.md, Makefile, .golangci.yml, .agentic-quality
 ```
@@ -487,7 +489,29 @@ written by hand.
   quirks are custom marshalers on generated types, on the streaming v2
   interfaces (`MarshalJSONTo`, `UnmarshalJSONFrom`): epoch-second timestamps,
   base64 blobs, and `__type` error codes. One option set in
-  `internal/protocol/awsjson` serves every encode and decode.
+  `internal/protocol/awsjson` serves every encode and decode. The responses
+  of the json services are written by generated encoders instead of v2's
+  reflection: each output type has an `AppendJSON` that `WriteResponse`
+  calls, and each struct below an output an `appendJSON<Struct>` function,
+  the one place its members are written, through `awsjson.Writer`. Their bytes
+  are v2's for the same value; the generated `codec_json_test.go` of each
+  service checks that every output has an encoder and compares the two on
+  random values (`TestJSONEncodeMatchesV2`, `FuzzJSONEncode`). A value v2
+  refuses (invalid UTF-8) goes to v2, which writes its own error. Documents and
+  structs with non-epoch timestamps stay on v2 per value. Strings are quoted
+  by scanning eight bytes at a time and copying each clean run whole: v2's
+  per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
+  4 its cost moved up to 38% with a 16-byte change in a caller's frame
+  (SQ-455). rest-json and error bodies still go through v2.
+- **JSON response buffers** (`internal/protocol/awsjson/buffers.go`): a
+  generated encoder writes into a reused buffer, given back once the body is
+  written. A buffer of up to 256 KiB goes to a `sync.Pool`. Larger ones go
+  to a stack that holds at most 32 MiB of them, and apart from it the
+  largest buffer given back that is bigger than 32 MiB, so that one large
+  body called for again does not grow its buffer from nothing each time.
+  Every GC cycle a cleanup checks whether a json response took or gave back
+  a large buffer since the cycle before; when none did, it drops them all,
+  so an idle server holds them for at most two collections.
 - **XML:** `xml.Decoder.RawToken` for input and an append-based writer for
   output (`internal/protocol/restxml`). The REST bindings (header, query, URI
   label, status code, `x-amz-meta-` maps) are in `internal/protocol/rest`;
@@ -615,7 +639,7 @@ and any other like it, as a change to every service. The selection tables in
 `secretsmanager` and `ssm`: their source and API paths follow from the service
 name, and `DEPENDS_ON` already holds the calls between them (`sns` calls `sqs`,
 `ssm` calls `secretsmanager`, `dynamodb` and `dynamodbstreams` run together, and
-`s3` will call `sns` and `kms`), so no service branch edits a table, not even
+`s3` calls `kms`, `sns` and `sqs`), so no service branch edits a table, not even
 for the first commit of a service that calls nothing yet (`DECLARED_AHEAD`
 lists the keys allowed to precede their calls). A
 service is selected for a gostack run only when `internal/service/<svc>/`
@@ -721,16 +745,26 @@ canonical, nothing set after the status) and the body.
   the events of a bulk delete, from crowding out client requests. Workers
   start with a waiting call and exit when none waits, so nothing runs while
   idle. The queue holds `inproc.MaxQueued` (4,096) waiting calls and refuses
-  the next; each queued call has 30 seconds.
+  the next, except a client made by `inproc.NewUnbounded`, which holds any
+  number and refuses only after `Close` (S3's notification client: an event
+  is never dropped because others wait); each queued call has 30 seconds.
 
 A call made before `Bind` gives the client a handler returns `ErrNotBound`. A
 handler that panics, as the gateway does to abort a response whose status it
 has written, fails that call with `ErrAborted` for `Do`, `Stream` and
 `Enqueue` alike; the caller's request and the queue's workers carry on. S3
-uses the client to check a notification's queue and to deliver event
-notifications to SQS. Each event is a `SendMessage` as the bucket's owner, in
-the lane of the queue's ARN, so the events for one queue arrive in the order
-they were raised and a slow queue holds up no other.
+uses the client to check a notification's queue or topic and to deliver event
+notifications to SQS and SNS. Each event to a queue is a `SendMessage` as the
+bucket's owner, in the lane of the queue's ARN; each event to a topic is a
+query-protocol `Publish` in the lane of the topic's ARN. So the events for one
+queue or topic arrive in the order they were raised and a slow one holds up no
+other. S3's client is unbounded (`inproc.NewUnbounded`), so no event is
+dropped because others wait, as LocalStack's notifier executor drops none, and
+a PUT never waits for delivery; the memory held grows with the events not yet
+delivered. At shutdown the events still queued get the hub's drain budget
+(`Calls`), and past it `Hub.Drain` cuts them and logs the count. SNS keeps its
+own bounded client, whose lanes park a delivery that finds the queue full. S3
+names the calls itself and imports neither service's package.
 
 `cmd/gostack` binds every service's client to one `inproc.Hub`, which serves
 the calls through the gateway's `InternalHandler`: the root router with each
@@ -1214,6 +1248,53 @@ Tests split along the same line:
   Kinesis, CloudWatch and SES assets).
 - Otherwise nothing persists and state is in-memory only.
 
+**Unmounted base directory.** The first `Load` at startup checks where each
+service that persists saves, its own directory `<base>/<service>`, against
+`/proc/self/mountinfo` (`warnUnmounted`). The mount nearest to the directory,
+at it or above it short of `/`, holds what is saved there. It logs one `WARN`
+for each of these, naming the base dir and the services in it:
+
+- No mount: the directory is on the root filesystem. In a container
+  (`Settings.InDocker`, LocalStack's `in_docker()`) the message is `persist: the
+  base dir is not on a mounted volume, so saved state will be lost with the
+  container`, and out of one, `persist: the base dir is on the root filesystem,
+  not on a mounted volume`.
+- A `tmpfs` or `ramfs` mount, as `--tmpfs /persisted-data` or a path under
+  `/dev/shm`: `persist: saved state is on a memory filesystem; lost when it is
+  unmounted`.
+- An anonymous volume, which Docker makes for an image's `VOLUME` when no `-v`
+  covers it: `persist: saved state is on an anonymous volume; it survives a
+  restart but not docker rm or docker compose down`. The mount's root field
+  ends in `/volumes/<64 hex digits>/_data`, where a named volume has its name:
+  `/docker/volumes/8306b0...966da/_data` against
+  `/docker/volumes/sq437-named/_data` in the mountinfo captured inside the
+  image under Docker 29.8.2 on OrbStack (`internal/persist/testdata/mountinfo`,
+  one file per layout: no volume, an anonymous, a named and a bind-mounted
+  volume at `/var/lib/localstack` and at `/persisted-data`, `--tmpfs`, and a
+  volume at `/persisted-data/s3`). A volume from `docker volume create` with no
+  name has such a name too, and warns alike. Podman was not installed to
+  capture; its docs name its anonymous volumes the same way, which is not
+  verified here.
+
+A volume per service, `-v s3:/persisted-data/s3`, is a mount for S3 alone: the
+other services that persist are named in the warning, and S3 is not. A
+directory inside a volume (`/persisted-data/gostack`) and a bind mount warn of
+nothing. A mount found by a `MountDetector` is taken for one that holds files.
+Nothing is logged when no service persists, as with `PERSIST_DEFAULT=0` and no
+`PERSIST_<SERVICE>=1`, and nothing where the mounts cannot be read: no
+`/proc/self/mountinfo`, as off Linux, or one that cannot be opened or read. A
+line of it has no length limit. A path with a link is resolved before a `..` in
+it is cleaned, as far as it exists, since the kernel takes `/link/../data`
+through the link. The check warns once, not on a later `Load` from
+`POST /_gostack/state/load`, and changes nothing else: state is saved to the
+directory as before.
+
+The `PERSISTENCE=1` state directory relies on the container runtime mounting
+the image's `VOLUME /var/lib/localstack`. Docker and Podman mount an anonymous
+volume there, which warns as above unless a `-v` names one. CRI-O's default
+`image_volumes = "mkdir"` only makes the directory, so under it the state is in
+the container's layer and the warning says so.
+
 **Configuration** is copied exactly from localstack-persist
 (`src/localstack_persist/config.py`, `state.py`); `internal/config/persist.go`
 cites the lines.
@@ -1407,7 +1488,9 @@ is untouched.
     renames into `blobs/<xx>` included.
   - **per-file fsync:** it fsyncs each asset, 8 at a time, on a descriptor
     opened for it, then each of their `blobs/<xx>` directories once. It costs
-    about 0.4 ms per pending asset on a Linux volume.
+    about 0.4 ms per pending asset on a Linux volume. On macOS the fsyncs are
+    plain `fsync(2)` and one `F_FULLFSYNC` on `assets/.gostack` follows the
+    last of them (see below).
 
   When the assets open, on Linux, gostack reads the type of the assets
   filesystem with `fstatfs` and takes syncfs only on a filesystem where the
@@ -1421,7 +1504,7 @@ is untouched.
   already covers. Every other filesystem takes the
   per-file path: overlayfs, FUSE and virtiofs, 9p, NFS, any other, and
   one whose type cannot be read. Other
-  systems always take the per-file path. One info line per service at startup
+  systems always take the per-file path, macOS in the form below. One info line per service at startup
   names the filesystem and the path, such as
   `persist: asset sync service=s3 fs=overlay sync="per-file fsync"` or
   `fs=tmpfs sync=syncfs`. A save
@@ -1487,6 +1570,112 @@ is untouched.
   only when its sync and every earlier one have returned without error, so a
   sync left running delays the next save and never lets it name a body whose
   write was lost.
+- **macOS: one drive flush per save** (SQ-427). Go's `File.Sync` is
+  `fcntl(F_FULLFSYNC)` on macOS, which asks the drive to flush its whole write
+  cache, so a per-file sync paid one drive flush per pending asset and per
+  directory, 1 to 7 ms each on an Apple SSD, more the more the disk is busy
+  with other writers (SQ-424 measured it). A shutdown save with
+  1,000 to 1,500 pending S3 objects ran past its save deadline (about 4.5 s
+  with the default `SHUTDOWN_TIMEOUT`) and was abandoned: 3,000 objects at
+  4.93 s, and 10,000 the same. Only in the macOS build, each asset and each
+  directory gets plain `fsync(2)`, 8 at a time, and one `F_FULLFSYNC` on
+  `assets/.gostack` runs after the last of them returned and before the
+  snapshot is renamed; the whole shutdown of the same 3,000 objects then takes
+  0.21 to 0.27 s (two runs of SQ-424's curve; 100 objects 36 ms, 1,000 objects
+  93 ms, 10,000 objects 755 ms). Apple's `fsync(2)` page says `fsync` hands the
+  data to the drive, which may hold it in its cache. The guarantee across files
+  is in `fcntl(2)`: "F_FULLFSYNC Does the same thing as fsync(2) then asks the
+  drive to flush all buffered data to the permanent storage device (arg is
+  ignored). As this drains the entire queue of the device and acts as a barrier,
+  data that had been fsync'd on the same device before is guaranteed to be
+  persisted when this call returns." So the one flush after the last fsync makes
+  every asset and directory permanent before the rename, the order a flush per
+  file gave. `F_BARRIERFSYNC` only orders writes without flushing, so it is not
+  enough. An error the flush itself returns is a failed sync like an fsync's,
+  with everything the section says of one: final, the service turns off. Two
+  things are not that. A filesystem with no drive flush answers `ENOTSUP`, as an
+  SMB mount does, and the save then fsyncs `assets/.gostack` instead and
+  succeeds, as Go's `File.Sync` does on macOS (`internal/poll/fd_fsync_darwin.go`
+  in Go 1.27.4, which falls back on `ENOTSUP` alone, go#64215). And a failure to
+  open `assets/.gostack` for the flush, such as no descriptor left for a moment,
+  fails the save like a per-file open that fails: every path was fsynced, the
+  ids stay pending, and the next save fsyncs them again and flushes. A save
+  whose deadline passes before the flush starts does not run it, and keeps its
+  ids pending. Linux and the other systems are unchanged.
+- **An abandoned save is marked for the next start** (SQ-427, SQ-447). A save
+  that runs out of time loses every change since the last completed save, and
+  the process that abandoned it is on its way out. When a flush's deadline
+  comes, it writes `<base>/<service>/.gostack-save-abandoned` for every
+  service the deadline puts at risk, at that moment and not when the work it is
+  in returns: a `Snapshot` cannot be cut short, and one that outlasts the
+  deadline outlasts the kill after it. Those are the services the flush holds
+  and has not saved, every service that is dirty, one the flush saved earlier
+  and a request changed since included, and the services the flush by the
+  timer holds, since a `Flush` lends its deadline to that flush when it comes,
+  inside a `Snapshot` as much as while it waits for the flush. The `Flush`
+  writes those markers itself and does not return before they are written.
+  What the flush's end finds dirty is marked then, so a change made after the
+  deadline's round is named if the flush ends before the kill. A service that
+  another `Flush` holds has that call's deadline, and is marked for this one
+  only when it is dirty. A flush whose save of a service failed for a reason of
+  its own, and a `Follower` whose leader did, is not marked: the flush's warning
+  names it with its cause, apart from the services the deadline cut, and the
+  advice to raise `SHUTDOWN_TIMEOUT` is for those. A `Flush` that ends at its
+  deadline waiting for the running flush or a `Load` marks the services nothing
+  saved, and the ones the flush by the timer holds, before it returns.
+  A marker is written with `O_EXCL`, so a link planted at its path has
+  nothing written through it, and counts as the marker. A service that has one
+  is skipped, so a later round costs a `lstat` each.
+  The markers of a round are written one after the other, which is all a kill
+  needs, and then made durable, which a power cut needs. Each marker and its
+  directory gets `fsync(2)`, and in the macOS build one `F_FULLFSYNC` on the
+  base dir follows the last of them (see the macOS item above for why the
+  guarantee holds): Go's `File.Sync` is `F_FULLFSYNC`, one drive flush for each
+  marker and directory. For 8 services on the APFS volume of an Apple M1 Max
+  the last marker existed after 1.6 to 4.5 ms and the round was durable after
+  10 to 12 ms, where `File.Sync` of each took 35 to 76 ms
+  (`Test_Engine_MarkAbandonedOfEightServices`). A marker created and not yet
+  fsynced when the process is killed can be lost by a power cut, which loses
+  the warning and never state: the state files are saved and fsynced by the
+  save, not by the marker. The kill of the process alone loses no marker that
+  was written. The rounds of one flush share a budget of 60 ms, which keeps the
+  last flush, the one at `Close`, 100 ms before the kill, of which the caller's
+  own wait leaves 80 ms, clear of it: each round has what the earlier ones left,
+  and ends there if its fsyncs have not. Three rounds whose fsyncs each took
+  longer than the budget took 60.6 to 62.4 ms in all, over 8 runs, where a
+  budget for each round would take 180 ms
+  (`Test_Engine_MarkAbandonedRoundsShareOneBudget`). The round that is left
+  with no time writes nothing and logs the services it could not mark. The
+  fsyncs a round left unfinished go on while the process lives, with the base dir
+  open until the last has ended. A save of the service that completes removes
+  the marker after it renames the snapshot, unless the service has changed
+  since the snapshot was taken: the change is lost if the process is killed, so
+  the marker stays and the next save that finds the service unchanged removes
+  it. A save looks for the marker in the listing of the service's directory
+  that it reads anyway to remove the temp files of its state file, and looks
+  by itself only when a link leads the state file to another directory. A
+  flush in time allocates nothing for the marker (SQ-461): a request marks
+  nothing, a flush whose context has no deadline arms no marking at its
+  deadline and shares no budget between its rounds, and a flush with one pays
+  for the arming alone. Such a flush marks when it ends, so a `Snapshot` that
+  outlasts a deadline it was never given is marked after it returns, and each
+  round of it has the whole budget. `BenchmarkSavePendingAssets/pending=100` on
+  tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
+  marker; the first version of the marker took 174, and PR #56's benchmark gate
+  read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).
+  A shutdown whose saves all complete leaves none. The startup `Load` logs
+  one warning for the services that have a marker, at warn: `persist: a save
+  was abandoned at its deadline before this start, so what changed after the
+  last completed save is lost` with `services=[s3]` and
+  `last_completed_save=[s3=2026-11-20T21:45:22Z]`, the modification time of the
+  service's newest state file, or `never` when it has none. The marker stays
+  until a save completes, so each start says so until then. A marker that cannot
+  be written or removed is logged and changes nothing else. A crash between a
+  completed save's rename and the removal of the marker, or a deadline that
+  falls while a save renames, leaves one warning too many. Every service that
+  is held or dirty when a round runs is marked, within the round's time, so a
+  change made before the deadline's round is never one too few. One made after
+  the flush's last round, or while the budget was spent, is not marked.
 - Save order: a flush saves in two passes, each in the same order. Services
   with assets to sync, or an earlier sync to wait for, when the flush starts
   go after the ones with none. Within each group, the service whose last
@@ -1627,11 +1816,17 @@ is untouched.
   smaller `PERSIST_FREQUENCY` leaves less unsaved when the stop comes. The
   loss is logged as an error from the shutdown save, and, when the shutdown's
   own save ran and was cut short, a warning that it was abandoned at its
-  deadline. A timed save the shutdown cancelled logs nothing of its own.
+  deadline. A timed save the shutdown lent its deadline to, when it waited for
+  that save, is cancelled by it and logs the same warning and writes the same
+  markers for the services it held and did not save (see the abandoned-save
+  marker above); only a timed save that a `Load` preempted logs
+  nothing of its own.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
-  Go's fsync is `F_FULLFSYNC`, 1000 pending take 5 to 7 s.
+  Go's fsync is `F_FULLFSYNC`, 1000 pending took 5 to 7 s with a flush per
+  file; with plain fsyncs and one flush (SQ-427) they take about 0.1 s
+  (`BenchmarkSyncPending/files=1000`, on an Apple M1 Max under heavy load).
 - `Remove` queues the id. A flush takes the queue before it takes the snapshot,
   and deletes those files once the snapshot is renamed into place and its
   directory fsynced. A deletion is not fsynced: if a crash loses it, the file
@@ -1908,8 +2103,8 @@ LocalStack runs Amazon's DynamoDB Local behind its provider. gostack runs no
 JVM: the engine is Go, in five packages under `internal/service/dynamodb`, and
 the handlers beside them take LocalStack's provider (`provider.py`,
 `utils.py`, `models.py` at 8b9a79f) for what it adds over the engine. What it
-answers differently, and the 21 operations at 501, are in `docs/compat.md`,
-"DynamoDB operations" and the DynamoDB sections after it.
+answers differently is in `docs/compat.md`, "DynamoDB operations" and the
+DynamoDB sections after it; the operations at 501 are in `docs/features.md`.
 
 | Package | Holds |
 |---|---|
@@ -1981,6 +2176,21 @@ under `attribute_exists`, and `ExecuteTransaction` a `TransactGetItems` or
 `TransactWriteItems`. PartiQL has no write path or reader of its own, so its
 writes reach streams and persistence like any other.
 
+DynamoDB Local holds a statement to its own 8,192 bytes and holds the
+expressions it compiles to no size: a `WHERE` that renders to 4,172
+characters, a `SELECT` of 700 attributes and an `UPDATE` of 600 `SET` actions
+are answered, where a request's expression is refused past 4,096 characters.
+`ExecuteStatement`, `BatchExecuteStatement` and `ExecuteTransaction` mark the
+context of the calls they make (`forStatement`), and every parse of a
+condition, filter, projection or update expression takes the `origin` that
+marks it (`newExprs`), so a call a caller sends keeps the limit and a new way
+to parse one of those has to say which it is. A key condition takes none: a
+statement's is `#n0 = :v0` and at most one range condition on placeholders,
+tens of characters, so it cannot reach the limit and has no statement form to
+exercise (`exprs.keyConditionText`, and `startFrom`'s parse of the same text).
+The count of 300 operators, which DynamoDB Local applies to an `UpdateExpression`
+and a condition alike, and the 100 operands of an `IN` hold for both.
+
 **Streams.** A table with a stream registers a `table.Observer`, which the
 engine calls under the table's write lock for every `Change` that changed
 something, so records are numbered in the order the writes applied. The
@@ -2012,8 +2222,8 @@ it and sorts it once.
 
 KMS follows LocalStack's own provider (`services/kms/provider.py`,
 `models.py`, `utils.py`), which uses no moto. It reads no settings. What it
-answers differently from LocalStack, and the eight operations at 501, are in
-`docs/compat.md`, "KMS".
+answers differently from LocalStack is in `docs/compat.md`, "KMS"; the
+operations at 501 are in `docs/features.md`.
 
 **Key model.** A key lives in the `State` of its account and region, in a
 `store.Bundle`. Any of its ids reaches it through one resolver: the key id, the
@@ -2090,11 +2300,10 @@ vectors.
 ### SNS (`internal/service/sns`)
 
 LocalStack implements SNS itself, with no moto (`localstack-core/localstack/services/sns/`
-at 8b9a79f). gostack ports its 36 operations; the other 6 of the API's 42 (the
-SMS sandbox and `ListOriginationNumbers`) answer 501 through the generated
-`Unimplemented`, and `GET /_gostack/services` reports 36 of 42
-(`Test_implemented`). What it answers differently is in `docs/compat.md`, the
-SNS sections.
+at 8b9a79f). gostack ports its operations; an operation of the API it does not
+build answers 501 through the generated `Unimplemented`. The operations in each
+set are in `docs/features.md`. What it answers differently is in
+`docs/compat.md`, the SNS sections.
 
 | Package | Holds |
 |---|---|
@@ -2139,8 +2348,10 @@ to HTTP and HTTPS". The system bench loads this path through `sns/publish`
 LocalStack's Secrets Manager is moto's with about 980 lines of patches
 (`services/secretsmanager/provider.py` at 8b9a79f), and gostack ports both: the
 patches and the moto behavior they leave in place, sized against moto-ext
-5.1.25. All 23 operations of the API are implemented, so `GET
-/_gostack/services` reports 23 of 23 (`Test_implemented`). Rotation that needs
+5.1.25. `ValidateResourcePolicy` and `StopReplicationToReplica` check the
+`SecretId` as LocalStack does and then answer 501, which `Provider.Stubs`
+declares, so `GET /_gostack/services` and `docs/features.md` leave them out of
+the implemented operations. Rotation that needs
 Lambda ends with `ResourceNotFoundException` and the secret as it was, because
 Lambda is not a service yet. What it answers differently is in `docs/compat.md`,
 "Secrets Manager".
@@ -2163,11 +2374,10 @@ region. SSM imports nothing of this package and reaches none of its state.
 
 LocalStack's SSM provider is a thin layer over moto (`services/ssm/provider.py`
 at 8b9a79f): five operations of its own, the rest moto's. gostack builds
-Parameter Store, 17 of the API's 146 operations (`Test_implemented`): the
-parameter operations, labels, tags for parameters, and the maintenance-window
-records moto keeps. The other 129 answer 501 through the generated
-`Unimplemented` and are listed by `GET /_gostack/services`. What it answers
-differently is in `docs/compat.md`, "SSM Parameter Store".
+Parameter Store: the parameter operations, labels, tags for parameters, and the
+maintenance-window records moto keeps. The rest of the API answers 501 through
+the generated `Unimplemented`; `docs/features.md` lists both sets. What it
+answers differently is in `docs/compat.md`, "SSM Parameter Store".
 
 **State.** A `State` per account and region in a `store.Bundle` holds every
 parameter as its list of versions, oldest first, with labels on versions and
@@ -2216,7 +2426,7 @@ in the product `go.mod`.
 | santhosh-tekuri/jsonschema/v6 | the internal API | Tests only. `internal/internalapi/schema_test.go` and `internal/service/sqs/developer-api_test.go` compile response and request schemas out of LocalStack's `specs/localstack/openapi.yaml` and gostack's `api/openapi/gostack.yaml` (OpenAPI 3.1, so JSON Schema 2020-12) and check what the internal API handlers and the SQS developer API answer against them. |
 | go.yaml.in/yaml/v3 | the internal API | Tests only, next to jsonschema: the same two tests read the two OpenAPI files, which are YAML, and hand them to jsonschema as JSON. |
 | golang.org/x/sync | the first errgroup | errgroup. |
-| golang.org/x/sys | the asset sync on Linux | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. It was already in the module graph, indirect, so no module was added. |
+| golang.org/x/sys | the asset sync on Linux and macOS | `unix.Fstatfs` reads the assets filesystem type, and on a filesystem proven for it `unix.Syncfs` makes every pending S3 asset durable with one `syncfs(2)` per save. On macOS `unix.Fsync` syncs each asset and one `unix.F_FULLFSYNC` flushes the drive per save. It was already in the module graph, indirect, so no module was added. |
 | fxamacker/cbor | Kinesis | Kinesis CBOR and smithy-rpc-v2-cbor. |
 | miekg/dns | the DNS server | The DNS server. |
 | aws-sdk-go-v2 (`aws-sdk-go-v2`, `credentials`, `service/sqs`) | in-process tests and the system bench | Tests and bench only; the product never imports it. `internal/service/sqs/sdk_test.go` and `sdk-fifo_test.go` drive a real SDK client through the gateway, which checks the wire shapes a generated client expects. `bench/` uses the SDK for the json-protocol load against each image. |

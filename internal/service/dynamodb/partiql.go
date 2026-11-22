@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -25,7 +26,7 @@ const codeConditionFailed = "ConditionalCheckFailedException"
 func (p *Provider) ExecuteStatement(
 	ctx context.Context, in *api.ExecuteStatementInput,
 ) (*api.ExecuteStatementOutput, error) {
-	out, err := p.runStatement(ctx, in)
+	out, err := p.runStatement(forStatement(ctx), in)
 	if err != nil {
 		return nil, statementFailure(err)
 	}
@@ -80,8 +81,55 @@ func (p *Provider) runStatement(
 	return out, nil
 }
 
+// checkStatementText makes the check a batch and a transaction make of each
+// statement as it takes it up, before they parse it: it is given and holds at
+// most 8,192 bytes, or the whole call is refused. empty is the message for a
+// statement missing or empty.
+func checkStatementText(src *string, empty string) error {
+	switch {
+	case src == nil || *src == "":
+		return value.Invalid(empty)
+	case len(*src) > maxStatementBytes:
+		return value.Invalid(msgStatementLong)
+	default:
+		return nil
+	}
+}
+
+// mixing refuses the call at the first statement that is a read where the
+// first was a write, or the other way, as the image does: before it looks at
+// the statements after that one, and so before an empty or long one among them,
+// and whatever is wrong with the statement itself but its syntax (SQ-467
+// image-probe.log). A statement that did not parse has no kind.
+type mixing struct {
+	seen  bool
+	reads bool
+	msg   string
+}
+
+// check refuses stmt when it mixes reads and writes with the statements
+// before it.
+func (m *mixing) check(stmt *partiql.Statement) error {
+	if stmt == nil {
+		return nil
+	}
+
+	reads := stmt.Kind == partiql.Select
+
+	switch {
+	case !m.seen:
+		m.seen, m.reads = true, reads
+	case reads != m.reads:
+		return value.Invalid(m.msg)
+	default:
+	}
+
+	return nil
+}
+
 // parseStatement parses a request's statement and checks it has a value for
-// each of its parameters. An EXISTS parses only where exists allows it, in a
+// each of its parameters; one that does not is returned with the error, as it
+// has a kind (mixing). An EXISTS parses only where exists allows it, in a
 // transaction.
 //
 //nolint:revive // flag-parameter: whether the operation runs EXISTS
@@ -96,18 +144,32 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 
 	stmt, err := partiql.Parse(*src)
 	if err != nil {
-		return nil, statementError(err)
+		return nil, parseFailure(err, exists)
 	}
 
 	if stmt.Kind == partiql.Exists && !exists {
-		return nil, value.Invalid(partiql.MsgNotWellFormed + *src)
+		return nil, value.Invalid(msgExistsOnlyTx)
 	}
 
 	if stmt.Params > len(params) {
-		return nil, value.Invalid(partiql.MsgParamCount)
+		return stmt, value.Invalid(partiql.MsgParamCount)
 	}
 
 	return stmt, nil
+}
+
+// parseFailure is the answer to a statement that did not parse. Outside a
+// transaction (exists false) an EXISTS around an expression is refused as an
+// EXISTS, where inside one it is not well formed.
+//
+//nolint:revive // flag-parameter: whether the operation runs EXISTS
+func parseFailure(err error, exists bool) error {
+	pe, ok := errors.AsType[*partiql.Error](err)
+	if ok && pe.ExistsOnly && !exists {
+		return value.Invalid(msgExistsOnlyTx)
+	}
+
+	return statementError(err)
 }
 
 // executeSelect runs a SELECT as a Query or a Scan.
@@ -437,21 +499,29 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 		return nil, nil, fmt.Errorf("statement: %w", err)
 	}
 
-	// The image holds a SELECT's paths to no size, so the list its read runs
-	// with is held to the limit here, after the overlap check, and answers as
-	// any statement's expression does. Nested paths add nothing to it (SQ-417).
+	// The image holds a SELECT's paths to no size, and so does the read this
+	// list goes to, which parses it with no size of its own (forStatement).
+	// Nested paths add nothing to it: the read keeps the whole top-level
+	// attribute and shapeItems takes the paths from it.
 	text := strings.Join(top, ", ")
-
-	err = expression.CheckProjectionSize(text)
-	if err != nil {
-		return nil, nil, fmt.Errorf("statement: %w", err)
-	}
 
 	if !nested {
 		return &text, nil, nil
 	}
 
 	return &text, paths, nil
+}
+
+// wholePaths renders paths as a ProjectionExpression of the paths themselves.
+func wholePaths(paths []partiql.Path, r *render) *string {
+	texts := make([]string, len(paths))
+	for i, path := range paths {
+		texts[i] = r.path(path)
+	}
+
+	text := strings.Join(texts, ", ")
+
+	return &text
 }
 
 // shapeItems puts each projected path of items under its alias; with no
@@ -472,15 +542,54 @@ func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 		return item
 	}
 
-	out := make(value.Item, len(paths))
+	// A short list names mostly what the item holds, so the result is sized
+	// for it, and a map that grows instead costs a narrow SELECT an allocation
+	// and 204 bytes an item (SQ-452). Most of a long list names nothing the item
+	// holds, and a map sized for it costs every item the list's length
+	// (SQ-412), so a long list is counted against the item first and the map
+	// sized for what it holds: no more than the list's length, and a map that
+	// grows from small to that costs 21% more (SQ-456).
+	size := len(paths)
+	if size > shapeHintMax {
+		size = heldPaths(item, paths)
+	}
+
+	out := make(value.Item, size)
+
+	var cuts cutPaths
 
 	for _, path := range paths {
+		if i := indexCut(path); i > 0 {
+			cuts.add(path, i)
+
+			continue
+		}
+
 		if v, ok := lookupPath(item, path); ok {
 			out[path.Alias()] = v
 		}
 	}
 
+	cuts.put(out, item)
+
 	return out
+}
+
+// shapeHintMax is the longest list shapeItem sizes its result for without
+// counting what the item holds of it.
+const shapeHintMax = 32
+
+// heldPaths is how many of paths item holds.
+func heldPaths(item value.Item, paths []partiql.Path) int {
+	n := 0
+
+	for _, path := range paths {
+		if _, ok := lookupPath(item, path); ok {
+			n++
+		}
+	}
+
+	return n
 }
 
 // lookupPath is the value at path in item.

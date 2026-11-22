@@ -13,10 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/blob"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/service/s3"
+	"github.com/kylecannon/gostack/internal/service/sns"
 	"github.com/kylecannon/gostack/internal/service/sqs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +35,7 @@ const (
 )
 
 // skipDestinationCheck is the header of SkipDestinationValidation.
-var skipDestinationCheck = map[string]string{"x-amz-skip-destination-validation": "true"}
+var skipDestinationCheck = map[string]string{"x-amz-skip-destination-validation": valueTrue}
 
 // notifyStack runs S3 and SQS in one gateway, with S3 delivering through it.
 type notifyStack struct {
@@ -53,20 +55,54 @@ func newNotifyStack(t *testing.T) *notifyStack {
 func newNotifyStackThrough(t *testing.T, wrap func(http.Handler) http.Handler) *notifyStack {
 	t.Helper()
 
+	provider, serverURL := serveNotifyGateway(t, wrap, nil)
+
+	return &notifyStack{t: t, url: serverURL, s3: provider}
+}
+
+// newTopicStack is newNotifyStack with SNS in the gateway too: a topic is a
+// notification target, and delivers to the queue it is subscribed with.
+func newTopicStack(t *testing.T) *notifyStack {
+	t.Helper()
+
+	provider, serverURL := serveNotifyGateway(t, nil, sns.New(nil, nil))
+
+	return &notifyStack{t: t, url: serverURL, s3: provider}
+}
+
+// serveNotifyGateway serves S3 and SQS, and topics when it is not nil, through
+// one gateway that S3 and SNS deliver through, and returns S3 and the server's
+// URL.
+func serveNotifyGateway(
+	tb testing.TB, wrap func(http.Handler) http.Handler, topics *sns.Provider,
+) (*s3.Provider, string) {
+	tb.Helper()
+
 	provider := s3.New(func() s3.Settings { return s3.Settings{LocalstackHost: localstackHost} },
-		blob.NewEphemeral(t.TempDir()))
+		blob.NewEphemeral(tb.TempDir()))
 	queues := sqs.New(func() sqs.Settings { return sqs.Settings{Host: localstackHost} }, func(string) {})
 
-	t.Cleanup(func() { provider.Close(context.WithoutCancel(t.Context())) })
-	t.Cleanup(queues.Close)
+	tb.Cleanup(func() { provider.Close(context.WithoutCancel(tb.Context())) })
+	tb.Cleanup(queues.Close)
+
+	regs := []service.Registration{provider.Registration(), queues.Registration()}
+
+	var mount func(chi.Router)
+
+	if topics != nil {
+		regs = append(regs, topics.Registration())
+		mount = topics.MountProtocol
+
+		tb.Cleanup(func() { topics.Close(context.WithoutCancel(tb.Context())) })
+	}
 
 	gw, err := gateway.New(
 		func() gateway.Settings { return gateway.Settings{Listen: []string{benchListen}} },
-		[]service.Registration{provider.Registration(), queues.Registration()},
-		nil,
+		regs,
+		mount,
 		nil,
 	)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	if wrap == nil {
 		provider.Bind(gw.Handler())
@@ -74,10 +110,14 @@ func newNotifyStackThrough(t *testing.T, wrap func(http.Handler) http.Handler) *
 		provider.Bind(wrap(gw.Handler()))
 	}
 
-	srv := httptest.NewServer(gw.Handler())
-	t.Cleanup(srv.Close)
+	if topics != nil {
+		topics.Bind(gw.Handler())
+	}
 
-	return &notifyStack{t: t, url: srv.URL, s3: provider}
+	srv := httptest.NewServer(gw.Handler())
+	tb.Cleanup(srv.Close)
+
+	return provider, srv.URL
 }
 
 func (n *notifyStack) s3Call(method, target, body string, header map[string]string) reply {
@@ -93,7 +133,7 @@ func (n *notifyStack) s3Call(method, target, body string, header map[string]stri
 		req.Header.Set(name, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(n.t, err)
 
 	defer func() { require.NoError(n.t, resp.Body.Close()) }()
@@ -120,7 +160,7 @@ func (n *notifyStack) sqsCall(operation string, params map[string]any) (int, map
 	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
 	req.Header.Set("X-Amz-Target", "AmazonSQS."+operation)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	require.NoError(n.t, err)
 
 	defer func() { require.NoError(n.t, resp.Body.Close()) }()
@@ -143,7 +183,7 @@ func (n *notifyStack) setup() {
 	created := n.s3Call(http.MethodPut, notifyBucket, "", map[string]string{"x-amz-object-ownership": "ObjectWriter"})
 	require.Equal(n.t, http.StatusOK, created.status, string(created.body))
 
-	status, out := n.sqsCall("CreateQueue", map[string]any{"QueueName": notifyQueue})
+	status, out := n.sqsCall("CreateQueue", map[string]any{fieldQueueName: notifyQueue})
 	require.Equal(n.t, http.StatusOK, status, out)
 }
 
@@ -169,7 +209,7 @@ func (n *notifyStack) receive(want int) []map[string]any {
 
 	for polled := false; !polled || (len(records) < want && time.Now().Before(deadline)); polled = true {
 		status, out := n.sqsCall("ReceiveMessage", map[string]any{
-			"QueueUrl": queueURL, "MaxNumberOfMessages": 10, "WaitTimeSeconds": 1, "VisibilityTimeout": 0,
+			fieldQueueURL: queueURL, "MaxNumberOfMessages": 10, "WaitTimeSeconds": 1, "VisibilityTimeout": 0,
 			"MessageSystemAttributeNames": []string{"All"},
 		})
 		require.Equal(n.t, http.StatusOK, status, out)
@@ -181,7 +221,7 @@ func (n *notifyStack) receive(want int) []map[string]any {
 			handle, _ := message["ReceiptHandle"].(string)
 			body, _ := message["Body"].(string)
 
-			_, _ = n.sqsCall("DeleteMessage", map[string]any{"QueueUrl": queueURL, "ReceiptHandle": handle})
+			_, _ = n.sqsCall("DeleteMessage", map[string]any{fieldQueueURL: queueURL, "ReceiptHandle": handle})
 
 			if strings.Contains(body, "s3:TestEvent") {
 				continue
@@ -579,7 +619,7 @@ func TestNotificationsToOneQueueDoNotWaitForAnother(t *testing.T) {
 
 	n.setup()
 
-	status, out := n.sqsCall("CreateQueue", map[string]any{"QueueName": slowQueue})
+	status, out := n.sqsCall("CreateQueue", map[string]any{fieldQueueName: slowQueue})
 	require.Equal(t, http.StatusOK, status, out)
 
 	slowARN := "arn:aws:sqs:us-east-1:" + notifyAcct + ":" + slowQueue

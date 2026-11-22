@@ -61,7 +61,7 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 func (r *reader) scanChecks(in *api.ScanInput) error {
 	hasExpr := in.FilterExpression != nil || in.ProjectionExpression != nil
 
-	x, err := newExprs(in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr,
+	x, err := newExprs(r.from, in.ExpressionAttributeNames, in.ExpressionAttributeValues, hasExpr,
 		in.FilterExpression != nil, "FilterExpression is null")
 	if err != nil {
 		return err
@@ -109,9 +109,7 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 		return err
 	}
 
-	r.decideFetch(topNames(r.projection))
-
-	return nil
+	return r.checkProjection()
 }
 
 // scanTarget finds the table and index a Scan reads and makes the checks that
@@ -152,7 +150,7 @@ func (p *Provider) scanTarget(ctx context.Context, in *api.ScanInput) (*tableEnt
 		return nil, nil, err
 	}
 
-	r.name, r.filter = name, legacy
+	r.name, r.filter, r.from = name, legacy, originOf(ctx)
 
 	err = r.checkConsistent()
 	if err != nil {

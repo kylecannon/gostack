@@ -29,4 +29,9 @@ const (
 	etagOther        = `"other"`
 	etagX            = `"x"`
 	targetDelete     = "/bucket?delete"
+
+	// Members of the SQS and SNS calls the notification tests make.
+	fieldQueueURL  = "QueueUrl"
+	fieldQueueName = "QueueName"
+	fieldTopicName = "Name"
 )

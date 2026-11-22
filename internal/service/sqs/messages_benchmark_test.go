@@ -17,6 +17,7 @@ import (
 //
 //	BenchmarkSendMessage/proto=json/queue=fifo/payload=64KiB
 //	BenchmarkReceiveMessage/proto=query/queue=standard/max=10/payload=256B/attrs=10
+//	BenchmarkReceiveMessage/proto=json/queue=standard/max=1/payload=64KiB/text=cjk
 //
 // Cells left out, and why. The matrix is the cross product less the cells that
 // run no code the kept ones do not, so that `make bench` at -count=10 fits its
@@ -33,6 +34,10 @@ import (
 //     attributes on a 256B body.
 //   - Payload and attributes on DeleteMessage and DeleteMessageBatch. They
 //     take a receipt handle and read neither.
+//   - The text axis on anything but json ReceiveMessage from a standard queue.
+//     Body text changes only how json quotes a body on the way out; the
+//     ASCII cells measure every other path. The text cells are the non-ASCII
+//     and escape-dense bodies that quote differently from ASCII.
 //   - Persistence is measured by the snapshot benchmarks, and the system bench
 //     runs the operations with PERSIST_SQS=1.
 
@@ -48,6 +53,7 @@ type cell struct {
 	payload benchPayload
 	max     int
 	attrs   int
+	text    benchText
 }
 
 // cellOpts says which axes an operation has.
@@ -55,6 +61,7 @@ type cellOpts struct {
 	maxes   []int // receive sizes; nil when the operation has none
 	payload bool  // the payload axis applies
 	attrs   bool  // the attribute cells apply
+	texts   bool  // the text cells apply
 }
 
 // name is the sub-benchmark name of a cell. The axes an operation does not have
@@ -72,6 +79,10 @@ func (c cell) name(opts cellOpts) string {
 
 	if c.attrs > 0 {
 		name += "/attrs=" + strconv.Itoa(c.attrs)
+	}
+
+	if c.text.name != "" {
+		name += "/text=" + c.text.name
 	}
 
 	return name
@@ -109,6 +120,16 @@ func (o cellOpts) cells() []cell {
 					out = append(out, cell{
 						proto: proto, kind: kind, payload: payload256B, max: size, attrs: benchMessageAttr,
 					})
+				}
+			}
+		}
+	}
+
+	if o.texts {
+		for _, size := range maxes {
+			for _, payload := range allPayloads {
+				for _, text := range benchTexts {
+					out = append(out, cell{proto: protoJSONName, kind: queueStandard, payload: payload, max: size, text: text})
 				}
 			}
 		}
@@ -375,10 +396,12 @@ func receiveBody(c cell, queueURL string) *segmented {
 // every benchRefillCalls calls, with the timer stopped, and the memory of a cell
 // stays the same however long it runs.
 func BenchmarkReceiveMessage(b *testing.B) {
-	eachCell(b, cellOpts{payload: true, attrs: true, maxes: []int{1, benchBatch}}, func(b *testing.B, c cell) {
+	opts := cellOpts{payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch}}
+	eachCell(b, opts, func(b *testing.B, c cell) {
 		env := newBenchEnv(b)
 		queueURL := env.queue(c.kind)
-		env.fill(queueURL, c.kind, benchBatch, c.payload.bytes, c.attrs, 1)
+		body := c.text.body(c.payload.bytes)
+		env.fillBody(queueURL, c.kind, benchBatch, body, c.attrs, 1)
 
 		caller := env.caller(c.proto, "ReceiveMessage", receiveBody(c, queueURL))
 		expectCount(b, caller.probe(), "MessageId", c.max)
@@ -390,7 +413,7 @@ func BenchmarkReceiveMessage(b *testing.B) {
 			if i%benchRefillCalls == 0 {
 				b.StopTimer()
 				env.purge(queueURL)
-				env.fill(queueURL, c.kind, benchBatch, c.payload.bytes, c.attrs, 1)
+				env.fillBody(queueURL, c.kind, benchBatch, body, c.attrs, 1)
 				b.StartTimer()
 			}
 

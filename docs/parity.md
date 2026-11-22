@@ -6,13 +6,13 @@ gostack runs LocalStack's own pytest suite unchanged. Parity is the share of tes
 
 | Service | Tests | Excluded | Skipped | LocalStack pass | LocalStack fail | gostack pass | Parity |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| dynamodb | 57 | 7 | 0 | 50 | 0 | 50 | 100.0% |
-| dynamodbstreams | 4 | 3 | 0 | 1 | 0 | 1 | 100.0% |
-| kms | 151 | 0 | 0 | 151 | 0 | 151 | 100.0% |
-| s3 | 573 | 28 | 0 | 544 | 1 | 545 | 100.0% |
-| secretsmanager | 66 | 8 | 0 | 58 | 0 | 58 | 100.0% |
-| sns | 208 | 25 | 0 | 183 | 0 | 183 | 100.0% |
-| sqs | 451 | 46 | 0 | 403 | 2 | 405 | 100.0% |
-| ssm | 14 | 3 | 0 | 11 | 0 | 11 | 100.0% |
-| sts | 14 | 7 | 0 | 7 | 0 | 7 | 100.0% |
-| **total** | 1538 | 127 | 0 | 1408 | 3 | 1411 | 100.0% |
+| <a id="dynamodb"></a>dynamodb | 57 | 7 | 0 | 50 | 0 | 50 | 100.0% |
+| <a id="dynamodbstreams"></a>dynamodbstreams | 4 | 3 | 0 | 1 | 0 | 1 | 100.0% |
+| <a id="kms"></a>kms | 151 | 0 | 0 | 151 | 0 | 151 | 100.0% |
+| <a id="s3"></a>s3 | 573 | 24 | 0 | 548 | 1 | 549 | 100.0% |
+| <a id="secretsmanager"></a>secretsmanager | 66 | 8 | 0 | 58 | 0 | 58 | 100.0% |
+| <a id="sns"></a>sns | 208 | 25 | 0 | 183 | 0 | 183 | 100.0% |
+| <a id="sqs"></a>sqs | 451 | 46 | 0 | 403 | 2 | 405 | 100.0% |
+| <a id="ssm"></a>ssm | 14 | 3 | 0 | 11 | 0 | 11 | 100.0% |
+| <a id="sts"></a>sts | 14 | 7 | 0 | 7 | 0 | 7 | 100.0% |
+| **total** | 1538 | 123 | 0 | 1412 | 3 | 1415 | 100.0% |

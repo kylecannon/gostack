@@ -120,9 +120,15 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
   `go fix` follows the toolchain, `modernize` follows the linter's release.
 - **CI** (`ci.yml`, on every pull request and every push to main) runs
   `make fmt FMT_ARGS=--diff`, `make tidy-check`, `make gen-check`,
-  `make fix-check`, `make lint`, `make test` and `make build`.
+  `make features-check`, `make fix-check`, `make lint`, `make test` and
+  `make build`.
 - **`make gen-check`** (`ci.yml`) regenerates `internal/api` and fails on any
   modified file or untracked generated file.
+- **`make features-check`** (`ci.yml`) renders `docs/features.md` from the
+  registered services (`Test_featureFacts` in `cmd/gostack`), the parity ledger
+  and `parity/features-services.json`, and fails when the file differs. A change
+  that adds or removes an operation, or moves a ledger row, regenerates
+  `docs/features.md` with `make features` in the same commit.
 - **Parity ledger** (`parity.yml`, on every pull request, and by hand with a
   `services` input) builds an image from GitHub's merge ref, the pull request
   head merged into its base, and runs LocalStack's own tests for the services
@@ -281,6 +287,32 @@ A feature is not done until its benchmarks cover the variants it can be called
 with. A change that adds or alters a feature adds or updates its rows in the
 same PR. A missing row is a review blocker.
 
+A micro benchmark cell has to be one the gate can compare: one operation of it
+finishes in at most 10 ms, so that a run at the gate's benchtime
+(`BENCH_TIME`, 500 ms) makes at least 50 iterations, the fewest benchstat can
+gate on. A cell is held to it with room to spare, because the gate's runner
+may be slower than the machine it was measured on: its slowest operation over
+three runs at the gate's benchtime is the number to check, and the cell is
+resized or left out when that is near the limit. The rule covers every
+benchmark in a package, not only its feature cells. A cell over the limit is
+made smaller (fewer subscribers, lanes or messages) until it is under, or it
+is left out, and a cell left out is not a missing row: the payload axis is
+covered by the widest cell that is under the limit. A benchmark whose one
+operation is a one-time cost, such as a key generation or a process start,
+cannot be sized to it and does not belong in the micro benchmarks. The cell's
+own comment names the cells left out and the time an operation took (or the
+iterations it reached); `go test -run '^$' -bench . -benchtime=500ms -count=3`
+prints both for each.
+
+A cell's time does not depend on the cells that ran before it. The collector
+paces itself by the live heap, so a cell that leaves what it recorded held, for
+as long as its engine lives, gives every later cell a larger heap goal and
+fewer collections, and dropping a cell from the matrix then moves the rows
+after it. A benchmark that keeps state across its cells discards what a cell
+recorded when the cell ends (`BenchmarkPublishEndpoint` and
+`BenchmarkPublishSMS` do, in `deviceBench.run`), and the collection that the
+testing package runs before each cell then frees it.
+
 | Axis | Values |
 |---|---|
 | Payload | small (under 1 KiB), medium (about 64 KiB), and the service's maximum |
@@ -415,6 +447,15 @@ they came from: the scheduled run compares with the artifact the previous
 passing run on main uploaded. LocalStack cells are reference numbers and never
 gate. A latency also has to rise by 0.05 ms (p50) or 0.5 ms (p99) to regress,
 so a tick of the 0.01 ms resolution at c=1 cannot fail the gate.
+
+The time to the first signed SNS publish, which a micro benchmark cannot hold
+(the signing key is made once a process, so an iteration costs a key generation
+and never reaches the 50 iterations the gate asks of one), is measured here: one
+fresh container a run, `-first-use-runs` (30) of them a side, and `bench
+compare` holds it as the cell `first-use/sns`, metric `first use`, by a
+rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
+is measured" and "The gate"). `make bench-system-quick` shows it under "First
+use".
 
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose

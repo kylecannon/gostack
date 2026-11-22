@@ -29,7 +29,7 @@ func (s *server) at(method, target string) (int, []byte, error) {
 	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, "+
 		"SignedHeaders=host, Signature=0")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := testClient.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("send request: %w", err)
 	}

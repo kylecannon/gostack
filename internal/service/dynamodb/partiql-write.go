@@ -16,6 +16,9 @@ import (
 const (
 	msgStatementEmpty  = "The statement was empty."
 	msgExistsCondition = "EXISTS() must contain a single item read with additional condition"
+	// msgExistsOnlyTx refuses an EXISTS outside ExecuteTransaction, in the
+	// image's words, which name no statement (SQ-467 image-probe.log).
+	msgExistsOnlyTx = "EXISTS can only be used in ExecuteTransaction write requests."
 )
 
 // conditionFailedError is a ConditionalCheckFailedException that carries the item
@@ -170,7 +173,7 @@ func (w *writeStatement) checkExpressions() error {
 func checkStatementExprs(
 	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int,
 ) error {
-	x, err := newExprs(names, values, true, true, "")
+	x, err := newExprs(fromStatement, names, values, true, true, "")
 	if err != nil {
 		return err
 	}

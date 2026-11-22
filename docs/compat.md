@@ -88,9 +88,15 @@ start, as LocalStack's `config.py` does. DynamoDB Local's own JVM settings
 | `PERSIST_FREQUENCY` | Decimal seconds a change waits before the save. Defaults to 10. |
 | `PERSIST_BASE_DIR` | Where the state lives. Defaults to `/persisted-data`. |
 
+gostack logs a warning at startup for each group of persisting services whose own directory under the base directory is not on a volume that lasts: on no mounted volume, so the state is lost with the container, on a memory filesystem (`--tmpfs`, `/dev/shm`), or on an anonymous volume, which survives a restart but not `docker rm` or `docker compose down` (`architecture.md`, Persistence). A volume per service, `-v s3:/persisted-data/s3`, covers that service. It logs nothing when no service persists or where `/proc/self/mountinfo` cannot be read. The `PERSISTENCE=1` state directory relies on the runtime mounting the image's `VOLUME /var/lib/localstack`: Docker and Podman do, and CRI-O's default only makes the directory. localstack-persist logs none of this: its `config.py` never checks `PERSIST_BASE_DIR` against a mount.
+
 S3 persists its buckets, objects, versions and uploads in progress, bodies included. Its on-disk layout differs from localstack-persist's, so a data directory does not move between the two. The bodies live in `<base>/s3/assets/.gostack/`, and gostack never touches anything else in `<base>/s3/assets/`, where localstack-persist keeps its buckets: a volume swapped from localstack-persist keeps those files, buckets named `tmp` or `blobs` included. When the assets directory cannot be made, as on a read-only base directory, gostack still starts, keeps S3 in memory, saves nothing for it, and `/_gostack/health` reports S3 as `persisted: false`. The same happens, until restart, once a sync of the bodies to disk fails, such as on an I/O error or a full thin-provisioned volume: S3 keeps serving from memory, the last saved state stays on disk, and a restart loads it, so what changed since that save is lost (`architecture.md`, persistence assets).
 
 S3 writes acknowledged since the last save are lost at `docker stop` when the shutdown save takes longer than its window. It does when another writer has a lot of data unsynced on the same volume. Raise `SHUTDOWN_TIMEOUT`, with Docker's stop timeout (`docker stop -t`, Compose `stop_grace_period`) raised to match, to widen the window, and lower `PERSIST_FREQUENCY` to leave less unsaved. Persistence with no volume mounted at `PERSIST_BASE_DIR` lands on the container's own overlay layer and takes the slower per-file sync path. The startup log names the filesystem and the sync path for each service (`persist: asset sync`). The window, the measurements and the filesystems that get each path are in `architecture.md`, Persistence, Assets.
+
+When a save runs out of its window, gostack says so at the next start. localstack-persist has no counterpart: it has no save deadline of its own to run out of. The flush writes a marker file, `<PERSIST_BASE_DIR>/<service>/.gostack-save-abandoned`, for each service the window cut off or left with a change unsaved, the moment it ends, so it is on disk even when the save is inside work that cannot be cut short. The startup logs one warning naming those services and the time of the last completed save of each: `persist: a save was abandoned at its deadline before this start, so what changed after the last completed save is lost`. The restart loads that save. A marker written and not yet fsynced when the process is killed can be lost by a power cut, which loses the warning and never state. A save that completes removes the marker, unless the service changed since the save took its snapshot, and then the next save that finds it unchanged does; a shutdown that saves everything leaves none. Delete a marker to silence the warning for a data directory you mean to keep as it is (`architecture.md`, Persistence, Assets).
+
+On macOS, S3's shutdown save no longer runs out of time for a thousand objects: each body gets a plain `fsync` and the drive's cache is flushed once per save, not once per body (`architecture.md`, Persistence, Assets). Linux is unchanged.
 
 SSM persists every parameter with all its versions, labels and tags, and its maintenance windows. A `SecureString` is written as it is stored, `kms:<key id>:<plaintext>` with `alias/aws/ssm` as the default key id, so its plaintext is on disk in the clear. No KMS call encrypts it, as in LocalStack.
 
@@ -198,15 +204,14 @@ what SQ-143 settled by sending the same requests to LocalStack 8b9a79f. Each
 
 ### KMS
 
-LocalStack's KMS provider (`services/kms/provider.py` at 8b9a79f) answers 45 of
-the 53 operations in the model, and gostack builds the same 45. The other eight
-answer `501 InternalFailure`, "API action '`<operation>`' for service 'kms' not
-yet implemented", on both, and `/_gostack/services` reports 45 of 53:
-`ConnectCustomKeyStore`, `CreateCustomKeyStore`, `DeleteCustomKeyStore`,
-`DescribeCustomKeyStores`, `DisconnectCustomKeyStore`, `UpdateCustomKeyStore`,
-`ListKeyRotations` and `UpdatePrimaryRegion`. `DeriveSharedSecret` with a
-`Recipient` answers `501` too (its row below). All 151 KMS rows of LocalStack's
-suite pass, with no exclusions (`parity/ledger/kms.json`).
+An operation of the KMS model that gostack does not build answers `501
+InternalFailure`, "API action '`<operation>`' for service 'kms' not yet
+implemented", as LocalStack's provider (`services/kms/provider.py` at 8b9a79f)
+does for one it does not implement. [features.md](features.md#kms) lists the
+operations gostack builds and the ones that answer 501, and agrees with
+`/_gostack/services`. `DeriveSharedSecret` with a `Recipient` answers `501` too
+(its row below). Every KMS row of LocalStack's suite passes, with no exclusions
+(`parity/ledger/kms.json`).
 
 Kept from LocalStack because its tests build and read them, though AWS differs:
 
@@ -309,7 +314,8 @@ What S3 does not do, or does in part, so a client's expectations can be set.
 |---|---|---|
 | `SelectObjectContent` | Answers | `501 NotImplemented`. No test covers it. |
 | KMS | Validates and creates keys | As LocalStack: an `aws:kms` write with no key id gets a key S3 has KMS make on first use, with `CreateKey` and the description "Default key that protects my S3 objects when no other key is defined", one per account and region, kept in S3's persisted state. It is not `alias/aws/s3`, which names another key in KMS. `aws:kms:dsse` gets no managed key. With `S3_SKIP_KMS_KEY_VALIDATION=0` the key a `PutObject`, `CopyObject` or `CreateMultipartUpload` names, and the key of the object a `GetObject` reads, are looked up with `DescribeKey`: a missing key answers `400 KMS.NotFoundException` with KMS's message, a disabled one `KMS.DisabledException`, one pending deletion `KMS.KMSInvalidStateException`; any other typed 4xx error KMS answers passes as `400 KMS.<type>`, as AWS S3 prefixes KMS errors, while a 5xx answer, typed or not, and an answer with no error type are `500 InternalError` (LocalStack answers 500 for every KMS error but `NotFoundException`, `aws/handlers/service.py`, which is copied for a 5xx and not for a refusal). Its usage and spec are not checked, and a POST upload, a bucket's default key and `HeadObject` are never checked, as in LocalStack. A key ARN in another region than the bucket answers `400 KMS.NotFoundException`, "Invalid arn `<region>`", for an `aws:kms` write with or without the check; `aws:kms:dsse` keeps it as sent without the check, as LocalStack calls `get_kms_key_arn` for `aws:kms` alone. A `CopyObject` resolves its target's encryption after its source has been read and checked, then the object lock and the ACL, as LocalStack does: a missing source answers `404 NoSuchKey` whatever the encryption headers, a bad `x-amz-acl` with another region's `aws:kms` key answers `400 KMS.NotFoundException`, and a copy whose source condition or SSE-C check fails makes no managed key. With `S3_SKIP_KMS_KEY_VALIDATION=0` the key the request names is checked before the source is read, as LocalStack does, so a missing source with a key KMS lacks answers `400`, not `404`. A copy that fails on `If-None-Match`, `If-Match` or the metadata size, which come after the encryption is resolved, still makes the managed key, as LocalStack does. A bucket's `aws:kms:dsse` default rule gives an object no key, so there is none for `GetObject` to check, as in LocalStack. The managed key is S3's own state: with `PERSIST_S3=1` and `PERSIST_KMS=0` the next process still holds the ARN of a key its KMS no longer has, so a `PutObject` answers 200 with that old ARN, as LocalStack does, and a `GetObject` answers `400 KMS.NotFoundException` once `S3_SKIP_KMS_KEY_VALIDATION=0`. An object written before the managed key was made by KMS carries the ARN gostack then derived from the account and region, which no KMS holds, so that `GetObject` answers the same under the check. A key id sent with `AES256`, or with no algorithm and no default encryption of the bucket to give one, is dropped: the object has no key, where LocalStack keeps it and, with the check on, looks it up on `GetObject`. Object bodies are not encrypted, and the encryption context is not stored. |
-| Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS only. SNS, Lambda and EventBridge targets are accepted and stored, and nothing is sent. |
+| Event notifications | Deliver to SQS, SNS, Lambda and EventBridge | Deliver to SQS and SNS. Lambda and EventBridge targets are accepted and stored, and nothing is sent. A topic target gets an SNS `Publish` made in process, as the bucket's owner in the region of the topic's ARN, with the record LocalStack sends as the message and the subject `Amazon S3 Notification`; the calls for one topic run in the order the events were raised, and SNS puts each on its subscribers' lanes before it takes the next, so one key's events reach a subscribed queue in order. Unless `SkipDestinationValidation` is set, `PutBucketNotificationConfiguration` asks SNS for the topic's attributes (`400 InvalidArgument`, "Unable to validate the following destination configurations", argument value "The destination topic does not exist") and publishes the `s3:TestEvent` document to it, answering "Permissions on the destination topic do not allow S3 to publish notifications from this bucket" when SNS refuses it, as it does for a FIFO topic, which needs a message group. The topic's access policy is not read. The request's `X-Amzn-Trace-Id` goes to a queue as its trace header and is not sent to a topic, as in LocalStack. An event is delivered after the request is answered and is never dropped because others wait: S3's delivery queue has no bound, as LocalStack's notifier executor has none, and each queue and each topic is a lane of its own, so one that is slow or stuck holds up no other destination and the PUTs behind it never wait. The cost is memory in proportion to the events not yet delivered: measured on darwin, each waiting event holds about 1.6 to 1.8 KB of heap (a queue target 1.6 KB, a topic target 1.8 KB) and 3.6 to 4.1 KB of resident memory, so 1,000,000 waiting events are about 3.4 to 3.9 GB. At shutdown the queued events get the budget of the hub's drain of in-process calls (`Calls`, inside `SHUTDOWN_TIMEOUT`); past it the rest are cut and the count is logged, "in-process calls cut at shutdown", as SNS logs the deliveries it drops. A topic that signs an envelope for its subscribers (the default; `RawMessageDelivery` off) is the slow destination to expect: SNS spends about a millisecond signing each, and its lane runs one at a time. |
+| S3 event documents: the JSON of a queue's body and of a topic's `Message` | `json.dumps` with its default separators, `", "` and `": "`. The `s3:TestEvent` document has `Service` first, then `Event`, `Time`, `Bucket`, `RequestId`, `HostId` | Compact: no space after `,` or `:`. Every member of both documents is in LocalStack's order, for every event S3 sends, in a queue's body, in a topic's raw message and in the `Message` of an envelope: in a `Records` document `x-amz-request-id` comes before `x-amz-id-2`, and `glacierEventData` is last on a completed restore. Parsed, every document is the same as LocalStack's | A client that parses the body sees no difference; one that compares the text sees the separators. The separators are left as they are. Found by SQ-419; the member order by SQ-432 |
 
 ## S3 wire details
 
@@ -339,24 +345,18 @@ What a raw HTTP client sees. SDK clients do not notice any of it.
 LocalStack serves DynamoDB by forwarding to Amazon's DynamoDB Local, rewriting
 some requests and answers in its provider (`services/dynamodb/provider.py` at
 8b9a79f). gostack runs a native engine (`docs/architecture.md`, "DynamoDB").
-It builds 36 of the 57 operations in the model, and `/_gostack/services`
-reports 36 of 57: the 35 operations the LocalStack image answers, plus
-`DescribeEndpoints` (the row under "Where gostack follows AWS").
+[features.md](features.md#dynamodb) lists the operations it builds and the ones
+that answer `501 InternalFailure`, "API action '`<operation>`' for service
+'dynamodb' not yet implemented", and agrees with `/_gostack/services`.
+`DescribeEndpoints` is one it builds that the LocalStack image does not answer
+(the row under "Where gostack follows AWS").
 
-The other 21 answer `501 InternalFailure`, "API action '`<operation>`' for
-service 'dynamodb' not yet implemented": `CreateBackup`, `DeleteBackup`,
-`DescribeBackup`, `ListBackups`, `RestoreTableFromBackup`,
-`RestoreTableToPointInTime`, `ExportTableToPointInTime`, `DescribeExport`,
-`ListExports`, `ImportTable`, `DescribeImport`, `ListImports`,
-`GetResourcePolicy`, `PutResourcePolicy`, `DeleteResourcePolicy`,
-`DescribeGlobalTableSettings`, `UpdateGlobalTableSettings`,
-`DescribeTableReplicaAutoScaling`, `UpdateTableReplicaAutoScaling`,
-`ListContributorInsights` and `UpdateContributorInsights`. The LocalStack
-image answers `400 UnknownOperationException`, "An unknown operation was
-requested.", for the 11 of them SQ-230 probed (`verification/SQ-230/probe1b.txt`:
-the backup, export, import, resource policy, global table settings, replica
-auto scaling and contributor insights calls); the other 10 are unprobed. No
-test of LocalStack's suite calls any of the 21: a grep of
+The LocalStack image answers `400 UnknownOperationException`, "An unknown
+operation was requested.", for the 11 of those operations SQ-230 probed
+(`verification/SQ-230/probe1b.txt`: the backup, export, import, resource policy,
+global table settings, replica auto scaling and contributor insights calls); the
+other 10 that answered 501 then are unprobed. No test of LocalStack's suite
+calls any of them: a grep of
 `tests/aws/services/dynamodb` and `tests/aws/services/dynamodbstreams` at
 8b9a79f for their boto3 names (`create_backup` ... `update_contributor_insights`)
 finds none.
@@ -434,17 +434,67 @@ caller's account and region, as LocalStack does.
 - An `AttributeUpdates` `ADD` or `DELETE` of a number set: gostack compares the
   members as numbers, so `1.0` equals `1`. LocalStack's `ADD` answers "Input
   collection contains duplicates" for them and its `DELETE` removes nothing.
-- A `Query` or `Scan` of a global index whose `ProjectionExpression` names an
-  attribute the index does not project: LocalStack answers "Global secondary
-  index X does not project [attr]"; gostack returns the items without the
-  attribute. `AttributesToGet` gets the image's refusal in both.
-- `ExecuteTransaction` and `BatchExecuteStatement` with an empty statement or a
-  parameter-count mismatch: the image answers "ExecutePartiQLTransaction can
-  not have empty statement." / "The statement was empty." and prefixes the
-  count message with "Validation failed in TransactStatements[i]: "; gostack's
-  texts differ. `BatchExecuteStatement` with an unknown
-  `ReturnValuesOnConditionCheckFailure` answers `500 InternalFailure` in the
-  image and `200` here with the statement answered.
+- A global index read that names an attribute the index does not project
+  (`ProjectionExpression`, `AttributesToGet`, a PartiQL `SELECT` list, and a
+  `Query` filter) is refused with the image's messages, as the Query and Scan
+  pages say ("you can only request attributes that are projected into the
+  index. Global secondary index queries cannot fetch attributes from the
+  parent table."). The attributes are listed in the image's order, which is
+  that of the `HashSet` it lists them from: by bucket of the set. Where two
+  names fall in one bucket the image lists them in the order the set was
+  filled, which gostack sorts by text, so a list of any length can order two
+  names differently (seen from five names, and at 15 and 18); the same names,
+  the same status. A `Query` filter lists them by name.
+- A filter on an attribute an index does not project, where the image does not
+  refuse it: a `Scan` of a global index and a statement's `WHERE` on one, which
+  the image evaluates against the table's item and gostack against the
+  index's, as the Query and Scan pages say a global index cannot fetch from
+  the table; a `Scan` or a statement's `WHERE` on a local index, which gostack
+  evaluates against the index's item as well, where the image evaluates the
+  table's; and a `Query` filter on a local index, which the image refuses
+  ("Secondary index X does not project one or more filter attributes") and
+  gostack answers.
+- A SELECT of paths in one list at different elements, as in `l[1][0],
+  l[2].z`: ExecuteStatement keys a path through an element past the first by
+  that element, and answers the elements the SELECT names together. The image
+  also drops a later such path from the answer (`l[1].p, l[2].q.r` answers
+  `l[1]` alone), and keys a path whose element comes after one that moved
+  back by its full path (`l[1][0], l[0]` answers `l[0]` and `l[1][0]`);
+  gostack answers each element under its own key (`l[1]` and `l[0]`). Paths
+  through the same index of different lists (`m.l[1].p, n.l[1].q`) take one
+  key, `l[1]`, which holds one value in both. When the paths share a key the
+  image keeps one path by an order gostack does not reproduce (no rule we
+  know fits every statement probed), and gostack keeps the first in name order that the item holds, with what that
+  path names and nothing of the others; either way the answer is a path the
+  statement names, never a value of a path it does not. An attribute named by
+  the key itself (`"l[1]"`) keeps it in both. A statement with one path, or
+  with all its paths in the first element they name, answers as the image
+  does.
+- A path step written `m['x']` (the image answers it as `m.x`), a projection
+  alias (`SELECT a AS z`, which the image refuses with "Aliasing is not
+  supported") and a block comment (`/* ... */`, which the image reads as white
+  space, where `--` comments are read by both): gostack's statement parser does
+  not read them, and answers "Statement wasn't well formed". None is new; all
+  are outside the projection work above. A statement with one of them in a
+  batch or a transaction is no kind for the check that refuses reads and writes
+  together, where the image counts it as the kind it is.
+- A statement in a batch or a transaction whose key is over 2,048 bytes (a hash
+  key) or 1,024 bytes (a range key): the image answers a batch statement's
+  `ValidationError` with no `TableName` and a transaction's with a
+  `CancellationReasons` entry for it; gostack names the table in the batch's
+  answer and answers the transaction with the message alone.
+- `EXISTS(...)` around an expression other than a `SELECT` (`EXISTS(garbage)`,
+  `EXISTS(NULL)`) inside `ExecuteTransaction`: the image answers "Unsupported
+  operation in transaction."; gostack answers "Statement wasn't well formed".
+  Outside a transaction both answer that EXISTS is only for
+  `ExecuteTransaction`.
+- `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
+  within ExecuteTransaction must specify the primary key in the where clause.";
+  the image answers "Reads on indices are not supported within transactions.".
+  `BatchExecuteStatement` with an unknown `ReturnValuesOnConditionCheckFailure`
+  answers a `500 InternalFailure` for a write in the image (a LocalStack
+  crash), `200` with the statement answered for a read; gostack answers the
+  statement's `ValidationError` for both.
 - A legacy filter or `Expected` with two or more invalid conditions: gostack
   names the first in attribute-name order, the image the first in the request's
   JSON order, which the decoded map does not keep. With one invalid condition
@@ -472,19 +522,28 @@ caller's account and region, as LocalStack does.
   message may name a different second path. The request is rejected or
   accepted the same either way. A PartiQL `UPDATE` and `SELECT` add their paths
   first to last in the statement's order. A `SELECT` list is checked for overlap
-  whatever its size, and a list that overlaps is answered with the overlap. The
-  image holds a `SELECT` to no size of its own, so one of 602 or more distinct
-  top-level attributes is accepted there. gostack reads with a
-  `ProjectionExpression` of those attributes, which the 4,096-character limit
-  bounds: it is `#n0, #n1, ...`, 7N-112 characters for N of 602 or more, so 602
-  is the first to be refused. Paths below the top level add nothing to it: a
-  list of any number of paths under one attribute, as long as the statement's
-  8,192 bytes hold it, is accepted, as in the image. The refusal is
-  `Expression size has exceeded the maximum allowed size;`: `400` from
-  ExecuteStatement, a `ValidationError` in the statement's `Error` from
-  BatchExecuteStatement, and `400` with
-  `Validation failed in TransactStatements[0]: ` before it from
-  ExecuteTransaction.
+  whatever its size, and a list that overlaps is answered with the overlap.
+- A PartiQL statement's text is held to 8,192 bytes, and the expressions it
+  compiles to to no size, as in the image; the 300 operators and 100 `IN`
+  operands of any expression hold for it. A `WHERE` of 4,000 parentheses nested
+  (an 8,055-byte statement) is answered `500 Internal Server Error` by the
+  image, where it answered 3,000 deep, and gostack answers it.
+- Arithmetic chained in one action of a PartiQL `UPDATE`, `SET a = a + 1 + 1`
+  or `SET a = (a + 1) + 1`, and a `list_append` inside a `list_append`: the
+  image applies them, and counts each `+` and `list_append` toward the 300
+  operators. gostack compiles the statement to an `UpdateExpression`, which
+  takes one `+` or `-` in an action and `list_append` only as its whole value,
+  and answers `Syntax error` or "The function is not allowed to be used this
+  way in an expression" at any count (probed in SQ-452).
+- The operators of a PartiQL statement's `WHERE` that are counted: the image
+  counts every one written, the key equality and the `AND` after it included.
+  gostack counts the condition the statement compiles to, which holds neither
+  for a `DELETE`, a `SELECT` of one hash key or an `EXISTS`, so `WHERE id = 'a'
+  AND (` 150 comparisons joined by `OR` `)` is refused by the image at 301
+  operators and answered by gostack, 2 apart on a table with a hash key only (a
+  range key was not probed). An `UPDATE` adds an `attribute_exists` and an
+  `AND` to its condition, which stand in for them, and is refused at the same
+  count.
 
 ## DynamoDB batches and transactions
 
@@ -523,8 +582,15 @@ per stream (`internal/service/dynamodb/stream`). The LocalStack column is the
 
 | Behavior | LocalStack | gostack | Source |
 |---|---|---|---|
-| FIFO topic deduplication | None at the topic: every publish is delivered, and each FIFO queue deduplicates on its own | The topic deduplicates, as AWS does. A message whose deduplication id (`MessageDeduplicationId`, or with `ContentBasedDeduplication` the SHA-256 of the message) the topic took in the last 5 minutes is accepted, answers the first message's `MessageId` and `SequenceNumber`, and is not delivered again. Under `PERSIST_SNS` the window survives a restart. | `test_publish_to_fifo_topic_deduplication_on_topic_level` (`aws.validated`) |
+| FIFO topic deduplication | None at the topic: every publish is delivered, and each FIFO queue deduplicates on its own | The topic deduplicates, as AWS does. A message whose deduplication id (`MessageDeduplicationId`, or with `ContentBasedDeduplication` the SHA-256 of the message) the topic took in the last 5 minutes is accepted, answers the first message's `MessageId` and `SequenceNumber`, and is not delivered again. Under `PERSIST_SNS` the window survives a restart: a save writes the ids the window still holds, each as the time of the save less its age on the monotonic clock (so a wall clock that stepped since the id was taken does not change how old the saved id is), and a restored id is placed by how long ago its saved time was, on the monotonic clock, so a wall clock that steps back during the run does not stretch the window. No timer runs: an idle topic holds its window until its next publish or save. | `test_publish_to_fifo_topic_deduplication_on_topic_level` (`aws.validated`) |
 | Protocols delivered to | SQS, HTTP, HTTPS, Lambda, Firehose, email (through SES), application endpoints and SMS | SQS, HTTP and HTTPS are delivered. Application endpoints and SMS are recorded and never sent (next section). A `lambda`, `firehose`, `email` or `email-json` subscription is accepted and stored, and nothing is delivered to it until gostack has the service. | Story contract (US-5): Lambda, Firehose and SES are out of scope until their services exist |
+| `PublishBatch` with no entries | `500 InternalError`: "exception while calling sns.PublishBatch: object of type 'NoneType' has no len()" | `400 EmptyBatchRequest`: "The batch request doesn't contain any entries." | The `PublishBatch` API reference lists `EmptyBatchRequest` among its errors; LocalStack takes `len()` of the missing list. Run against the image in the SQ-278 review. |
+| A `PublishBatch` entry with no `Message` member | `500 InternalError` ("object of type 'NoneType' has no len()") for the whole call, and no entry is published | The entry alone is answered in `Failed`: `Code` `InvalidParameter`, `Message` "Invalid parameter: Empty message", `SenderFault` true. The other entries are published and the call answers `200`, with `Successful` empty when every entry failed. LocalStack's crash is not copied | The model marks `PublishBatchRequestEntry.Message` required; the `PublishBatch` reference: "The result of publishing each message is reported individually in the response." Image run in the SQ-464 review (case std 3). `Test_Provider_PublishBatch_missing_message` and `_only_missing_messages` pin it. |
+| A `PublishBatch` entry with `Message` empty | `200`, the entry `Successful`. A subscriber without raw delivery is sent the envelope with `"Message": ""`. A raw SQS subscriber gets nothing: SQS refuses the empty body ("The request must contain the parameter MessageBody", in the container log). The same on a FIFO topic | The same. An empty `Message` is taken as any other text, as it is for one space; only the raw SQS delivery is refused | No AWS page or snapshot covers it, so LocalStack's answer stands (orchestrator ruling after the SQ-464 review; image cases std 1, std 2, fifo 1 and fifo 4). `Test_Provider_PublishBatch_empty_message` pins std 1 and std 2, `Test_Provider_PublishBatch_empty_message_fifo` fifo 1 and fifo 4. |
+| A `PublishBatch` entry with `Message` empty and `MessageStructure` `json` | `400 InvalidParameter`: "Invalid parameter: Message Structure - JSON message body failed to parse" | The same, as for `Publish` | Image case std 4. `Test_Provider_PublishBatch_validation`, "empty message under json". |
+| A `PublishBatch` of one entry of 262,144 bytes and an empty entry that carries an attribute | `400 BatchRequestTooLong`: the empty entry's attribute name, type and value count in the total. Without the attribute the batch is `200` | The same | Image cases std 8 and std 9. `Test_Provider_PublishBatch_validation`, "batch too long with an empty entry's attribute", pins std 8; `Test_Provider_PublishBatch_empty_entry_beside_a_full_one` pins std 9. |
+| A `PublishBatch` entry to a FIFO topic with `MessageGroupId` empty | `200` with every entry `Successful`, and then nothing from that batch reaches a FIFO queue, the good entries included: the `SendMessageBatch` is refused ("The request must contain the parameter MessageGroupId", in the container log) | `400 InvalidParameter`: "Invalid parameter: The MessageGroupId parameter is required for FIFO topics", as for a missing group id | The `PublishBatchRequestEntry` API reference (`MessageGroupId`): "You must associate a non-empty MessageGroupId with a message. If you do not provide a MessageGroupId, the action fails." Image case fifo 3 (SQ-464 review). |
+| Field order of the JSON envelope a subscriber is sent | Python dict order: `Type`, `MessageId`, `TopicArn`, `Message`, `Timestamp`, `UnsubscribeURL`, `Subject`, `MessageAttributes`, `SignatureVersion`, `Signature`, `SigningCertURL`. On a FIFO topic the members are `Type`, `MessageId`, `TopicArn`, `Message`, `Timestamp`, `UnsubscribeURL`, `Subject`, `MessageAttributes`, then `SequenceNumber` last, with no signature members (image, SQ-464 review) | AWS's order: `Type`, `MessageId`, `SequenceNumber` (FIFO), `TopicArn`, `Subject`, `Message`, `Timestamp`, `SignatureVersion`, `Signature`, `SigningCertURL` (no signature fields on a FIFO topic), `UnsubscribeURL`, `MessageAttributes`, written sorted by name. The bytes within a member follow `json.dumps`. A JSON parser sees the same object | The SQS bodies of LocalStack's `aws.validated` snapshots and the AWS HTTP/HTTPS confirmation document (story log entry 2); the snapshot comparison parses the JSON, so no row depends on the order. The signature covers the fixed canonical string, not the bytes of the envelope. |
 
 **Signing.** gostack signs a delivered message with SignatureVersion 1
 (SHA1withRSA) or 2 (SHA256withRSA), PKCS #1 v1.5, under its own RSA-2048 key and

@@ -1,6 +1,7 @@
 package sns_test
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"net/http"
 	"strconv"
@@ -19,7 +20,9 @@ const (
 	fifoNoGroup    = "Invalid parameter: The MessageGroupId parameter is required for FIFO topics"
 	fifoNoDedup    = "Invalid parameter: The topic should either have ContentBasedDeduplication enabled or " +
 		"MessageDeduplicationId provided explicitly"
-	noDefault = "Invalid parameter: Message Structure - No default entry in JSON message body"
+	noDefault     = "Invalid parameter: Message Structure - No default entry in JSON message body"
+	emptyMessage  = "Invalid parameter: Empty message"
+	attrEntryType = "MessageAttributes.entry.1.Value.DataType"
 )
 
 func Test_Provider_Publish_validation(t *testing.T) {
@@ -45,7 +48,7 @@ func Test_Provider_Publish_validation(t *testing.T) {
 		{
 			// LocalStack reports the empty message before the attribute.
 			name: "empty message before attributes", params: append([]string{paramTopicArn, topic}, noType...),
-			status: http.StatusBadRequest, code: invalidParameter, message: "Invalid parameter: Empty message",
+			status: http.StatusBadRequest, code: invalidParameter, message: emptyMessage,
 		},
 		{
 			name: "bad phone number", params: []string{"PhoneNumber", "abc", paramMessage, "m"},
@@ -197,6 +200,13 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoGroup,
 		},
 		{
+			// LocalStack answers 200 for an empty group id. The AWS API
+			// reference (PublishBatchRequestEntry.MessageGroupId): "You must
+			// associate a non-empty MessageGroupId with a message."
+			name: "fifo with an empty group", params: batch(fifo, entry(1, "1", "m", paramGroup, "")),
+			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoGroup,
+		},
+		{
 			name: "fifo without deduplication", params: batch(fifo, entry(1, "1", "m", paramGroup, "g")),
 			status: http.StatusBadRequest, code: invalidParameter, message: fifoNoDedup,
 		},
@@ -211,6 +221,22 @@ func Test_Provider_PublishBatch_validation(t *testing.T) {
 			name: "batch too long", params: batch(topic, entry(1, "1", half), entry(2, "2", half)),
 			status: http.StatusBadRequest, code: "BatchRequestTooLong",
 			message: "The length of all the messages put together is more than the limit.",
+		},
+		{
+			// An empty Message is taken as any other is (the image answers
+			// this 400 too): its attributes count in the total.
+			name: "batch too long with an empty entry's attribute",
+			params: batch(topic, entry(1, "1", strings.Repeat("x", 262_144)),
+				entry(2, "2", "", attrEntryName, "k", attrEntryType, typeString, attrEntryString, strings.Repeat("a", 100))),
+			status: http.StatusBadRequest, code: "BatchRequestTooLong",
+			message: "The length of all the messages put together is more than the limit.",
+		},
+		{
+			// An empty Message under MessageStructure json is a body that
+			// does not parse, as for a Publish.
+			name: "empty message under json", params: batch(topic, entry(1, "1", "", paramStructure, valueStructure)),
+			status: http.StatusBadRequest, code: invalidParameter,
+			message: "Invalid parameter: Message Structure - JSON message body failed to parse",
 		},
 	}
 
@@ -227,7 +253,16 @@ type batchSuccess struct {
 	SequenceNumber string `xml:"SequenceNumber"`
 }
 
-type batchFailed struct{}
+type batchFailure struct {
+	ID          string `xml:"Id"`
+	Code        string `xml:"Code"`
+	Message     string `xml:"Message"`
+	SenderFault bool   `xml:"SenderFault"`
+}
+
+type batchFailed struct {
+	Entries []batchFailure `xml:"member"`
+}
 
 type batchReply struct {
 	Successful []batchSuccess `xml:"PublishBatchResult>Successful>member"`
@@ -263,6 +298,167 @@ func Test_Provider_PublishBatch_standard(t *testing.T) {
 
 	msgs := q.await(2)
 	assert.ElementsMatch(t, []string{"one", "two"}, []string{msgs[0].Body, msgs[1].Body})
+}
+
+// noMessage is batch entry n with an Id and the members, and no Message member.
+func noMessage(n int, id string, members ...string) []string {
+	p := "PublishBatchRequestEntries.member." + strconv.Itoa(n) + "."
+	params := []string{p + "Id", id}
+
+	for i := 0; i+1 < len(members); i += 2 {
+		params = append(params, p+members[i], members[i+1])
+	}
+
+	return params
+}
+
+// Test_Provider_PublishBatch_missing_message: an entry with no Message member
+// is answered as Failed with InvalidParameter and published to no one; the
+// model marks Message required, and LocalStack's answer is a 500 for the whole
+// call. The entries beside it are published.
+func Test_Provider_PublishBatch_missing_message(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	q := s.createQueue(account, region, "q", nil)
+	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
+
+	out := s.publishBatch(batch(topic,
+		entry(1, "a", "alpha"), noMessage(2, "b"), noMessage(3, "c"), entry(4, "d", "delta"))...)
+
+	require.Len(t, out.Successful, 2)
+	assert.Equal(t, "a", out.Successful[0].ID)
+	assert.Equal(t, "d", out.Successful[1].ID)
+	require.NotNil(t, out.Failed)
+	assert.Equal(t, []batchFailure{
+		{ID: "b", Code: invalidParameter, Message: emptyMessage, SenderFault: true},
+		{ID: "c", Code: invalidParameter, Message: emptyMessage, SenderFault: true},
+	}, out.Failed.Entries)
+
+	msgs := q.await(2)
+	assert.ElementsMatch(t, []string{"alpha", "delta"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, q.receive(0), "the entries with no Message were not sent")
+}
+
+// Test_Provider_PublishBatch_only_missing_messages: a batch whose every entry
+// fails answers 200 with an empty Successful and publishes nothing, on a FIFO
+// topic too.
+func Test_Provider_PublishBatch_only_missing_messages(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+	q := s.createQueue(account, region, "q.fifo", map[string]string{attrFifoQueue: textTrue})
+	s.subscribeQueue(topic, q.arn, attrRaw, textTrue)
+
+	out := s.publishBatch(batch(topic,
+		noMessage(1, "a", paramGroup, "g", paramDedup, "1"),
+		noMessage(2, "b", paramGroup, "g", paramDedup, "2"),
+	)...)
+
+	assert.Empty(t, out.Successful)
+	require.NotNil(t, out.Failed)
+	assert.Len(t, out.Failed.Entries, 2)
+	assert.Empty(t, q.receive(0))
+}
+
+// Test_Provider_PublishBatch_empty_message: an empty Message is taken as
+// LocalStack takes it, as any other text. The entry is Successful, a
+// subscriber without raw delivery is sent the envelope with "Message": "", and
+// only a raw SQS delivery is refused, for the empty body SQS will not take.
+func Test_Provider_PublishBatch_empty_message(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	raw := s.createQueue(account, region, "raw", nil)
+	enveloped := s.createQueue(account, region, "enveloped", nil)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	out := s.publishBatch(batch(topic, entry(1, "a", "beta"), entry(2, "b", ""), entry(3, "c", "gamma"))...)
+
+	require.Len(t, out.Successful, 3)
+	assert.Empty(t, out.Failed.Entries)
+
+	assert.ElementsMatch(t, []string{"beta", "", "gamma"}, envelopeMessages(t, enveloped, 3))
+
+	msgs := raw.await(2)
+	assert.ElementsMatch(t, []string{"beta", "gamma"}, []string{msgs[0].Body, msgs[1].Body})
+	assert.Empty(t, raw.receive(0), "SQS refused the empty body of a raw delivery")
+}
+
+// envelopeMessages is the Message member of each envelope the queue holds.
+func envelopeMessages(t *testing.T, q *queue, n int) []string {
+	t.Helper()
+
+	got := make([]string, 0, n)
+
+	for _, m := range q.await(n) {
+		var env struct {
+			Message string `json:"Message"`
+		}
+
+		require.NoError(t, json.Unmarshal([]byte(m.Body), &env), m.Body)
+
+		got = append(got, env.Message)
+	}
+
+	return got
+}
+
+// Test_Provider_PublishBatch_empty_message_fifo: on a FIFO topic an entry with
+// an empty Message is Successful with a sequence number, as on the image
+// (cases fifo 1 and fifo 4): the envelope carries "Message": "" and a raw SQS
+// delivery is refused, while the entry beside it is delivered in order.
+func Test_Provider_PublishBatch_empty_message_fifo(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t.fifo", attrKey1, "FifoTopic", attrValue1, textTrue)
+	fifoQueue := map[string]string{attrFifoQueue: textTrue}
+	raw := s.createQueue(account, region, "raw.fifo", fifoQueue)
+	enveloped := s.createQueue(account, region, "enveloped.fifo", fifoQueue)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	only := s.publishBatch(batch(topic, entry(1, "a", "", paramGroup, "g", paramDedup, "d1"))...)
+
+	require.Len(t, only.Successful, 1)
+	assert.NotEmpty(t, only.Successful[0].SequenceNumber, "fifo 1: the empty entry takes a sequence number")
+	assert.Equal(t, []string{""}, envelopeMessages(t, enveloped, 1), "fifo 1: the envelope carries an empty Message")
+	assert.Empty(t, raw.receive(0), "fifo 1: SQS refuses the raw delivery's empty body")
+
+	pair := s.publishBatch(batch(topic,
+		entry(1, "a", "", paramGroup, "g", paramDedup, "d2"),
+		entry(2, "b", "two", paramGroup, "g", paramDedup, "d3"),
+	)...)
+
+	require.Len(t, pair.Successful, 2)
+	assert.Empty(t, pair.Failed.Entries)
+	assert.Equal(t, []string{"", "two"}, envelopeMessages(t, enveloped, 2), "fifo 4: both arrive, in entry order")
+
+	msgs := raw.await(1)
+	assert.Equal(t, "two", msgs[0].Body, "fifo 4: the raw queue gets the good entry only")
+	assert.Empty(t, raw.receive(0))
+}
+
+// Test_Provider_PublishBatch_empty_entry_beside_a_full_one: a 262,144-byte
+// entry and an empty entry with no attribute is a 200 that publishes both
+// (image case std 9); the validation table pins the 400 once the empty entry
+// carries an attribute.
+func Test_Provider_PublishBatch_empty_entry_beside_a_full_one(t *testing.T) {
+	s := newStack(t, nil)
+	topic := s.createTopic(paramName, "t")
+	raw := s.createQueue(account, region, "raw", nil)
+	enveloped := s.createQueue(account, region, "enveloped", nil)
+	s.subscribeQueue(topic, raw.arn, attrRaw, textTrue)
+	s.subscribeQueue(topic, enveloped.arn)
+
+	big := strings.Repeat("a", 262144)
+	out := s.publishBatch(batch(topic, entry(1, "a", big), entry(2, "b", ""))...)
+
+	require.Len(t, out.Successful, 2)
+	assert.Empty(t, out.Failed.Entries)
+
+	assert.ElementsMatch(t, []string{big, ""}, envelopeMessages(t, enveloped, 2))
+
+	msgs := raw.await(1)
+	assert.Equal(t, big, msgs[0].Body, "the raw queue gets the full entry; SQS refuses the empty one")
+	assert.Empty(t, raw.receive(0))
 }
 
 // Test_Provider_PublishBatch_fifo publishes a batch whose third entry repeats

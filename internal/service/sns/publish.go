@@ -154,7 +154,7 @@ func checkPublish(in *api.PublishInput) error {
 	}
 
 	if deref(in.Message) == "" {
-		return api.NewInvalidParameterException("Invalid parameter: Empty message")
+		return api.NewInvalidParameterException(msgEmptyMessage)
 	}
 
 	if phone := deref(in.PhoneNumber); phone != "" && !e164.MatchString(phone) {

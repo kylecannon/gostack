@@ -63,6 +63,12 @@ func (t *Time) MarshalJSONTo(enc *jsontext.Encoder) error {
 	return nil
 }
 
+// AppendEpoch appends the time as MarshalJSONTo writes it, for the generated
+// json encoders.
+func (t *Time) AppendEpoch(buf []byte) []byte {
+	return appendEpoch(buf, t.Time)
+}
+
 // appendEpoch appends t as epoch seconds.
 func appendEpoch(buf []byte, t time.Time) []byte {
 	sec, nsec := t.Unix(), int64(t.Nanosecond())
