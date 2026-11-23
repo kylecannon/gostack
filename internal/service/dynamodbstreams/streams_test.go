@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/kylecannon/gostack/internal/request"
+	streamlog "github.com/kylecannon/gostack/internal/service/dynamodb/stream"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/kylecannon/gostack/internal/service/dynamodbstreams"
 	"github.com/stretchr/testify/require"
 )
@@ -307,7 +309,12 @@ func Test_trimmed(t *testing.T) {
 		SetLimits(retention time.Duration, maxBytes int64)
 	})
 	require.True(t, ok)
-	limits.SetLimits(time.Hour, 3*300)
+
+	// Each put below leaves a record of the same charge, its key k<digit>
+	// as both its keys and its new image; the bound holds three of them.
+	key := "k0"
+	item := value.Item{"id": {S: &key}}
+	limits.SetLimits(time.Hour, 3*streamlog.Charge(&streamlog.Record{Keys: item, New: item}))
 
 	old := s.iterator(t, arn, shard, "TRIM_HORIZON")
 
