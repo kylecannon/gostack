@@ -42,11 +42,14 @@ type opStats struct {
 
 // usage is what the orchestrator reads from the target's cgroup around a run.
 type usage struct {
-	BaselineRSSBytes uint64  `json:"baseline_rss_bytes"`
-	EndRSSBytes      uint64  `json:"end_rss_bytes"`
-	PeakRSSBytes     uint64  `json:"peak_rss_bytes"`
-	MedianRSSBytes   uint64  `json:"median_rss_bytes"`
-	CPUPercent       float64 `json:"cpu_percent"`
+	BaselineRSSBytes uint64 `json:"baseline_rss_bytes"`
+	EndRSSBytes      uint64 `json:"end_rss_bytes"`
+	PeakRSSBytes     uint64 `json:"peak_rss_bytes"`
+	// PeakUsageBytes is the peak of the memory the cgroup counts against the limit,
+	// page cache included, next to the resident set PeakRSSBytes is.
+	PeakUsageBytes uint64  `json:"peak_usage_bytes,omitempty"`
+	MedianRSSBytes uint64  `json:"median_rss_bytes"`
+	CPUPercent     float64 `json:"cpu_percent"`
 }
 
 // runResult is what a workload returns for one run of a cell: the operations it
@@ -59,6 +62,20 @@ type runResult struct {
 	Counters     map[string]int     `json:"counters,omitempty"`
 	Ops          map[string]opStats `json:"ops"`
 	Usage        usage              `json:"usage,omitzero"`
+	// ItemsFilled is the items the server had acknowledged when a workload that
+	// fills its target first stopped filling: all of them in a run that completed,
+	// and how far it got in one that failed.
+	ItemsFilled int `json:"items_filled,omitempty"`
+}
+
+// opErrors is the operations of the run that failed.
+func (r runResult) opErrors() int {
+	total := 0
+	for _, stats := range r.Ops {
+		total += stats.Errors
+	}
+
+	return total
 }
 
 // agenticRun is the create, use and delete workload.
@@ -85,7 +102,15 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 
 	switch args[0] {
 	case "cell":
-		result, err = cellCommand(ctx, args[1:])
+		var run runResult
+
+		run, err = cellCommand(ctx, args[1:])
+		result = run
+
+		// A fill that failed prints how far it got, and the failure follows on stderr.
+		if err != nil && run.ItemsFilled > 0 {
+			_ = encodeResult(stdout, run)
+		}
 	case "agentic":
 		result, err = agenticCommand(ctx, args[1:])
 	case loadgenFirst:
@@ -98,12 +123,17 @@ func loadgenMain(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 
-	err = json.NewEncoder(stdout).Encode(result)
+	err = encodeResult(stdout, result)
 	if err != nil {
 		return fmt.Errorf("write result: %w", err)
 	}
 
 	return nil
+}
+
+// encodeResult writes a result as the JSON the orchestrator reads.
+func encodeResult(w io.Writer, result any) error {
+	return json.NewEncoder(w).Encode(result) //nolint:wrapcheck // the caller wraps it.
 }
 
 // optionFlags collects the repeated -opt key=value flags of a cell.
