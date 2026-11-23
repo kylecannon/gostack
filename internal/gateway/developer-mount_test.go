@@ -76,6 +76,51 @@ func Test_Gateway_DeveloperMount(t *testing.T) {
 	})
 }
 
+// Test_Gateway_DeveloperMount_unmatchedPaths: a path under the prefix that no
+// developer route takes, or takes with another method, is answered as a path
+// under no registered prefix is: the AWS handling of the gateway.
+func Test_Gateway_DeveloperMount_unmatchedPaths(t *testing.T) {
+	g := newGateway(t, newSettings(), []service.Registration{developerRegistration(nil)})
+
+	for _, tt := range []struct{ name, method, mounted, unmounted string }{
+		{"no route", http.MethodGet, "/_gostack/services/sqs/nope", "/_gostack/services/zzz/nope"},
+		{"another method", http.MethodPost, "/_gostack/services/sqs/messages", "/_gostack/services/zzz/messages"},
+		{"no route at the alias", http.MethodGet, "/_aws/sqs/nope", "/_aws/zzz/nope"},
+		{"the prefix itself", http.MethodGet, "/_gostack/services/sqs", "/_gostack/services/zzz"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want, wantBody := call(t, g.Handler(), newRequest(t, tt.method, "http://localhost:4566"+tt.unmounted, "", nil))
+			got, gotBody := call(t, g.Handler(), newRequest(t, tt.method, "http://localhost:4566"+tt.mounted, "", nil))
+
+			require.Equal(t, want.StatusCode, got.StatusCode)
+			require.Equal(t, wantBody, gotBody)
+			require.NotEqual(t, developerBody, gotBody)
+		})
+	}
+}
+
+// Test_Gateway_DeveloperMount_besideARootRouteUnderTheAliasPrefix: a route the
+// process mounts at the root under /_aws/<name>, as the SNS certificate is,
+// answers beside the service's developer routes, with the compat paths on and
+// off. Only the developer ones follow the kill switch.
+func Test_Gateway_DeveloperMount_besideARootRouteUnderTheAliasPrefix(t *testing.T) {
+	const cert = "http://localhost:4566/_aws/sqs/cert.pem"
+
+	root := func(r chi.Router) {
+		r.Get("/_aws/sqs/cert.pem", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("cert")) })
+	}
+
+	for _, disabled := range []bool{false, true} {
+		settings := newSettings(func(s *gateway.Settings) { s.DisableCompatPaths = disabled })
+		g := newGateway(t, settings, []service.Registration{developerRegistration(nil)}, root)
+
+		_, body := call(t, g.Handler(), newRequest(t, http.MethodGet, cert, "", nil))
+		require.Equal(t, "cert", body, "DisableCompatPaths=%v", disabled)
+		require.True(t, answers(t, g, developerCanonical+"/messages"), "DisableCompatPaths=%v", disabled)
+		require.Equal(t, !disabled, answers(t, g, developerCompat+"/messages"), "DisableCompatPaths=%v", disabled)
+	}
+}
+
 // Test_Gateway_DeveloperMount_cannotRegisterOutsideItsPrefix: whatever a
 // DeveloperMount registers is served under its prefix, so it is not a routing
 // hook. A route written with another path is under the prefix, not at it, and

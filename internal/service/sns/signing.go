@@ -26,7 +26,7 @@ const defaultHost = "localhost.localstack.cloud:4566"
 //
 // TEMPORARY: it also mounts the developer endpoints (mountDeveloperAPI), through
 // the one hook the process hands internalapi. Registration.DeveloperMount
-// (SQ-270, merged) is their home: set it to mountDeveloperAPI with the routes
+// (added by SQ-270) is their home: set it to mountDeveloperAPI with the routes
 // written relative to /_gostack/services/sns and /_aws/sns, as SQS's are, and
 // drop the call below and Settings.DisableCompatPaths, since the gateway's own
 // DisableCompatPaths decides the /_aws names

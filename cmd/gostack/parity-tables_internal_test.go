@@ -84,6 +84,15 @@ func Test_reachesOtherServices(t *testing.T) {
 			reg:  service.Registration{Mount: func(r chi.Router) { r.Get("/_gostackish/x", noop) }},
 			want: true,
 		},
+		{
+			name: "a DeveloperMount, whatever it registers",
+			reg: service.Registration{DeveloperMount: func(r chi.Router) {
+				r.Handle("/*", http.HandlerFunc(noop))
+				r.NotFound(noop)
+				r.Get("/{account:[0-9]{12}}/{queue}", noop)
+			}},
+			want: false,
+		},
 		{name: "ClaimHost", reg: service.Registration{ClaimHost: func(string) bool { return false }}, want: true},
 	}
 

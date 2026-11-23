@@ -1051,9 +1051,12 @@ whatever it registers, a `/*` route or a `NotFound` handler included, cannot
 meet another service's request, and the parity tables do not count it as a
 routing hook (see Parity oracle). Service authors: put the developer endpoints
 in `developer-*.go` files of the package and document the paths in
-`api/openapi/gostack.yaml` in the same change. The files hold no hook, which
-`Test_developerFilesHoldNoRoutingHook` checks, so a change to one selects its
-service and the services that depend on it and never every service.
+`api/openapi/gostack.yaml` in the same change. Nothing outside those files may
+use what they declare, which `Test_developerFilesHoldNoRoutingHook` checks
+(code the endpoints share with the AWS path goes in another file), so a change
+to one selects its service and the services that depend on it and never every
+service. A path under the prefix that no developer route takes goes on to the
+gateway's AWS handling, as any unmatched path does.
 Protocol paths that must stay up under `GOSTACK_COMPAT_PATHS=0` do not belong
 here (see below).
 

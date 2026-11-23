@@ -180,8 +180,11 @@ SETTINGS_SUFFIX = ".go"
 # its package named developer-*.go. The gateway scopes the router they get to
 # the service's own prefix, so they hold no routing hook, and a change to one
 # selects <svc> and its dependents, never every service, even when <svc> is in
-# ROUTING_REACH. Test_parityTables parses these files and fails when one sets a
-# hook (Mount, ClaimHost, Claim, Fallback or Preprocess).
+# ROUTING_REACH. That holds only while the hooks run nothing these files
+# declare: Test_developerFilesHoldNoRoutingHook fails when a hook function is
+# declared in one, or a file of the package outside them names a constant, type
+# or function they declare (a method only when its name is theirs alone), other
+# than the DeveloperMount function itself. Put code both share in another file.
 DEVELOPER_PREFIX = "developer-"
 DEVELOPER_SUFFIX = ".go"
 SERVICE_PACKAGE = "github.com/kylecannon/gostack/internal/service/"

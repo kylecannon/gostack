@@ -206,7 +206,7 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 		}
 
 		if g.regs[i].DeveloperMount != nil {
-			mountDeveloper(r, &g.regs[i], prefixes)
+			mountDeveloper(g, r, &g.regs[i], prefixes)
 		}
 	}
 
@@ -241,10 +241,16 @@ func developerPrefixes(s Settings) []string {
 // mountDeveloper calls reg.DeveloperMount with a router for each of prefixes
 // plus the service's name. A sub-router answers only the paths under its
 // prefix, so the service's routes, whatever they are, never see another
-// service's requests.
-func mountDeveloper(r chi.Router, reg *service.Registration, prefixes []string) {
+// service's requests. A path under the prefix that no route of the service
+// takes goes on to serveAWS, as it did when the routes were mounted at the
+// root, unless the service sets its own NotFound or MethodNotAllowed handler.
+func mountDeveloper(g *Gateway, r chi.Router, reg *service.Registration, prefixes []string) {
 	for _, prefix := range prefixes {
-		r.Route(prefix+reg.Metadata.Name, reg.DeveloperMount)
+		r.Route(prefix+reg.Metadata.Name, func(sub chi.Router) {
+			sub.NotFound(g.serveAWS)
+			sub.MethodNotAllowed(g.serveAWS)
+			reg.DeveloperMount(sub)
+		})
 	}
 }
 

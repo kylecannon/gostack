@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,23 +19,31 @@ const developerFilePrefix = "developer-"
 
 // Test_developerFilesHoldNoRoutingHook holds the rule behind DEVELOPER_PREFIX
 // in parity/ledger.py: a change to internal/service/<svc>/developer-*.go
-// selects <svc> and its dependents, not every service, because the file holds
-// the service's developer endpoints and no hook on other services' requests.
-// The test fails when a function a registration sets as Mount, ClaimHost,
-// Claim, Fallback or Preprocess is declared in such a file.
+// selects <svc> and its dependents, not every service, because nothing a
+// routing hook runs is declared there. A hook runs code of the package, so the
+// rule has two halves, both checked here for every registration:
+//   - a function it sets as Mount, ClaimHost, Claim, Fallback or Preprocess is
+//     not declared in a developer file;
+//   - no file of the package outside developer-*.go (a test file apart) names
+//     anything a developer file declares, but the DeveloperMount function the
+//     registration sets. Developer files may use the rest of the package.
 func Test_developerFilesHoldNoRoutingHook(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
 
 	regs := buildRegistrations(t)
-	checked := 0
+	hooks, developers := 0, 0
 
 	for i := range regs {
 		reg := &regs[i]
-		declared := developerFuncs(t, filepath.Join(root, "internal", "service", reg.Metadata.Name))
+		dir := filepath.Join(root, "internal", "service", reg.Metadata.Name)
+		outside := decls(t, dir, false)
+		// A name a file outside developer-*.go declares too, a method of
+		// another type for one, cannot be told from the developer one by name.
+		declared := slices.DeleteFunc(decls(t, dir, true), func(name string) bool { return slices.Contains(outside, name) })
 
 		for hook, fn := range routingHooks(reg) {
-			checked++
+			hooks++
 
 			name, file := funcOf(fn)
 			require.False(t, strings.HasPrefix(filepath.Base(file), developerFilePrefix),
@@ -42,14 +51,26 @@ func Test_developerFilesHoldNoRoutingHook(t *testing.T) {
 			require.NotContains(t, declared, name,
 				"%s.%s is %s, declared in a developer-*.go file: it holds no routing hook", reg.Metadata.Name, hook, name)
 		}
+
+		// A service that mounts its developer endpoints some other way (SNS,
+		// through internalapi.Deps.Protocol, until it moves to DeveloperMount)
+		// has no developer mount to keep apart yet. It is not in ROUTING_REACH
+		// either, so a developer file of it selects only it and its dependents
+		// whatever the rule.
+		if len(declared) == 0 || reg.DeveloperMount == nil {
+			continue
+		}
+
+		developers++
+
+		allowed, _ := funcOf(reg.DeveloperMount)
+
+		require.Empty(t, outsideUses(t, dir, declared, allowed),
+			"%s: files outside developer-*.go use what a developer file declares", reg.Metadata.Name)
 	}
 
-	require.Positive(t, checked, "no routing hook was checked")
-
-	t.Run("a hook declared in a developer file is found", func(t *testing.T) {
-		dir := filepath.Join(root, "internal", "service", "sqs")
-		require.Contains(t, developerFuncs(t, dir), "mountDeveloperAPI")
-	})
+	require.Positive(t, hooks, "no routing hook was checked")
+	require.Positive(t, developers, "no developer file was checked")
 }
 
 // routingHooks returns the hooks reg sets, by field name.
@@ -82,30 +103,89 @@ func funcOf(fn any) (name, file string) {
 	return strings.TrimSuffix(name, "-fm"), file
 }
 
-// developerFuncs lists the names of the functions and methods declared in the
-// developer-*.go files of the package in dir, test files not included.
-func developerFuncs(t *testing.T, dir string) []string {
+// decls lists the names declared at top level (constants, variables, types,
+// functions and methods) in the developer-*.go files of the package in dir, or
+// in its other non-test files.
+func decls(t *testing.T, dir string, developer bool) []string {
 	t.Helper()
-
-	files, err := filepath.Glob(filepath.Join(dir, developerFilePrefix+"*.go"))
-	require.NoError(t, err)
 
 	var names []string
 
-	for _, path := range files {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-
-		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		require.NoError(t, err)
-
-		for _, decl := range parsed.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok {
-				names = append(names, fn.Name.Name)
+	for _, path := range goFiles(t, dir, developer) {
+		for _, decl := range parseGo(t, path).Decls {
+			switch decl := decl.(type) {
+			case *ast.FuncDecl:
+				names = append(names, decl.Name.Name)
+			case *ast.GenDecl:
+				for _, spec := range decl.Specs {
+					names = append(names, specNames(spec)...)
+				}
+			default:
+				// A bad declaration, which parsing already reported.
 			}
 		}
 	}
 
-	return names
+	return slices.DeleteFunc(names, func(name string) bool { return name == "_" })
+}
+
+func specNames(spec ast.Spec) []string {
+	switch spec := spec.(type) {
+	case *ast.TypeSpec:
+		return []string{spec.Name.Name}
+	case *ast.ValueSpec:
+		names := make([]string, 0, len(spec.Names))
+		for _, name := range spec.Names {
+			names = append(names, name.Name)
+		}
+
+		return names
+	default:
+		return nil
+	}
+}
+
+// outsideUses lists each identifier of the non-test files of dir outside
+// developer-*.go that is one of declared, but allowed. It matches by name, so
+// a local variable or a field that shares a name is listed too; rename it.
+func outsideUses(t *testing.T, dir string, declared []string, allowed string) []string {
+	t.Helper()
+
+	var uses []string
+
+	for _, path := range goFiles(t, dir, false) {
+		ast.Inspect(parseGo(t, path), func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name != allowed && slices.Contains(declared, id.Name) {
+				uses = append(uses, filepath.Base(path)+": "+id.Name)
+			}
+
+			return true
+		})
+	}
+
+	return uses
+}
+
+// goFiles lists the non-test .go files of dir: the developer-*.go ones when
+// developer is set, every other one otherwise.
+func goFiles(t *testing.T, dir string, developer bool) []string {
+	t.Helper()
+
+	all, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	require.NoError(t, err)
+
+	return slices.DeleteFunc(all, func(path string) bool {
+		base := filepath.Base(path)
+
+		return strings.HasSuffix(base, "_test.go") || strings.HasPrefix(base, developerFilePrefix) != developer
+	})
+}
+
+func parseGo(t *testing.T, path string) *ast.File {
+	t.Helper()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	require.NoError(t, err)
+
+	return parsed
 }
