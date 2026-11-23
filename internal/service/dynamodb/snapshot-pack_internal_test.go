@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -213,5 +214,108 @@ func FuzzOrderer(f *testing.F) {
 
 		want := appendItem(nil, item)
 		require.Equal(t, string(want), string(o.Append(nil, p)))
+	})
+}
+
+// packHeader is the header of p: its size, scalar count and attribute count.
+func packHeader(p value.Packed) string {
+	return string(p[:len(p)-len(p.JSON())])
+}
+
+// nested is an item whose attribute is depth maps deep, counting itself.
+func nested(depth int) string {
+	return strings.Repeat(`{"a":{"M":`, depth-1) + `{"a":{"S":"x"}}` + strings.Repeat(`}}`, depth-1)
+}
+
+// checkPackedJSON checks what JSONPacker made of raw against the typed path:
+// the item parse reads, ValidateItem accepts and Pack packs, with the same
+// header, the same item, and raw as the snapshot writes it.
+func checkPackedJSON(t *testing.T, raw []byte, got value.Packed) {
+	t.Helper()
+
+	item, err := newItemParser().parse(raw)
+	require.NoError(t, err, "packed what parse refuses: %s", raw)
+	require.NoError(t, value.ValidateItem(item), "packed what ValidateItem refuses: %s", raw)
+
+	want, err := value.Pack(item)
+	require.NoError(t, err)
+	require.Equal(t, packHeader(want), packHeader(got), string(raw))
+	require.True(t, value.EqualItems(item, value.Unpack(got)), string(raw))
+
+	var o value.Orderer
+
+	require.Equal(t, string(appendItem(nil, item)), string(o.Append(nil, got)), string(raw))
+}
+
+// Test_jsonPacker_packsSnapshotItems checks JSONPacker takes every item as
+// the snapshot writes it, and packs it as Pack packs the item: the same
+// header, the same item, and the json written back as it was read.
+func Test_jsonPacker_packsSnapshotItems(t *testing.T) {
+	var k value.JSONPacker
+
+	texts := slices.Concat(codecItems, orderItems, []string{
+		nested(value.MaxDepth), `{}`, `{"n":{"N":"0"},"d":{"N":"-0.001"},"b":{"B":""}}`,
+	})
+
+	for _, text := range texts {
+		item, err := newItemParser().parse(jsontext.Value(text))
+		require.NoError(t, err, text)
+		require.NoError(t, value.ValidateItem(item), text)
+
+		raw := appendItem(nil, item)
+
+		got, ok := k.Pack(raw)
+		require.True(t, ok, "refused %s", raw)
+		checkPackedJSON(t, raw, got)
+		require.Equal(t, string(raw), got.JSON(), "the snapshot's json is the packed json")
+	}
+
+	_, ok := k.Pack(nil)
+	require.False(t, ok)
+}
+
+// packerRefuses are items JSONPacker leaves to the typed path: valid json that
+// Pack would not write as it is, and items DynamoDB refuses.
+var packerRefuses = []string{
+	`{ "a":{"S":"x"}}`, `{"a" :{"S":"x"}}`, `{"a":{"S":"x"} }`, `{"a":{ "S":"x"}}`,
+	`{"\u0061":{"S":"x"}}`, `{"a":{"S":"\u0078"}}`, `{"a":{"S":"\/"}}`, `{"a":{"\u0053":"x"}}`,
+	`{"":{"S":"x"}}`, `{"a":{"S":null}}`, `{"a":{}}`, `{"a":{"S":"x","N":"1"}}`, `{"a":{"X":"x"}}`,
+	`{"a":{"N":"01"}}`, `{"a":{"N":"1E2"}}`, `{"a":{"N":"+1"}}`, `{"a":{"N":"-0"}}`, `{"a":{"N":"1.0"}}`,
+	`{"a":{"N":"x"}}`, `{"a":{"N":1}}`, `{"a":{"B":"AR=="}}`, `{"a":{"B":"AQ"}}`, `{"a":{"B":"!!"}}`,
+	`{"a":{"SS":[]}}`, `{"a":{"SS":["x","x"]}}`, `{"a":{"NS":["1","1"]}}`, `{"a":{"BS":["AQ==","AQ=="]}}`,
+	`{"a":{"NULL":false}}`, `{"a":{"BOOL":"true"}}`, `{"a":{"L":{}}}`, `{"a":{"M":[]}}`,
+	nested(value.MaxDepth + 1), "{\"a\":{\"S\":\"\xff\"}}", "{\"\xff\":{\"S\":\"x\"}}",
+}
+
+// Test_jsonPacker_leavesTheRest checks JSONPacker refuses json it would have
+// to rewrite, and items DynamoDB refuses, which the typed path then decodes
+// or refuses as it did before.
+func Test_jsonPacker_leavesTheRest(t *testing.T) {
+	var k value.JSONPacker
+
+	for _, text := range packerRefuses {
+		_, ok := k.Pack([]byte(text))
+		require.False(t, ok, text)
+	}
+}
+
+// FuzzJSONPacker checks JSONPacker never takes json the typed path would
+// refuse, and that what it takes it packs as the typed path does.
+func FuzzJSONPacker(f *testing.F) {
+	for _, text := range slices.Concat(codecItems, orderItems, packerRefuses) {
+		f.Add([]byte(text))
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		if !jsontext.Value(raw).IsValid(jsontext.AllowInvalidUTF8(true)) {
+			return
+		}
+
+		var k value.JSONPacker
+
+		got, ok := k.Pack(raw)
+		if ok {
+			checkPackedJSON(t, raw, got)
+		}
 	})
 }

@@ -476,6 +476,7 @@ type restored struct {
 	accounts map[string]*accountState
 	states   map[place]map[string]*tableEntry
 	parser   *itemParser
+	packer   value.JSONPacker
 }
 
 // Restore replaces the state with the snapshot in r. It implements
@@ -719,7 +720,7 @@ func (p *Provider) readTable(dec *jsontext.Decoder, got *restored, tables map[st
 	var (
 		e     *tableEntry
 		shard *shardData
-		items []value.Item
+		items []value.Packed
 	)
 
 	for dec.PeekKind() != '}' {
@@ -758,7 +759,7 @@ func (p *Provider) readTable(dec *jsontext.Decoder, got *restored, tables map[st
 		return fmt.Errorf("%w: table %q appears twice", errSnapshot, e.meta.Name)
 	}
 
-	err = e.data.Load(items)
+	err = e.data.LoadPacked(items)
 	if err != nil {
 		return fmt.Errorf("%w: table %q: %w", errSnapshot, e.meta.Name, err)
 	}
@@ -789,10 +790,12 @@ func readMeta(dec *jsontext.Decoder) (*tableEntry, error) {
 	return &tableEntry{meta: meta, data: meta.newEngine()}, nil
 }
 
-// readItems reads a table's items: jsontext checks each one's syntax, and
-// parser, which got checks once per restore, builds it.
-func (got *restored) readItems(dec *jsontext.Decoder) ([]value.Item, error) {
-	var items []value.Item
+// readItems reads a table's items, packed: jsontext checks each one's syntax,
+// and packer packs it from its json as the snapshot holds it. An item whose
+// json Pack would not have written as it is, parser, which got checks once per
+// restore, builds and ValidateItem checks before it is packed.
+func (got *restored) readItems(dec *jsontext.Decoder) ([]value.Packed, error) {
+	var items []value.Packed
 
 	if got.parser == nil {
 		got.parser = newItemParser()
@@ -804,22 +807,40 @@ func (got *restored) readItems(dec *jsontext.Decoder) ([]value.Item, error) {
 			return err //nolint:wrapcheck // Restore wraps it
 		}
 
-		item, err := got.parser.parse(raw)
-		if err != nil {
-			return err
+		packed, ok := got.packer.Pack(raw)
+		if !ok {
+			packed, err = got.packParsed(raw)
+			if err != nil {
+				return err
+			}
 		}
 
-		err = value.ValidateItem(item)
-		if err != nil {
-			return fmt.Errorf("%w: an item is not valid: %w", errSnapshot, err)
-		}
-
-		items = append(items, item)
+		items = append(items, packed)
 
 		return nil
 	})
 
 	return items, err
+}
+
+// packParsed decodes, checks and packs an item the packer did not take.
+func (got *restored) packParsed(raw jsontext.Value) (value.Packed, error) {
+	item, err := got.parser.parse(raw)
+	if err != nil {
+		return "", err
+	}
+
+	err = value.ValidateItem(item)
+	if err == nil {
+		var packed value.Packed
+
+		packed, err = value.Pack(item)
+		if err == nil {
+			return packed, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: an item is not valid: %w", errSnapshot, err)
 }
 
 // restoreShard gives e its latest stream's shard back, without records, and
