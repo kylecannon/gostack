@@ -207,9 +207,9 @@ func (p *Provider) PutSecretValue(ctx context.Context, in *api.PutSecretValueInp
 }
 
 // stagesFrom is the stages PutSecretValue was given, each once, in the order
-// given, and none empty: a null entry of the list reaches the handler as an
-// empty name, which LocalStack takes for no stage. nil stays nil, for the
-// default stage.
+// given, and none empty: LocalStack takes an empty name for no stage. A null
+// entry of the list never reaches the handler (the decoder leaves it out), so
+// this drops only an explicit "". nil stays nil, for the default stage.
 //
 // moto keeps a stage listed twice, so a version can hold AWSCURRENT twice and
 // a later move leaves two versions holding it, a state AWS cannot reach.

@@ -34,10 +34,14 @@ var strict = json.JoinOptions(
 // encoded or decoded, whatever its type. Each of these takes everything the
 // default encoding takes and gives the same result for it, so every encode and
 // decode runs with strict first and pays for lenient only when strict refuses.
+// The same goes for dropping the nulls of a list or map (nulls.go), which
+// lenient always does and strict does only for a body that holds a null
+// (strictFor).
 var lenient = json.JoinOptions(
 	strict,
 	json.WithMarshalers(json.MarshalToFunc(marshalNonFinite)),
 	json.WithUnmarshalers(json.JoinUnmarshalers(
+		nullDroppers,
 		json.UnmarshalFromFunc(unmarshalNonFinite),
 		json.UnmarshalFromFunc(unmarshalInt32),
 		json.UnmarshalFromFunc(unmarshalInt64),
@@ -108,7 +112,7 @@ func DecodeLenient[T any](body []byte) (v *T, usedLenient bool, err *awserr.Erro
 		return v, false, nil
 	}
 
-	if json.Unmarshal(body, v, strict) == nil {
+	if json.Unmarshal(body, v, strictFor(body)) == nil {
 		return v, false, nil
 	}
 
@@ -149,7 +153,7 @@ func marshalStrictFirst(v any) ([]byte, error) {
 // strict pass refuses the data part way, the lenient pass reads every member
 // the strict one set again, so v ends as the lenient pass alone leaves it.
 func Unmarshal(data []byte, v any) error {
-	if json.Unmarshal(data, v, strict) == nil {
+	if json.Unmarshal(data, v, strictFor(data)) == nil {
 		return nil
 	}
 

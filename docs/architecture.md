@@ -503,6 +503,41 @@ written by hand.
   per-byte quoting loop keeps three values on the stack, and on AMD Zen 3 and
   4 its cost moved up to 38% with a 16-byte change in a caller's frame
   (SQ-455). rest-json and error bodies still go through v2.
+- **A null in a list or map of scalars (SQ-300):** v2 reads a json `null` into
+  a `[]string` element or a `map[string]string` value as `""`, so a handler
+  could not tell `[null]` from `[""]`. Measured on main, `PutSecretValue`
+  `VersionStages:[null]` reached the handler as `[""]`, a `null` in
+  `ReceiveMessage` `AttributeNames` as `""`, and `{"k":null}` in a KMS
+  `EncryptionContext` as `{"k":""}`, on json 1.0 and json 1.1 alike; a
+  `[]byte` element went through as `nil`. Every json and rest-json decode runs
+  through `awsjson.DecodeWithin` (rest-xml and query have no null), so the one
+  fix is there: the decoder leaves a null list element, and a map entry whose
+  value is null, out of the result (`internal/protocol/awsjson/nulls.go`). It
+  covers a list and a map of `string`, `int32`, `int64`, `float64`, `bool` and
+  `[]byte`, every scalar element type the generator writes
+  (`scalarTypes` in `model.go`); `Test_generated_collections_DropNulls` in
+  `codegen/cmd/gostack-codegen` fails when a generated list or map holds an
+  element type the decoder does not cover, or the generator gains a scalar
+  one. Choice and why:
+  - **Drop (chosen).** botocore-generated clients never send a null element,
+    and LocalStack drops it where it acts on one (the Secrets Manager
+    provider), so dropping changes nothing a client or the parity suite sees.
+    `[""]` and `{"k":""}` stay as sent. No call site changes: the lists stay
+    `[]string`.
+  - **Keep it visible (rejected).** A `[]*string` or a presence mask changes
+    the type of 77 list and map shapes across the nine APIs and every
+    handler that reads one, for a value no client sends.
+  - **Refuse with a `SerializationException` (rejected).** It is only right if
+    AWS does it, and no snapshot or API reference this repository cites says
+    so. Unverified AWS behavior follows LocalStack (rule 3 under "Behavior
+    the suite does not pin"), and a refusal could move a parity test from
+    pass to fail if one sends a null.
+  - **Cost.** A body with no `null` byte decodes with the same options as
+    before. A body with one pays for the unmarshalers, which cost a lookup on
+    every value, as the lenient readers do. A list of structures keeps a null
+    as one empty structure, since every handler already refuses a structure
+    with its required members missing; a timestamp element is a pointer and
+    keeps a null as `nil`.
 - **Pre-encoded values:** a json service's `EncodedShapes` option in
   `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
   response can carry already encoded; DynamoDB names `AttributeMap`. Every

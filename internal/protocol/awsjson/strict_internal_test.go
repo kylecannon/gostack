@@ -19,6 +19,7 @@ type stamped struct {
 	Ratio *float64   `json:"Ratio,omitzero"`
 	When  *ISO8601   `json:"When,omitzero"`
 	Inner *strictAll `json:"Inner,omitzero"`
+	Tags  []string   `json:"Tags,omitzero"`
 }
 
 func (s *stamped) MarshalJSONTo(enc *jsontext.Encoder) error {
@@ -44,6 +45,8 @@ type strictAll struct {
 	S     *string            `json:"S,omitzero"`
 	Xs    [][]byte           `json:"Xs,omitzero"`
 	ByKey map[string]float64 `json:"ByKey,omitzero"`
+	Ints  []int32            `json:"Ints,omitzero"`
+	Names map[string]string  `json:"Names,omitzero"`
 	Stamp *stamped           `json:"Stamp,omitzero"`
 	Next  *strictAll         `json:"Next,omitzero"`
 }
@@ -64,6 +67,13 @@ var strictSeeds = []string{
 	`{"Next":{"I":"x"}}`,
 	`{"I":[5]}`,
 	`[`,
+	// A null in a list or a map, where the strict pass takes the body, where only the
+	// lenient pass does, and where a null sits beside a value the lenient pass reads.
+	`{"Xs":[null,"QQ==",null],"Ints":[null,1,null],"Names":{"a":null,"b":"x"},"Stamp":{"Tags":["a",null]}}`,
+	`{"Ints":[null,"5",5.7,null],"Names":{"a":"x","a":null},"Xs":[null,"a\nGk"]}`,
+	`{"Ints":[null],"Names":{"a":null},"Stamp":{"Count":"7","Tags":[null,"t"]}}`,
+	`{"Ints":[1,null,{}]}`,
+	`{"Names":{"a":null,"b":[1]}}`,
 }
 
 // lenientOnly decodes data the way every decode ran before strict came first.
@@ -96,7 +106,7 @@ func checkStrictAgrees(t *testing.T, data []byte) {
 	want, wantErr := lenientOnly(data)
 
 	strictV := new(strictAll)
-	if json.Unmarshal(data, strictV, strict) == nil {
+	if json.Unmarshal(data, strictV, strictFor(data)) == nil {
 		require.NoError(t, wantErr, "%s: strict took a body lenient refuses", data)
 		same(t, want, strictV, data)
 	}
@@ -111,7 +121,7 @@ func checkStrictAgrees(t *testing.T, data []byte) {
 
 	require.Nil(t, failure, "%s", data)
 	same(t, want, got, data)
-	require.Equal(t, json.Unmarshal(data, new(strictAll), strict) != nil, usedLenient, "%s", data)
+	require.Equal(t, json.Unmarshal(data, new(strictAll), strictFor(data)) != nil, usedLenient, "%s", data)
 
 	into := new(strictAll)
 	require.NoError(t, Unmarshal(data, into))
