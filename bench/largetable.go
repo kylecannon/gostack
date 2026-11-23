@@ -14,23 +14,9 @@ import (
 )
 
 // This file holds the large-table DynamoDB workload, which only -profile large
-// runs (docs/standards.md, "System bench"). One cell is a container with a memory
-// limit, one table with a global secondary index, items of a realistic mix put in
-// it before the clock starts, and then a mixed load for a fixed time:
-//
-//	items       25k, 50k, 100k, 300k and 1M, so a heavier representation reaches
-//	            the limit at one of them
-//	persistence off and PERSIST_DYNAMODB=1
-//	concurrency 16 and 64
-//	memory      1g, or -memory
-//
-// An item has 10 to 30 attributes (strings, numbers, a boolean, small maps and
-// lists) and a body of 100 B to 4 KiB, its size spread evenly on a log scale.
-// The text is random, so a representation that compresses runs of one byte gains
-// nothing here. Every byte of an item follows from its index and a version, so
-// two images are loaded with the same table.
-//
-// The load is 70% reads and 30% writes, one operation a cycle:
+// runs. bench/doc.go, "The large profile", describes the cells, the items and the
+// mix. Every byte of an item follows from its index and a version, so two images
+// are loaded with the same table. The load is one operation a cycle:
 //
 //	get         35%  GetItem
 //	query       20%  Query of a partition (20 items) or of the index, a third of
@@ -112,8 +98,8 @@ const (
 
 const ddbAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
-// ddbLargeSteps are the sizes of the tables a large run fills, in items. Under 1g
-// the first holds in any image, a table of 100k items is past the limit of an
+// ddbLargeSteps are the sizes of the tables a large run fills, in items. Under the
+// default limit the first holds in any image, a table of 100k items is past it for an
 // image that holds an item as a decoded document (about 16 KiB each, SQ-522's
 // first reading), and 1M is past it for a packed one (about 4.5 KiB each).
 var ddbLargeSteps = []int{25_000, 50_000, 100_000, 300_000, 1_000_000}

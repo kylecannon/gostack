@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,37 +55,100 @@ const (
 	variantNoHealthcheck = "no-healthcheck"
 )
 
-// memoryLimit is what -memory accepts: bytes, with a b, k, m or g after them in
-// either case, as docker run --memory takes them (1G, 1g, 512m).
-var memoryLimit = regexp.MustCompile(`^[1-9][0-9]*[bBkKmMgG]?$`)
+// memoryLimit is what -memory accepts: a number of bytes with a b, k, m or g after
+// it in either case, as docker run --memory takes them (1G, 1g, 512m).
+var memoryLimit = regexp.MustCompile(`^([1-9][0-9]*)([bBkKmMgG]?)$`)
 
-// profileSpec is what a profile runs besides its cells, which the run reads from
-// profileSpecs and not from the profile's name. The idle windows and the second
-// idle variant still follow the name (applyProfileDefaults, footprint).
+// memoryUnits is what the unit of a -memory value multiplies it by; none is bytes.
+var memoryUnits = map[string]uint64{"": 1, "b": 1, "k": bytesPerKiB, "m": bytesPerMiB, "g": bytesPerGiB}
+
+// memoryFloor is the least docker run --memory accepts, 6 MiB.
+const memoryFloor = 6 * bytesPerMiB
+
+// errMemory reports a -memory value docker run would refuse.
+var errMemory = errors.New("memory limit")
+
+// parseMemory is the bytes of a -memory value. It refuses what docker run
+// --memory would: a value that is not a number with a unit, one too big for a
+// count of bytes, and one under memoryFloor (4096, 2b and 100k are).
+func parseMemory(s string) (uint64, error) {
+	m := memoryLimit.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("%w: want a number of bytes with an optional b, k, m or g, such as 1g", errMemory)
+	}
+
+	n, err := strconv.ParseUint(m[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errMemory, err)
+	}
+
+	unit := memoryUnits[strings.ToLower(m[2])]
+
+	if n > math.MaxUint64/unit {
+		return 0, fmt.Errorf("%w: more than a count of bytes holds", errMemory)
+	}
+
+	if n*unit < memoryFloor {
+		return 0, fmt.Errorf("%w: docker takes at least 6m", errMemory)
+	}
+
+	return n * unit, nil
+}
+
+// profileSpec is what a profile runs, which the run reads from profileSpecs and
+// never from the profile's name. What the table leaves out is each workload's own
+// choice of cells for a profile (its Cells).
 type profileSpec struct {
 	name string
+	// about is the profile's line in the help of -profile.
+	about string
 	// targets is the default of -targets.
 	targets string
+	// settle and idle are the default idle windows.
+	settle, idle time.Duration
 	// footprint is whether the run times startup, first use and idle memory, and
 	// agentic whether it runs each service's create, use and delete cycle.
 	footprint, agentic bool
-	// limited is whether the profile's cells have a memory limit, which -memory
+	// noHealthcheck is whether the idle windows run a second time on a target with
+	// its HEALTHCHECK off.
+	noHealthcheck bool
+	// large is whether the profile runs the large workloads and no others, and no
+	// other profile runs them. Its cells run under a memory limit, which -memory
 	// replaces.
-	limited bool
+	large bool
 }
 
 var profileSpecs = []profileSpec{
 	{
-		name:      profileFull,
-		targets:   targetGostack + "," + targetSlim + "," + targetLocalstack,
+		name:          profileFull,
+		about:         "the whole matrix",
+		targets:       targetGostack + "," + targetSlim + "," + targetLocalstack,
+		settle:        fullSettle,
+		idle:          fullIdle,
+		footprint:     true,
+		agentic:       true,
+		noHealthcheck: true,
+	},
+	{
+		name:      profileQuick,
+		about:     "each axis once at concurrency 16, and the base cell at 1 and 64",
+		targets:   targetGostack,
+		settle:    quickSettle,
+		idle:      quickIdle,
 		footprint: true,
 		agentic:   true,
 	},
-	{name: profileQuick, targets: targetGostack, footprint: true, agentic: true},
 	// The large profile measures its cells and nothing else: the startup, idle and
 	// agentic runs of the other profiles are not what it is for, and each would add
 	// minutes to a run that is already long.
-	{name: profileLarge, targets: targetGostack, limited: true},
+	{
+		name:    profileLarge,
+		about:   "the large-table workloads alone, each cell a table of its own under a memory limit",
+		targets: targetGostack,
+		settle:  fullSettle,
+		idle:    fullIdle,
+		large:   true,
+	},
 }
 
 // profileOf is the spec of a profile by name.
@@ -95,6 +159,26 @@ func profileOf(name string) (profileSpec, bool) {
 	}
 
 	return profileSpecs[i], true
+}
+
+// profileNames lists the profiles as an error says them: "full, quick or large".
+func profileNames() string {
+	names := make([]string, len(profileSpecs))
+	for i, p := range profileSpecs {
+		names[i] = p.name
+	}
+
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// profileHelp is the help of -profile: each profile and what it runs.
+func profileHelp() string {
+	lines := make([]string, len(profileSpecs))
+	for i, p := range profileSpecs {
+		lines[i] = p.name + ": " + p.about
+	}
+
+	return strings.Join(lines, ". ")
 }
 
 // target is one image to measure. Only a target that persists runs the cells
@@ -331,11 +415,10 @@ func (o *options) bind(flags *flag.FlagSet) {
 
 		return nil
 	})
-	flags.StringVar(&o.profile, "profile", profileFull,
-		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64. "+
-			"large: the large-table workloads alone, each cell a table of its own under a memory limit")
+	flags.StringVar(&o.profile, "profile", profileFull, profileHelp())
 	flags.StringVar(&o.memory, "memory", "",
-		"the memory limit of every cell that has one, as docker run --memory writes it (default: the cell's, 1g)")
+		"the memory limit of every cell that has one, as docker run --memory writes it, at least 6m "+
+			"(default: the limit of the cell)")
 	flags.StringVar(&o.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
 		"tag for the load generator image the run builds")
 	flags.StringVar(&o.outDir, "out", "bench/results", "directory for the result files")
@@ -365,16 +448,12 @@ func (o *options) bind(flags *flag.FlagSet) {
 func (o *options) check() error {
 	profile, ok := profileOf(o.profile)
 	if !ok {
-		return fmt.Errorf("-profile %q: want %s, %s or %s", o.profile, profileFull, profileQuick, profileLarge)
+		return fmt.Errorf("-profile %q: want %s", o.profile, profileNames())
 	}
 
-	if o.memory != "" && !profile.limited {
-		return fmt.Errorf("-memory %q: the %s profile has no memory limit to replace; only -profile %s has one",
-			o.memory, o.profile, profileLarge)
-	}
-
-	if o.memory != "" && !memoryLimit.MatchString(o.memory) {
-		return fmt.Errorf("-memory %q: want a number of bytes with an optional b, k, m or g, such as 1g", o.memory)
+	err := o.checkMemory(profile)
+	if err != nil {
+		return err
 	}
 
 	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
@@ -384,6 +463,25 @@ func (o *options) check() error {
 	if o.firstUseRuns < minFirstUseRuns {
 		return fmt.Errorf("-first-use-runs %d: want at least %d, the fewest a side with which the rank-sum test can "+
 			"fail a first use", o.firstUseRuns, minFirstUseRuns)
+	}
+
+	return nil
+}
+
+// checkMemory refuses a -memory that the profile cannot use or docker would refuse.
+func (o *options) checkMemory(profile profileSpec) error {
+	if o.memory == "" {
+		return nil
+	}
+
+	if !profile.large {
+		return fmt.Errorf("-memory %q: the %s profile has no memory limit to replace; only a profile that runs "+
+			"the large workloads has one", o.memory, o.profile)
+	}
+
+	_, err := parseMemory(o.memory)
+	if err != nil {
+		return fmt.Errorf("-memory %q: %w", o.memory, err)
 	}
 
 	return nil
@@ -430,17 +528,14 @@ func selectTargets(list string, all []target) []target {
 }
 
 func (o *options) applyProfileDefaults() {
-	settle, idle := fullSettle, fullIdle
-	if o.profile == profileQuick {
-		settle, idle = quickSettle, quickIdle
-	}
+	profile, _ := profileOf(o.profile)
 
 	if o.settle == 0 {
-		o.settle = settle
+		o.settle = profile.settle
 	}
 
 	if o.idle == 0 {
-		o.idle = idle
+		o.idle = profile.idle
 	}
 }
 
@@ -454,6 +549,8 @@ type runner struct {
 	// across cells: with one repetition a cell has one round, and a count that
 	// began again in each cell would run the base first in all of them.
 	cellRounds int
+	// runCell runs a cell once on a target; nil is cellRun. A test puts a fake here.
+	runCell func(ctx context.Context, t target, spec cellSpec) (runResult, error)
 }
 
 // takeRounds reserves the next n rounds of cell runs and returns the first.
@@ -712,7 +809,7 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 			break
 		}
 
-		for s, cell := range r.cell(ctx, sides, r.opts.limited(spec)) {
+		for s, cell := range r.cell(ctx, sides, r.opts.withMemory(spec)) {
 			res[s].noteCell(cell)
 
 			res[s].Cells = append(res[s].Cells, cell)
@@ -726,10 +823,10 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 	return res
 }
 
-// limited is the cell with the run's memory limit, when it has one and -memory
+// withMemory is the cell with the run's memory limit, when it has one and -memory
 // names another.
-func (o *options) limited(spec cellSpec) cellSpec {
-	if spec.Memory != "" && o.memory != "" {
+func (o *options) withMemory(spec cellSpec) cellSpec {
+	if spec.limited() && o.memory != "" {
 		spec.Memory = o.memory
 	}
 
@@ -749,7 +846,7 @@ func (r *runner) footprint(ctx context.Context, sides []target, res []targetResu
 
 	r.idleVariant(ctx, sides, res, variantHealthcheck)
 
-	if r.opts.profile == profileFull {
+	if profile, _ := profileOf(r.opts.profile); profile.noHealthcheck {
 		r.idleVariant(ctx, sides, res, variantNoHealthcheck)
 	}
 }
@@ -931,15 +1028,20 @@ func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cell
 	failed := make([][]string, len(sides))
 	first := r.takeRounds(r.opts.reps)
 
+	runOnce := r.runCell
+	if runOnce == nil {
+		runOnce = r.cellRun
+	}
+
 	alternateFrom(first, r.opts.reps, len(sides), func(round, s int) {
 		rep := round - first
 
 		r.logf("%s: %s: run %d of %d, load average %s", sides[s].label(), spec.id(), rep+1, r.opts.reps,
 			loadAverage(ctx))
 
-		run, err := r.cellRun(ctx, sides[s], spec)
+		run, err := runOnce(ctx, sides[s], spec)
 		if err != nil {
-			failed[s] = append(failed[s], fmt.Sprintf("run %d: %v", rep+1, err))
+			failed[s] = append(failed[s], failedReason(rep+1, err, run))
 			failedRuns[s] = append(failedRuns[s], failedRun{run: run, oomKilled: errors.Is(err, errOOMKilled)})
 
 			return
@@ -1000,12 +1102,12 @@ func (c cellSpec) containerArgs() []string {
 	if c.persists() {
 		args = append(args, "-e", c.PersistEnv+"=1")
 
-		if c.Memory == "" {
+		if !c.limited() {
 			args = append(args, "--tmpfs", persistDir)
 		}
 	}
 
-	if c.Memory != "" {
+	if c.limited() {
 		args = append(args, "--memory", c.Memory, "--memory-swap", c.Memory)
 	}
 
@@ -1050,14 +1152,28 @@ func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResul
 	})
 	run.Usage = used
 
-	// A run that failed, or that counted operations that did, may have a container
-	// the daemon has not yet recorded the death of.
-	var wait time.Duration
-	if err != nil || run.opErrors() > 0 {
-		wait = oomSettle
+	return endRun(ctx, inst, spec, run, err)
+}
+
+// endRun is the run and its error once the load generator has returned: the load
+// generator's own error, and how the target container stands, read after
+// settleWait.
+func endRun(ctx context.Context, inst *instance, spec cellSpec, run runResult, loadgenErr error) (runResult, error) {
+	return run, runError(loadgenErr, inst.aliveWithin(ctx, spec.settleWait(loadgenErr, run)))
+}
+
+// settleWait is how long a run waits for its container to stop before it reads
+// the container's state. A load generator that failed may have done so the moment
+// the connection dropped, before the daemon recorded why the container stopped.
+// So may the operations of a cell with a memory limit that failed as its container
+// was dying. In any other run a container that is still running costs the whole
+// wait for nothing: a cell without a limit is not OOM-killed.
+func (c cellSpec) settleWait(loadgenErr error, run runResult) time.Duration {
+	if loadgenErr != nil || (c.limited() && run.opErrors() > 0) {
+		return oomSettle
 	}
 
-	return run, runError(err, inst.aliveWithin(ctx, wait))
+	return 0
 }
 
 // runError is the error of a run from what the load generator returned and what

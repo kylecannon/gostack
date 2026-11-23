@@ -460,14 +460,12 @@ use".
 How a service holds a large data set is measured under a memory limit, by
 `make bench-system-large` (`bench run -profile large`), which no other target
 runs, because each of its cells takes minutes. Its steps and its mix are in
-`bench/doc.go`, "The large profile". Each cell is a container started with
-`--memory` (1g, `BENCH_LARGE_MEMORY` or `-memory`, which no other profile
-accepts) and `--memory-swap` equal to it, so a container that goes over is killed
-and not swapped. An OOM-killed run is recorded as a failed run with its reason.
-The target measures gostack alone and compares with no committed result, since
-none holds large cells. Every profile logs the host's load average before each
-run of a cell: the machine it runs on is part of what it measures. The figure is
-the host's, not the Docker VM's.
+`bench/doc.go`, "The large profile", which also has the default limit. Each cell
+is a container started with `--memory` (`BENCH_LARGE_MEMORY` or `-memory`, which
+no other profile accepts) and `--memory-swap` equal to it, so a container that
+goes over is killed and not swapped. An OOM-killed run is recorded as a failed
+run with its reason. The target measures gostack alone and compares with no
+committed result, since none holds large cells.
 
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose

@@ -43,6 +43,10 @@
 // `bench run -services s3` runs the cells and the agentic cycle of the named
 // services only.
 //
+// Every run of a cell logs the host's load average (`uptime`, the host's and not
+// the Docker VM's) beside the cell's id, since the machine a run is on is part of
+// what it measures.
+//
 // # The SQS matrix
 //
 // A cell of the sqs/messaging workload is one point of these axes:
@@ -133,8 +137,7 @@
 // minutes, and cellsFor lists it for this profile alone and lists nothing else
 // there. Gostack is the only target, and the run measures its cells and nothing
 // else (no startup, idle or agentic run). A cell is a container started with
-// --memory (1g, or -memory) and the same --memory-swap, a table with a global
-// secondary index, and
+// --memory and the same --memory-swap, a table with a global secondary index, and
 //
 //	items        25k, 50k, 100k, 300k, 1M, put with BatchWriteItem before the clock
 //	             starts, from a source seeded by the item's index, so two images
@@ -150,15 +153,31 @@
 // 15% (a page of 25 from a random key, a third filtered), put 10%, update 10%,
 // delete 5%, batchwrite 5% (25 puts). Each cell is a run of its own on a fresh
 // container, one repetition by default in the make target, because the fill
-// comes first. A cell records its peak RSS (anon plus mapped file pages) and its
-// peak usage, the memory its cgroup counts against the limit, page cache
-// included, and items_filled, the items the server had acknowledged when the
-// fill ended. A container the kernel OOM-killed has oom_killed in its cell, with
-// items_filled and the memory it reached, and a run that failed any other way
-// keeps those too. A run that failed waits up to oomSettle for its container to
-// stop, and takes State.OOMKilled together with exit code 137 for the kill, so
-// the load generator's own failure, which comes first, is not read as a death of
-// another kind.
+// comes first.
+//
+// The memory limit is 1g. -memory (the make target's
+// BENCH_LARGE_MEMORY) replaces it in every cell, as docker run --memory writes
+// it (1G, 1g, 512m), at least 6m, the least docker takes; any other profile refuses
+// the flag.
+//
+// A cell records its peak RSS (anon plus mapped file pages) and its peak usage,
+// the memory its cgroup counts against the limit, page cache included. Both are
+// the highest of readings taken every 100 ms, and cgroup v2 keeps no high-water
+// mark of its own, so a container killed between two readings reached a little
+// more than its peak shows. It records items_filled too, the items the server had
+// acknowledged when the fill ended.
+//
+// A container the kernel OOM-killed is a failed run, and its cell has oom_killed.
+// Every failed run's entry in failed_runs ends with the items its fill had put in
+// and the peak RSS and peak usage it reached, so a cell whose other runs
+// completed keeps them as well; a cell none of whose runs completed also holds
+// them in items_filled, peak_rss_bytes and peak_usage_bytes. The kill is read
+// from State.OOMKilled together with exit code 137, so a killed child process,
+// such as the healthcheck, does not make a later exit one. The daemon records a
+// death a moment after the load generator's connection drops, so a run whose load
+// generator failed, or whose operations failed under a memory limit, waits up to
+// oomSettle (5 s) for its container to stop before it reads the state
+// (cellSpec.settleWait); any other run reads it once.
 //
 // # The KMS matrix
 //
@@ -320,10 +339,14 @@
 // `bench run -base-image B -base-commit C -base-out DIR` measures image B as
 // the base of the one target, next to the target's own image as the head, in
 // one run: each startup run, idle run and run of a cell goes base head, then
-// head base, and so on (roundOrder in run.go). It writes two ordinary result
-// files, the base's in DIR and the head's in -out, for `bench compare`. The
-// pull request workflow measures this way, so drift over the job lands on both
-// sides.
+// head base, and so on (roundOrder in run.go). The count of rounds runs on across
+// cells, since with one repetition a cell has one round and a count that began
+// again in each cell would run the base first in all of them: with an odd -reps
+// the sides take the first run of a cell in turn (the pull request workflow's 5
+// does), and with an even one every cell starts with the base. It writes two
+// ordinary result files, the base's in DIR and the head's in -out, for `bench
+// compare`. The pull request workflow measures this way, so drift over the job
+// lands on both sides.
 //
 // # Errors and dead targets
 //
@@ -392,4 +415,7 @@
 // fields and ids with no service, so the committed results still compare. A
 // cell's failed_runs, the repetitions that did not complete, was added without
 // a version bump: no field changed its meaning, and a file without it has none.
+// So were a cell's peak_usage_bytes, items_filled and oom_killed, its spec's
+// memory, and the memory a cell with no completed run holds in peak_rss_bytes
+// from its failed runs; compare reads none of them.
 package main

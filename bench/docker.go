@@ -32,7 +32,10 @@ const (
 var errNotReady = errors.New("container did not become ready")
 
 // dockerOutput runs the docker CLI and returns its stdout. A failure carries
-// the CLI's stderr.
+// the CLI's stderr and comes back with whatever the command wrote to stdout
+// before it failed: the output is not nil beside an error. Only the load generator
+// reads it, for how far a failed fill got; every other caller checks the error
+// first.
 func dockerOutput(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, dockerBin, args...) //nolint:gosec // the arguments are built by this program
 	var stderr bytes.Buffer

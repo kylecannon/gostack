@@ -151,6 +151,10 @@ type cellSpec struct {
 
 func (c cellSpec) persists() bool { return c.PersistEnv != "" }
 
+// limited reports whether the cell runs under a memory limit. containerArgs says
+// what that changes besides --memory.
+func (c cellSpec) limited() bool { return c.Memory != "" }
+
 // option returns the value of an axis, or "" when the cell has no such axis.
 func (c cellSpec) option(key string) string {
 	for _, o := range c.Options {
@@ -195,7 +199,7 @@ func (c cellSpec) id() string {
 		parts = append(parts, o.Key+"="+o.Value)
 	}
 
-	if c.Memory != "" {
+	if c.limited() {
 		parts = append(parts, "mem="+c.Memory)
 	}
 
@@ -211,12 +215,14 @@ func (c cellSpec) id() string {
 func cellsFor(profile string, t target, services ...string) []cellSpec {
 	var out []cellSpec
 
+	prof, _ := profileOf(profile)
+
 	for _, w := range workloads {
 		if len(services) > 0 && !slices.Contains(services, w.Service()) {
 			continue
 		}
 
-		if _, large := w.(largeWorkload); large != (profile == profileLarge) {
+		if _, large := w.(largeWorkload); large != prof.large {
 			continue
 		}
 
