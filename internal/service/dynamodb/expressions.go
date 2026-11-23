@@ -44,6 +44,9 @@ type origin struct {
 	// the ANDs that joined them. The image counts them toward the 300 of the
 	// WHERE (SQ-454).
 	unwritten int
+	// shape is, for a SELECT of paths below the top level, how the read takes
+	// them from each item its projection keeps (reader.projected).
+	shape *selectShape
 }
 
 // fromStatement is the origin of a PartiQL statement; the zero origin is a
@@ -63,6 +66,15 @@ func forStatement(ctx context.Context) context.Context {
 func withUnwritten(ctx context.Context, operators int) context.Context {
 	from := originOf(ctx)
 	from.unwritten = operators
+
+	return context.WithValue(ctx, originKey{}, from)
+}
+
+// withShape marks ctx, which forStatement has marked, with how a SELECT takes
+// its paths from each item (origin.shape).
+func withShape(ctx context.Context, shape *selectShape) context.Context {
+	from := originOf(ctx)
+	from.shape = shape
 
 	return context.WithValue(ctx, originKey{}, from)
 }

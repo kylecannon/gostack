@@ -49,7 +49,6 @@ type reader struct {
 
 	selectMode string
 	filter     expression.Condition
-	projection expression.Projection
 	// from is who wrote the read's expressions (originOf).
 	from origin
 	// fetch reads the table's item for an index entry, as a local index does
@@ -66,16 +65,57 @@ type reader struct {
 	// that gives a KeyConditionExpression.
 	legacy *legacyKey
 
-	// typed makes the page's items maps, for a PartiQL statement that reads
-	// them, where a request's page with nothing to evaluate holds each item's
-	// packed json.
-	typed bool
 	// What visit decodes of a stored item (prepare): the attributes the
-	// index holds, when it does not hold them all, and those the filter and
-	// the projection read, nil for all of them.
-	indexNames, filterNames, projectionNames []string
+	// index holds, when it does not hold them all, and those the filter
+	// reads, nil for all of them.
+	indexNames, filterNames []string
+	// project holds the read's projection, nil for none, and applies it to a
+	// stored item. The shape of a SELECT of nested paths is from.shape.
+	project projector
 	// dec decodes the stored items visit reads.
 	dec value.Decoder
+}
+
+// projector applies a projection to stored items, decoding no more of each
+// than the projection keeps.
+type projector struct {
+	projection expression.Projection
+	// names are the top-level attributes the projection names.
+	names []string
+	// top is set when the projection names only top-level attributes: those
+	// attributes, decoded, are the projected item.
+	top bool
+}
+
+func newProjector(projection expression.Projection) projector {
+	if projection == nil {
+		return projector{}
+	}
+
+	top := true
+
+	for _, path := range projection.Paths() {
+		top = top && len(path) == 1
+	}
+
+	return projector{projection: projection, names: distinct(topNames(projection), nil), top: top}
+}
+
+// apply is the projection of stored, in a map of its own; dec decodes it.
+func (pj *projector) apply(dec *value.Decoder, stored value.Packed) value.Item {
+	if pj.top {
+		return dec.Item(stored, pj.names)
+	}
+
+	return pj.projection.Apply(dec.View(stored, pj.names))
+}
+
+// applyStored is apply for a single stored item, with a decoder of its own.
+func (pj *projector) applyStored(stored value.Packed) value.Item {
+	var dec value.Decoder
+	defer dec.Release()
+
+	return pj.apply(&dec, stored)
 }
 
 // page is what a reader read: its items are maps, or, for a read that writes
@@ -105,9 +145,7 @@ func (r *reader) prepare() {
 		r.filterNames = distinct(expression.Names(r.filter), nil)
 	}
 
-	if r.projection != nil {
-		r.projectionNames = distinct(topNames(r.projection), nil)
-	}
+	r.project = newProjector(r.project.projection)
 }
 
 // holdsAll reports whether an index holds every attribute of an item.
@@ -165,6 +203,7 @@ func giveEncoded(list []awsjson.Encoded) {
 // what the read reads, which a Query does not need to give.
 func (r *reader) read(run func(visit func(hash string, stored value.Packed) bool) error) (*page, error) {
 	r.prepare()
+	defer r.dec.Release()
 
 	pg := &page{}
 
@@ -241,7 +280,7 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 	if r.filter != nil {
 		view := item
 		if view == nil {
-			view = r.dec.View(stored, r.filterNames)
+			view = r.dec.Peek(stored, r.filterNames)
 		}
 
 		ok, err := r.filter.Eval(view)
@@ -260,16 +299,10 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 
 	switch {
 	case r.selectMode == selectCount:
-	case r.projection != nil:
-		if item == nil {
-			item = r.dec.View(stored, r.projectionNames)
-		}
-
-		pg.items = append(pg.items, r.projection.Apply(item))
+	case r.project.projection != nil:
+		pg.items = append(pg.items, r.projected(item, stored))
 	case item != nil:
 		pg.items = append(pg.items, item)
-	case r.typed:
-		pg.items = append(pg.items, r.dec.Item(stored, nil))
 	default:
 		if pg.encoded == nil {
 			pg.encoded = takeEncoded()
@@ -281,11 +314,28 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 	return true
 }
 
+// projected is the projection of stored, or of item, the index's part of it,
+// when that is not nil, shaped by r.from.shape when it is set.
+func (r *reader) projected(item value.Item, stored value.Packed) value.Item {
+	switch {
+	case r.from.shape == nil && item != nil:
+		return r.project.projection.Apply(item)
+	case r.from.shape == nil:
+		return r.project.apply(&r.dec, stored)
+	case item != nil:
+		// The projection names the paths' first names: shaping takes no
+		// more than it keeps.
+		return shapeItem(item, r.from.shape.paths)
+	default:
+		return shapeItem(r.dec.ViewSelect(stored, r.from.shape.sel), r.from.shape.paths)
+	}
+}
+
 // indexItem is what an index that holds less than every attribute holds of
 // stored. The page keeps that item itself only when it neither projects nor
 // counts it; otherwise it is a view the next decode reuses.
 func (r *reader) indexItem(stored value.Packed) value.Item {
-	if r.projection == nil && r.selectMode != selectCount {
+	if r.project.projection == nil && r.selectMode != selectCount {
 		return r.dec.Item(stored, r.indexNames)
 	}
 

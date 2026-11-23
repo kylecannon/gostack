@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/protocol/constraint"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/partiql"
@@ -215,15 +216,53 @@ func (p *Provider) executeSelect(
 		start: start, forward: !stmt.Desc, capacity: in.ReturnConsumedCapacity,
 	}
 
+	// The read shapes each item it keeps by paths below the top level.
+	if aliases != nil {
+		ctx = withShape(ctx, &selectShape{sel: selectionOf(aliases), paths: aliases})
+	}
+
 	pg, err := p.runSelect(ctx, q, stmt.Where, key, r)
 	if err != nil {
 		return nil, err
 	}
 
+	// A page with nothing projected holds the items as stored, which go out
+	// as they are.
 	return &api.ExecuteStatementOutput{
-		Items: shapeItems(pg.items, aliases), NextToken: encodeToken(pg.last), LastEvaluatedKey: pg.last,
-		ConsumedCapacity: pg.used,
+		Items: pg.items, ItemsJSON: pg.itemsJSON,
+		NextToken: encodeToken(pg.last), LastEvaluatedKey: pg.last, ConsumedCapacity: pg.used,
 	}, nil
+}
+
+// selectShape is how the read of a SELECT of paths below the top level takes
+// them from each item: it decodes the parts sel names, and puts each path
+// under its alias (shapeItem).
+type selectShape struct {
+	sel   *value.Selection
+	paths []partiql.Path
+}
+
+// selectionOf is the parts of an item a SELECT of paths takes: each path's
+// names, up to its first index, below which the value is taken whole.
+func selectionOf(paths []partiql.Path) *value.Selection {
+	sel := &value.Selection{}
+	names := make([]string, 0, len(paths[0]))
+
+	for _, path := range paths {
+		names = names[:0]
+
+		for _, s := range path {
+			if s.IsIndex {
+				break
+			}
+
+			names = append(names, s.Name)
+		}
+
+		sel.Add(names)
+	}
+
+	return sel
 }
 
 // selectQuery is what a SELECT asks of the Query or Scan it runs as.
@@ -236,11 +275,13 @@ type selectQuery struct {
 	capacity                 *string
 }
 
-// selectPage is one page a SELECT read.
+// selectPage is one page a SELECT read: its items as maps, or, when it
+// projects nothing, as stored.
 type selectPage struct {
-	items []map[string]api.AttributeValue
-	last  value.Item
-	used  *api.ConsumedCapacity
+	items     []map[string]api.AttributeValue
+	itemsJSON []awsjson.Encoded
+	last      value.Item
+	used      *api.ConsumedCapacity
 }
 
 // runSelect runs a SELECT's WHERE over key: a Query when it pins the hash
@@ -273,7 +314,9 @@ func (p *Provider) runSelect(
 			return nil, fmt.Errorf("statement: %w", err)
 		}
 
-		return &selectPage{items: out.Items, last: out.LastEvaluatedKey, used: out.ConsumedCapacity}, nil
+		return &selectPage{
+			items: out.Items, itemsJSON: out.ItemsJSON, last: out.LastEvaluatedKey, used: out.ConsumedCapacity,
+		}, nil
 	}
 
 	start, ok := startFrom(q, plan, key, r)
@@ -291,7 +334,9 @@ func (p *Provider) runSelect(
 		return nil, fmt.Errorf("statement: %w", err)
 	}
 
-	return &selectPage{items: out.Items, last: out.LastEvaluatedKey, used: out.ConsumedCapacity}, nil
+	return &selectPage{
+		items: out.Items, itemsJSON: out.ItemsJSON, last: out.LastEvaluatedKey, used: out.ConsumedCapacity,
+	}, nil
 }
 
 // planQuery finds the key condition of a Query in where: an equality on the
@@ -514,8 +559,8 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 
 	// The image holds a SELECT's paths to no size, and so does the read this
 	// list goes to, which parses it with no size of its own (forStatement).
-	// Nested paths add nothing to it: the read keeps the whole top-level
-	// attribute and shapeItems takes the paths from it.
+	// Nested paths add nothing to it: the read keeps the top-level attribute
+	// and takes the paths from it (selectShape).
 	text := strings.Join(top, ", ")
 
 	if !nested {
@@ -535,17 +580,6 @@ func wholePaths(paths []partiql.Path, r *render) *string {
 	text := strings.Join(texts, ", ")
 
 	return &text
-}
-
-// shapeItems puts each projected path of items under its alias; with no
-// paths, items are as read. It never returns nil, so an empty result is [].
-func shapeItems(items []map[string]api.AttributeValue, paths []partiql.Path) []map[string]api.AttributeValue {
-	out := make([]map[string]api.AttributeValue, len(items))
-	for i, item := range items {
-		out[i] = shapeItem(item, paths)
-	}
-
-	return out
 }
 
 // shapeItem puts each projected path of item under its alias; with no paths,

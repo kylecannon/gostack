@@ -118,15 +118,16 @@ func appendTyped(list []map[string]api.AttributeValue, items []value.Packed, pro
 		list = make([]map[string]api.AttributeValue, 0, len(items))
 	}
 
-	names := distinct(topNames(projection), nil)
+	pj := newProjector(projection)
 
 	var dec value.Decoder
+	defer dec.Release()
 
 	for _, item := range items {
 		if projection == nil {
 			list = append(list, dec.Item(item, nil))
 		} else {
-			list = append(list, projection.Apply(dec.View(item, names)))
+			list = append(list, pj.apply(&dec, item))
 		}
 	}
 

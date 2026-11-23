@@ -49,19 +49,27 @@ func (p *Provider) TransactGetItems(
 	used := tableConsumption{}
 	size := 0
 
+	var dec value.Decoder
+	defer dec.Release()
+
 	for i, g := range gets {
 		// A transactional read costs twice a consistent one, an item or not.
-		used.on(g.name).table += transactUnits * readUnits(value.ItemSize(stored[i]), new(true))
+		used.on(g.name).table += transactUnits * readUnits(stored[i].Size(), new(true))
 
-		item := stored[i]
-		if item == nil {
+		if stored[i] == "" {
 			continue
 		}
 
-		if g.projection != nil {
-			item = g.projection.Apply(item)
+		// An item with nothing to project goes out as it is stored.
+		if g.projection == nil {
+			size += stored[i].Size() + responseItemOverhead
+			out.Responses[i].ItemJSON = stored[i].Encoded()
+
+			continue
 		}
 
+		pj := newProjector(g.projection)
+		item := pj.apply(&dec, stored[i])
 		size += value.ItemSize(item) + responseItemOverhead
 		out.Responses[i].Item = item
 	}
@@ -79,7 +87,7 @@ func (p *Provider) TransactGetItems(
 
 // readTransaction reads every get's item under the read locks of all their
 // tables, taken in table.Lock's global order.
-func readTransaction(gets []txGet) []value.Item {
+func readTransaction(gets []txGet) []value.Packed {
 	engines := make([]*table.Table, len(gets))
 	for i := range gets {
 		engines[i] = gets[i].entry.data
@@ -88,9 +96,9 @@ func readTransaction(gets []txGet) []value.Item {
 	unlock := table.ReadLock(engines...)
 	defer unlock()
 
-	stored := make([]value.Item, len(gets))
+	stored := make([]value.Packed, len(gets))
 	for i := range gets {
-		stored[i] = gets[i].entry.data.GetHeld(gets[i].key)
+		stored[i] = gets[i].entry.data.GetHeldPacked(gets[i].key)
 	}
 
 	return stored
