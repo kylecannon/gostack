@@ -46,8 +46,11 @@ const (
 // HeapSize estimates the heap item takes: its map, its attribute names and
 // each value's own allocations, from the lengths and capacities of the value
 // tree. It never reads a type at run time. Where the layout leaves a range,
-// such as a map's capacity, it takes the top of it, so the estimate is at
-// least what item holds. It is not DynamoDB's size, which ItemSize is.
+// such as a slice's size class, it takes the top of it. A map's capacity it
+// cannot see: it takes what insertion or a hint near the length leaves, so a
+// map made with a larger hint, such as UpdateItem's at the small-map
+// boundary, or one that shrank, can hold a few hundred bytes more than
+// counted. It is not DynamoDB's size, which ItemSize is.
 func HeapSize(item Item) int64 {
 	if item == nil {
 		return 0

@@ -762,10 +762,13 @@ records, and at most 256 MiB of them, oldest trimmed first. The bound counts
 heap, not DynamoDB's size: `stream.Charge` is `value.HeapSize` of a record's
 keys and images, estimated from the value tree's lengths and capacities
 without reflection, plus 256 bytes for its slot in the shard. Where the layout
-leaves a range, such as a map's capacity, the estimate takes the top of it,
-and it charges each image whole, though a record's new image is the table's
-item until a later write replaces it and is then the next record's old image,
-so a shard holds at most the bound and often less. `stream/charge_test.go`
+leaves a range, such as a slice's size class, the estimate takes the top of
+it. A map's capacity is not visible, so the estimate takes what insertion
+leaves; a map made with a larger hint (UpdateItem's at the 8-entry small-map
+boundary) or one that shrank holds a few hundred bytes more than counted. Each
+image is charged whole, though a record's new image is the table's item until
+a later write replaces it and is then the next record's old image, so a shard
+usually holds less than the bound. `stream/charge_test.go`
 measures the charge at 1 to 1.5 times the live heap of records of several
 shapes, and `Test_stream_heapStaysUnderCap` holds a stream under sustained
 writes to its bound in live heap. `SizeBytes`, DynamoDB's size of keys and

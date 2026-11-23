@@ -104,7 +104,9 @@ func Test_charge_coversHeap(t *testing.T) {
 
 			// Each record's images are decoded as it is appended, so the shard
 			// is all that holds them, and what decoding left besides is garbage
-			// the measurement collects.
+			// the measurement collects. One image decoded first fills the
+			// decoder's caches, which would otherwise land in the measurement.
+			_ = shape.image(t, 2*shape.count)
 			before := liveHeap()
 
 			for i := range shape.count {

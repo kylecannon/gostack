@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,6 +81,9 @@ func BenchmarkPutItemStream(b *testing.B) {
 			b.Run(fmt.Sprintf("shape=%s/payload=%s", shape.name, payload.name), func(b *testing.B) {
 				s := newStack(b)
 				s.ok(b, opCreate, fmt.Sprintf(streamTable, "NEW_AND_OLD_IMAGES"))
+				// The shard's retention timer would hold its records past the
+				// cell, and every later cell would run on a larger heap.
+				b.Cleanup(dynamodb.Shard(s.provider, usEast1, "streamed").Stop)
 
 				bodies := [2]string{}
 				for i, variant := range []byte{'x', 'y'} {

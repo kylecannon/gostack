@@ -45,7 +45,9 @@ func Test_stream_heapStaysUnderCap(t *testing.T) {
 
 	s := newStack(t)
 	s.ok(t, "CreateTable", fmt.Sprintf(streamTable, "OLD_IMAGE"))
-	dynamodb.Shard(s.provider, usEast1, "streamed").SetLimits(stream.Retention, bound)
+	shard := dynamodb.Shard(s.provider, usEast1, "streamed")
+	shard.SetLimits(stream.Retention, bound)
+	t.Cleanup(shard.Stop)
 
 	put := func(n int) {
 		attrs := make([]string, attributes)
