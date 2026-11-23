@@ -71,7 +71,9 @@ Commands (standard library only):
            is one service's own path (and that service is not in
            ROUTING_REACH), a Go test file, or is in NO_IMAGE_EFFECT; see
            affected_services. cmd/gostack/settings-<svc>.go is <svc>'s own
-           path too, whether or not <svc> is in ROUTING_REACH. --range names
+           path too, whether or not <svc> is in ROUTING_REACH, and so is
+           internal/service/<svc>/developer-*.go, the service's developer
+           endpoints (Registration.DeveloperMount). --range names
            the change, so a change to cmd/gostack/services.go that only edits
            whole registrations() entries and service imports selects the
            services those lines name instead of every service.
@@ -174,6 +176,14 @@ REGISTRATION_FILE = "cmd/gostack/services.go"
 SETTINGS_DIR = "cmd/gostack/"
 SETTINGS_PREFIX = "settings-"
 SETTINGS_SUFFIX = ".go"
+# A service's developer endpoints (Registration.DeveloperMount) live in files of
+# its package named developer-*.go. The gateway scopes the router they get to
+# the service's own prefix, so they hold no routing hook, and a change to one
+# selects <svc> and its dependents, never every service, even when <svc> is in
+# ROUTING_REACH. Test_parityTables parses these files and fails when one sets a
+# hook (Mount, ClaimHost, Claim, Fallback or Preprocess).
+DEVELOPER_PREFIX = "developer-"
+DEVELOPER_SUFFIX = ".go"
 SERVICE_PACKAGE = "github.com/kylecannon/gostack/internal/service/"
 
 # A change under internal/service/<svc>/ or internal/api/<svc>/ (generated from
@@ -215,6 +225,10 @@ GO_TEST_SUFFIX = "_test.go"
 # A Mount whose every route is under GATEWAY_NAMESPACES is not a hook of this
 # kind, since no AWS call is made to those paths: dynamodb mounts DELETE
 # /_gostack/services/dynamodb/expired and its /_aws name, and is not in the list.
+# A DeveloperMount is not counted at all: the gateway gives it a router scoped to
+# the service's own /_gostack/services/<svc> and /_aws/<svc> prefixes, which no
+# other service's request reaches. sqs's developer endpoint is one, and sqs is in
+# the list for its queue-URL Mount alone.
 ROUTING_REACH = ("s3", "sqs")
 # The path prefixes the gateway keeps for its own endpoints: /_gostack, and the
 # /_localstack and /_aws names it also answers. Test_parityTables reads them
@@ -1210,6 +1224,18 @@ def settings_service(path: str) -> str | None:
     return service if service in TEST_DIRS else None
 
 
+def developer_service(path: str) -> str | None:
+    """The service of internal/service/<svc>/developer-*.go, when <svc> is in
+    TEST_DIRS, or None. A file deeper in the package, or one without the
+    prefix, is the service's own path like any other (own_service)."""
+    if not path.startswith(SERVICE_DIR):
+        return None
+    service, slash, name = path[len(SERVICE_DIR) :].partition("/")
+    if not slash or "/" in name or service not in TEST_DIRS:
+        return None
+    return service if name.startswith(DEVELOPER_PREFIX) and name.endswith(DEVELOPER_SUFFIX) else None
+
+
 def with_dependents(services: set[str], known: set[str], served: set[str]) -> set[str]:
     """services and every service whose tests depend on one of them, following
     DEPENDS_ON to its end. A dependent is added only when it is served: it has
@@ -1255,24 +1281,29 @@ def affected_services(paths: list[str], known: set[str], registration: set[str] 
       directory, but never every service on that account: the file maps
       configuration onto <svc>'s settings and holds none of its routing
       hooks, so ROUTING_REACH does not apply to it;
+    - internal/service/<svc>/developer-*.go: the same, because the file holds
+      the service's developer endpoints, which no other service's request
+      reaches (Registration.DeveloperMount);
     - parity/ledger/<svc>.json or parity/exclusions/<svc>.yaml: <svc>;
     - REGISTRATION_FILE, when registration holds the services its changed
       lines name (registration_services): those, as if their directories had
       changed. None means the change could not be attributed."""
     code: set[str] = set()
-    settings: set[str] = set()
+    contained: set[str] = set()
     files: set[str] = set()
     shared = False
     for path in paths:
         if no_image_effect(path):
             continue
-        service = own_service(path)
-        settings_file = settings_service(path)
+        # A developer file is its service's own path too, but one that holds no
+        # routing hook, so it is looked up first and never joins code.
+        contained_file = settings_service(path) or developer_service(path)
+        service = None if contained_file else own_service(path)
         ledger_file = parity_file_service(path)
         if service is not None:
             code.add(service)
-        elif settings_file is not None:
-            settings.add(settings_file)
+        elif contained_file is not None:
+            contained.add(contained_file)
         elif ledger_file is not None:
             files.add(ledger_file)
         elif path == REGISTRATION_FILE and registration is not None:
@@ -1280,11 +1311,11 @@ def affected_services(paths: list[str], known: set[str], registration: set[str] 
         else:
             shared = True
     served = service_dirs()
-    # A settings file of a service nobody serves yet changes nothing gostack
-    # does, so its dependents are not selected for it either. A service
-    # directory that is gone (its files are in the diff, it is not in the tree)
-    # still selects its dependents: they called it.
-    affected = with_dependents(code | (settings & served), known, served) | files
+    # A settings or developer file of a service nobody serves yet changes
+    # nothing gostack does, so its dependents are not selected for it either. A
+    # service directory that is gone (its files are in the diff, it is not in
+    # the tree) still selects its dependents: they called it.
+    affected = with_dependents(code | (contained & served), known, served) | files
     selected = set(known) | affected if shared or code.intersection(ROUTING_REACH) else affected
     return selected & served
 

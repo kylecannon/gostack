@@ -198,9 +198,15 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 		internal(r)
 	}
 
+	prefixes := developerPrefixes(g.settings())
+
 	for i := range g.regs {
 		if g.regs[i].Mount != nil {
 			g.regs[i].Mount(r)
+		}
+
+		if g.regs[i].DeveloperMount != nil {
+			mountDeveloper(r, &g.regs[i], prefixes)
 		}
 	}
 
@@ -211,6 +217,35 @@ func buildRouter(g *Gateway, internal func(chi.Router)) http.Handler {
 	r.MethodNotAllowed(g.serveAWS)
 
 	return r
+}
+
+// The prefixes of a service's developer endpoints, before its name:
+// /_gostack/services/<name> is always served, and LocalStack's /_aws/<name>
+// unless Settings.DisableCompatPaths is set.
+const (
+	developerCanonicalPrefix = "/_gostack/services/"
+	developerCompatPrefix    = "/_aws/"
+)
+
+// developerPrefixes are the prefixes a service's developer endpoints are
+// mounted under, before its name: the compat one unless DisableCompatPaths is
+// set.
+func developerPrefixes(s Settings) []string {
+	if s.DisableCompatPaths {
+		return []string{developerCanonicalPrefix}
+	}
+
+	return []string{developerCanonicalPrefix, developerCompatPrefix}
+}
+
+// mountDeveloper calls reg.DeveloperMount with a router for each of prefixes
+// plus the service's name. A sub-router answers only the paths under its
+// prefix, so the service's routes, whatever they are, never see another
+// service's requests.
+func mountDeveloper(r chi.Router, reg *service.Registration, prefixes []string) {
+	for _, prefix := range prefixes {
+		r.Route(prefix+reg.Metadata.Name, reg.DeveloperMount)
+	}
 }
 
 // Listen loads the TLS certificate and opens the addresses of Settings.Listen.

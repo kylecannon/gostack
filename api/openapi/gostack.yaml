@@ -7,6 +7,13 @@ info:
     /_localstack stay available as aliases and answer with LocalStack's response
     shapes, described in specs/localstack/openapi.yaml. The paths are unversioned:
     a breaking change adds the new form, migrates callers, then deletes the old one.
+
+
+    A service's developer endpoints live under /_gostack/services/{service}, always,
+    and LocalStack serves the same suffix under /_aws/{service} unless
+    GOSTACK_COMPAT_PATHS=0. The service mounts them through
+    Registration.DeveloperMount, on a router scoped to its own prefix. Each
+    service documents its paths here, in the change that adds them.
   version: latest
 servers:
   - url: http://{host}:{port}

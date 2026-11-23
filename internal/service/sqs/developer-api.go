@@ -31,13 +31,9 @@ import (
 // responses, a dummy receipt handle, and two flags that add the messages a
 // receive would not return.
 const (
-	// developerCanonicalPrefix is where the developer endpoints always live.
-	developerCanonicalPrefix = "/_gostack/services"
-	// developerCompatPrefix is LocalStack's name for them, mounted unless
-	// Settings.DisableCompatPaths is set.
-	developerCompatPrefix = "/_aws"
-
-	developerMessagesPath = "/sqs/messages"
+	// The routes are relative to the prefix the gateway scopes DeveloperMount
+	// to: /_gostack/services/sqs and, unless GOSTACK_COMPAT_PATHS=0, /_aws/sqs.
+	developerMessagesPath = "/messages"
 	developerQueuePath    = developerMessagesPath + "/{region}/{account_id}/{queue_name}"
 
 	// fieldQueueURL and fieldAction are the form and query names of a
@@ -221,21 +217,14 @@ func peekedOf(chosen []*entry) []peeked {
 	return out
 }
 
-// mountDeveloperAPI adds the developer routes: always under /_gostack/services,
-// and under /_aws too unless the settings turn the LocalStack names off. It is
-// called when the router is built, so the setting is read once.
+// mountDeveloperAPI adds the developer routes. It is the DeveloperMount of the
+// registration: the gateway calls it for /_gostack/services/sqs, and for
+// /_aws/sqs unless GOSTACK_COMPAT_PATHS=0.
 func (p *Provider) mountDeveloperAPI(r chi.Router) {
-	prefixes := []string{developerCanonicalPrefix}
-	if !p.settings().DisableCompatPaths {
-		prefixes = append(prefixes, developerCompatPrefix)
-	}
-
-	for _, prefix := range prefixes {
-		r.Get(prefix+developerMessagesPath, p.listMessages)
-		r.Post(prefix+developerMessagesPath, p.listMessages)
-		r.Get(prefix+developerQueuePath, p.listQueueMessages)
-		r.Post(prefix+developerQueuePath, p.listQueueMessages)
-	}
+	r.Get(developerMessagesPath, p.listMessages)
+	r.Post(developerMessagesPath, p.listMessages)
+	r.Get(developerQueuePath, p.listQueueMessages)
+	r.Post(developerQueuePath, p.listQueueMessages)
 }
 
 // devCall is one call of the developer API: the request context it answers in

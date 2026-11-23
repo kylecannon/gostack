@@ -59,20 +59,21 @@ const (
 
 var devPaths = []string{devCompat, devCanonical}
 
-// newDevStack is the SQS provider behind the gateway, with the settings changed
-// by mutate before the routes are mounted.
-func newDevStack(t *testing.T, mutate func(*sqs.Settings)) *stack {
+// newDevStack is the SQS provider behind the gateway, with the gateway's
+// settings changed by mutate before the routes are mounted.
+func newDevStack(t *testing.T, mutate func(*gateway.Settings)) *stack {
 	t.Helper()
 
 	settings := newSettings()
-	if mutate != nil {
-		settings.update(mutate)
-	}
-
 	provider := sqs.New(settings.get, nil)
 
+	gwSettings := gateway.Settings{Listen: []string{testListen}}
+	if mutate != nil {
+		mutate(&gwSettings)
+	}
+
 	gw, err := gateway.New(
-		func() gateway.Settings { return gateway.Settings{Listen: []string{testListen}} },
+		func() gateway.Settings { return gwSettings },
 		[]service.Registration{provider.Registration()},
 		nil,
 		nil,
@@ -91,7 +92,7 @@ type devFixture struct {
 	taken received
 }
 
-func newDevFixture(t *testing.T, mutate func(*sqs.Settings)) devFixture {
+func newDevFixture(t *testing.T, mutate func(*gateway.Settings)) devFixture {
 	t.Helper()
 
 	s := newDevStack(t, mutate)
@@ -708,7 +709,7 @@ func Test_DeveloperAPI_mounting(t *testing.T) {
 	})
 
 	t.Run("compat paths off leaves the canonical ones", func(t *testing.T) {
-		f := newDevFixture(t, func(s *sqs.Settings) { s.DisableCompatPaths = true })
+		f := newDevFixture(t, func(s *gateway.Settings) { s.DisableCompatPaths = true })
 
 		require.Equal(t, []string{devVisible}, bodies(f.list(devCanonical, "")))
 		require.Equal(t, http.StatusOK, f.get(devCanonical+devQueuePath, nil).status)

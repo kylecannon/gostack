@@ -40,9 +40,4 @@ type Settings struct {
 	// ParityAWSAccessKeyID is PARITY_AWS_ACCESS_KEY_ID. It decides which access
 	// keys name an account on the queue-URL paths, as it does in the gateway.
 	ParityAWSAccessKeyID bool
-	// DisableCompatPaths is GOSTACK_COMPAT_PATHS=0: the developer API is then
-	// served under /_gostack/services only, and not under LocalStack's /_aws.
-	// It is read when the routes are mounted. The zero value keeps the /_aws
-	// paths, which is the default of GOSTACK_COMPAT_PATHS.
-	DisableCompatPaths bool
 }
