@@ -71,8 +71,8 @@ func (l *Log) Attach(records []Record) bool {
 	l.low = first
 
 	for i := range l.records {
-		l.records[i].charge = Charge(&l.records[i])
-		l.bytes += l.records[i].charge
+		l.records[i].charge = storedCharge(Charge(&l.records[i]))
+		l.bytes += int64(l.records[i].charge)
 	}
 
 	for l.bytes > l.maxBytes && len(l.records) > 1 {

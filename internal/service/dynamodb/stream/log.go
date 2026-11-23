@@ -62,8 +62,21 @@ type Record struct {
 	// Expired marks a time-to-live removal, made by the service.
 	Expired bool
 	// charge is what the shard counted for the record against its byte
-	// bound, so trimming it takes back the same.
-	charge int64
+	// bound, so trimming it takes back the same. It fills the padding after
+	// Expired, so a Record stays 88 bytes: a snapshot copies every record.
+	// It holds Charge up to math.MaxUint32 (4 GiB less a byte); a record
+	// charged more counts that (storedCharge).
+	charge uint32
+}
+
+// storedCharge is a charge as a record keeps it, at most math.MaxUint32. That
+// is past MaxBytes, so a record charged it still trims every older record and
+// is trimmed by the next append, as its whole charge would be. No record comes
+// near it: the densest item value.MaxItemSize allows, a list of empty
+// strings, is charged about 176 bytes an ItemSize byte, so the largest record,
+// keys and two such images, about 206 MiB (Test_charge_largestRecord).
+func storedCharge(charge int64) uint32 {
+	return uint32(min(charge, math.MaxUint32)) //nolint:gosec // G115: capped; a heap size is not negative.
 }
 
 // Charge is what r counts against a shard's byte bound: the heap its keys and
@@ -173,7 +186,7 @@ func (l *Log) ParseSequenceNumber(s string) (int, error) {
 // closed or has handed out every number. It trims the oldest records while
 // the byte bound is passed and arms the retention timer when none is armed.
 func (l *Log) Append(r Record) {
-	r.charge = Charge(&r)
+	r.charge = storedCharge(Charge(&r))
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -185,7 +198,7 @@ func (l *Log) Append(r Record) {
 	r.Seq = l.next
 	l.next++
 	l.records = append(l.records, r)
-	l.bytes += r.charge
+	l.bytes += int64(r.charge)
 
 	for l.bytes > l.maxBytes && len(l.records) > 1 {
 		l.dropOldest()
@@ -320,7 +333,7 @@ func (l *Log) checkPosition(pos int) (int, error) {
 
 // dropOldest trims the oldest record. The caller holds mu.
 func (l *Log) dropOldest() {
-	l.bytes -= l.records[0].charge
+	l.bytes -= int64(l.records[0].charge)
 	l.records[0] = Record{}
 	l.records = l.records[1:]
 	l.low++
