@@ -106,10 +106,11 @@ type Record struct {
 // storedCharge is a charge as a record keeps it, at most math.MaxUint32. That
 // is past MaxBytes, so a record charged it still trims every older record and
 // is trimmed by the next append, as its whole charge would be
-// (Test_log_saturatedChargeTrims). No record comes near it: the densest item
-// value.MaxItemSize allows, a list of empty strings whose array append has
-// doubled, is charged about 336 bytes an ItemSize byte, so the largest record,
-// keys and two such images, about 394 MiB (Test_charge_largestRecord).
+// (Test_log_saturatedChargeTrims). No record comes near it: an image is a
+// packed item, charged its string's length (value.PackedHeap), and the
+// densest item value.MaxItemSize allows, a list of empty strings, packs to
+// about ten bytes an ItemSize byte, so the largest record, two such images
+// and keys, is about 8 MiB (Test_charge_largestRecord).
 func storedCharge(charge int64) uint32 {
 	return uint32(min(charge, math.MaxUint32)) //nolint:gosec // G115: capped; a heap size is not negative.
 }

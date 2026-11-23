@@ -310,10 +310,15 @@ type reusedMap struct {
 	wild bool
 }
 
-// The largest scratch Release keeps: a map of more attributes, or more Peek
-// strings, is dropped rather than held in the pool.
+// The largest scratch Release keeps: a map of more attributes, a list of names
+// with room for more than twice that, or more Peek strings, is dropped rather
+// than held in the pool. The names' room is what a wide item once took and a
+// map, which never gives its slots back, still holds, though a narrower item
+// since has left it few; it runs past the attributes by what append rounds
+// up (71 for 64).
 const (
 	maxPooledView    = 64
+	maxPooledNames   = 2 * maxPooledView
 	maxPooledStrings = maxDecoderChunk
 )
 
@@ -390,7 +395,7 @@ func (d *Decoder) Release() {
 
 	d.scratch = nil
 
-	if len(s.view.m) > maxPooledView || len(s.peek.m) > maxPooledView || cap(s.strs) > maxPooledStrings {
+	if s.view.oversized() || s.peek.oversized() || cap(s.strs) > maxPooledStrings {
 		return
 	}
 
@@ -401,8 +406,18 @@ func (d *Decoder) Release() {
 	viewScratches.Put(s)
 }
 
+// oversized is whether rm holds more than a pool keeps: a map of more
+// attributes, or room for more names, which an earlier, wider item left behind
+// a narrower one.
+func (rm *reusedMap) oversized() bool {
+	return len(rm.m) > maxPooledView || cap(rm.seen) > maxPooledNames
+}
+
 // release empties what the map holds of the items it was read from, which it
-// would otherwise keep alive, and keeps its slots for the next read.
+// would otherwise keep alive, and keeps its slots for the next read. seen is
+// emptied to its capacity, not its length: the names an earlier, wider item
+// set lie past where the last, narrower one stopped, and are substrings of
+// that item's packed string.
 func (rm *reusedMap) release() {
 	if rm.wild {
 		clear(rm.m)
@@ -413,7 +428,7 @@ func (rm *reusedMap) release() {
 		rm.m[name] = api.AttributeValue{}
 	}
 
-	clear(rm.seen)
+	clear(rm.seen[:cap(rm.seen)])
 }
 
 func (d *Decoder) scratchOf() *viewScratch {
@@ -477,21 +492,53 @@ func (u *unpacker) into(rm *reusedMap, hint int, names []string, below []*Select
 		rm.m = make(Item, hint)
 	}
 
+	// When every attribute is read, the names the item does not hold are
+	// found by emptying each value first, since a value read has a member
+	// set: looking each name up in seen, as a list of names is, takes as many
+	// steps as the square of a wide item's attributes. A map's slots are kept
+	// for the next item, as clearing it would give them up and the next
+	// item take them again.
+	if names == nil {
+		for name := range rm.m {
+			rm.m[name] = api.AttributeValue{}
+		}
+	}
+
 	rm.wild = rm.wild || names == nil
 	u.reuse, u.seen = rm.m, rm.seen[:0]
 
 	m := u.object(0, names, below)
 	rm.seen = u.seen
 
-	if len(m) > len(rm.seen) {
-		for name := range m {
-			if !slices.Contains(rm.seen, name) {
-				delete(m, name)
-			}
-		}
+	switch {
+	case len(m) <= len(rm.seen):
+	case names == nil:
+		dropUnset(m)
+	default:
+		dropUnseen(m, rm.seen)
 	}
 
 	return m
+}
+
+// dropUnset removes from m the names whose value is still empty: those an
+// earlier item set that the last, which read every attribute, did not.
+func dropUnset(m Item) {
+	for name, v := range m {
+		if v.MembersSet() == 0 {
+			delete(m, name)
+		}
+	}
+}
+
+// dropUnseen removes from m the names an earlier item set that the last did
+// not: those not in seen.
+func dropUnseen(m Item, seen []string) {
+	for name := range m {
+		if !slices.Contains(seen, name) {
+			delete(m, name)
+		}
+	}
 }
 
 // Selection names the parts of an item a read keeps: each attribute it names,

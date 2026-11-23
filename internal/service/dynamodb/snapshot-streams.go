@@ -226,13 +226,31 @@ func (p *Provider) RestoreStreams(r io.Reader) error {
 		return fmt.Errorf("read dynamodbstreams snapshot: %w", err)
 	}
 
-	// Every record is converted before any shard takes one, so a record that
-	// cannot be packed leaves every shard without records, as one that fails
-	// the check does.
+	attach, err := p.packRestored(&file)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range attach {
+		f()
+	}
+
+	return nil
+}
+
+// packRestored packs the records of every shard of file that its table still
+// has, and returns what attaches each to its shard. Every record is converted
+// before any shard takes one, so a record that cannot be packed leaves every
+// shard without records, as one that fails the check does. Each shard's
+// decoded records are let go as soon as they are packed, or passed over, so
+// the file's typed images and the packed ones are not all held at once.
+func (p *Provider) packRestored(file *streamsFile) ([]func(), error) {
 	attach := make([]func(), 0, len(file.Shards))
 
 	for i := range file.Shards {
 		saved := &file.Shards[i]
+		decoded := saved.Records
+		saved.Records = nil
 
 		e := p.states.Get(saved.Account, saved.Region).table(saved.Table)
 		if e == nil {
@@ -247,19 +265,15 @@ func (p *Provider) RestoreStreams(r io.Reader) error {
 			continue
 		}
 
-		records, err := savedRecords(saved.Records)
+		records, err := savedRecords(decoded)
 		if err != nil {
-			return fmt.Errorf("read dynamodbstreams snapshot: %w", err)
+			return nil, fmt.Errorf("read dynamodbstreams snapshot: %w", err)
 		}
 
 		attach = append(attach, func() { shard.Attach(records) })
 	}
 
-	for _, f := range attach {
-		f()
-	}
-
-	return nil
+	return attach, nil
 }
 
 // savedRecords is the records of a shard's snapshot as the shard keeps them,
