@@ -758,8 +758,18 @@ returns and the errors it names, and `dynamodb/value` for the `Item` a record
 holds and the `ValidationException` both services answer alike. DynamoDB Streams keeps no
 state of its own: its iterators carry their position, issue time and shard.
 Each shard keeps records for 24 hours, on a timer armed only while it holds
-records, and at most 256 MiB of them, each counted as its `SizeBytes` plus 256
-bytes, oldest trimmed first.
+records, and at most 256 MiB of them, oldest trimmed first. The bound counts
+heap, not DynamoDB's size: `stream.Charge` is `value.HeapSize` of a record's
+keys and images, estimated from the value tree's lengths and capacities
+without reflection, plus 256 bytes for its slot in the shard. Where the layout
+leaves a range, such as a map's capacity, the estimate takes the top of it,
+and it charges each image whole, though a record's new image is the table's
+item until a later write replaces it and is then the next record's old image,
+so a shard holds at most the bound and often less. `stream/charge_test.go`
+measures the charge at 1 to 1.5 times the live heap of records of several
+shapes, and `Test_stream_heapStaysUnderCap` holds a stream under sustained
+writes to its bound in live heap. `SizeBytes`, DynamoDB's size of keys and
+images, is what the wire carries and what a GetRecords page's 1 MB counts.
 
 An `inproc.Call` names the method, path, query, content type, headers and body,
 so it speaks every protocol. Its zero values are a json 1.0 call: `POST /`,
@@ -2067,12 +2077,13 @@ Kinesis. The state is two files, LocalStack's split:
   `Followed(false)` before it frees the pair for another flush: a failed
   table save, a streams save that failed before its snapshot, a flush
   cancelled between the two saves, Stop's flush), or at the next cut, so it lives for one flush
-  and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
-  the item images are shared with the shard. A shard at its bound holds at
-  most `MaxBytes / RecordOverhead`, about 1,048,576 records, so the copy is
-  about 88 MiB per full shard during a flush. The streams snapshot encodes
+  and at most one is held. It is a `[]stream.Record` of 96 bytes a record;
+  the item images are shared with the shard. A record is charged at least
+  `RecordOverhead` and the heap of its keys map, 736 bytes for a one-letter
+  key, so a shard at its bound holds at most about 365,000 records and the
+  copy is about 33 MiB per full shard during a flush. The streams snapshot encodes
   each record from the copy as it writes it, with no second array, so a full
-  shard's save peaks at about that 88 MiB live, and a written shard's copy is
+  shard's save peaks at about that 33 MiB live, and a written shard's copy is
   released before the next shard is written. A cut of slice
   headers would cost nothing but needs retention to stop zeroing a dropped
   record in place, which would keep dropped images until the shard's array
@@ -2306,8 +2317,8 @@ A time to live removal goes through `Table.Expire`, whose record carries the
 **What is held in memory.** Everything. Each item is a
 `map[string]api.AttributeValue`, referenced once from the primary store and
 once from each index that projects it; about 1.3 KB per item of 100 bytes
-(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records
-for 24 hours. `TransactWriteItems` client request tokens are held for their
+(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records,
+in heap as `stream.Charge` estimates it, for 24 hours. `TransactWriteItems` client request tokens are held for their
 10-minute window and swept when a later transaction looks. Time to live
 removes nothing unless asked: the hourly sweep runs only under
 `DYNAMODB_REMOVE_EXPIRED_ITEMS`, on a timer armed while a table has time to

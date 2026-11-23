@@ -163,19 +163,15 @@ func recorder(
 	}
 }
 
-// keyAttributes is the most attributes a key has.
-const keyAttributes = 2
-
-// keysOf is the key attributes of item.
+// keysOf is the key attributes of item, in a map sized to them: the record
+// holds it for as long as the stream keeps the record, and the shard's byte
+// bound charges it by its length.
 func keysOf(item value.Item, key table.KeySchema) value.Item {
-	keys := make(value.Item, keyAttributes)
-	keys[key.Hash.Name] = item[key.Hash.Name]
-
-	if key.Range.Name != "" {
-		keys[key.Range.Name] = item[key.Range.Name]
+	if key.Range.Name == "" {
+		return value.Item{key.Hash.Name: item[key.Hash.Name]}
 	}
 
-	return keys
+	return value.Item{key.Hash.Name: item[key.Hash.Name], key.Range.Name: item[key.Range.Name]}
 }
 
 // AttributeValue is DynamoDB's attribute value, the type of a stream record's

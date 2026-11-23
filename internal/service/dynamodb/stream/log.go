@@ -24,17 +24,16 @@ const (
 // Retention is how long a record is kept: 24 hours, as DynamoDB keeps them.
 const Retention = 24 * time.Hour
 
-// MaxBytes bounds the records one shard keeps, each charged its SizeBytes plus
-// RecordOverhead: once a write would pass it, the oldest records are trimmed
-// first, as retention trims them. A shard therefore holds at most 256 MiB of
-// record images, Record structs and key maps together, however fast the table
+// MaxBytes bounds the records one shard keeps, each charged the heap it pins
+// (Charge): once a write would pass it, the oldest records are trimmed first,
+// as retention trims them. A shard therefore holds at most 256 MiB of heap in
+// record images, key maps and Record slots together, however fast the table
 // is written and however small its records are.
 const MaxBytes = 256 << 20
 
-// RecordOverhead is what a record is charged beyond its SizeBytes: the Record
-// struct, its slot in the shard and its keys map, which SizeBytes does not
-// count. A KEYS_ONLY record's SizeBytes is a few bytes, so without it the
-// bound would let a shard hold tens of millions of records.
+// RecordOverhead is what a record is charged beyond its keys and images: the
+// Record struct and its slot in the shard's array, which append grows to up
+// to twice the records it holds.
 const RecordOverhead = 256
 
 // ErrTrimmed is returned for a position whose record retention or the byte
@@ -49,16 +48,31 @@ var ErrPosition = errors.New("stream: no such sequence number")
 // items, so a record costs no copy of them; a nil image is one the view type
 // leaves out.
 type Record struct {
-	Seq       int
-	Event     string
-	Keys      value.Item
-	New       value.Item
-	Old       value.Item
+	Seq   int
+	Event string
+	Keys  value.Item
+	New   value.Item
+	Old   value.Item
+	// SizeBytes is DynamoDB's size of the record, its keys' and images'
+	// ItemSize, which the wire carries and a read's byte limit counts. The
+	// byte bound charges the heap instead (Charge).
 	SizeBytes int64
 	// At is when the write applied.
 	At time.Time
 	// Expired marks a time-to-live removal, made by the service.
 	Expired bool
+	// charge is what the shard counted for the record against its byte
+	// bound, so trimming it takes back the same.
+	charge int64
+}
+
+// Charge is what r counts against a shard's byte bound: the heap its keys and
+// images take, as value.HeapSize estimates it, and RecordOverhead. It charges
+// each image whole, though an image can be shared: New is the table's item
+// until a later write replaces it, and then the next record's Old. The bound
+// therefore errs toward holding less than it allows.
+func Charge(r *Record) int64 {
+	return value.HeapSize(r.Keys) + value.HeapSize(r.New) + value.HeapSize(r.Old) + RecordOverhead
 }
 
 // Page is what one Read returns.
@@ -159,6 +173,8 @@ func (l *Log) ParseSequenceNumber(s string) (int, error) {
 // closed or has handed out every number. It trims the oldest records while
 // the byte bound is passed and arms the retention timer when none is armed.
 func (l *Log) Append(r Record) {
+	r.charge = Charge(&r)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -169,7 +185,7 @@ func (l *Log) Append(r Record) {
 	r.Seq = l.next
 	l.next++
 	l.records = append(l.records, r)
-	l.bytes += r.SizeBytes + RecordOverhead
+	l.bytes += r.charge
 
 	for l.bytes > l.maxBytes && len(l.records) > 1 {
 		l.dropOldest()
@@ -304,7 +320,7 @@ func (l *Log) checkPosition(pos int) (int, error) {
 
 // dropOldest trims the oldest record. The caller holds mu.
 func (l *Log) dropOldest() {
-	l.bytes -= l.records[0].SizeBytes + RecordOverhead
+	l.bytes -= l.records[0].charge
 	l.records[0] = Record{}
 	l.records = l.records[1:]
 	l.low++
