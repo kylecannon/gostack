@@ -193,7 +193,8 @@ var (
 // (protocol.WaitDense), those bytes still charged, until the request's context
 // ends (protocol.DenseWaiter) or protocol.DefaultDenseWait passes, and then
 // fails with errBusy; one that holds none, which no bound counts while it
-// waits, fails with errBusy at once. It fails with
+// waits, fails with errBusy at once, and also while any body waits, so that it
+// never passes one (protocol.TryDense). It fails with
 // errBusy too, at once and before taking the lane, while any request would still wait for
 // room under the in-flight bound once the body gave back what it holds of it
 // (protocol.BodiesWait): the queue then drains one body at a time, and a
@@ -249,7 +250,7 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	switch {
 	case own == 0:
 		if err == nil {
-			err = try()
+			err = protocol.TryDense(try)
 		}
 	case err == nil || errors.Is(err, protocol.ErrHeapBusy):
 		err = protocol.WaitDense(waitContext(r.hold), try)

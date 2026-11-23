@@ -755,13 +755,36 @@ lane, or reservations it could fit without). The third waits
   throughout, and the heap's room is reckoned without the in-flight bound, so
   waiters add nothing the room does not already leave for: with the defaults at
   most three 16 MiB bodies wait at once. A body whose request holds none of the
-  pool (`GOSTACK_MAX_IN_FLIGHT_BODIES=0`, a request the gateway did not charge)
-  is counted nowhere while it waits, so it does not wait: it is throttled at
-  once, as before the queue.
+  pool is counted nowhere while it waits, so it does not wait
+  (`protocol.TryDense`): it is throttled at once, as before the queue, and also
+  while any body waits, so it never passes one. That is a request one service
+  makes to another through the gateway, and every body under
+  `GOSTACK_MAX_IN_FLIGHT_BODIES=0`. A body of `FreeBody` (64 KiB) or less,
+  which the gateway never meters, does not reach the mark: the smallest that
+  does, 342 lists nested to the depth limit, is 85 KB.
 - **The remaining throttles:** the deadline; a body that would pass requests
   waiting for the in-flight bound (`protocol.BodiesWait`, above), checked in its
   turn and answered at once; the final reservation's busy answer, since the
   lane's holder never waits; and an uncharged request.
+- **Locks:** the queue, the reservations and the weighing share one lock,
+  `protocol`'s `heap.mu`, held only to read or change them: never across a
+  collection, a try, a wait or a decode. The lane is an atomic flag no body
+  waits on, and a wake is a send that never blocks, to the head's channel of
+  one. The one nesting is a lane's give-back, its `sync.Once` around clearing
+  the lane and taking `heap.mu` to wake the head; nothing takes them the other
+  way. The in-flight pool's lock is never held with `heap.mu`: `BodiesWait`
+  and `Charge.Release` take one after the other
+  (`Test_WaitDense_NoLockAcrossACollectionOrAWait`).
+- **Answered once:** a head whose request ends as its turn comes either tries
+  and is served holding the lane, or leaves with its busy answer holding
+  nothing and gives its turn to the body behind it, never both
+  (`Test_WaitDense_AWaiterWokenAsItIsCancelledAnswersOnce`). Releases, cancels
+  and deadlines racing each other leave no body asleep while it could be
+  served, and no goroutine behind
+  (`Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue`). At
+  shutdown a waiter is answered at its deadline within the drain, or when the
+  drain's end closes its connection
+  (`Test_decodeBudget_aWaitingBodyIsAnsweredAtShutdown`).
 - **No idle work:** with no body waiting, a dense body takes the queue's lock
   once to see that it is empty and makes no waiter, channel or timer
   (`Test_WaitDense_NothingWhileNoBodyWaits`). A waiter makes one timer, stopped
@@ -777,8 +800,9 @@ decoded, 109 of 122 throttles for the lane. Tests: `Test_WaitDense_FirstInFirstO
 `Test_WaitDense_ACancelledBodyLeavesTheQueue`,
 `Test_WaitDense_ABodyThatCannotFitIsAnsweredAtOnce`,
 `Test_WaitDense_NoLostWakeups`, `Test_DecodeWithin_AChargedBodyWaitsForTheRoom`,
+`Test_DecodeWithin_AnUnchargedBodyDoesNotPassAWaitingOne`,
 `Test_DecodeWithin_ATooLargeBodyDoesNotWaitItsTurn`; benchmark
-`BenchmarkDenseAdmission`.
+`BenchmarkDenseAdmission` (DynamoDB).
 
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.

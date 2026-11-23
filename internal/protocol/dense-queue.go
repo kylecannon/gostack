@@ -59,26 +59,36 @@ type denseWaiter struct {
 // the heap or collects at a time. Nothing runs while no body waits: the timer
 // is made only for a body that waits, and stopped when it leaves.
 func WaitDense(ctx context.Context, try func() error) error {
+	err := TryDense(try)
+	if !denseBusy(err) {
+		return err
+	}
+
+	return queueDense(ctx, try, err)
+}
+
+// TryDense runs try once for a dense body that does not wait, one whose
+// request holds nothing of the in-flight bound: while any body waits in the
+// dense queue it answers ErrHeapBusy without trying, so the body never takes
+// the room a waiting one is owed, and otherwise it answers try's answer. It
+// is WaitDense's first step, without the queue.
+func TryDense(try func() error) error {
 	heap.mu.Lock()
 	waiting := len(heap.queue) > 0
 	heap.mu.Unlock()
 
-	err := ErrHeapBusy
-
-	if !waiting {
-		err = try()
-		if err != nil {
-			// The try may have held the lane for a moment, while the head
-			// of a queue that formed meanwhile tried and missed for it.
-			wakeDense()
-		}
-
-		if !denseBusy(err) {
-			return err
-		}
+	if waiting {
+		return ErrHeapBusy
 	}
 
-	return queueDense(ctx, try, err)
+	err := try()
+	if err != nil {
+		// The try may have held the lane for a moment, while the head of a
+		// queue that formed meanwhile tried and missed for it.
+		wakeDense()
+	}
+
+	return err
 }
 
 // queueDense is WaitDense for a body that waits its turn: it joins the queue,
@@ -145,6 +155,11 @@ func leaveDense(w *denseWaiter) {
 // wakeDense gives the head its turn: when the lane is given back, and after a
 // refused try by a body outside the queue, which may have held the lane for a
 // moment and made the head miss.
+//
+// heap.mu is the queue's, the reservations' and the weighing's one lock, held
+// only to read or change them and never across a collection, a try, a wait or
+// a decode. A lane's give-back calls wakeDense inside its sync.Once: the one
+// place a lock is taken under another, and nothing takes them the other way.
 func wakeDense() {
 	heap.mu.Lock()
 	wakeHead()

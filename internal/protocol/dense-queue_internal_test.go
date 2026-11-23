@@ -2,8 +2,11 @@ package protocol
 
 import (
 	"context"
+	"math/rand/v2"
+	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,6 +304,201 @@ func Test_WaitDense_NoLostWakeups(t *testing.T) {
 		t.Errorf("a body that fits alone was answered %v", err)
 	}
 
+	requireNothingHeld(t)
+}
+
+// Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue: senders whose
+// bodies fit only one at a time wait while others give back the lane after a
+// random hold, some cancelled at a random moment, with a deadline drawn per run
+// that releases race (1 ms, 3 ms) or that no body reaches (a minute). Every
+// sender is answered once, served holding the lane or refused holding nothing;
+// with the long deadline every sender not cancelled is served, so a waiter left
+// asleep while the lane is free shows as one that never is. After, nothing is
+// queued or held, a new body is served at once, and no goroutine is left. Run
+// it with -race -count.
+func Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue(t *testing.T) {
+	const senders = 16
+
+	seed := uint64(time.Now().UnixNano())
+
+	rng := rand.New(rand.NewPCG(seed, seed>>1))
+	wait := []time.Duration{time.Millisecond, 3 * time.Millisecond, time.Minute}[rng.IntN(3)]
+	t.Logf("seed %d, wait %v", seed, wait)
+	before := runtime.NumGoroutine()
+
+	emptyHeap(t, wait)
+
+	var (
+		wg      sync.WaitGroup
+		answers atomic.Int64
+	)
+
+	for range senders {
+		cancelAfter := time.Duration(rng.IntN(2_000)) * time.Microsecond
+		patient := rng.IntN(2) == 0
+		hold := time.Duration(rng.IntN(200)) * time.Microsecond
+
+		wg.Go(func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			if !patient {
+				stop := time.AfterFunc(cancelAfter, cancel)
+				defer stop.Stop()
+			}
+
+			body := &denseTurn{n: 60}
+			err := WaitDense(ctx, body.try)
+
+			answers.Add(1)
+
+			if err != nil {
+				assert.True(t, denseBusy(err), "refused only for what others hold: %v", err)
+				assert.Nil(t, body.lane, "a refused body holds no lane")
+				assert.False(t, patient && wait == time.Minute, "a patient body is served: %v", err)
+
+				return
+			}
+
+			time.Sleep(hold)
+			body.giveBack()
+		})
+	}
+
+	drained := make(chan struct{})
+
+	go func() {
+		wg.Wait()
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a sender was never answered")
+	}
+
+	assert.Equal(t, int64(senders), answers.Load(), "every sender answered once")
+	requireNothingHeld(t)
+
+	late := &denseTurn{n: 60}
+	require.NoError(t, WaitDense(context.Background(), late.try), "a body after them is served")
+	late.giveBack()
+
+	// Polled here, not with assert.Eventually, which runs its condition in a
+	// goroutine of its own.
+	for deadline := time.Now().Add(10 * time.Second); runtime.NumGoroutine() > before; {
+		if time.Now().After(deadline) {
+			stacks := make([]byte, 1<<20)
+			t.Fatalf("goroutines left: %d, before %d:\n%s", runtime.NumGoroutine(), before,
+				stacks[:runtime.Stack(stacks, true)])
+		}
+
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Test_WaitDense_AWaiterWokenAsItIsCancelledAnswersOnce: the head of the queue
+// is cancelled in the same instant the lane is given back, over and over. It
+// is either served, holding the lane, or refused, holding nothing; never both
+// and never neither, and a turn it leaves unused passes to the body behind it,
+// which is served.
+func Test_WaitDense_AWaiterWokenAsItIsCancelledAnswersOnce(t *testing.T) {
+	emptyHeap(t, time.Minute)
+
+	served, refused := 0, 0
+
+	for range 200 {
+		holder := &denseTurn{n: 60}
+		require.NoError(t, WaitDense(context.Background(), holder.try))
+
+		ctx, cancel := context.WithCancel(context.Background())
+		head := &denseTurn{n: 60}
+		headAnswer := startDense(ctx, head)
+
+		requireQueued(t, 1)
+
+		next := &denseTurn{n: 60}
+		nextAnswer := startDense(context.Background(), next)
+
+		requireQueued(t, 2)
+
+		start := make(chan struct{})
+
+		var wg sync.WaitGroup
+
+		wg.Go(func() { <-start; cancel() })
+		wg.Go(func() { <-start; holder.giveBack() })
+		close(start)
+		wg.Wait()
+
+		err := <-headAnswer
+		if err != nil {
+			require.True(t, denseBusy(err), "refused for what the holder held: %v", err)
+			require.Nil(t, head.lane, "a refused body holds no lane")
+
+			refused++
+		} else {
+			served++
+
+			head.giveBack()
+		}
+
+		require.NoError(t, <-nextAnswer, "the body behind is served")
+		next.giveBack()
+		requireNothingHeld(t)
+	}
+
+	t.Logf("served %d, refused %d", served, refused)
+}
+
+// Test_WaitDense_NoLockAcrossACollectionOrAWait: the heap's lock, the only one
+// the queue, the lane and the reservations take, is free while a body's
+// weighing collects and while a body waits its turn.
+func Test_WaitDense_NoLockAcrossACollectionOrAWait(t *testing.T) {
+	emptyHeap(t, time.Minute)
+
+	// 30 bytes stay live whatever is collected, so a body of 60 beside another
+	// request's 20 misses, could fit were nothing live, and collects; the floor
+	// it finds then fits it, so it is busy for the other's reservation.
+	heap.read = func() (int64, int64) { return 30, 30 }
+
+	// Others, the test among them, take the lock a moment; one held across a
+	// collection or a wait is never free until it ends.
+	lockFree := func() bool {
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			if heap.mu.TryLock() {
+				heap.mu.Unlock()
+
+				return true
+			}
+		}
+
+		return false
+	}
+
+	var collections atomic.Int64
+
+	heap.collect = func() {
+		assert.True(t, lockFree(), "the heap's lock is free during a collection")
+		collections.Add(1)
+	}
+
+	other, err := ReserveHeapBeside(20, 0)
+	require.NoError(t, err)
+
+	big := &denseTurn{n: 60}
+	require.ErrorIs(t, big.try(), ErrHeapBusy)
+	assert.Positive(t, collections.Load(), "the weighing collected")
+
+	answer := startDense(context.Background(), big)
+	requireQueued(t, 1)
+	require.True(t, lockFree(), "the heap's lock is free while a body waits")
+	requireQueued(t, 1)
+
+	other()
+	require.NoError(t, <-answer, "served once the reservation is given back")
+	big.giveBack()
 	requireNothingHeld(t)
 }
 

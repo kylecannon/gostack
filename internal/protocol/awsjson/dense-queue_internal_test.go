@@ -91,6 +91,45 @@ func Test_DecodeWithin_AChargedBodyWaitsForTheRoom(t *testing.T) {
 	requireLaneFree(t)
 }
 
+// Test_DecodeWithin_AnUnchargedBodyDoesNotPassAWaitingOne: a dense body whose
+// request holds none of the in-flight bound, as an internal request's does, is
+// throttled while another body waits in the dense queue though the heap has
+// room for it, and served once none waits: it does not wait, and it never
+// takes the room a waiting body is owed.
+func Test_DecodeWithin_AnUnchargedBodyDoesNotPassAWaitingOne(t *testing.T) {
+	heaptest.Settle(t)
+	withDenseWait(t, time.Minute)
+
+	body := denseBody(300_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+	live, peak := HeapEstimate[denseValue](body)
+	withHeapRoom(t, 4*(int64(len(body))+live+peak))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	head := make(chan error, 1)
+
+	go func() {
+		head <- protocol.WaitDense(ctx, func() error { return protocol.ErrHeapBusy })
+	}()
+
+	uncharged := &recordingHold{}
+	t.Cleanup(uncharged.release)
+
+	assert.Eventually(t, func() bool {
+		_, _, err := DecodeWithin[denseValue](body, budget, uncharged)
+		uncharged.release()
+
+		return assert.ObjectsAreEqual(protocol.ThrottledJSON(), err)
+	}, 10*time.Second, time.Millisecond, "throttled while a body waits ahead of it")
+
+	cancel()
+	require.ErrorIs(t, <-head, protocol.ErrHeapBusy, "the head leaves when its request ends")
+
+	_, _, err := DecodeWithin[denseValue](body, budget, uncharged)
+	assert.Nil(t, err, "served once no body waits")
+	requireLaneFree(t)
+}
+
 // Test_DecodeWithin_ATooLargeBodyDoesNotWaitItsTurn: a dense body that would
 // not fit the heap's room with nothing else reserved or live is refused as too
 // large at once, while another body waits in the dense queue ahead of it.

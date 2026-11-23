@@ -1,10 +1,14 @@
 package dynamodb_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -64,4 +68,84 @@ func Test_decodeBudget_twoDenseSendersInAClosedLoopAreAllServed(t *testing.T) {
 
 	_, held := protocol.InFlight()
 	assert.Zero(t, held, "every request gives back what it held")
+}
+
+// Test_decodeBudget_aWaitingBodyIsAnsweredAtShutdown: a dense PutItem waits in
+// the dense queue for a lane another holds when the server shuts down as the
+// gateway does (http.Server.Shutdown until the drain's deadline, then Close).
+// A drain longer than the wait sees the body answered 400 ThrottlingException
+// at its deadline and drains in time; a drain shorter than the wait ends it by
+// closing the connection, which ends the request's context and so the wait.
+// The handler returns either way, within the drain, and gives back what it
+// held.
+func Test_decodeBudget_aWaitingBodyIsAnsweredAtShutdown(t *testing.T) {
+	roomyMemoryLimit(t)
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() {
+		protocol.SetInFlight(0)
+		protocol.SetDenseWait(protocol.DefaultDenseWait)
+	})
+
+	body := `{"TableName":"missing","Item":` + denseItem("p", numberList(12_000)) + `}`
+
+	for _, tc := range []struct {
+		name        string
+		wait, drain time.Duration
+		answered    bool
+	}{
+		{"the wait ends first", 100 * time.Millisecond, 10 * time.Second, true},
+		{"the drain ends first", time.Minute, 200 * time.Millisecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			protocol.SetDenseWait(tc.wait)
+
+			lane, release, err := protocol.TakeDenseLane(1, 1)
+			require.NoError(t, err)
+
+			defer release()
+			defer lane()
+
+			server := serve(t, newStack(t))
+
+			type reply struct {
+				status int
+				answer string
+			}
+
+			replies := make(chan reply, 1)
+
+			go func() {
+				status, answer := sendTo(t, server, opPut, body)
+				replies <- reply{status, answer}
+			}()
+
+			// The body is charged as it is read, and then waits.
+			require.Eventually(t, func() bool { _, held := protocol.InFlight(); return held > 0 },
+				10*time.Second, time.Millisecond, "the body is read")
+			time.Sleep(50 * time.Millisecond)
+
+			start := time.Now()
+			ctx, cancel := context.WithTimeout(context.Background(), tc.drain)
+
+			defer cancel()
+
+			shutdownErr := server.Config.Shutdown(ctx)
+			if errors.Is(shutdownErr, context.DeadlineExceeded) {
+				shutdownErr = server.Config.Close()
+			}
+
+			require.NoError(t, shutdownErr)
+
+			got := <-replies
+
+			if tc.answered {
+				assert.Equal(t, http.StatusBadRequest, got.status)
+				assert.Contains(t, got.answer, "ThrottlingException", "answered at its wait's end")
+			}
+
+			assert.Less(t, time.Since(start), tc.drain+5*time.Second, "answered within the drain")
+			assert.Eventually(t, func() bool { _, held := protocol.InFlight(); return held == 0 },
+				10*time.Second, time.Millisecond, "the request gives back what it held")
+		})
+	}
 }
