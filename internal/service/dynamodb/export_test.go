@@ -33,7 +33,14 @@ func RemoveExpired(p *Provider) int {
 func Expire(p *Provider, account, region, table, id, attribute, threshold string) bool {
 	e := p.states.Get(account, region).table(table)
 
-	return e.expire(value.Item{"id": {S: &id}}, attribute, &api.AttributeValue{N: &threshold})
+	// The sweep names the key by the item it found; the key alone names it
+	// as well.
+	key, err := value.Pack(value.Item{"id": {S: &id}})
+	if err != nil {
+		panic(err)
+	}
+
+	return e.expire(key, attribute, &api.AttributeValue{N: &threshold})
 }
 
 // Cut takes the snapshot's one consistent copy of every table, the span its

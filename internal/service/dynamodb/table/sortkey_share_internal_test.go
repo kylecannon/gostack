@@ -71,7 +71,7 @@ func Test_Table_Write_sortKeySharesTheItemsBytes(t *testing.T) {
 
 		require.NoError(t, value.ValidateItem(item))
 
-		_, err := tbl.Write(key, func(value.Item) (value.Item, error) { return item, nil })
+		_, err := tbl.Write(key, func(value.Packed) (value.Item, error) { return item, nil })
 		require.NoError(t, err)
 
 		sk := item["sk"]

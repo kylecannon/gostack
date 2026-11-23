@@ -29,7 +29,10 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, err
 	}
 
-	change, err := e.data.Write(in.Key, func(old value.Item) (value.Item, error) {
+	change, err := e.data.Write(in.Key, func(stored value.Packed) (value.Item, error) {
+		// The update writes into the item unpacked here, which is its own.
+		old := value.Unpack(stored)
+
 		failed := plan.guard.check(old)
 		if failed != nil {
 			return nil, failed
@@ -55,10 +58,18 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		paths = plan.update.Paths()
 	}
 
-	used := writeCapacity(e, change.Old, change.New)
+	used := writeCapacity(e, change.OldPacked, change.New)
+
+	// change.New may be the item the update unpacked and wrote into, so the
+	// old item is unpacked again from what was stored, and only for the
+	// ReturnValues that answer it.
+	var old value.Item
+	if plan.mode == expression.ReturnAllOld || plan.mode == expression.ReturnUpdatedOld {
+		old = value.Unpack(change.OldPacked)
+	}
 
 	return &api.UpdateItemOutput{
-		Attributes:       expression.ReturnValues(plan.mode, paths, change.Old, change.New),
+		Attributes:       expression.ReturnValues(plan.mode, paths, old, change.New),
 		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name),
 	}, nil
 }
@@ -164,10 +175,11 @@ func updateExpressions(
 }
 
 // applyUpdate is the item an update makes of old: the expression applied, or
-// with none, old as it is or the key alone when nothing is stored.
+// with none, old as it is or the key alone when nothing is stored. old is the
+// caller's own, just unpacked, and the update writes into it.
 func applyUpdate(update *expression.UpdateExpr, key, old value.Item) (value.Item, error) {
 	if update != nil {
-		updated, err := update.Apply(key, old)
+		updated, err := update.ApplyOwned(key, old)
 		if err != nil {
 			return nil, fmt.Errorf("update: %w", err)
 		}

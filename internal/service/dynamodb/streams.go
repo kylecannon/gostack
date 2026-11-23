@@ -130,6 +130,7 @@ func recorder(
 ) table.Observer {
 	newImage := viewType == viewNewImage || viewType == viewNewAndOld
 	oldImage := viewType == viewOldImage || viewType == viewNewAndOld
+	names := keyNames(key)
 
 	return func(c table.Change) {
 		r := stream.Record{At: clock(), Expired: c.Expired}
@@ -137,10 +138,11 @@ func recorder(
 		source := c.New
 
 		switch {
-		case c.Old == nil:
+		case c.OldPacked == "":
 			r.Event = stream.Insert
 		case c.New == nil:
-			r.Event, source = stream.Remove, c.Old
+			// A removal reads its keys from the item removed, and only them.
+			r.Event, source = stream.Remove, c.OldPacked.Attrs(names)
 		default:
 			r.Event = stream.Modify
 		}

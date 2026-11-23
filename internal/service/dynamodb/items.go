@@ -65,18 +65,18 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, err
 	}
 
-	change, err := e.data.Write(in.Item, func(old value.Item) (value.Item, error) {
-		return in.Item, guard.check(old)
+	change, err := e.data.Write(in.Item, func(old value.Packed) (value.Item, error) {
+		return in.Item, guard.checkPacked(old)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	used := writeCapacity(e, change.Old, change.New)
+	used := writeCapacity(e, change.OldPacked, change.New)
 	out := &api.PutItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
 	if returnOld {
-		out.Attributes = change.Old
+		out.Attributes = value.Unpack(change.OldPacked)
 	}
 
 	return out, nil
@@ -155,19 +155,19 @@ func (p *Provider) DeleteItem(ctx context.Context, in *api.DeleteItemInput) (*ap
 		return nil, err
 	}
 
-	change, err := e.data.Write(in.Key, func(old value.Item) (value.Item, error) {
+	change, err := e.data.Write(in.Key, func(old value.Packed) (value.Item, error) {
 		// nil deletes, as Write takes it.
-		return nil, guard.check(old)
+		return nil, guard.checkPacked(old)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	used := writeCapacity(e, change.Old, nil)
+	used := writeCapacity(e, change.OldPacked, nil)
 	out := &api.DeleteItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
 	if returnOld {
-		out.Attributes = change.Old
+		out.Attributes = value.Unpack(change.OldPacked)
 	}
 
 	return out, nil
@@ -183,6 +183,16 @@ type writeGuard struct {
 // check evaluates the condition on old, the item stored.
 func (g *writeGuard) check(old value.Item) error {
 	return checkCondition(g.cond, old, g.returnOld)
+}
+
+// checkPacked is check on the item stored as the table stores it, which is
+// unpacked only when there is a condition to read it.
+func (g *writeGuard) checkPacked(old value.Packed) error {
+	if g.cond == nil {
+		return nil
+	}
+
+	return g.check(value.Unpack(old))
 }
 
 // putGuard checks the condition parameters of a PutItem, in the order DynamoDB
@@ -399,7 +409,12 @@ func readUnits(size int, consistentRead *bool) float64 {
 // writeUnits is what a write costs: a unit per 1 KB begun of the larger of the
 // old and the new item, at least one.
 func writeUnits(old, updated value.Item) float64 {
-	return float64(unitsOf(max(value.ItemSize(old), value.ItemSize(updated)), writeUnitBytes))
+	return sizeUnits(max(value.ItemSize(old), value.ItemSize(updated)))
+}
+
+// sizeUnits is what a write of an item of size bytes costs.
+func sizeUnits(size int) float64 {
+	return float64(unitsOf(size, writeUnitBytes))
 }
 
 func unitsOf(size, unit int) int {

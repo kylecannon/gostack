@@ -313,16 +313,25 @@ func capacities(m map[string]float64) map[string]api.Capacity {
 // Local counts it: the table's units on the larger image, and on each index
 // whose entry the write changed, the larger projected image when the item
 // keeps its index key, both when it moves, and the one there is when it
-// enters or leaves the index.
-func writeCapacity(e *tableEntry, old, updated value.Item) consumption {
+// enters or leaves the index. old is the item as the table stored it, "" for
+// none.
+func writeCapacity(e *tableEntry, old value.Packed, updated value.Item) consumption {
 	return indexedWriteCapacity(e.data.Key(), e.indexSpecs(), old, updated)
 }
 
 // indexedWriteCapacity is writeCapacity on a table with key schema key and
 // the indexes specs, for a caller that holds the table's lock and so cannot
-// take the entry's.
-func indexedWriteCapacity(key table.KeySchema, specs []table.IndexSpec, old, updated value.Item) consumption {
-	c := consumption{table: writeUnits(old, updated)}
+// take the entry's. The table's units read only the old item's size; the
+// old item is unpacked only for a table with indexes, whose units read its
+// attributes.
+func indexedWriteCapacity(key table.KeySchema, specs []table.IndexSpec, packed value.Packed, updated value.Item,
+) consumption {
+	c := consumption{table: sizeUnits(max(packed.Size(), value.ItemSize(updated)))}
+	if len(specs) == 0 {
+		return c
+	}
+
+	old := value.Unpack(packed)
 
 	for _, spec := range specs {
 		oldIn, newIn := inIndex(&spec, old), inIndex(&spec, updated)

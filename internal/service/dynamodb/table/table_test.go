@@ -55,7 +55,7 @@ func put(t *testing.T, tbl *table.Table, item value.Item) table.Change {
 
 	require.NoError(t, value.ValidateItem(item))
 
-	change, err := tbl.Write(item, func(value.Item) (value.Item, error) { return item, nil })
+	change, err := tbl.Write(item, func(value.Packed) (value.Item, error) { return item, nil })
 	require.NoError(t, err)
 
 	return change
@@ -64,7 +64,7 @@ func put(t *testing.T, tbl *table.Table, item value.Item) table.Change {
 func remove(t *testing.T, tbl *table.Table, key value.Item) table.Change {
 	t.Helper()
 
-	change, err := tbl.Write(key, func(value.Item) (value.Item, error) {
+	change, err := tbl.Write(key, func(value.Packed) (value.Item, error) {
 		return nil, nil //nolint:nilnil // a nil item is the engine's delete
 	})
 	require.NoError(t, err)
@@ -104,13 +104,13 @@ func Test_Table_indexesFollowOverwriteAndDelete(t *testing.T) {
 
 	// Overwrite a/1 with another g and no l: it leaves both old index entries.
 	change := put(t, tbl, value.Item{"pk": s("a"), "sk": n("1.0"), "g": s("y")})
-	assert.Equal(t, "x", *change.Old["g"].S)
+	assert.Equal(t, "x", *value.Unpack(change.OldPacked)["g"].S)
 	assert.Equal(t, []string{keyA2}, keysOf(t, tbl, "byG", s("x"), table.SortCondition{}, nil, true))
 	assert.Equal(t, []string{keyA1}, keysOf(t, tbl, "byG", s("y"), table.SortCondition{}, nil, true))
 	assert.Empty(t, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
 
 	change = remove(t, tbl, value.Item{"pk": s("a"), "sk": n("2")})
-	assert.NotNil(t, change.Old)
+	assert.NotEmpty(t, change.OldPacked)
 	assert.Nil(t, change.New)
 	assert.Empty(t, keysOf(t, tbl, "byG", s("x"), table.SortCondition{}, nil, true))
 
@@ -284,24 +284,27 @@ func Test_Table_Write_decideError(t *testing.T) {
 	put(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
 
 	refused := errors.New("refused")
-	change, err := tbl.Write(value.Item{"pk": s("a"), "sk": n("1")}, func(value.Item) (value.Item, error) {
+	change, err := tbl.Write(value.Item{"pk": s("a"), "sk": n("1")}, func(value.Packed) (value.Item, error) {
 		return nil, refused
 	})
 
 	require.ErrorIs(t, err, refused)
-	assert.NotNil(t, change.Old)
+	assert.NotEmpty(t, change.OldPacked)
 	assert.NotNil(t, tbl.Get(value.Item{"pk": s("a"), "sk": n("1")}), "a refused write stores nothing")
 }
 
 func Test_Change_Changed(t *testing.T) {
-	item := value.Item{"pk": s("a")}
-	same := value.Item{"pk": s("a")}
-	other := value.Item{"pk": s("a"), "x": n("1")}
+	item := value.Item{"pk": s("a"), "m": {M: value.Item{"x": n("1"), "y": s("b")}}}
+	same := value.Item{"pk": s("a"), "m": {M: value.Item{"y": s("b"), "x": n("1")}}}
+	other := value.Item{"pk": s("a"), "m": {M: value.Item{"x": n("2"), "y": s("b")}}}
 
-	assert.False(t, table.Change{Old: item, New: same}.Changed())
-	assert.True(t, table.Change{Old: item, New: other}.Changed())
+	packed, err := value.Pack(item)
+	require.NoError(t, err)
+
+	assert.False(t, table.Change{OldPacked: packed, New: same}.Changed())
+	assert.True(t, table.Change{OldPacked: packed, New: other}.Changed())
 	assert.True(t, table.Change{New: item}.Changed())
-	assert.True(t, table.Change{Old: item}.Changed())
+	assert.True(t, table.Change{OldPacked: packed}.Changed())
 	assert.False(t, table.Change{}.Changed())
 }
 
@@ -418,7 +421,7 @@ func Test_Lock_overlappingTables(t *testing.T) {
 
 			for _, tbl := range []*table.Table{a, b} {
 				item := value.Item{"pk": s("k"), "sk": n(strconv.Itoa(i))}
-				_, err := tbl.WriteHeld(item, func(value.Item) (value.Item, error) { return item, nil })
+				_, err := tbl.WriteHeld(item, func(value.Packed) (value.Item, error) { return item, nil })
 				assert.NoError(t, err)
 			}
 		})

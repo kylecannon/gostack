@@ -33,19 +33,56 @@ type updateFinal func(parent *api.AttributeValue, el PathElement) error
 // takes elements out last. A missing parent is never created. The new item
 // shares the values the update leaves alone with old; old is not changed.
 func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
-	for _, path := range u.paths {
-		if _, ok := key[path[0].Name]; ok {
-			return nil, value.Invalid(msgUpdateKey + path[0].Name + msgUpdateKeyTail)
-		}
-	}
-
-	results, err := u.evaluate(old)
+	err := u.checkKey(key)
 	if err != nil {
 		return nil, err
 	}
 
 	item := make(value.Item, len(old)+len(key))
 	maps.Copy(item, old)
+
+	return u.applyTo(key, item)
+}
+
+// ApplyOwned is Apply for a caller that owns old and drops it, such as a
+// write that has just unpacked the item stored: the update writes into old,
+// the top-level map, in place of a copy of it, and returns it, or a new item
+// when old is nil. On an error old may be part written, and must not be read.
+// A map or list below an attribute is still copied before an action changes
+// it: a value the update read, SET a = b, can share it.
+func (u *UpdateExpr) ApplyOwned(key, old value.Item) (value.Item, error) {
+	err := u.checkKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if old == nil {
+		old = make(value.Item, len(key))
+	}
+
+	return u.applyTo(key, old)
+}
+
+// checkKey refuses an update of an attribute of key.
+func (u *UpdateExpr) checkKey(key value.Item) error {
+	for _, path := range u.paths {
+		if _, ok := key[path[0].Name]; ok {
+			return value.Invalid(msgUpdateKey + path[0].Name + msgUpdateKeyTail)
+		}
+	}
+
+	return nil
+}
+
+// apply is Apply's body: it evaluates the update against item and then writes
+// it into item, which holds the old item's attributes and is the caller's.
+func (u *UpdateExpr) applyTo(key, item value.Item) (value.Item, error) {
+	// Every right-hand side is computed before the first write.
+	results, err := u.evaluate(item)
+	if err != nil {
+		return nil, err
+	}
+
 	maps.Copy(item, key)
 
 	root := api.AttributeValue{M: item}

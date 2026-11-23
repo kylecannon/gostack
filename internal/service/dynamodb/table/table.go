@@ -42,6 +42,11 @@ type Table struct {
 	// stay guarded by mu.
 	indexes atomic.Pointer[[]*index]
 
+	// names lists, each once, the key attributes of the table and then of
+	// each index: what a write reads of the item it stores or removes. It is
+	// set with each index list, under mu.
+	names []string
+
 	// observer is told of every write that changes what is stored, under mu,
 	// so it sees the writes in the order they applied. Nil when no one
 	// listens, which costs a write nothing.
@@ -70,13 +75,15 @@ type index struct {
 }
 
 // Change is what a write did: the item stored before and the item stored
-// after, either nil when there was none. OldPacked and NewPacked are the same
-// two items as the table stores them, "" when there was none. An observer that
-// keeps an item keeps these: they are immutable strings that hold no other
-// item's bytes, where Old and New can share the bytes of the item they were
-// decoded from or built over, and so pin it.
+// after, as the table stores them, "" when there was none, and the item
+// stored after as the write gave it, nil when there is none. The old item has
+// no typed form here: a write decodes it only when it reads it, and an update
+// writes into the item it decoded, so the item it gives as New may be that
+// one. A reader of the old item unpacks OldPacked. An observer that keeps an
+// item keeps the packed ones: they are immutable strings that hold no other
+// item's bytes, where New can share the bytes of the item it was built over,
+// and so pin it.
 type Change struct {
-	Old       value.Item
 	New       value.Item
 	OldPacked value.Packed
 	NewPacked value.Packed
@@ -86,13 +93,14 @@ type Change struct {
 }
 
 // Changed reports whether the write changed what is stored: an item appeared,
-// disappeared, or was replaced by one that is not Equal.
+// disappeared, or was replaced by one that is not Equal. The old item is
+// compared in place, and not unpacked.
 func (c Change) Changed() bool {
-	if (c.Old == nil) != (c.New == nil) {
+	if (c.OldPacked == "") != (c.New == nil) {
 		return true
 	}
 
-	return c.Old != nil && !value.EqualItems(c.Old, c.New)
+	return c.OldPacked != "" && c.OldPacked != c.NewPacked && !value.EqualPacked(c.OldPacked, c.New)
 }
 
 // New returns an empty table with key schema key and the given indexes.
@@ -104,7 +112,7 @@ func New(key KeySchema, indexes []IndexSpec) *Table {
 		list = append(list, &index{spec: spec, data: newStore()})
 	}
 
-	t.indexes.Store(&list)
+	t.publish(list)
 
 	return t
 }
@@ -179,13 +187,18 @@ func (t *Table) GetHeldPacked(key value.Item) value.Packed {
 	return t.primary.get(hash, rng, "")
 }
 
-// Write is the one write path. It calls decide with the item stored at key,
-// nil when there is none, and stores what decide returns: a new item, which
-// must have the same key, or nil to delete. An error from decide stores
-// nothing and is returned with the old image. The new item is checked with
-// CheckItem first. decide runs under the table's write lock and must not call
-// back into the table. key must have passed CheckKey or CheckItem.
-func (t *Table) Write(key value.Item, decide func(old value.Item) (value.Item, error)) (Change, error) {
+// Decide is what a write stores, given the item stored at its key as the
+// table stores it, "" when there is none: a new item, which must have the
+// same key, or nil to delete. It runs under the table's write lock and must
+// not call back into the table. It unpacks old only when it reads it, and the
+// item it unpacks is its own: it may return it, written over.
+type Decide func(old value.Packed) (value.Item, error)
+
+// Write is the one write path. It calls decide with the item stored at key and
+// stores what it returns. An error from decide stores nothing and is returned
+// with the old image. The new item is checked with CheckItem first. key must
+// have passed CheckKey or CheckItem.
+func (t *Table) Write(key value.Item, decide Decide) (Change, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -194,17 +207,39 @@ func (t *Table) Write(key value.Item, decide func(old value.Item) (value.Item, e
 
 // WriteHeld is Write for a caller that holds the table's lock through Lock, as
 // a write across several tables does.
-func (t *Table) WriteHeld(key value.Item, decide func(old value.Item) (value.Item, error)) (Change, error) {
-	return t.apply(key, decide, false)
+func (t *Table) WriteHeld(key value.Item, decide Decide) (Change, error) {
+	hash, rng := t.primaryKey(key)
+
+	return t.apply(hash, rng, decide, false)
 }
 
-// Expire is Write for the service's own removal of an expired item: decide
-// returns nil to remove it, and the observer sees a Change marked Expired.
-func (t *Table) Expire(key value.Item, decide func(old value.Item) (value.Item, error)) (Change, error) {
+// errKept is how Expire's write keeps the item it finds.
+var errKept = errors.New("the item is kept")
+
+// Expire is the service's own removal of an expired item: item is the item as
+// a read of the table found it, which names the key, and expired is asked,
+// under the write lock, of the item stored at that key now. The item is
+// removed when there is one and expired reports true, and the observer sees a
+// Change marked Expired. Expire reports whether it removed one. The key is
+// read from item in place, so the removal decodes nothing.
+func (t *Table) Expire(item value.Packed, expired func(stored value.Packed) bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	return t.apply(key, decide, true)
+	var dec value.Decoder
+
+	hash, rng := t.primaryKey(dec.Peek(item, t.tableNames()))
+	dec.Release()
+
+	_, err := t.apply(hash, rng, func(stored value.Packed) (value.Item, error) {
+		if stored == "" || !expired(stored) {
+			return nil, errKept
+		}
+
+		return nil, nil //nolint:nilnil // nil deletes, as Write takes it
+	}, true)
+
+	return err == nil
 }
 
 // Lock takes the write locks of tables, each once, in one global order, so
@@ -282,7 +317,7 @@ func (t *Table) AddIndex(spec IndexSpec) {
 	}
 
 	list := slices.Concat(t.indexList(), []*index{idx})
-	t.indexes.Store(&list)
+	t.publish(list)
 }
 
 // DropIndex removes the named secondary index, and reports whether there was
@@ -296,7 +331,7 @@ func (t *Table) DropIndex(name string) bool {
 	// DeleteFunc works in place, so it runs on a copy: CheckItem may be
 	// reading the published slice.
 	list := slices.DeleteFunc(slices.Clone(old), func(idx *index) bool { return idx.spec.Name == name })
-	t.indexes.Store(&list)
+	t.publish(list)
 
 	return len(list) < len(old)
 }
@@ -445,15 +480,31 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(hash string,
 	return nil
 }
 
-// apply is Write's body: the caller holds mu for writing.
-func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, error), expired bool) (Change, error) {
-	hash, rng := t.primaryKey(key)
-	stored := t.primary.get(hash, rng, "")
-	old := value.Unpack(stored)
+// publish makes list the table's indexes, and names their key attributes and
+// the table's. The caller holds mu for writing, or is New.
+func (t *Table) publish(list []*index) {
+	t.names = keyNames(t.key, specsOf(list))
+	t.indexes.Store(&list)
+}
 
-	updated, err := decide(old)
+// tableNames is the key attributes of the table alone, which names lists
+// first.
+func (t *Table) tableNames() []string {
+	if t.key.HasRange() {
+		return t.names[:2]
+	}
+
+	return t.names[:1]
+}
+
+// apply is Write's body for the item at the encoded key hash and rng: the
+// caller holds mu for writing.
+func (t *Table) apply(hash, rng string, decide Decide, expired bool) (Change, error) {
+	stored := t.primary.get(hash, rng, "")
+
+	updated, err := decide(stored)
 	if err != nil {
-		return Change{Old: old}, err
+		return Change{OldPacked: stored}, err
 	}
 
 	// The item is packed once, here, and its entries take their keys from the
@@ -464,29 +515,35 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 	if updated != nil {
 		err := t.CheckItem(updated)
 		if err != nil {
-			return Change{Old: old}, err
+			return Change{OldPacked: stored}, err
 		}
 
 		h, s := t.primaryKey(updated)
 		if h != hash || (s != "" && s != rng) {
-			return Change{Old: old}, errKeyChanged
+			return Change{OldPacked: stored}, errKeyChanged
 		}
 
 		packed, err = value.Pack(updated)
 		if err != nil {
-			return Change{Old: old}, err //nolint:wrapcheck // the encoder's own error
+			return Change{OldPacked: stored}, err //nolint:wrapcheck // the encoder's own error
 		}
 	}
 
-	if old != nil {
-		t.unstore(hash, rng, old, stored.Size())
+	// The keys of the old and new items are read through one decoder, in
+	// place: the old item is never unpacked here.
+	var dec value.Decoder
+
+	if stored != "" {
+		t.unstore(hash, rng, stored, &dec)
 	}
 
 	if packed != "" {
-		t.store(hash, packed)
+		t.store(hash, packed, &dec)
 	}
 
-	change := Change{Old: old, New: updated, OldPacked: stored, NewPacked: packed, Expired: expired}
+	dec.Release()
+
+	change := Change{New: updated, OldPacked: stored, NewPacked: packed, Expired: expired}
 	if t.observer != nil && change.Changed() {
 		t.observer(change)
 	}
@@ -650,11 +707,16 @@ func (t *Table) tie(item value.Item) string {
 }
 
 // store puts item, packed, in the table's partition hash and in each index it
-// is in. Its keys are read from item, so they share its bytes.
-func (t *Table) store(hash string, item value.Packed) {
+// is in. Its keys are read from item through dec, in place, so they share its
+// bytes; a table keyed by its hash alone, with no index, reads none.
+func (t *Table) store(hash string, item value.Packed, dec *value.Decoder) {
 	size := item.Size()
 	indexes := t.indexList()
-	keys := item.Attrs(keyNames(t.key, specsOf(indexes)))
+
+	var keys value.Item
+	if t.key.HasRange() || len(indexes) > 0 {
+		keys = dec.Peek(item, t.names)
+	}
 
 	t.primary.put(hash, entry{sort: sortKey(t.key, keys), item: item})
 	t.count++
@@ -670,15 +732,24 @@ func (t *Table) store(hash string, item value.Packed) {
 }
 
 // unstore removes the entries of item, stored in partition hash at range
-// value rng, whose size is size.
-func (t *Table) unstore(hash, rng string, item value.Item, size int) {
+// value rng. Its index keys are read from item through dec, in place.
+func (t *Table) unstore(hash, rng string, item value.Packed, dec *value.Decoder) {
+	size := item.Size()
+
 	t.primary.remove(hash, rng, "")
 	t.count--
 	t.size -= size
 
-	for _, idx := range t.indexList() {
-		if ihash, isort, ok := indexKey(&idx.spec, item); ok {
-			idx.data.remove(ihash, isort, t.tie(item))
+	indexes := t.indexList()
+	if len(indexes) == 0 {
+		return
+	}
+
+	keys := dec.Peek(item, t.names)
+
+	for _, idx := range indexes {
+		if ihash, isort, ok := indexKey(&idx.spec, keys); ok {
+			idx.data.remove(ihash, isort, t.tie(keys))
 			idx.count--
 			idx.size -= size
 		}

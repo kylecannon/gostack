@@ -142,8 +142,12 @@ type txAction struct {
 
 // txResult is what one action does once every condition holds.
 type txResult struct {
-	old, new value.Item
-	write    bool
+	// old is the item stored as the table stores it, "" for none: an update
+	// writes into the item it unpacked, so the item undo puts back, and the
+	// capacity counted, are read from here.
+	old   value.Packed
+	new   value.Item
+	write bool
 }
 
 // TransactWriteItems applies up to 100 puts, updates, deletes and condition
@@ -259,7 +263,7 @@ func applyTransaction(actions []*txAction) ([]txResult, error) {
 			continue
 		}
 
-		_, err := a.entry.data.WriteHeld(a.key, func(value.Item) (value.Item, error) { return results[i].new, nil })
+		_, err := a.entry.data.WriteHeld(a.key, func(value.Packed) (value.Item, error) { return results[i].new, nil })
 		if err != nil {
 			undo(actions[:i], results)
 
@@ -276,8 +280,8 @@ func applyTransaction(actions []*txAction) ([]txResult, error) {
 func undo(actions []*txAction, results []txResult) {
 	for i, a := range slices.Backward(actions) {
 		if results[i].write {
-			_, _ = a.entry.data.WriteHeld(a.key, func(value.Item) (value.Item, error) {
-				return results[i].old, nil
+			_, _ = a.entry.data.WriteHeld(a.key, func(value.Packed) (value.Item, error) {
+				return value.Unpack(results[i].old), nil
 			})
 		}
 	}
@@ -291,8 +295,15 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 		return cancellation(reasonValidation, a.keyMismatch, nil), txResult{}, nil
 	}
 
-	old := a.entry.data.GetHeld(a.key)
-	result := txResult{old: old}
+	stored := a.entry.data.GetHeldPacked(a.key)
+	result := txResult{old: stored}
+
+	// The item stored is unpacked once, for the condition and the update that
+	// read it, and the update writes into it.
+	var old value.Item
+	if a.condition != nil || a.op == opUpdate {
+		old = value.Unpack(stored)
+	}
 
 	if a.condition != nil {
 		ok, err := a.condition.Eval(old)
@@ -393,8 +404,8 @@ func transactCapacity(actions []*txAction, results []txResult) tableConsumption 
 
 		switch {
 		case a.op == opConditionCheck:
-			used.on(a.name).table += transactUnits * readUnits(value.ItemSize(r.old), new(true))
-		case a.op == opDelete && r.old == nil:
+			used.on(a.name).table += transactUnits * readUnits(r.old.Size(), new(true))
+		case a.op == opDelete && r.old == "":
 			used.on(a.name).table++
 		default:
 			c := indexedWriteCapacity(a.entry.data.Key(), a.entry.data.IndexesHeld(), r.old, r.new)

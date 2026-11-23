@@ -1,6 +1,7 @@
 package value
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json/jsontext"
@@ -65,8 +66,10 @@ func Pack(item Item) (Packed, error) {
 		return "", err
 	}
 
+	// The wrapping is checked on the bytes, and the item is copied once, into
+	// the Packed: a string(body) here would copy it again.
 	body := buf[head:]
-	if !strings.HasPrefix(string(body), itemPrefix) || !strings.HasSuffix(string(body), itemSuffix) {
+	if !bytes.HasPrefix(body, []byte(itemPrefix)) || !bytes.HasSuffix(body, []byte(itemSuffix)) {
 		return "", errPackShape
 	}
 
@@ -75,17 +78,20 @@ func Pack(item Item) (Packed, error) {
 	return Packed(buf), nil
 }
 
-// countScalars counts the S and N values of item, at any depth.
+// countScalars counts the S and N values of item, at any depth. Each value is
+// taken as the copy the range makes: a pointer to that copy would move it to
+// the heap, one allocation for each member of each map.
 func countScalars(item Item) int {
 	n := 0
 	for _, v := range item {
-		n += scalarsOf(&v)
+		n += scalarsOf(v)
 	}
 
 	return n
 }
 
-func scalarsOf(v *api.AttributeValue) int {
+// scalarsOf takes v by value, so that countScalars's copy stays on the stack.
+func scalarsOf(v api.AttributeValue) int {
 	switch {
 	case v.S != nil, v.N != nil:
 		return 1
@@ -94,7 +100,7 @@ func scalarsOf(v *api.AttributeValue) int {
 	case v.L != nil:
 		n := 0
 		for i := range v.L {
-			n += scalarsOf(&v.L[i])
+			n += scalarsOf(v.L[i])
 		}
 
 		return n
