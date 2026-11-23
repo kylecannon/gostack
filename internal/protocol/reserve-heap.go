@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"errors"
 	"math"
 	"runtime"
@@ -47,8 +48,22 @@ var heap = struct {
 	// collection began says that what it found live is not overstated by a
 	// value whose reservation was given back after it was marked (heapFloor).
 	releases uint64
-	read     func() (objects, live int64) // readHeap; a test replaces it
-	collect  func()                       // runtime.GC; a test replaces it
+	// queue is the dense bodies waiting for the lane and the heap's room, in
+	// the order they arrived (WaitDense).
+	queue []*DenseSeat
+	// queued is what reserved holds in the queue's account: the bytes of
+	// bodies that joined the queue and neither hold the lane nor gave them
+	// back (DenseSeat).
+	queued int64
+	// shedding reports that the lane's holder sheds the queue, until its
+	// weighHeap returns; drained is closed once queued is zero (shedDense).
+	shedding bool
+	drained  chan struct{}
+	// moved, when not nil, runs with mu held each time a seat's account
+	// changes: a test's check that each seat's bytes are in one account.
+	moved   func(*DenseSeat)
+	read    func() (objects, live int64) // readHeap; a test replaces it
+	collect func()                       // runtime.GC; a test replaces it
 }{
 	read:    readHeap,
 	collect: runtime.GC,
@@ -66,7 +81,8 @@ const (
 // ReserveHeapBeside reserves estimate bytes of heap for a decoding that keeps
 // at most that much at its peak, for a request that holds own bytes of what is
 // reserved already (the rest is other requests'), and returns the release that
-// gives them back. It reserves when the heap's objects now, what is reserved
+// gives them back and gives the dense queue's head its turn (WaitDense). It
+// reserves when the heap's objects now, what is reserved
 // already and estimate fit the room heapRoom weighs them against: the Go
 // memory limit (debug.SetMemoryLimit, which cmd/gostack sets from a
 // container's or a machine's memory), no more than the memory cap, less the
@@ -78,9 +94,18 @@ const (
 // When estimate does not fit it reserves nothing and fails as heapVerdict
 // answers: ErrNoHeapRoom, which a decoder answers as too large, only when the
 // body provably misses with nothing other requests hold, and ErrHeapBusy, a
-// throttle, otherwise.
+// throttle, otherwise. The bodies waiting in the dense queue are other
+// requests: their bytes are reserved (WaitDense). Its caller holds the dense
+// lane, so when the queued bodies' bytes are what it misses for, it sheds the
+// queue and waits for their room (weighHeap), at most DefaultDenseWait.
 func ReserveHeapBeside(estimate, own int64) (release func(), err error) {
-	err = weighHeap(estimate, own, reserveObjects)
+	return ReserveHeapBesideContext(context.Background(), estimate, own)
+}
+
+// ReserveHeapBesideContext is ReserveHeapBeside for a request whose wait for
+// the bodies it sheds ends with ctx (WithDenseWait).
+func ReserveHeapBesideContext(ctx context.Context, estimate, own int64) (release func(), err error) {
+	err = weighHeap(ctx, estimate, own, reserveObjects)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +114,7 @@ func ReserveHeapBeside(estimate, own int64) (release func(), err error) {
 		heap.mu.Lock()
 		heap.reserved -= estimate
 		heap.releases++
+		wakeHead()
 		heap.mu.Unlock()
 	}, nil
 }
@@ -148,6 +174,8 @@ func heapVerdict(w heapWeigh) error {
 type heapAttempt struct {
 	n, own, room int64
 	use          heapUse
+	// counted is what the last weigh counted of the heap.
+	counted int64
 	// weighed reports a first weigh, at which releases was read.
 	weighed  bool
 	releases uint64
@@ -167,17 +195,79 @@ type heapAttempt struct {
 // bytes of it the caller's, and the heap, as use says. When the heap stands in
 // the way it runs one collection and weighs again, unless what is reserved and
 // n pass the room with nothing live. It fails as heapVerdict answers.
-func weighHeap(n, own int64, use heapUse) error {
-	a := &heapAttempt{n: n, own: own, room: heapRoom(), use: use}
+//
+// Its callers hold the dense lane (TakeDenseLane, DenseSeat.TakeLane, and the
+// decoder's final reservation), so the bodies whose bytes are in the dense
+// queue's account joined it after the caller first tried, and own counts the
+// caller's bytes in the lane's account. When the attempt is busy, and n would
+// fit were the queued bodies' bytes gone from the heap and their reservations
+// given back, weighHeap sheds the queue (shedDense): every queued body is
+// answered busy, and no body joins or tries outside the queue until weighHeap
+// returns, so a shed body cannot rejoin while the caller collects. Once their
+// requests have given back their reservations it weighs again, once, in a
+// fresh attempt. It waits for that until ctx ends, or DefaultDenseWait
+// (SetDenseWait) for a ctx with no deadline, and fails busy then.
+func weighHeap(ctx context.Context, n, own int64, use heapUse) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
 
-	collectable, err := a.weigh()
-	if err != nil && collectable {
-		a.collect()
-
-		_, err = a.weigh()
+		ctx, cancel = WithDenseWait(ctx)
+		defer cancel()
 	}
 
-	return err
+	shedding := false
+
+	defer func() {
+		if shedding {
+			endShedding()
+		}
+	}()
+
+	for {
+		a := &heapAttempt{n: n, own: own, room: heapRoom(), use: use}
+
+		collectable, err := a.weigh()
+		if err != nil && collectable {
+			a.collect()
+
+			_, err = a.weigh()
+		}
+
+		if !errors.Is(err, ErrHeapBusy) {
+			return err
+		}
+
+		drained := a.shed()
+		if drained == nil {
+			return err
+		}
+
+		shedding = true
+
+		select {
+		case <-drained:
+		case <-ctx.Done():
+			return err
+		}
+	}
+}
+
+// shed sheds the dense queue (shedDense) for an attempt that missed, when n
+// fits with the queued bodies' bytes taken out of what it counted of the heap
+// and of what is reserved, and returns the channel closed once they are given
+// back; otherwise it returns nil and sheds nothing. Once the queue is shed no
+// body joins it until weighHeap returns, so a second shed finds nothing
+// queued.
+func (a *heapAttempt) shed() <-chan struct{} {
+	heap.mu.Lock()
+	defer heap.mu.Unlock()
+
+	queued := heap.queued
+	if queued == 0 || max(a.counted-queued, 0)+heap.reserved-queued+a.n > a.room {
+		return nil
+	}
+
+	return shedDense()
 }
 
 // weigh weighs the attempt's n beside what is reserved and the heap: its
@@ -203,6 +293,8 @@ func (a *heapAttempt) weigh() (collectable bool, err error) {
 	if a.use == checkLive {
 		counted = live
 	}
+
+	a.counted = counted
 
 	err = heapVerdict(heapWeigh{
 		n: a.n, own: a.own, reserved: heap.reserved, counted: counted, room: a.room,
@@ -312,8 +404,10 @@ func SetMemoryCap(n int64) (old int64) {
 // whatever a collection would free. It answers as heapVerdict does with
 // nothing counted and a floor of zero: ErrHeapBusy when n passes the room
 // beside what other requests reserve but fits it alone, and ErrNoHeapRoom
-// when n passes the room alone. It reads what is reserved and the room, never
-// the heap, and runs no collection.
+// when n passes the room alone. What is reserved includes the bytes of the
+// bodies waiting in the dense queue (WaitDense), so beside them n is busy,
+// never too large. It reads what is reserved and the room, never the heap, and
+// runs no collection.
 func CheckHeapRoom(n int64) error {
 	room := heapRoom()
 
@@ -346,24 +440,35 @@ var (
 // DecodeBudget, the only kind of body decoded off the in-flight bound, and
 // whose decoding is projected to keep peak, its own n bytes included: such a
 // body first takes the process's one dense lane, so at most one of them is
-// walked and decoded at a time and none waits for another. It fails, holding
+// walked and decoded at a time; TakeDenseLane never waits for the lane, and a
+// body that finds it taken waits its turn in WaitDense. Holding the lane, it
+// waits only for bodies queued after it that it sheds for room their bytes
+// take (weighHeap), at most DefaultDenseWait. A body waiting in the queue
+// takes the lane from its seat instead (DenseSeat.TakeLane). It fails, holding
 // nothing, with ErrDenseLaneTaken when another body has the lane, and, as
 // heapVerdict answers, with ErrHeapBusy or ErrNoHeapRoom when the heap could
 // not hold peak beside what the last collection found live (weighHeap with
 // checkLive, which may collect, one lane holder at a time) or has no room for
 // n. Otherwise lane gives back the lane, which the decoder does as soon as
-// decoding returns, and runs once however often it is called; release gives
+// decoding returns, and runs once however often it is called, giving the
+// dense queue's head its turn; release gives
 // back the reservation, which lasts until the request is answered when a
 // HeapKeeper keeps it, so the lane bounds the decodes at once and the
 // reservation the heap.
 func TakeDenseLane(n, peak int64) (lane, release func(), err error) {
+	return TakeDenseLaneContext(context.Background(), n, peak)
+}
+
+// TakeDenseLaneContext is TakeDenseLane for a request whose wait for the
+// bodies it sheds ends with ctx (WithDenseWait).
+func TakeDenseLaneContext(ctx context.Context, n, peak int64) (lane, release func(), err error) {
 	if !denseLane.CompareAndSwap(false, true) {
 		return nil, nil, ErrDenseLaneTaken
 	}
 
-	err = weighHeap(peak, 0, checkLive)
+	err = weighHeap(ctx, peak, 0, checkLive)
 	if err == nil {
-		release, err = ReserveHeapBeside(n, 0)
+		release, err = ReserveHeapBesideContext(ctx, n, 0)
 	}
 
 	if err != nil {
@@ -372,9 +477,7 @@ func TakeDenseLane(n, peak int64) (lane, release func(), err error) {
 		return nil, nil, err
 	}
 
-	var once sync.Once
-
-	return func() { once.Do(func() { denseLane.Store(false) }) }, release, nil
+	return giveBackLane(), release, nil
 }
 
 // readHeap reads the heap's objects and what the last collection found live,
