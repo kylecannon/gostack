@@ -51,10 +51,19 @@ func Pack(item Item) (Packed, error) {
 	bp, _ := packScratch.Get().(*[]byte)
 	defer packScratch.Put(bp)
 
+	size := ItemSize(item)
+
+	var shape packShape
+	shape.item(item)
+
 	// Sizes and counts are never negative.
-	buf := binary.AppendUvarint((*bp)[:0], uint64(ItemSize(item))) //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(countScalars(item)))    //nolint:gosec // G115: see above
+	buf := binary.AppendUvarint((*bp)[:0], uint64(size))   //nolint:gosec // G115: see above
+	buf = binary.AppendUvarint(buf, uint64(shape.scalars)) //nolint:gosec // G115: see above
 	buf = binary.AppendUvarint(buf, uint64(len(item)))
+	// A scratch buffer the pool lost, or one too small for the item, grows
+	// once to a little over the item's json size, not by append's steps,
+	// whose sum is about five times a large item.
+	buf = slices.Grow(buf, size+shape.extra+packWrapping)
 	head := len(buf)
 
 	out := api.GetItemOutput{Item: item}
@@ -78,35 +87,75 @@ func Pack(item Item) (Packed, error) {
 	return Packed(buf), nil
 }
 
-// countScalars counts the S and N values of item, at any depth. Each value is
-// taken as the copy the range makes: a pointer to that copy would move it to
-// the heap, one allocation for each member of each map.
-func countScalars(item Item) int {
-	n := 0
-	for _, v := range item {
-		n += scalarsOf(v)
-	}
+// The json Pack writes around what ItemSize counts, a little over: the quotes,
+// type key and punctuation of a value with its name, of a set element, and of
+// the output that wraps the item.
+const (
+	packPerValue   = 12
+	packPerElement = 4
+	packWrapping   = 64
+)
 
-	return n
+// packShape is what one walk of an item finds: the count of its S and N
+// values, at any depth, for the header, and the bytes its json adds to what
+// ItemSize counts: punctuation, number digits, which ItemSize counts about
+// two to a byte, and the third base64 adds to binary.
+type packShape struct {
+	scalars, extra int
 }
 
-// scalarsOf takes v by value, so that countScalars's copy stays on the stack.
-func scalarsOf(v api.AttributeValue) int {
-	switch {
-	case v.S != nil, v.N != nil:
-		return 1
-	case v.M != nil:
-		return countScalars(v.M)
-	case v.L != nil:
-		n := 0
-		for i := range v.L {
-			n += scalarsOf(v.L[i])
-		}
-
-		return n
-	default:
-		return 0
+// item adds the values of item. Each value is taken as the copy the range
+// makes: a pointer to that copy would move it to the heap, one allocation for
+// each member of each map.
+func (s *packShape) item(item Item) {
+	for _, v := range item {
+		s.value(v)
 	}
+}
+
+// value takes v by value, so that item's copy stays on the stack.
+func (s *packShape) value(v api.AttributeValue) {
+	s.extra += packPerValue
+
+	switch {
+	case v.S != nil:
+		s.scalars++
+	case v.N != nil:
+		s.scalars++
+		s.extra += numberExtra(*v.N)
+	case v.M != nil:
+		s.item(v.M)
+	case v.L != nil:
+		for i := range v.L {
+			s.value(v.L[i])
+		}
+	case v.B != nil:
+		s.extra += base64Extra(len(v.B))
+	case v.SS != nil:
+		s.extra += packPerElement * len(v.SS)
+	case v.NS != nil:
+		for _, n := range v.NS {
+			s.extra += packPerElement + numberExtra(n)
+		}
+	case v.BS != nil:
+		for _, b := range v.BS {
+			s.extra += packPerElement + base64Extra(len(b))
+		}
+	default:
+	}
+}
+
+// base64Extra is what base64 adds to n bytes, or a little over.
+func base64Extra(n int) int {
+	const pad = 2
+
+	return n/3 + pad
+}
+
+// numberExtra is what the json of n adds to the size ItemSize counts for it,
+// about one byte for two digits, or a little over.
+func numberExtra(n string) int {
+	return len(n)/2 + 1
 }
 
 // packHeader is what the header of a Packed holds, and where its json starts.
