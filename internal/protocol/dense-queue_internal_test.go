@@ -71,19 +71,11 @@ func (d *denseTurn) giveBack() {
 	d.release()
 }
 
-// denseQueued is how many bodies wait in the dense queue.
-func denseQueued() int {
-	heap.mu.Lock()
-	defer heap.mu.Unlock()
-
-	return len(heap.queue)
-}
-
 // requireQueued waits until n bodies wait in the queue.
 func requireQueued(t *testing.T, n int) {
 	t.Helper()
 
-	require.Eventually(t, func() bool { return denseQueued() == n }, 10*time.Second, time.Millisecond,
+	require.Eventually(t, func() bool { return DenseQueued() == n }, 10*time.Second, time.Millisecond,
 		"%d bodies wait", n)
 }
 
@@ -92,13 +84,15 @@ func requireQueued(t *testing.T, n int) {
 func requireNothingHeld(t *testing.T) {
 	t.Helper()
 
-	assert.Zero(t, denseQueued(), "no body waits")
+	assert.Zero(t, DenseQueued(), "no body waits")
 	assert.False(t, denseLane.Load(), "the lane is free")
 
 	heap.mu.Lock()
 	defer heap.mu.Unlock()
 
 	assert.Zero(t, heap.reserved, "nothing is reserved")
+	assert.Zero(t, heap.queued, "no queued body's bytes are reserved")
+	assert.False(t, heap.shedding, "no body is shed")
 }
 
 // startDense runs WaitDense for body in its own goroutine and sends its answer
@@ -106,7 +100,7 @@ func requireNothingHeld(t *testing.T) {
 func startDense(ctx context.Context, body *denseTurn) <-chan error {
 	answer := make(chan error, 1)
 
-	go func() { answer <- WaitDense(ctx, body.try) }()
+	go func() { answer <- WaitDense(ctx, 0, nil, body.try) }()
 
 	return answer
 }
@@ -189,17 +183,17 @@ func Test_WaitDense_TheDeadlineAnswersBusy(t *testing.T) {
 	require.NoError(t, err)
 
 	start := time.Now()
-	err = WaitDense(t.Context(), (&denseTurn{n: 50}).try)
+	err = WaitDense(t.Context(), 0, nil, (&denseTurn{n: 50}).try)
 	require.ErrorIs(t, err, ErrHeapBusy)
 	assert.GreaterOrEqual(t, time.Since(start), wait, "it waited out the deadline")
-	assert.Zero(t, denseQueued())
+	assert.Zero(t, DenseQueued())
 
 	other()
 
 	holder := &denseTurn{n: 10}
 	require.NoError(t, holder.try())
 
-	err = WaitDense(t.Context(), (&denseTurn{n: 10}).try)
+	err = WaitDense(t.Context(), 0, nil, (&denseTurn{n: 10}).try)
 	require.ErrorIs(t, err, ErrDenseLaneTaken)
 
 	holder.giveBack()
@@ -253,9 +247,9 @@ func Test_WaitDense_ABodyThatCannotFitIsAnsweredAtOnce(t *testing.T) {
 	other, err := ReserveHeapBeside(60, 0)
 	require.NoError(t, err)
 
-	err = WaitDense(t.Context(), (&denseTurn{n: 101}).try)
+	err = WaitDense(t.Context(), 0, nil, (&denseTurn{n: 101}).try)
 	require.ErrorIs(t, err, ErrNoHeapRoom)
-	assert.Zero(t, denseQueued())
+	assert.Zero(t, DenseQueued())
 
 	other()
 	requireNothingHeld(t)
@@ -283,7 +277,7 @@ func Test_WaitDense_NoLostWakeups(t *testing.T) {
 			for range rounds {
 				body := &denseTurn{n: 40}
 
-				err := WaitDense(context.Background(), body.try)
+				err := WaitDense(context.Background(), 0, nil, body.try)
 				if err != nil {
 					errs <- err
 
@@ -348,7 +342,7 @@ func Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue(t *testing.T)
 			}
 
 			body := &denseTurn{n: 60}
-			err := WaitDense(ctx, body.try)
+			err := WaitDense(ctx, 0, nil, body.try)
 
 			answers.Add(1)
 
@@ -382,7 +376,7 @@ func Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue(t *testing.T)
 	requireNothingHeld(t)
 
 	late := &denseTurn{n: 60}
-	require.NoError(t, WaitDense(context.Background(), late.try), "a body after them is served")
+	require.NoError(t, WaitDense(context.Background(), 0, nil, late.try), "a body after them is served")
 	late.giveBack()
 
 	// Polled here, not with assert.Eventually, which runs its condition in a
@@ -410,7 +404,7 @@ func Test_WaitDense_AWaiterWokenAsItIsCancelledAnswersOnce(t *testing.T) {
 
 	for range 200 {
 		holder := &denseTurn{n: 60}
-		require.NoError(t, WaitDense(context.Background(), holder.try))
+		require.NoError(t, WaitDense(context.Background(), 0, nil, holder.try))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		head := &denseTurn{n: 60}
@@ -511,7 +505,7 @@ func Test_WaitDense_NothingWhileNoBodyWaits(t *testing.T) {
 	admit := func() error { return nil }
 
 	allocs := testing.AllocsPerRun(100, func() {
-		_ = WaitDense(context.Background(), admit)
+		_ = WaitDense(context.Background(), 0, nil, admit)
 	})
 
 	assert.Zero(t, allocs, "the uncontended path allocates nothing")

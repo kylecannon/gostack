@@ -37,7 +37,8 @@ func withDenseWait(t *testing.T, wait time.Duration) {
 // room, waits in the dense queue and is served once the reservation is given
 // back, where a request that holds none of the in-flight bound is throttled
 // (Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation).
-// Past the queue's wait it is answered with a throttle.
+// While it waits its bytes are reserved on the heap and its request gives back
+// the in-flight bound. Past the queue's wait it is answered with a throttle.
 func Test_DecodeWithin_AChargedBodyWaitsForTheRoom(t *testing.T) {
 	heaptest.Settle(t)
 	withDenseWait(t, time.Minute)
@@ -87,7 +88,8 @@ func Test_DecodeWithin_AChargedBodyWaitsForTheRoom(t *testing.T) {
 
 	_, _, decodeErr := DecodeWithin[denseValue](body, budget, late)
 	assert.Equal(t, protocol.ThrottledJSON(), decodeErr, "past the wait: a throttle")
-	assert.Empty(t, late.steps, "nothing is reserved and the pool is kept")
+	assert.Equal(t, []string{stepKeep, stepReleasePool}, late.steps,
+		"it waited with its bytes reserved, kept until its request is answered, and the pool given back")
 	requireLaneFree(t)
 }
 
@@ -109,7 +111,7 @@ func Test_DecodeWithin_AnUnchargedBodyDoesNotPassAWaitingOne(t *testing.T) {
 	head := make(chan error, 1)
 
 	go func() {
-		head <- protocol.WaitDense(ctx, func() error { return protocol.ErrHeapBusy })
+		head <- protocol.WaitDense(ctx, 0, nil, func() error { return protocol.ErrHeapBusy })
 	}()
 
 	uncharged := &recordingHold{}
@@ -148,7 +150,7 @@ func Test_DecodeWithin_ATooLargeBodyDoesNotWaitItsTurn(t *testing.T) {
 	head := make(chan error, 1)
 
 	go func() {
-		head <- protocol.WaitDense(ctx, func() error { return protocol.ErrHeapBusy })
+		head <- protocol.WaitDense(ctx, 0, nil, func() error { return protocol.ErrHeapBusy })
 	}()
 
 	t.Cleanup(func() {
