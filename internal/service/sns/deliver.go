@@ -13,6 +13,7 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/sns"
 	"github.com/kylecannon/gostack/internal/inproc"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service/sns/envelope"
 	"github.com/kylecannon/gostack/internal/service/sns/filter"
@@ -395,12 +396,12 @@ func sendCall(queue arnParts, arn, source string, params *sendParams) (inproc.Ca
 
 	b := make([]byte, 0, len(params.body)+len(queueURL)+callOverhead)
 	b = append(b, `{"QueueUrl":`...)
-	b = appendJSONString(b, queueURL)
+	b = awsjson.AppendQuote(b, queueURL)
 
 	from := len(b)
 
 	b = append(b, `,"MessageBody":`...)
-	b = appendJSONString(b, params.body)
+	b = awsjson.AppendQuote(b, params.body)
 
 	if len(params.attrs) > 0 {
 		b = appendSQSAttributes(b, params.attrs)
@@ -408,19 +409,19 @@ func sendCall(queue arnParts, arn, source string, params *sendParams) (inproc.Ca
 
 	if params.groupID != "" {
 		b = append(b, `,"MessageGroupId":`...)
-		b = appendJSONString(b, params.groupID)
+		b = awsjson.AppendQuote(b, params.groupID)
 	}
 
 	if params.dedupID != "" {
 		b = append(b, `,"MessageDeduplicationId":`...)
-		b = appendJSONString(b, params.dedupID)
+		b = awsjson.AppendQuote(b, params.dedupID)
 	}
 
 	to := len(b)
 
 	if params.trace != "" {
 		b = append(b, `,"MessageSystemAttributes":{"`+traceAttribute+`":{"DataType":"String","StringValue":`...)
-		b = appendJSONString(b, params.trace)
+		b = awsjson.AppendQuote(b, params.trace)
 		b = append(b, "}}"...)
 	}
 
@@ -436,7 +437,7 @@ func queueURLOf(queue arnParts) string {
 // internalSend is the internal call that sends body, a SendMessage's, to the
 // queue arn names, from source.
 func internalSend(queue arnParts, arn, source string, body []byte) inproc.Call {
-	meta := appendJSONString([]byte(`{"source_arn":`), source)
+	meta := awsjson.AppendQuote([]byte(`{"source_arn":`), source)
 	meta = append(meta, `,"service_principal":"sns"}`...)
 
 	return inproc.Call{
@@ -461,7 +462,7 @@ func (sp sendSpan) deadLetter(primary []byte, dlq, source string) func() inproc.
 
 		b := make([]byte, 0, sp.to-sp.from+len(queueURL)+callOverhead)
 		b = append(b, `{"QueueUrl":`...)
-		b = appendJSONString(b, queueURL)
+		b = awsjson.AppendQuote(b, queueURL)
 		b = append(b, primary[sp.from:sp.to]...)
 		b = append(b, '}')
 
@@ -480,9 +481,9 @@ func appendSQSAttributes(b []byte, attrs map[string]api.MessageAttributeValue) [
 			b = append(b, ',')
 		}
 
-		b = appendJSONString(b, name)
+		b = awsjson.AppendQuote(b, name)
 		b = append(b, `:{"DataType":`...)
-		b = appendJSONString(b, deref(a.DataType))
+		b = awsjson.AppendQuote(b, deref(a.DataType))
 
 		if strings.HasPrefix(deref(a.DataType), typeBinary) {
 			b = append(b, `,"BinaryValue":"`...)
@@ -490,7 +491,7 @@ func appendSQSAttributes(b []byte, attrs map[string]api.MessageAttributeValue) [
 			b = append(b, '"')
 		} else {
 			b = append(b, `,"StringValue":`...)
-			b = appendJSONString(b, deref(a.StringValue))
+			b = awsjson.AppendQuote(b, deref(a.StringValue))
 		}
 
 		b = append(b, '}')

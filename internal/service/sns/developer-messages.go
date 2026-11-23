@@ -10,30 +10,35 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/kylecannon/gostack/internal/account"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/service/sns/envelope"
 )
 
 // The developer endpoints that list what SNS recorded instead of sending, and
 // the one that opts a number out of SMS. They are LocalStack's
 // SNSServicePlatformEndpointMessagesApiResource, SNSServiceSMSMessagesApiResource
-// and SNSServiceSMSPhoneOptOutResource, under /_gostack/services and /_aws.
+// and SNSServiceSMSPhoneOptOutResource, under /_gostack/services/sns and
+// /_aws/sns: the paths here are relative to the prefix the gateway scopes
+// Registration.DeveloperMount to.
 const (
-	endpointMessagesPath = "/sns/platform-endpoint-messages"
-	smsMessagesPath      = "/sns/sms-messages"
-	phoneOptOutsPath     = "/sns/phone-opt-outs"
+	endpointMessagesPath = "/platform-endpoint-messages"
+	smsMessagesPath      = "/sms-messages"
+	phoneOptOutsPath     = "/phone-opt-outs"
 
 	// maxOptOutBody is the most bytes of an opt-out request read.
 	maxOptOutBody = 1 << 20
 )
 
-// mountMessages adds the routes of the recorded messages and the opt-out
-// under prefix.
-func (p *Provider) mountMessages(r chi.Router, prefix string) {
-	r.Get(prefix+endpointMessagesPath, p.listEndpointMessages)
-	r.Delete(prefix+endpointMessagesPath, p.deleteEndpointMessages)
-	r.Get(prefix+smsMessagesPath, p.listSMSMessages)
-	r.Delete(prefix+smsMessagesPath, p.deleteSMSMessages)
-	r.Post(prefix+phoneOptOutsPath, p.optOutPhoneNumber)
+// mountDeveloperAPI adds the developer routes. It is the DeveloperMount of the
+// registration: the gateway calls it for /_gostack/services/sns, and for
+// /_aws/sns unless GOSTACK_COMPAT_PATHS=0.
+func (p *Provider) mountDeveloperAPI(r chi.Router) {
+	r.Get(subscriptionTokensPath+"/*", p.subscriptionToken)
+	r.Get(endpointMessagesPath, p.listEndpointMessages)
+	r.Delete(endpointMessagesPath, p.deleteEndpointMessages)
+	r.Get(smsMessagesPath, p.listSMSMessages)
+	r.Delete(smsMessagesPath, p.deleteSMSMessages)
+	r.Post(phoneOptOutsPath, p.optOutPhoneNumber)
 }
 
 // messagesScope is the State a call of the endpoints asks about: the account
@@ -101,7 +106,7 @@ func (p *Provider) listEndpointMessages(w http.ResponseWriter, r *http.Request) 
 	}
 
 	b = append(b, `},"region":`...)
-	b = appendJSONString(b, scope.region)
+	b = awsjson.AppendQuote(b, scope.region)
 	b = append(b, '}')
 
 	writeJSON(w, http.StatusOK, b)
@@ -167,7 +172,7 @@ func (p *Provider) listSMSMessages(w http.ResponseWriter, r *http.Request) {
 			b = append(b, ',')
 		}
 
-		b = appendJSONString(b, n)
+		b = awsjson.AppendQuote(b, n)
 		b = append(b, ":["...)
 
 		for j, m := range byNumber[n] {
@@ -182,7 +187,7 @@ func (p *Provider) listSMSMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b = append(b, `},"region":`...)
-	b = appendJSONString(b, scope.region)
+	b = awsjson.AppendQuote(b, scope.region)
 	b = append(b, '}')
 
 	writeJSON(w, http.StatusOK, b)
@@ -261,12 +266,12 @@ func writeJSON(w http.ResponseWriter, status int, body []byte) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, append(appendJSONString([]byte(`{"error":`), message), '}'))
+	writeJSON(w, status, append(awsjson.AppendQuote([]byte(`{"error":`), message), '}'))
 }
 
 // appendEndpointList writes `"<arn>":[...]`.
 func appendEndpointList(b []byte, arn string, msgs []RecordedMessage) []byte {
-	b = appendJSONString(b, arn)
+	b = awsjson.AppendQuote(b, arn)
 	b = append(b, ":["...)
 
 	for i := range msgs {
@@ -286,14 +291,14 @@ func appendEndpointList(b []byte, arn string, msgs []RecordedMessage) []byte {
 // and MessageId when the message has one.
 func appendEndpointMessage(b []byte, m *RecordedMessage) []byte {
 	b = append(b, `{"TargetArn":`...)
-	b = appendJSONString(b, m.TargetARN)
+	b = awsjson.AppendQuote(b, m.TargetARN)
 	b = append(b, `,"TopicArn":`...)
-	b = appendJSONString(b, m.TopicARN)
+	b = awsjson.AppendQuote(b, m.TopicARN)
 	b = appendBody(b, m)
 
 	if m.MessageID != "" {
 		b = append(b, `,"MessageId":`...)
-		b = appendJSONString(b, m.MessageID)
+		b = awsjson.AppendQuote(b, m.MessageID)
 	}
 
 	return append(b, '}')
@@ -302,11 +307,11 @@ func appendEndpointMessage(b []byte, m *RecordedMessage) []byte {
 // appendSMSMessage writes a message of the SMS listing.
 func appendSMSMessage(b []byte, m *RecordedMessage) []byte {
 	b = append(b, `{"PhoneNumber":`...)
-	b = appendJSONString(b, m.PhoneNumber)
+	b = awsjson.AppendQuote(b, m.PhoneNumber)
 	b = appendNullable(b, "TopicArn", m.TopicARN)
 	b = appendNullable(b, "SubscriptionArn", m.SubscriptionARN)
 	b = append(b, `,"MessageId":`...)
-	b = appendJSONString(b, m.MessageID)
+	b = awsjson.AppendQuote(b, m.MessageID)
 	b = appendBody(b, m)
 
 	return append(b, '}')
@@ -320,9 +325,9 @@ func appendBody(b []byte, m *RecordedMessage) []byte {
 
 	if m.MessageStructure == structureJSON {
 		// LocalStack encodes the body again, as Python's json.dumps does.
-		b = appendJSONString(b, string(envelope.AppendJSONDumps(nil, m.Message)))
+		b = awsjson.AppendQuote(b, string(envelope.AppendJSONDumps(nil, m.Message)))
 	} else {
-		b = appendJSONString(b, m.Message)
+		b = awsjson.AppendQuote(b, m.Message)
 	}
 
 	b = append(b, `,"MessageAttributes":`...)
@@ -348,7 +353,7 @@ func appendNullable(b []byte, name, value string) []byte {
 		return append(b, "null"...)
 	}
 
-	return appendJSONString(b, value)
+	return awsjson.AppendQuote(b, value)
 }
 
 // appendAttributes writes message attributes by name: the data type and the
@@ -362,9 +367,9 @@ func appendAttributes(b []byte, attrs map[string]MessageAttribute) []byte {
 		}
 
 		a := attrs[name]
-		b = appendJSONString(b, name)
+		b = awsjson.AppendQuote(b, name)
 		b = append(b, `:{"DataType":`...)
-		b = appendJSONString(b, a.DataType)
+		b = awsjson.AppendQuote(b, a.DataType)
 
 		if a.BinaryValue != nil {
 			b = append(b, `,"BinaryValue":"`...)
@@ -372,7 +377,7 @@ func appendAttributes(b []byte, attrs map[string]MessageAttribute) []byte {
 			b = append(b, '"')
 		} else {
 			b = append(b, `,"StringValue":`...)
-			b = appendJSONString(b, a.StringValue)
+			b = awsjson.AppendQuote(b, a.StringValue)
 		}
 
 		b = append(b, '}')

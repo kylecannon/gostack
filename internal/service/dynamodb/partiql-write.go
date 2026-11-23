@@ -56,6 +56,9 @@ type writeStatement struct {
 	rank  []int
 	del   *api.DeleteItemInput
 	check *api.ConditionCheck
+	// unwritten is the operators the WHERE wrote that the condition does not
+	// hold (keyOperators), which the count of its operators takes in.
+	unwritten int
 }
 
 // compileWrite compiles a write statement against its table. returnOld is
@@ -94,6 +97,8 @@ func (c caller) compileWrite(
 	if err != nil {
 		return nil, err
 	}
+
+	w.unwritten = keyOperators(key)
 
 	var onFailure *string
 	if returnOld {
@@ -164,16 +169,39 @@ func (w *writeStatement) checkExpressions() error {
 		return nil
 	}
 
-	return checkStatementExprs(names, values, cond, update, w.rank)
+	unwritten := w.unwritten
+	if w.update != nil {
+		// Its condition holds an attribute_exists and an AND for the key
+		// equality of a hash key and the AND after it.
+		unwritten -= updateKeyOperators
+	}
+
+	return checkStatementExprs(names, values, cond, update, w.rank, unwritten)
+}
+
+// updateKeyOperators is what the condition of a compiled UPDATE holds of its
+// WHERE's key equalities: the attribute_exists, and the AND that joins the rest
+// of the WHERE to it.
+const updateKeyOperators = 2
+
+// keyOperators is the operators a WHERE that names the whole of key wrote
+// for it: an equality for each key attribute and the AND that joined each to
+// what followed, which the condition that is left does not hold (SQ-454).
+func keyOperators(key table.KeySchema) int {
+	return conditionAndAND * len(keyParts(key))
 }
 
 // checkStatementExprs parses a compiled statement's condition and update
 // expressions over its placeholders. rank is where the update's actions stand
-// in the statement.
+// in the statement, and unwritten the operators its WHERE wrote that cond does
+// not hold.
 func checkStatementExprs(
-	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int,
+	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int, unwritten int,
 ) error {
-	x, err := newExprs(fromStatement, names, values, true, true, "")
+	from := fromStatement
+	from.unwritten = unwritten
+
+	x, err := newExprs(from, names, values, true, true, "")
 	if err != nil {
 		return err
 	}

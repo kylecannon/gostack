@@ -529,23 +529,8 @@ caller's account and region, as LocalStack does.
   compiles to to no size, as in the image; the 300 operators and 100 `IN`
   operands of any expression hold for it. A `WHERE` of 4,000 parentheses nested
   (an 8,055-byte statement) is answered `500 Internal Server Error` by the
-  image, where it answered 3,000 deep, and gostack answers it.
-- Arithmetic chained in one action of a PartiQL `UPDATE`, `SET a = a + 1 + 1`
-  or `SET a = (a + 1) + 1`, and a `list_append` inside a `list_append`: the
-  image applies them, and counts each `+` and `list_append` toward the 300
-  operators. gostack compiles the statement to an `UpdateExpression`, which
-  takes one `+` or `-` in an action and `list_append` only as its whole value,
-  and answers `Syntax error` or "The function is not allowed to be used this
-  way in an expression" at any count (probed in SQ-452).
-- The operators of a PartiQL statement's `WHERE` that are counted: the image
-  counts every one written, the key equality and the `AND` after it included.
-  gostack counts the condition the statement compiles to, which holds neither
-  for a `DELETE`, a `SELECT` of one hash key or an `EXISTS`, so `WHERE id = 'a'
-  AND (` 150 comparisons joined by `OR` `)` is refused by the image at 301
-  operators and answered by gostack, 2 apart on a table with a hash key only (a
-  range key was not probed). An `UPDATE` adds an `attribute_exists` and an
-  `AND` to its condition, which stand in for them, and is refused at the same
-  count.
+  image, where it answered 3,000 deep: gostack's answer, the statement's, is
+  kept, and the image's `500` is not copied.
 
 ## DynamoDB batches and transactions
 
@@ -733,6 +718,26 @@ request (SQ-266). An SSM operation gostack does not build answers
 | `LastModifiedDate` of an ordinary parameter in a `GetParameters` that has a secret reference | Whole seconds, as the call reads each parameter through the SSM client and converts the date with `time.mktime` | The parameter's own `LastModifiedDate`, with its fraction | The same parameter is read with its fraction by `GetParameter` and by `GetParameters` without a reference; truncating it only here is an artifact of the lookup. |
 | `GetParameters` with a secret reference among the names | The parameters of the call are read without the caller's `WithDecryption`, so a `SecureString` comes back as `kms:alias/aws/ssm:<value>`, and the call takes more than 10 names. A name whose fourth segment is `secretsmanager` (`/a/b/secretsmanager/c`) is read as a secret. | `WithDecryption` applies to the parameters too, more than 10 names is `400 ValidationException` as without a reference, and only `/aws/reference/secretsmanager/` makes a reference. A found secret is returned whatever `WithDecryption` says, as LocalStack does. | The documented `GetParameters` limit and `WithDecryption`; a parameter named `/a/b/secretsmanager/c` is a legal one. |
 | `GetParameter` of a secret reference when no Secrets Manager is served (`SERVICES` leaves it out) | Not run: the lookup's client call gets the gateway's not-enabled answer, and the provider catches only `ResourceNotFoundException` (`ssm/provider.py` at 8b9a79f) | `400 ParameterNotFound`, as for a secret nothing holds | A service that is off holds no secrets. |
+
+## JSON null inside a list or a map
+
+AWS SDKs never send a `null` in these places, so the rows are for a hand-written
+json body. The answers were probed against gostack main with `curl` on the json
+protocol (`X-Amz-Target`), on a table `tab1` (hash key `id`, type `S`) and a
+queue `pq0`. Where LocalStack answers `500`, gostack does not copy it. Two inputs
+answer alike and have no row: a `null` in an `NS` list
+(`400 ValidationException`, "A value provided cannot be converted into a
+number") and in `UntagQueue`'s `TagKeys` (`200`).
+
+| Input | LocalStack | gostack |
+|---|---|---|
+| `PutItem` with `"ExpressionAttributeNames":{"#n":null}` and `ConditionExpression` `attribute_not_exists(#n)` | `400 ValidationException`, "ExpressionAttributeNames contains invalid value: null for key #n" | `400 ValidationException`, "ExpressionAttributeNames contains invalid value: Empty attribute name for key #n" |
+| `PutItem` with `"ss":{"SS":[null]}` | `400 ValidationException`, "One or more parameter values were invalid: An string set may not have a null string as a member" | `200`, and the set is stored with one empty string: `GetItem` returns `"SS":[""]` |
+| `PutItem` with `"Expected":{"x":{"ComparisonOperator":"IN","AttributeValueList":[null]}}` | `400 ValidationException`, "The supplied Item contains a null AttributeValue" | `400 ValidationException`, "Supplied AttributeValue is empty, must contain exactly one of the supported datatypes" |
+| `CreateQueue` and `SetQueueAttributes` with `"VisibilityTimeout":null` in `Attributes` | `200` | `400 InvalidAttributeValue`, "Invalid value for the parameter VisibilityTimeout. Reason: Must be between 0 and 43200." |
+| `GetQueueAttributes` with `"AttributeNames":[null]` | `500` | `400 InvalidAttributeName`, "Unknown Attribute ." |
+| `ReceiveMessage` with `"AttributeNames":[null]` and `"MessageAttributeNames":[null]` | `500` | `200` |
+| `TagQueue` with `"Tags":{"k":null}` | `200`, and `ListQueueTags` then answers `{"Tags":{}}` | `200`, and `ListQueueTags` answers `{"Tags":{"k":""}}` |
 
 ## Accepted LocalStack-only behavior
 

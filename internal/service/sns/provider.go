@@ -96,6 +96,8 @@ func (p *Provider) Registration() service.Registration {
 		Reset:    p.Reset,
 		Close:    p.Close,
 		Bind:     p.Bind,
+
+		DeveloperMount: p.mountDeveloperAPI,
 	}
 }
 

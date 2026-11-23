@@ -13,7 +13,6 @@ func sqsSettings(current *config.Settings) sqs.Settings {
 		DelayPurgeRetry:      current.SQSDelayPurgeRetry,
 		Host:                 current.LocalstackHost.String(),
 		ParityAWSAccessKeyID: current.ParityAWSAccessKeyID,
-		DisableCompatPaths:   !current.CompatPaths,
 
 		EnableMessageRetentionPeriod:   current.SQSEnableMessageRetentionPeriod,
 		DisableMaxNumberOfMessageLimit: current.SQSDisableMaxNumberOfMessageLimit,

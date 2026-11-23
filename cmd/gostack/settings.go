@@ -30,6 +30,7 @@ func gatewaySettings(s *config.Settings) gateway.Settings {
 	return gateway.Settings{
 		Listen:                     listen,
 		CustomSSLCertPath:          s.CustomSSLCertPath,
+		DisableCompatPaths:         !s.CompatPaths,
 		FailFast:                   s.FailFast,
 		ResponseHeaderEnabled:      s.ResponseHeaderEnabled,
 		ParityAWSAccessKeyID:       s.ParityAWSAccessKeyID,

@@ -70,7 +70,8 @@ func (c caller) compileRead(
 			return nil, err
 		}
 
-		err = checkStatementExprs(r.attributeNames(), r.attributeValues(), &filter, nil, nil)
+		err = checkStatementExprs(
+			r.attributeNames(), r.attributeValues(), &filter, nil, nil, keyOperators(e.data.Key()))
 		if err != nil {
 			return nil, err
 		}

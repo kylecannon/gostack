@@ -9,20 +9,20 @@ import (
 	"unicode/utf8"
 )
 
-// checkQuote fails when appendQuote writes other bytes than v2 for s, or
+// checkQuote fails when appendStrictQuote writes other bytes than v2 for s, or
 // takes a string v2 refuses or refuses one v2 takes.
 func checkQuote(t *testing.T, s string) {
 	t.Helper()
 
 	want, wantErr := json.Marshal(s, strict)
-	got, ok := appendQuote([]byte("prefix"), s)
+	got, ok := appendStrictQuote([]byte("prefix"), s)
 
 	if ok != (wantErr == nil) || ok != utf8.ValidString(s) {
-		t.Fatalf("appendQuote(%q) ok=%t, v2 error %v", s, ok, wantErr)
+		t.Fatalf("appendStrictQuote(%q) ok=%t, v2 error %v", s, ok, wantErr)
 	}
 
 	if ok && !bytes.Equal(got, append([]byte("prefix"), want...)) {
-		t.Fatalf("appendQuote(%q)\n got %s\nwant prefix%s", s, got, want)
+		t.Fatalf("appendStrictQuote(%q)\n got %s\nwant prefix%s", s, got, want)
 	}
 }
 

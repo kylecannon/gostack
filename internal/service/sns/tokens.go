@@ -3,12 +3,9 @@ package sns
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/go-chi/chi/v5"
 	api "github.com/kylecannon/gostack/internal/api/sns"
 )
 
@@ -17,17 +14,6 @@ const (
 	tokenLength = 64
 	// tokenRegionEnd ends the region at the start of a token: "/" in hex.
 	tokenRegionEnd = "2f"
-
-	// developerCanonicalPrefix is where the developer endpoints always live.
-	developerCanonicalPrefix = "/_gostack/services"
-	// developerCompatPrefix is LocalStack's name for them, mounted unless
-	// Settings.DisableCompatPaths is set.
-	developerCompatPrefix = "/_aws"
-	// subscriptionTokensPath is LocalStack's SUBSCRIPTION_TOKENS_ENDPOINT
-	// under either prefix. The subscription ARN follows it.
-	subscriptionTokensPath = "/sns/subscription-tokens"
-	// keySubscriptionARN names the ARN in every reply of the endpoint.
-	keySubscriptionARN = "subscription_arn"
 
 	// The version and variant bits of a version 4 UUID, RFC 9562.
 	uuidVersionKeep = 0x0f
@@ -87,63 +73,4 @@ func newUUID() string {
 
 func isHexDigit(r rune) bool {
 	return '0' <= r && r <= '9' || 'a' <= r && r <= 'f' || 'A' <= r && r <= 'F'
-}
-
-// mountDeveloperAPI adds the developer routes: always under /_gostack/services,
-// and under /_aws too unless the settings turn the LocalStack names off. It is
-// called when the router is built, so the setting is read once.
-func (p *Provider) mountDeveloperAPI(r chi.Router) {
-	prefixes := []string{developerCanonicalPrefix}
-	if !p.settings().DisableCompatPaths {
-		prefixes = append(prefixes, developerCompatPrefix)
-	}
-
-	for _, prefix := range prefixes {
-		r.Get(prefix+subscriptionTokensPath+"/*", p.subscriptionToken)
-		p.mountMessages(r, prefix)
-	}
-}
-
-// subscriptionToken is LocalStack's SNSServiceSubscriptionTokenApiResource: the
-// confirmation token of the subscription the rest of the path names, so a
-// test can confirm a subscription whose confirmation message it cannot
-// receive.
-func (p *Provider) subscriptionToken(w http.ResponseWriter, r *http.Request) {
-	arn := chi.URLParam(r, "*")
-
-	parts, ok := parseARN(arn)
-	if !ok {
-		writeTokenReply(w, http.StatusBadRequest, map[string]string{
-			"error": "The provided SubscriptionARN is invalid", keySubscriptionARN: arn,
-		})
-
-		return
-	}
-
-	st := p.stateAt(parts.account, parts.region)
-
-	st.mu.RLock()
-	sub, ok := st.subscriptions[arn]
-	st.mu.RUnlock()
-
-	if !ok {
-		writeTokenReply(w, http.StatusNotFound, map[string]string{
-			"error": "The provided SubscriptionARN is not found", keySubscriptionARN: arn,
-		})
-
-		return
-	}
-
-	writeTokenReply(w, http.StatusOK, map[string]string{"subscription_token": sub.Token, keySubscriptionARN: arn})
-}
-
-func writeTokenReply(w http.ResponseWriter, status int, body map[string]string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	// A map of strings always encodes, so an error is a write to a client that
-	// is gone, and there is no one left to tell.
-	err := json.NewEncoder(w).Encode(body)
-	if err != nil {
-		return
-	}
 }

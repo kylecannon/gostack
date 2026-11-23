@@ -1023,7 +1023,11 @@ selects every service; `ROUTING_REACH` in `parity/ledger.py` lists them and
 is under the gateway's own namespaces, `GATEWAY_NAMESPACES` in the same file
 (`/_gostack/`, `/_aws/` and `/_localstack/`), is the exception: no AWS call is
 made to those paths, so DynamoDB's two developer `DELETE` routes leave it out
-of `ROUTING_REACH`, while SQS's queue-URL paths keep it in.
+of `ROUTING_REACH`, while SQS's queue-URL paths keep it in. A
+`DeveloperMount` is not counted at all (the gateway scopes its router to the
+service's own prefix), and a change to a `developer-*.go` file of a service
+selects that service and its dependents even for a service in `ROUTING_REACH`
+(`developer_service` in `parity/ledger.py`).
 `store.Bundle` keeps each account-region state for good and resets it through
 the emptier its owner gives `NewBundle`.
 
@@ -1366,6 +1370,32 @@ same suffix under both prefixes:
 - `sns/platform-endpoint-messages`, `sns/sms-messages`,
   `sns/subscription-tokens/<arn>` and `sns/phone-opt-outs`
 - `sqs/messages` and `sqs/messages/<region>/<account>/<queue>`
+
+A service mounts its endpoints with `Registration.DeveloperMount`, written
+relative to its prefix: `r.Get("/messages", ...)` answers
+`/_gostack/services/sqs/messages` always and `/_aws/sqs/messages` unless
+`GOSTACK_COMPAT_PATHS=0` (`gateway.Settings.DisableCompatPaths`, read once when
+the router is built). The gateway calls the function with a sub-router for each
+prefix, so the service writes no prefix and keeps no compat switch of its own.
+It is not `Mount`: a sub-router sees requests to its own prefix only, so
+whatever it registers, a `/*` route or a `NotFound` handler included, cannot
+meet another service's request, and the parity tables do not count it as a
+routing hook (see Parity oracle). Service authors: put the developer endpoints
+in `developer-*.go` files of the package and document the paths in
+`api/openapi/gostack.yaml` in the same change. Nothing outside those files may
+use what they declare, which `Test_developerFilesHoldNoRoutingHook` checks
+(code the endpoints share with the AWS path goes in another file), so a change
+to one selects its service and the services that depend on it and never every
+service. A path under the prefix that no developer route takes goes on to the
+gateway's AWS handling, as any unmatched path does.
+SQS and SNS use it (`developer-*.go` in each package). SNS's signing
+certificate, which sits under `/_aws/sns` too, is a protocol path and stays
+outside it: the provider's `MountProtocol` hands it to `internalapi.Deps.Protocol`.
+Protocol paths that must stay up under `GOSTACK_COMPAT_PATHS=0` do not belong
+here (see below). DynamoDB's `dynamodb/expired` is the one developer endpoint
+still on `Mount` (with its own compat switch): it is under the gateway's
+namespaces, so it is not a routing hook either, and it is in no
+`developer-*.go` file.
 
 Two LocalStack paths have no canonical twin of the same shape.
 `/_localstack/plugins` and `/_localstack/diagnose` (only under `DEBUG`) return

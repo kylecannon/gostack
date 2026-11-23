@@ -87,6 +87,7 @@ type updateAction struct {
 type updateParser struct {
 	*parser
 
+	statement bool // the actions of a PartiQL UPDATE: a value is an expression of any depth
 	actions   []*updateAction
 	clauses   []updateClause
 	paths     []*updatePathExpr
@@ -174,10 +175,15 @@ func (p *updateParser) action(clause updateClause) error {
 // setValue reads an operand, or two joined by + or -. Its first operand may be
 // a parenthesized set value; a parenthesized sum or difference is the whole
 // set value and takes no + or - after it, as DynamoDB Local's grammar has it.
+// The value of a PartiQL UPDATE is read by chain instead.
 func (p *updateParser) setValue() (*updateOperand, error) {
 	left, err := p.operand(true)
 	if err != nil {
 		return nil, err
+	}
+
+	if p.statement {
+		return p.chain(left)
 	}
 
 	var kind updateOperandKind
@@ -203,6 +209,36 @@ func (p *updateParser) setValue() (*updateOperand, error) {
 	}
 
 	return &updateOperand{kind: kind, args: []*updateOperand{left, right}}, nil
+}
+
+// chain reads the + and - after left, grouping from the left: the image applies
+// a PartiQL UPDATE's value as an expression, so that a + b - c is (a + b) - c,
+// and counts each one an operator (SQ-454). A right operand is a set value of
+// its own when it is parenthesized.
+func (p *updateParser) chain(left *updateOperand) (*updateOperand, error) {
+	for {
+		var kind updateOperandKind
+
+		switch p.peek().kind {
+		case tokPlus:
+			kind = updateOpPlus
+		case tokMinus:
+			kind = updateOpMinus
+		default:
+			return left, nil
+		}
+
+		p.next()
+
+		p.sums++
+
+		right, err := p.operand(true)
+		if err != nil {
+			return nil, err
+		}
+
+		left = &updateOperand{kind: kind, args: []*updateOperand{left, right}}
+	}
 }
 
 // operand reads a value, a parenthesized operand, a function call or a path.
@@ -278,7 +314,7 @@ func (p *updateParser) call() (*updateOperand, error) {
 	p.next()
 
 	for {
-		arg, err := p.operand(false)
+		arg, err := p.argument()
 		if err != nil {
 			return nil, err
 		}
@@ -296,6 +332,16 @@ func (p *updateParser) call() (*updateOperand, error) {
 			return nil, p.syntaxError()
 		}
 	}
+}
+
+// argument reads an operand of a function: a single operand, or in a PartiQL
+// UPDATE a set value, which may be a sum.
+func (p *updateParser) argument() (*updateOperand, error) {
+	if p.statement {
+		return p.setValue()
+	}
+
+	return p.operand(false)
 }
 
 // valueRef reads a ":value" placeholder.

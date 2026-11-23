@@ -57,9 +57,27 @@ type Registration struct {
 	Metadata Metadata
 	// Serve decodes the call in rc, runs the operation and writes the response.
 	Serve func(http.ResponseWriter, *request.Context)
-	// Mount adds routes beyond the AWS call path, such as SQS queue-URL paths and
-	// the developer API. It is nil when there are none.
+	// Mount adds routes beyond the AWS call path, such as SQS queue-URL paths.
+	// It gets the gateway's own router, so its routes can meet any service's
+	// requests: it is a routing hook. A service's developer endpoints go in
+	// DeveloperMount instead. It is nil when there are none.
 	Mount func(chi.Router)
+	// DeveloperMount adds the service's developer endpoints, the routes that
+	// are for tooling and not AWS calls, such as SQS's /sqs/messages. The
+	// gateway calls it with a router scoped to the service's own prefix, once
+	// for /_gostack/services/<Metadata.Name>, which is always served, and once
+	// for /_aws/<Metadata.Name>, which is served unless GOSTACK_COMPAT_PATHS=0
+	// (gateway.Settings.DisableCompatPaths). A route is written without the
+	// prefix: Get("/messages") answers /_gostack/services/sqs/messages.
+	//
+	// It is not a routing hook (parity/ledger.py's ROUTING_REACH and
+	// Test_parityTables do not count it). The router is a sub-router mounted
+	// under the prefix, so every route it takes, a "/*" or a NotFound handler
+	// included, sees requests to that prefix only: it cannot see a request meant
+	// for another service, and a route written with another service's path is
+	// served under this prefix, never at that path. It is nil when there are
+	// none.
+	DeveloperMount func(chi.Router)
 	// Mutating reports whether an operation changes state that persistence must
 	// save. It is nil for the default rule: every operation whose name does not
 	// start with Get, Head, Query, List, Describe or Receive.
