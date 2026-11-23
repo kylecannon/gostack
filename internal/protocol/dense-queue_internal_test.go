@@ -40,6 +40,20 @@ func emptyHeap(t *testing.T, wait time.Duration) {
 	checkSeats(t)
 
 	t.Cleanup(func() {
+		// A failed test can leave bodies waiting; its context has ended, so
+		// they leave. What they held, and a body stuck in its try, is then
+		// cleared, so the next test starts from nothing held instead of
+		// failing in its turn.
+		assert.Eventually(t, func() bool { return DenseQueued() == 0 }, 5*time.Second, time.Millisecond,
+			"the test's bodies leave the queue")
+
+		if t.Failed() {
+			heap.mu.Lock()
+			heap.queue, heap.reserved, heap.queued, heap.shedding = nil, 0, 0, false
+			heap.mu.Unlock()
+			denseLane.Store(false)
+		}
+
 		heap.read, heap.collect = read, collect
 		debug.SetMemoryLimit(limit)
 		SetMemoryCap(memoryCap)

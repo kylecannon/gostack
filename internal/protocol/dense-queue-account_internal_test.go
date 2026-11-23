@@ -84,11 +84,11 @@ func Test_WaitDense_TheHeadIsNotStarvedByTheBodiesBehindIt(t *testing.T) {
 	require.NoError(t, holder.try())
 
 	head := &queuedBody{n: 10, peak: 90}
-	headAnswer := head.start(t.Context())
+	headAnswer := head.start(t)
 	requireQueued(t, 1)
 
 	behind := &queuedBody{n: 15}
-	behindAnswer := behind.start(t.Context())
+	behindAnswer := behind.start(t)
 	requireQueued(t, 2)
 
 	holder.giveBack()
@@ -155,7 +155,7 @@ func Test_WaitDense_TheHeadsBytesAreAlwaysCounted(t *testing.T) {
 		}
 	}
 
-	headAnswer := head.start(t.Context())
+	headAnswer := head.start(t)
 	requireQueued(t, 1)
 
 	// A reservation given back gives the head its turn while the holder

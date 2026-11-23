@@ -35,19 +35,32 @@ type queuedBody struct {
 }
 
 // start runs WaitDense for the body in its own goroutine, keeping the
-// reservation's release, and sends its answer on the returned channel.
-func (q *queuedBody) start(ctx context.Context) <-chan error {
+// reservation's release, and sends its answer on the returned channel. The
+// test fails within seconds when the body is answered without joining, or
+// neither joins nor is answered.
+func (q *queuedBody) start(t *testing.T) <-chan error {
+	t.Helper()
+
 	answer := make(chan error, 1)
 	kept := make(chan func(), 1)
 
 	go func() {
-		answer <- WaitDense(ctx, q.n, func(seat *DenseSeat) {
+		answer <- WaitDense(t.Context(), q.n, func(seat *DenseSeat) {
 			q.joined(seat)
 			kept <- seat.Release
 		}, q.try)
 	}()
 
-	q.release = <-kept
+	select {
+	case q.release = <-kept:
+		// Its request is answered at the latest when the test ends, so a
+		// failed test leaves nothing reserved; the release runs once.
+		t.Cleanup(q.release)
+	case err := <-answer:
+		t.Fatalf("the body of %d bytes was answered %v without joining the queue", q.n, err)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the body of %d bytes neither joined the queue nor was answered within 5s", q.n)
+	}
 
 	return answer
 }
@@ -62,7 +75,7 @@ func Test_WaitDense_AQueuedBodysBytesAreAnotherRequests(t *testing.T) {
 	require.NoError(t, holder.try())
 
 	waiter := &queuedBody{n: 30}
-	answer := waiter.start(t.Context())
+	answer := waiter.start(t)
 	requireQueued(t, 1)
 
 	require.ErrorIs(t, CheckHeapRoom(80), ErrHeapBusy, "80 bytes fit alone: the waiter's 30 make them busy")
@@ -137,7 +150,7 @@ func Test_WaitDense_TheLaneHolderShedsAQueueThatTakesItsRoom(t *testing.T) {
 	require.NoError(t, holder.try())
 
 	waiter := &queuedBody{n: 30}
-	waiterAnswer := waiter.start(t.Context())
+	waiterAnswer := waiter.start(t)
 	requireQueued(t, 1)
 
 	reserved := make(chan error, 1)
@@ -151,7 +164,7 @@ func Test_WaitDense_TheLaneHolderShedsAQueueThatTakesItsRoom(t *testing.T) {
 		reserved <- err
 	}()
 
-	require.ErrorIs(t, <-waiterAnswer, ErrHeapBusy, "the later arrival is shed")
+	require.ErrorIs(t, answerWithin(t, waiterAnswer, "the waiter"), ErrHeapBusy, "the later arrival is shed")
 	assert.Zero(t, DenseQueued())
 	assert.Never(t, func() bool { return len(reserved) > 0 }, 100*time.Millisecond, time.Millisecond,
 		"the holder is not admitted while the waiter's bytes are reserved")
@@ -163,7 +176,8 @@ func Test_WaitDense_TheLaneHolderShedsAQueueThatTakesItsRoom(t *testing.T) {
 	answered.Store(true)
 	waiter.release()
 
-	require.NoError(t, <-reserved, "the holder is admitted once the waiter's bytes are given back")
+	require.NoError(t, answerWithin(t, reserved, "the holder"),
+		"the holder is admitted once the waiter's bytes are given back")
 
 	final()
 	holder.giveBack()
@@ -215,7 +229,7 @@ func Test_WaitDense_AHeadTryingWhenTheQueueIsShedIsShedWithIt(t *testing.T) {
 	<-trying
 
 	behind := &queuedBody{n: 30}
-	behindAnswer := behind.start(t.Context())
+	behindAnswer := behind.start(t)
 	requireQueued(t, 2)
 
 	reserved := make(chan error, 1)
@@ -229,9 +243,11 @@ func Test_WaitDense_AHeadTryingWhenTheQueueIsShedIsShedWithIt(t *testing.T) {
 		reserved <- err
 	}()
 
-	require.ErrorIs(t, <-behindAnswer, ErrHeapBusy, "the body behind the head is shed")
+	require.ErrorIs(t, answerWithin(t, behindAnswer, "the body behind the head"),
+		ErrHeapBusy, "the body behind the head is shed")
 	close(missed)
-	require.ErrorIs(t, <-headAnswer, ErrHeapBusy, "the head that missed while the queue is shed is shed")
+	require.ErrorIs(t, answerWithin(t, headAnswer, "the head"),
+		ErrHeapBusy, "the head that missed while the queue is shed is shed")
 
 	answered.Store(true)
 	behind.release()
@@ -239,7 +255,8 @@ func Test_WaitDense_AHeadTryingWhenTheQueueIsShedIsShedWithIt(t *testing.T) {
 		"the holder is not admitted while the head's bytes are reserved")
 	headRelease()
 
-	require.NoError(t, <-reserved, "the holder is admitted once both bodies' bytes are given back")
+	require.NoError(t, answerWithin(t, reserved, "the holder"),
+		"the holder is admitted once both bodies' bytes are given back")
 
 	final()
 	holder.giveBack()
@@ -261,7 +278,7 @@ func Test_WaitDense_TheLaneHolderWaitsForAShedBodyAtMostTheWait(t *testing.T) {
 	require.NoError(t, holder.try())
 
 	waiter := &queuedBody{n: 30}
-	waiterAnswer := waiter.start(t.Context())
+	waiterAnswer := waiter.start(t)
 	requireQueued(t, 1)
 
 	SetDenseWait(wait)
@@ -270,7 +287,7 @@ func Test_WaitDense_TheLaneHolderWaitsForAShedBodyAtMostTheWait(t *testing.T) {
 	_, err := ReserveHeapBeside(55, holder.n)
 	require.ErrorIs(t, err, ErrHeapBusy)
 	assert.GreaterOrEqual(t, time.Since(start), wait, "it waited for the shed body")
-	require.ErrorIs(t, <-waiterAnswer, ErrHeapBusy)
+	require.ErrorIs(t, answerWithin(t, waiterAnswer, "the waiter"), ErrHeapBusy)
 
 	waiter.release()
 	holder.giveBack()
@@ -294,7 +311,7 @@ func Test_WaitDense_TheLaneHolderDoesNotShedForAnotherRequestsRoom(t *testing.T)
 	require.NoError(t, holder.try())
 
 	waiter := &queuedBody{n: 5}
-	waiterAnswer := waiter.start(t.Context())
+	waiterAnswer := waiter.start(t)
 	requireQueued(t, 1)
 
 	_, err = ReserveHeapBeside(45, holder.n)
@@ -304,7 +321,7 @@ func Test_WaitDense_TheLaneHolderDoesNotShedForAnotherRequestsRoom(t *testing.T)
 
 	other()
 	holder.giveBack()
-	require.NoError(t, <-waiterAnswer)
+	require.NoError(t, answerWithin(t, waiterAnswer, "the waiter"))
 
 	waiter.release()
 	waiter.giveBack()
