@@ -146,6 +146,53 @@ func Test_packed_writesDuringReads(t *testing.T) {
 	wg.Wait()
 }
 
+// Test_packed_putsStoreTheirItem: every write that stores the request's item
+// as it is, which packs it before the table's lock, stores that item: PutItem,
+// a BatchWriteItem put, a TransactWriteItems Put, and the PartiQL INSERT of
+// ExecuteStatement, BatchExecuteStatement and ExecuteTransaction. A put whose
+// condition fails leaves the stored item as it was.
+func Test_packed_putsStoreTheirItem(t *testing.T) {
+	s := newStack(t)
+	s.ok(t, opCreate, fmt.Sprintf(packedTable, "tab"))
+
+	item := func(sk int) string {
+		return `{"pk":{"S":"a"},"sk":{"N":"` + strconv.Itoa(sk) + `"},"v":{"S":"q\"uote ` + strconv.Itoa(sk) +
+			`"},"l":{"L":[{"N":"2"},{"B":"AQI="}]},"m":{"M":{"b":{"BOOL":true}}}}`
+	}
+	insert := func(sk int) string {
+		return `INSERT INTO \"tab\" VALUE {'pk':'a','sk':` + strconv.Itoa(sk) + `,'v':'q\"uote ` + strconv.Itoa(sk) + `'}`
+	}
+
+	s.ok(t, opPut, `{"TableName":"tab","Item":`+item(1)+`}`)
+	s.ok(t, opBatchWrite, `{"RequestItems":{"tab":[{"PutRequest":{"Item":`+item(2)+`}},`+
+		`{"PutRequest":{"Item":`+item(3)+`}}]}}`)
+	s.ok(t, opTransactWrite, `{"TransactItems":[{"Put":{"TableName":"tab","Item":`+item(4)+`,`+
+		`"ConditionExpression":"attribute_not_exists(pk)"}},{"Put":{"TableName":"tab","Item":`+item(5)+`}}]}`)
+	s.ok(t, opStatement, `{"Statement":"`+insert(6)+`"}`)
+	s.ok(t, opBatchStmt, `{"Statements":[{"Statement":"`+insert(7)+`"}]}`)
+	s.ok(t, opTransaction, `{"TransactStatements":[{"Statement":"`+insert(8)+`"}]}`)
+
+	s.ok(t, opPut, `{"TableName":"tab","Item":`+item(9)+`}`)
+
+	refused := s.call(t, usEast1, opPut, `{"TableName":"tab","Item":`+
+		strings.Replace(item(9), `"q\"uote 9"`, `"replaced"`, 1)+`,"ConditionExpression":"attribute_not_exists(pk)"}`)
+	require.Contains(t, refused.body, "ConditionalCheckFailedException")
+
+	statement := func(sk int) string {
+		return `{"pk":{"S":"a"},"sk":{"N":"` + strconv.Itoa(sk) + `"},"v":{"S":"q\"uote ` + strconv.Itoa(sk) + `"}}`
+	}
+
+	for sk := 1; sk <= 9; sk++ {
+		want := item(sk)
+		if sk >= 6 && sk <= 8 {
+			want = statement(sk)
+		}
+
+		got := s.call(t, usEast1, opGet, `{"TableName":"tab","Key":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(sk)+`"}}}`)
+		require.JSONEq(t, `{"Item":`+want+`}`, got.body, "item %d", sk)
+	}
+}
+
 // Test_packed_requestNotRetained: an item put from a request padded to 64 KiB
 // keeps none of the request: the heap grows by about the items, not by the
 // bodies they came in.

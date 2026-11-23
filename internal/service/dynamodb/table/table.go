@@ -195,6 +195,13 @@ func (t *Table) GetHeldPacked(key value.Item) value.Packed {
 // expression.ApplyStored is the only writer into such an item.
 type Decide func(old value.Packed) (value.Item, error)
 
+// DecidePacked is Decide that may also return the new item packed: the bytes
+// value.Pack returns for that item, which the write then stores as they are
+// instead of packing the item under the table's lock. "" has the write pack
+// the item, as Write does. The bytes are not checked against the item: a
+// caller returns them only for the item they were packed from.
+type DecidePacked func(old value.Packed) (value.Item, value.Packed, error)
+
 // Write is the one write path. It calls decide with the item stored at key and
 // stores what it returns. An error from decide stores nothing and is returned
 // with the old image. The new item is checked with CheckItem first. key must
@@ -209,6 +216,25 @@ func (t *Table) Write(key value.Item, decide Decide) (Change, error) {
 // WriteHeld is Write for a caller that holds the table's lock through Lock, as
 // a write across several tables does.
 func (t *Table) WriteHeld(key value.Item, decide Decide) (Change, error) {
+	return t.WriteHeldPacked(key, func(old value.Packed) (value.Item, value.Packed, error) {
+		item, err := decide(old)
+
+		return item, "", err
+	})
+}
+
+// WritePacked is Write for a decide that may return its item packed, as a put
+// does with the request's item, packed before the lock is taken.
+func (t *Table) WritePacked(key value.Item, decide DecidePacked) (Change, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.WriteHeldPacked(key, decide)
+}
+
+// WriteHeldPacked is WritePacked for a caller that holds the table's lock
+// through Lock.
+func (t *Table) WriteHeldPacked(key value.Item, decide DecidePacked) (Change, error) {
 	hash, rng := t.primaryKey(key)
 
 	return t.apply(hash, rng, decide, false)
@@ -232,12 +258,12 @@ func (t *Table) Expire(item value.Packed, expired func(stored value.Packed) bool
 	hash, rng := t.primaryKey(dec.Peek(item, t.tableNames()))
 	dec.Release()
 
-	_, err := t.apply(hash, rng, func(stored value.Packed) (value.Item, error) {
+	_, err := t.apply(hash, rng, func(stored value.Packed) (value.Item, value.Packed, error) {
 		if stored == "" || !expired(stored) {
-			return nil, errKept
+			return nil, "", errKept
 		}
 
-		return nil, nil //nolint:nilnil // nil deletes, as Write takes it
+		return nil, "", nil // nil deletes, as Write takes it
 	}, true)
 
 	return err == nil
@@ -500,34 +526,17 @@ func (t *Table) tableNames() []string {
 
 // apply is Write's body for the item at the encoded key hash and rng: the
 // caller holds mu for writing.
-func (t *Table) apply(hash, rng string, decide Decide, expired bool) (Change, error) {
+func (t *Table) apply(hash, rng string, decide DecidePacked, expired bool) (Change, error) {
 	stored := t.primary.get(hash, rng, "")
 
-	updated, err := decide(stored)
+	updated, packed, err := decide(stored)
 	if err != nil {
 		return Change{OldPacked: stored}, err
 	}
 
-	// The item is packed once, here, and its entries take their keys from the
-	// packed item, whose bytes they share, and not from key or updated, which
-	// are the request's.
-	var packed value.Packed
-
-	if updated != nil {
-		err := t.CheckItem(updated)
-		if err != nil {
-			return Change{OldPacked: stored}, err
-		}
-
-		h, s := t.primaryKey(updated)
-		if h != hash || (s != "" && s != rng) {
-			return Change{OldPacked: stored}, errKeyChanged
-		}
-
-		packed, err = value.Pack(updated)
-		if err != nil {
-			return Change{OldPacked: stored}, err //nolint:wrapcheck // the encoder's own error
-		}
+	packed, err = t.packFor(hash, rng, updated, packed)
+	if err != nil {
+		return Change{OldPacked: stored}, err
 	}
 
 	// The keys of the old and new items are read through one decoder, in
@@ -550,6 +559,35 @@ func (t *Table) apply(hash, rng string, decide Decide, expired bool) (Change, er
 	}
 
 	return change, nil
+}
+
+// packFor checks updated, the item a decide returned for the key hash and
+// rng, and returns what the write stores: packed, the bytes decide returned
+// with it, or the item packed here when there were none. The item is packed
+// once, by decide's caller before the lock or here, and its entries take their
+// keys from the packed item, whose bytes they share, and not from key or
+// updated, which are the request's. A delete stores nothing, whatever decide
+// returned with it.
+func (t *Table) packFor(hash, rng string, updated value.Item, packed value.Packed) (value.Packed, error) {
+	if updated == nil {
+		return "", nil
+	}
+
+	err := t.CheckItem(updated)
+	if err != nil {
+		return "", err
+	}
+
+	h, s := t.primaryKey(updated)
+	if h != hash || (s != "" && s != rng) {
+		return "", errKeyChanged
+	}
+
+	if packed != "" {
+		return packed, nil
+	}
+
+	return value.Pack(updated) //nolint:wrapcheck // the encoder's own error
 }
 
 func (t *Table) needsSort(indexName string) bool {
