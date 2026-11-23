@@ -23,34 +23,49 @@ import (
 // longer shows a save's lock hold or allocation at the size of a very large
 // queue.
 //
+// A FIFO restore of 1000 messages took 6.2 to 8.2 ms on the runners (4.4 ms for
+// a standard queue), too close to the limit for the slowest runner, so a FIFO
+// restore stops at 500 messages (restoreMessages) and a FIFO save, 1.7 ms,
+// stays at 1000.
+//
 // Besides the time, a row reports:
 //
 //	lock-ms     how long a save holds the queue's lock to copy it
 //	alloc/file  the bytes a call allocates, in units of the size of the file
 const (
 	snapshotMessages = 1000
-	snapshotInflight = snapshotMessages / 10
 	snapshotBody     = 200
 	snapshotAttrs    = 2
 	snapshotGroups   = 100
 )
 
-// bigQueue returns an environment whose one queue holds the messages above.
-func bigQueue(b *testing.B, kind queueKind) *benchEnv {
+// restoreMessages is the messages a restore of the queue kind holds: a FIFO
+// queue's 1000 are over the limit.
+func restoreMessages(kind queueKind) int {
+	if kind == queueFIFO {
+		return snapshotMessages / 2
+	}
+
+	return snapshotMessages
+}
+
+// bigQueue returns an environment whose one queue holds that many messages, a
+// tenth of them in flight.
+func bigQueue(b *testing.B, kind queueKind, messages int) *benchEnv {
 	b.Helper()
 
 	e := newBenchEnv(b)
 	url := e.queue(kind)
 
-	e.fill(url, kind, snapshotMessages, snapshotBody, snapshotAttrs, snapshotGroups)
-	e.handles(url, snapshotInflight)
+	e.fill(url, kind, messages, snapshotBody, snapshotAttrs, snapshotGroups)
+	e.handles(url, messages/10)
 
 	return e
 }
 
 // snapshotRow is the name of a row: the FIFO one carries its queue axis.
-func snapshotRow(kind queueKind) string {
-	name := "queues=1/messages=" + strconv.Itoa(snapshotMessages)
+func snapshotRow(kind queueKind, messages int) string {
+	name := "queues=1/messages=" + strconv.Itoa(messages)
 	if kind == queueFIFO {
 		name += "/queue=fifo"
 	}
@@ -78,8 +93,8 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 
 func BenchmarkSnapshot(b *testing.B) {
 	for _, kind := range []queueKind{queueStandard, queueFIFO} {
-		b.Run(snapshotRow(kind), func(b *testing.B) {
-			e := bigQueue(b, kind)
+		b.Run(snapshotRow(kind, snapshotMessages), func(b *testing.B) {
+			e := bigQueue(b, kind, snapshotMessages)
 
 			// The file is counted, not kept: the benchmark needs its size only.
 			var file countingWriter
@@ -115,10 +130,10 @@ func BenchmarkSnapshot(b *testing.B) {
 
 func BenchmarkRestore(b *testing.B) {
 	for _, kind := range []queueKind{queueStandard, queueFIFO} {
-		b.Run(snapshotRow(kind), func(b *testing.B) {
+		b.Run(snapshotRow(kind, restoreMessages(kind)), func(b *testing.B) {
 			var file bytes.Buffer
 
-			source := bigQueue(b, kind)
+			source := bigQueue(b, kind, restoreMessages(kind))
 
 			err := source.provider.Snapshot(&file)
 			if err != nil {
