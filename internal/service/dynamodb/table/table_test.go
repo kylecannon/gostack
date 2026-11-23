@@ -273,6 +273,30 @@ func Test_Table_AddIndexBackfillsAndDropIndex(t *testing.T) {
 	assert.False(t, tbl.DropIndex("byQ"))
 }
 
+// Test_Table_AddIndex_afterDeleteEmptiesPartition is UpdateTable creating a
+// global index after a Scan built the partition order and a delete emptied a
+// partition: the backfill walks the order and must not meet the dropped key.
+func Test_Table_AddIndex_afterDeleteEmptiesPartition(t *testing.T) {
+	key := table.KeySchema{Hash: table.KeyAttribute{Name: "pk", Type: "S"}}
+	tbl := table.New(key, nil)
+
+	put(t, tbl, value.Item{"pk": s("a"), "q": s("x")})
+	put(t, tbl, value.Item{"pk": s("b"), "q": s("y")})
+	require.NoError(t, tbl.Scan("", nil, func(value.Item) bool { return true }))
+	remove(t, tbl, value.Item{"pk": s("a")})
+
+	require.NotPanics(t, func() {
+		tbl.AddIndex(table.IndexSpec{
+			Name: "byQ", Global: true,
+			Key: table.KeySchema{Hash: table.KeyAttribute{Name: "q", Type: "S"}},
+		})
+	})
+
+	count, _, ok := tbl.IndexStats("byQ")
+	require.True(t, ok)
+	assert.Equal(t, 1, count, "the backfill indexes the one item left")
+}
+
 func Test_Table_Write_decideError(t *testing.T) {
 	tbl := composite()
 	put(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
