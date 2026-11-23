@@ -515,12 +515,15 @@ length, kept until the request is answered) and the request gives back
 what its body and its planned decoding hold of the pool (`awsjson`'s
 `moveBody`, `protocol.HeapKeeper.ReleasePool`), so a smaller request waiting
 for the pool is admitted as soon as it would be were the body refused. A body
-that finds the lane taken by another is answered `400 ThrottlingException` at
-once, which SDKs retry. One that finds no room for its bytes is answered as the
-heap verdict below says: the decode budget's answer when it provably cannot
-fit with nothing other requests hold, and `400 ThrottlingException` otherwise.
-Either holds the pool until it is answered, as a refused body does. Nothing waits for the lane, so no dense body sits on the heap
-queued behind another. Without the lane, 64 dense senders put about 30 bodies of 10 MB on
+that finds the lane taken by another, or no room for its bytes beside other
+requests' reservations when it could fit without them, waits its turn in the
+dense queue ("The dense queue" below) and is throttled only when the wait ends
+first. One that provably cannot fit with nothing other requests hold is
+answered with the decode budget's answer at once, as the heap verdict below
+says. A body that joins the queue gives back its pool share there too, and
+holds a heap reservation for its own bytes instead, so a waiting body holds
+nothing a smaller request waits for. It takes the lane only in its turn.
+Without the lane, 64 dense senders put about 30 bodies of 10 MB on
 the heap at once (two at a time on the pool) and a 300 KiB `PutItem` on
 another connection took up to 1.5 s longer than without the gain. The lane
 bounds the walks and decodes past the budget at once, their CPU and the
@@ -538,7 +541,10 @@ The lane is taken only while no request would still wait for the in-flight
 bound once the body gave back what it holds of it (`protocol.BodiesWait`,
 either queue, in the order the pool lets them in); otherwise the body is
 answered `400 ThrottlingException` there
-(`Test_DecodeWithin_NoDenseBodyWhileABodyWaits`). A request that waits only
+(`Test_DecodeWithin_NoDenseBodyWhileABodyWaits`). It is asked at a body's
+first arrival only: a body in the dense queue has given its share back, so no
+request waits on it, and a later body waiting for the bound never takes its
+turn. A request that waits only
 on the dense body's own bytes does not count, since the move lets it in: a
 15.5 MB dense `BatchWriteItem` sent beside a 9.75 MB sparse one was refused
 in 4 to 5 rounds of 15 when every waiter counted, and is served in all 15
@@ -576,7 +582,9 @@ The projection depends on item order: a dense item ahead of sparse ones is
 projected over the whole body and can be refused at the mark, while the same
 items with the dense one last are walked to the end and served, as contract
 C allows. Two dense bodies decoded at once get one served and the other
-served too or throttled
+served after it, from the dense queue, or throttled when its wait ends first,
+the first needs the room its bytes take, or its request holds nothing of the
+in-flight bound
 (`Test_DecodeWithin_OneDenseBodyAtATime`,
 `Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled`), and which one
 is served first varies from run to run. The second is refused as too large
@@ -600,7 +608,7 @@ anything, and a throttle otherwise:
 | either | fits the room now | admitted (reserved at the two reserving checks) |
 | no, at every weigh | misses | the decode budget's answer, too large |
 | yes, at some weigh | misses the floor, which is zero when none is shown: cannot fit alone | the decode budget's answer, too large |
-| yes, at some weigh | fits the floor; when none is shown, its own bytes and the body fit the room | `400 ThrottlingException` (`protocol.ErrHeapBusy`) |
+| yes, at some weigh | fits the floor; when none is shown, its own bytes and the body fit the room | busy (`protocol.ErrHeapBusy`): at the two checks before decoding, the body waits in the dense queue and is answered `400 ThrottlingException` only when its wait ends first; at the final reservation, `400 ThrottlingException` at once, unless the queued bodies' bytes are what it misses for: the holder then sheds the queue and weighs again once they are given back ("The dense queue") |
 
 - **The floor** is what stays live without the other requests: what a
   collection found live, less what they reserve, never below zero, since a
@@ -623,15 +631,29 @@ anything, and a throttle otherwise:
   the first weigh and before the collection leaves it fresh, and a miss against
   it is too large. Sticky busy holds within one weigh attempt; the
   projected-heap weigh, the lane's own reservation and the final reservation
-  are separate attempts.
+  are separate attempts. A body waiting in the dense queue makes a new attempt
+  at every try: what one try saw of other requests, and its floor, end with it,
+  since a reservation given back during the wait makes them stale.
 - **What the floor counts as staying:** bodies and decodings held under the
   in-flight bound reserve nothing on the heap. The floor counts them as
-  staying, as a check with no other reservation does.
+  staying, as a check with no other reservation does. A body waiting in the
+  dense queue is not one of them: it reserves its bytes, so the floor counts
+  it as another request's.
+- **The remaining too-large case beside another body:** a dense body read
+  under the in-flight bound and not yet in the queue is held by nothing the
+  heap counts, so a body weighed beside it with no reservation in the way is
+  answered too large when the other body's bytes tip it, though it fits
+  alone. The tip is under one such body: 0.48 to 0.73 MB for a 751 KB batch.
+  Two senders on a fixed schedule of 80 sends at 256 KiB over the least room
+  get 14 too large on 53c8394f and 7 with the queue; at 1 MiB, none. Two
+  senders in a closed loop lock into it at 256 KiB: 198 of 200 on
+  53c8394f and 181 of 200 with the queue (SQ-532).
 - **The remaining case, accepted:** a body that can never fit, sent beside a
   reservation so large that the body passes the room beside it even with
   nothing live, runs no collection, since none could make room for it now. So
-  no floor is shown and it is throttled until a retry finds it alone, or the
-  SDK gives up.
+  no floor is shown and it waits in the dense queue: in its turn after the
+  reservation is given back it is answered too large, and when its wait ends
+  first it is throttled until a retry finds it alone, or the SDK gives up.
 
 Tests: `Test_heapVerdict_Table`,
 `Test_TakeDenseLane_AnotherAnsweredDuringTheCollectionStaysBusy`,
@@ -709,6 +731,156 @@ after decoding for every one: the estimate runs 1.01 (lists 31 deep) to 2.02
 (string and number sets) times what is live. `Fuzz_heapEstimate_coversLiveHeap`
 is the same property from a fuzzed seed and size. The test measures what is
 live after decoding; the growth peak is bounded by construction, not by it.
+
+##### The dense queue
+
+A body charged past `DecodeBudget` whose walk reaches the mark finds one of
+three things: room, provable lack of it, or room held by other requests (the
+lane, or reservations it could fit without). The third waits
+(`protocol.WaitDense`, `awsjson`'s `moveBody`):
+
+- **What waits:** a body that finds the lane taken (`ErrDenseLaneTaken`) or
+  the heap busy (`ErrHeapBusy`, the verdict's fourth row) at the check before
+  the lane or at `TakeDenseLane`. A body past the room with nothing live
+  (`protocol.CheckHeapRoom`, rows two and three) is answered too large at once,
+  even while others wait; one found too large against what is live, which only
+  the lane's holder may collect for, is answered in its turn.
+- **Order:** one queue, first in first out. A body that arrives while any body
+  waits joins the end without trying. Only the head tries: at once when it
+  joins an empty queue, and again each time the lane or a reservation is given
+  back, or the body ahead of it leaves. Each try is a fresh weigh, its own
+  collection included when the heap stands in the way, so at most one waiting
+  body collects at a time. A head that is too large in its turn is answered so
+  and leaves, and the next body has its turn. The order holds from joining. A
+  body's first try runs before it joins, so between a body's first try and its
+  joining the queue, a body that finds the queue empty tries first. The passed
+  body loses its turn, and when the passing body takes the lane and misses for
+  the passed body's bytes, it sheds the passed body ("Shedding" below), which
+  is throttled though it arrived first.
+- **Head-of-line cost:** strict order means a later body that would fit now
+  waits behind a head that does not: a 15 MB batch at the head, waiting for a
+  handler's reservation, keeps a 200 KB `PutItem` behind it waiting too, up to
+  the head's wait, though the `PutItem` fits beside the reservation. Letting
+  it pass would let a stream of small dense bodies starve a large one forever,
+  which is the failure the queue exists to end.
+- **The deadline:** a request has one deadline for the lane and the heap,
+  `protocol.DefaultDenseWait`, 2 s from its body's first try
+  (`protocol.WithDenseWait`, ended early by the request's context). Its wait
+  in the queue and, holding the lane, its waits for the bodies it sheds at
+  `TakeDenseLane`, the lane's reservation and the final reservation all end
+  with it, and the body then answers `400 ThrottlingException`. The largest dense body is walked and
+  decoded in about 0.4 s, so 2 s outlasts a few of them ahead or a handler
+  that keeps a reservation, and ends well inside the 5 s a body waits for the
+  in-flight bound and an SDK's read timeout. A constant, not a setting.
+- **Context:** a waiter leaves the queue as soon as its request's context ends
+  (`protocol.DenseWaiter`): a client gone, or a connection the server closes at
+  shutdown. Shutdown's drain otherwise waits at most the 2 s for it.
+- **What a waiter holds:** a heap reservation for its own bytes, its seat
+  (`protocol.DenseSeat`), kept until its request is answered, and nothing of
+  the pool or the lane. From joining until its request gives them back, the
+  bytes sit in exactly one account: the queue's (`heap.queued`, which the
+  lane's holder may shed) or, while the body holds the lane, the lane's. They
+  move between the two only under `heap.mu`: the head that takes the lane
+  moves them to the lane's account, weighs its peak beside them as its own,
+  and moves them back if it is not admitted, so no weigh counts them twice or
+  not at all. Into the queue they move from the pool: the reservation is made
+  under `heap.mu` before the pool share is given back, so for a moment both
+  count them, never neither. The dense-queue tests check the accounts at
+  every move (`checkSeats`). It joins only
+  when what the last collection found live, what is reserved and its bytes
+  fit the room, without a collection, as `TakeDenseLane` weighs; otherwise it is throttled at once, a later arrival
+  that would take the room the lane's holder needs. With its bytes reserved,
+  every weigh counts them as another request's, so a body they stand in the
+  way of is busy and never too large, and the pool it gave back admits other
+  requests' bodies while it waits. Before, a waiter kept its pool share, a
+  15 MB body 44 MB of the 64 MiB bound, and a 200 KB `PutItem` waited behind
+  it for the pool up to the waiter's 2 s (SQ-529 F2); a third dense sender
+  waited for the pool too and was throttled there (SQ-531 F2). A body whose
+  request holds none of the pool is counted nowhere while it waits, so it does
+  not wait
+  (`protocol.TryDense`): it is throttled at once, as before the queue, and also
+  while any body waits, so it never passes one. That is a request one service
+  makes to another through the gateway, and every body under
+  `GOSTACK_MAX_IN_FLIGHT_BODIES=0`. A body of `FreeBody` (64 KiB) or less,
+  which the gateway never meters, does not reach the mark: the smallest that
+  does, 342 lists nested to the depth limit, is 85 KB.
+- **Shedding:** every body in the queue arrived after the lane's holder, but
+  for one passed in the window above. When
+  the holder's weigh, at `TakeDenseLane` or its final reservation, is busy and
+  would fit with the queued bodies' bytes gone from the heap and their
+  reservations given back, the holder sheds the queue (`protocol`'s
+  `weighHeap`): every body whose bytes are the queue's leaves with a throttle,
+  a head trying included, and no body joins or makes a first try until the
+  holder's weigh returns, so a shed body cannot rejoin while the holder
+  collects. The holder waits until their requests are answered and give their
+  reservations back, then weighs again once with a fresh collection, until
+  its request's deadline, and is throttled after it. The head of the queue
+  takes the lane in its turn to shed the bodies behind it: before the lane it
+  is weighed beside what other requests reserve, not what the queue holds, so
+  bodies that joined after it never keep it from its turn. So an earlier
+  arrival is not refused for a later one's bytes, outside that window, and is
+  never admitted while they are still reserved. Before, a waiter's bytes were
+  live and reserved by nobody: the holder's final reservation found no other
+  request's reservation and answered a body that fits alone too large (SQ-529
+  F1); and the head's check before the lane counted the bodies behind it, so a
+  head that fits alone waited out its deadline behind them (SQ-532 round 2
+  F1).
+- **The throttles, the complete list:** the deadline; a body whose bytes do
+  not fit beside what is reserved, at joining; a body that would pass requests
+  waiting for the in-flight bound (`protocol.BodiesWait`, above), checked
+  before it joins the queue, since a queued body has given its share back; a
+  queued body the holder sheds, and a body that arrives while it sheds; the
+  final reservation's busy answer for room other requests' handlers hold,
+  which the holder does not wait for; and an uncharged request. compat.md's
+  limits table points here.
+- **Locks:** the queue, the reservations and the weighing share one lock,
+  `protocol`'s `heap.mu`, held only to read or change them: never across a
+  collection, a try, a wait or a decode. The lane is an atomic flag no body
+  waits on, and a wake is a send that never blocks, to the head's channel of
+  one. The one nesting is a lane's give-back, its `sync.Once` around clearing
+  the lane and taking `heap.mu` to wake the head; nothing takes them the other
+  way. The in-flight pool's lock is never held with `heap.mu`: `BodiesWait`
+  and `Charge.Release` take one after the other, and a joining body gives its
+  pool share back after `joinDense` unlocks
+  (`Test_WaitDense_NoLockAcrossACollectionOrAWait`). A shedding holder waits
+  on a channel `heap.mu` guards, closed under it when the last queued
+  reservation is given back, and holds no lock while it waits.
+- **Answered once:** a head whose request ends as its turn comes either tries
+  and is served holding the lane, or leaves with its busy answer holding
+  nothing and gives its turn to the body behind it, never both
+  (`Test_WaitDense_AWaiterWokenAsItIsCancelledAnswersOnce`). Releases, cancels
+  and deadlines racing each other leave no body asleep while it could be
+  served, and no goroutine behind
+  (`Test_WaitDense_RacingReleasesCancelsAndDeadlinesDrainTheQueue`). At
+  shutdown a waiter is answered at its deadline within the drain, or when the
+  drain's end closes its connection
+  (`Test_decodeBudget_aWaitingBodyIsAnsweredAtShutdown`).
+- **No idle work:** with no body waiting, a dense body takes the queue's lock
+  once to see that it is empty and makes no waiter, channel or timer
+  (`Test_WaitDense_NothingWhileNoBodyWaits`). A waiter makes one timer, stopped
+  when it leaves, and no goroutine.
+
+Two senders of a dense `PutItem` in a closed loop with no backoff, 200 each
+through the gateway, are all decoded and none throttled
+(`Test_decodeBudget_twoDenseSendersInAClosedLoopAreAllServed`); before the
+queue, SQ-508's loop of two senders was throttled about 16 times for each body
+decoded, 109 of 122 throttles for the lane. Tests: `Test_WaitDense_FirstInFirstOut`,
+`Test_WaitDense_ALaterBodyThatWouldFitWaitsBehindTheHead`,
+`Test_WaitDense_TheDeadlineAnswersBusy`,
+`Test_WaitDense_ACancelledBodyLeavesTheQueue`,
+`Test_WaitDense_ABodyThatCannotFitIsAnsweredAtOnce`,
+`Test_WaitDense_NoLostWakeups`, `Test_DecodeWithin_AChargedBodyWaitsForTheRoom`,
+`Test_DecodeWithin_AnUnchargedBodyDoesNotPassAWaitingOne`,
+`Test_DecodeWithin_ATooLargeBodyDoesNotWaitItsTurn`,
+`Test_WaitDense_AQueuedBodysBytesAreAnotherRequests`,
+`Test_WaitDense_ABodyWhoseBytesDoNotFitIsNotQueued`,
+`Test_WaitDense_TheLaneHolderShedsAQueueThatTakesItsRoom`,
+`Test_WaitDense_AHeadTryingWhenTheQueueIsShedIsShedWithIt`,
+`Test_WaitDense_RacingShedsReleasesAndCancelsDrainTheQueue`,
+`Test_WaitDense_TheLaneHolderWaitsForAShedBodyAtMostTheWait`,
+`Test_WaitDense_TheLaneHolderDoesNotShedForAnotherRequestsRoom`,
+`Test_decodeBudget_aBodyWaitingBehindTheHeadDoesNotMakeItTooLarge`; benchmark
+`BenchmarkDenseAdmission` (DynamoDB).
 
 Residuals, accepted: a bounded pool trades availability under abuse for
 memory.
