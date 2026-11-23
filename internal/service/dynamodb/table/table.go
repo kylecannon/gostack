@@ -132,6 +132,12 @@ func (t *Table) IndexStats(name string) (count, size int, ok bool) {
 
 // Get returns the item with key, or nil. key must have passed CheckKey.
 func (t *Table) Get(key value.Item) value.Item {
+	return value.Unpack(t.GetPacked(key))
+}
+
+// GetPacked returns the item with key as it is stored, or "". key must have
+// passed CheckKey.
+func (t *Table) GetPacked(key value.Item) value.Packed {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -159,7 +165,7 @@ func (t *Table) IndexesHeld() []IndexSpec {
 func (t *Table) GetHeld(key value.Item) value.Item {
 	hash, rng := t.primaryKey(key)
 
-	return t.primary.get(hash, rng, "")
+	return value.Unpack(t.primary.get(hash, rng, ""))
 }
 
 // Write is the one write path. It calls decide with the item stored at key,
@@ -251,12 +257,15 @@ func (t *Table) AddIndex(spec IndexSpec) {
 	defer t.mu.Unlock()
 
 	idx := &index{spec: spec, data: newStore()}
+	names := keyNames(t.key, []IndexSpec{spec})
+
 	for _, hash := range t.primary.sortedKeys() {
 		for _, e := range t.primary.parts[hash].entries {
-			if ihash, isort, ok := indexKey(&spec, e.item); ok {
-				idx.data.put(ihash, entry{sort: isort, tie: t.tie(e.item), item: e.item})
+			keys := e.item.Attrs(names)
+			if ihash, isort, ok := indexKey(&spec, keys); ok {
+				idx.data.put(ihash, entry{sort: isort, tie: t.tie(keys), item: e.item})
 				idx.count++
-				idx.size += value.ItemSize(e.item)
+				idx.size += e.item.Size()
 			}
 		}
 	}
@@ -317,7 +326,7 @@ type SortCondition struct {
 //nolint:revive // flag-parameter: the direction of the read is part of the API
 func (t *Table) Range(
 	indexName string, hash *api.AttributeValue, cond SortCondition, start value.Item, forward bool,
-	visit func(value.Item) bool,
+	visit func(value.Packed) bool,
 ) error {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -351,7 +360,7 @@ func (t *Table) Range(
 }
 
 //nolint:revive // flag-parameter: as Range
-func visitRange(entries []entry, lo, hi int, forward bool, visit func(value.Item) bool) {
+func visitRange(entries []entry, lo, hi int, forward bool, visit func(value.Packed) bool) {
 	if forward {
 		for i := lo; i < hi; i++ {
 			if !visit(entries[i].item) {
@@ -373,7 +382,7 @@ func visitRange(entries []entry, lo, hi int, forward bool, visit func(value.Item
 // partition in the order of their encoded hash values and in range key order
 // within each, beginning after the exclusive start key start when it is not
 // nil. visit is as for Range.
-func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) bool) error {
+func (t *Table) Scan(indexName string, start value.Item, visit func(hash string, item value.Packed) bool) error {
 	if t.needsSort(indexName) {
 		t.sortKeys(indexName)
 	}
@@ -416,7 +425,7 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 		}
 
 		for _, e := range p.entries[lo:] {
-			if !visit(e.item) {
+			if !visit(hash, e.item) {
 				return nil
 			}
 		}
@@ -428,16 +437,18 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 // apply is Write's body: the caller holds mu for writing.
 func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, error), expired bool) (Change, error) {
 	hash, rng := t.primaryKey(key)
-	old := t.primary.get(hash, rng, "")
+	stored := t.primary.get(hash, rng, "")
+	old := value.Unpack(stored)
 
 	updated, err := decide(old)
 	if err != nil {
 		return Change{Old: old}, err
 	}
 
-	// The entry of the updated item takes its range key from the item, whose
-	// bytes it shares, and not from key, which is the request's.
-	var newRng string
+	// The item is packed once, here, and its entries take their keys from the
+	// packed item, whose bytes they share, and not from key or updated, which
+	// are the request's.
+	var packed value.Packed
 
 	if updated != nil {
 		err := t.CheckItem(updated)
@@ -450,15 +461,18 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 			return Change{Old: old}, errKeyChanged
 		}
 
-		newRng = s
+		packed, err = value.Pack(updated)
+		if err != nil {
+			return Change{Old: old}, err //nolint:wrapcheck // the encoder's own error
+		}
 	}
 
 	if old != nil {
-		t.unstore(hash, rng, old)
+		t.unstore(hash, rng, old, stored.Size())
 	}
 
-	if updated != nil {
-		t.store(hash, newRng, updated)
+	if packed != "" {
+		t.store(hash, packed)
 	}
 
 	change := Change{Old: old, New: updated, Expired: expired}
@@ -624,25 +638,29 @@ func (t *Table) tie(item value.Item) string {
 	return encodeKey(&h, &r)
 }
 
-func (t *Table) store(hash, rng string, item value.Item) {
-	size := value.ItemSize(item)
+// store puts item, packed, in the table's partition hash and in each index it
+// is in. Its keys are read from item, so they share its bytes.
+func (t *Table) store(hash string, item value.Packed) {
+	size := item.Size()
+	indexes := t.indexList()
+	keys := item.Attrs(keyNames(t.key, specsOf(indexes)))
 
-	t.primary.put(hash, entry{sort: rng, item: item})
+	t.primary.put(hash, entry{sort: sortKey(t.key, keys), item: item})
 	t.count++
 	t.size += size
 
-	for _, idx := range t.indexList() {
-		if ihash, isort, ok := indexKey(&idx.spec, item); ok {
-			idx.data.put(ihash, entry{sort: isort, tie: t.tie(item), item: item})
+	for _, idx := range indexes {
+		if ihash, isort, ok := indexKey(&idx.spec, keys); ok {
+			idx.data.put(ihash, entry{sort: isort, tie: t.tie(keys), item: item})
 			idx.count++
 			idx.size += size
 		}
 	}
 }
 
-func (t *Table) unstore(hash, rng string, item value.Item) {
-	size := value.ItemSize(item)
-
+// unstore removes the entries of item, stored in partition hash at range
+// value rng, whose size is size.
+func (t *Table) unstore(hash, rng string, item value.Item, size int) {
 	t.primary.remove(hash, rng, "")
 	t.count--
 	t.size -= size
@@ -654,6 +672,40 @@ func (t *Table) unstore(hash, rng string, item value.Item) {
 			idx.size -= size
 		}
 	}
+}
+
+// keyNames lists, each once, the key attributes of key and of each index of
+// specs: what an entry of the table or an index reads from a stored item.
+func keyNames(key KeySchema, specs []IndexSpec) []string {
+	const perKey = 2 // a hash and a range attribute
+
+	names := make([]string, 0, perKey+perKey*len(specs))
+
+	add := func(name string) {
+		if name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+
+	add(key.Hash.Name)
+	add(key.Range.Name)
+
+	for i := range specs {
+		add(specs[i].Key.Hash.Name)
+		add(specs[i].Key.Range.Name)
+	}
+
+	return names
+}
+
+// specsOf returns the specs of indexes.
+func specsOf(indexes []*index) []IndexSpec {
+	specs := make([]IndexSpec, len(indexes))
+	for i, idx := range indexes {
+		specs[i] = idx.spec
+	}
+
+	return specs
 }
 
 // indexKey returns the encoded index hash value and the encoded index range

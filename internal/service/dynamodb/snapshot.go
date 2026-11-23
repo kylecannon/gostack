@@ -394,8 +394,8 @@ func writeTable(out *snapshotWriter, img *tableImage) error {
 			out.text(",")
 		}
 
-		out.buf, out.names = appendItem(out.buf, items[i], out.names)
-		items[i] = nil // let a table dropped meanwhile go before the encode ends
+		out.buf, out.names = appendItem(out.buf, value.Unpack(items[i]), out.names)
+		items[i] = "" // let a table dropped meanwhile go before the encode ends
 
 		err := out.flushFull()
 		if err != nil {

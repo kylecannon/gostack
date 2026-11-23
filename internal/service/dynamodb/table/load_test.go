@@ -17,7 +17,9 @@ func scanKeys(t *testing.T, tbl *table.Table, index string) []string {
 
 	var got []string
 
-	require.NoError(t, tbl.Scan(index, nil, func(item value.Item) bool {
+	require.NoError(t, tbl.Scan(index, nil, func(_ string, packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		key := *item["pk"].S + "/" + *item["sk"].N
 		if g, ok := item["g"]; ok {
 			key += " g=" + *g.S
@@ -108,7 +110,8 @@ func Test_Table_ImageHeld(t *testing.T) {
 		items := img.Items()
 
 		got := make([]string, 0, len(items))
-		for _, item := range items {
+		for _, packed := range items {
+			item := value.Unpack(packed)
 			got = append(got, *item["pk"].S+"/"+*item["sk"].N)
 		}
 
@@ -157,7 +160,9 @@ func Test_Table_Load_hashOnly(t *testing.T) {
 
 	var got []string
 
-	require.NoError(t, tbl.Scan("", nil, func(item value.Item) bool {
+	require.NoError(t, tbl.Scan("", nil, func(_ string, packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		got = append(got, *item["pk"].S)
 
 		return true

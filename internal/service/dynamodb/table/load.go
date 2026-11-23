@@ -18,7 +18,7 @@ var errNotEmpty = errors.New("load into a table that holds items")
 // the table's lock; Items puts it in order after the lock is released.
 type Image struct {
 	parts  []imagePart
-	items  []value.Item
+	items  []value.Packed
 	sorted bool
 }
 
@@ -35,7 +35,7 @@ type imagePart struct {
 // image is one that later writes do not change, and putting it in order,
 // which a table with new partitions needs, waits for Image.Items.
 func (t *Table) ImageHeld() Image {
-	img := Image{items: make([]value.Item, 0, t.count), sorted: t.primary.sorted}
+	img := Image{items: make([]value.Packed, 0, t.count), sorted: t.primary.sorted}
 
 	visit := func(hash string, p *partition) {
 		start := len(img.items)
@@ -71,7 +71,7 @@ func (t *Table) ImageHeld() Image {
 // Items returns the image's items as Scan reads them: partition after
 // partition in the order of their encoded hash values, in range key order
 // within each. The image is left empty.
-func (img *Image) Items() []value.Item {
+func (img *Image) Items() []value.Packed {
 	if img.sorted {
 		items := img.items
 		*img = Image{}
@@ -81,7 +81,7 @@ func (img *Image) Items() []value.Item {
 
 	slices.SortFunc(img.parts, func(a, b imagePart) int { return strings.Compare(a.hash, b.hash) })
 
-	items := make([]value.Item, 0, len(img.items))
+	items := make([]value.Packed, 0, len(img.items))
 	for _, part := range img.parts {
 		items = append(items, img.items[part.start:part.end]...)
 	}
@@ -112,7 +112,12 @@ func (t *Table) Load(items []value.Item) error {
 		}
 	}
 
-	err := t.loadPrimary(items)
+	all, err := t.pack(items)
+	if err != nil {
+		return err
+	}
+
+	err = t.loadPrimary(all)
 	if err != nil {
 		return err
 	}
@@ -120,19 +125,19 @@ func (t *Table) Load(items []value.Item) error {
 	for _, idx := range t.indexList() {
 		key := idx.spec.Key
 
-		fill(&idx.data, items, func(dst []byte, item value.Item) ([]byte, bool) {
-			if !indexed(&idx.spec, item) {
+		fill(&idx.data, all, func(dst []byte, l *loaded) ([]byte, bool) {
+			if !indexed(&idx.spec, l.keys) {
 				return dst, false
 			}
 
-			h := item[key.Hash.Name]
+			h := l.keys[key.Hash.Name]
 
 			return value.AppendKeyString(dst, &h), true
-		}, func(item value.Item) entry {
+		}, func(l *loaded) entry {
 			idx.count++
-			idx.size += value.ItemSize(item)
+			idx.size += l.item.Size()
 
-			return entry{sort: sortKey(key, item), tie: t.tie(item), item: item}
+			return entry{sort: sortKey(key, l.keys), tie: t.tie(l.keys), item: l.item}
 		})
 		sortPartitions(&idx.data)
 	}
@@ -140,20 +145,45 @@ func (t *Table) Load(items []value.Item) error {
 	return nil
 }
 
+// loaded is an item Load packed, and its key attributes read back from the
+// packed item, whose bytes they share.
+type loaded struct {
+	item value.Packed
+	keys value.Item
+}
+
+// pack packs each of items, and drops the caller's reference to it.
+func (t *Table) pack(items []value.Item) ([]loaded, error) {
+	names := keyNames(t.key, specsOf(t.indexList()))
+	all := make([]loaded, len(items))
+
+	for i, item := range items {
+		p, err := value.Pack(item)
+		if err != nil {
+			return nil, err //nolint:wrapcheck // the encoder's own error
+		}
+
+		items[i] = nil
+		all[i] = loaded{item: p, keys: p.Attrs(names)}
+	}
+
+	return all, nil
+}
+
 // loadPrimary puts items in the table's own store. A table without a range
 // key has one item per partition, so its partitions are made in one pass;
 // with one, fill sizes them first.
-func (t *Table) loadPrimary(items []value.Item) error {
-	add := func(item value.Item) entry {
+func (t *Table) loadPrimary(items []loaded) error {
+	add := func(l *loaded) entry {
 		t.count++
-		t.size += value.ItemSize(item)
+		t.size += l.item.Size()
 
-		return entry{sort: sortKey(t.key, item), item: item}
+		return entry{sort: sortKey(t.key, l.keys), item: l.item}
 	}
 
 	if t.key.HasRange() {
-		fill(&t.primary, items, func(dst []byte, item value.Item) ([]byte, bool) {
-			h := item[t.key.Hash.Name]
+		fill(&t.primary, items, func(dst []byte, l *loaded) ([]byte, bool) {
+			h := l.keys[t.key.Hash.Name]
 
 			return value.AppendKeyString(dst, &h), true
 		}, add)
@@ -168,15 +198,15 @@ func (t *Table) loadPrimary(items []value.Item) error {
 	t.primary.parts = make(map[string]*partition, len(items))
 	t.primary.sorted = false
 
-	for _, item := range items {
-		h := item[t.key.Hash.Name]
+	for i := range items {
+		h := items[i].keys[t.key.Hash.Name]
 		hash := value.KeyString(&h)
 
 		if t.primary.parts[hash] != nil {
 			return ErrDuplicateKey
 		}
 
-		t.primary.parts[hash] = &partition{entries: []entry{add(item)}}
+		t.primary.parts[hash] = &partition{entries: []entry{add(&items[i])}}
 	}
 
 	return nil
@@ -199,8 +229,8 @@ func sortKey(key KeySchema, item value.Item) string {
 // first and makes each at its size, so a partition of many items is allocated
 // once rather than grown, and its key string once. The order is left to
 // sortPartitions.
-func fill(s *store, items []value.Item, hash func([]byte, value.Item) ([]byte, bool),
-	add func(value.Item) entry,
+func fill(s *store, items []loaded, hash func([]byte, *loaded) ([]byte, bool),
+	add func(*loaded) entry,
 ) {
 	var (
 		key    []byte
@@ -209,10 +239,10 @@ func fill(s *store, items []value.Item, hash func([]byte, value.Item) ([]byte, b
 
 	s.sorted = false
 
-	for _, item := range items {
+	for i := range items {
 		var ok bool
 
-		key, ok = hash(key[:0], item)
+		key, ok = hash(key[:0], &items[i])
 		if !ok {
 			continue
 		}
@@ -230,13 +260,13 @@ func fill(s *store, items []value.Item, hash func([]byte, value.Item) ([]byte, b
 		p.entries = make([]entry, 0, n)
 	}
 
-	for _, item := range items {
+	for i := range items {
 		var ok bool
 
-		key, ok = hash(key[:0], item)
+		key, ok = hash(key[:0], &items[i])
 		if ok {
 			p := s.parts[string(key)]
-			p.entries = append(p.entries, add(item))
+			p.entries = append(p.entries, add(&items[i]))
 		}
 	}
 }

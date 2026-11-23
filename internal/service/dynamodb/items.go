@@ -125,16 +125,23 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 		return nil, fmt.Errorf("item: %w", err)
 	}
 
-	stored := e.data.Get(in.Key)
+	stored := e.data.GetPacked(in.Key)
+	used := consumption{table: readUnits(stored.Size(), in.ConsistentRead)}
+	out := &api.GetItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
-	item := stored
-	if projection != nil && stored != nil {
-		item = projection.Apply(stored)
+	// An item with nothing to project goes out as it is stored; a statement
+	// reads Item, so it gets the item decoded.
+	switch {
+	case stored == "":
+	case projection != nil:
+		out.Item = projection.Apply(stored.Attrs(distinct(topNames(projection), nil)))
+	case originOf(ctx).statement:
+		out.Item = value.Unpack(stored)
+	default:
+		out.ItemJSON = stored.Encoded()
 	}
 
-	used := consumption{table: readUnits(value.ItemSize(stored), in.ConsistentRead)}
-
-	return &api.GetItemOutput{Item: item, ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}, nil
+	return out, nil
 }
 
 // DeleteItem removes the item with a key, if there is one, when its

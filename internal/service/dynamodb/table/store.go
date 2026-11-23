@@ -16,7 +16,7 @@ import (
 type entry struct {
 	sort string
 	tie  string
-	item value.Item
+	item value.Packed
 }
 
 // compare orders entries by range key value, then by tie.
@@ -54,17 +54,17 @@ func newStore() store {
 	return store{parts: make(map[string]*partition), sorted: true}
 }
 
-func (s *store) get(hash, sortKey, tie string) value.Item {
+func (s *store) get(hash, sortKey, tie string) value.Packed {
 	p := s.parts[hash]
 	if p == nil {
-		return nil
+		return ""
 	}
 
 	if i := searchFirst(p, sortKey, tie); i < len(p.entries) && p.entries[i].compare(sortKey, tie) == 0 {
 		return p.entries[i].item
 	}
 
-	return nil
+	return ""
 }
 
 // put stores e under hash, replacing an entry with the same range value and

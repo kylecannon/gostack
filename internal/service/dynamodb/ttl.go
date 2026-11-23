@@ -172,7 +172,11 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 
 	var keys []value.Item
 
-	_ = e.data.Scan("", nil, func(item value.Item) bool {
+	names := []string{attribute, schema.Hash.Name, schema.Range.Name}
+
+	_ = e.data.Scan("", nil, func(_ string, packed value.Packed) bool {
+		item := packed.Attrs(names)
+
 		if expired(item, attribute, threshold) {
 			keys = append(keys, keyOf(item, schema.Hash.Name, schema.Range.Name))
 		}

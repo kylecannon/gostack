@@ -80,7 +80,9 @@ func keysOf(
 
 	var got []string
 
-	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(item value.Item) bool {
+	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		got = append(got, *item["pk"].S+"/"+*item["sk"].N)
 
 		return true
@@ -201,7 +203,9 @@ func Test_Table_Range_beginsWith(t *testing.T) {
 
 	prefix := table.SortCondition{Op: table.SortBeginsWith, Values: []api.AttributeValue{s("ab")}}
 	require.NoError(t, tbl.Range("", new(s("p")), prefix, nil, true,
-		func(item value.Item) bool {
+		func(packed value.Packed) bool {
+			item := value.Unpack(packed)
+
 			got = append(got, *item["sk"].S)
 
 			return true
@@ -219,7 +223,7 @@ func Test_Table_Range_indexStartKey(t *testing.T) {
 	assert.Equal(t, []string{"p/2", "p/3"}, keysOf(t, tbl, "byG", s("same"), table.SortCondition{}, start, true),
 		"items sharing an index key are ordered by table key")
 
-	err := tbl.Range("nope", new(s("p")), table.SortCondition{}, nil, true, func(value.Item) bool { return true })
+	err := tbl.Range("nope", new(s("p")), table.SortCondition{}, nil, true, func(value.Packed) bool { return true })
 	require.ErrorIs(t, err, table.ErrNoIndex)
 }
 
@@ -234,7 +238,9 @@ func Test_Table_Scan(t *testing.T) {
 	scan := func(start value.Item, limit int) []string {
 		var got []string
 
-		require.NoError(t, tbl.Scan("", start, func(item value.Item) bool {
+		require.NoError(t, tbl.Scan("", start, func(_ string, packed value.Packed) bool {
+			item := value.Unpack(packed)
+
 			got = append(got, *item["pk"].S+"/"+*item["sk"].N)
 
 			return len(got) < limit
