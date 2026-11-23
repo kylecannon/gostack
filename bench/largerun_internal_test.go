@@ -420,20 +420,30 @@ func Test_runner_loadgen_keeps_what_a_failed_load_generator_printed(t *testing.T
 }
 
 // failingDynamoDB answers CreateTable and the first BatchWriteItem, and refuses
-// everything after them, as a target does that has just been killed.
+// everything after them, as a target does that has just been killed. A refusal
+// waits until the batch was answered and the client has had time to read the
+// answer: the first failure cancels the fill, and a batch still being read when
+// it does is not counted.
 func failingDynamoDB(t *testing.T) client {
 	t.Helper()
 
 	var calls atomic.Int64
 
+	answered := make(chan struct{})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if calls.Add(1) <= 2 {
+		switch calls.Add(1) {
+		case 1:
+			_, _ = w.Write([]byte(`{}`))
+		case 2:
 			_, _ = w.Write([]byte(`{}`))
 
-			return
+			close(answered)
+		default:
+			<-answered
+			time.Sleep(200 * time.Millisecond)
+			http.Error(w, "gone", http.StatusServiceUnavailable)
 		}
-
-		http.Error(w, "gone", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
 
