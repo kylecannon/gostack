@@ -210,6 +210,10 @@ func Test_UpdateExpr_Apply(t *testing.T) {
 			require.NoError(t, err)
 			require.JSONEq(t, tt.wantItem, updateJSON(t, updated))
 
+			owned, err := u.ApplyOwned(updateItem(t, updateKey), updateItem(t, tt.giveItem))
+			require.NoError(t, err)
+			require.JSONEq(t, tt.wantItem, updateJSON(t, owned), "ApplyOwned answers as Apply")
+
 			for _, rv := range []struct{ mode, want string }{
 				{expression.ReturnUpdatedOld, tt.wantOld},
 				{expression.ReturnUpdatedNew, tt.wantNew},
@@ -299,7 +303,10 @@ func Test_UpdateExpr_Apply_Errors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, _, err := updateApply(t, updateItem(t, tt.giveItem), tt.giveExpr, updateSubs(t, tt.giveNames, tt.giveValues))
+			u, _, err := updateApply(t, updateItem(t, tt.giveItem), tt.giveExpr, updateSubs(t, tt.giveNames, tt.giveValues))
+			requireUpdateError(t, err, tt.wantMsg)
+
+			_, err = u.ApplyOwned(updateItem(t, updateKey), updateItem(t, tt.giveItem))
 			requireUpdateError(t, err, tt.wantMsg)
 		})
 	}

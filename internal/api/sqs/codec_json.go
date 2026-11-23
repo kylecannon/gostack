@@ -749,7 +749,7 @@ func appendJSONMessage(w *awsjson.Writer, v *Message) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMessageAttributeValue(w, &e0)
+			appendJSONMapValueMessageAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -794,6 +794,13 @@ func appendJSONMessageAttributeValue(w *awsjson.Writer, v *MessageAttributeValue
 		w.String(*v.DataType)
 	}
 	w.ObjectEnd(start)
+}
+
+// appendJSONMapValueMessageAttributeValue appends v, a map value, as a json object.
+//
+//go:noinline
+func appendJSONMapValueMessageAttributeValue(w *awsjson.Writer, v MessageAttributeValue) {
+	appendJSONMessageAttributeValue(w, &v)
 }
 
 // appendJSONPurgeQueueOutput appends v as a json object.

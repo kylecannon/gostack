@@ -141,7 +141,7 @@ func appendJSONAttributeValue(w *awsjson.Writer, v *AttributeValue) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -165,6 +165,13 @@ func appendJSONAttributeValue(w *awsjson.Writer, v *AttributeValue) {
 		w.Bool(*v.BOOL)
 	}
 	w.ObjectEnd(start)
+}
+
+// appendJSONMapValueAttributeValue appends v, a map value, as a json object.
+//
+//go:noinline
+func appendJSONMapValueAttributeValue(w *awsjson.Writer, v AttributeValue) {
+	appendJSONAttributeValue(w, &v)
 }
 
 // appendJSONDescribeStreamOutput appends v as a json object.
@@ -415,7 +422,7 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -430,7 +437,7 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -445,7 +452,7 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}

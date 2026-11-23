@@ -6,6 +6,31 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
+// appendJSONLocalSecondaryIndexInfo appends v as a json object.
+func appendJSONLocalSecondaryIndexInfo(w *awsjson.Writer, v *LocalSecondaryIndexInfo) {
+	start := w.ObjectStart()
+	if v.IndexName != nil {
+		w.Raw(`,"IndexName":`)
+		w.String(*v.IndexName)
+	}
+	if v.KeySchema != nil {
+		w.Raw(`,"KeySchema":`)
+		w.Byte('[')
+		for i0 := range v.KeySchema {
+			if i0 > 0 {
+				w.Byte(',')
+			}
+			appendJSONKeySchemaElement(w, &v.KeySchema[i0])
+		}
+		w.Byte(']')
+	}
+	if v.Projection != nil {
+		w.Raw(`,"Projection":`)
+		appendJSONProjection(w, v.Projection)
+	}
+	w.ObjectEnd(start)
+}
+
 // appendJSONOnDemandThroughput appends v as a json object.
 func appendJSONOnDemandThroughput(w *awsjson.Writer, v *OnDemandThroughput) {
 	start := w.ObjectStart()
@@ -140,7 +165,7 @@ func appendJSONPutItemOutput(w *awsjson.Writer, v *PutItemOutput) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -169,7 +194,7 @@ func appendJSONPutRequest(w *awsjson.Writer, v *PutRequest) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -218,7 +243,7 @@ func appendJSONQueryOutput(w *awsjson.Writer, v *QueryOutput) {
 					first1 = false
 					w.String(k1)
 					w.Byte(':')
-					appendJSONAttributeValue(w, &e1)
+					appendJSONMapValueAttributeValue(w, e1)
 				}
 				w.Byte('}')
 			}
@@ -244,7 +269,7 @@ func appendJSONQueryOutput(w *awsjson.Writer, v *QueryOutput) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -614,7 +639,7 @@ func appendJSONScanOutput(w *awsjson.Writer, v *ScanOutput) {
 					first1 = false
 					w.String(k1)
 					w.Byte(':')
-					appendJSONAttributeValue(w, &e1)
+					appendJSONMapValueAttributeValue(w, e1)
 				}
 				w.Byte('}')
 			}
@@ -640,7 +665,7 @@ func appendJSONScanOutput(w *awsjson.Writer, v *ScanOutput) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}
@@ -1239,7 +1264,7 @@ func appendJSONUpdateItemOutput(w *awsjson.Writer, v *UpdateItemOutput) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONAttributeValue(w, &e0)
+			appendJSONMapValueAttributeValue(w, e0)
 		}
 		w.Byte('}')
 	}

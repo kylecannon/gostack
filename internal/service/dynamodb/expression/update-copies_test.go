@@ -84,3 +84,36 @@ func Test_Apply_NestedSetsCopyTheirParentOnce(t *testing.T) { //nolint:parallelt
 	t.Logf("bytes of one Apply of %d nested SET actions: %d", actions, res.AllocedBytesPerOp())
 	require.Less(t, res.AllocedBytesPerOp(), int64(4<<20), "bytes of one Apply of %d nested SET actions", actions)
 }
+
+// Test_ApplyOwned_CopiesBelowTheItem: ApplyOwned writes the update into the
+// item it is given and returns it, but a map below an attribute is still copied
+// before an action changes it. In SET a = b, b.x = :v the new a is the old b,
+// which shares b's map: written in place, b.x = :v would change a too, and the
+// map the caller unpacked under b.
+func Test_ApplyOwned_CopiesBelowTheItem(t *testing.T) {
+	t.Parallel()
+
+	u, err := expression.ParseUpdate("SET a = b, b.x = :n", updateSubs(t, "", `{":n":{"N":"7"}}`), nil)
+	require.NoError(t, err)
+
+	owned := updateItem(t, `{"pk":{"S":"k"},"b":{"M":{"x":{"N":"1"}}}}`)
+	oldB := owned["b"].M
+
+	got, err := u.ApplyOwned(updateItem(t, `{"pk":{"S":"k"}}`), owned)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pk":{"S":"k"},"a":{"M":{"x":{"N":"1"}}},"b":{"M":{"x":{"N":"7"}}}}`, updateJSON(t, got))
+	require.Equal(t, "1", *oldB["x"].N, "the map under the old b is not written")
+	require.Contains(t, owned, "a", "the item given is the item written")
+
+	// With no old item, ApplyOwned makes one.
+	got, err = u.ApplyOwned(updateItem(t, `{"pk":{"S":"k"}}`), nil)
+	require.Error(t, err, "b is missing, so a = b fails")
+	require.Nil(t, got)
+
+	set, err := expression.ParseUpdate("SET c = :n", updateSubs(t, "", `{":n":{"N":"7"}}`), nil)
+	require.NoError(t, err)
+
+	got, err = set.ApplyOwned(updateItem(t, `{"pk":{"S":"k"}}`), nil)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"pk":{"S":"k"},"c":{"N":"7"}}`, updateJSON(t, got))
+}

@@ -157,6 +157,39 @@ func Test_Table_ImageHeld(t *testing.T) {
 	require.Equal(t, keys(), image(), "after a delete that empties a partition")
 }
 
+// Test_Table_ImageHeld_putsPartitionsInOrder: an image taken before any Scan
+// has built the partition order holds the partitions in map order, and Each
+// puts them in Scan's order. With 64 partitions, map order is Scan's order by
+// chance about once in 10^89 runs.
+func Test_Table_ImageHeld_putsPartitionsInOrder(t *testing.T) {
+	tbl := composite()
+
+	for i := range 64 {
+		put(t, tbl, value.Item{"pk": s("p" + strconv.Itoa(63-i)), "sk": n(strconv.Itoa(i % 3))})
+	}
+
+	unlock := table.ReadLock(tbl)
+	img := tbl.ImageHeld()
+	unlock()
+
+	var got []string
+
+	require.NoError(t, img.Each(func(packed value.Packed) error {
+		item := value.Unpack(packed)
+		got = append(got, *item["pk"].S+"/"+*item["sk"].N)
+
+		return nil
+	}))
+
+	want := make([]string, 0, len(got))
+	for _, key := range scanKeys(t, tbl, "") {
+		want = append(want, strings.Fields(key)[0])
+	}
+
+	require.Len(t, got, 64)
+	require.Equal(t, want, got)
+}
+
 // Test_Table_Load_hashOnly checks a table without a range key, which Load
 // fills in one pass.
 func Test_Table_Load_hashOnly(t *testing.T) {
