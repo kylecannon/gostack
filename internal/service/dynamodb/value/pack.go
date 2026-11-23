@@ -48,44 +48,81 @@ func Pack(item Item) (Packed, error) {
 		return "", nil
 	}
 
-	bp, _ := packScratch.Get().(*[]byte)
-	defer packScratch.Put(bp)
-
 	size := ItemSize(item)
 
 	var shape packShape
 	shape.item(item)
 
-	// Sizes and counts are never negative.
-	buf := binary.AppendUvarint((*bp)[:0], uint64(size))   //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(shape.scalars)) //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(len(item)))
-	// A scratch buffer the pool lost, or one too small for the item, grows to
-	// a little over the item's json size, not by append's steps, whose sum is
-	// about five times a large item. It usually grows once: the json of a
-	// string with control bytes, escaped to six bytes each, can outgrow it.
-	buf = slices.Grow(buf, size+shape.extra+packWrapping)
-	head := len(buf)
+	estimate := size + shape.extra + packWrapping
 
-	out := api.GetItemOutput{Item: item}
+	bp, _ := packScratch.Get().(*[]byte)
+	defer packScratch.Put(bp)
 
-	buf, err := out.AppendJSON(buf)
+	if estimate >= packOwnBuffer && cap(*bp) < packHeaderMax+estimate {
+		buf, packed, err := packInto(make([]byte, 0, packHeaderMax+estimate), item, size, shape.scalars, estimate)
+		if err != nil {
+			return "", err
+		}
+
+		// The buffer becomes the Packed when the estimate held the json
+		// closely, as it does a large string or binary value: copying the
+		// item again would cost a second allocation of its size. Slack past
+		// packSlack, from many small values or escaped control bytes, would be
+		// held as long as the item, so the item is copied to its own size and
+		// the buffer is the pool's, for the next large item.
+		if cap(buf)-len(packed) > len(packed)/packSlack {
+			*bp = buf
+
+			return Packed(packed), nil
+		}
+
+		return Packed(unsafe.String(unsafe.SliceData(packed), len(packed))), nil //nolint:gosec // G103: buf is not used again
+	}
+
+	buf, packed, err := packInto((*bp)[:0], item, size, shape.scalars, estimate)
 	*bp = buf
 
 	if err != nil {
 		return "", err
 	}
 
-	// The wrapping is checked on the bytes, and the item is copied once, into
-	// the Packed: a string(body) here would copy it again.
-	body := buf[head:]
-	if !bytes.HasPrefix(body, []byte(itemPrefix)) || !bytes.HasSuffix(body, []byte(itemSuffix)) {
-		return "", errPackShape
+	// The item is copied once, into the Packed.
+	return Packed(packed), nil
+}
+
+// packInto appends the header and the json of item, as GetItemOutput wraps
+// it, to buf, which it grows to about the json's size first. It returns buf
+// and the packed item within it: the header, moved up against the item's
+// json over the wrapping's prefix, so that neither the json nor a copy of it
+// moves. On an error packed is nil and buf may hold part of the item.
+func packInto(buf []byte, item Item, size, scalars, estimate int) ([]byte, []byte, error) {
+	// Sizes and counts are never negative.
+	buf = binary.AppendUvarint(buf, uint64(size))    //nolint:gosec // G115: see above
+	buf = binary.AppendUvarint(buf, uint64(scalars)) //nolint:gosec // G115: see above
+	buf = binary.AppendUvarint(buf, uint64(len(item)))
+	// A scratch buffer the pool lost, or one too small for the item, grows to
+	// a little over the item's json size, not by append's steps, whose sum is
+	// about five times a large item. It usually grows once: the json of a
+	// string with control bytes, escaped to six bytes each, can outgrow it.
+	buf = slices.Grow(buf, estimate)
+	head := len(buf)
+
+	out := api.GetItemOutput{Item: item}
+
+	buf, err := out.AppendJSON(buf)
+	if err != nil {
+		return buf, nil, err
 	}
 
-	buf = append(buf[:head], body[len(itemPrefix):len(body)-len(itemSuffix)]...)
+	body := buf[head:]
+	if !bytes.HasPrefix(body, []byte(itemPrefix)) || !bytes.HasSuffix(body, []byte(itemSuffix)) {
+		return buf, nil, errPackShape
+	}
 
-	return Packed(buf), nil
+	// A header is a few bytes, so it fits over the prefix's.
+	copy(buf[len(itemPrefix):], buf[:head])
+
+	return buf, buf[len(itemPrefix) : len(buf)-len(itemSuffix)], nil
 }
 
 // The json Pack writes around what ItemSize counts, a little over: the quotes,
@@ -95,6 +132,20 @@ const (
 	packPerValue   = 12
 	packPerElement = 4
 	packWrapping   = 64
+)
+
+// Pack encodes an item into a pooled scratch buffer and copies it into the
+// Packed. A pool loses its buffers at each collection, which a large item's
+// writes bring often, and a lost buffer is one more allocation of the item's
+// size. So an item whose json Pack estimates at packOwnBuffer or more, past
+// which the runtime gives each allocation pages of its own, and which the
+// pooled buffer cannot hold, is encoded into a buffer of its own, with room
+// for the longest header, packHeaderMax. That buffer is kept as the Packed
+// when the slack the estimate left is at most a packSlack-th of it.
+const (
+	packOwnBuffer = 32 << 10
+	packHeaderMax = 3 * binary.MaxVarintLen64
+	packSlack     = 16
 )
 
 // packShape is what one walk of an item finds: the count of its S and N
@@ -352,7 +403,17 @@ const (
 type Decoder struct {
 	strs    []string
 	scratch *viewScratch
+	// wide is the last list of more than wideNames names the Decoder read
+	// items with, and wideIndex the place of each name in it: an attribute of
+	// a wide item is looked up in it in one step, and not in as many as there
+	// are names. Holding wide keeps its array from being reused for another
+	// list, so the list a read passes again is known by its first element.
+	wide      []string
+	wideIndex map[string]int
 }
+
+// wideNames is the most names an attribute is looked up in one by one.
+const wideNames = 16
 
 // viewScratch is what View and Peek reuse: a map each, and the strings of
 // Peek's values.
@@ -470,6 +531,28 @@ func (d *Decoder) Release() {
 	viewScratches.Put(s)
 }
 
+// indexOf is the place of each name of names, built once for a list the
+// Decoder reads with again, or nil for a list of wideNames or fewer.
+func (d *Decoder) indexOf(names []string) map[string]int {
+	if len(names) <= wideNames {
+		return nil
+	}
+
+	//nolint:gosec // G103: compares addresses, reads nothing
+	if same := unsafe.SliceData(names) == unsafe.SliceData(d.wide); !same || len(names) != len(d.wide) {
+		d.wide = names
+		d.wideIndex = make(map[string]int, len(names))
+
+		for i, name := range names {
+			if _, ok := d.wideIndex[name]; !ok {
+				d.wideIndex[name] = i
+			}
+		}
+	}
+
+	return d.wideIndex
+}
+
 // oversized is whether rm holds more than a pool keeps: a map of more
 // attributes, or room for more names, which an earlier, wider item left behind
 // a narrower one.
@@ -530,7 +613,7 @@ func (d *Decoder) decode(p Packed, names []string, below []*Selection, rm *reuse
 		d.strs = make([]string, 0, max(need, min(chunkGrowth*cap(d.strs), maxDecoderChunk)))
 	}
 
-	u := unpacker{s: string(p), i: h.body, strs: d.strs, chunked: true}
+	u := unpacker{s: string(p), i: h.body, strs: d.strs, chunked: true, index: d.indexOf(names)}
 
 	var m Item
 	if rm != nil {
@@ -678,6 +761,10 @@ type unpacker struct {
 	// parts, when not nil, holds the map each Selection's part of a map is
 	// read into (ViewSelect).
 	parts map[*Selection]*reusedMap
+	// index, when not nil, is the place of each name the top object wants
+	// (Decoder.indexOf). That object takes it; one below it looks its names
+	// up one by one.
+	index map[string]int
 }
 
 // object reads a map of attribute values, all of them or, when want is not
@@ -689,11 +776,12 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 		m = make(Item, hint)
 	}
 
-	u.reuse = nil
+	index := u.index
+	u.reuse, u.index = nil, nil
 	u.i++ // {
 
 	if u.s[u.i] != '}' {
-		u.members(m, want, below, reused)
+		u.members(m, want, index, below, reused)
 	} else {
 		u.i++
 		u.open = false
@@ -702,8 +790,9 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 	return m
 }
 
-// members reads the members of an object, from its first, into m.
-func (u *unpacker) members(m Item, want []string, below []*Selection, reused bool) {
+// members reads the members of an object, from its first, into m. index, when
+// not nil, is the place of each name of want.
+func (u *unpacker) members(m Item, want []string, index map[string]int, below []*Selection, reused bool) {
 	found := 0
 
 	for {
@@ -712,7 +801,7 @@ func (u *unpacker) members(m Item, want []string, below []*Selection, reused boo
 
 		j := -1
 		if want != nil && found < len(want) {
-			j = slices.Index(want, name)
+			j = wantedAt(want, index, name)
 		}
 
 		switch {
@@ -747,6 +836,20 @@ func (u *unpacker) members(m Item, want []string, below []*Selection, reused boo
 			return
 		}
 	}
+}
+
+// wantedAt is the place of name in want, -1 when it is not there; index, when
+// not nil, holds each name's place.
+func wantedAt(want []string, index map[string]int, name string) int {
+	if index == nil {
+		return slices.Index(want, name)
+	}
+
+	if j, ok := index[name]; ok {
+		return j
+	}
+
+	return -1
 }
 
 // member reads a map value: whole for nil sel, else the members sel names.

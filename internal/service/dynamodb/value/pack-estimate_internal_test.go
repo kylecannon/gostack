@@ -1,6 +1,7 @@
 package value
 
 import (
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,5 +81,68 @@ func Test_packShape_coversTheJSON(t *testing.T) {
 		estimate := ItemSize(item) + shape.extra + packWrapping
 		assert.GreaterOrEqual(t, estimate, json, "%s: the estimate holds the json", name)
 		assert.LessOrEqual(t, estimate, json+json/2+packWrapping, "%s: the estimate is near the json", name)
+	}
+}
+
+// Test_Pack_largeItemAllocatesItsSizeOnce: a large string or binary value
+// packed after a collection, which empties the scratch pool, allocates one
+// buffer of about the item's size, which becomes the Packed, and not a scratch
+// buffer and a copy as well. A large item of many small values, whose estimate
+// leaves more slack than the Packed keeps, is copied to its own size. Each
+// packs to the item, whichever buffer it took. It is not parallel: another
+// test's allocations would count.
+func Test_Pack_largeItemAllocatesItsSizeOnce(t *testing.T) {
+	big := strings.Repeat("x", 399<<10)
+
+	many := Item{}
+	for i := range 4000 {
+		many["a"+strconv.Itoa(i)] = api.AttributeValue{S: new("v")}
+	}
+
+	str := Item{"pk": {S: new("k")}, "s": {S: &big}}
+
+	items := []struct {
+		name string
+		item Item
+		once bool
+	}{
+		{"string", str, true},
+		{"binary", Item{"pk": {S: new("k")}, "b": {B: []byte(big)}}, true},
+		{"attributes", many, false},
+		// The pool holds the attributes' buffer now, so this one is copied
+		// out of it.
+		{"string from the pool", str, false},
+	}
+
+	for _, c := range items {
+		if c.once {
+			runtime.GC() //nolint:revive // a pool drops its buffers over two collections
+			runtime.GC() //nolint:revive // a pool drops its buffers over two collections
+		}
+
+		var before, after runtime.MemStats
+
+		runtime.ReadMemStats(&before)
+
+		packed, err := Pack(c.item)
+
+		runtime.ReadMemStats(&after)
+		require.NoError(t, err, c.name)
+
+		if c.once {
+			// The runtime rounds a large allocation up to whole pages.
+			const page = 8 << 10
+
+			assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(len(packed)+len(packed)/packSlack+page),
+				"%s: Pack allocated more than the item once", c.name)
+		}
+
+		assert.True(t, EqualItems(Unpack(packed), c.item), "%s: the item unpacks as it was", c.name)
+
+		typed, err := (&api.GetItemOutput{Item: c.item}).AppendJSON(nil)
+		require.NoError(t, err, c.name)
+		// The encoder writes a map's members in the order it ranges them.
+		assert.Len(t, packed.JSON(), len(typed)-len(itemPrefix+itemSuffix), "%s: the json is the encoder's", c.name)
+		assert.Equal(t, ItemSize(c.item), packed.Size(), c.name)
 	}
 }

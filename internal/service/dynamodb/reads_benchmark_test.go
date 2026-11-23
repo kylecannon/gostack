@@ -287,6 +287,7 @@ func fanOutErr(workers int, fn func(worker int) error) error {
 func BenchmarkUpdateItem(b *testing.B) {
 	benchUpdate(b, newStack)
 	b.Run(persistOn, func(b *testing.B) { benchUpdate(b, persistedStack) })
+	benchUpdatePayload(b)
 }
 
 // benchUpdate runs the UpdateItem matrix on the stacks mk builds.

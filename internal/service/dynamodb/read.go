@@ -153,14 +153,38 @@ func holdsAll(spec *table.IndexSpec) bool {
 	return spec.Projection.Type == table.ProjectAll || spec.Projection.Type == ""
 }
 
+// distinctLinear is the most names distinct looks for one by one.
+const distinctLinear = 16
+
 // distinct is the names of a and b, each once, leaving out the empty name. It
 // is nil when there are none, which a Decoder reads as every attribute.
 func distinct(a, b []string) []string {
 	out := make([]string, 0, len(a)+len(b))
 
+	// Past a few names a set finds each in one step, where a look through out
+	// takes as many as it holds: a projection of a thousand paths would take
+	// half a million.
+	var seen map[string]struct{}
+	if len(a)+len(b) > distinctLinear {
+		seen = make(map[string]struct{}, len(a)+len(b))
+	}
+
 	for _, list := range [][]string{a, b} {
 		for _, name := range list {
-			if name != "" && !slices.Contains(out, name) {
+			if name == "" {
+				continue
+			}
+
+			if seen == nil {
+				if !slices.Contains(out, name) {
+					out = append(out, name)
+				}
+
+				continue
+			}
+
+			if _, ok := seen[name]; !ok {
+				seen[name] = struct{}{}
 				out = append(out, name)
 			}
 		}

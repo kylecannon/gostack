@@ -183,6 +183,26 @@ func Test_Packed_Number(t *testing.T) {
 }
 
 // Test_Decoder_reuse decodes random items one after another through one
+// decoderNames is the names Test_Decoder_reuse reads in a round: every other
+// round every attribute randomPackItem may set, more than a Decoder looks up
+// one by one, and the rest about a quarter of them, and a name no item holds.
+func decoderNames(r *rand.Rand, round int) []string {
+	odds := 4
+	if round%2 == 1 {
+		odds = 1
+	}
+
+	names := []string{"absent"}
+
+	for i := range 40 {
+		if r.IntN(odds) == 0 {
+			names = append(names, "a"+strconv.Itoa(i)+`"\`)
+		}
+	}
+
+	return names
+}
+
 // Decoder: Peek and View answer what Attrs does though their maps held the
 // item before, a value View answered stays as it was after later calls, and
 // ViewSelect keeps of each map only the members its paths name, though each
@@ -225,13 +245,7 @@ func Test_Decoder_reuse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		names := []string{"absent"}
-		for i := range 40 {
-			if r.IntN(4) == 0 {
-				names = append(names, "a"+strconv.Itoa(i)+`"\`)
-			}
-		}
-
+		names := decoderNames(r, round)
 		want := p.Attrs(names)
 
 		for _, read := range []func(value.Packed, []string) value.Item{dec.Peek, dec.View, dec.Item} {
