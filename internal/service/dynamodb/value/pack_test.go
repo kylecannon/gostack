@@ -141,7 +141,8 @@ func Test_Pack_roundTrips(t *testing.T) {
 // Test_Decoder_reuse decodes random items one after another through one
 // Decoder: Peek and View answer what Attrs does though their maps held the
 // item before, a value View answered stays as it was after later calls, and
-// ViewSelect keeps of each map only the members its paths name.
+// ViewSelect keeps of each map only the members its paths name, though each
+// Selection is used again on items whose maps hold other members.
 func Test_Decoder_reuse(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +157,18 @@ func Test_Decoder_reuse(t *testing.T) {
 	const rounds = 2000
 
 	held := make([]kept, 0, rounds)
+
+	// A read uses one Selection for every item, so the maps ViewSelect keeps
+	// part of are reused from item to item.
+	type selection struct {
+		sel *value.Selection
+		ref selRef
+	}
+
+	selections := make([]selection, 6)
+	for i := range selections {
+		selections[i].sel, selections[i].ref = randomSelection(r)
+	}
 
 	// pruned counts the maps ViewSelect kept part of.
 	pruned := 0
@@ -187,9 +200,9 @@ func Test_Decoder_reuse(t *testing.T) {
 			held = append(held, kept{v, want[name]})
 		}
 
-		sel, ref := randomSelection(r)
+		s := selections[r.IntN(len(selections))]
 
-		got, wantSel := dec.ViewSelect(p, sel), ref.prune(item)
+		got, wantSel := dec.ViewSelect(p, s.sel), s.ref.prune(item)
 		if !value.EqualItems(got, wantSel) {
 			t.Fatalf("round %d: ViewSelect = %v, want %v", round, got, wantSel)
 		}
