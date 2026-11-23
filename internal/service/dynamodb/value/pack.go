@@ -171,7 +171,7 @@ func Unpack(p Packed) Item {
 	h := p.header()
 	u := unpacker{s: string(p), i: h.body, strs: make([]string, 0, h.scalars)}
 
-	return u.object(h.attrs, nil)
+	return u.object(h.attrs, nil, nil)
 }
 
 // UnpackJSON decodes the json of an item as Encoded returns it.
@@ -182,7 +182,7 @@ func UnpackJSON(j []byte) Item {
 
 	u := unpacker{s: string(j)}
 
-	return u.object(0, nil)
+	return u.object(0, nil, nil)
 }
 
 // Attrs decodes the attributes of p that names lists, and leaves the others
@@ -193,9 +193,10 @@ func (p Packed) Attrs(names []string) Item {
 		return nil
 	}
 
-	u := unpacker{s: string(p), i: p.header().body}
+	h := p.header()
+	u := unpacker{s: string(p), i: h.body}
 
-	return u.object(len(names), names)
+	return u.object(viewHint(h, names), names, nil)
 }
 
 // Number returns the text of the attribute name of p when it is a number, and
@@ -272,34 +273,84 @@ func (u *unpacker) number() (string, bool) {
 	return u.s[start:end], true
 }
 
-// maxDecoderChunk caps the strings a Decoder takes in one allocation.
-const maxDecoderChunk = 512
+// maxDecoderChunk caps the strings a Decoder takes in one allocation, and
+// each chunk it takes is chunkGrowth times the last, up to that.
+const (
+	maxDecoderChunk = 512
+	chunkGrowth     = 2
+)
 
 // Decoder decodes the items of one read, sharing allocations between them: its
 // S and N values point into chunks of strings that it never writes twice, so
-// a value it decoded stays valid after the next call, and View reuses one map.
-// It is not safe for concurrent use.
+// a value it decoded stays valid after the next call. View and Peek each
+// reuse one map, and Peek one slice of strings, taken from a pool that
+// Release gives them back to. It is not safe for concurrent use.
 type Decoder struct {
-	view Item
-	strs []string
+	strs    []string
+	scratch *viewScratch
 }
 
+// viewScratch is what View and Peek reuse: a map each, and the strings of
+// Peek's values.
+type viewScratch struct {
+	view, peek reusedMap
+	strs       []string
+	// parts holds, for each Selection that keeps part of a map, the map
+	// ViewSelect reads that part into, item after item.
+	parts map[*Selection]*reusedMap
+}
+
+// reusedMap is a map that items are decoded into one after another, each
+// value written over the one before it, so the map keeps the slot it took.
+// seen collects the names the last item set; wild is set once an item gave
+// every attribute, whose names are that item's own bytes.
+type reusedMap struct {
+	m    Item
+	seen []string
+	wild bool
+}
+
+// The largest scratch Release keeps: a map of more attributes, or more Peek
+// strings, is dropped rather than held in the pool.
+const (
+	maxPooledView    = 64
+	maxPooledStrings = maxDecoderChunk
+)
+
+var viewScratches = sync.Pool{New: func() any { return new(viewScratch) }}
+
 // View decodes the attributes of p that names lists, every one for nil names,
-// into a map the next call to View clears: for a filter, which reads the item
-// and drops it, or a projection, which copies the values it keeps. It returns
-// nil for no item.
+// into a map the next call to View rewrites, and Release gives back: for a
+// filter, which reads the item and drops it, or a projection, which copies
+// the values it keeps. Its values stay valid after those calls, as Item's
+// do. names must not repeat a name. It returns nil for no item.
 func (d *Decoder) View(p Packed, names []string) Item {
 	if p == "" {
 		return nil
 	}
 
-	if d.view == nil {
-		d.view = make(Item, max(len(names), 1))
+	rm := &d.scratchOf().view
+
+	return d.decode(p, names, nil, rm)
+}
+
+// Peek is View into a map of its own, for a caller that reads the values and
+// keeps none of them, not even through a copy that shares them, such as a
+// filter: their strings are rewritten by the next call to Peek.
+func (d *Decoder) Peek(p Packed, names []string) Item {
+	if p == "" {
+		return nil
 	}
 
-	clear(d.view)
+	s := d.scratchOf()
+	clear(s.strs)
 
-	return d.decode(p, names, d.view)
+	h := p.header()
+	u := unpacker{s: string(p), i: h.body, strs: s.strs[:0]}
+	m := u.into(&s.peek, viewHint(h, names), names, nil)
+	s.strs = u.strs
+
+	return m
 }
 
 // Item decodes as View does into a map of its own, which the caller keeps.
@@ -308,10 +359,85 @@ func (d *Decoder) Item(p Packed, names []string) Item {
 		return nil
 	}
 
-	return d.decode(p, names, nil)
+	return d.decode(p, names, nil, nil)
 }
 
-func (d *Decoder) decode(p Packed, names []string, into Item) Item {
+// ViewSelect decodes the parts of p that sel names into the map View decodes
+// into, for a caller that copies out the values it keeps. A value sel names
+// whole stays valid as View's do; a map it keeps part of is reused by the
+// next call, as the item's own map is. It returns nil for no item.
+func (d *Decoder) ViewSelect(p Packed, sel *Selection) Item {
+	if p == "" {
+		return nil
+	}
+
+	s := d.scratchOf()
+	if s.parts == nil {
+		s.parts = make(map[*Selection]*reusedMap, len(sel.below))
+	}
+
+	return d.decode(p, sel.names, sel.below, &s.view)
+}
+
+// Release gives back the maps and strings View, ViewSelect and Peek reuse. No
+// map they returned may be read after it; values copied out of View's and
+// ViewSelect's stay valid, as Item's do.
+func (d *Decoder) Release() {
+	s := d.scratch
+	if s == nil {
+		return
+	}
+
+	d.scratch = nil
+
+	if len(s.view.m) > maxPooledView || len(s.peek.m) > maxPooledView || cap(s.strs) > maxPooledStrings {
+		return
+	}
+
+	s.view.release()
+	s.peek.release()
+	clear(s.strs)
+	clear(s.parts)
+	viewScratches.Put(s)
+}
+
+// release empties what the map holds of the items it was read from, which it
+// would otherwise keep alive, and keeps its slots for the next read.
+func (rm *reusedMap) release() {
+	if rm.wild {
+		clear(rm.m)
+		rm.wild = false
+	}
+
+	for name := range rm.m {
+		rm.m[name] = api.AttributeValue{}
+	}
+
+	clear(rm.seen)
+}
+
+func (d *Decoder) scratchOf() *viewScratch {
+	if d.scratch == nil {
+		d.scratch, _ = viewScratches.Get().(*viewScratch)
+	}
+
+	return d.scratch
+}
+
+// viewHint is the attributes a decode of names from an item with header h
+// holds at most.
+func viewHint(h packHeader, names []string) int {
+	if names == nil {
+		return h.attrs
+	}
+
+	return min(h.attrs, len(names))
+}
+
+// decode decodes the attributes of p that names lists, through the
+// Selections below them, into rm's map, or a new one for nil rm. Its strings
+// go into d's chunks.
+func (d *Decoder) decode(p Packed, names []string, below []*Selection, rm *reusedMap) Item {
 	h := p.header()
 
 	need := h.scalars
@@ -322,22 +448,93 @@ func (d *Decoder) decode(p Packed, names []string, into Item) Item {
 	// A chunk that cannot hold the item's scalars is left to the values that
 	// point into it, and a new one taken: the strings never move.
 	if cap(d.strs)-len(d.strs) < need {
-		const growth = 2
-
-		d.strs = make([]string, 0, max(need, min(growth*cap(d.strs), maxDecoderChunk)))
+		d.strs = make([]string, 0, max(need, min(chunkGrowth*cap(d.strs), maxDecoderChunk)))
 	}
 
-	u := unpacker{s: string(p), i: h.body, strs: d.strs, into: into}
+	u := unpacker{s: string(p), i: h.body, strs: d.strs, chunked: true}
 
-	hint := h.attrs
-	if names != nil {
-		hint = len(names)
+	var m Item
+	if rm != nil {
+		if below != nil {
+			u.parts = d.scratch.parts
+		}
+
+		m = u.into(rm, viewHint(h, names), names, below)
+	} else {
+		m = u.object(viewHint(h, names), names, below)
 	}
 
-	m := u.object(hint, names)
 	d.strs = u.strs
 
 	return m
+}
+
+// into reads the item, as object does, into rm's map: each value written
+// over the one the map holds under its name, and then the names this item
+// does not hold removed.
+func (u *unpacker) into(rm *reusedMap, hint int, names []string, below []*Selection) Item {
+	if rm.m == nil {
+		rm.m = make(Item, hint)
+	}
+
+	rm.wild = rm.wild || names == nil
+	u.reuse, u.seen = rm.m, rm.seen[:0]
+
+	m := u.object(0, names, below)
+	rm.seen = u.seen
+
+	if len(m) > len(rm.seen) {
+		for name := range m {
+			if !slices.Contains(rm.seen, name) {
+				delete(m, name)
+			}
+		}
+	}
+
+	return m
+}
+
+// Selection names the parts of an item a read keeps: each attribute it names,
+// whole, or, for a map, only the members its own Selection names. The zero
+// Selection names nothing.
+type Selection struct {
+	names []string
+	// below is the Selection of each name, nil for the whole value.
+	below []*Selection
+}
+
+// Add names the value at path, a name and the names of the map members below
+// it. A value named whole stays whole, whatever is added below it.
+func (s *Selection) Add(path []string) {
+	for len(path) > 0 {
+		i := slices.Index(s.names, path[0])
+
+		switch {
+		case i < 0 && len(path) == 1:
+			s.names = append(s.names, path[0])
+			s.below = append(s.below, nil)
+
+			return
+		case i < 0:
+			s.names = append(s.names, path[0])
+			s.below = append(s.below, &Selection{})
+			i = len(s.names) - 1
+		case s.below[i] == nil:
+			return
+		case len(path) == 1:
+			s.below[i] = nil
+
+			return
+		default:
+		}
+
+		s, path = s.below[i], path[1:]
+	}
+}
+
+// Names are the attributes s names.
+func (s *Selection) Names() []string {
+	return s.names
 }
 
 // header reads the header of p.
@@ -357,55 +554,153 @@ type unpacker struct {
 	s    string
 	i    int
 	strs []string
-	// into, when not nil, is the empty map the top object is read into.
-	into Item
+	// reuse, when not nil, is the map of an earlier item the top object is
+	// read into (into), and seen collects the names written in it.
+	reuse Item
+	seen  []string
+	// open is set when the last object read stopped before its end, once it
+	// had every name it wanted.
+	open bool
+	// chunked is set when strs is a Decoder's chunk, whose strings outlive
+	// the read.
+	chunked bool
+	// parts, when not nil, holds the map each Selection's part of a map is
+	// read into (ViewSelect).
+	parts map[*Selection]*reusedMap
 }
 
 // object reads a map of attribute values, all of them or, when want is not
-// nil, those it names; hint sizes the map.
-func (u *unpacker) object(hint int, want []string) Item {
-	m := u.into
-	if m == nil {
+// nil, those it names; hint sizes the map. below, when not nil, is the
+// Selection of each name of want, nil for the whole value.
+func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
+	m, reused := u.reuse, u.reuse != nil
+	if !reused {
 		m = make(Item, hint)
 	}
 
-	u.into = nil
+	u.reuse = nil
 	u.i++ // {
 
-	if u.s[u.i] == '}' {
+	if u.s[u.i] != '}' {
+		u.members(m, want, below, reused)
+	} else {
 		u.i++
-
-		return m
+		u.open = false
 	}
 
+	return m
+}
+
+// members reads the members of an object, from its first, into m.
+func (u *unpacker) members(m Item, want []string, below []*Selection, reused bool) {
 	found := 0
 
 	for {
 		name := u.str()
 		u.i++ // :
 
-		if want == nil || (found < len(want) && slices.Contains(want, name)) {
-			m[name] = u.value()
-			found++
-		} else {
+		j := -1
+		if want != nil && found < len(want) {
+			j = slices.Index(want, name)
+		}
+
+		switch {
+		case want != nil && j < 0:
 			u.skip()
+		case reused:
+			// A name from want shares no bytes with the item.
+			if j >= 0 {
+				name = want[j]
+			}
+
+			m[name] = u.value(selectionAt(below, j))
+			u.seen = append(u.seen, name)
+			found++
+		default:
+			m[name] = u.value(selectionAt(below, j))
+			found++
 		}
 
 		c := u.s[u.i]
 		u.i++
 
 		if c == '}' {
-			return m
+			u.open = false
+
+			return
 		}
 
 		if want != nil && found == len(want) {
-			return m
+			u.open = true
+
+			return
 		}
 	}
 }
 
-// value reads one attribute value.
-func (u *unpacker) value() api.AttributeValue {
+// member reads a map value: whole for nil sel, else the members sel names.
+func (u *unpacker) member(sel *Selection) Item {
+	if sel == nil {
+		return u.object(0, nil, nil)
+	}
+
+	// The map's own size is not known: a long list of names it may not hold
+	// would size it for all of them.
+	const maxHint = 8
+
+	var m Item
+
+	if u.parts != nil {
+		rm := u.parts[sel]
+		if rm == nil {
+			rm = &reusedMap{}
+			u.parts[sel] = rm
+		}
+
+		seen := u.seen
+		m = u.into(rm, min(len(sel.names), maxHint), sel.names, sel.below)
+		u.seen = seen
+	} else {
+		m = u.object(min(len(sel.names), maxHint), sel.names, sel.below)
+	}
+
+	if u.open {
+		u.skipMembers()
+		u.open = false
+	}
+
+	return m
+}
+
+// skipMembers steps over the members of an object from the one at u.i, and
+// its closing brace.
+func (u *unpacker) skipMembers() {
+	for {
+		u.skipString()
+		u.i++ // :
+		u.skip()
+
+		c := u.s[u.i]
+		u.i++
+
+		if c == '}' {
+			return
+		}
+	}
+}
+
+// selectionAt is below[j], nil when there is none.
+func selectionAt(below []*Selection, j int) *Selection {
+	if below == nil || j < 0 {
+		return nil
+	}
+
+	return below[j]
+}
+
+// value reads one attribute value; sel, when not nil, names the members of a
+// map it keeps.
+func (u *unpacker) value(sel *Selection) api.AttributeValue {
 	u.i += len(`{"`)
 	end := u.i + strings.IndexByte(u.s[u.i:], '"')
 	kind := u.s[u.i:end]
@@ -427,7 +722,7 @@ func (u *unpacker) value() api.AttributeValue {
 	case TypeBS:
 		v.BS = u.blobs()
 	case TypeM:
-		v.M = u.object(0, nil)
+		v.M = u.member(sel)
 	case TypeL:
 		v.L = u.list()
 	case TypeNULL:
@@ -444,8 +739,15 @@ func (u *unpacker) value() api.AttributeValue {
 
 // ptr keeps s in the item's slice of strings and points at it. The slice is
 // made at the count of the item's S and N values, so it never moves; a partial
-// read that outgrows it leaves the strings already taken where they are.
+// read that outgrows it leaves the strings already taken where they are, in a
+// chunk of their own when they are kept (chunked) rather than in a copy.
 func (u *unpacker) ptr(s string) *string {
+	if u.chunked && len(u.strs) == cap(u.strs) {
+		const least = 8
+
+		u.strs = make([]string, 0, min(max(chunkGrowth*cap(u.strs), least), maxDecoderChunk))
+	}
+
 	u.strs = append(u.strs, s)
 
 	return &u.strs[len(u.strs)-1]
@@ -559,7 +861,7 @@ func (u *unpacker) list() []api.AttributeValue {
 	}
 
 	for {
-		out = append(out, u.value())
+		out = append(out, u.value(nil))
 		c := u.s[u.i]
 		u.i++
 

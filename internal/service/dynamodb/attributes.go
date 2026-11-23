@@ -141,7 +141,7 @@ func (r *reader) attributesToGet(names []string) error {
 		return err
 	}
 
-	r.projection = projection
+	r.project.projection = projection
 
 	return nil
 }
@@ -169,7 +169,7 @@ func (r *reader) checkIndexProjects(names []string) error {
 // that does not decides to fetch from the table (decideFetch). The names are
 // listed once.
 func (r *reader) checkProjection() error {
-	names := topNames(r.projection)
+	names := topNames(r.project.projection)
 
 	err := r.checkIndexProjects(names)
 	if err != nil {

@@ -169,9 +169,14 @@ func (t *Table) IndexesHeld() []IndexSpec {
 // GetHeld is Get for a caller that holds the table's lock through Lock or
 // ReadLock, as a transaction does.
 func (t *Table) GetHeld(key value.Item) value.Item {
+	return value.Unpack(t.GetHeldPacked(key))
+}
+
+// GetHeldPacked is GetHeld for a caller that takes the item as stored.
+func (t *Table) GetHeldPacked(key value.Item) value.Packed {
 	hash, rng := t.primaryKey(key)
 
-	return value.Unpack(t.primary.get(hash, rng, ""))
+	return t.primary.get(hash, rng, "")
 }
 
 // Write is the one write path. It calls decide with the item stored at key,

@@ -53,8 +53,6 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 
 	forward := in.ScanIndexForward == nil || *in.ScanIndexForward
 
-	r.typed = originOf(ctx).statement
-
 	pg, err := r.read(func(visit func(string, value.Packed) bool) error {
 		return e.data.Range(indexName(r.index), &hash, cond, r.start, forward, func(stored value.Packed) bool {
 			return visit("", stored)
@@ -254,7 +252,7 @@ func (r *reader) parseQuery(in *api.QueryInput) (*expression.KeyText, error) {
 		return nil, err
 	}
 
-	r.projection, err = x.projection(in.ProjectionExpression)
+	r.project.projection, err = x.projection(in.ProjectionExpression)
 	if err != nil {
 		return nil, err
 	}

@@ -129,14 +129,12 @@ func (p *Provider) GetItem(ctx context.Context, in *api.GetItemInput) (*api.GetI
 	used := consumption{table: readUnits(stored.Size(), in.ConsistentRead)}
 	out := &api.GetItemOutput{ConsumedCapacity: used.report(in.ReturnConsumedCapacity, name)}
 
-	// An item with nothing to project goes out as it is stored; a statement
-	// reads Item, so it gets the item decoded.
+	// An item with nothing to project goes out as it is stored.
 	switch {
 	case stored == "":
 	case projection != nil:
-		out.Item = projection.Apply(stored.Attrs(distinct(topNames(projection), nil)))
-	case originOf(ctx).statement:
-		out.Item = value.Unpack(stored)
+		pj := newProjector(projection)
+		out.Item = pj.applyStored(stored)
 	default:
 		out.ItemJSON = stored.Encoded()
 	}
