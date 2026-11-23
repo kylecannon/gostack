@@ -1,7 +1,9 @@
 package value_test
 
 import (
+	"maps"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -135,6 +137,48 @@ func Test_Pack_roundTrips(t *testing.T) {
 		if len(part) != len(names)-1 {
 			t.Fatalf("Attrs read %d attributes, want %d", len(part), len(names)-1)
 		}
+	}
+}
+
+// Test_Packed_Number checks Number reads each attribute's number as Unpack
+// does, for plain names, names with escapes and absent names, and that it
+// allocates nothing for a plain name. It is not parallel: AllocsPerRun
+// refuses a parallel test.
+func Test_Packed_Number(t *testing.T) {
+	r := rand.New(rand.NewPCG(3, 4))
+
+	for range 2000 {
+		item := randomPackItem(r)
+		item["ttl"] = randomPackValue(r, 1)
+		item["é"] = api.AttributeValue{N: new(strconv.Itoa(r.IntN(100)))}
+
+		p, err := value.Pack(item)
+		if err != nil {
+			t.Fatalf("Pack: %v", err)
+		}
+
+		for _, name := range append(slices.Collect(maps.Keys(item)), "absent", "a", `a"\`, "") {
+			want, ok := item[name]
+			wantN := ok && want.N != nil
+
+			got, gotN := p.Number(name)
+			if gotN != wantN || (wantN && got != *want.N) {
+				t.Fatalf("Number(%q) = %q, %v; want %v", name, got, gotN, want)
+			}
+		}
+	}
+
+	p, err := value.Pack(value.Item{"pk": {S: new("k")}, "ttl": {N: new("5")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n := testing.AllocsPerRun(100, func() { p.Number("ttl") }); n != 0 {
+		t.Fatalf("Number allocates %v times", n)
+	}
+
+	if _, ok := value.Packed("").Number("ttl"); ok {
+		t.Fatal("no item has a number")
 	}
 }
 

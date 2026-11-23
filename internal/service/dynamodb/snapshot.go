@@ -111,12 +111,12 @@ func (p *Provider) Snapshot(w io.Writer) error {
 const snapshotBuffer = 64 << 10
 
 // snapshotWriter writes a snapshot to w through one buffer. The structure is
-// written by hand, meta and account state through json v2, items through
-// appendItem.
+// written by hand, meta and account state through json v2, items from their
+// packed json through an Orderer.
 type snapshotWriter struct {
 	w     io.Writer
 	buf   []byte
-	names []string
+	items value.Orderer
 }
 
 // flush writes the buffer out.
@@ -387,20 +387,20 @@ func writeTable(out *snapshotWriter, img *tableImage) error {
 
 	out.text(`,"items":[`)
 
-	items := img.items.Items()
+	first := true
 
-	for i := range items {
-		if i > 0 {
+	err := img.items.Each(func(item value.Packed) error {
+		if !first {
 			out.text(",")
 		}
 
-		out.buf, out.names = appendItem(out.buf, value.Unpack(items[i]), out.names)
-		items[i] = "" // let a table dropped meanwhile go before the encode ends
+		first = false
+		out.buf = out.items.Append(out.buf, item)
 
-		err := out.flushFull()
-		if err != nil {
-			return err
-		}
+		return out.flushFull()
+	})
+	if err != nil {
+		return err //nolint:wrapcheck // the writer's own error, which Snapshot wraps
 	}
 
 	out.text("]}")

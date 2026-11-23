@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -170,16 +171,25 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 
 	schema := e.data.Key()
 
-	var keys []value.Item
+	var (
+		keys  []value.Item
+		names []string
+		dec   *value.Decoder
+	)
 
-	names := []string{attribute, schema.Hash.Name, schema.Range.Name}
-
+	// The time to live attribute is read in place; only an expired item's
+	// key is decoded, its strings in the chunks of one decoder.
 	_ = e.data.Scan("", nil, func(_ string, packed value.Packed) bool {
-		item := packed.Attrs(names)
-
-		if expired(item, attribute, threshold) {
-			keys = append(keys, keyOf(item, schema.Hash.Name, schema.Range.Name))
+		n, ok := packed.Number(attribute)
+		if !ok || !expiredNumber(n, threshold) {
+			return true
 		}
+
+		if dec == nil {
+			names, dec = keyNames(schema), new(value.Decoder)
+		}
+
+		keys = append(keys, dec.Item(packed, names))
 
 		return true
 	})
@@ -218,14 +228,20 @@ func expired(item value.Item, attribute string, threshold *api.AttributeValue) b
 	return ok && v.N != nil && value.Compare(&v, threshold) <= 0
 }
 
-// keyOf is the key of a stored item.
-func keyOf(item value.Item, hash, rng string) value.Item {
-	key := value.Item{hash: item[hash]}
-	if rng != "" {
-		key[rng] = item[rng]
+// expiredNumber reports whether the number n is at or before threshold.
+func expiredNumber(n string, threshold *api.AttributeValue) bool {
+	v := api.AttributeValue{N: &n}
+
+	return value.Compare(&v, threshold) <= 0
+}
+
+// keyNames is the names of the key attributes of schema.
+func keyNames(schema table.KeySchema) []string {
+	if schema.HasRange() {
+		return []string{schema.Hash.Name, schema.Range.Name}
 	}
 
-	return key
+	return []string{schema.Hash.Name}
 }
 
 // armExpiry arms the sweep timer when DYNAMODB_REMOVE_EXPIRED_ITEMS is set and

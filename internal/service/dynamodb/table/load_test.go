@@ -107,13 +107,14 @@ func Test_Table_ImageHeld(t *testing.T) {
 		img := tbl.ImageHeld()
 		unlock()
 
-		items := img.Items()
+		var got []string
 
-		got := make([]string, 0, len(items))
-		for _, packed := range items {
+		require.NoError(t, img.Each(func(packed value.Packed) error {
 			item := value.Unpack(packed)
 			got = append(got, *item["pk"].S+"/"+*item["sk"].N)
-		}
+
+			return nil
+		}))
 
 		return got
 	}
@@ -140,7 +141,14 @@ func Test_Table_ImageHeld(t *testing.T) {
 	put(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
 	remove(t, tbl, value.Item{"pk": s("p1"), "sk": n("1")})
 
-	require.Len(t, img.Items(), len(loadItems()))
+	held := 0
+
+	require.NoError(t, img.Each(func(value.Packed) error {
+		held++
+
+		return nil
+	}))
+	require.Equal(t, len(loadItems()), held)
 	require.Equal(t, keys(), image(), "after writes that add a partition")
 
 	// The order is current (keys() scanned); emptying a partition leaves its

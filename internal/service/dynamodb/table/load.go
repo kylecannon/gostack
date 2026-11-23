@@ -15,7 +15,7 @@ var ErrDuplicateKey = errors.New("two items have the same key")
 var errNotEmpty = errors.New("load into a table that holds items")
 
 // Image is a table's items as one moment left them. ImageHeld takes it under
-// the table's lock; Items puts it in order after the lock is released.
+// the table's lock; Each puts it in order after the lock is released.
 type Image struct {
 	parts  []imagePart
 	items  []value.Packed
@@ -33,7 +33,7 @@ type imagePart struct {
 // partitions' keys. The caller holds the table's lock through Lock or
 // ReadLock, for this copy and no longer: stored items are immutable, so the
 // image is one that later writes do not change, and putting it in order,
-// which a table with new partitions needs, waits for Image.Items.
+// which a table with new partitions needs, waits for Image.Each.
 func (t *Table) ImageHeld() Image {
 	img := Image{items: make([]value.Packed, 0, t.count), sorted: t.primary.sorted}
 
@@ -68,27 +68,35 @@ func (t *Table) ImageHeld() Image {
 	return img
 }
 
-// Items returns the image's items as Scan reads them: partition after
+// Each calls each for the image's items as Scan reads them: partition after
 // partition in the order of their encoded hash values, in range key order
-// within each. The image is left empty.
-func (img *Image) Items() []value.Packed {
+// within each. It puts the partitions in order rather than copying the items
+// in it, drops its reference to each item once each has it, so a table
+// dropped meanwhile goes as it is written, and stops at the first error each
+// returns. The image is left empty.
+func (img *Image) Each(each func(value.Packed) error) error {
+	parts, items := img.parts, img.items
 	if img.sorted {
-		items := img.items
-		*img = Image{}
-
-		return items
-	}
-
-	slices.SortFunc(img.parts, func(a, b imagePart) int { return strings.Compare(a.hash, b.hash) })
-
-	items := make([]value.Packed, 0, len(img.items))
-	for _, part := range img.parts {
-		items = append(items, img.items[part.start:part.end]...)
+		parts = []imagePart{{end: len(items)}}
+	} else {
+		slices.SortFunc(parts, func(a, b imagePart) int { return strings.Compare(a.hash, b.hash) })
 	}
 
 	*img = Image{}
 
-	return items
+	for _, part := range parts {
+		for i := part.start; i < part.end; i++ {
+			item := items[i]
+			items[i] = ""
+
+			err := each(item)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // Load fills an empty table with items, as a restore does: each is checked
