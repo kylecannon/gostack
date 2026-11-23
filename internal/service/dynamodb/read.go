@@ -344,7 +344,7 @@ func (r *reader) projected(item value.Item, stored value.Packed) value.Item {
 		// more than it keeps.
 		return shapeItem(item, r.from.shape.paths)
 	default:
-		return shapeItem(r.dec.ViewSelect(stored, r.from.shape.sel), r.from.shape.paths)
+		return shapeSelected(r.dec.ViewSelect(stored, r.from.shape.sel), r.from.shape.paths)
 	}
 }
 
