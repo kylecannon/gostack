@@ -81,7 +81,8 @@ type Registration struct {
 	// depth limit are charged 200 bytes for each byte of body, so it declares
 	// 256. A json body charged more than protocol.DecodeFactor allows is
 	// decoded only when the Go memory limit has room for the heap it keeps
-	// (awsjson.DecodeWithin, protocol.ReserveHeap), and is refused otherwise.
+	// (awsjson.DecodeWithin, protocol.ReserveHeapBeside), and is throttled or
+	// refused otherwise.
 	DecodeFactor int
 
 	// ClaimHost reports whether a request to host is the service's, before any

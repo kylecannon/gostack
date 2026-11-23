@@ -374,7 +374,7 @@ func Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge(t *testing
 
 	// The first holds its final reservation, far past its bytes, from the
 	// end of its walk until it is answered.
-	require.Eventually(t, func() bool { return !protocol.HeapRoomFor(room - 64<<20) }, time.Minute, time.Millisecond,
+	require.Eventually(t, func() bool { return protocol.CheckHeapRoom(room-64<<20) != nil }, time.Minute, time.Millisecond,
 		"the first body reserves its heap")
 
 	kinds := map[string]int{}

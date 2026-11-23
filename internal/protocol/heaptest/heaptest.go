@@ -1,5 +1,6 @@
 // Package heaptest settles the heap for tests whose answer the decode
-// budget's heap room decides (protocol.ReserveHeap, protocol.HeapCouldFit).
+// budget's heap room decides (protocol.TakeDenseLane,
+// protocol.ReserveHeapBeside).
 //
 // A test at the room's edge must weigh the heap it builds, not one an earlier
 // test left behind. Settle handles one way an earlier test's state outlives
@@ -24,7 +25,7 @@ import (
 )
 
 // The runtime metrics Settle reports: the heap's objects, which
-// protocol.ReserveHeap weighs, and the collections that have run.
+// protocol.ReserveHeapBeside weighs, and the collections that have run.
 const (
 	heapObjects = "/memory/classes/heap/objects:bytes"
 	collections = "/gc/cycles/total:gc-cycles"

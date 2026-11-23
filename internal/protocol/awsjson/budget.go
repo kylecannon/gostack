@@ -42,11 +42,12 @@ var ErrTooLarge = &awserr.Error{
 // A body charged more than protocol.DecodeBudget, the most any service is
 // allowed at protocol.DecodeFactor, is one only a service that declares its own
 // factor decodes (DynamoDB's). It is not charged to hold: it is decoded only
-// when protocol.ReserveHeap has room under the Go memory limit for the heap the
-// walk bounds it to keep (walker.heap), and refused with ErrTooLarge otherwise,
-// as it is at protocol.DecodeFactor, unless it misses only for what other
-// requests reserve, which they give back once answered
-// (protocol.ErrHeapBusy): that body is answered protocol.ThrottledJSON. The walk passes DecodeBudget where it
+// when protocol.ReserveHeapBeside has room under the Go memory limit for the
+// heap the walk bounds it to keep (walker.heap). Otherwise it is refused with
+// ErrTooLarge, as it is at protocol.DecodeFactor, when it provably misses with
+// nothing other requests hold (protocol.ErrNoHeapRoom), and answered
+// protocol.ThrottledJSON when it may fit once they are answered
+// (protocol.ErrHeapBusy). The walk passes DecodeBudget where it
 // would stop at protocol.DecodeFactor; from there the body's own bytes are a
 // heap reservation and no longer hold the in-flight bound, when hold is a
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
@@ -113,8 +114,8 @@ func (r *reservations) end() {
 // protocol.DecodeBudget reserves heap instead (DecodeWithin), first for its
 // own bytes once the walk passes DecodeBudget (moveBody), then for what the
 // walk bounds decoding it to keep; r takes the lane and each reservation's
-// release. A final reservation that misses only for what other requests
-// reserve (protocol.ErrHeapBusy) is answered protocol.ThrottledJSON.
+// release. A final reservation that may fit once other requests are answered
+// (protocol.ErrHeapBusy) is answered protocol.ThrottledJSON.
 func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.Error {
 	hold := r.hold
 
@@ -182,10 +183,11 @@ var (
 // hold is a protocol.HeapKeeper, gives back what the body and its decoding
 // hold of the in-flight bound, so that the room other requests' bodies wait
 // for is free again as soon as it would be were the body refused. It fails,
-// holding what it held and without waiting, with errNoRoom when the heap has
-// no room with nothing other requests reserve, and with errBusy when another
-// body has the lane or the heap would have room but for what other requests
-// reserve (protocol.ErrHeapBusy), which they give back once answered. It fails with
+// holding what it held and without waiting, with errNoRoom when the heap
+// provably has no room with nothing other requests hold
+// (protocol.ErrNoHeapRoom), and with errBusy when another body has the lane or
+// the heap may have room once other requests are answered
+// (protocol.ErrHeapBusy). It fails with
 // errBusy too, before taking the lane, while any request would still wait for
 // room under the in-flight bound once the body gave back what it holds of it
 // (protocol.BodiesWait): the queue then drains one body at a time, and a
@@ -199,7 +201,7 @@ var (
 // anything else with nothing counted live (protocol.CheckHeapRoom), so a body
 // that could never fit is refused as too large at no cost, and with the lane
 // held against what is live, after a collection when the last one leaves no
-// room (protocol.HeapCouldFit). The projection only refuses early: what the
+// room (protocol.TakeDenseLane). The projection only refuses early: what the
 // walk bounds is still reserved once it ends, and a body the projection
 // admits can still be refused there.
 func moveBody(body []byte, r *reservations, heap, read int64) error {

@@ -510,17 +510,16 @@ A body charged past `DecodeBudget`, which every other service refuses, holds
 the pool only as long as a refused one does. Its walk passes `DecodeBudget`
 at the point where every other service's walk stops and refuses it; there
 the body takes the process's one dense lane, its own bytes are reserved on
-the heap (`protocol.TakeDenseLane`: the lane, and `protocol.ReserveHeap` of
-its length, kept until the request is answered) and the request gives back
+the heap (`protocol.TakeDenseLane`: the lane, and a reservation of its
+length, kept until the request is answered) and the request gives back
 what its body and its planned decoding hold of the pool (`awsjson`'s
 `moveBody`, `protocol.HeapKeeper.ReleasePool`), so a smaller request waiting
 for the pool is admitted as soon as it would be were the body refused. A body
-that finds no room for its bytes with nothing other requests reserve is
-refused there at once with the decode budget's answer, and one that finds the
-lane taken by another, or the room held only by other requests' reservations,
-is answered `400 ThrottlingException` at once, which SDKs retry, since it fits
-once the others are decoded and answered; either holds the pool until it is
-answered, as a refused body does. Nothing waits for the lane, so no dense body sits on the heap
+that finds the lane taken by another is answered `400 ThrottlingException` at
+once, which SDKs retry. One that finds no room for its bytes is answered as the
+heap verdict below says: the decode budget's answer when it provably cannot
+fit with nothing other requests hold, and `400 ThrottlingException` otherwise.
+Either holds the pool until it is answered, as a refused body does. Nothing waits for the lane, so no dense body sits on the heap
 queued behind another. Without the lane, 64 dense senders put about 30 bodies of 10 MB on
 the heap at once (two at a time on the pool) and a 300 KiB `PutItem` on
 another connection took up to 1.5 s longer than without the gain. The lane
@@ -561,9 +560,9 @@ was decoded 7 times). An SDK's backoff spreads such senders out. At the same poi
 body is refused, before the pool is given back, when its bytes and the heap
 its walk is projected to end at could not fit: at once, before the lane, when
 they pass the room with nothing live (`protocol.CheckHeapRoom`), and with the
-lane held when they do not fit beside what is live (`protocol.HeapCouldFit`).
+lane held when they do not fit beside what is live (`protocol.TakeDenseLane`).
 What the last collection found live can be stale, a collection that ran while
-an earlier body's value was live, so when it leaves no room `HeapCouldFit`
+an earlier body's value was live, so when it leaves no room `TakeDenseLane`
 runs a collection and reads again before it refuses (only the lane's holder
 collects, so one collection runs at a time): a dense body sent to a missing table and answered
 `ResourceNotFoundException`, then sent again to a table that exists, was
@@ -577,28 +576,72 @@ The projection depends on item order: a dense item ahead of sparse ones is
 projected over the whole body and can be refused at the mark, while the same
 items with the dense one last are walked to the end and served, as contract
 C allows. Two dense bodies decoded at once get one served and the other
-served too or throttled, never refused as too large
+served too or throttled
 (`Test_DecodeWithin_OneDenseBodyAtATime`,
 `Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled`), and which one
-is served first varies from run to run. The heap's objects count the body too while it is live,
-so the reservation counts it twice, which only refuses earlier. A value
-another request's handler still holds is counted twice the same way, in what
-is live and in that request's reservation, and no collection frees it. So a
-miss at any of the three checks (the room before the lane, the projected
-heap with the lane held, the final reservation) is a throttle when the body
-would fit the room with nothing other requests reserve or hold live, since
-they give it back once answered, and the decode budget's answer only when
-nothing is reserved by others or the body passes the room alone, so a body
-that can never fit is not throttled until the SDK gives up
-(`protocol.ErrHeapBusy`;
+is served first varies from run to run. The second is refused as too large
+only by the verdict below, when what stays live without the first's
+reservation leaves it no room: when it would be refused alone too.
+
+The heap's objects count the body too while it is live, so the reservation
+counts it twice, which only refuses earlier. A value another request's handler
+still holds is counted twice the same way, in what is live and in that
+request's reservation, and no collection frees it. So each of the three checks
+(the room before the lane, `protocol.CheckHeapRoom`; the projected heap with
+the lane held, `protocol.TakeDenseLane`; the final reservation,
+`protocol.ReserveHeapBeside`) answers a miss through one verdict (`protocol`'s
+`heapVerdict`). A wrong throttle costs the client one retry; a wrong too large
+fails a request that would be served. So the answer is too large only when it
+is provable that the body cannot fit even with no other request holding
+anything, and a throttle otherwise:
+
+| Other requests held a reservation during the check | The body against the floor | Answer |
+| --- | --- | --- |
+| either | fits the room now | admitted (reserved at the two reserving checks) |
+| no, at every weigh | misses | the decode budget's answer, too large |
+| yes, at some weigh | misses the floor: cannot fit alone | the decode budget's answer, too large |
+| yes, at some weigh | fits the floor, or no floor is shown | `400 ThrottlingException` (`protocol.ErrHeapBusy`) |
+
+- **The floor** is what stays live without the other requests: what a
+  collection found live, less what they reserve, never below zero, since a
+  request's reservation covers what it keeps live (SQ-459). The body misses it
+  when the floor, its own bytes already reserved and what it asks for pass the
+  room.
+- **When the floor holds:** only when the collection ran after every
+  reservation given back before it. A value whose request was answered after
+  the collection marked it still reads as live, so a check counts the
+  reservations given back and shows no floor (zero) when one was given back
+  after its collection began, or when it ran no collection. The check before
+  the lane counts nothing live, so its floor is zero.
+- **Sticky busy:** once a check has seen another request's reservation, or one
+  given back during it, it stays a throttle for the rest of that check. Its
+  collection can mark that request's value live just before the request is
+  answered, so the second weigh finds nothing reserved by others and no room
+  for that value alone (SQ-508 M1). The retry, alone, gets the right answer.
+- **What the floor counts as staying:** bodies and decodings held under the
+  in-flight bound reserve nothing on the heap. The floor counts them as
+  staying, as a check with no other reservation does.
+- **The remaining case, accepted:** a body that can never fit, sent beside a
+  reservation so large that the body passes the room beside it even with
+  nothing live, runs no collection, since none could make room for it now. So
+  no floor is shown and it is throttled until a retry finds it alone, or the
+  SDK gives up.
+
+Tests: `Test_heapVerdict_Table`,
+`Test_TakeDenseLane_AnotherAnsweredDuringTheCollectionStaysBusy`,
+`Test_weighHeap_AStaleFloorIsBusy`,
+`Test_TakeDenseLane_StoredDataBesideAOneByteReservationIsTooLarge`,
+`Test_DecodeWithin_TheFinalReservationAnswersAsTheTable`,
 `Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation`,
 `Test_DecodeWithin_ABodyPastTheRoomAloneIsTooLargeBesideAnothersReservation`,
 `Test_TakeDenseLane_AnotherRequestsValueDoesNotRefuseABodyThatFitsAlone`,
-`Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge`). Before
-this, a 3 MB dense body that fit a 78 MiB room alone was refused as too large
-while an earlier one was still answered, and at the 323 MiB room of a 512 MiB
-container a second batch sent during the first one's handler was refused in 4
-of 6 tries (SQ-498). The rest of
+`Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge`. Before
+SQ-498, a 3 MB dense body that fit a 78 MiB room alone was refused as too
+large while an earlier one was still answered, and at the 323 MiB room of a
+512 MiB container a second batch sent during the first one's handler was
+refused in 4 of 6 tries.
+
+The rest of
 the walk and the decode then run on the heap alone. The body is decoded only
 when the heap it keeps fits under the Go memory limit, and refused with the
 decode budget's answer (`400 SerializationException`, "decodes into more
@@ -616,7 +659,7 @@ than gostack allows") otherwise:
    array or table a value is grown from while the maps around it hold the
    key and value they decode each entry into. A ratio from one shape is not
    used: the measured cost-to-live ratio runs 1.9 to 7.6 by shape.
-2. `protocol.ReserveHeap` reserves that bound when the heap's objects now
+2. `protocol.ReserveHeapBeside` reserves that bound when the heap's objects now
    (`/memory/classes/heap/objects:bytes`, never below what is live), what
    other decodes have reserved and the bound fit the Go memory limit less the
    in-flight bound (64 MiB, which every body and decode the pool admits stays
@@ -701,10 +744,10 @@ that decode together on the real SQS provider.
 #### Memory under a container limit
 
 The in-flight bound charges a model of decoding, not the heap, so what a
-dense DynamoDB body keeps live is bounded by `protocol.ReserveHeap` against
+dense DynamoDB body keeps live is bounded by `protocol.ReserveHeapBeside` against
 the Go memory limit (above). Start-up sets that limit to 85% of the
 container's: 435 MiB under `--memory 512m` and 217.6 MiB under
-`--memory 256m`. `ReserveHeap` leaves the in-flight bound (64 MiB) and
+`--memory 256m`. `ReserveHeapBeside` leaves the in-flight bound (64 MiB) and
 `protocol.HeapSlack` (48 MiB) below it, so a dense decode has 323 MiB of
 room at 512 MiB and 105 MiB at 256 MiB, less whatever is already live.
 

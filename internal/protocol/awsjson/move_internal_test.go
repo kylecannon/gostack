@@ -531,8 +531,8 @@ func Test_DecodeWithin_ABodyPastTheRoomAloneIsTooLargeBesideAnothersReservation(
 	_, _, err := DecodeWithin[denseValue](body, budget, alone)
 	require.Same(t, ErrTooLarge, err, "alone the body is too large")
 
-	other, ok := protocol.ReserveHeap(need / 8)
-	require.True(t, ok)
+	other, err2 := protocol.ReserveHeapBeside(need/8, 0)
+	require.NoError(t, err2)
 	t.Cleanup(other)
 
 	beside := &recordingHold{}
