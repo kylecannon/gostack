@@ -23,10 +23,13 @@ func Test_SnapshotStreams_sameBytesAsTheFileType(t *testing.T) {
 	at := time.Date(2026, 11, 20, 10, 0, 0, 123456789, time.UTC)
 	created := at.Add(-time.Hour)
 
+	packed, err := value.Pack(image)
+	require.NoError(t, err)
+
 	records := []stream.Record{
-		{Seq: 1, Event: stream.Insert, Keys: keys, New: image, SizeBytes: 12, At: at},
-		{Seq: 2, Event: stream.Modify, Keys: keys, New: image, Old: image, SizeBytes: 20, At: at.Add(time.Second)},
-		{Seq: 3, Event: stream.Remove, Keys: value.Item{"id": {S: &other}}, Old: image, SizeBytes: 9, At: at, Expired: true},
+		{Seq: 1, Event: stream.Insert, Keys: keys, New: packed, SizeBytes: 12, At: at},
+		{Seq: 2, Event: stream.Modify, Keys: keys, New: packed, Old: packed, SizeBytes: 20, At: at.Add(time.Second)},
+		{Seq: 3, Event: stream.Remove, Keys: value.Item{"id": {S: &other}}, Old: packed, SizeBytes: 9, At: at, Expired: true},
 	}
 	cut := []shardCut{
 		{account: "000000000000", region: "us-west-2", table: "b", created: created, records: records[:1]},
@@ -42,7 +45,7 @@ func Test_SnapshotStreams_sameBytesAsTheFileType(t *testing.T) {
 
 		for _, r := range c.records {
 			saved.Records = append(saved.Records, recordSaved{
-				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
+				Seq: r.Seq, Event: r.Event.String(), Keys: r.Keys, New: value.Unpack(r.New), Old: value.Unpack(r.Old),
 				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
 			})
 		}

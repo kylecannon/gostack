@@ -138,6 +138,13 @@ func setHeap(v *api.AttributeValue) int {
 	return total
 }
 
+// PackedHeap is the heap a packed item takes: its one string, rounded up as
+// the allocator rounds it, 0 for no item. Where HeapSize estimates a decoded
+// item from its tree, a packed one is a single allocation of a known length.
+func PackedHeap(p Packed) int64 {
+	return int64(allocBytes(len(p)))
+}
+
 // allocBytes is at least what an allocation of n bytes takes once its size
 // class or pages round it up.
 func allocBytes(n int) int {

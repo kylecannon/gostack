@@ -111,10 +111,19 @@ func Test_charge_coversHeap(t *testing.T) {
 
 			for i := range shape.count {
 				newImage := shape.image(t, i)
-				r := stream.Record{Event: stream.Modify, Keys: value.Item{"id": newImage["id"]}, New: newImage, At: now}
+				// The key is the record's own copy, as the recorder makes it, so it
+				// pins nothing of the image it came from.
+				id := strings.Clone(*newImage["id"].S)
+				r := stream.Record{Event: stream.Modify, Keys: value.Item{"id": {S: &id}}, At: now}
+
+				var err error
+
+				r.New, err = value.Pack(newImage)
+				require.NoError(t, err)
 
 				if shape.old {
-					r.Old = shape.image(t, shape.count+i)
+					r.Old, err = value.Pack(shape.image(t, shape.count+i))
+					require.NoError(t, err)
 				}
 
 				shard.Append(r)

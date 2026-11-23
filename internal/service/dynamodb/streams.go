@@ -147,14 +147,14 @@ func recorder(
 
 		r.Keys = keysOf(source, key)
 		if newImage {
-			r.New = c.New
+			r.New = c.NewPacked
 		}
 
 		if oldImage {
-			r.Old = c.Old
+			r.Old = c.OldPacked
 		}
 
-		r.SizeBytes = int64(value.ItemSize(r.Keys) + value.ItemSize(r.New) + value.ItemSize(r.Old))
+		r.SizeBytes = int64(value.ItemSize(r.Keys) + r.New.Size() + r.Old.Size())
 		shard.Append(r)
 
 		if notify != nil {
@@ -165,13 +165,39 @@ func recorder(
 
 // keysOf is the key attributes of item, in a map sized to them: the record
 // holds it for as long as the stream keeps the record, and the shard's byte
-// bound charges it by its length.
+// bound charges it by its length. Its values are copies. The item's strings
+// can share the bytes of a packed item, the one a removal read them from or
+// the one an update built the new item over, and a key that shared them would
+// pin all of them for as long as the record lives, past what Charge counts.
 func keysOf(item value.Item, key table.KeySchema) value.Item {
 	if key.Range.Name == "" {
-		return value.Item{key.Hash.Name: item[key.Hash.Name]}
+		return value.Item{key.Hash.Name: cloneKey(item[key.Hash.Name])}
 	}
 
-	return value.Item{key.Hash.Name: item[key.Hash.Name], key.Range.Name: item[key.Range.Name]}
+	return value.Item{
+		key.Hash.Name:  cloneKey(item[key.Hash.Name]),
+		key.Range.Name: cloneKey(item[key.Range.Name]),
+	}
+}
+
+// cloneKey is a key attribute, a string, number or binary, with bytes of its
+// own.
+func cloneKey(v api.AttributeValue) api.AttributeValue {
+	var out api.AttributeValue
+
+	if v.S != nil {
+		out.S = new(strings.Clone(*v.S))
+	}
+
+	if v.N != nil {
+		out.N = new(strings.Clone(*v.N))
+	}
+
+	if v.B != nil {
+		out.B = slices.Clone(v.B)
+	}
+
+	return out
 }
 
 // AttributeValue is DynamoDB's attribute value, the type of a stream record's

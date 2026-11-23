@@ -14,12 +14,12 @@ import (
 // recordFields is Record without its charge.
 type recordFields struct {
 	Seq       int
-	Event     string
 	Keys      value.Item
-	New       value.Item
-	Old       value.Item
+	New       value.Packed
+	Old       value.Packed
 	SizeBytes int64
 	At        time.Time
+	Event     Event
 	Expired   bool
 }
 
@@ -29,6 +29,7 @@ type recordFields struct {
 func Test_record_chargeFitsPadding(t *testing.T) {
 	require.Equal(t, unsafe.Sizeof(recordFields{}), unsafe.Sizeof(Record{}),
 		"a Record is as large as its fields without the charge")
+	require.EqualValues(t, 88, unsafe.Sizeof(Record{}), "a Record stays 88 bytes")
 }
 
 // Test_storedCharge_saturates: a record keeps its charge up to

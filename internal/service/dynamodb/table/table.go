@@ -70,10 +70,16 @@ type index struct {
 }
 
 // Change is what a write did: the item stored before and the item stored
-// after, either nil when there was none.
+// after, either nil when there was none. OldPacked and NewPacked are the same
+// two items as the table stores them, "" when there was none. An observer that
+// keeps an item keeps these: they are immutable strings that hold no other
+// item's bytes, where Old and New can share the bytes of the item they were
+// decoded from or built over, and so pin it.
 type Change struct {
-	Old value.Item
-	New value.Item
+	Old       value.Item
+	New       value.Item
+	OldPacked value.Packed
+	NewPacked value.Packed
 	// Expired marks a removal made through Expire: the service deleting an
 	// item whose time to live passed, not a caller.
 	Expired bool
@@ -475,7 +481,7 @@ func (t *Table) apply(key value.Item, decide func(old value.Item) (value.Item, e
 		t.store(hash, packed)
 	}
 
-	change := Change{Old: old, New: updated, Expired: expired}
+	change := Change{Old: old, New: updated, OldPacked: stored, NewPacked: packed, Expired: expired}
 	if t.observer != nil && change.Changed() {
 		t.observer(change)
 	}

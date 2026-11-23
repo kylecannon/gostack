@@ -314,7 +314,10 @@ func Test_trimmed(t *testing.T) {
 	// as both its keys and its new image; the bound holds three of them.
 	key := "k0"
 	item := value.Item{"id": {S: &key}}
-	limits.SetLimits(time.Hour, 3*streamlog.Charge(&streamlog.Record{Keys: item, New: item}))
+	packed, err := value.Pack(item)
+	require.NoError(t, err)
+
+	limits.SetLimits(time.Hour, 3*streamlog.Charge(&streamlog.Record{Keys: item, New: packed}))
 
 	old := s.iterator(t, arn, shard, "TRIM_HORIZON")
 

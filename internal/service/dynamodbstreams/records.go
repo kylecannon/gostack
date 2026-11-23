@@ -25,12 +25,13 @@ var (
 	servicePrincipal = "dynamodb.amazonaws.com"
 )
 
-// record is r as GetRecords returns it. The images are the engine's immutable
-// items, so their strings, numbers and binaries are shared, not copied.
-func record(info dynamodb.StreamInfo, r *stream.Record) api.Record {
+// record is r as GetRecords returns it. Its images are decoded by dec, which
+// shares allocations between the records of one read; the response holds them
+// until it is written.
+func record(info dynamodb.StreamInfo, r *stream.Record, dec *value.Decoder) api.Record {
 	out := api.Record{
 		EventID:      new(eventID(info.Shard.Created(), r.Seq)),
-		EventName:    new(r.Event),
+		EventName:    new(r.Event.String()),
 		EventVersion: new(eventVersion),
 		EventSource:  new(eventSource),
 		AwsRegion:    new(info.Region),
@@ -38,8 +39,8 @@ func record(info dynamodb.StreamInfo, r *stream.Record) api.Record {
 			// LocalStack's records carry whole seconds.
 			ApproximateCreationDateTime: &protocol.Time{Time: r.At.Truncate(time.Second)},
 			Keys:                        item(r.Keys),
-			NewImage:                    item(r.New),
-			OldImage:                    item(r.Old),
+			NewImage:                    item(dec.Item(r.New, nil)),
+			OldImage:                    item(dec.Item(r.Old, nil)),
 			SequenceNumber:              new(info.Shard.SequenceNumber(r.Seq)),
 			SizeBytes:                   new(r.SizeBytes),
 			StreamViewType:              new(info.ViewType),

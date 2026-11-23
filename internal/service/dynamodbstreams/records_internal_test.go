@@ -48,12 +48,14 @@ func Test_record_expired(t *testing.T) {
 	info := dynamodb.StreamInfo{Region: "us-east-1", ViewType: "KEYS_ONLY", Shard: shard}
 	r := stream.Record{Seq: 1, Event: stream.Remove, Keys: value.Item{"id": {S: &str}}, Expired: true, At: time.Now()}
 
-	got := record(info, &r)
+	var dec value.Decoder
+
+	got := record(info, &r, &dec)
 	require.Equal(t, "Service", *got.UserIdentity.Type)
 	require.Equal(t, "dynamodb.amazonaws.com", *got.UserIdentity.PrincipalId)
 	require.Nil(t, got.Dynamodb.NewImage)
 	require.Nil(t, got.Dynamodb.OldImage)
 
 	r.Expired = false
-	require.Nil(t, record(info, &r).UserIdentity)
+	require.Nil(t, record(info, &r, &dec).UserIdentity)
 }
