@@ -135,10 +135,8 @@ type page struct {
 // prepare works out what visit decodes of a stored item, once a read's
 // expressions are parsed.
 func (r *reader) prepare() {
-	if r.index != nil && !holdsAll(r.index) {
-		r.indexNames = distinct([]string{
-			r.tableKey.Hash.Name, r.tableKey.Range.Name, r.index.Key.Hash.Name, r.index.Key.Range.Name,
-		}, r.index.Projection.NonKeyAttributes)
+	if r.index != nil && !r.index.HoldsAll() {
+		r.indexNames = distinct(r.index.Held(r.tableKey), nil)
 	}
 
 	if r.filter != nil {
@@ -146,11 +144,6 @@ func (r *reader) prepare() {
 	}
 
 	r.project = newProjector(r.project.projection)
-}
-
-// holdsAll reports whether an index holds every attribute of an item.
-func holdsAll(spec *table.IndexSpec) bool {
-	return spec.Projection.Type == table.ProjectAll || spec.Projection.Type == ""
 }
 
 // distinctLinear is the most names distinct looks for one by one.
@@ -641,7 +634,7 @@ func chooseSelect(mode *string, projection string, onIndex bool) (string, error)
 // hold. A global index cannot.
 func (r *reader) decideFetch(projectionNames []string) {
 	spec := r.index
-	if spec == nil || spec.Global || spec.Projection.Type == table.ProjectAll || spec.Projection.Type == "" {
+	if spec == nil || spec.Global || spec.HoldsAll() {
 		return
 	}
 
@@ -662,12 +655,7 @@ func (r *reader) decideFetch(projectionNames []string) {
 
 // holds reports whether the index read holds the named attribute.
 func (r *reader) holds(name string) bool {
-	keys := []string{r.tableKey.Hash.Name, r.tableKey.Range.Name, r.key.Hash.Name, r.key.Range.Name}
-	if slices.Contains(keys, name) {
-		return true
-	}
-
-	return r.index.Projection.Type == table.ProjectInclude && slices.Contains(r.index.Projection.NonKeyAttributes, name)
+	return slices.Contains(r.index.Held(r.tableKey), name)
 }
 
 // topNames are the top-level attributes a projection names.

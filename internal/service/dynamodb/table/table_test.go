@@ -445,4 +445,10 @@ func Test_IndexSpec_Project(t *testing.T) {
 
 	spec.Projection = table.Projection{Type: table.ProjectKeysOnly}
 	assert.Equal(t, value.Item{"pk": s("a"), "g": s("b")}, spec.Project(key, item))
+
+	// NonKeyAttributes count for INCLUDE alone.
+	spec.Projection = table.Projection{Type: table.ProjectKeysOnly, NonKeyAttributes: []string{"x"}}
+	assert.Equal(t, value.Item{"pk": s("a"), "g": s("b")}, spec.Project(key, item))
+	assert.NotContains(t, spec.Held(key), "x")
+	assert.False(t, spec.HoldsAll())
 }

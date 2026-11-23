@@ -1085,18 +1085,20 @@ stream as a `StreamInfo` whose shard is the read side of `stream.Log`
 the records' snapshot (`StreamSnapshotter`), which `PERSIST_DYNAMODBSTREAMS`
 saves under DynamoDB Streams' own name. Beside `dynamodb` the service imports
 two of DynamoDB's packages: `dynamodb/stream` for the `Record` and `Page` a read
-returns and the errors it names, and `dynamodb/value` for the `Item` a record
-holds and the `ValidationException` both services answer alike. DynamoDB Streams keeps no
+returns and the errors it names, and `dynamodb/value` for the `Decoder` that
+reads the `Packed` images of a record into the `Item` a response writes, and
+the `ValidationException` both services answer alike. DynamoDB Streams keeps no
 state of its own: its iterators carry their position, issue time and shard.
 Each shard keeps records for 24 hours, on a timer armed only while it holds
 records, and at most 256 MiB of them, oldest trimmed first. The bound counts
 heap, not DynamoDB's size: `stream.Charge` is `value.HeapSize` of a record's
-keys and images, estimated from the value tree's lengths and capacities
-without reflection, plus 256 bytes for its slot in the shard. Where the layout
-leaves a range, such as a slice's size class, the estimate takes the top of
-it. A map's capacity is not visible, so the estimate takes what insertion
-leaves; a map made with a larger hint (UpdateItem's at the 8-entry small-map
-boundary) or one that shrank holds a few hundred bytes more than counted. Each
+keys, estimated from the value tree's lengths and capacities without
+reflection, plus `value.PackedHeap` of each image, which is one string and so
+its length rounded up as the allocator rounds it, plus 256 bytes for its slot
+in the shard. Where the layout leaves a range, such as a slice's size class,
+the estimate takes the top of it. A map's capacity is not visible, so the
+estimate for the keys takes what insertion leaves; a map made with a larger
+hint or one that shrank holds a few hundred bytes more than counted. Each
 image is charged whole, though a record's new image is the table's item until
 a later write replaces it and is then the next record's old image, so a shard
 usually holds less than the bound. `stream/charge_test.go`
@@ -2411,7 +2413,7 @@ Kinesis. The state is two files, LocalStack's split:
   `Followed(false)` before it frees the pair for another flush: a failed
   table save, a streams save that failed before its snapshot, a flush
   cancelled between the two saves, Stop's flush), or at the next cut, so it lives for one flush
-  and at most one is held. It is a `[]stream.Record` of 96 bytes a record;
+  and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
   the item images are shared with the shard. A record is charged at least
   `RecordOverhead` and the heap of its keys map, 736 bytes for a one-letter
   key, so a shard at its bound holds at most about 365,000 records and the
@@ -2557,7 +2559,7 @@ DynamoDB sections after it; the operations at 501 are in `docs/features.md`.
 
 | Package | Holds |
 |---|---|
-| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. |
+| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. `Packed`, an item as one string (its json after a header), and the `Decoder` that reads attributes of one without unpacking the rest; `JSONPacker`, which packs an item from the json a snapshot holds, and `Orderer`, which writes a packed item as the snapshot does, each map's names in byte order. |
 | `table` | One table's items under its key schema, its secondary indexes, the write path and the ordered reads. No handler state. |
 | `expression` | The four expression languages: one lexer, one path parser, one reserved-word list, a parsed form per language. |
 | `partiql` | The PartiQL parser. It knows no tables. |
@@ -2593,7 +2595,9 @@ what it was handed and no read copies an item.
 
 **The write path.** Every write, from `PutItem` to a PartiQL `UPDATE`, a
 transaction or a time to live removal, goes through `Table.Write` (or
-`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `table.Decide`
+`WriteHeld` under `Lock`, or `Expire`, which takes the expired item and a
+predicate it asks of the stored one under the lock, and returns whether it
+removed one). It calls the handler's `table.Decide`
 with the stored item as the table stores it, a `value.Packed`, under the
 table's write lock, and packs and stores the `value.Item` that `decide`
 returns, nil to delete; a condition expression, an update expression and the
@@ -2679,8 +2683,8 @@ are under Persistence, "DynamoDB". The format: `{"v":1,"accounts":[…],
 "states":[{"account","region","tables":[{"meta","shard","items"}]}]}` in
 `dynamodb/store.*`, items as the wire writes them with numbers canonical, and
 the shard records in `dynamodbstreams/store.*`. Restore rebuilds the indexes
-from the items with `table.Load`, which sizes each partition before it fills
-it and sorts it once.
+from the items with `table.LoadPacked`, which sizes each partition before it
+fills it and sorts it once.
 
 ### KMS (`internal/service/kms`)
 
