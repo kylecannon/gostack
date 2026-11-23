@@ -36,14 +36,13 @@ import (
 //
 // The cells are sized to what a run can gate on (docs/standards.md,
 // Benchmarks): 64 lanes of 16 deliveries took 12 ms over SQS and 22 to 771 ms
-// over HTTP. 16 lanes of 4 over SQS took 12.8 ms at 256 KiB and 10.0 ms at 32
-// KiB, 16 lanes of 2 took 9.7 ms and 8.0 ms, and 8 lanes of 2 over HTTP took
-// 24.0 ms at 32 KiB and 2 lanes of 2 10.8 ms: a burst has a
-// floor of 5 to 7 ms (the 1 ms poll for the last dead letter, and the wait for
-// the unrelated publishes in flight), and over HTTP a connection and a POST
-// each. As kept, SQS runs 8 lanes of 2, 6.9 ms at 32 KiB and 7.4 ms at 256 KiB,
-// and HTTP 2 lanes of 1, 7.6 ms, each the slowest of three runs. The HTTP burst
-// at 256 KiB is left out, and the burst at 256 KiB is the SQS one.
+// over HTTP, and 16 lanes of 4 over SQS and 8 lanes of 2 over HTTP were still
+// too long where they were sized. A burst has a floor (the 1 ms poll for the
+// last dead letter, and the wait for the unrelated publishes in flight), and
+// over HTTP a connection and a POST each. As kept, SQS runs 8 lanes of 2, 1.6 ms
+// at 32 KiB and 2.6 ms at 256 KiB, and HTTP 2 lanes of 1, 2.4 ms, each the
+// slowest of ten runs on a runner. The HTTP burst at 256 KiB is left out, and
+// the burst at 256 KiB is the SQS one.
 //
 //	BenchmarkBurst/protocol=sqs/lanes=8/perlane=2/payload=256KiB
 func BenchmarkBurst(b *testing.B) {

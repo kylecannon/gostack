@@ -25,22 +25,21 @@ import (
 //
 // At concurrency 16 one iteration is 16 simultaneous calls, so ns/op and the
 // byte rate are per sixteen calls. The 1 KiB and 256 KiB bodies stay in memory
-// and the 1 MiB and 16 MiB bodies spill to a file, so the four sizes cover both
-// storage paths. The system bench measures against LocalStack.
+// and the 1 MiB body spills to a file, so the three sizes cover both storage
+// paths. The system bench measures against LocalStack.
 //
 // The matrix is cut (docs/standards.md, "Benchmarks"): tooSlowToGate leaves out
 // a cell whose iteration moves more bytes than the operation's budget,
-// writeBudget or readBudget. The slowest of three runs of a cell left out was
-// 52.0 ms for PutObject at 16MiB, 81.6 ms at 1MiB and 16 workers, 13.7 ms at
-// 256KiB and 16 workers, and 19.4 ms for GetObject at 16MiB and 16 workers. The
-// widest cells kept: PutObject 4.6 ms at 1MiB and 4.5 ms at 1KiB and 16
-// workers, GetObject 3.6 ms at 16MiB and 4.9 ms at 1MiB and 16 workers, and,
-// persisted, PutObject 3.2 ms at 1MiB and 3.5 ms at 1KiB and 16 workers.
+// writeBudget or readBudget. There is no 16 MiB body, for no cell of it fits:
+// GetObject at 16MiB and one worker took 11.8 ms on a runner, and a PutObject
+// of it moves sixteen times what the 4.3 ms PutObject at 1MiB does. The widest
+// cells kept on a runner: GetObject 7.1 ms at 1MiB and 16 workers, and,
+// persisted, 6.1 ms.
 
 const benchAuth = "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0"
 
 var (
-	benchPayloads    = []benchPayload{{"1KiB", 1 << 10}, {"256KiB", 256 << 10}, {"1MiB", 1 << 20}, {"16MiB", 16 << 20}}
+	benchPayloads    = []benchPayload{{"1KiB", 1 << 10}, {"256KiB", 256 << 10}, {"1MiB", 1 << 20}}
 	benchConcurrency = []int{1, 16}
 )
 
@@ -145,7 +144,8 @@ const (
 	writeBudget = 1 << 20
 
 	// readBudget is the same for a GetObject, which streams the stored body out
-	// and costs a fraction of a PUT of it.
+	// and costs a fraction of a PUT of it. 1MiB at 16 workers moves 16 MiB and
+	// took 7.1 ms on a runner, so no wider cell is added.
 	readBudget = 16 << 20
 )
 
@@ -190,7 +190,8 @@ func benchMatrix(b *testing.B, budget int, run func(b *testing.B, s *objectBench
 // body spills to a file (over 512 KiB) and whose iteration has more than one
 // worker, which neither the 1KiB cell at 16 workers nor the 1MiB cell at one
 // is. An iteration moves 1.25 MiB, over writeBudget, so the cell stands outside
-// the matrix with a budget of its own.
+// the matrix with a budget of its own: it took 3.3 ms, the slowest of ten runs
+// on a runner.
 var putSpillPayload = benchPayload{"640KiB", 640 << 10}
 
 const putSpillWorkers = 2

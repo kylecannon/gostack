@@ -319,7 +319,11 @@ prints both for each.
 A cell is left out inside the benchmark's own matrix, in the code that builds
 it, and the comment above names what it cuts and the time that cut it. The
 forms in use are a shorter list (`snapshotSizes`, `batchSubscribers`), a
-condition in the matrix loop (`publishCells` and `BenchmarkBurst` in
+lower concurrency for an operation that costs about 6 times one call at 16
+(`privateKeyConcurrency` and `p521Concurrency` in `internal/service/kms`: 1 and
+4, 1 and 2, where a private-key operation took 8 to 23 ms at 16 on a 4 CPU
+runner; the cell at the lower count has to fit under 8 ms at the one-call time
+times its calls), a condition in the matrix loop (`publishCells` and `BenchmarkBurst` in
 `internal/service/sns`), a predicate the loop asks (`tooSlowToGate` in
 `internal/inproc`, `internal/api/sqs`, `internal/service/kms`,
 `internal/service/s3` and `internal/service/sns`) and a budget a predicate
@@ -332,7 +336,10 @@ names, which stops matching without a sound when a cell is renamed, or
 A count ladder (keys, secrets, parameters, queues or messages in a snapshot or
 a restore) runs at 10 and 1,000. A step of a hundred shows a cost that is not
 linear, and a larger count runs the same code for longer. A ladder keeps a
-larger count only where its cell is at most 8 ms on the gate's runners.
+larger count only where its cell is at most 8 ms on the gate's runners, and it
+is cut per operation where one operation is over (`snapshotSizes` in
+`internal/service/s3`: a restore of 1,000 objects took 8.5 ms, so a restore
+stops at 500 and a snapshot, 5.8 ms, at 1,000).
 
 A cell's time does not depend on the cells that ran before it. The collector
 paces itself by the live heap, so a cell that leaves what it recorded held, for

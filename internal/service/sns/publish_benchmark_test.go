@@ -381,9 +381,9 @@ func benchPublishBatch(b *testing.B, c publishCell) {
 // standard topic, and every delivery; any dropped fails the benchmark. The
 // cells are sized to what a run can gate on (docs/standards.md, Benchmarks), so
 // one publisher of two batches and two publishers of one, at 10 subscribers. 16
-// publishers took 10 to 11 ms, four publishers 4.6 to 10.2 ms, and one publisher
-// of five batches 5.1 to 10.3 ms, in three runs; as kept, one publisher of two
-// batches took 4.6 ms and two publishers 4.3 ms, the slowest of three. The
+// publishers took 10 to 11 ms and four publishers 4.6 to 10.2 ms where they
+// were sized; as kept, one publisher of two batches took 1.6 ms and two
+// publishers 1.6 ms, the slowest of ten runs on a runner. The
 // burst that owes 160,000 deliveries, 16 publishers of ten batches at 100
 // subscribers, ran once in 900 ms: too few iterations to gate on;
 // Test_Provider_Publish_burst (lanes_test.go) runs it and checks that every

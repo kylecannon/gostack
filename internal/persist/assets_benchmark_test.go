@@ -83,8 +83,9 @@ func BenchmarkAssetsCommit(b *testing.B) {
 // PR #56). Its counts are those of the benchmark before the rule. The second
 // runs on the disk, where the save pays the syncfs of the whole filesystem, a
 // floor of the disk and not of this code, so its counts are the two smallest;
-// the larger ones of the benchmark before the rule are left out. On an ext4
-// loop volume one pending asset took 13.2 to 18.8 ms and 10 took 14.0 to 14.6.
+// the larger ones of the benchmark before the rule are left out. The slowest of
+// ten runs on a runner: 2.2 ms for 1 pending asset and 2.6 ms for 10 on the
+// disk, and 0.2 ms for 100, 0.6 ms for 1,000 and 5.8 ms for 10,000 on tmpfs.
 var (
 	savePendingTmpfs = []int{100, 1000, 10000}
 	savePendingDisk  = []int{1, 10}

@@ -34,11 +34,11 @@ type snapshotCell struct{ queues, messages int }
 // queues is 640 MiB of bodies and 1000 queues of them is 62 GiB. Each cell
 // that holds messages holds 25 or 16 MiB of bodies instead, what one snapshot
 // takes in a time the gate can compare (docs/standards.md, "Benchmarks";
-// queues=10 messages=100 took 11.0 ms and queues=1000 messages=1 12.3 ms, the
-// slowest of three runs):
+// queues=10 messages=100 took 16.4 ms and queues=1000 messages=1 17.6 ms, the
+// slowest of ten runs on a runner):
 //
-//	queues=10    messages=40   (a few busy queues, 25 MiB, 4.4 ms)
-//	queues=250   messages=1    (many queues, each with something in it, 16 MiB, 3.1 ms)
+//	queues=10    messages=40   (a few busy queues, 25 MiB, 6.3 ms)
+//	queues=250   messages=1    (many queues, each with something in it, 16 MiB, 4.4 ms)
 //
 // queues=1000 with messages=100 is dropped. It runs the same code as the cell
 // above it, 100 times larger.
@@ -116,20 +116,14 @@ func newFilledProvider(b *testing.B, queues, messages int) *sqsservice.Provider 
 //
 // The cells left out are queues=10 messages=100 and queues=1000 messages=1,
 // which BenchmarkSQSSnapshot still runs at the sizes of snapshotCells. An
-// operation took at most 3.3 ms of flush (queues=1000 messages=0) and 4.3 ms of
-// restore (queues=40 messages=1) on tmpfs, and the slowest of three runs on an
-// ext4 volume was 6.7 ms for BenchmarkSQSFlushFsync (queues=250 messages=0, the
-// fsync of the snapshot and its directory), 4.1 ms for BenchmarkSQSRestoreExact
-// (queues=40 messages=1) and 2.2 ms for BenchmarkSQSFlushWrite (queues=1000
-// messages=0).
-//
-// The gate's runners (linux/amd64, 4 cpus: AMD EPYC 7763 and 9V45, Intel Xeon
-// 6975P-C; 8 hosts, 8 runs each at -benchtime=500ms, verification/SQ-466/
-// amd-558134a) timed queues=1000 messages=0 under the names these cells had
-// before: restore took 2.48 to 6.49 ms at 94 or more iterations, and flush, then
-// on the runner's disk with its fsync, 3.09 to 6.69 ms at 79 or more. Neither
-// was over 10 ms, and the restore time is above the arm64 figure. queues=10
-// messages=4 and queues=40 messages=1 have no x86 time: they did not exist.
+// operation took at most 2.5 ms of BenchmarkSQSFlushWrite (queues=1000
+// messages=0, on tmpfs) and 4.3 ms of BenchmarkSQSRestoreExact (queues=1000
+// messages=0), the slowest of ten runs on a runner. The earlier runs on the
+// gate's runners (linux/amd64, 4 cpus; 8 hosts, 8 runs each at
+// -benchtime=500ms, verification/SQ-466/amd-558134a) timed queues=1000
+// messages=0 under the names these cells had before: restore took 2.48 to 6.49
+// ms at 94 or more iterations, and flush, then on the runner's disk with its
+// fsync, 3.09 to 6.69 ms at 79 or more.
 var roundTripCells = []snapshotCell{
 	{10, 0},
 	{1000, 0},
@@ -199,20 +193,15 @@ func BenchmarkSQSFlushWrite(b *testing.B) {
 // fsync time is how fast the runner's disk takes their data, and that is not
 // this code.
 //
-// queues=1000 is left out for it (docs/standards.md, "Benchmarks"): on the disk
-// of a Docker VM an operation took 7.0 to 8.1 ms, too near the limit for a
-// runner with a slower disk. The two below took 1.7 to 9.2 ms (queues=10, a 3.9
-// KB file) and 2.4 to 5.4 ms (queues=250) there, in 9 runs with nothing else
-// using the disk. Those are that VM's disk, which swung that much between runs;
-// no cell is smaller than queues=10, and queues=10 is kept at its size on main.
-//
-// The gate's runners (linux/amd64, 8 hosts, 8 runs each at -benchtime=500ms,
-// verification/SQ-466/amd-558134a) timed queues=10 under its old name,
-// BenchmarkSQSFlush queues=10/messages=0, which wrote to b.TempDir as this does
-// (eb8c43e6): 0.31 to 1.08 ms at 658 or more iterations, 0.30 to 0.90 ms with
-// the chunked writer. queues=250 has no x86 time. queues=1000 took 3.09 to 6.69
-// ms at 79 or more iterations on the runners, and is left out for the arm64
-// time above.
+// queues=1000 is left out for it (docs/standards.md, "Benchmarks"): it took
+// 3.09 to 6.69 ms on the runners, near the limit for a disk that is slower on
+// another day. The two below are the cells that stay, with the slowest of ten
+// runs on a runner: 3.4 ms for queues=10 (2.6 ms on main) and 2.5 ms for
+// queues=250. No cell is smaller than queues=10, and it is kept at its size on
+// main. The runners (linux/amd64, 4 cpus; 8 hosts, 8 runs each at
+// -benchtime=500ms, verification/SQ-466/amd-558134a) timed queues=10 under its
+// old name, BenchmarkSQSFlush queues=10/messages=0, which wrote to b.TempDir as
+// this does (eb8c43e6): 0.31 to 1.08 ms at 658 or more iterations.
 func BenchmarkSQSFlushFsync(b *testing.B) {
 	for _, c := range fsyncCells {
 		benchFlush(b, c, b.TempDir(), "")

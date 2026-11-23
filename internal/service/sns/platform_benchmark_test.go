@@ -29,7 +29,13 @@ const (
 	devicesMany = 1000
 )
 
-var benchDevices = []int{1, devicesSome, devicesMany}
+// benchDevices lists the 100-device cells last. They are new, and when they ran
+// before the 1,000-device cells, two 256 KiB cells of those took 11% and 21%
+// longer on the runners than on main (PR #78's bench run, the same hosts and
+// shard, code unchanged). Neither macOS nor a 4 CPU Linux container showed it in
+// ten interleaved rounds, so the cause is unproven; the order gives the
+// 1,000-device cells the state they had on main.
+var benchDevices = []int{1, devicesMany, devicesSome}
 
 // benchClearEvery is how many iterations a device benchmark records before it
 // discards what it recorded.
