@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -25,8 +26,9 @@ const developerFilePrefix = "developer-"
 //   - a function it sets as Mount, ClaimHost, Claim, Fallback or Preprocess is
 //     not declared in a developer file;
 //   - no file of the package outside developer-*.go (a test file apart) names
-//     anything a developer file declares, but the DeveloperMount function the
-//     registration sets. Developer files may use the rest of the package.
+//     anything a developer file declares, and names the DeveloperMount
+//     function only as the value of the DeveloperMount key in the Registration
+//     literal. Developer files may use the rest of the package.
 func Test_developerFilesHoldNoRoutingHook(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	require.NoError(t, err)
@@ -65,10 +67,11 @@ func Test_developerFilesHoldNoRoutingHook(t *testing.T) {
 
 		developers++
 
-		allowed, _ := funcOf(reg.DeveloperMount)
+		mountName, _ := funcOf(reg.DeveloperMount)
 
-		require.Empty(t, outsideUses(t, dir, declared, allowed),
-			"%s: files outside developer-*.go use what a developer file declares", reg.Metadata.Name)
+		require.Empty(t, outsideUses(t, dir, declared, mountName),
+			"%s: files outside developer-*.go use what a developer file declares, "+
+				"or name the DeveloperMount function outside the Registration literal", reg.Metadata.Name)
 	}
 
 	require.Positive(t, hooks, "no routing hook was checked")
@@ -148,24 +151,91 @@ func specNames(spec ast.Spec) []string {
 }
 
 // outsideUses lists each identifier of the non-test files of dir outside
-// developer-*.go that is one of declared, but allowed. It matches by name, so
-// a local variable or a field that shares a name is listed too; rename it.
-func outsideUses(t *testing.T, dir string, declared []string, allowed string) []string {
+// developer-*.go that is one of declared, or is mountName, the DeveloperMount
+// function. mountName passes only as the value of the DeveloperMount key of a
+// Registration literal: a call, a method value assigned elsewhere or a
+// reference from Mount or MountProtocol code puts the developer routes where a
+// routing hook runs, outside the prefix the gateway scopes them to. It matches
+// by name, so a local variable or a field that shares a name is listed too;
+// rename it. Each use reads "file:line: name".
+func outsideUses(t *testing.T, dir string, declared []string, mountName string) []string {
 	t.Helper()
 
 	var uses []string
 
 	for _, path := range goFiles(t, dir, false) {
-		ast.Inspect(parseGo(t, path), func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && id.Name != allowed && slices.Contains(declared, id.Name) {
-				uses = append(uses, filepath.Base(path)+": "+id.Name)
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, path, nil, 0)
+		require.NoError(t, err)
+
+		registered := registeredMounts(parsed)
+
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok || registered[id] || (id.Name != mountName && !slices.Contains(declared, id.Name)) {
+				return true
 			}
+
+			uses = append(uses, fmt.Sprintf("%s:%d: %s", filepath.Base(path), fset.Position(id.Pos()).Line, id.Name))
 
 			return true
 		})
 	}
 
 	return uses
+}
+
+// registeredMounts returns the identifiers that name the DeveloperMount
+// function where a Registration literal sets it: the value of its
+// DeveloperMount key, when that is a plain name or a selector such as
+// p.mountDeveloperAPI. Anything else in the value, a wrapping function
+// literal or a call, names it as code and is not returned.
+func registeredMounts(file *ast.File) map[*ast.Ident]bool {
+	registered := map[*ast.Ident]bool{}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok || !isRegistration(lit.Type) {
+			return true
+		}
+
+		for _, elt := range lit.Elts {
+			pair, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+
+			if key, ok := pair.Key.(*ast.Ident); !ok || key.Name != "DeveloperMount" {
+				continue
+			}
+
+			switch value := pair.Value.(type) {
+			case *ast.Ident:
+				registered[value] = true
+			case *ast.SelectorExpr:
+				registered[value.Sel] = true
+			default:
+				// Not a name: whatever it holds is listed as a use.
+			}
+		}
+
+		return true
+	})
+
+	return registered
+}
+
+// isRegistration reports whether typ names service.Registration, or
+// Registration inside package service.
+func isRegistration(typ ast.Expr) bool {
+	switch typ := typ.(type) {
+	case *ast.Ident:
+		return typ.Name == "Registration"
+	case *ast.SelectorExpr:
+		return typ.Sel.Name == "Registration"
+	default:
+		return false
+	}
 }
 
 // goFiles lists the non-test .go files of dir: the developer-*.go ones when
