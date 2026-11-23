@@ -457,6 +457,16 @@ rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
 is measured" and "The gate"). `make bench-system-quick` shows it under "First
 use".
 
+How a service holds a large data set is measured under a memory limit, by
+`make bench-system-large` (`bench run -profile large`), which no other target
+runs, because each of its cells takes minutes. Its steps and its mix are in
+`bench/doc.go`, "The large profile", which also has the default limit. Each cell
+is a container started with `--memory` (`BENCH_LARGE_MEMORY` or `-memory`, which
+no other profile accepts) and `--memory-swap` equal to it, so a container that
+goes over is killed and not swapped. An OOM-killed run is recorded as a failed
+run with its reason. The target measures gostack alone and compares with no
+committed result, since none holds large cells.
+
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose
 container exited or was removed fails, and is recorded in the cell's
@@ -545,7 +555,8 @@ so the entry never expires. Delete the entries in the first change after the
 merge.
 
 A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
-such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.
+such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`;
+a cell under a memory limit has a `mem=<limit>` segment before `c=`.
 A cell holds its operations as a map from name to latency, and declares the
 environment variable that turns its persistence on. A service is added by
 registering a workload in `bench/` (`Service`, `Name`, `Ops`, `Cells`, `Run`);
