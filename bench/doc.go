@@ -153,13 +153,12 @@
 // comes first. A cell records its peak RSS (anon plus mapped file pages) and its
 // peak usage, the memory its cgroup counts against the limit, page cache
 // included, and items_filled, the items the server had acknowledged when the
-// fill ended. A container the kernel OOM-killed is a failed run with its reason:
-// the cell reports oom_killed, items_filled and the memory it reached, and a
-// run that failed any other way keeps those too. A run that failed waits up to
-// oomSettle for its container to stop, and takes State.OOMKilled together with
-// exit code 137 for the kill, so the load generator's own failure, which comes
-// first, is not read as a death of another kind. -memory is refused by any
-// other profile.
+// fill ended. A container the kernel OOM-killed has oom_killed in its cell, with
+// items_filled and the memory it reached, and a run that failed any other way
+// keeps those too. A run that failed waits up to oomSettle for its container to
+// stop, and takes State.OOMKilled together with exit code 137 for the kill, so
+// the load generator's own failure, which comes first, is not read as a death of
+// another kind.
 //
 // # The KMS matrix
 //

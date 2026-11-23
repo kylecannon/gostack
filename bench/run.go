@@ -58,8 +58,9 @@ const (
 // either case, as docker run --memory takes them (1G, 1g, 512m).
 var memoryLimit = regexp.MustCompile(`^[1-9][0-9]*[bBkKmMgG]?$`)
 
-// profileSpec is what a profile runs besides its cells: the table
-// that decides it, so no check of a profile's name is left in the run.
+// profileSpec is what a profile runs besides its cells, which the run reads from
+// profileSpecs and not from the profile's name. The idle windows and the second
+// idle variant still follow the name (applyProfileDefaults, footprint).
 type profileSpec struct {
 	name string
 	// targets is the default of -targets.

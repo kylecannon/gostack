@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -361,7 +363,7 @@ func Test_windowUsage(t *testing.T) {
 	assert.EqualValues(t, 45, got.MedianRSSBytes)
 	assert.InDelta(t, 50, got.CPUPercent, 0.001, "a second of CPU in two")
 
-	stopped := windowUsage(first, containerStats{}, peaks)
+	stopped := windowUsage(first, containerStats{Read: time.Unix(102, 0)}, peaks)
 	assert.EqualValues(t, 60, stopped.PeakRSSBytes)
 	assert.EqualValues(t, 90, stopped.PeakUsageBytes)
 	assert.Zero(t, stopped.CPUPercent, "the zero counters of a stopped container are no end of the window")
@@ -380,12 +382,62 @@ func Test_runResult_opErrors(t *testing.T) {
 func fakeDocker(t *testing.T, out string, status int) {
 	t.Helper()
 
-	dir := t.TempDir()
 	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = run ]; then\n  printf '%%s' '%s'\n  exit %d\nfi\nexit 0\n",
 		out, status)
 
+	installDocker(t, script)
+}
+
+// fakeInspect puts a docker on the PATH whose `inspect` prints the states in turn
+// and then the last one for ever, as a container does that stops while it is read.
+func fakeInspect(t *testing.T, states ...string) {
+	t.Helper()
+
+	var cases strings.Builder
+
+	for i, state := range states[:len(states)-1] {
+		fmt.Fprintf(&cases, "  %d) echo '%s';;\n", i+1, state)
+	}
+
+	fmt.Fprintf(&cases, "  *) echo '%s';;\n", states[len(states)-1])
+
+	count := filepath.Join(t.TempDir(), "count")
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = inspect ]; then\n  n=$(cat %s 2>/dev/null || echo 0)\n"+
+		"  n=$((n + 1))\n  echo $n > %s\n  case $n in\n%s  esac\nfi\nexit 0\n", count, count, cases.String())
+
+	installDocker(t, script)
+}
+
+func installDocker(t *testing.T, script string) {
+	t.Helper()
+
+	dir := t.TempDir()
+
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// A container the daemon has not yet recorded the death of reads as running to a
+// single look, and as OOM-killed to a run that waits for it to stop.
+func Test_instance_aliveWithin_waits_for_the_container_to_stop(t *testing.T) {
+	inst := &instance{name: "target"}
+
+	fakeInspect(t, "running 0 false", "exited 137 true")
+	require.NoError(t, inst.alive(t.Context()), "one look, as a run that completed takes")
+
+	fakeInspect(t, "running 0 false", "running 0 false", "exited 137 true")
+	require.ErrorIs(t, inst.aliveWithin(t.Context(), oomSettle), errOOMKilled)
+
+	// A container that is still running when the wait ends is alive.
+	fakeInspect(t, "running 0 false")
+	require.NoError(t, inst.aliveWithin(t.Context(), 300*time.Millisecond))
+
+	// One that died of something else is a death and no OOM kill.
+	fakeInspect(t, "running 0 false", "exited 1 false")
+
+	err := inst.aliveWithin(t.Context(), oomSettle)
+	require.ErrorIs(t, err, errTargetDied)
+	require.NotErrorIs(t, err, errOOMKilled)
 }
 
 // A load generator that fails after it printed how far its fill got has that kept,
@@ -419,29 +471,30 @@ func Test_runner_loadgen_keeps_what_a_failed_load_generator_printed(t *testing.T
 	assert.Equal(t, 300, done.ItemsFilled)
 }
 
-// failingDynamoDB answers CreateTable and the first BatchWriteItem, and refuses
-// everything after them, as a target does that has just been killed. A refusal
-// waits until the batch was answered and the client has had time to read the
-// answer: the first failure cancels the fill, and a batch still being read when
-// it does is not counted.
+// failingFillItems is a table of one batch more than the fill has workers.
+const failingFillItems = (ddbSeedWorkers + 1) * ddbBatchSize
+
+// failingDynamoDB answers CreateTable and the first BatchWriteItem, holds the
+// next ones and refuses them, as a target does that has just been killed, when
+// the batch past one a worker each arrives. Only a worker whose batch was
+// answered and counted asks for another, so the refusals, which cancel the fill,
+// cannot come before the count.
 func failingDynamoDB(t *testing.T) client {
 	t.Helper()
 
 	var calls atomic.Int64
 
-	answered := make(chan struct{})
+	refuse := make(chan struct{})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		switch calls.Add(1) {
-		case 1:
+		switch n := calls.Add(1); {
+		case n <= 2: // CreateTable, and the first batch
 			_, _ = w.Write([]byte(`{}`))
-		case 2:
-			_, _ = w.Write([]byte(`{}`))
-
-			close(answered)
+		case n == ddbSeedWorkers+2: // the batch past a worker each
+			close(refuse)
+			http.Error(w, "gone", http.StatusServiceUnavailable)
 		default:
-			<-answered
-			time.Sleep(200 * time.Millisecond)
+			<-refuse
 			http.Error(w, "gone", http.StatusServiceUnavailable)
 		}
 	}))
@@ -453,20 +506,21 @@ func failingDynamoDB(t *testing.T) client {
 // A fill a failure ended says how many items the server had acknowledged, in the
 // run's own field and not only in its message.
 func Test_large_table_run_reports_how_far_its_fill_got(t *testing.T) {
-	cell := ddbLargeCell("", 100, levelMid)
+	cell := ddbLargeCell("", failingFillItems, levelMid)
 
 	run, err := largeTableWorkload{}.Run(t.Context(), failingDynamoDB(t), cell, time.Millisecond)
 
 	require.Error(t, err)
 	assert.Equal(t, ddbBatchSize, run.ItemsFilled, "one batch of 25 was acknowledged")
-	assert.Contains(t, err.Error(), "seeded 25 of 100 items")
+	assert.Contains(t, err.Error(), fmt.Sprintf("seeded %d of %d items", ddbBatchSize, failingFillItems))
 
 	// loadgen cell prints the run when the fill failed, so the orchestrator can read it.
 	var out bytes.Buffer
 
 	err = loadgenMain(t.Context(), []string{
 		"cell", "-endpoint", failingDynamoDB(t).endpoint, "-service", serviceDynamoDB,
-		"-workload", workloadDDBLarge, "-opt", optItems + "=100", "-concurrency", "16", "-duration", "1ms",
+		"-workload", workloadDDBLarge, "-opt", optItems + "=" + strconv.Itoa(failingFillItems),
+		"-concurrency", "16", "-duration", "1ms",
 	}, &out)
 	require.Error(t, err)
 
