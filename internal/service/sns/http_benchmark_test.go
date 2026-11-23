@@ -20,17 +20,18 @@ import (
 // last endpoint has answered. The endpoints are paths of one local server
 // that reads each body and answers 200, so each subscriber is its own lane.
 //
-// As for BenchmarkPublish, a cell is gated only when an operation takes at
-// most 10 ms (docs/standards.md, Benchmarks): one subscriber at 256 B and
-// 256 KiB, ten at 256 KiB raw, and 100 at 256 B and at 16 KiB raw. In three
-// runs the slowest of them, 100 at 16 KiB raw, took 8 ms (at least 92
-// iterations), the others 0.1 to 4.4 ms. A 100-subscriber publish at 256 KiB
-// took 11 to 40 ms, and the envelope cells left out, 10 at 256 KiB and 100 at
-// 16 KiB, ran 61 to 105 iterations (5 to 8 ms) when they were last measured:
-// each writes and signs a body for every subscriber, so its time moves the
-// most with the machine's load.
+// As for BenchmarkPublish, the cells kept are those a run can gate on
+// (docs/standards.md, Benchmarks): one subscriber at 256 B and 256 KiB, ten at
+// 256 KiB raw, and 100 at 256 B. The slowest of the cells kept took 4.5 ms (100
+// at 256 B enveloped), the slowest of three runs. A 100-subscriber publish at
+// 16 KiB raw took 12.8 ms, and at 256 KiB 11 to 40 ms, so they are left out, and
+// the payload axis at 100 subscribers is
+// covered by the ten at 256 KiB raw (3.2 ms). The envelope cells left
+// out, 10 at 256 KiB and 100 at 16 KiB, ran 61 to 105 iterations (5 to 8 ms)
+// when they were last measured: each writes and signs a body for every
+// subscriber, so its time moves the most with the machine's load.
 //
-//	BenchmarkPublishHTTP/subscribers=100/delivery=raw/payload=16KiB
+//	BenchmarkPublishHTTP/subscribers=100/delivery=raw/payload=256B
 
 var benchHTTPSubscribers = []int{1, bulkFanOut, widestFanOut}
 
@@ -52,7 +53,7 @@ func BenchmarkPublishHTTP(b *testing.B) {
 // httpCellRuns says whether BenchmarkPublishHTTP runs the cell for a
 // subscriber count, publishPayloads[payload] and a raw or enveloped delivery.
 func httpCellRuns(subscribers, payload int, raw bool) bool {
-	small, typical, largest := payload == 0, payload == 1, payload == len(publishPayloads)-1
+	small, largest := payload == 0, payload == len(publishPayloads)-1
 
 	switch subscribers {
 	case 1:
@@ -60,7 +61,7 @@ func httpCellRuns(subscribers, payload int, raw bool) bool {
 	case bulkFanOut:
 		return largest && raw
 	default:
-		return small || typical && raw
+		return small
 	}
 }
 

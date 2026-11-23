@@ -195,16 +195,14 @@ var publishPayloads = []struct {
 	{name256KiB, 256<<10 - benchAttrSize},
 }
 
-// A cell runs only when an operation of it takes at most 10 ms, so that the
-// benchmark job's 500 ms makes the 50 iterations benchstat needs to gate on
-// (the rule is in docs/standards.md, Benchmarks). That rules out 100
-// subscribers at 256 KiB (40 to 105 ms a publish) and the envelope cells that
-// write a signed body for every subscriber at 100 subscribers above 256 B and
-// at 10 at 256 KiB (about 100 iterations when last measured, 10 to 100 on a
-// busy machine). What is left still spans the matrix: three payloads at 1 and
-// 10 subscribers, 100 subscribers at 256 B and at 16 KiB raw, raw and
-// envelope, standard and FIFO. The slowest of the cells in three runs is one
-// subscriber at 256 KiB, 7.4 ms through the envelope and 6.4 ms raw.
+// The cells are cut to those a run can gate on (docs/standards.md, Benchmarks).
+// That rules out 100 subscribers at 256 KiB (40 to 105 ms a publish) and the
+// envelope cells that write a signed body for every subscriber at 100
+// subscribers above 256 B and at 10 at 256 KiB (about 100 iterations when last
+// measured, 10 to 100 on a busy machine). What is left still spans the matrix:
+// three payloads at 1 and 10 subscribers, 100 subscribers at 256 B and at 16 KiB
+// raw, raw and envelope, standard and FIFO. The slowest of the cells in three
+// runs is 100 subscribers standard raw at 16 KiB, 4.8 ms.
 const (
 	// widestFanOut is the subscriber count that runs the small payload, and
 	// the typical one raw.
@@ -260,8 +258,8 @@ func BenchmarkPublish(b *testing.B) {
 	// The persistence rows: a standard publish to queues leaves SNS clean, a
 	// FIFO publish marks it dirty and the engine saves it every
 	// persistFrequency while the publishes run. 256 KiB through ten
-	// subscribers is over the 10 ms an operation a cell may take, so these stop
-	// at 16 KiB.
+	// subscribers is too slow to gate on (docs/standards.md, Benchmarks), so
+	// these stop at 16 KiB.
 	for _, fifo := range []bool{false, true} {
 		for _, payload := range publishPayloads[:2] {
 			c := publishCell{subscribers: 10, fifo: fifo, payload: payload.size, size: payload.name, persist: true}
@@ -313,21 +311,22 @@ var benchBatchPayloads = []struct {
 
 const benchBatchEntries = 10
 
-// BenchmarkPublishBatch publishes ten entries at once, raw, with no filter
-// policy; the single-publish rows cover those options. As for Publish, a cell
-// that takes over 10 ms an operation is left out: the 100-subscriber cells
-// above the small payload (47 to 54 ms). The slowest of the cells kept took 6.1
-// ms in three runs.
-//
-//	BenchmarkPublishBatch/subscribers=100/topic=fifo/payload=256B
-func BenchmarkPublishBatch(b *testing.B) {
-	for _, subscribers := range benchSubscribers {
-		for _, fifo := range []bool{false, true} {
-			for i, payload := range benchBatchPayloads {
-				if subscribers == widestFanOut && i > 0 {
-					continue
-				}
+// batchSubscribers are the subscriber counts of BenchmarkPublishBatch: those of
+// benchSubscribers but the widest.
+var batchSubscribers = benchSubscribers[:len(benchSubscribers)-1]
 
+// BenchmarkPublishBatch publishes ten entries at once, raw, with no filter
+// policy; the single-publish rows cover those options. As for Publish, the
+// cells a run cannot gate on are left out: the 100-subscriber cells, 11.5 ms
+// (standard) and 9.1 ms (fifo) at the small payload and 47 to 54 ms above it,
+// the slowest of three runs. Ten subscribers, each entry of ten reaching all of
+// them, stand for the widest fan-out: 4.9 ms standard at 25 KiB entries.
+//
+//	BenchmarkPublishBatch/subscribers=10/topic=fifo/payload=256B
+func BenchmarkPublishBatch(b *testing.B) {
+	for _, subscribers := range batchSubscribers {
+		for _, fifo := range []bool{false, true} {
+			for _, payload := range benchBatchPayloads {
 				c := publishCell{subscribers: subscribers, fifo: fifo, raw: true, payload: payload.size}
 				topic := "standard"
 				if fifo {
@@ -380,18 +379,21 @@ func benchPublishBatch(b *testing.B, c publishCell) {
 // BenchmarkPublishBurst times a burst: publishers PublishBatch calls of ten
 // small raw messages at once, each publisher sending batches of them, to a
 // standard topic, and every delivery; any dropped fails the benchmark. The
-// cells are sized to take at most 10 ms an operation (docs/standards.md,
-// Benchmarks), so one publisher and four, at 10 subscribers: 16 publishers
-// took 10 to 11 ms, and eight 10 ms on a busy machine. The burst that owes 160,000 deliveries, 16 publishers of
-// ten batches at 100 subscribers, ran once in 900 ms: too few iterations to
-// gate on; Test_Provider_Publish_burst (lanes_test.go) runs it and checks that
-// every delivery arrives.
+// cells are sized to what a run can gate on (docs/standards.md, Benchmarks), so
+// one publisher of two batches and two publishers of one, at 10 subscribers. 16
+// publishers took 10 to 11 ms and four publishers 4.6 to 10.2 ms where they
+// were sized; as kept, one publisher of two batches took 1.6 ms and two
+// publishers 1.6 ms, the slowest of ten runs on a runner. The
+// burst that owes 160,000 deliveries, 16 publishers of ten batches at 100
+// subscribers, ran once in 900 ms: too few iterations to gate on;
+// Test_Provider_Publish_burst (lanes_test.go) runs it and checks that every
+// delivery arrives.
 //
-//	BenchmarkPublishBurst/subscribers=10/publishers=4/batches=1
+//	BenchmarkPublishBurst/subscribers=10/publishers=2/batches=1
 func BenchmarkPublishBurst(b *testing.B) {
 	for _, cell := range []struct{ subscribers, publishers, batches int }{
-		{10, 1, 5},
-		{10, 4, 1},
+		{10, 1, 2},
+		{10, 2, 1},
 	} {
 		name := fmt.Sprintf("subscribers=%d/publishers=%d/batches=%d", cell.subscribers, cell.publishers, cell.batches)
 		b.Run(name, func(b *testing.B) { benchPublishBurst(b, cell.subscribers, cell.publishers, cell.batches) })

@@ -69,10 +69,12 @@ var importCells = []struct {
 // BenchmarkImportKeyMaterial imports the same material into one key again and
 // again, with that many calls at once. The wrapping key's RSA decryption is
 // the work; a symmetric key's material that is current already changes
-// nothing, and an RSA key's key pair is parsed and replaced each time.
+// nothing, and an RSA key's key pair is parsed and replaced each time. It runs
+// at 1 and 4 calls at once: on a 4 CPU runner 16 took 8.8 and 10.2 ms
+// (docs/standards.md, "Benchmarks").
 func BenchmarkImportKeyMaterial(b *testing.B) {
 	for _, cell := range importCells {
-		for _, workers := range []int{1, 16} {
+		for _, workers := range privateKeyConcurrency {
 			b.Run("proto=json/"+cell.name+"/concurrency="+strconv.Itoa(workers), func(b *testing.B) {
 				c := newBench(b)
 				body := importBody(c, cell.spec, cell.usage, cell.algorithm)

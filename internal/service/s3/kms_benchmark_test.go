@@ -21,7 +21,10 @@ import (
 // fakeKMS behind S3's in-process client, so a row measures S3's side of the
 // call and not KMS's work. For example
 //
-//	BenchmarkPutObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=16
+//	BenchmarkPutObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=1
+//
+// The 1MiB rows at 16 workers are left out by tooSlowToGate and writeBudget
+// (docs/standards.md, "Benchmarks"): they took 64 ms.
 //
 // sse=kms-managed names no key, so the account's managed key is used (made on
 // the first write); sse=kms-key names a key id; sse=kms-validated names it
@@ -117,12 +120,20 @@ func (s *objectBenchServer) putWith(ctx context.Context, target string, body []b
 // reads with a DescribeKey, on every read. The same payload and concurrency
 // axes as BenchmarkGetObject, to read against its no-KMS rows. For example
 //
-//	BenchmarkGetObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=16
+//	BenchmarkGetObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=1
+//
+// The budget is writeBudget and not the readBudget of BenchmarkGetObject, so the
+// 1MiB row at 16 workers is left out: with a DescribeKey on every read it took
+// 11.7 ms, the slowest of three runs, against 4.9 ms for GetObject.
 func BenchmarkGetObjectSSEKMS(b *testing.B) {
 	option := kmsBenchOptions[len(kmsBenchOptions)-1]
 
 	for _, payload := range kmsBenchPayloads {
 		for _, workers := range benchConcurrency {
+			if tooSlowToGate(payload, workers, writeBudget) {
+				continue
+			}
+
 			name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
 
 			b.Run(name, func(b *testing.B) {
@@ -157,6 +168,10 @@ func BenchmarkPutObjectSSEKMS(b *testing.B) {
 	for _, option := range kmsBenchOptions {
 		for _, payload := range kmsBenchPayloads {
 			for _, workers := range benchConcurrency {
+				if tooSlowToGate(payload, workers, writeBudget) {
+					continue
+				}
+
 				name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {

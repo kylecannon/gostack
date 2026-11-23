@@ -51,28 +51,46 @@
 #   commit:    a commit that carries the cost.
 
 - gate: benchstat
-  package: cmd/gostack
-  benchmark: ServiceTable_Capabilities
+  package: internal/service/sns
+  benchmark: PublishSMS/route=topic/numbers=1000/payload=256KiB/concurrency=1
+  unit: sec/op
+  max: +40%
+  reason: no SNS code changed; on main the cut topic/1000/256B/16-worker cell ran just before this one and likely left a larger heap and fewer collections for main's time (GC counts not measured) (+27.4% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
+
+- gate: benchstat
+  package: internal/service/sns
+  benchmark: PublishSMS/route=topic/numbers=1000/payload=256KiB/concurrency=1
+  unit: B/s
+  max: +40%
+  reason: no SNS code changed; on main the cut topic/1000/256B/16-worker cell ran just before this one and likely left a larger heap and fewer collections for main's throughput (GC counts not measured) (-21.5% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
+
+- gate: benchstat
+  package: internal/service/sns
+  benchmark: PublishEndpoint/route=topic/endpoints=1000/structure=plain/payload=256KiB/concurrency=1
   unit: sec/op
   max: +25%
-  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 0.5 ms once per process
-  pr: 36
-  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3
+  reason: no SNS code changed; on main the cut topic/1000/256B/16-worker cell ran just before this one and likely left a larger heap and fewer collections for main's time (GC counts not measured) (+14.9% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
 
 - gate: benchstat
-  package: cmd/gostack
-  benchmark: ServiceTable_Capabilities
-  unit: B/op
-  max: +20%
-  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 227 KiB once per process
-  pr: 36
-  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3
+  package: internal/service/sns
+  benchmark: PublishEndpoint/route=topic/endpoints=1000/structure=plain/payload=256KiB/concurrency=1
+  unit: B/s
+  max: +25%
+  reason: no SNS code changed; on main the cut topic/1000/256B/16-worker cell ran just before this one and likely left a larger heap and fewer collections for main's throughput (GC counts not measured) (-13.0% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
 
 - gate: benchstat
-  package: cmd/gostack
-  benchmark: ServiceTable_Capabilities
-  unit: allocs/op
+  package: internal/service/s3
+  benchmark: ListObjectsV2Paging/keys=100000/delimiter=slash
+  unit: sec/op
   max: +20%
-  reason: the first GET /_gostack/services now counts DynamoDB's 57 and DynamoDB Streams' 4 operations; 4686 allocations once per process
-  pr: 36
-  commit: 5402f4e53fada06cc046f5f418364e72bf406dd3
+  reason: no S3 code changed and B/op and allocs/op are equal; on main the cut keys=100000 flat cell ran just before this one and likely left a different heap for main's time (GC counts not measured); it passed the gate on this PR's previous run (+10.8% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60

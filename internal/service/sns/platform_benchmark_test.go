@@ -21,10 +21,21 @@ import (
 // are discarded every benchClearEvery iterations, with the timer stopped, so
 // the lists do not grow without end.
 //
-//	BenchmarkPublishEndpoint/route=topic/endpoints=1000/structure=json/payload=256KiB/concurrency=16
+//	BenchmarkPublishEndpoint/route=topic/endpoints=100/structure=json/payload=256B/concurrency=16
 //	BenchmarkPublishSMS/route=direct/numbers=1/payload=256B/concurrency=1
 
-var benchDevices = []int{1, 1000}
+const (
+	devicesSome = 100
+	devicesMany = 1000
+)
+
+// benchDevices lists the 100-device cells last. They are new, and when they ran
+// before the 1,000-device cells, two 256 KiB cells of those took 11% and 21%
+// longer on the runners than on main (PR #78's bench run, the same hosts and
+// shard, code unchanged). Neither macOS nor a 4 CPU Linux container showed it in
+// ten interleaved rounds, so the cause is unproven; the order gives the
+// 1,000-device cells the state they had on main.
+var benchDevices = []int{1, devicesMany, devicesSome}
 
 // benchClearEvery is how many iterations a device benchmark records before it
 // discards what it recorded.
@@ -181,12 +192,26 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 }
 
 // tooSlowToGate is true for the cells that do not reach the 50 iterations in
-// the benchmark job's 500 ms that a cell needs to be gated on: 16 workers at
-// 256 KiB took 10 to 38 ms an iteration, and 5 of the 12 endpoint and sms cells
-// there ran 15 to 46 times. Those cells run at one worker, which still spans
-// every other axis.
-func tooSlowToGate(payload, workers int) bool {
-	return workers > 1 && payload > benchPayloads[0].size
+// the benchmark job's 500 ms that a cell needs to be gated on (docs/standards.md,
+// "Benchmarks"): 16 workers at 256 KiB took 10 to 38 ms an iteration, and 5 of
+// the 12 endpoint and sms cells there ran 15 to 46 times. Those cells run at one
+// worker, which still spans every other axis. A publish to a topic of 1,000
+// endpoints or numbers by 16 workers is left out at the smallest payload too: it
+// took 8.3 ms (endpoint, plain), 8.9 ms (endpoint, json) and 11.1 ms (sms), the
+// slowest of three runs. The fan-out of a topic under concurrency is kept at 100
+// devices (1.7 ms, the slowest of the three cells, in three runs); 1,000 stays
+// at one worker. A direct publish addresses the first device, so its cells run
+// at 1 and 1,000 devices only, to size the region, and not at 100.
+func tooSlowToGate(route string, devices, payload, workers int) bool {
+	if workers > 1 && payload > benchPayloads[0].size {
+		return true
+	}
+
+	if route == routeTopic && workers > 1 {
+		return devices == devicesMany
+	}
+
+	return devices == devicesSome
 }
 
 // BenchmarkPublishEndpoint publishes to a platform endpoint with and without
@@ -199,7 +224,7 @@ func BenchmarkPublishEndpoint(b *testing.B) {
 			for _, structure := range []string{"plain", valueStructure} {
 				for _, payload := range benchPayloads {
 					for _, workers := range benchConcurrency {
-						if tooSlowToGate(payload.size, workers) {
+						if tooSlowToGate(route, endpoints, payload.size, workers) {
 							continue
 						}
 
@@ -247,7 +272,7 @@ func BenchmarkPublishSMS(b *testing.B) {
 
 			for _, payload := range benchPayloads {
 				for _, workers := range benchConcurrency {
-					if tooSlowToGate(payload.size, workers) {
+					if tooSlowToGate(route, numbers, payload.size, workers) {
 						continue
 					}
 

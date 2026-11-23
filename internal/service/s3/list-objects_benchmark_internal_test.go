@@ -79,6 +79,15 @@ func BenchmarkIndexInsert(b *testing.B) {
 	}
 }
 
+// tooSlowToGate leaves out keys=100000 with no delimiter of
+// BenchmarkListObjectsV2Paging (docs/standards.md, "Benchmarks"): paging the
+// 100,000 keys flat took 30.8 ms, the slowest of three runs. The 100,000 keys
+// with a delimiter stay (0.3 ms), and keys=10000 with none covers the flat
+// paging (2.6 ms).
+func tooSlowToGate(keys int, delimiter string) bool {
+	return keys == 100_000 && delimiter == ""
+}
+
 // BenchmarkListObjectsV2Paging pages through a whole bucket with ListObjectsV2
 // calls: flat, a thousand keys to the page, and with a delimiter, which lists
 // the folders (a hundred keys to a folder) a hundred to the page. An op is the
@@ -94,6 +103,10 @@ func BenchmarkListObjectsV2Paging(b *testing.B) {
 		ctx := request.With(b.Context(), rc)
 
 		for _, tt := range []struct{ name, delimiter string }{{"none", ""}, {"slash", "/"}} {
+			if tooSlowToGate(keys, tt.delimiter) {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("keys=%d/delimiter=%s", keys, tt.name), func(b *testing.B) {
 				for b.Loop() {
 					in := &s3api.ListObjectsV2Input{Bucket: new(benchBucket)}

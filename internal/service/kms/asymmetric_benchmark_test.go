@@ -16,8 +16,8 @@ import (
 // each spec at its own digest, and RSA_2048 in both padding schemes, which take
 // different code. Every payload runs only on one RSA, one NIST and the
 // secp256k1 cell; the others sign the small message alone. With
-// specConcurrency that is 33 cells per operation, so the package's matrix stays
-// inside make bench's timeout at -count=10.
+// specConcurrency that is 33 cells per operation (Sign leaves one out, below), so
+// the package's matrix stays inside make bench's timeout at -count=10.
 var signCells = []struct {
 	spec, algorithm string
 	payloads        []signPayload
@@ -48,25 +48,64 @@ var (
 // specConcurrency is the cut of dataConcurrency per spec: 64 calls at once only
 // on the two fast curves, RSA_4096 one call at a time, since 16 of its signing
 // calls run under 50 iterations in a 500ms cell, and every other spec at 1 and
-// 16.
-func specConcurrency(spec string) []int {
-	switch spec {
-	case eccP256, secgK1:
+// 16. Three groups run at fewer calls at once (docs/standards.md,
+// "Benchmarks"), where on a 4 CPU runner 16 took about 6.5 times one call, the
+// slowest of ten runs: RSA_2048 Sign at 1 and 4 (8.2 to 9.8 ms at 16, 1.2 ms at
+// 1), P521 at 1 and 2 (19.5 ms for Verify and 22.7 ms for DeriveSharedSecret at
+// 16, 3.1 and 3.7 ms at 1; four calls would be 12 to 15 ms if they did not
+// overlap, two are 6.3 and 7.4 at worst), and DeriveSharedSecret on P384 at 1
+// and 4 (5.9 to 8.1 ms at 16 across runs, 0.84 ms at 1, so 4 calls are 3.4 ms
+// at worst). Verify of RSA_2048 is a public-key operation and keeps 16, and so
+// do Sign and Verify on P384 (2.6 and 5.2 ms at 16).
+func specConcurrency(operation, spec string) []int {
+	switch {
+	case spec == eccP256 || spec == secgK1:
 		return dataConcurrency
-	case rsa4096:
+	case spec == rsa4096:
 		return dataConcurrency[:1]
+	case spec == eccP521:
+		return p521Concurrency
+	case spec == eccP384 && operation == "DeriveSharedSecret":
+		return privateKeyConcurrency
+	case spec == rsa2048 && operation != "Verify":
+		return privateKeyConcurrency
 	default:
 		return dataConcurrency[:2]
 	}
 }
 
-// runSignCells runs one sub-benchmark per Sign or Verify cell.
-func runSignCells(b *testing.B, run func(b *testing.B, spec, algorithm string, payload signPayload, workers int)) {
+var (
+	// privateKeyConcurrency is the concurrency of a private-key operation that
+	// costs several calls at 16: RSA_2048 Sign, the RSA decryption of
+	// ImportKeyMaterial, and the ECDH of DeriveSharedSecret on P384.
+	privateKeyConcurrency = []int{1, 4}
+	// p521Concurrency is that of the P521 operations, each of which is slower.
+	p521Concurrency = []int{1, 2}
+)
+
+// tooSlowToGate reports the Sign cells that are left out (docs/standards.md,
+// "Benchmarks"): Sign RSA_3072 at concurrency 16 took 28.8 ms, the slowest of
+// three runs; at one call it takes 3.4 ms. Verify is a public-key operation and keeps every
+// cell (1.5 ms at 16).
+func tooSlowToGate(operation, spec string, workers int) bool {
+	return operation == "Sign" && spec == rsa3072 && workers > 1
+}
+
+// runSignCells runs one sub-benchmark per Sign or Verify cell of the operation.
+func runSignCells(
+	b *testing.B,
+	operation string,
+	run func(b *testing.B, spec, algorithm string, payload signPayload, workers int),
+) {
 	b.Helper()
 
 	for _, cell := range signCells {
 		for _, payload := range cell.payloads {
-			for _, workers := range specConcurrency(cell.spec) {
+			for _, workers := range specConcurrency(operation, cell.spec) {
+				if tooSlowToGate(operation, cell.spec, workers) {
+					continue
+				}
+
 				b.Run(signCell(cell.spec, cell.algorithm, payload.name, workers), func(b *testing.B) {
 					run(b, cell.spec, cell.algorithm, payload, workers)
 				})
@@ -143,7 +182,7 @@ func signCell(spec, algorithm, payload string, workers int) string {
 // BenchmarkSign signs each cell's message, with that many calls at once on one
 // key.
 func BenchmarkSign(b *testing.B) {
-	runSignCells(b, func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
+	runSignCells(b, "Sign", func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
 		c := newBench(b)
 		body := signBody(c.asymmetricKey(spec, usageSignVerify), algorithm, payload.size) + "}"
 
@@ -159,7 +198,7 @@ func BenchmarkSign(b *testing.B) {
 // BenchmarkVerify verifies a signature of each cell's message, with that many
 // calls at once on one key.
 func BenchmarkVerify(b *testing.B) {
-	runSignCells(b, func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
+	runSignCells(b, "Verify", func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
 		c := newBench(b)
 		sign := signBody(c.asymmetricKey(spec, usageSignVerify), algorithm, payload.size)
 
@@ -193,7 +232,7 @@ func BenchmarkGetPublicKey(b *testing.B) {
 // calls at once on one key, cut as the Sign cells are.
 func BenchmarkDeriveSharedSecret(b *testing.B) {
 	for _, spec := range []string{eccP256, eccP384, eccP521, secgK1} {
-		for _, workers := range specConcurrency(spec) {
+		for _, workers := range specConcurrency("DeriveSharedSecret", spec) {
 			b.Run("proto=json/spec="+spec+"/concurrency="+strconv.Itoa(workers), func(b *testing.B) {
 				c := newBench(b)
 				id := c.asymmetricKey(spec, usageKeyAgreement)

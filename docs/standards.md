@@ -291,18 +291,57 @@ A micro benchmark cell has to be one the gate can compare: one operation of it
 finishes in at most 10 ms, so that a run at the gate's benchtime
 (`BENCH_TIME`, 500 ms) makes at least 50 iterations, the fewest benchstat can
 gate on. A cell is held to it with room to spare, because the gate's runner
-may be slower than the machine it was measured on: its slowest operation over
-three runs at the gate's benchtime is the number to check, and the cell is
-resized or left out when that is near the limit. The rule covers every
+may be slower than the machine it was measured on: **its slowest of three runs
+at the gate's benchtime has to be at most 8 ms**, and the cell is resized or
+left out when it is over. The number that decides is the one the gate's own
+runners report (`make bench-ab` on ubuntu-latest, `b.TempDir` on ext4, 4 CPUs),
+from the bench workflow's run on the PR, never one from macOS, where an fsync
+costs 17 to 35 ms. A container is only a local pre-check, and it misreads both
+ways: it over-reads an fsync about 10 times and, with more CPUs than a runner,
+under-reads a cell that is bound by the CPU. Run it with `--cpus 4`,
+`GOTOOLCHAIN` set from `go.mod` and `TMPDIR` on an ext4 volume: `docker run
+--rm --cpus 4 -v "$PWD":/src -w /src golang:<toolchain> go test -p 1 -run '^$'
+-bench <cells> -benchtime=500ms -count=3 <pkg>`. The rule covers every
 benchmark in a package, not only its feature cells. A cell over the limit is
 made smaller (fewer subscribers, lanes or messages) until it is under, or it
 is left out, and a cell left out is not a missing row: the payload axis is
-covered by the widest cell that is under the limit. A benchmark whose one
+covered by the widest cell that is under the limit. A cell whose time is a
+fixed floor of the disk, such as the syncfs that ends a save of pending assets,
+cannot be made smaller: it runs on a memory filesystem, where the floor is
+gone, and on the disk at the smallest counts only
+(`BenchmarkSavePendingAssets`). A benchmark whose one
 operation is a one-time cost, such as a key generation or a process start,
 cannot be sized to it and does not belong in the micro benchmarks. The cell's
 own comment names the cells left out and the time an operation took (or the
 iterations it reached); `go test -run '^$' -bench . -benchtime=500ms -count=3`
 prints both for each.
+
+A cell is left out inside the benchmark's own matrix, in the code that builds
+it, and the comment above names what it cuts and the time that cut it. The
+forms in use are a shorter list (`snapshotSizes`, `batchSubscribers`), a
+lower concurrency for an operation that costs about 6 times one call at 16
+(`privateKeyConcurrency` and `p521Concurrency` in `internal/service/kms`: 1 and
+4, 1 and 2, where a private-key operation took 8 to 23 ms at 16 on a 4 CPU
+runner, among them DeriveSharedSecret on P384 at 8.1 ms; the cell at the lower
+count has to fit under 8 ms at the one-call time times its calls), a condition in the matrix loop (`publishCells` and `BenchmarkBurst` in
+`internal/service/sns`), a predicate the loop asks (`tooSlowToGate` in
+`internal/inproc`, `internal/api/sqs`, `internal/service/kms`,
+`internal/service/s3` and `internal/service/sns`) and a budget a predicate
+compares against (`writeBudget` and `readBudget` in `internal/service/s3`,
+`cellOpts.maxCallBytes` in `internal/service/sqs`,
+`maxIterationBatchBytes` in `internal/service/dynamodb`). Never a map of cell
+names, which stops matching without a sound when a cell is renamed, or
+`b.Skip`, which reports a cell that did not run.
+
+A count ladder (keys, secrets, parameters, queues or messages in a snapshot or
+a restore) runs at 10 and 1,000. A step of a hundred shows a cost that is not
+linear, and a larger count runs the same code for longer. A ladder keeps a
+larger count only where its cell is at most 8 ms on the gate's runners, and it
+is cut per operation where one operation is over (`snapshotSizes` in
+`internal/service/s3`: a restore of 1,000 objects took 8.5 ms, so a restore
+stops at 500 and a snapshot, 5.8 ms, at 1,000; `restoreMessages` in
+`internal/service/sqs`: a FIFO restore of 1,000 messages took 8.2 ms, so it
+stops at 500).
 
 A cell's time does not depend on the cells that ran before it. The collector
 paces itself by the live heap, so a cell that leaves what it recorded held, for
@@ -327,7 +366,7 @@ not apply to a feature is left out, not filled with a placeholder.
 
 A micro benchmark's persistence-on rows sit under the same function as its
 persistence-off rows, with a `persist=on` key first
-(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16`) and no key for
+(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=1`) and no key for
 off, so the base's rows keep their names. `benchstat -col /persist` sets the two
 side by side.
 
