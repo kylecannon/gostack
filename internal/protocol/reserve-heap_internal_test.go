@@ -400,7 +400,12 @@ func Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered(t *testing.T) {
 	assert.Equal(t, room/2, heap.reserved, "the reservation is still held")
 
 	_, _, err = TakeDenseLane(room/2+1, room/2+1)
-	require.ErrorIs(t, err, ErrNoHeapRoom, "the first body's reservation still counts")
+	require.Error(t, err, "the first body's reservation still counts")
+	require.NotErrorIs(t, err, ErrNoHeapRoom, "and is given back once it is answered: the body fits alone")
+	assert.False(t, denseLane.Load())
+
+	_, _, err = TakeDenseLane(room+1, room+1)
+	require.ErrorIs(t, err, ErrNoHeapRoom, "a body past the room alone has no room, whatever others reserve")
 	assert.False(t, denseLane.Load())
 
 	second := &Charge{}
@@ -414,6 +419,67 @@ func Test_TakeDenseLane_TheLaneIsFreeWhileTheRequestIsAnswered(t *testing.T) {
 	assert.Equal(t, room/2, heap.reserved)
 
 	second.Release()
+	assert.Zero(t, heap.reserved)
+	assert.False(t, denseLane.Load())
+}
+
+// Test_TakeDenseLane_AnotherRequestsValueDoesNotRefuseABodyThatFitsAlone: a
+// request still answered keeps its reservation and the value it covers live,
+// which a collection does not free, so the heap counts that value twice. A body
+// that would fit with nothing that request reserves is not refused for want
+// of room, whether the heap it is projected to keep (HeapCouldFit) or its own
+// bytes (ReserveHeap) miss: the room is back once the request is answered. A
+// body past the room alone is refused, and so is one that misses beside a
+// heap nothing reserved holds live, a table's.
+func Test_TakeDenseLane_AnotherRequestsValueDoesNotRefuseABodyThatFitsAlone(t *testing.T) {
+	collections := fakeHeap(t, 0, 0)
+
+	bound, _ := InFlight()
+	if bound == 0 {
+		bound = DefaultInFlight
+	}
+
+	room := int64(100 << 20)
+	debug.SetMemoryLimit(bound + HeapSlack + room)
+
+	first := &Charge{}
+
+	lane, release, err := TakeDenseLane(room/2, room/2)
+	require.NoError(t, err)
+	first.KeepHeap(release)
+	lane()
+
+	// The first value is live while its request is answered.
+	live := room / 2
+	heap.read = func() (int64, int64) { return live, live }
+
+	_, _, err = TakeDenseLane(room/4, room/4)
+	require.Error(t, err, "the projected heap misses beside the first value")
+	require.NotErrorIs(t, err, ErrNoHeapRoom, "but fits once the first request is answered")
+	assert.Equal(t, 1, *collections, "a collection could have freed the value")
+
+	_, _, err = TakeDenseLane(room/4, 0)
+	require.Error(t, err, "the body's bytes miss beside the first value")
+	require.NotErrorIs(t, err, ErrNoHeapRoom, "but fit once the first request is answered")
+
+	_, _, err = TakeDenseLane(room+1, room+1)
+	require.ErrorIs(t, err, ErrNoHeapRoom, "past the room alone")
+	assert.False(t, denseLane.Load())
+	assert.Equal(t, room/2, heap.reserved, "a refused body reserves nothing")
+
+	first.Release()
+
+	live = 0 // the first value is garbage, collected
+
+	lane, release, err = TakeDenseLane(room/4, room/4)
+	require.NoError(t, err, "the first request answered")
+	lane()
+	release()
+
+	live = room / 2 // a table's items, which nothing reserves
+
+	_, _, err = TakeDenseLane(room/2+1, room/2+1)
+	require.ErrorIs(t, err, ErrNoHeapRoom, "what is live with nothing reserved stays")
 	assert.Zero(t, heap.reserved)
 	assert.False(t, denseLane.Load())
 }

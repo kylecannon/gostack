@@ -44,7 +44,9 @@ var ErrTooLarge = &awserr.Error{
 // factor decodes (DynamoDB's). It is not charged to hold: it is decoded only
 // when protocol.ReserveHeap has room under the Go memory limit for the heap the
 // walk bounds it to keep (walker.heap), and refused with ErrTooLarge otherwise,
-// as it is at protocol.DecodeFactor. The walk passes DecodeBudget where it
+// as it is at protocol.DecodeFactor, unless it misses only for what other
+// requests reserve, which they give back once answered
+// (protocol.ErrHeapBusy): that body is answered protocol.ThrottledJSON. The walk passes DecodeBudget where it
 // would stop at protocol.DecodeFactor; from there the body's own bytes are a
 // heap reservation and no longer hold the in-flight bound, when hold is a
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
@@ -75,11 +77,14 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 
 // reservations is what one DecodeWithin holds past the in-flight bound: the
 // dense lane, while the body is walked and decoded, and the heap reservations
-// its request's HeapKeeper does not keep.
+// its request's HeapKeeper does not keep. moved is the body's own bytes,
+// reserved on the heap when moveBody took the lane: what the request already
+// holds of what is reserved when it reserves the heap the walk bounds.
 type reservations struct {
 	hold     protocol.DecodeHolder
 	lane     func()
 	reserved []func()
+	moved    int64
 }
 
 // keep hands release, a heap reservation's, to the request's HeapKeeper, to
@@ -108,7 +113,8 @@ func (r *reservations) end() {
 // protocol.DecodeBudget reserves heap instead (DecodeWithin), first for its
 // own bytes once the walk passes DecodeBudget (moveBody), then for what the
 // walk bounds decoding it to keep; r takes the lane and each reservation's
-// release.
+// release. A final reservation that misses only for what other requests
+// reserve (protocol.ErrHeapBusy) is answered protocol.ThrottledJSON.
 func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.Error {
 	hold := r.hold
 
@@ -131,8 +137,12 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 	// FreeDecode, so one charged past DecodeBudget has its heap bounded, and
 	// the walk moved its bytes at DecodeBudget.
 	if cost > protocol.DecodeBudget(len(body)) {
-		release, ok := protocol.ReserveHeap(heap + allocSize(p.heapSize))
-		if !ok {
+		release, err := protocol.ReserveHeapBeside(heap+allocSize(p.heapSize), r.moved)
+
+		switch {
+		case errors.Is(err, protocol.ErrHeapBusy):
+			return protocol.ThrottledJSON()
+		case err != nil:
 			return ErrTooLarge
 		}
 
@@ -154,13 +164,14 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 type moveFunc func(heap, read int64) error
 
 var (
-	// errNoRoom stops a walk whose body found no room on the heap (moveBody):
-	// the answer at protocol.DecodeFactor, ErrTooLarge.
+	// errNoRoom stops a walk whose body found no room on the heap with
+	// nothing other requests reserve (moveBody): the answer at
+	// protocol.DecodeFactor, ErrTooLarge.
 	errNoRoom = errors.New("no room for the body on the heap")
-	// errBusy stops a walk whose body found the dense lane taken, or requests
-	// waiting for room under the in-flight bound (moveBody): room it could
-	// have once they are done, so the answer is a throttle, which an SDK
-	// retries.
+	// errBusy stops a walk whose body found the dense lane taken, the heap's
+	// room held by other requests' reservations, or requests waiting for room
+	// under the in-flight bound (moveBody): room it could have once they are
+	// done, so the answer is a throttle, which an SDK retries.
 	errBusy = errors.New("the dense lane is busy")
 )
 
@@ -172,7 +183,9 @@ var (
 // hold of the in-flight bound, so that the room other requests' bodies wait
 // for is free again as soon as it would be were the body refused. It fails,
 // holding what it held and without waiting, with errNoRoom when the heap has
-// no room, and with errBusy when another body has the lane. It fails with
+// no room with nothing other requests reserve, and with errBusy when another
+// body has the lane or the heap would have room but for what other requests
+// reserve (protocol.ErrHeapBusy), which they give back once answered. It fails with
 // errBusy too, before taking the lane, while any request would still wait for
 // room under the in-flight bound once the body gave back what it holds of it
 // (protocol.BodiesWait): the queue then drains one body at a time, and a
@@ -183,7 +196,7 @@ var (
 // The heap's room is weighed for the body and the heap its walk would end at,
 // projected from the heap the first read bytes of it hold, so that a body the
 // final reservation would refuse is not walked to its end first: before
-// anything else with nothing counted live (protocol.HeapRoomFor), so a body
+// anything else with nothing counted live (protocol.CheckHeapRoom), so a body
 // that could never fit is refused as too large at no cost, and with the lane
 // held against what is live, after a collection when the last one leaves no
 // room (protocol.HeapCouldFit). The projection only refuses early: what the
@@ -200,23 +213,21 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	n := int64(len(body))
 	peak := n + projectHeap(heap, read, len(body))
 
-	switch {
-	case !protocol.HeapRoomFor(peak):
-		return errNoRoom
-	case protocol.BodiesWait(own):
+	err := protocol.CheckHeapRoom(peak)
+	if err != nil {
+		return moveRefusal(err)
+	}
+
+	if protocol.BodiesWait(own) {
 		return errBusy
 	}
 
 	lane, release, err := protocol.TakeDenseLane(n, peak)
-	if errors.Is(err, protocol.ErrDenseLaneTaken) {
-		return errBusy
-	}
-
 	if err != nil {
-		return errNoRoom
+		return moveRefusal(err)
 	}
 
-	r.lane = lane
+	r.lane, r.moved = lane, n
 	r.keep(release)
 
 	if keeps {
@@ -224,6 +235,17 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	}
 
 	return nil
+}
+
+// moveRefusal is moveBody's answer to a refusal of the lane or the heap:
+// errBusy for what other requests hold (protocol.ErrDenseLaneTaken,
+// protocol.ErrHeapBusy) and errNoRoom otherwise.
+func moveRefusal(err error) error {
+	if errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
+		return errBusy
+	}
+
+	return errNoRoom
 }
 
 // projectHeap is the heap a walk of a body of n bytes ends at, were the rest

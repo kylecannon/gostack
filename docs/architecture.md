@@ -416,8 +416,8 @@ How each piece is bounded, and why this way:
   `--memory` gets, and which wins over a `--memory` above it. The cgroup limit
   is the smallest v2 `memory.max` of the process's own cgroup and every cgroup
   above it up to the mount's root, all of which the kernel holds it to; only
-  when none sets one, v1 `memory.limit_in_bytes`, from the process's own
-  cgroup and then the mount's root. `max`, a v1 limit of 2^60 or more and an
+  when none sets one, the smallest v1 `memory.limit_in_bytes` the same way,
+  so a pod's or a slice's limit above the process's own cgroup counts. `max`, a v1 limit of 2^60 or more and an
   absent file mean none. When `GOMEMLIMIT` is not set in the
   environment it sets the Go memory limit to 85% of that memory
   (`debug.SetMemoryLimit`, `cmd/gostack/memory-limit.go`) and logs the two
@@ -515,11 +515,12 @@ its length, kept until the request is answered) and the request gives back
 what its body and its planned decoding hold of the pool (`awsjson`'s
 `moveBody`, `protocol.HeapKeeper.ReleasePool`), so a smaller request waiting
 for the pool is admitted as soon as it would be were the body refused. A body
-that finds no room for its bytes is refused there at once with the decode
-budget's answer, and one that finds the lane taken by another is answered
-`400 ThrottlingException` at once, which SDKs retry, since it fits once the
-other is decoded; either holds the pool until it is answered, as a refused
-body does. Nothing waits for the lane, so no dense body sits on the heap
+that finds no room for its bytes with nothing other requests reserve is
+refused there at once with the decode budget's answer, and one that finds the
+lane taken by another, or the room held only by other requests' reservations,
+is answered `400 ThrottlingException` at once, which SDKs retry, since it fits
+once the others are decoded and answered; either holds the pool until it is
+answered, as a refused body does. Nothing waits for the lane, so no dense body sits on the heap
 queued behind another. Without the lane, 64 dense senders put about 30 bodies of 10 MB on
 the heap at once (two at a time on the pool) and a 300 KiB `PutItem` on
 another connection took up to 1.5 s longer than without the gain. The lane
@@ -551,15 +552,20 @@ them waits for the queue to drain. A dense decode beside that drain (290 to
 CPU) or a walk to the end of a body then refused (37 to 41 ms against 4 ms)
 slowed the drain, and with it a 300 KiB `PutItem` on another connection, by
 about 0.2 s (SQ-474). Under such load a dense body is throttled; one that
-reaches a server with nothing queued is still served. At the same point a
+reaches a server with nothing queued is still served. Dense senders throttle
+each other the same way: a dense body waiting for the pool counts as a waiter
+for the next one, so a closed loop of dense senders with no backoff can be
+throttled while the lane sits idle (SQ-498, under `-race`: 6 senders of a
+7.5 MB batch for 24 s, 2 decoded and 554 throttled, where one sender alone
+was decoded 7 times). An SDK's backoff spreads such senders out. At the same point a
 body is refused, before the pool is given back, when its bytes and the heap
 its walk is projected to end at could not fit: at once, before the lane, when
-they pass the room with nothing live (`protocol.HeapRoomFor`), and with the
+they pass the room with nothing live (`protocol.CheckHeapRoom`), and with the
 lane held when they do not fit beside what is live (`protocol.HeapCouldFit`).
 What the last collection found live can be stale, a collection that ran while
 an earlier body's value was live, so when it leaves no room `HeapCouldFit`
-runs a collection, or waits for the one running, and reads again before it
-refuses: a dense body sent to a missing table and answered
+runs a collection and reads again before it refuses (only the lane's holder
+collects, so one collection runs at a time): a dense body sent to a missing table and answered
 `ResourceNotFoundException`, then sent again to a table that exists, was
 refused on the first's garbage until then
 (`Test_HeapCouldFit_CollectsBeforeItRefuses`,
@@ -575,7 +581,24 @@ served too or throttled, never refused as too large
 (`Test_DecodeWithin_OneDenseBodyAtATime`,
 `Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled`), and which one
 is served first varies from run to run. The heap's objects count the body too while it is live,
-so the reservation counts it twice, which only refuses earlier. The rest of
+so the reservation counts it twice, which only refuses earlier. A value
+another request's handler still holds is counted twice the same way, in what
+is live and in that request's reservation, and no collection frees it. So a
+miss at any of the three checks (the room before the lane, the projected
+heap with the lane held, the final reservation) is a throttle when the body
+would fit the room with nothing other requests reserve or hold live, since
+they give it back once answered, and the decode budget's answer only when
+nothing is reserved by others or the body passes the room alone, so a body
+that can never fit is not throttled until the SDK gives up
+(`protocol.ErrHeapBusy`;
+`Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation`,
+`Test_DecodeWithin_ABodyPastTheRoomAloneIsTooLargeBesideAnothersReservation`,
+`Test_TakeDenseLane_AnotherRequestsValueDoesNotRefuseABodyThatFitsAlone`,
+`Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge`). Before
+this, a 3 MB dense body that fit a 78 MiB room alone was refused as too large
+while an earlier one was still answered, and at the 323 MiB room of a 512 MiB
+container a second batch sent during the first one's handler was refused in 4
+of 6 tries (SQ-498). The rest of
 the walk and the decode then run on the heap alone. The body is decoded only
 when the heap it keeps fits under the Go memory limit, and refused with the
 decode budget's answer (`400 SerializationException`, "decodes into more
@@ -600,8 +623,8 @@ than gostack allows") otherwise:
    under) and `protocol.HeapSlack` (48 MiB: the runtime's own structures and
    stacks, the spans' unused room and what a handler builds). When the heap
    stands in the way and the bound and what is reserved would fit were
-   nothing live, it runs a collection, one request at a time while any other
-   waits for it, and reads again; `/gc/heap/live:bytes` alone does not decide
+   nothing live, it runs a collection, only ever from the dense lane's
+   holder, so one at a time, and reads again; `/gc/heap/live:bytes` alone does not decide
    it, since the last collection can have run while an earlier body's value
    was live. Reading and reserving are one
    step under a lock, so decodes at once each see the others' reservations.
@@ -709,7 +732,8 @@ Scan a round at every concurrency (the rest of the round gets `main`'s
 answer), and the first `BatchWriteItem` of 25 items of 42,000 numbers, and of
 39,000 attributes, to the existing table; the second send of each is refused,
 because the first's items are now live. These numbers predate the collection
-before a refusal (above) and the throttle for a busy lane: a body that then
+before a refusal (above), the throttle for a busy lane and the throttle for a
+body that misses only for other requests' reservations: a body that then
 followed one whose value had died, such as the second send of 39,000
 attributes to the missing table, could be refused on its garbage. Nothing else is served: the 25 x
 64,000-number body's bound (about 330 MiB live) does not fit the room. At

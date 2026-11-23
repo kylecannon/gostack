@@ -117,10 +117,10 @@ func machineMemory(root string) (memory int64, source string, ok bool) {
 // each cgroup above it up to the mount's root, which is the container's own
 // cgroup when it has a namespace of its own; the kernel holds the process to
 // every one of them, so the smallest gives the limit. Only when none of them
-// sets one is cgroup v1's memory.limit_in_bytes looked for, in the process's
-// own cgroup and then at the mount's root, the first that sets one giving it.
-// A file that says max, or no limit, or is missing, sets none. It reports
-// false when none sets one.
+// sets one is cgroup v1's memory.limit_in_bytes read the same way, in the
+// process's own cgroup of the memory controller and each above it up to that
+// mount's root, a pod's or a slice's limit included. A file that says max, or
+// no limit, or is missing, sets none. It reports false when none sets one.
 func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 	fsys, err := os.OpenRoot(root)
 	if err != nil {
@@ -132,35 +132,32 @@ func cgroupMemoryLimit(root string) (limit int64, source string, ok bool) {
 	own, _ := fsys.ReadFile("proc/self/cgroup")
 	v2, v1 := ownCgroups(string(own))
 
-	for dir := v2; ; dir = path.Dir(dir) {
+	limit, source, ok = smallestCgroupLimit(fsys, "sys/fs/cgroup", v2, "memory.max")
+	if ok {
+		return limit, source, true
+	}
+
+	return smallestCgroupLimit(fsys, "sys/fs/cgroup/memory", v1, "memory.limit_in_bytes")
+}
+
+// smallestCgroupLimit returns the smallest limit name sets in the cgroup dir
+// below the mount and in each cgroup above it up to the mount's root, and the
+// file it came from; it reports false when none sets one.
+func smallestCgroupLimit(fsys *os.Root, mount, dir, name string) (limit int64, source string, ok bool) {
+	for ; ; dir = path.Dir(dir) {
 		if dir == "/" {
 			dir = ""
 		}
 
-		file := "sys/fs/cgroup" + dir + "/memory.max"
+		file := mount + dir + "/" + name
 		if n, set := readCgroupLimit(fsys, file); set && (!ok || n < limit) {
 			limit, source, ok = n, "/"+file, true
 		}
 
 		if dir == "" {
-			break
+			return limit, source, ok
 		}
 	}
-
-	if ok {
-		return limit, source, true
-	}
-
-	for _, file := range []string{
-		"sys/fs/cgroup/memory" + v1 + "/memory.limit_in_bytes",
-		"sys/fs/cgroup/memory/memory.limit_in_bytes",
-	} {
-		if n, set := readCgroupLimit(fsys, file); set {
-			return n, "/" + file, true
-		}
-	}
-
-	return 0, "", false
 }
 
 // readCgroupLimit is parseCgroupLimit of file below fsys; a file it cannot

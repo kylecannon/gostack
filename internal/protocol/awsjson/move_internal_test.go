@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"runtime/metrics"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -417,5 +418,128 @@ func Test_DecodeWithin_ABodyWaitingOnlyOnTheDenseBodysBytesDoesNotStopIt(t *test
 	require.NoError(t, <-waited, "moving the dense body lets the waiting request in")
 
 	served.release()
+	requireLaneFree(t)
+}
+
+// withHeapRoom gives the decode budget's heap room bytes, past the in-flight
+// bound and protocol.HeapSlack, with no Go memory limit, for one test.
+func withHeapRoom(t *testing.T, room int64) {
+	t.Helper()
+
+	bound, _ := protocol.InFlight()
+	if bound == 0 {
+		bound = protocol.DefaultInFlight
+	}
+
+	withMemoryLimit(t, math.MaxInt64)
+
+	old := protocol.SetMemoryCap(room + bound + protocol.HeapSlack)
+	t.Cleanup(func() { protocol.SetMemoryCap(old) })
+}
+
+// Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation:
+// a dense body that fits the heap's room alone, sent while an earlier dense
+// request is still answered and keeps its reservation and its value live, is
+// answered with a throttle, which an SDK retries, not refused as too large;
+// once the earlier request is answered the same body is served. A reservation
+// held with nothing of it live, the lane given back, throttles it too.
+func Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation(t *testing.T) {
+	heaptest.Settle(t)
+
+	body := denseBody(3_000_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+	live, peak := HeapEstimate[denseValue](body)
+	need := int64(len(body)) + live + peak
+
+	withHeapRoom(t, need*3/2) // room for one body, not two
+
+	alone := &recordingHold{}
+	_, _, err := DecodeWithin[denseValue](body, budget, alone)
+	require.Nil(t, err, "alone the body is served")
+	alone.release()
+
+	first := &recordingHold{}
+	t.Cleanup(first.release)
+
+	value, _, err := DecodeWithin[denseValue](body, budget, first)
+	require.Nil(t, err)
+
+	second := &recordingHold{}
+	t.Cleanup(second.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, second)
+	assert.Equal(t, protocol.ThrottledJSON(), err, "the first request is still answered: a throttle")
+	assert.Empty(t, second.steps, "nothing is reserved and the pool is kept")
+
+	require.Len(t, value.L, 3_000_000, "the first value is live until its request is answered")
+	first.release() // the first value is garbage from here on
+
+	third := &recordingHold{}
+	t.Cleanup(third.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, third)
+	require.Nil(t, err, "the first request answered: served")
+	third.release()
+
+	// Another body holds the lane and as much as the body needs, nothing of
+	// it live; then gives back the lane and keeps the reservation.
+	lane, reservation, laneErr := protocol.TakeDenseLane(need, 0)
+	require.NoError(t, laneErr)
+
+	release := sync.OnceFunc(reservation)
+	t.Cleanup(release)
+	t.Cleanup(lane)
+
+	held := &recordingHold{}
+	t.Cleanup(held.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, held)
+	assert.Equal(t, protocol.ThrottledJSON(), err, "the lane and the reservation held: a throttle")
+
+	lane()
+
+	_, _, err = DecodeWithin[denseValue](body, budget, held)
+	assert.Equal(t, protocol.ThrottledJSON(), err, "the reservation held: a throttle")
+	assert.Empty(t, held.steps)
+
+	release()
+
+	_, _, err = DecodeWithin[denseValue](body, budget, held)
+	require.Nil(t, err, "the reservation given back: served")
+	held.release()
+	requireLaneFree(t)
+}
+
+// Test_DecodeWithin_ABodyPastTheRoomAloneIsTooLargeBesideAnothersReservation:
+// a dense body that would not fit the heap's room with nothing else reserved
+// or live is refused as too large, as it is alone, while another request
+// holds a reservation: no answer of other requests would let it in, so it is
+// not throttled.
+func Test_DecodeWithin_ABodyPastTheRoomAloneIsTooLargeBesideAnothersReservation(t *testing.T) {
+	heaptest.Settle(t)
+
+	body := denseBody(3_000_000)
+	budget := protocol.DecodeBudgetAt(len(body), 256)
+	live, peak := HeapEstimate[denseValue](body)
+	need := int64(len(body)) + live + peak
+
+	withHeapRoom(t, need/2)
+
+	alone := &recordingHold{}
+	t.Cleanup(alone.release)
+
+	_, _, err := DecodeWithin[denseValue](body, budget, alone)
+	require.Same(t, ErrTooLarge, err, "alone the body is too large")
+
+	other, ok := protocol.ReserveHeap(need / 8)
+	require.True(t, ok)
+	t.Cleanup(other)
+
+	beside := &recordingHold{}
+	t.Cleanup(beside.release)
+
+	_, _, err = DecodeWithin[denseValue](body, budget, beside)
+	assert.Same(t, ErrTooLarge, err, "too large beside another request's reservation too")
+	assert.Empty(t, beside.steps, "nothing is reserved and the pool is kept")
 	requireLaneFree(t)
 }

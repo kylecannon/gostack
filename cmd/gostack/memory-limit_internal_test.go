@@ -31,6 +31,8 @@ const (
 	procCgroup   = "proc/self/cgroup"
 	rootFile     = "sys/fs/cgroup/memory.max"
 	rootMemory   = "/sys/fs/cgroup/memory.max"
+	v1RootFile   = "sys/fs/cgroup/memory/memory.limit_in_bytes"
+	v1Unlimited  = "9223372036854771712\n" // the largest page-aligned int64
 )
 
 // Test_cgroupMemoryLimit reads the limit a container runs under, in cgroup v2
@@ -109,9 +111,9 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 		},
 		{
 			name:       "v1",
-			files:      map[string]string{"sys/fs/cgroup/memory/memory.limit_in_bytes": container512},
+			files:      map[string]string{v1RootFile: container512},
 			wantLimit:  512 << 20,
-			wantSource: "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+			wantSource: "/" + v1RootFile,
 			wantOK:     true,
 		},
 		{
@@ -125,8 +127,34 @@ func Test_cgroupMemoryLimit(t *testing.T) {
 			wantOK:     true,
 		},
 		{
+			name: "v1 limit on a parent of the process's own cgroup",
+			files: map[string]string{
+				procCgroup: "5:memory:/kubepods/pod1/gostack\n",
+				"sys/fs/cgroup/memory/kubepods/pod1/gostack/memory.limit_in_bytes": v1Unlimited,
+				"sys/fs/cgroup/memory/kubepods/pod1/memory.limit_in_bytes":         container512,
+				"sys/fs/cgroup/memory/kubepods/memory.limit_in_bytes":              v1Unlimited,
+				v1RootFile: v1Unlimited,
+				meminfo:    "MemTotal:       16777216 kB\n",
+			},
+			wantLimit:  512 << 20,
+			wantSource: "/sys/fs/cgroup/memory/kubepods/pod1/memory.limit_in_bytes",
+			wantOK:     true,
+		},
+		{
+			name: "v1 the smallest of the process's own cgroup and those above it",
+			files: map[string]string{
+				procCgroup: "5:memory:/kubepods/pod1/gostack\n",
+				"sys/fs/cgroup/memory/kubepods/pod1/gostack/memory.limit_in_bytes": container1Gi,
+				"sys/fs/cgroup/memory/kubepods/pod1/memory.limit_in_bytes":         container512,
+				v1RootFile: container1Gi,
+			},
+			wantLimit:  512 << 20,
+			wantSource: "/sys/fs/cgroup/memory/kubepods/pod1/memory.limit_in_bytes",
+			wantOK:     true,
+		},
+		{
 			name:   "v1 reports no limit as the largest page-aligned int64",
-			files:  map[string]string{"sys/fs/cgroup/memory/memory.limit_in_bytes": "9223372036854771712\n"},
+			files:  map[string]string{v1RootFile: v1Unlimited},
 			wantOK: false,
 		},
 		{

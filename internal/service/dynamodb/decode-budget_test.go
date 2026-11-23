@@ -333,6 +333,82 @@ func Test_decodeBudget_twoDenseBatchesAtOnceAreServedOrThrottled(t *testing.T) {
 	assert.Zero(t, held, "every request gives back what it held")
 }
 
+// Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge: under the
+// room cmd/gostack gives a 512 MiB container, a dense batch of 7.5 MB is
+// decoded and stored, and while its handler runs, its reservation and value
+// held, a smaller dense batch that fits alone is sent again and again, each
+// once the last is answered. Every one is throttled, which an SDK retries, or
+// decoded (answered ResourceNotFoundException, its table missing), never
+// refused as too large; once the first is answered it is decoded.
+func Test_decodeBudget_aDenseBodyWhileAnotherIsHandledIsNeverTooLarge(t *testing.T) {
+	heaptest.Settle(t)
+	noMemoryLimit(t)
+	protocol.SetMemoryCap(protocol.SoftLimit(512 << 20))
+	protocol.SetInFlight(protocol.DefaultInFlight)
+	t.Cleanup(func() { protocol.SetInFlight(0) })
+
+	room := protocol.SoftLimit(512<<20) - protocol.DefaultInFlight - protocol.HeapSlack
+
+	s := newStack(t)
+	server := serve(t, s)
+	s.ok(t, opCreate, hashTable("pair"))
+
+	stored := denseBatch("pair", oneNumber, 30_000)
+	missing := denseBatch("missing", oneNumber, 12_000)
+
+	status, answer := sendTo(t, server, opBatchWrite, missing)
+	require.Contains(t, answer, "ResourceNotFoundException", "alone the second body is decoded: %d", status)
+
+	firstDone := make(chan struct{})
+
+	var (
+		firstStatus int
+		firstAnswer string
+	)
+
+	go func() {
+		defer close(firstDone)
+
+		firstStatus, firstAnswer = sendTo(t, server, opBatchWrite, stored)
+	}()
+
+	// The first holds its final reservation, far past its bytes, from the
+	// end of its walk until it is answered.
+	require.Eventually(t, func() bool { return !protocol.HeapRoomFor(room - 64<<20) }, time.Minute, time.Millisecond,
+		"the first body reserves its heap")
+
+	kinds := map[string]int{}
+
+	for answered := false; !answered; {
+		select {
+		case <-firstDone:
+			answered = true
+		default:
+		}
+
+		code, text := sendTo(t, server, opBatchWrite, missing)
+
+		switch {
+		case strings.Contains(text, "ThrottlingException"):
+			kinds["throttled"]++
+		case strings.Contains(text, "ResourceNotFoundException"):
+			kinds["decoded"]++
+		default:
+			t.Errorf("a second body that fits alone: %d %s", code, text[:min(len(text), 200)])
+			kinds["other"]++
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	<-firstDone
+	assert.Equal(t, http.StatusOK, firstStatus, firstAnswer[:min(len(firstAnswer), 300)])
+	t.Logf("second bodies while the first was handled: %v", kinds)
+
+	status, answer = sendTo(t, server, opBatchWrite, missing)
+	assert.Contains(t, answer, "ResourceNotFoundException", "the first answered: decoded, %d", status)
+}
+
 // Test_decodeBudget_worstLegalBody sends, for each operation that takes
 // AttributeValues, the densest body its documented limits allow, and every one
 // is served: none is refused for decoding into more than its budget. The

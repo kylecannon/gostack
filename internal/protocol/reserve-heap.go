@@ -36,14 +36,13 @@ type HeapKeeper interface {
 
 // heap is what ReserveHeap has reserved, and the samples it reads the heap
 // with. Reading and reserving are one step under mu, so that requests decoded
-// at once each see what the others reserved. collecting lets one request at a
-// time run a collection for room.
+// at once each see what the others reserved. Only the body holding the dense
+// lane (TakeDenseLane) runs a collection for room, so one runs at a time.
 var heap = struct {
-	mu         sync.Mutex
-	reserved   int64
-	collecting sync.Mutex
-	read       func() (objects, live int64) // readHeap; a test replaces it
-	collect    func()                       // runtime.GC; a test replaces it
+	mu       sync.Mutex
+	reserved int64
+	read     func() (objects, live int64) // readHeap; a test replaces it
+	collect  func()                       // runtime.GC; a test replaces it
 }{
 	read:    readHeap,
 	collect: runtime.GC,
@@ -66,29 +65,64 @@ const (
 // sets from a container's or a machine's memory), no more than the memory cap,
 // less the in-flight bound, which what every other request's body and
 // decoding holds stays below, and HeapSlack. Objects not yet collected count
-// as live; when the heap stands in the way, it runs one collection (collect)
-// and reads the heap again, unless what is reserved and estimate pass the room
-// alone. A decoder refuses the body when it reports false: decoding it could
-// end in the container's OOM killer, which waiting does not prevent.
+// as live; when the heap stands in the way, it runs one collection and reads
+// the heap again, unless what is reserved and estimate pass the room
+// alone. It is ReserveHeapBeside(estimate, 0).
 func ReserveHeap(estimate int64) (release func(), ok bool) {
-	room := heapRoom()
+	release, err := ReserveHeapBeside(estimate, 0)
 
-	fits, collectable := tryReserve(estimate, room)
-	if !fits && collectable {
-		collect()
+	return release, err == nil
+}
 
-		fits, _ = tryReserve(estimate, room)
-	}
-
-	if !fits {
-		return nil, false
+// ReserveHeapBeside is ReserveHeap for a request that holds own bytes of what
+// is reserved already: the rest is other requests'. When estimate does not fit
+// it fails with ErrHeapBusy when other requests reserve some of the room and
+// own and estimate fit it alone, since the reservations, and the values their
+// handlers hold, are given back once those requests are answered, and with
+// ErrNoHeapRoom otherwise. A decoder throttles a body on ErrHeapBusy and
+// refuses it on ErrNoHeapRoom: decoding it now could end in the container's
+// OOM killer, and one that misses with nothing reserved by others, or that
+// passes the room alone, would miss again.
+func ReserveHeapBeside(estimate, own int64) (release func(), err error) {
+	err = weighHeap(estimate, own, reserveObjects)
+	if err != nil {
+		return nil, err
 	}
 
 	return func() {
 		heap.mu.Lock()
 		heap.reserved -= estimate
 		heap.mu.Unlock()
-	}, true
+	}, nil
+}
+
+// heapUse is what weighHeap does with n.
+type heapUse int
+
+const (
+	// checkLive weighs n beside what the last collection found live and
+	// reserves nothing (HeapCouldFit).
+	checkLive heapUse = iota
+	// reserveObjects weighs n beside the heap's objects and reserves it when
+	// it fits (ReserveHeap).
+	reserveObjects
+)
+
+// weighHeap weighs n against the room (heapRoom) beside what is reserved, own
+// bytes of it the caller's, and the heap, as use says. When the heap stands in
+// the way it runs one collection and weighs again, unless what is reserved and
+// n pass the room alone. It fails as ReserveHeapBeside does.
+func weighHeap(n, own int64, use heapUse) error {
+	room := heapRoom()
+
+	collectable, err := tryHeap(n, own, room, use)
+	if err != nil && collectable {
+		heap.collect()
+
+		_, err = tryHeap(n, own, room, use)
+	}
+
+	return err
 }
 
 // heapRoom is what ReserveHeap weighs the heap against: the Go memory limit,
@@ -151,61 +185,43 @@ func SetMemoryCap(n int64) (old int64) {
 // HeapCouldFit reports whether ReserveHeap could reserve n now: whether what
 // is live, what is reserved and n fit the room ReserveHeap weighs them against
 // (heapRoom). It reads what is live from the last collection; when that leaves
-// no room, it runs a collection, as ReserveHeap does, or waits for the one
-// another request runs, and reads again, because a collection that ran while
-// an earlier body's value was still live would otherwise refuse the next body
-// for garbage. When what is reserved and n pass the room alone it reports
-// false without collecting (HeapRoomFor). It reserves nothing, so a decoder
-// can refuse a body early that ReserveHeap would refuse at the end of its
-// walk.
+// no room, it runs a collection, as ReserveHeap does, and reads again, because
+// a collection that ran while an earlier body's value was still live would
+// otherwise refuse the next body for garbage. When what is reserved and n pass
+// the room alone it reports false without collecting (HeapRoomFor). It
+// reserves nothing, so a decoder can refuse a body early that ReserveHeap
+// would refuse at the end of its walk.
 func HeapCouldFit(n int64) bool {
-	room := heapRoom()
-
-	fits, collectable := couldFit(n, room)
-	if fits || !collectable {
-		return fits
-	}
-
-	collect()
-
-	fits, _ = couldFit(n, room)
-
-	return fits
-}
-
-// collect runs a collection, one request at a time: a request that finds
-// another's running waits for it to end instead, and then reads the heap it
-// left. Either way what the last collection found live is what is live now,
-// not what was live while an earlier body's value was.
-func collect() {
-	if heap.collecting.TryLock() {
-		heap.collect()
-	} else {
-		heap.collecting.Lock()
-	}
-
-	heap.collecting.Unlock()
+	return weighHeap(n, 0, checkLive) == nil
 }
 
 // HeapRoomFor reports whether n fits the room ReserveHeap weighs the heap
 // against beside what is reserved, were nothing else live: a body it refuses,
 // HeapCouldFit and ReserveHeap refuse too, whatever a collection would free.
-// It reads no heap and runs no collection.
+// It is CheckHeapRoom(n) == nil.
 func HeapRoomFor(n int64) bool {
-	_, fits := couldFit(n, heapRoom())
-
-	return fits
+	return CheckHeapRoom(n) == nil
 }
 
-// couldFit reports whether what the last collection found live, what is
-// reserved and n fit room, and whether what is reserved and n alone do.
-func couldFit(n, room int64) (fits, withNothingLive bool) {
+// CheckHeapRoom is HeapRoomFor for a decoder: it fails with ErrHeapBusy when n
+// passes the room beside what is reserved but fits it alone, so that what
+// other requests reserve misses it only until they are answered, and with
+// ErrNoHeapRoom when n passes the room alone. It reads what is reserved and
+// the room, never the heap, and runs no collection.
+func CheckHeapRoom(n int64) error {
+	room := heapRoom()
+
 	heap.mu.Lock()
 	defer heap.mu.Unlock()
 
-	_, live := heap.read()
-
-	return live+heap.reserved+n <= room, heap.reserved+n <= room
+	switch {
+	case heap.reserved+n <= room:
+		return nil
+	case n <= room:
+		return ErrHeapBusy
+	default:
+		return ErrNoHeapRoom
+	}
 }
 
 // denseLane is held by the one body at a time that is walked and decoded past
@@ -216,7 +232,12 @@ var (
 	// ErrDenseLaneTaken is TakeDenseLane's refusal while another body holds
 	// the lane: the body could be decoded once the lane is free.
 	ErrDenseLaneTaken = errors.New("another body holds the dense lane")
-	// ErrNoHeapRoom is TakeDenseLane's refusal when the heap has no room.
+	// ErrHeapBusy is the refusal of a body the heap has no room for while
+	// other requests hold reservations, when it would fit with none of theirs:
+	// it fits once they are answered.
+	ErrHeapBusy = errors.New("other requests' reservations hold the heap's room")
+	// ErrNoHeapRoom is the refusal of a body the heap has no room for with
+	// nothing other requests reserve.
 	ErrNoHeapRoom = errors.New("no room on the heap")
 )
 
@@ -225,30 +246,28 @@ var (
 // whose decoding is projected to keep peak, its own n bytes included: such a
 // body first takes the process's one dense lane, so at most one of them is
 // walked and decoded at a time and none waits for another. It fails, holding
-// nothing, with ErrDenseLaneTaken when another body has the lane, and with
-// ErrNoHeapRoom when the heap could not hold peak (HeapCouldFit, which may
-// collect, one lane holder at a time) or has no room for n. Otherwise lane
-// gives back the lane, which the decoder does as soon as decoding returns,
-// and runs once however often it is called; release gives back the
-// reservation, which lasts as ReserveHeap's does, until the request is
-// answered, so the lane bounds the decodes at once and the reservation the
-// heap.
+// nothing, with ErrDenseLaneTaken when another body has the lane, and, as
+// ReserveHeapBeside does, with ErrHeapBusy or ErrNoHeapRoom when the heap
+// could not hold peak (HeapCouldFit, which may collect, one lane holder at a
+// time) or has no room for n. Otherwise lane gives back the lane, which the
+// decoder does as soon as decoding returns, and runs once however often it is
+// called; release gives back the reservation, which lasts as ReserveHeap's
+// does, until the request is answered, so the lane bounds the decodes at once
+// and the reservation the heap.
 func TakeDenseLane(n, peak int64) (lane, release func(), err error) {
 	if !denseLane.CompareAndSwap(false, true) {
 		return nil, nil, ErrDenseLaneTaken
 	}
 
-	if !HeapCouldFit(peak) {
-		denseLane.Store(false)
-
-		return nil, nil, ErrNoHeapRoom
+	err = weighHeap(peak, 0, checkLive)
+	if err == nil {
+		release, err = ReserveHeapBeside(n, 0)
 	}
 
-	release, ok := ReserveHeap(n)
-	if !ok {
+	if err != nil {
 		denseLane.Store(false)
 
-		return nil, nil, ErrNoHeapRoom
+		return nil, nil, err
 	}
 
 	var once sync.Once
@@ -256,23 +275,34 @@ func TakeDenseLane(n, peak int64) (lane, release func(), err error) {
 	return func() { once.Do(func() { denseLane.Store(false) }) }, release, nil
 }
 
-// tryReserve reserves estimate when the heap's objects, what is reserved and
-// estimate fit room, and otherwise reports whether what is reserved and
-// estimate would fit were nothing live: whether a collection could make room.
-// What the last collection found live does not say: it can have run while an
-// earlier body's value was live.
-func tryReserve(estimate, room int64) (fits, collectable bool) {
+// tryHeap weighs n beside what is reserved, own bytes of it the caller's, and
+// the heap: its objects for reserveObjects, which then reserves n when they
+// fit room, and what the last collection found live for checkLive. On a miss
+// it reports whether what is reserved and n would fit were nothing live,
+// whether a collection could make room, and fails as ReserveHeapBeside does.
+// What the last collection found live does not say what a reservation can
+// take: it can have run while an earlier body's value was live.
+func tryHeap(n, own, room int64, use heapUse) (collectable bool, err error) {
 	heap.mu.Lock()
 	defer heap.mu.Unlock()
 
-	objects, _ := heap.read()
-	if objects+heap.reserved+estimate <= room {
-		heap.reserved += estimate
-
-		return true, false
+	objects, live := heap.read()
+	if use == checkLive {
+		objects = live
 	}
 
-	return false, heap.reserved+estimate <= room
+	switch {
+	case objects+heap.reserved+n <= room:
+		if use == reserveObjects {
+			heap.reserved += n
+		}
+
+		return false, nil
+	case heap.reserved > own && own+n <= room:
+		return heap.reserved+n <= room, ErrHeapBusy
+	default:
+		return heap.reserved+n <= room, ErrNoHeapRoom
+	}
 }
 
 // readHeap reads the heap's objects and what the last collection found live,
