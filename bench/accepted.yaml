@@ -85,3 +85,12 @@
   reason: no SNS code changed; on main the cut topic/1000/256B/16-worker cell ran just before this one and likely left a larger heap and fewer collections for main's throughput (GC counts not measured) (-13.0% on the runners)
   pr: 78
   commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
+
+- gate: benchstat
+  package: internal/service/s3
+  benchmark: ListObjectsV2Paging/keys=100000/delimiter=slash
+  unit: sec/op
+  max: +20%
+  reason: no S3 code changed and B/op and allocs/op are equal; on main the cut keys=100000 flat cell ran just before this one and likely left a different heap for main's time (GC counts not measured); it passed the gate on this PR's previous run (+10.8% on the runners)
+  pr: 78
+  commit: 3526fb85025df4db08d4b6cbd94bfa8de0337b60
