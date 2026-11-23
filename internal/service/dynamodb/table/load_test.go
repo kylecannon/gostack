@@ -140,10 +140,23 @@ func Test_Table_ImageHeld(t *testing.T) {
 	require.Len(t, img.Items(), len(loadItems()))
 	require.Equal(t, keys(), image(), "after writes that add a partition")
 
-	// The order is current (keys() scanned); emptying a partition drops its
-	// key from it.
+	// The order is current (keys() scanned); emptying a partition leaves its
+	// key in it.
 	remove(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
 	require.Equal(t, keys(), image(), "after a delete that empties a partition")
+
+	// ImageHeld before any Scan: the order is current and holds the key of a
+	// partition a delete just emptied.
+	put(t, tbl, value.Item{"pk": s("z"), "sk": n("1")})
+	keys()
+	remove(t, tbl, value.Item{"pk": s("z"), "sk": n("1")})
+	got := image()
+	require.Equal(t, keys(), got, "ImageHeld first, after a delete that empties a partition")
+
+	// ImageHeld before any Scan: the order is stale after a new partition.
+	put(t, tbl, value.Item{"pk": s("a"), "sk": n("2")})
+	got = image()
+	require.Equal(t, keys(), got, "ImageHeld first, after a write that adds a partition")
 }
 
 // Test_Table_Load_hashOnly checks a table without a range key, which Load

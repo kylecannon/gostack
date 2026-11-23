@@ -252,7 +252,12 @@ func (t *Table) AddIndex(spec IndexSpec) {
 
 	idx := &index{spec: spec, data: newStore()}
 	for _, hash := range t.primary.sortedKeys() {
-		for _, e := range t.primary.parts[hash].entries {
+		p := t.primary.parts[hash]
+		if p == nil {
+			continue // a delete emptied it; see store
+		}
+
+		for _, e := range p.entries {
 			if ihash, isort, ok := indexKey(&spec, e.item); ok {
 				idx.data.put(ihash, entry{sort: isort, tie: t.tie(e.item), item: e.item})
 				idx.count++
@@ -388,9 +393,8 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 
 	keys := data.order
 	if data.needsSort() {
-		// A partition was added or dropped between the two locks: read the
-		// partitions that are still there, as a scan running beside writes
-		// may.
+		// A partition was added between the two locks: read the partitions
+		// that were there, as a scan running beside writes may.
 		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return data.parts[k] == nil })
 	}
 
