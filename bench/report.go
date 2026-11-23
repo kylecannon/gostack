@@ -135,6 +135,11 @@ type cellResult struct {
 	// added to schema 3 without a bump: a file without it has no failed runs, and
 	// no field changed its meaning.
 	FailedRuns []string `json:"failed_runs,omitempty"`
+	// OOMKilled counts the runs whose container the kernel killed for going over
+	// its memory limit (Spec.Memory). Each is in FailedRuns too. A cell none of
+	// whose runs completed keeps the memory the killed runs reached in
+	// PeakRSSBytes, which is how far the target got.
+	OOMKilled int `json:"oom_killed,omitempty"`
 }
 
 // settleCell is the result of a cell from the runs that completed and the
@@ -148,6 +153,26 @@ func settleCell(spec cellSpec, runs []runResult, failed []string) cellResult {
 	cell.FailedRuns = failed
 
 	return cell
+}
+
+// withOOM is the cell with the runs whose container was OOM-killed recorded.
+func withOOM(c cellResult, killed []runResult) cellResult {
+	c.OOMKilled = len(killed)
+
+	if c.Runs > 0 || len(killed) == 0 {
+		return c
+	}
+
+	baseline, peak := make([]float64, 0, len(killed)), make([]float64, 0, len(killed))
+
+	for _, run := range killed {
+		baseline = append(baseline, float64(run.Usage.BaselineRSSBytes))
+		peak = append(peak, float64(run.Usage.PeakRSSBytes))
+	}
+
+	c.BaselineRSSBytes, c.PeakRSSBytes = spreadOf(baseline), spreadOf(peak)
+
+	return c
 }
 
 // summarizeCell folds the runs of one cell.
@@ -414,14 +439,24 @@ func (r report) markdown() string {
 		"the runs, with the range in the JSON. Memory is the resident set of the container (anon plus mapped file "+
 		"pages). CPU is a percentage of one core.\n\n", r.Settings.Reps, r.Settings.CellSeconds)
 
-	r.footprintTable(&b)
+	large := r.Profile == profileLarge
+	if large {
+		b.WriteString("The large profile fills a table of its own in each run before the clock starts, in a " +
+			"container with the memory limit in the cell id (mem=). A container the kernel kills for going over " +
+			"it is reported as OOM-killed with the memory it had reached, not as a bare failure.\n\n")
+	} else {
+		r.footprintTable(&b)
+	}
 
 	for _, t := range r.Targets {
 		cellTable(&b, t)
 	}
 
-	r.agenticTable(&b)
-	r.firstUseTable(&b)
+	if !large {
+		r.agenticTable(&b)
+		r.firstUseTable(&b)
+	}
+
 	r.notes(&b)
 	r.flags(&b)
 	r.problemList(&b)
@@ -512,7 +547,7 @@ func cellTable(b *strings.Builder, t targetResult) {
 
 		for _, c := range cells {
 			if c.Problem != "" {
-				fmt.Fprintf(b, "| `%s` | %s |%s\n", c.ID, c.Problem, strings.Repeat(" |", len(ops)+cycleColumns-1))
+				fmt.Fprintf(b, "| `%s` | %s |%s\n", c.ID, problemText(c), strings.Repeat(" |", len(ops)+cycleColumns-1))
 
 				continue
 			}
@@ -523,12 +558,28 @@ func cellTable(b *strings.Builder, t targetResult) {
 				fmt.Fprintf(b, " %s |", opPair(c.Ops[op]))
 			}
 
-			fmt.Fprintf(b, " %.0f | %.0f | %s |\n", c.CyclesPerSec.Median, c.OpsPerSec.Median,
-				mib(uint64(c.PeakRSSBytes.Median)))
+			peak := mib(uint64(c.PeakRSSBytes.Median))
+			if c.OOMKilled > 0 {
+				peak += fmt.Sprintf(" (%d runs OOM-killed)", c.OOMKilled)
+			}
+
+			fmt.Fprintf(b, " %.0f | %.0f | %s |\n", c.CyclesPerSec.Median, c.OpsPerSec.Median, peak)
 		}
 
 		fmt.Fprintln(b)
 	}
+}
+
+// problemText is what a cell with no completed run shows in its row. A cell the
+// kernel killed says so, with the limit and the memory it reached, in place of
+// the load generator's error, which is in the Problems list.
+func problemText(c cellResult) string {
+	if c.OOMKilled == 0 {
+		return c.Problem
+	}
+
+	return fmt.Sprintf("**OOM-killed** at the %s limit in %d of %d runs, peak RSS %s",
+		c.Spec.Memory, c.OOMKilled, len(c.FailedRuns), mib(uint64(c.PeakRSSBytes.Median)))
 }
 
 // agenticServices lists the services some target has an agentic result for, and

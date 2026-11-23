@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ const (
 	variantNoHealthcheck = "no-healthcheck"
 )
 
+// memoryLimit is what -memory accepts: bytes, with a b, k, m or g after them.
+var memoryLimit = regexp.MustCompile(`^[1-9][0-9]*[bkmg]?$`)
+
 // target is one image to measure. Only a target that persists runs the cells
 // that set a persistence variable, such as PERSIST_SQS=1.
 type target struct {
@@ -92,6 +96,7 @@ type options struct {
 	baseImage        string
 	baseCommit       string
 	baseOut          string
+	memory           string
 	startupRuns      int
 	firstUseRuns     int
 	idleRuns         int
@@ -287,7 +292,10 @@ func (o *options) bind(flags *flag.FlagSet) {
 		return nil
 	})
 	flags.StringVar(&o.profile, "profile", profileFull,
-		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64")
+		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64. "+
+			"large: the large-table workloads alone, each cell a table of its own under a memory limit")
+	flags.StringVar(&o.memory, "memory", "",
+		"the memory limit of every cell that has one, as docker run --memory writes it (default: the cell's, 1g)")
 	flags.StringVar(&o.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
 		"tag for the load generator image the run builds")
 	flags.StringVar(&o.outDir, "out", "bench/results", "directory for the result files")
@@ -315,8 +323,12 @@ func (o *options) bind(flags *flag.FlagSet) {
 
 // check refuses a setting no run can use.
 func (o *options) check() error {
-	if o.profile != profileFull && o.profile != profileQuick {
-		return fmt.Errorf("-profile %q: want %s or %s", o.profile, profileFull, profileQuick)
+	if !slices.Contains([]string{profileFull, profileQuick, profileLarge}, o.profile) {
+		return fmt.Errorf("-profile %q: want %s, %s or %s", o.profile, profileFull, profileQuick, profileLarge)
+	}
+
+	if o.memory != "" && !memoryLimit.MatchString(o.memory) {
+		return fmt.Errorf("-memory %q: want a number of bytes with an optional b, k, m or g, such as 1g", o.memory)
 	}
 
 	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
@@ -333,7 +345,7 @@ func (o *options) check() error {
 
 // defaultTargets are the images a profile measures when -targets is not set.
 func defaultTargets(profile string) string {
-	if profile == profileQuick {
+	if profile == profileQuick || profile == profileLarge {
 		return targetGostack
 	}
 
@@ -626,6 +638,47 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 		res[s].ImageBytes = size
 	}
 
+	large := r.opts.profile == profileLarge
+
+	// The large profile measures its cells and nothing else: the startup, idle and
+	// agentic runs of the other profiles are not what it is for, and each would
+	// add minutes to a run that is already long.
+	if !large {
+		r.footprint(ctx, sides, res)
+	}
+
+	for _, spec := range cellsFor(r.opts.profile, sides[0], r.opts.services...) {
+		if ctx.Err() != nil {
+			break
+		}
+
+		for s, cell := range r.cell(ctx, sides, r.opts.limited(spec)) {
+			res[s].noteCell(cell)
+
+			res[s].Cells = append(res[s].Cells, cell)
+		}
+	}
+
+	if !large {
+		r.agenticAll(ctx, sides, res)
+	}
+
+	return res
+}
+
+// limited is the cell with the run's memory limit, when it has one and -memory
+// names another.
+func (o *options) limited(spec cellSpec) cellSpec {
+	if spec.Memory != "" && o.memory != "" {
+		spec.Memory = o.memory
+	}
+
+	return spec
+}
+
+// footprint measures what the target costs doing nothing: the time to start,
+// the first use of a service and the idle memory and CPU.
+func (r *runner) footprint(ctx context.Context, sides []target, res []targetResult) {
 	startups, errs := r.startup(ctx, sides)
 	for s := range sides {
 		res[s].Startup = startups[s]
@@ -639,22 +692,6 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 	if r.opts.profile == profileFull {
 		r.idleVariant(ctx, sides, res, variantNoHealthcheck)
 	}
-
-	for _, spec := range cellsFor(r.opts.profile, sides[0], r.opts.services...) {
-		if ctx.Err() != nil {
-			break
-		}
-
-		for s, cell := range r.cell(ctx, sides, spec) {
-			res[s].noteCell(cell)
-
-			res[s].Cells = append(res[s].Cells, cell)
-		}
-	}
-
-	r.agenticAll(ctx, sides, res)
-
-	return res
 }
 
 // idleVariant measures one idle variant on every side into res.
@@ -830,12 +867,20 @@ func (r *runner) idleRun(ctx context.Context, t target, variant string, i int) (
 // does not carry into the next.
 func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cellResult {
 	runs := make([][]runResult, len(sides))
+	killed := make([][]runResult, len(sides))
 	failed := make([][]string, len(sides))
 
 	alternate(r.opts.reps, len(sides), func(rep, s int) {
+		r.logf("%s: %s: run %d of %d, load average %s", sides[s].label(), spec.id(), rep+1, r.opts.reps,
+			loadAverage(ctx))
+
 		run, err := r.cellRun(ctx, sides[s], spec)
 		if err != nil {
 			failed[s] = append(failed[s], fmt.Sprintf("run %d: %v", rep+1, err))
+
+			if errors.Is(err, errOOMKilled) {
+				killed[s] = append(killed[s], run)
+			}
 
 			return
 		}
@@ -846,12 +891,28 @@ func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cell
 	res := make([]cellResult, len(sides))
 
 	for s, t := range sides {
-		r.logf("%s: %s: %d of %d runs", t.label(), spec.id(), len(runs[s]), r.opts.reps)
+		r.logf("%s: %s: %d of %d runs, %d OOM-killed", t.label(), spec.id(), len(runs[s]), r.opts.reps, len(killed[s]))
 
-		res[s] = settleCell(spec, runs[s], failed[s])
+		res[s] = withOOM(settleCell(spec, runs[s], failed[s]), killed[s])
 	}
 
 	return res
+}
+
+// loadAverage is the host's load average as `uptime` prints it, for the log of a
+// run on a machine that is not quiet. It is "unknown" where there is no uptime.
+func loadAverage(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "uptime").Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	_, load, found := strings.Cut(string(out), "load average")
+	if !found {
+		return "unknown"
+	}
+
+	return strings.TrimSpace(strings.TrimLeft(load, "s:"))
 }
 
 // loadgenArgs are the flags of `loadgen cell` that describe the cell.
@@ -867,13 +928,51 @@ func (c cellSpec) loadgenArgs() []string {
 	return args
 }
 
-func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResult, error) {
-	var extra []string
-	if spec.persists() {
-		extra = []string{"-e", spec.PersistEnv + "=1", "--tmpfs", persistDir}
+// containerArgs are the `docker run` flags of a cell's container: its persistence
+// variable and the memory limit. A persistence directory in memory (tmpfs) is
+// charged to the container's limit, so a cell with a limit keeps it on disk; the
+// limit is the swap limit too, so a container that goes over is killed, not
+// swapped.
+func (c cellSpec) containerArgs() []string {
+	var args []string
+
+	if c.persists() {
+		args = append(args, "-e", c.PersistEnv+"=1")
+
+		if c.Memory == "" {
+			args = append(args, "--tmpfs", persistDir)
+		}
 	}
 
-	inst, _, err := r.start(ctx, t, extra...)
+	if c.Memory != "" {
+		args = append(args, "--memory", c.Memory, "--memory-swap", c.Memory)
+	}
+
+	return args
+}
+
+// timeout is how long the load generator may take to run the cell: its clock,
+// the slack, and the time the workload needs to fill what it loads.
+func (r *runner) timeout(spec cellSpec) time.Duration {
+	timeout := r.opts.duration + loadgenSlack
+
+	wl, err := findWorkload(spec.Service, spec.Workload)
+	if err != nil {
+		return timeout
+	}
+
+	if seeded, ok := wl.(seededWorkload); ok {
+		timeout += seeded.SeedTime(spec)
+	}
+
+	return timeout
+}
+
+// cellRun runs the cell once on a container of its own. A container the kernel
+// killed for its memory is a failed run that wraps errOOMKilled, and the run
+// returned with it holds the memory the container reached.
+func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResult, error) {
+	inst, _, err := r.start(ctx, t, spec.containerArgs()...)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -885,13 +984,22 @@ func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResul
 	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
 		args := append([]string{"cell"}, spec.loadgenArgs()...)
 
-		return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run,
+		return r.loadgen(ctx, inst.name, r.timeout(spec), &run,
 			append(args, "-duration", r.opts.duration.String())...)
 	})
 	run.Usage = used
 
-	if err == nil {
-		err = inst.alive(ctx)
+	// A load generator that failed on a container the kernel killed says why the
+	// run failed; one that failed on a container that is running, or died of
+	// something else, says it itself.
+	died := inst.alive(ctx)
+
+	switch {
+	case err == nil:
+		err = died
+	case errors.Is(died, errOOMKilled):
+		err = fmt.Errorf("%w; the load generator said: %w", died, err)
+	default:
 	}
 
 	return run, err
@@ -994,7 +1102,10 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 
 	last, err := r.api.stats(ctx, container)
 	if err != nil {
-		return usage{}, errors.Join(workErr, fmt.Errorf("read stats: %w", err))
+		// The memory reached before the counters went is what a container the
+		// kernel killed has to show.
+		return usage{BaselineRSSBytes: first.rss(), PeakRSSBytes: peak},
+			errors.Join(workErr, fmt.Errorf("read stats: %w", err))
 	}
 
 	peak = max(peak, last.rss())

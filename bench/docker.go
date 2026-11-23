@@ -313,18 +313,30 @@ func removeArgs(name string) []string {
 // a measurement ended: it exited, or was removed, during the run.
 var errTargetDied = errors.New("the target container died during the run")
 
-// alive returns errTargetDied unless the container is still running. A run
-// against a target that went away has numbers from before and errors from after
-// it went, so the run is not a measurement of the image.
+// errOOMKilled reports a target container the kernel killed for going over its
+// memory limit. It wraps errTargetDied, so a caller that does not tell the two
+// apart treats it as any other death.
+var errOOMKilled = fmt.Errorf("%w: it was OOM-killed", errTargetDied)
+
+// alive returns errTargetDied unless the container is still running, and
+// errOOMKilled when the kernel's out-of-memory killer ended it. A run against a
+// target that went away has numbers from before and errors from after it went,
+// so the run is not a measurement of the image.
 func (i *instance) alive(ctx context.Context) error {
-	out, err := dockerOutput(ctx, "inspect", "--format", "{{.State.Status}} {{.State.ExitCode}}", i.name)
+	out, err := dockerOutput(ctx, "inspect", "--format",
+		"{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}", i.name)
 	if err != nil {
 		return fmt.Errorf("%w: %s: %w", errTargetDied, i.name, err)
 	}
 
-	if state := strings.TrimSpace(string(out)); !strings.HasPrefix(state, "running ") {
-		return fmt.Errorf("%w: %s is %s (status, exit code)", errTargetDied, i.name, state)
+	state := strings.TrimSpace(string(out))
+	if strings.HasPrefix(state, "running ") {
+		return nil
 	}
 
-	return nil
+	if strings.HasSuffix(state, " true") {
+		return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errOOMKilled, i.name, state)
+	}
+
+	return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errTargetDied, i.name, state)
 }

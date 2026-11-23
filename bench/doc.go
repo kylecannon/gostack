@@ -11,8 +11,8 @@
 //
 // Six subcommands share the one binary:
 //
-//	bench run       the orchestrator, on the host. `make bench-system` and
-//	                `make bench-system-quick` run it.
+//	bench run       the orchestrator, on the host. `make bench-system`,
+//	                `make bench-system-quick` and `make bench-system-large` run it.
 //	bench compare   the regression gate for result files.
 //	bench loadgen   the load generator. The orchestrator cross-compiles this
 //	                binary into a scratch image and runs it in a container that
@@ -123,6 +123,35 @@
 // -profile quick runs 6, all at concurrency 16: item at 100 B with persistence
 // off and on, and query, update, transact and stream. DynamoDB has no agentic
 // workload.
+//
+// # The large profile
+//
+// -profile large (`make bench-system-large`) runs one more workload,
+// dynamodb/large (largetable.go), and no other profile runs it: its cells take
+// minutes, and cellsFor lists it for this profile alone and lists nothing else
+// there. Gostack is the only target, and the run measures its cells and nothing
+// else (no startup, idle or agentic run). A cell is a container started with
+// --memory (1g, or -memory) and the same --memory-swap, a table with a global
+// secondary index, and
+//
+//	items        25k, 50k, 100k, 300k, 1M, put with BatchWriteItem before the clock
+//	             starts, from a source seeded by the item's index, so two images
+//	             are given the same table
+//	persistence  off, and PERSIST_DYNAMODB=1 with the directory on the container's
+//	             disk (a tmpfs is charged to the limit)
+//	concurrency  16 and 64
+//
+// An item has 10 to 30 attributes (strings, numbers, a boolean, small maps and
+// lists) and a body of 100 B to 4 KiB spread evenly on a log scale, of random
+// text a compressor cannot shrink. The load is 70% reads and 30% writes, one
+// operation a cycle: get 35%, query 20% (table or index, a third filtered), scan
+// 15% (a page of 25 from a random key, a third filtered), put 10%, update 10%,
+// delete 5%, batchwrite 5% (25 puts). Each cell is a run of its own on a fresh
+// container, one repetition by default in the make target, because the fill
+// comes first. A container the kernel OOM-killed is a recorded outcome: the cell
+// reports oom_killed, the memory it reached, and the load generator's error, which
+// says how many items the fill had put. Docker inspects State.OOMKilled for it,
+// after the load generator's own failure.
 //
 // # The KMS matrix
 //

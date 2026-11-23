@@ -457,6 +457,28 @@ rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
 is measured" and "The gate"). `make bench-system-quick` shows it under "First
 use".
 
+How a service holds a large data set under a memory limit is measured by the
+large profile, `make bench-system-large` (`bench run -profile large`), which no
+other target runs, because each of its cells takes minutes (`bench/largetable.go`
+has the shape). It measures gostack alone, and nothing but its cells: no startup,
+idle or agentic run. A cell is one container started with `--memory` (1g,
+`BENCH_LARGE_MEMORY` or `-memory`) and `--memory-swap` equal to it, so a
+container that goes over is killed and not swapped. In it one DynamoDB table with
+a global secondary index is filled to 25k, 50k, 100k, 300k or 1M items of 10 to
+30 attributes and 100 B to 4 KiB, each cell's own table, before the clock starts.
+The fill then gives way to a mixed load for `-duration`, 70% reads (GetItem,
+Query on the table and the index, Scan pages, a third of the last two filtered)
+and 30% writes (PutItem, UpdateItem, DeleteItem, BatchWriteItem of 25), at
+concurrency 16 and 64, persistence off and on. A cell records peak RSS,
+throughput, p50 and p99 of each operation and whether the kernel OOM-killed the
+container: a killed cell is a recorded outcome (`oom_killed`, the memory it
+reached, and how many items the fill had put) and not a failed run. A
+persistence-on cell of this profile keeps its directory on the container's disk,
+not in a tmpfs, whose pages the limit would count. `-base-image` measures a base
+and a head in alternation, as in a pull request. The target compares with no
+committed result, since none holds large cells, and it logs the load average
+before each run: the machine it runs on is part of what it measures.
+
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose
 container exited or was removed fails, and is recorded in the cell's

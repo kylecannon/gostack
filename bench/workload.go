@@ -23,6 +23,9 @@ import (
 const (
 	profileFull  = "full"
 	profileQuick = "quick"
+	// profileLarge runs only the workloads that fill a target with a large data set
+	// under a memory limit. Each cell takes minutes, so no other profile runs it.
+	profileLarge = "large"
 
 	levelLow  = 1
 	levelMid  = 16
@@ -31,8 +34,8 @@ const (
 	bytesPerKiB = 1 << 10
 
 	// idFixedParts are the segments of a cell id besides the workload's options:
-	// service, workload, persist, payload and concurrency.
-	idFixedParts = 5
+	// service, workload, persist, payload, memory limit and concurrency.
+	idFixedParts = 6
 )
 
 // workload is one service's load shape.
@@ -49,6 +52,20 @@ type workload interface {
 	// Run runs one cell for the duration against the endpoint, on cell.Concurrency
 	// workers, and returns what it timed.
 	Run(ctx context.Context, c client, cell cellSpec, duration time.Duration) (runResult, error)
+}
+
+// largeWorkload marks a workload the large profile runs and no other profile
+// does: cellsFor lists its cells for -profile large only, and lists no other
+// workload's cells there.
+type largeWorkload interface {
+	largeOnly()
+}
+
+// seededWorkload is a workload that fills its target before the clock starts, so
+// its run needs more than the duration and the load generator's slack.
+type seededWorkload interface {
+	// SeedTime is the longest the fill of the cell may take.
+	SeedTime(cell cellSpec) time.Duration
 }
 
 // agenticWorkload is a service's create, use and delete cycle.
@@ -73,6 +90,7 @@ var (
 		updateWorkload{},
 		transactWorkload{},
 		streamWorkload{},
+		largeTableWorkload{},
 		cryptWorkload{},
 		dataKeyWorkload{},
 		signWorkload{},
@@ -126,6 +144,9 @@ type cellSpec struct {
 	// service's persistence on. Empty is persistence off.
 	PersistEnv  string `json:"persist_env,omitempty"`
 	Concurrency int    `json:"concurrency"`
+	// Memory is the container's memory limit as docker run --memory writes it,
+	// such as 1g. Empty is no limit. -memory replaces it in every cell that has one.
+	Memory string `json:"memory,omitempty"`
 }
 
 func (c cellSpec) persists() bool { return c.PersistEnv != "" }
@@ -174,6 +195,10 @@ func (c cellSpec) id() string {
 		parts = append(parts, o.Key+"="+o.Value)
 	}
 
+	if c.Memory != "" {
+		parts = append(parts, "mem="+c.Memory)
+	}
+
 	parts = append(parts, "c="+strconv.Itoa(c.Concurrency))
 
 	return strings.Join(parts, "/")
@@ -181,12 +206,17 @@ func (c cellSpec) id() string {
 
 // cellsFor lists the cells of a profile that a target runs, for the services
 // named, or for every service when none is. A target that does not persist
-// leaves the persistence-on cells out.
+// leaves the persistence-on cells out. The large profile lists the large
+// workloads and no others, and no other profile lists them.
 func cellsFor(profile string, t target, services ...string) []cellSpec {
 	var out []cellSpec
 
 	for _, w := range workloads {
 		if len(services) > 0 && !slices.Contains(services, w.Service()) {
+			continue
+		}
+
+		if _, large := w.(largeWorkload); large != (profile == profileLarge) {
 			continue
 		}
 
