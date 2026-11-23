@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,30 +11,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The workload runs against gostack's DynamoDB in this process: every operation
-// of the mix is timed and none fails, which also shows the service holds the
-// index, the filtered scan and the batch write the mix uses.
+// A cell runs against gostack's DynamoDB in this process, at both concurrencies
+// of the matrix, with no failed call.
 func Test_large_table_workload_runs_against_DynamoDB(t *testing.T) {
 	c := ddbServer(t)
 
-	for _, concurrency := range []int{levelLow, levelMid} {
-		cell := ddbCell(workloadDDBLarge, 0, "", concurrency)
-		cell.Options = []option{{Key: optItems, Value: "300"}}
-		cell.Memory = ddbLargeMemory
+	for _, concurrency := range []int{levelMid, levelHigh} {
+		cell := ddbLargeCell("", 300, concurrency)
 
 		wl, err := findWorkload(cell.Service, cell.Workload)
 		require.NoError(t, err)
 
-		run, err := wl.Run(t.Context(), c, cell, 300*time.Millisecond)
+		run, err := wl.Run(t.Context(), c, cell, 100*time.Millisecond)
 		require.NoError(t, err)
 		assert.Positive(t, run.Cycles)
 
-		for _, op := range wl.Ops() {
-			stats := run.Ops[op]
-			assert.Positive(t, stats.Count, "%s timed no %s", cell.id(), op)
+		for op, stats := range run.Ops {
 			assert.Zero(t, stats.Errors, "%s: %s failed", cell.id(), op)
 		}
 	}
+}
+
+// A fixed number of cycles of the mix reaches every operation against the real
+// service and fails none, so the service holds the index, the filtered scan, the
+// update expression and the batch write the mix uses. The count of cycles, not
+// the clock, decides what runs, so a loaded host cannot starve an operation.
+func Test_large_table_mix_reaches_every_operation(t *testing.T) {
+	c := ddbServer(t)
+	dc := newDDBClient(c.endpoint, ddbSeedWorkers)
+
+	const items = 300
+
+	table, err := dc.createLargeTable(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, dc.fillLargeTable(t.Context(), table, items))
+
+	m := &mixer{dc: dc, table: table, items: items, rng: workerRand(0)}
+	rec := newRecorder()
+
+	for range 2000 {
+		m.cycle(t.Context(), &rec)
+	}
+
+	require.NoError(t, rec.firstErr)
+
+	for _, op := range (largeTableWorkload{}).Ops() {
+		assert.NotEmpty(t, rec.timings[op], "no %s was timed", op)
+		assert.Zero(t, rec.failed[op], "%s failed", op)
+	}
+
+	// The table is the size its cell says, and the writes left it about that size.
+	var out struct{ Count int }
+
+	body := fmt.Appendf(nil, `{"TableName":%q,"Select":"COUNT"}`, table)
+	require.NoError(t, dc.send(t.Context(), ddbTarget, "Scan", body, &out))
+	assert.InDelta(t, items, out.Count, items/5)
 }
 
 func Test_large_table_workload_refuses_a_cell_it_cannot_run(t *testing.T) {
