@@ -281,7 +281,7 @@ func (p *Provider) runSelect(
 		return &selectPage{items: []map[string]api.AttributeValue{}}, nil
 	}
 
-	out, err := p.Query(ctx, &api.QueryInput{
+	out, err := p.Query(withUnwritten(ctx, plan.unwritten), &api.QueryInput{
 		TableName: q.table, IndexName: q.index, KeyConditionExpression: &plan.keyCond, FilterExpression: plan.filter,
 		ProjectionExpression: q.projection, ExpressionAttributeNames: r.attributeNames(),
 		ExpressionAttributeValues: r.attributeValues(), Limit: q.limit, ConsistentRead: q.consistent,
@@ -338,6 +338,10 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 
 	keyCond := r.path(partiql.Path{{Name: key.Hash.Name}}) + " = " + v
 
+	// The key condition holds the hash equality and a range condition, each
+	// one operator, and the filter holds neither them nor the ANDs after them.
+	unwritten := conditionAndAND
+
 	if rangeCond != nil {
 		var s string
 
@@ -347,6 +351,7 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 		}
 
 		keyCond += " AND " + s
+		unwritten += conditionAndAND
 	}
 
 	filter, err := renderCond(joinAll(rest), r)
@@ -354,13 +359,21 @@ func planQuery(where *partiql.Node, key table.KeySchema, r *render) (*queryPlan,
 		return nil, err
 	}
 
-	return &queryPlan{keyCond: keyCond, filter: filter}, nil
+	return &queryPlan{keyCond: keyCond, filter: filter, unwritten: unwritten}, nil
 }
+
+// conditionAndAND is the operators of a key condition the image counts toward
+// its WHERE, and the filter does not hold: the condition itself and the AND
+// that follows it (SQ-454).
+const conditionAndAND = 2
 
 // queryPlan is the expressions of the Query a SELECT runs as.
 type queryPlan struct {
 	keyCond string
 	filter  *string
+	// unwritten is the operators the WHERE wrote for the key condition, which
+	// the count of the filter's takes in.
+	unwritten int
 }
 
 // startFrom is where the Query of plan starts after q.start, a NextToken that
