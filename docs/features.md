@@ -87,7 +87,7 @@ Persistence: state saved when `PERSIST_DYNAMODB` is on.
 
 Headings of [compat.md](compat.md) that name dynamodb: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB until KMS](compat.md#dynamodb-until-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
 
-Other headings of compat.md with a table row under them that names dynamodb: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [DynamoDB Streams](compat.md#dynamodb-streams).
+Other headings of compat.md with a table row under them that names dynamodb: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [Request memory limits](compat.md#request-memory-limits), [DynamoDB Streams](compat.md#dynamodb-streams).
 
 **Implemented (36)**
 

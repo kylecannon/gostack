@@ -38,12 +38,36 @@ var ErrTooLarge = &awserr.Error{
 // When hold is not nil, what both passes of a body that could decode into more
 // than protocol.FreeDecode would hold is charged to hold before decoding. When
 // hold refuses, DecodeWithin returns protocol.ThrottledJSON.
+//
+// A body charged more than protocol.DecodeBudget, the most any service is
+// allowed at protocol.DecodeFactor, is one only a service that declares its own
+// factor decodes (DynamoDB's). It is not charged to hold: it is decoded only
+// when protocol.ReserveHeapBeside has room under the Go memory limit for the
+// heap the walk bounds it to keep (walker.heap). Otherwise it is refused with
+// ErrTooLarge, as it is at protocol.DecodeFactor, when it provably misses with
+// nothing other requests hold (protocol.ErrNoHeapRoom), and answered
+// protocol.ThrottledJSON when it may fit once they are answered
+// (protocol.ErrHeapBusy). The walk passes DecodeBudget where it
+// would stop at protocol.DecodeFactor; from there the body's own bytes are a
+// heap reservation and no longer hold the in-flight bound, when hold is a
+// protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
+// holds the bound no longer than one refused there. One body at a time is
+// walked and decoded past the budget (protocol.TakeDenseLane): another that
+// passes it meanwhile, or while other requests wait for room under the
+// in-flight bound, is answered protocol.ThrottledJSON where its walk passes
+// it, since it could be decoded once they are done.
+// The lane is given back as soon as DecodeWithin returns, on every path. Each
+// reservation lasts until the request is answered when hold keeps it
+// (HeapKeeper.KeepHeap), and until the body is decoded otherwise.
 func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
 	bound := decodePasses * int64(len(body)) * p.perByte
 	if bound > budget || (hold != nil && bound > protocol.FreeDecode) {
-		err := chargeDecode(body, p, budget, hold)
+		r := &reservations{hold: hold}
+		defer r.end()
+
+		err := chargeDecode(body, p, budget, r)
 		if err != nil {
 			return nil, false, err
 		}
@@ -52,18 +76,80 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 	return DecodeLenient[T](body)
 }
 
+// reservations is what one DecodeWithin holds past the in-flight bound: the
+// dense lane, while the body is walked and decoded, and the heap reservations
+// its request's HeapKeeper does not keep. moved is the body's own bytes,
+// reserved on the heap when moveBody took the lane: what the request already
+// holds of what is reserved when it reserves the heap the walk bounds.
+type reservations struct {
+	hold     protocol.DecodeHolder
+	lane     func()
+	reserved []func()
+	moved    int64
+}
+
+// keep hands release, a heap reservation's, to the request's HeapKeeper, to
+// run when the request is answered, or else runs it at end.
+func (r *reservations) keep(release func()) {
+	if keeper, ok := r.hold.(protocol.HeapKeeper); !ok || !keeper.KeepHeap(release) {
+		r.reserved = append(r.reserved, release)
+	}
+}
+
+// end runs when decoding has returned, whatever it returned: it gives back the
+// dense lane and the reservations no HeapKeeper took.
+func (r *reservations) end() {
+	if r.lane != nil {
+		r.lane()
+	}
+
+	for _, release := range r.reserved {
+		release()
+	}
+}
+
 // chargeDecode refuses body with ErrTooLarge when decoding it as p plans it
 // would pass budget, and otherwise charges what both passes hold past
-// protocol.FreeDecode to hold, when there is one.
-func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder) *awserr.Error {
+// protocol.FreeDecode to hold, when there is one. A body charged past
+// protocol.DecodeBudget reserves heap instead (DecodeWithin), first for its
+// own bytes once the walk passes DecodeBudget (moveBody), then for what the
+// walk bounds decoding it to keep; r takes the lane and each reservation's
+// release. A final reservation that may fit once other requests are answered
+// (protocol.ErrHeapBusy) is answered protocol.ThrottledJSON.
+func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.Error {
+	hold := r.hold
+
 	unwalked := int64(math.MaxInt64)
 	if hold != nil {
 		unwalked = protocol.FreeDecode
 	}
 
-	cost, err := decodeCost(body, p, budget, unwalked)
+	var move moveFunc
+	if hold != nil && budget > protocol.DecodeBudget(len(body)) {
+		move = func(heap, read int64) error { return moveBody(body, r, heap, read) }
+	}
+
+	cost, heap, err := decodeCost(body, p, budget, unwalked, move)
 	if err != nil || hold == nil || cost <= protocol.FreeDecode {
 		return err
+	}
+
+	// With a hold, a body is walked unless its separators cost at most
+	// FreeDecode, so one charged past DecodeBudget has its heap bounded, and
+	// the walk moved its bytes at DecodeBudget.
+	if cost > protocol.DecodeBudget(len(body)) {
+		release, err := protocol.ReserveHeapBeside(heap+allocSize(p.heapSize), r.moved)
+
+		switch {
+		case errors.Is(err, protocol.ErrHeapBusy):
+			return protocol.ThrottledJSON()
+		case err != nil:
+			return ErrTooLarge
+		}
+
+		r.keep(release)
+
+		return nil
 	}
 
 	_, herr := hold.HoldDecode(cost)
@@ -74,8 +160,110 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 	return nil
 }
 
+// moveFunc is what a walk runs once its cost passes DecodeBudget (moveBody),
+// with the heap the walk has bounded so far and the bytes it has read.
+type moveFunc func(heap, read int64) error
+
+var (
+	// errNoRoom stops a walk whose body found no room on the heap with
+	// nothing other requests reserve (moveBody): the answer at
+	// protocol.DecodeFactor, ErrTooLarge.
+	errNoRoom = errors.New("no room for the body on the heap")
+	// errBusy stops a walk whose body found the dense lane taken, the heap's
+	// room held by other requests' reservations, or requests waiting for room
+	// under the in-flight bound (moveBody): room it could have once they are
+	// done, so the answer is a throttle, which an SDK retries.
+	errBusy = errors.New("the dense lane is busy")
+)
+
+// moveBody runs when the walk of body passes protocol.DecodeBudget, where it
+// would stop for a service without its own factor. It takes the dense lane
+// with the body's own bytes reserved on the heap (protocol.TakeDenseLane), the
+// lane until decoding returns and the reservation as r keeps it, and, when the
+// hold is a protocol.HeapKeeper, gives back what the body and its decoding
+// hold of the in-flight bound, so that the room other requests' bodies wait
+// for is free again as soon as it would be were the body refused. It fails,
+// holding what it held and without waiting, with errNoRoom when the heap
+// provably has no room with nothing other requests hold
+// (protocol.ErrNoHeapRoom), and with errBusy when another body has the lane or
+// the heap may have room once other requests are answered
+// (protocol.ErrHeapBusy). It fails with
+// errBusy too, before taking the lane, while any request would still wait for
+// room under the in-flight bound once the body gave back what it holds of it
+// (protocol.BodiesWait): the queue then drains one body at a time, and a
+// dense body walked and decoded beside it, or walked to its end only to be
+// refused, slows what every waiting request waits on. A request that waits
+// only on the body's own bytes does not count: moving the body lets it in.
+//
+// The heap's room is weighed for the body and the heap its walk would end at,
+// projected from the heap the first read bytes of it hold, so that a body the
+// final reservation would refuse is not walked to its end first: before
+// anything else with nothing counted live (protocol.CheckHeapRoom), so a body
+// that could never fit is refused as too large at no cost, and with the lane
+// held against what is live, after a collection when the last one leaves no
+// room (protocol.TakeDenseLane). The projection only refuses early: what the
+// walk bounds is still reserved once it ends, and a body the projection
+// admits can still be refused there.
+func moveBody(body []byte, r *reservations, heap, read int64) error {
+	keeper, keeps := r.hold.(protocol.HeapKeeper)
+
+	var own int64
+	if keeps {
+		own = keeper.PoolHeld()
+	}
+
+	n := int64(len(body))
+	peak := n + projectHeap(heap, read, len(body))
+
+	err := protocol.CheckHeapRoom(peak)
+	if err != nil {
+		return moveRefusal(err)
+	}
+
+	if protocol.BodiesWait(own) {
+		return errBusy
+	}
+
+	lane, release, err := protocol.TakeDenseLane(n, peak)
+	if err != nil {
+		return moveRefusal(err)
+	}
+
+	r.lane, r.moved = lane, n
+	r.keep(release)
+
+	if keeps {
+		keeper.ReleasePool()
+	}
+
+	return nil
+}
+
+// moveRefusal is moveBody's answer to a refusal of the lane or the heap:
+// errBusy for what other requests hold (protocol.ErrDenseLaneTaken,
+// protocol.ErrHeapBusy) and errNoRoom otherwise.
+func moveRefusal(err error) error {
+	if errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
+		return errBusy
+	}
+
+	return errNoRoom
+}
+
+// projectHeap is the heap a walk of a body of n bytes ends at, were the rest
+// of it shaped as its first read bytes, which hold heap.
+func projectHeap(heap, read int64, n int) int64 {
+	if read <= 0 {
+		return heap
+	}
+
+	return heap/read*int64(n) + heap%read*int64(n)/read
+}
+
 // decodeCost is what both passes of decoding body as p plans it hold at most,
-// or ErrTooLarge when that passes budget.
+// and the most one pass keeps on the heap at its peak (walker.heap), or
+// ErrTooLarge when the cost passes budget. The heap is zero for a body that is
+// not walked.
 //
 // It first bounds the cost from the body's shape without reading it as json
 // (structureUnits): its text costs at most its bytes, and only the separators
@@ -83,21 +271,33 @@ func chargeDecode(body []byte, p *plan, budget int64, hold protocol.DecodeHolder
 // budget whose separators cost at most unwalked: any, when nothing is charged,
 // and protocol.FreeDecode when the bound is charged, so the charge is at
 // most FreeDecode beyond the body's own bytes. Any other body is walked token by
-// token (walkCost), which is as costly as decoding it.
-func decodeCost(body []byte, p *plan, budget, unwalked int64) (int64, *awserr.Error) {
+// token (walkCost), which is as costly as decoding it. When move is not nil,
+// the walk runs it once its cost passes protocol.DecodeBudget (moveBody): a
+// move that finds no room is ErrTooLarge too, and one that finds the dense
+// lane busy is protocol.ThrottledJSON.
+func decodeCost(body []byte, p *plan, budget, unwalked int64, move moveFunc) (cost, heap int64, err *awserr.Error) {
 	structure := decodePasses * structureUnits(body) * p.perUnit
 	bound := decodePasses*int64(len(body)) + structure
 
 	if bound <= budget && structure <= unwalked {
-		return bound, nil
+		return bound, 0, nil
 	}
 
-	cost, over := walkCost(body, p, budget/decodePasses)
-	if over {
-		return 0, ErrTooLarge
+	w := walker{dec: newWalkDecoder(body), limit: budget / decodePasses}
+	if move != nil {
+		w.mark, w.move = protocol.DecodeBudget(len(body))/decodePasses, move
 	}
 
-	return decodePasses * cost, nil
+	walked, heap, stop := w.walk(p)
+
+	switch {
+	case errors.Is(stop, errBusy):
+		return 0, 0, protocol.ThrottledJSON()
+	case stop != nil:
+		return 0, 0, ErrTooLarge
+	}
+
+	return decodePasses * walked, heap, nil
 }
 
 // structureUnits is how many places in body a value can begin at: after a
@@ -153,6 +353,14 @@ type plan struct {
 	// entry, what it points to, and for a value of type any its closing token
 	// and its member's name as well.
 	perUnit int64
+
+	// What a value of the type keeps on the heap decoded (walker.heap):
+	// heapSize is the type's own size, what a pointer to it allocates. For a
+	// map, group is one group of its table, outOfLine what one entry allocates
+	// beside it (a key or value of more than mapMaxSlot bytes), and open what
+	// decoding it holds until it ends: the key and the value it decodes each
+	// entry into before storing it.
+	heapSize, group, outOfLine, open int64
 }
 
 var plans sync.Map // reflect.Type -> *plan
@@ -276,6 +484,11 @@ const (
 	// anyUnitCost is three tokens of a value of type any: a member's name, its
 	// value, and the value's closing token.
 	anyUnitCost = 3 * anyValueCost
+	// anyValueHeap is what a token decoded into an any keeps on the heap
+	// beyond a string's text: a map entry's three slots of a 16-byte key and
+	// 16-byte value, or a list element's two capacities of one, with its
+	// boxed value, or a map's header and first group shared by its tokens.
+	anyValueHeap = 2 * anyValueCost
 	// maxPointerChain is longer than any chain of pointers in the API; a
 	// longer one makes every body walked (unboundedUnit).
 	maxPointerChain = 8
@@ -298,7 +511,7 @@ func buildPlan(t reflect.Type, built map[reflect.Type]*plan) *plan {
 		return p
 	}
 
-	p := &plan{}
+	p := &plan{heapSize: sizeOf(t)}
 	built[t] = p
 
 	if freeLeaves[t] {
@@ -326,6 +539,8 @@ func buildPlan(t reflect.Type, built map[reflect.Type]*plan) *plan {
 		p.kind, p.size, p.elem = kindPointer, sizeOf(t.Elem()), buildPlan(t.Elem(), built)
 	case reflect.Map:
 		p.kind, p.size, p.elem = kindMap, sizeOf(t.Key())+sizeOf(t.Elem()), buildPlan(t.Elem(), built)
+		p.group, p.outOfLine = mapLayout(sizeOf(t.Key()), sizeOf(t.Elem()))
+		p.open = allocSize(sizeOf(t.Key())) + allocSize(sizeOf(t.Elem()))
 	case reflect.Interface:
 		p.kind = kindAny
 	case reflect.Struct:
@@ -365,34 +580,63 @@ func structFields(t reflect.Type, built map[reflect.Type]*plan) map[string]*plan
 // errOverBudget stops a walk that has passed its budget.
 var errOverBudget = errors.New("over budget")
 
-// overBudget reports whether body, decoded into a value planned by p, would
-// cost more than budget. A body that is not valid json reports false: the
-// decode that follows refuses it, having decoded no more than the walk read.
 // walkCost walks body as p plans it and returns what one pass of decoding it
-// holds, or reports over once that passes budget.
-func walkCost(body []byte, p *plan, budget int64) (int64, bool) {
-	w := walker{
-		dec:   jsontext.NewDecoder(bytes.NewBuffer(body), jsontext.AllowDuplicateNames(true)),
-		limit: budget,
-	}
+// holds and the most it keeps on the heap at its peak (walker.heap), or
+// reports over once the cost passes budget. A body that is not valid json
+// reports what the walk read: the decode that follows refuses it, having
+// decoded no more than that.
+func walkCost(body []byte, p *plan, budget int64) (cost, heap int64, over bool) {
+	w := walker{dec: newWalkDecoder(body), limit: budget}
 
-	if errors.Is(w.value(p), errOverBudget) {
-		return 0, true
-	}
+	cost, heap, stop := w.walk(p)
 
-	return w.cost, false
+	return cost, heap, stop != nil
 }
 
+// walk is walkCost for a walker already set up, which returns what stopped
+// it: errOverBudget, or the error of a move that failed (walker.mark).
+func (w *walker) walk(p *plan) (cost, heap int64, stop error) {
+	err := w.value(p)
+	if errors.Is(err, errOverBudget) || errors.Is(err, errNoRoom) || errors.Is(err, errBusy) {
+		return 0, 0, err
+	}
+
+	return w.cost, w.heap + w.peak, nil
+}
+
+func newWalkDecoder(body []byte) *jsontext.Decoder {
+	return jsontext.NewDecoder(bytes.NewBuffer(body), jsontext.AllowDuplicateNames(true))
+}
+
+// A walker charges two things for what it reads. cost is the decode cost
+// model, what decoding allocates in all, which the budget and the in-flight
+// bound count. heap is the most the decoded value keeps live, from what the
+// runtime gives each allocation (heap.go): a pointer's value, a string's text,
+// a slice's array at the capacity it grew to, a map's header, groups and out of
+// line entries. peak is the most decoding holds at once beyond that: the array
+// a slice or a map's table is grown from, while the maps it is inside hold the
+// key and value they decode each entry into (open). move, when set, runs once
+// the cost passes mark, within the limit.
 type walker struct {
-	dec         *jsontext.Decoder
-	cost, limit int64
-	name        []byte
+	dec              *jsontext.Decoder
+	cost, limit      int64
+	heap, peak, open int64
+	name             []byte
+	mark             int64
+	move             moveFunc
 }
 
 func (w *walker) charge(n int64) error {
 	w.cost += n
 	if w.cost > w.limit {
 		return errOverBudget
+	}
+
+	if w.move != nil && w.cost > w.mark {
+		move := w.move
+		w.move = nil
+
+		return move(w.heap+w.peak, w.dec.InputOffset())
 	}
 
 	return nil
@@ -407,10 +651,17 @@ func (w *walker) value(p *plan) error {
 	switch {
 	case p.kind == kindAny:
 		return w.anyValue()
-	case p.kind == kindText && kind == '"':
+	case p.kind == kindText && kind != '{' && kind != '[' && kind != 'n':
 		v, err := w.dec.ReadValue()
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
+		}
+
+		// The lenient readers keep a number or a bool sent for a string as its
+		// text, so its heap is counted; its cost is not, as before.
+		w.heap += allocSize(int64(len(v)))
+		if kind != '"' {
+			return nil
 		}
 
 		return w.charge(int64(len(v)))
@@ -420,17 +671,17 @@ func (w *walker) value(p *plan) error {
 			return err
 		}
 
+		w.heap += allocSize(p.elem.heapSize)
+
 		return w.value(p.elem)
 	case p.kind == kindStruct && kind == '{':
 		return w.object(func(name []byte) (int64, *plan) { return 0, p.fields[string(name)] })
 	case p.kind == kindMap && kind == '{':
-		return w.object(func(name []byte) (int64, *plan) {
-			return 2*p.size + mapEntryCost + int64(len(name)), p.elem
-		})
+		return w.mapValue(p)
 	case p.kind == kindSlice && kind == '[':
 		return w.array(p)
 	default:
-		return w.dec.SkipValue() //nolint:wrapcheck // only errOverBudget is looked at
+		return w.dec.SkipValue() //nolint:wrapcheck // only the walk's own errors are looked at
 	}
 }
 
@@ -439,7 +690,7 @@ func (w *walker) value(p *plan) error {
 func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 	_, err := w.dec.ReadToken()
 	if err != nil {
-		return err //nolint:wrapcheck // only errOverBudget is looked at
+		return err //nolint:wrapcheck // only the walk's own errors are looked at
 	}
 
 	for w.dec.PeekKind() == '"' {
@@ -447,14 +698,14 @@ func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 
 		raw, err = w.dec.ReadValue()
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
 		}
 
 		name := raw[1 : len(raw)-1]
 		if bytes.IndexByte(name, '\\') >= 0 {
 			w.name, err = jsontext.AppendUnquote(w.name[:0], raw)
 			if err != nil {
-				return err //nolint:wrapcheck // only errOverBudget is looked at
+				return err //nolint:wrapcheck // only the walk's own errors are looked at
 			}
 
 			name = w.name
@@ -480,14 +731,16 @@ func (w *walker) object(member func(name []byte) (int64, *plan)) error {
 
 	_, err = w.dec.ReadToken()
 
-	return err //nolint:wrapcheck // only errOverBudget is looked at
+	return err //nolint:wrapcheck // only the walk's own errors are looked at
 }
 
 func (w *walker) array(p *plan) error {
 	_, err := w.dec.ReadToken()
 	if err != nil {
-		return err //nolint:wrapcheck // only errOverBudget is looked at
+		return err //nolint:wrapcheck // only the walk's own errors are looked at
 	}
+
+	var elements int64
 
 	for kind := w.dec.PeekKind(); kind != ']' && kind != 0; kind = w.dec.PeekKind() {
 		err = w.charge(appendCost * p.size)
@@ -495,15 +748,48 @@ func (w *walker) array(p *plan) error {
 			return err
 		}
 
+		elements++
+
 		err = w.value(p.elem)
 		if err != nil {
 			return err
 		}
 	}
 
+	// Its array was grown from one no larger, alive with it at the last copy.
+	backing := sliceBacking(elements, p.size)
+	w.heap += backing
+	w.peak = max(w.peak, w.open+backing)
+
 	_, err = w.dec.ReadToken()
 
-	return err //nolint:wrapcheck // only errOverBudget is looked at
+	return err //nolint:wrapcheck // only the walk's own errors are looked at
+}
+
+// mapValue walks a map: each entry costs both copies of its key and value, a
+// bucket's overhead and its key's text; it keeps its key's text and what it
+// allocates out of line, and the map keeps its header and its tables.
+func (w *walker) mapValue(p *plan) error {
+	var entries int64
+
+	w.open += p.open
+	err := w.object(func(name []byte) (int64, *plan) {
+		entries++
+		w.heap += allocSize(int64(len(name))) + p.outOfLine
+
+		return 2*p.size + mapEntryCost + int64(len(name)), p.elem
+	})
+	w.open -= p.open
+
+	if err != nil {
+		return err
+	}
+
+	tables, growing := mapTables(entries, p.group)
+	w.heap += mapHeader + tables
+	w.peak = max(w.peak, w.open+p.open+growing)
+
+	return nil
 }
 
 // anyValue walks a value decoded into an any: every value, member name
@@ -525,13 +811,17 @@ func (w *walker) anyValue() error {
 		}
 
 		if err != nil {
-			return err //nolint:wrapcheck // only errOverBudget is looked at
+			return err //nolint:wrapcheck // only the walk's own errors are looked at
 		}
 
 		err = w.charge(anyValueCost + int64(len(text)))
 		if err != nil {
 			return err
 		}
+
+		// A token decoded into an any keeps at most an interface's box, its
+		// share of a map's slots or a slice's array, and a string's text.
+		w.heap += anyValueHeap + allocSize(int64(len(text)))
 
 		if w.dec.StackDepth() == depth {
 			return nil
