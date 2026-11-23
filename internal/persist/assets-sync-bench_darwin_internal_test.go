@@ -13,8 +13,13 @@ import (
 
 // syncBenchCounts is the axis of the sync benchmarks: pending assets in one
 // save. 3,000 is where the per-file F_FULLFSYNC of SQ-424 ran a 4.5 s shutdown
-// save out of time.
-var syncBenchCounts = []int{100, 1000, 3000}
+// save out of time, and 1,000 and 100 are the counts this axis once held. They
+// are left out under the 10 ms rule (docs/standards.md, "Benchmarks"): each
+// file costs about 0.1 ms of fsync here, so a sync of 100 took 12.9 ms
+// (BenchmarkSyncPending), 1,000 took 52 ms and 3,000 125 ms, the fastest of
+// three runs at -benchtime=500ms on a darwin/arm64 laptop. The cost is linear
+// in the count, so the two below stand for the ladder.
+var syncBenchCounts = []int{10, 30}
 
 // syncBenchAssets returns assets with n committed 1 KiB files, their ids and
 // their paths. It is rewritten before each timed sync by dirty, so the sync has

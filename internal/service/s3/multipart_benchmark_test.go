@@ -23,14 +23,21 @@ import (
 // headerCRC32 is the canonical form of x-amz-checksum-crc32.
 const headerCRC32 = "X-Amz-Checksum-Crc32"
 
-// BenchmarkMultipartUpload uploads a 64 MiB object in 8 MiB parts through the
-// gateway: create, eight UploadParts and the completion that assembles them.
+// BenchmarkMultipartUpload uploads a 1 MiB object in one part through the
+// gateway: create, an UploadPart and the completion that assembles it.
 // It runs with no checksum, which costs a full-object CRC64NVME at
 // completion, and with a COMPOSITE CRC32 checked on every part.
+//
+// The cell was 64 MiB in eight 8 MiB parts, which took 197 ms with the checksum
+// and 283 ms without (the fastest of three runs at -benchtime=500ms on a
+// darwin/arm64 laptop), so it is left out under the 10 ms rule
+// (docs/standards.md, "Benchmarks"). No cell with more than one part fits it:
+// every part but the last has to be 5 MiB, and one took about 25 ms. So this
+// measures one part, and no longer the assembly of several.
 func BenchmarkMultipartUpload(b *testing.B) {
 	const (
-		objectSize = 64 << 20
-		partBytes  = 8 << 20
+		objectSize = 1 << 20
+		partBytes  = 1 << 20
 	)
 
 	part := bytes.Repeat([]byte("p"), partBytes)
@@ -51,7 +58,7 @@ func BenchmarkMultipartUpload(b *testing.B) {
 			"<ChecksumCRC32>" + crc + "</ChecksumCRC32>",
 		},
 	} {
-		b.Run("size=64MiB/part=8MiB/"+variant.name, func(b *testing.B) {
+		b.Run("size=1MiB/part=1MiB/"+variant.name, func(b *testing.B) {
 			url := benchServer(b)
 			benchSend(b, http.MethodPut, url+"/bench", nil, nil)
 

@@ -82,7 +82,10 @@ func BenchmarkIndexInsert(b *testing.B) {
 // BenchmarkListObjectsV2Paging pages through a whole bucket with ListObjectsV2
 // calls: flat, a thousand keys to the page, and with a delimiter, which lists
 // the folders (a hundred keys to a folder) a hundred to the page. An op is the
-// whole paging.
+// whole paging. keys=100000 with no delimiter is left out under the 10 ms rule
+// (docs/standards.md, "Benchmarks"): it took 24 ms, the fastest of three runs at
+// -benchtime=500ms on a darwin/arm64 laptop. The 100,000 keys with a delimiter
+// stay, and keys=10000 with none covers the flat paging.
 func BenchmarkListObjectsV2Paging(b *testing.B) {
 	for _, keys := range []int{10_000, 100_000} {
 		p := benchProviderOf(b, keys)
@@ -94,6 +97,10 @@ func BenchmarkListObjectsV2Paging(b *testing.B) {
 		ctx := request.With(b.Context(), rc)
 
 		for _, tt := range []struct{ name, delimiter string }{{"none", ""}, {"slash", "/"}} {
+			if keys == 100_000 && tt.delimiter == "" {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("keys=%d/delimiter=%s", keys, tt.name), func(b *testing.B) {
 				for b.Loop() {
 					in := &s3api.ListObjectsV2Input{Bucket: new(benchBucket)}

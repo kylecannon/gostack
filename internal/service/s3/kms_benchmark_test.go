@@ -160,6 +160,8 @@ func BenchmarkPutObjectSSEKMS(b *testing.B) {
 				name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {
+					skipLeftOut(b)
+
 					s := newKMSBenchServer(b, option.validate)
 					body := bytes.Repeat([]byte("x"), payload.size)
 

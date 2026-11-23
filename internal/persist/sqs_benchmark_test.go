@@ -32,18 +32,21 @@ type snapshotCell struct{ queues, messages int }
 // The messages per queue are not 1000 everywhere. A snapshot is one json
 // document held in memory twice over, so 1000 messages of 64KiB in each of 10
 // queues is 640 MiB of bodies and 1000 queues of them is 62 GiB. Each cell
-// that holds messages holds about 62 MiB of bodies instead:
+// that holds messages holds a few MiB of bodies instead (the 10 ms rule of
+// docs/standards.md, "Benchmarks", holds it to what one snapshot takes in under
+// 8 ms: queues=10 messages=100 took 10.8 ms and queues=1000 messages=1 11.9 ms
+// on a darwin/arm64 laptop, the fastest of three runs at -benchtime=500ms):
 //
-//	queues=10    messages=100   (a few busy queues)
-//	queues=1000  messages=1     (many queues, each with something in it)
+//	queues=10    messages=40   (a few busy queues)
+//	queues=250   messages=1    (many queues, each with something in it)
 //
 // queues=1000 with messages=100 is dropped. It runs the same code as the cell
 // above it, 100 times larger.
 var snapshotCells = []snapshotCell{
 	{10, 0},
 	{1000, 0},
-	{10, 100},
-	{1000, 1},
+	{10, 40},
+	{250, 1},
 }
 
 const (

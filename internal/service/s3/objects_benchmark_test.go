@@ -130,6 +130,54 @@ func fanOut(workers int, fn func(worker int) error) error {
 	return nil
 }
 
+// leftOutCells are the cells the 10 ms rule leaves out of the matrices
+// (docs/standards.md, "Benchmarks"): one operation of each took more than 8 ms,
+// the fastest of three runs at -benchtime=500ms on a darwin/arm64 laptop, so the
+// gate would make fewer than 50 iterations of it. The time is in ms:
+//
+//   - PutObject at 16 MiB: 73 at concurrency 1 and 251 at 16; at 1 MiB with 16
+//     workers 19.5; persist=on at 1 MiB 14.7 with one worker and 75 with 16, and
+//     12.6 at 1 KiB with 16 (the engine's save every persistFrequency runs
+//     inside the iteration).
+//   - GetObject at 16 MiB: 7.5 at concurrency 1 (8.6 in the slowest run) and 72
+//     at 16.
+//   - PutObjectSSEKMS at 1 MiB with 16 workers: 18.2 to 18.4 for the three
+//     options.
+//   - PutObjectNotified through a topic with its envelope, 16 workers: 15.9 at
+//     1 KiB and 18.8 at 256 KiB.
+//   - DeleteObjectVersioned persist=on, delete=version, 16 workers: 8.9.
+//
+// The payload axis is covered by the widest cell that is under the limit: 1 MiB
+// at one worker, and 256 KiB at 16. What the cells left out add that these do
+// not is the 16 MiB spill to a file, which no cell under the limit measures, and
+// the persisted 1 MiB rows' write and sync of a spilled body.
+var leftOutCells = map[string]bool{
+	"BenchmarkPutObject/payload=16MiB/concurrency=1":                                 true,
+	"BenchmarkPutObject/payload=16MiB/concurrency=16":                                true,
+	"BenchmarkPutObject/payload=1MiB/concurrency=16":                                 true,
+	"BenchmarkPutObject/persist=on/payload=1MiB/concurrency=1":                       true,
+	"BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16":                      true,
+	"BenchmarkPutObject/persist=on/payload=1KiB/concurrency=16":                      true,
+	"BenchmarkGetObject/payload=16MiB/concurrency=1":                                 true,
+	"BenchmarkGetObject/payload=16MiB/concurrency=16":                                true,
+	"BenchmarkPutObjectSSEKMS/sse=kms-managed/payload=1MiB/concurrency=16":           true,
+	"BenchmarkPutObjectSSEKMS/sse=kms-validated/payload=1MiB/concurrency=16":         true,
+	"BenchmarkPutObjectSSEKMS/sse=kms-key/payload=1MiB/concurrency=16":               true,
+	"BenchmarkPutObjectNotified/target=topic-envelope/payload=1KiB/concurrency=16":   true,
+	"BenchmarkPutObjectNotified/target=topic-envelope/payload=256KiB/concurrency=16": true,
+	"BenchmarkDeleteObjectVersioned/persist=on/delete=version/concurrency=16":        true,
+}
+
+// skipLeftOut ends a cell that leftOutCells names before it builds anything, so
+// that it prints no row.
+func skipLeftOut(b *testing.B) {
+	b.Helper()
+
+	if leftOutCells[b.Name()] {
+		b.Skip("left out under the 10 ms rule, see leftOutCells")
+	}
+}
+
 // benchMatrix runs one sub-benchmark for every payload at every concurrency, and
 // then those of persistedPayloads again on a persisted server, under persist=on.
 func benchMatrix(b *testing.B, run func(b *testing.B, s *objectBenchServer, p benchPayload, workers int)) {
@@ -146,6 +194,7 @@ func benchMatrix(b *testing.B, run func(b *testing.B, s *objectBenchServer, p be
 				name := persistName(persisted, fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers))
 
 				b.Run(name, func(b *testing.B) {
+					skipLeftOut(b)
 					run(b, serverFor(b, persisted), payload, workers)
 				})
 			}

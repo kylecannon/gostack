@@ -196,6 +196,8 @@ func BenchmarkDeleteObjectVersioned(b *testing.B) {
 				name := persistName(persisted, fmt.Sprintf("delete=%s/concurrency=%d", kind, workers))
 
 				b.Run(name, func(b *testing.B) {
+					skipLeftOut(b)
+
 					s := enableVersioning(b, serverFor(b, persisted), "Enabled")
 
 					if kind == "marker" {

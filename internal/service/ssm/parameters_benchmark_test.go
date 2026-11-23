@@ -261,8 +261,15 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// snapshotSizes are the parameters a snapshot and a restore run at. 10,000 is
+// left out under the 10 ms rule (docs/standards.md, "Benchmarks"): a restore
+// took 13 ms and a snapshot 8 ms (8.9 in the slowest run), the fastest of three
+// runs at -benchtime=500ms on a darwin/arm64 laptop. The cost grows with the
+// count, so 1,000 stands for the ladder.
+var snapshotSizes = []int{10, 1_000}
+
 func BenchmarkSnapshot(b *testing.B) {
-	for _, n := range benchSizes {
+	for _, n := range snapshotSizes {
 		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
 			p, _ := filled(b, n)
 
@@ -281,7 +288,7 @@ func BenchmarkSnapshot(b *testing.B) {
 }
 
 func BenchmarkRestore(b *testing.B) {
-	for _, n := range benchSizes {
+	for _, n := range snapshotSizes {
 		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
 			p, _ := filled(b, n)
 
@@ -338,7 +345,13 @@ func nextToken(h http.Handler, w *sink, op string, body obj, token string) (stri
 // starts from the first parameter on every page takes 748 ms, against 18 ms
 // with a cursor. The benchmarks also ran at 100,000, which took about 8 s of
 // the 12.5 s one run of the two took and showed the same thing.
-const listAllSize = 10_000
+//
+// They run at 1,000 under the 10 ms rule (docs/standards.md, "Benchmarks"). At
+// 10,000 the walks took 21.2 ms (DescribeParameters) and 16.2 ms
+// (GetParametersByPath) and the deletion 63 ms, the fastest of three runs at
+// -benchtime=500ms on a darwin/arm64 laptop. A walk from the first parameter on
+// every page would take about 7 ms at 1,000, against under 2 ms with a cursor.
+const listAllSize = 1_000
 
 // BenchmarkPageThrough reads every parameter of a store a page at a time, one
 // iteration being the whole walk, through GetParametersByPath and

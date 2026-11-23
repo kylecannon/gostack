@@ -11,21 +11,28 @@ import (
 )
 
 // The persistence rows of one queue that holds many messages (docs/standards.md,
-// "Benchmarks"): saving and loading a queue of 100000 messages of 200 bytes with
+// "Benchmarks"): saving and loading a queue of 1000 messages of 200 bytes with
 // two attributes each, a tenth of them in flight. A FIFO queue spreads them over
-// 1000 groups. The rows of many small queues are BenchmarkSQSSnapshot and
+// 100 groups. The rows of many small queues are BenchmarkSQSSnapshot and
 // BenchmarkSQSRestoreExact in internal/persist.
+//
+// The queue held 100000 messages in 1000 groups, which the 10 ms rule leaves out
+// (docs/standards.md, "Benchmarks"): the fastest of three runs at
+// -benchtime=500ms on a darwin/arm64 laptop took 79 ms (standard) and 175 ms
+// (FIFO) to save, and 327 ms and 457 ms to restore. The cost grows with the
+// count, so the 1000 stands for the ladder, and it no longer shows a save's
+// lock hold or allocation at the size of a very large queue.
 //
 // Besides the time, a row reports:
 //
 //	lock-ms     how long a save holds the queue's lock to copy it
 //	alloc/file  the bytes a call allocates, in units of the size of the file
 const (
-	snapshotMessages = 100_000
+	snapshotMessages = 1000
 	snapshotInflight = snapshotMessages / 10
 	snapshotBody     = 200
 	snapshotAttrs    = 2
-	snapshotGroups   = 1000
+	snapshotGroups   = 100
 )
 
 // bigQueue returns an environment whose one queue holds the messages above.

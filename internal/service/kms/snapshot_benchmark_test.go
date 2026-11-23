@@ -24,7 +24,12 @@ import (
 // a save is always running or due while the calls run.
 const persistFrequency = 10 * time.Millisecond
 
-var snapshotSizes = []int{10, 10_000}
+// snapshotSizes are the keys a snapshot and a restore run at. 10,000 is left out
+// under the 10 ms rule (docs/standards.md, "Benchmarks"): a restore took 38 ms
+// and a snapshot 26 ms, the fastest of three runs at -benchtime=500ms on a
+// darwin/arm64 laptop. The cost grows with the count, so 1,000 stands for the
+// ladder.
+var snapshotSizes = []int{10, 1_000}
 
 // newPersistedBench is a bench whose KMS is persisted under a temp dir, as
 // PERSIST_KMS=1 wires it. It checks at the end that a snapshot reached the

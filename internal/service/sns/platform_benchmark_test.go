@@ -184,8 +184,16 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 // the benchmark job's 500 ms that a cell needs to be gated on: 16 workers at
 // 256 KiB took 10 to 38 ms an iteration, and 5 of the 12 endpoint and sms cells
 // there ran 15 to 46 times. Those cells run at one worker, which still spans
-// every other axis.
-func tooSlowToGate(payload, workers int) bool {
+// every other axis. A publish to a topic of 1,000 endpoints or numbers by 16
+// workers is left out at the smallest payload too: it took 8.5 to 10.2 ms (sms,
+// and endpoint with a plain or json structure), the fastest of three runs at
+// -benchtime=500ms on a darwin/arm64 laptop. The 1,000 at one worker, and 100
+// at 16, stay.
+func tooSlowToGate(route string, devices, payload, workers int) bool {
+	if workers > 1 && route == routeTopic && devices >= 1000 {
+		return true
+	}
+
 	return workers > 1 && payload > benchPayloads[0].size
 }
 
@@ -199,7 +207,7 @@ func BenchmarkPublishEndpoint(b *testing.B) {
 			for _, structure := range []string{"plain", valueStructure} {
 				for _, payload := range benchPayloads {
 					for _, workers := range benchConcurrency {
-						if tooSlowToGate(payload.size, workers) {
+						if tooSlowToGate(route, endpoints, payload.size, workers) {
 							continue
 						}
 
@@ -247,7 +255,7 @@ func BenchmarkPublishSMS(b *testing.B) {
 
 			for _, payload := range benchPayloads {
 				for _, workers := range benchConcurrency {
-					if tooSlowToGate(payload.size, workers) {
+					if tooSlowToGate(route, numbers, payload.size, workers) {
 						continue
 					}
 

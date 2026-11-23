@@ -46,14 +46,15 @@ var (
 )
 
 // specConcurrency is the cut of dataConcurrency per spec: 64 calls at once only
-// on the two fast curves, RSA_4096 one call at a time, since 16 of its signing
-// calls run under 50 iterations in a 500ms cell, and every other spec at 1 and
-// 16.
+// on the two fast curves, RSA_3072 and RSA_4096 one call at a time, since 16 of
+// their signing calls run under 50 iterations in a 500ms cell (RSA_3072 at 16
+// took 11.7 ms, the fastest of three runs at -benchtime=500ms on a darwin/arm64
+// laptop), and every other spec at 1 and 16.
 func specConcurrency(spec string) []int {
 	switch spec {
 	case eccP256, secgK1:
 		return dataConcurrency
-	case rsa4096:
+	case rsa3072, rsa4096:
 		return dataConcurrency[:1]
 	default:
 		return dataConcurrency[:2]

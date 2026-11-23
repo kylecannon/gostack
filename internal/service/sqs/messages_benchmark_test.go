@@ -62,6 +62,9 @@ type cellOpts struct {
 	payload bool  // the payload axis applies
 	attrs   bool  // the attribute cells apply
 	texts   bool  // the text cells apply
+
+	// leftOut reports a cell the operation leaves out; nil leaves none out.
+	leftOut func(c cell) bool
 }
 
 // name is the sub-benchmark name of a cell. The axes an operation does not have
@@ -143,6 +146,10 @@ func eachCell(b *testing.B, opts cellOpts, fn func(b *testing.B, c cell)) {
 	b.Helper()
 
 	for _, c := range opts.cells() {
+		if opts.leftOut != nil && opts.leftOut(c) {
+			continue
+		}
+
 		b.Run(c.name(opts), func(b *testing.B) { fn(b, c) })
 	}
 }
@@ -395,8 +402,18 @@ func receiveBody(c cell, queueURL string) *segmented {
 // message until the message is deleted, so the queue is purged and filled again
 // every benchRefillCalls calls, with the timer stopped, and the memory of a cell
 // stays the same however long it runs.
+//
+// The cells that receive ten 1 MiB messages in one call are left out under the
+// 10 ms rule (docs/standards.md, "Benchmarks"): a call returns 10 MiB, and the
+// fastest of three runs at -benchtime=500ms on a darwin/arm64 laptop took 9.5 ms
+// (accents) to 23.8 ms (json text) in json and 12.3 to 12.8 ms in query. The
+// cells that receive one 1 MiB message and ten of 256 KiB stay, so the payload
+// axis is covered by the widest cells under the limit.
 func BenchmarkReceiveMessage(b *testing.B) {
-	opts := cellOpts{payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch}}
+	opts := cellOpts{
+		payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch},
+		leftOut: func(c cell) bool { return c.max == benchBatch && c.payload.bytes >= 1<<20 },
+	}
 	eachCell(b, opts, func(b *testing.B, c cell) {
 		env := newBenchEnv(b)
 		queueURL := env.queue(c.kind)

@@ -75,9 +75,12 @@ func decodeBatch(vals url.Values) (entries, attributes int) {
 
 // BenchmarkDecodeBatch decodes SendMessageBatch forms of n entries. It checks
 // that the decode stays linear in the entries: the Decoder looks up a key below
-// another once per entry.
+// another once per entry. 10,000 entries are left out under the 10 ms rule
+// (docs/standards.md, "Benchmarks"): a decode took 26 ms, the fastest of three
+// runs at -benchtime=500ms on a darwin/arm64 laptop. The 100-fold step from 10
+// to 1000 still shows a decode that is not linear.
 func BenchmarkDecodeBatch(b *testing.B) {
-	for _, n := range []int{10, 1000, 10000} {
+	for _, n := range []int{10, 1000} {
 		vals := batchForm(n)
 
 		b.Run("entries="+strconv.Itoa(n), func(b *testing.B) {

@@ -177,6 +177,8 @@ func BenchmarkPutObjectNotified(b *testing.B) {
 				name := fmt.Sprintf("target=%s/payload=%s/concurrency=%d", target, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {
+					skipLeftOut(b)
+
 					s := notifiedServer(b, target)
 					body := bytes.Repeat([]byte("x"), payload.size)
 

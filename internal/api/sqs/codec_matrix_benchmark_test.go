@@ -165,10 +165,18 @@ func benchReceived(body string) *ReceiveMessageOutput {
 }
 
 // BenchmarkEncodeReceiveMessage writes a ReceiveMessage response of ten
-// messages, each of the payload's size.
+// messages, each of the payload's size. proto=query at payload=1MiB is left out
+// under the 10 ms rule (docs/standards.md, "Benchmarks"): the 10 MiB response
+// took 12.2 ms, the fastest of three runs at -benchtime=500ms on a darwin/arm64
+// laptop. proto=query at 64KiB is its widest cell under the limit, and
+// proto=json at 1MiB stays.
 func BenchmarkEncodeReceiveMessage(b *testing.B) {
 	for _, proto := range benchProtocols {
 		for _, payload := range benchPayloads {
+			if proto.name == "query" && payload.name == "1MiB" {
+				continue
+			}
+
 			out := benchReceived(benchBody(payload.bytes))
 			rc := &request.Context{Service: "sqs", Operation: "ReceiveMessage", Protocol: proto.kind, RequestID: "req-1"}
 
