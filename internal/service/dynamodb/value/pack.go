@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 	"unsafe"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
@@ -195,6 +196,80 @@ func (p Packed) Attrs(names []string) Item {
 	u := unpacker{s: string(p), i: p.header().body}
 
 	return u.object(len(names), names)
+}
+
+// Number returns the text of the attribute name of p when it is a number, and
+// false when p has no such attribute or it is of another type. For a name the
+// encoder writes without escapes it reads the json in place and allocates
+// nothing; another name is decoded as Attrs decodes it.
+func (p Packed) Number(name string) (string, bool) {
+	if p == "" {
+		return "", false
+	}
+
+	if !plainName(name) {
+		v, ok := p.Attrs([]string{name})[name]
+		if !ok || v.N == nil {
+			return "", false
+		}
+
+		return *v.N, true
+	}
+
+	h := p.header()
+	u := unpacker{s: string(p), i: h.body + 1} // {
+
+	if u.s[u.i] == '}' {
+		return "", false
+	}
+
+	for {
+		// A name written with an escape holds a backslash, which a plain
+		// name does not, so the bytes between the quotes compare as the name.
+		start := u.i + 1
+		u.skipString()
+		raw := u.s[start : u.i-1]
+		u.i++ // :
+
+		if raw == name {
+			return u.number()
+		}
+
+		u.skip()
+
+		if u.s[u.i] == '}' {
+			return "", false
+		}
+
+		u.i++ // ,
+	}
+}
+
+// plainName reports whether the encoder writes name between its quotes as it
+// is: valid UTF-8, and no quote, backslash or control byte to escape.
+func plainName(name string) bool {
+	for i := range len(name) {
+		if c := name[i]; c < ' ' || c == '"' || c == '\\' {
+			return false
+		}
+	}
+
+	return utf8.ValidString(name)
+}
+
+// number reads the attribute value at u.i when it is a number, whose text the
+// encoder writes without escapes.
+func (u *unpacker) number() (string, bool) {
+	const prefix = `{"N":"`
+
+	if !strings.HasPrefix(u.s[u.i:], prefix) {
+		return "", false
+	}
+
+	start := u.i + len(prefix)
+	end := start + strings.IndexByte(u.s[start:], '"')
+
+	return u.s[start:end], true
 }
 
 // maxDecoderChunk caps the strings a Decoder takes in one allocation.

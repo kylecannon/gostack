@@ -37,14 +37,14 @@ func Test_itemCodec_roundTrip(t *testing.T) {
 		require.NoError(t, value.ValidateItem(want))
 		require.Equal(t, want, got, text)
 
-		out, _ := appendItem(nil, got, nil)
+		out := appendItem(nil, got)
 		require.True(t, jsontext.Value(out).IsValid(), string(out))
 
 		again, err := p.parse(out)
 		require.NoError(t, err)
 		require.Equal(t, got, again)
 
-		twice, _ := appendItem(nil, again, nil)
+		twice := appendItem(nil, again)
 		require.Equal(t, string(out), string(twice))
 	}
 }
@@ -80,7 +80,7 @@ func FuzzItemParser(f *testing.F) {
 			require.NoError(t, json.Unmarshal(raw, &want), "parse took what json v2 refuses")
 			require.Equal(t, want, got)
 
-			out, _ := appendItem(nil, got, nil)
+			out := appendItem(nil, got)
 			again, err := newItemParser().parse(out)
 			require.NoError(t, err)
 			require.Equal(t, got, again)
@@ -154,7 +154,7 @@ func Test_itemCodec_deepest(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, value.ValidateItem(got))
 
-	out, _ := appendItem(nil, got, nil)
+	out := appendItem(nil, got)
 	require.Equal(t, text, string(out))
 }
 
