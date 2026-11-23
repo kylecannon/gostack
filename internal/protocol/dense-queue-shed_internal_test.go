@@ -41,7 +41,10 @@ func (q *queuedBody) start(ctx context.Context) <-chan error {
 	kept := make(chan func(), 1)
 
 	go func() {
-		answer <- WaitDense(ctx, q.n, func(release func()) { kept <- release }, q.try)
+		answer <- WaitDense(ctx, q.n, func(seat *DenseSeat) {
+			q.joined(seat)
+			kept <- seat.Release
+		}, q.try)
 	}()
 
 	q.release = <-kept
@@ -68,11 +71,16 @@ func Test_WaitDense_AQueuedBodysBytesAreAnotherRequests(t *testing.T) {
 	holder.giveBack()
 	require.NoError(t, <-answer, "the waiter is admitted once the lane is free")
 
+	heap.mu.Lock()
+	assert.Equal(t, int64(30), heap.reserved, "the admitted body's seat is the lane's reservation, reserved once")
+	assert.Zero(t, heap.queued, "and no longer the queue's")
+	heap.mu.Unlock()
+
 	waiter.release()
 	waiter.release()
 
 	heap.mu.Lock()
-	assert.Equal(t, int64(30), heap.reserved, "the admitted body holds its lane's reservation, and the queue's is gone")
+	assert.Zero(t, heap.reserved, "its request gives its bytes back once")
 	heap.mu.Unlock()
 
 	waiter.giveBack()
@@ -93,7 +101,7 @@ func Test_WaitDense_ABodyWhoseBytesDoNotFitIsNotQueued(t *testing.T) {
 	require.NoError(t, holder.try())
 
 	joined := false
-	err := WaitDense(t.Context(), 55, func(func()) { joined = true }, (&denseTurn{n: 55}).try)
+	err := WaitDense(t.Context(), 55, func(*DenseSeat) { joined = true }, (&denseTurn{n: 55}).try)
 	require.ErrorIs(t, err, ErrHeapBusy)
 	assert.False(t, joined, "it never joined")
 	assert.Zero(t, DenseQueued())
@@ -149,7 +157,7 @@ func Test_WaitDense_TheLaneHolderShedsAQueueThatTakesItsRoom(t *testing.T) {
 		"the holder is not admitted while the waiter's bytes are reserved")
 
 	late := &queuedBody{n: 5}
-	err := WaitDense(t.Context(), late.n, func(func()) { t.Error("no body joins while the queue is shed") }, late.try)
+	err := WaitDense(t.Context(), late.n, func(*DenseSeat) { t.Error("no body joins while the queue is shed") }, late.try)
 	require.ErrorIs(t, err, ErrHeapBusy, "a body that arrives while the queue is shed is answered busy")
 
 	answered.Store(true)
@@ -200,7 +208,7 @@ func Test_WaitDense_AHeadTryingWhenTheQueueIsShedIsShedWithIt(t *testing.T) {
 	headAnswer, headKept := make(chan error, 1), make(chan func(), 1)
 
 	go func() {
-		headAnswer <- WaitDense(t.Context(), 5, func(release func()) { headKept <- release }, headTry)
+		headAnswer <- WaitDense(t.Context(), 5, func(seat *DenseSeat) { headKept <- seat.Release }, headTry)
 	}()
 
 	headRelease := <-headKept
@@ -346,7 +354,7 @@ func Test_WaitDense_RacingShedsReleasesAndCancelsDrainTheQueue(t *testing.T) {
 
 			body := &denseTurn{n: 30}
 			release := func() {}
-			err := WaitDense(ctx, body.n, func(r func()) { release = r }, body.try)
+			err := WaitDense(ctx, body.n, func(seat *DenseSeat) { body.joined(seat); release = seat.Release }, body.try)
 
 			answers.Add(1)
 			// The request is answered after hold, and gives back the queue's

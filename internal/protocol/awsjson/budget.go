@@ -90,6 +90,10 @@ type reservations struct {
 	lane     func()
 	reserved []func()
 	moved    int64
+	// wait is the request's one deadline for the dense lane and the heap's
+	// room (protocol.WithDenseWait), from moveBody; cancel ends it at end.
+	wait   context.Context //nolint:containedctx // one request's, for its decoding only
+	cancel context.CancelFunc
 }
 
 // keep hands release, a heap reservation's, to the request's HeapKeeper, to
@@ -109,6 +113,10 @@ func (r *reservations) end() {
 
 	for _, release := range r.reserved {
 		release()
+	}
+
+	if r.cancel != nil {
+		r.cancel()
 	}
 }
 
@@ -142,7 +150,12 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 	// FreeDecode, so one charged past DecodeBudget has its heap bounded, and
 	// the walk moved its bytes at DecodeBudget.
 	if cost > protocol.DecodeBudget(len(body)) {
-		release, err := protocol.ReserveHeapBeside(heap+allocSize(p.heapSize), r.moved)
+		wait := r.wait
+		if wait == nil {
+			wait = context.Background()
+		}
+
+		release, err := protocol.ReserveHeapBesideContext(wait, heap+allocSize(p.heapSize), r.moved)
 
 		switch {
 		case errors.Is(err, protocol.ErrHeapBusy):
@@ -232,26 +245,9 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	n := int64(len(body))
 	peak := n + projectHeap(heap, read, len(body))
 
-	var lane, release func()
+	r.wait, r.cancel = protocol.WithDenseWait(waitContext(r.hold))
 
-	queued := false
-	try := func() error {
-		err := protocol.CheckHeapRoom(peak)
-		if err != nil {
-			return fmt.Errorf("weigh the room for %d bytes: %w", peak, err)
-		}
-
-		if !queued && protocol.BodiesWait(own) {
-			return errBusy
-		}
-
-		lane, release, err = protocol.TakeDenseLane(n, peak)
-		if err != nil {
-			return fmt.Errorf("take the dense lane for %d bytes: %w", peak, err)
-		}
-
-		return nil
-	}
+	d := &denseTry{wait: r.wait, n: n, peak: peak, own: own}
 
 	// A body that passes the room with nothing live is too large whatever
 	// waits ahead of it, so that is answered before the queue; in its turn the
@@ -261,18 +257,18 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	switch {
 	case own == 0:
 		if err == nil {
-			err = protocol.TryDense(try)
+			err = protocol.TryDense(d.try)
 		}
 	case err == nil || errors.Is(err, protocol.ErrHeapBusy):
 		// A body that joins the queue holds a heap reservation for its bytes
 		// from then on, and gives back the in-flight bound, so that what
 		// other requests' bodies wait for is free while it waits.
-		err = protocol.WaitDense(waitContext(r.hold), n, func(release func()) {
-			queued = true
+		err = protocol.WaitDense(r.wait, n, func(joined *protocol.DenseSeat) {
+			d.seat = joined
 
-			r.keep(release)
+			r.keep(joined.Release)
 			keeper.ReleasePool()
-		}, try)
+		}, d.try)
 	default: // too large: err is the answer
 	}
 
@@ -280,11 +276,58 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 		return moveRefusal(err)
 	}
 
-	r.lane, r.moved = lane, n
-	r.keep(release)
+	r.lane, r.moved = d.lane, n
+
+	if d.release != nil {
+		r.keep(d.release)
+	}
 
 	if keeps {
 		keeper.ReleasePool()
+	}
+
+	return nil
+}
+
+// denseTry is moveBody's try at the dense lane for a body of n bytes whose
+// decoding is projected to keep peak, under the request's one deadline, wait:
+// from its seat once it has joined the dense queue (protocol.DenseSeat), and
+// otherwise after the checks before the lane. lane and release are what it
+// took; a seat's reservation is kept when the body joins, so release is nil
+// then.
+type denseTry struct {
+	wait          context.Context //nolint:containedctx // the request's deadline (reservations.wait)
+	n, peak, own  int64
+	seat          *protocol.DenseSeat
+	lane, release func()
+}
+
+func (d *denseTry) try() error {
+	var err error
+
+	if d.seat != nil {
+		// Queued: the seat's reservation is the body's, and becomes the
+		// lane's.
+		d.lane, err = d.seat.TakeLane(d.wait, d.peak)
+		if err != nil {
+			return fmt.Errorf("take the dense lane for %d bytes from the queue: %w", d.peak, err)
+		}
+
+		return nil
+	}
+
+	err = protocol.CheckHeapRoom(d.peak)
+	if err != nil {
+		return fmt.Errorf("weigh the room for %d bytes: %w", d.peak, err)
+	}
+
+	if protocol.BodiesWait(d.own) {
+		return errBusy
+	}
+
+	d.lane, d.release, err = protocol.TakeDenseLaneContext(d.wait, d.n, d.peak)
+	if err != nil {
+		return fmt.Errorf("take the dense lane for %d bytes: %w", d.peak, err)
 	}
 
 	return nil

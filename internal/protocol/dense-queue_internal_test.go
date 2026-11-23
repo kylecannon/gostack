@@ -37,6 +37,7 @@ func emptyHeap(t *testing.T, wait time.Duration) {
 	heap.collect = func() {}
 	debug.SetMemoryLimit(bound + HeapSlack + emptyRoom)
 	SetDenseWait(wait)
+	checkSeats(t)
 
 	t.Cleanup(func() {
 		heap.read, heap.collect = read, collect
@@ -50,17 +51,43 @@ func emptyHeap(t *testing.T, wait time.Duration) {
 // the room with nothing live, then the lane with n reserved. What it took is
 // kept for the test to give back.
 type denseTurn struct {
-	n             int64
+	// n is the body's bytes, and peak what its decoding keeps, n included;
+	// zero is n.
+	n, peak int64
+	// hook, when not nil, runs first in each try.
+	hook func()
+	// seat is the body's in the queue once it joins (joined): it tries the
+	// lane from it, as the decoder does.
+	seat          *DenseSeat
 	lane, release func()
 }
 
+// joined takes the body's seat, as the decoder does when it joins the queue.
+func (d *denseTurn) joined(seat *DenseSeat) {
+	d.seat = seat
+}
+
 func (d *denseTurn) try() error {
-	err := CheckHeapRoom(d.n)
+	if d.hook != nil {
+		d.hook()
+	}
+
+	peak := max(d.peak, d.n)
+
+	if d.seat != nil {
+		var err error
+
+		d.lane, err = d.seat.TakeLane(context.Background(), peak)
+
+		return err
+	}
+
+	err := CheckHeapRoom(peak)
 	if err != nil {
 		return err
 	}
 
-	d.lane, d.release, err = TakeDenseLane(d.n, d.n)
+	d.lane, d.release, err = TakeDenseLane(d.n, peak)
 
 	return err
 }
@@ -68,7 +95,10 @@ func (d *denseTurn) try() error {
 // giveBack gives back the lane and the reservation the body took.
 func (d *denseTurn) giveBack() {
 	d.lane()
-	d.release()
+
+	if d.release != nil {
+		d.release()
+	}
 }
 
 // requireQueued waits until n bodies wait in the queue.
