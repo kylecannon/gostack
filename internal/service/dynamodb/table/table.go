@@ -333,7 +333,12 @@ func (t *Table) AddIndex(spec IndexSpec) {
 	names := keyNames(t.key, []IndexSpec{spec})
 
 	for _, hash := range t.primary.sortedKeys() {
-		for _, e := range t.primary.parts[hash].entries {
+		p := t.primary.parts[hash]
+		if p == nil {
+			continue // a delete emptied it; see store
+		}
+
+		for _, e := range p.entries {
 			keys := e.item.Attrs(names)
 			if ihash, isort, ok := indexKey(&spec, keys); ok {
 				idx.data.put(ihash, entry{sort: isort, tie: t.tie(keys), item: e.item})
