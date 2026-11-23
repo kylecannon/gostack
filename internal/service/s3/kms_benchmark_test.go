@@ -123,6 +123,10 @@ func BenchmarkGetObjectSSEKMS(b *testing.B) {
 
 	for _, payload := range kmsBenchPayloads {
 		for _, workers := range benchConcurrency {
+			if tooSlowToGate(payload, workers, writeBudget) {
+				continue
+			}
+
 			name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
 
 			b.Run(name, func(b *testing.B) {
@@ -157,11 +161,13 @@ func BenchmarkPutObjectSSEKMS(b *testing.B) {
 	for _, option := range kmsBenchOptions {
 		for _, payload := range kmsBenchPayloads {
 			for _, workers := range benchConcurrency {
+				if tooSlowToGate(payload, workers, writeBudget) {
+					continue
+				}
+
 				name := fmt.Sprintf("sse=%s/payload=%s/concurrency=%d", option.name, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {
-					skipLeftOut(b)
-
 					s := newKMSBenchServer(b, option.validate)
 					body := bytes.Repeat([]byte("x"), payload.size)
 

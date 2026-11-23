@@ -38,6 +38,10 @@ import (
 //     Body text changes only how json quotes a body on the way out; the
 //     ASCII cells measure every other path. The text cells are the non-ASCII
 //     and escape-dense bodies that quote differently from ASCII.
+//   - ReceiveMessage of ten messages at 1MiB, a call that returns 10 MiB:
+//     NUMBERS-PENDING. The 1MiB message received alone and ten of 64KiB stay,
+//     so the payload axis is covered by the widest cells under the limit
+//     (cellOpts.maxCallBytes).
 //   - Persistence is measured by the snapshot benchmarks, and the system bench
 //     runs the operations with PERSIST_SQS=1.
 
@@ -63,8 +67,9 @@ type cellOpts struct {
 	attrs   bool  // the attribute cells apply
 	texts   bool  // the text cells apply
 
-	// leftOut reports a cell the operation leaves out; nil leaves none out.
-	leftOut func(c cell) bool
+	// maxCallBytes, when above 0, leaves out the cells whose call returns more
+	// than that: max messages of the cell's payload.
+	maxCallBytes int
 }
 
 // name is the sub-benchmark name of a cell. The axes an operation does not have
@@ -112,17 +117,21 @@ func (o cellOpts) cells() []cell {
 
 	var out []cell
 
+	add := func(c cell) {
+		if o.maxCallBytes == 0 || c.max*c.payload.bytes <= o.maxCallBytes {
+			out = append(out, c)
+		}
+	}
+
 	for _, proto := range []string{protoJSONName, protoQueryName} {
 		for _, kind := range []queueKind{queueStandard, queueFIFO} {
 			for _, size := range maxes {
 				for _, payload := range o.payloads(kind) {
-					out = append(out, cell{proto: proto, kind: kind, payload: payload, max: size})
+					add(cell{proto: proto, kind: kind, payload: payload, max: size})
 				}
 
 				if o.attrs && kind == queueStandard {
-					out = append(out, cell{
-						proto: proto, kind: kind, payload: payload256B, max: size, attrs: benchMessageAttr,
-					})
+					add(cell{proto: proto, kind: kind, payload: payload256B, max: size, attrs: benchMessageAttr})
 				}
 			}
 		}
@@ -132,7 +141,7 @@ func (o cellOpts) cells() []cell {
 		for _, size := range maxes {
 			for _, payload := range allPayloads {
 				for _, text := range benchTexts {
-					out = append(out, cell{proto: protoJSONName, kind: queueStandard, payload: payload, max: size, text: text})
+					add(cell{proto: protoJSONName, kind: queueStandard, payload: payload, max: size, text: text})
 				}
 			}
 		}
@@ -146,10 +155,6 @@ func eachCell(b *testing.B, opts cellOpts, fn func(b *testing.B, c cell)) {
 	b.Helper()
 
 	for _, c := range opts.cells() {
-		if opts.leftOut != nil && opts.leftOut(c) {
-			continue
-		}
-
 		b.Run(c.name(opts), func(b *testing.B) { fn(b, c) })
 	}
 }
@@ -396,23 +401,19 @@ func receiveBody(c cell, queueURL string) *segmented {
 	return w.done()
 }
 
+// maxReceiveBytes is the most one ReceiveMessage cell returns in a call: ten
+// messages of 1MiB are over it, and ten of 64KiB under it.
+const maxReceiveBytes = 4 << 20
+
 // BenchmarkReceiveMessage receives from a queue that holds ten messages, with a
 // visibility timeout of 0, so that each call sees the same messages and the
 // queue never runs dry. A queue keeps every receipt handle it has issued for a
 // message until the message is deleted, so the queue is purged and filled again
 // every benchRefillCalls calls, with the timer stopped, and the memory of a cell
 // stays the same however long it runs.
-//
-// The cells that receive ten 1 MiB messages in one call are left out under the
-// 10 ms rule (docs/standards.md, "Benchmarks"): a call returns 10 MiB, and the
-// fastest of three runs at -benchtime=500ms on a darwin/arm64 laptop took 9.5 ms
-// (accents) to 23.8 ms (json text) in json and 12.3 to 12.8 ms in query. The
-// cells that receive one 1 MiB message and ten of 256 KiB stay, so the payload
-// axis is covered by the widest cells under the limit.
 func BenchmarkReceiveMessage(b *testing.B) {
 	opts := cellOpts{
-		payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch},
-		leftOut: func(c cell) bool { return c.max == benchBatch && c.payload.bytes >= 1<<20 },
+		payload: true, attrs: true, texts: true, maxes: []int{1, benchBatch}, maxCallBytes: maxReceiveBytes,
 	}
 	eachCell(b, opts, func(b *testing.B, c cell) {
 		env := newBenchEnv(b)

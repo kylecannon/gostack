@@ -16,8 +16,8 @@ import (
 // each spec at its own digest, and RSA_2048 in both padding schemes, which take
 // different code. Every payload runs only on one RSA, one NIST and the
 // secp256k1 cell; the others sign the small message alone. With
-// specConcurrency that is 33 cells per operation, so the package's matrix stays
-// inside make bench's timeout at -count=10.
+// specConcurrency that is 33 cells per operation (Sign leaves one out, below), so
+// the package's matrix stays inside make bench's timeout at -count=10.
 var signCells = []struct {
 	spec, algorithm string
 	payloads        []signPayload
@@ -46,28 +46,42 @@ var (
 )
 
 // specConcurrency is the cut of dataConcurrency per spec: 64 calls at once only
-// on the two fast curves, RSA_3072 and RSA_4096 one call at a time, since 16 of
-// their signing calls run under 50 iterations in a 500ms cell (RSA_3072 at 16
-// took 11.7 ms, the fastest of three runs at -benchtime=500ms on a darwin/arm64
-// laptop), and every other spec at 1 and 16.
+// on the two fast curves, RSA_4096 one call at a time, since 16 of its signing
+// calls run under 50 iterations in a 500ms cell, and every other spec at 1 and
+// 16.
 func specConcurrency(spec string) []int {
 	switch spec {
 	case eccP256, secgK1:
 		return dataConcurrency
-	case rsa3072, rsa4096:
+	case rsa4096:
 		return dataConcurrency[:1]
 	default:
 		return dataConcurrency[:2]
 	}
 }
 
-// runSignCells runs one sub-benchmark per Sign or Verify cell.
-func runSignCells(b *testing.B, run func(b *testing.B, spec, algorithm string, payload signPayload, workers int)) {
+// tooSlowToGate reports the Sign cells the 10 ms rule leaves out (docs/standards.md,
+// "Benchmarks"): NUMBERS-PENDING. Verify is a public-key operation and keeps every
+// cell.
+func tooSlowToGate(operation, spec string, workers int) bool {
+	return operation == "Sign" && spec == rsa3072 && workers > 1
+}
+
+// runSignCells runs one sub-benchmark per Sign or Verify cell of the operation.
+func runSignCells(
+	b *testing.B,
+	operation string,
+	run func(b *testing.B, spec, algorithm string, payload signPayload, workers int),
+) {
 	b.Helper()
 
 	for _, cell := range signCells {
 		for _, payload := range cell.payloads {
 			for _, workers := range specConcurrency(cell.spec) {
+				if tooSlowToGate(operation, cell.spec, workers) {
+					continue
+				}
+
 				b.Run(signCell(cell.spec, cell.algorithm, payload.name, workers), func(b *testing.B) {
 					run(b, cell.spec, cell.algorithm, payload, workers)
 				})
@@ -144,7 +158,7 @@ func signCell(spec, algorithm, payload string, workers int) string {
 // BenchmarkSign signs each cell's message, with that many calls at once on one
 // key.
 func BenchmarkSign(b *testing.B) {
-	runSignCells(b, func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
+	runSignCells(b, "Sign", func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
 		c := newBench(b)
 		body := signBody(c.asymmetricKey(spec, usageSignVerify), algorithm, payload.size) + "}"
 
@@ -160,7 +174,7 @@ func BenchmarkSign(b *testing.B) {
 // BenchmarkVerify verifies a signature of each cell's message, with that many
 // calls at once on one key.
 func BenchmarkVerify(b *testing.B) {
-	runSignCells(b, func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
+	runSignCells(b, "Verify", func(b *testing.B, spec, algorithm string, payload signPayload, workers int) {
 		c := newBench(b)
 		sign := signBody(c.asymmetricKey(spec, usageSignVerify), algorithm, payload.size)
 

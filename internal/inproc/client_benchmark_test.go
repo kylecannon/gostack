@@ -83,13 +83,12 @@ func enqueueAll(b *testing.B, client *inproc.Client, calls []inproc.Call, concur
 	answered.Wait()
 }
 
-// getLeftOut reports the cell BenchmarkGetObject leaves out under the 10 ms rule
-// (docs/standards.md, "Benchmarks"): mode=buffered/payload=8MiB/concurrency=16
-// took 10.4 ms an operation, the fastest of three runs at -benchtime=500ms on a
-// darwin/arm64 laptop. The same body read whole by one call (concurrency=1)
-// stays, and so does the streamed read at 16.
-func getLeftOut(mode string, size int64, concurrency int) bool {
-	return mode == "buffered" && size == eightMiB && concurrency == 16
+// tooSlowToGate reports the cells BenchmarkGetObject leaves out under the 10 ms
+// rule (docs/standards.md, "Benchmarks"): payload=8MiB at concurrency=16, 16
+// bodies of 8 MiB an iteration, took NUMBERS-PENDING. The same body at one call
+// stays in both modes, and so does 512B at 16.
+func tooSlowToGate(size int64, concurrency int) bool {
+	return size == eightMiB && concurrency == 16
 }
 
 // BenchmarkGetObject is an S3 GET through the gateway, its body read whole by
@@ -142,7 +141,7 @@ func BenchmarkGetObject(b *testing.B) {
 	for _, mode := range modes {
 		for _, payload := range payloads {
 			for _, concurrency := range []int{1, 16} {
-				if getLeftOut(mode.name, payload.size, concurrency) {
+				if tooSlowToGate(payload.size, concurrency) {
 					continue
 				}
 

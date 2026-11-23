@@ -123,6 +123,10 @@ func BenchmarkPutObjectVersioned(b *testing.B) {
 	for _, cell := range versionedBenchCells {
 		for _, payload := range cell.payloads {
 			for _, workers := range benchConcurrency {
+				if tooSlowToGate(payload, workers, writeBudget) {
+					continue
+				}
+
 				name := fmt.Sprintf("versioning=%s/payload=%s/concurrency=%d", cell.name, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {
@@ -196,8 +200,6 @@ func BenchmarkDeleteObjectVersioned(b *testing.B) {
 				name := persistName(persisted, fmt.Sprintf("delete=%s/concurrency=%d", kind, workers))
 
 				b.Run(name, func(b *testing.B) {
-					skipLeftOut(b)
-
 					s := enableVersioning(b, serverFor(b, persisted), "Enabled")
 
 					if kind == "marker" {

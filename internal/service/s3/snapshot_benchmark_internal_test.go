@@ -33,13 +33,12 @@ func snapshotBenchProvider(b *testing.B, objects int) *Provider {
 }
 
 // BenchmarkSnapshot measures a save and a load of S3's state by the number of
-// objects it holds. 10,000 objects are left out under the 10 ms rule
-// (docs/standards.md, "Benchmarks"): a snapshot took 32 ms and a restore 48 ms,
-// the fastest of three runs at -benchtime=500ms on a darwin/arm64 laptop. The
-// cost is linear in the count, and the widest cell under the limit stands for
-// the ladder.
+// objects it holds. The ladder stops at 1,000 objects under the 10 ms rule
+// (docs/standards.md, "Benchmarks"): with 10,000 a snapshot took NUMBERS-PENDING.
+// The cost is linear in the count, and the widest cell under the limit stands
+// for the ladder.
 func BenchmarkSnapshot(b *testing.B) {
-	for _, objects := range []int{250, 1_000} {
+	for _, objects := range []int{10, 1_000} {
 		p := snapshotBenchProvider(b, objects)
 
 		var saved bytes.Buffer
