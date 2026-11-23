@@ -118,6 +118,17 @@ func (rc *Context) PoolHeld() int64 {
 	return rc.decode.Held()
 }
 
+// WaitContext is protocol.DenseWaiter: the context of the call's request, which
+// ends a dense body's wait for its turn (protocol.WaitDense), or
+// context.Background for a Context with no request.
+func (rc *Context) WaitContext() context.Context {
+	if rc.Request == nil {
+		return context.Background()
+	}
+
+	return rc.Request.Context()
+}
+
 // ReleaseDecode gives back what HoldDecode charged to this Context's own hold,
 // for a request that carries no protocol.Charge. What a request with one holds
 // is given back by protocol.ReleaseBody, and by the gateway when the handler

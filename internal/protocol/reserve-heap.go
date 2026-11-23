@@ -47,8 +47,11 @@ var heap = struct {
 	// collection began says that what it found live is not overstated by a
 	// value whose reservation was given back after it was marked (heapFloor).
 	releases uint64
-	read     func() (objects, live int64) // readHeap; a test replaces it
-	collect  func()                       // runtime.GC; a test replaces it
+	// queue is the dense bodies waiting for the lane and the heap's room, in
+	// the order they arrived (WaitDense).
+	queue   []*denseWaiter
+	read    func() (objects, live int64) // readHeap; a test replaces it
+	collect func()                       // runtime.GC; a test replaces it
 }{
 	read:    readHeap,
 	collect: runtime.GC,
@@ -66,7 +69,8 @@ const (
 // ReserveHeapBeside reserves estimate bytes of heap for a decoding that keeps
 // at most that much at its peak, for a request that holds own bytes of what is
 // reserved already (the rest is other requests'), and returns the release that
-// gives them back. It reserves when the heap's objects now, what is reserved
+// gives them back and gives the dense queue's head its turn (WaitDense). It
+// reserves when the heap's objects now, what is reserved
 // already and estimate fit the room heapRoom weighs them against: the Go
 // memory limit (debug.SetMemoryLimit, which cmd/gostack sets from a
 // container's or a machine's memory), no more than the memory cap, less the
@@ -89,6 +93,7 @@ func ReserveHeapBeside(estimate, own int64) (release func(), err error) {
 		heap.mu.Lock()
 		heap.reserved -= estimate
 		heap.releases++
+		wakeHead()
 		heap.mu.Unlock()
 	}, nil
 }
@@ -346,13 +351,15 @@ var (
 // DecodeBudget, the only kind of body decoded off the in-flight bound, and
 // whose decoding is projected to keep peak, its own n bytes included: such a
 // body first takes the process's one dense lane, so at most one of them is
-// walked and decoded at a time and none waits for another. It fails, holding
+// walked and decoded at a time; TakeDenseLane itself never waits, and a body
+// that finds the lane taken waits its turn in WaitDense. It fails, holding
 // nothing, with ErrDenseLaneTaken when another body has the lane, and, as
 // heapVerdict answers, with ErrHeapBusy or ErrNoHeapRoom when the heap could
 // not hold peak beside what the last collection found live (weighHeap with
 // checkLive, which may collect, one lane holder at a time) or has no room for
 // n. Otherwise lane gives back the lane, which the decoder does as soon as
-// decoding returns, and runs once however often it is called; release gives
+// decoding returns, and runs once however often it is called, giving the
+// dense queue's head its turn; release gives
 // back the reservation, which lasts until the request is answered when a
 // HeapKeeper keeps it, so the lane bounds the decodes at once and the
 // reservation the heap.
@@ -374,7 +381,12 @@ func TakeDenseLane(n, peak int64) (lane, release func(), err error) {
 
 	var once sync.Once
 
-	return func() { once.Do(func() { denseLane.Store(false) }) }, release, nil
+	return func() {
+		once.Do(func() {
+			denseLane.Store(false)
+			wakeDense()
+		})
+	}, release, nil
 }
 
 // readHeap reads the heap's objects and what the last collection found live,

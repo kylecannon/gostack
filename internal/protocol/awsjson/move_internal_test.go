@@ -438,8 +438,11 @@ func withHeapRoom(t *testing.T, room int64) {
 }
 
 // Test_DecodeWithin_ADenseBodyThatFitsAloneIsThrottledBesideAnothersReservation:
-// a dense body that fits the heap's room alone, sent while an earlier dense
-// request is still answered and keeps its reservation and its value live, is
+// a dense body that fits the heap's room alone, of a request that holds none
+// of the in-flight bound and so does not wait in the dense queue
+// (Test_DecodeWithin_AChargedBodyWaitsForTheRoom has one that does), sent
+// while an earlier dense request is still answered and keeps its reservation
+// and its value live, is
 // answered with a throttle, which an SDK retries, not refused as too large;
 // once the earlier request is answered the same body is served. A reservation
 // held with nothing of it live, the lane given back, throttles it too.

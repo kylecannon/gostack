@@ -101,6 +101,16 @@ func (c *Charge) PoolHeld() int64 {
 	return held
 }
 
+// WaitContext is DenseWaiter: the request's context, or context.Background
+// for a Charge that WithCharge did not put on one.
+func (c *Charge) WaitContext() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+
+	return c.ctx
+}
+
 // Release gives back everything the request holds. The gateway calls it when
 // the handler returns.
 func (c *Charge) Release() {

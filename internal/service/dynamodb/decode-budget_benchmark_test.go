@@ -31,14 +31,13 @@ import (
 //
 //   - A body whose decoding passes protocol.DecodeBudget (passesBudget) is sent
 //     at concurrency 1 only. Such a body takes the process's one dense lane
-//     (protocol.TakeDenseLane): while one is walked and decoded, another that
-//     arrives is answered ThrottledJSON and does not wait for it. A cell that
-//     sends them together measures which worker won the lane and then fails on
-//     the throttle, and a retry would make sec/op a measure of luck and backoff,
-//     so there is none. The cells this left out are the PutItem 400 KB dense
-//     body and the 15 MB batch of dense items at concurrency 16 and 64. Fair
-//     admission of a dense body, one that waits for the lane in its turn,
-//     would bring them back.
+//     (protocol.TakeDenseLane), and another that arrives while one is walked and
+//     decoded waits its turn in the dense queue (protocol.WaitDense), so such
+//     cells would be served; none is under the time limit below, the smallest
+//     body past the budget taking 18 ms alone. The PutItem 400 KB dense body and
+//     the 15 MB batch of dense items at concurrency 16 and 64 are left out for
+//     it. The queue's own matrix is awsjson's BenchmarkDenseAdmission, on bodies
+//     small enough to fit the limit.
 //   - A cell whose slowest operation over three runs at the gate's benchtime
 //     passes 8 ms is left out, so that the gate makes at least 50 iterations
 //     (docs/standards.md, "Every feature ships its benchmark matrix");

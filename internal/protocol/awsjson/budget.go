@@ -2,10 +2,12 @@ package awsjson
 
 import (
 	"bytes"
+	"context"
 	"encoding"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"reflect"
@@ -183,12 +185,16 @@ var (
 // hold is a protocol.HeapKeeper, gives back what the body and its decoding
 // hold of the in-flight bound, so that the room other requests' bodies wait
 // for is free again as soon as it would be were the body refused. It fails,
-// holding what it held and without waiting, with errNoRoom when the heap
-// provably has no room with nothing other requests hold
-// (protocol.ErrNoHeapRoom), and with errBusy when another body has the lane or
-// the heap may have room once other requests are answered
-// (protocol.ErrHeapBusy). It fails with
-// errBusy too, before taking the lane, while any request would still wait for
+// holding what it held, with errNoRoom at once when the heap provably has no
+// room with nothing other requests hold (protocol.ErrNoHeapRoom). When another
+// body has the lane (protocol.ErrDenseLaneTaken) or the heap may have room once
+// other requests are answered (protocol.ErrHeapBusy), a body whose request
+// holds bytes of the in-flight bound waits its turn in the dense queue
+// (protocol.WaitDense), those bytes still charged, until the request's context
+// ends (protocol.DenseWaiter) or protocol.DefaultDenseWait passes, and then
+// fails with errBusy; one that holds none, which no bound counts while it
+// waits, fails with errBusy at once. It fails with
+// errBusy too, at once and before taking the lane, while any request would still wait for
 // room under the in-flight bound once the body gave back what it holds of it
 // (protocol.BodiesWait): the queue then drains one body at a time, and a
 // dense body walked and decoded beside it, or walked to its end only to be
@@ -215,16 +221,41 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	n := int64(len(body))
 	peak := n + projectHeap(heap, read, len(body))
 
+	var lane, release func()
+
+	try := func() error {
+		err := protocol.CheckHeapRoom(peak)
+		if err != nil {
+			return fmt.Errorf("weigh the room for %d bytes: %w", peak, err)
+		}
+
+		if protocol.BodiesWait(own) {
+			return errBusy
+		}
+
+		lane, release, err = protocol.TakeDenseLane(n, peak)
+		if err != nil {
+			return fmt.Errorf("take the dense lane for %d bytes: %w", peak, err)
+		}
+
+		return nil
+	}
+
+	// A body that passes the room with nothing live is too large whatever
+	// waits ahead of it, so that is answered before the queue; in its turn the
+	// body is weighed again, beside what is reserved then.
 	err := protocol.CheckHeapRoom(peak)
-	if err != nil {
-		return moveRefusal(err)
+
+	switch {
+	case own == 0:
+		if err == nil {
+			err = try()
+		}
+	case err == nil || errors.Is(err, protocol.ErrHeapBusy):
+		err = protocol.WaitDense(waitContext(r.hold), try)
+	default: // too large: err is the answer
 	}
 
-	if protocol.BodiesWait(own) {
-		return errBusy
-	}
-
-	lane, release, err := protocol.TakeDenseLane(n, peak)
 	if err != nil {
 		return moveRefusal(err)
 	}
@@ -240,14 +271,24 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 }
 
 // moveRefusal is moveBody's answer to a refusal of the lane or the heap:
-// errBusy for what other requests hold (protocol.ErrDenseLaneTaken,
-// protocol.ErrHeapBusy) and errNoRoom otherwise.
+// errBusy for what other requests hold or wait for (protocol.ErrDenseLaneTaken,
+// protocol.ErrHeapBusy, errBusy) and errNoRoom otherwise.
 func moveRefusal(err error) error {
-	if errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
+	if errors.Is(err, errBusy) || errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
 		return errBusy
 	}
 
 	return errNoRoom
+}
+
+// waitContext is the context that ends a dense body's wait in the queue: its
+// request's (protocol.DenseWaiter), or none for a hold that names none.
+func waitContext(hold protocol.DecodeHolder) context.Context {
+	if waiter, ok := hold.(protocol.DenseWaiter); ok {
+		return waiter.WaitContext()
+	}
+
+	return context.Background()
 }
 
 // projectHeap is the heap a walk of a body of n bytes ends at, were the rest
