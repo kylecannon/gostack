@@ -43,11 +43,37 @@ func Test_storedCharge_saturates(t *testing.T) {
 	require.Greater(t, int64(math.MaxUint32), int64(MaxBytes), "a saturated charge passes the byte bound")
 }
 
+// Test_log_saturatedChargeTrims: a record kept at the saturated charge trims
+// every older record, the next append trims it, and the shard's count comes
+// back to exactly what the records it holds were charged.
+func Test_log_saturatedChargeTrims(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := New(now, func() time.Time { return now })
+	defer l.Stop()
+
+	for range 3 {
+		l.Append(Record{Event: Insert, Keys: value.Item{"id": {S: new("k")}}, At: now})
+	}
+
+	small := l.bytes / 3
+
+	l.add(Record{Event: Insert, At: now, charge: math.MaxUint32})
+	require.Len(t, l.records, 1, "the saturated record trims every older one")
+	require.Equal(t, 4, l.records[0].Seq)
+	require.Equal(t, int64(math.MaxUint32), l.bytes)
+
+	l.Append(Record{Event: Insert, Keys: value.Item{"id": {S: new("k")}}, At: now})
+	require.Len(t, l.records, 1, "the next append trims the saturated record")
+	require.Equal(t, 5, l.records[0].Seq)
+	require.Equal(t, small, l.bytes, "trimming takes back what the saturated record was charged")
+}
+
 // Test_charge_largestRecord: the largest charge a stored item can bring is far
 // below where storedCharge saturates. The most heap an item holds for each
 // byte of its ItemSize is a list of empty strings or of empty maps, each
 // element counted a byte or four but pinning a list slot and a pointer or a
-// map. A record is its keys and at most two images, each at most
+// map; the list's array is taken at twice its length, the most append leaves
+// it. A record is its keys and at most two images, each at most
 // value.MaxItemSize, and the keys are part of an image, so three such images
 // bound it.
 func Test_charge_largestRecord(t *testing.T) {
@@ -60,7 +86,7 @@ func Test_charge_largestRecord(t *testing.T) {
 	}
 
 	for name, element := range dense {
-		list := make([]api.AttributeValue, elements)
+		list := make([]api.AttributeValue, elements, 2*elements)
 		for i := range list {
 			list[i] = element()
 		}

@@ -71,10 +71,11 @@ type Record struct {
 
 // storedCharge is a charge as a record keeps it, at most math.MaxUint32. That
 // is past MaxBytes, so a record charged it still trims every older record and
-// is trimmed by the next append, as its whole charge would be. No record comes
-// near it: the densest item value.MaxItemSize allows, a list of empty
-// strings, is charged about 176 bytes an ItemSize byte, so the largest record,
-// keys and two such images, about 206 MiB (Test_charge_largestRecord).
+// is trimmed by the next append, as its whole charge would be
+// (Test_log_saturatedChargeTrims). No record comes near it: the densest item
+// value.MaxItemSize allows, a list of empty strings whose array append has
+// doubled, is charged about 336 bytes an ItemSize byte, so the largest record,
+// keys and two such images, about 394 MiB (Test_charge_largestRecord).
 func storedCharge(charge int64) uint32 {
 	return uint32(min(charge, math.MaxUint32)) //nolint:gosec // G115: capped; a heap size is not negative.
 }
@@ -187,26 +188,7 @@ func (l *Log) ParseSequenceNumber(s string) (int, error) {
 // the byte bound is passed and arms the retention timer when none is armed.
 func (l *Log) Append(r Record) {
 	r.charge = storedCharge(Charge(&r))
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closed || l.next == math.MaxInt {
-		return
-	}
-
-	r.Seq = l.next
-	l.next++
-	l.records = append(l.records, r)
-	l.bytes += int64(r.charge)
-
-	for l.bytes > l.maxBytes && len(l.records) > 1 {
-		l.dropOldest()
-	}
-
-	if l.timer == nil && !l.stopped {
-		l.timer = time.AfterFunc(l.records[0].At.Add(l.retention).Sub(l.now()), l.expire)
-	}
+	l.add(r)
 }
 
 // Armed reports whether the retention timer is armed.
@@ -313,6 +295,29 @@ func (l *Log) Read(pos, limit int, maxBytes int64) (Page, error) {
 	next := pos + end - start
 
 	return Page{Records: records, Next: next, Done: l.closed && next == l.next}, nil
+}
+
+// add is Append for a record whose charge is set.
+func (l *Log) add(r Record) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.closed || l.next == math.MaxInt {
+		return
+	}
+
+	r.Seq = l.next
+	l.next++
+	l.records = append(l.records, r)
+	l.bytes += int64(r.charge)
+
+	for l.bytes > l.maxBytes && len(l.records) > 1 {
+		l.dropOldest()
+	}
+
+	if l.timer == nil && !l.stopped {
+		l.timer = time.AfterFunc(l.records[0].At.Add(l.retention).Sub(l.now()), l.expire)
+	}
 }
 
 // checkPosition is Position for a caller that holds mu.
