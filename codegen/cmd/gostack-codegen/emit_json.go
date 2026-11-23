@@ -30,7 +30,7 @@ func (g *generator) jsonFile() (string, error) {
 		p.f("// decode%sJSON reads the json body of a %s request, for a caller that has", name, name)
 		p.f("// the body alone. A call's own reader goes through decodeJSON.")
 		p.f("func decode%sJSON(body []byte) (*%s, *awserr.Error) {", name, in)
-		p.f("\treturn awsjson.Decode[%s](body)", in)
+		p.f("\treturn awsjson.Decode[%s](body%s)", in, g.decodeOptions())
 		p.f("}")
 		p.blank()
 	}

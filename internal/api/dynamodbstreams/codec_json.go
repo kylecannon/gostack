@@ -17,25 +17,25 @@ const (
 // decodeDescribeStreamJSON reads the json body of a DescribeStream request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeStreamJSON(body []byte) (*DescribeStreamInput, *awserr.Error) {
-	return awsjson.Decode[DescribeStreamInput](body)
+	return awsjson.Decode[DescribeStreamInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetRecordsJSON reads the json body of a GetRecords request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetRecordsJSON(body []byte) (*GetRecordsInput, *awserr.Error) {
-	return awsjson.Decode[GetRecordsInput](body)
+	return awsjson.Decode[GetRecordsInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetShardIteratorJSON reads the json body of a GetShardIterator request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetShardIteratorJSON(body []byte) (*GetShardIteratorInput, *awserr.Error) {
-	return awsjson.Decode[GetShardIteratorInput](body)
+	return awsjson.Decode[GetShardIteratorInput](body, awsjson.KeepNulls)
 }
 
 // decodeListStreamsJSON reads the json body of a ListStreams request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListStreamsJSON(body []byte) (*ListStreamsInput, *awserr.Error) {
-	return awsjson.Decode[ListStreamsInput](body)
+	return awsjson.Decode[ListStreamsInput](body, awsjson.KeepNulls)
 }
 
 // AppendJSON appends v as json, as encoding/json/v2 writes it.

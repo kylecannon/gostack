@@ -451,6 +451,17 @@ func (g *generator) jsonOverBody() string {
 	return "protocol.BodyTooLarge()"
 }
 
+// decodeOptions is the trailing argument list of an awsjson decode call: what
+// the service asks of the decode (serviceOptions.KeepNulls), with the comma that
+// opens it.
+func (g *generator) decodeOptions() string {
+	if g.opts.KeepNulls {
+		return ", awsjson.KeepNulls"
+	}
+
+	return ""
+}
+
 // emitDecodeJSON writes the function every operation's reader decodes a json
 // body with. It keeps the body on the request only when the lenient pass was
 // needed, the one case a handler reads it again (sentNumber in sqs).
@@ -468,7 +479,7 @@ func (g *generator) emitDecodeJSON(p *printer) {
 	}
 
 	p.f("func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {")
-	p.f("\tin, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)")
+	p.f("\tin, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc%s)", g.decodeOptions())
 
 	if g.opts.QueryOverBody {
 		p.f("\tif err == awsjson.ErrTooLarge {")

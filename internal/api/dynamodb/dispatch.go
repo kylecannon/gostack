@@ -2494,7 +2494,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 // more than the call's budget gets awsjson.ErrTooLarge. That is not the answer to a
 // body over protocol.MaxBody: the cap does not set the budget.
 func decodeJSON[T any](rc *request.Context, body []byte) (*T, *awserr.Error) {
-	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc)
+	in, lenient, err := awsjson.DecodeWithin[T](body, rc.DecodeBudget(len(body)), rc, awsjson.KeepNulls)
 	if lenient {
 		rc.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}

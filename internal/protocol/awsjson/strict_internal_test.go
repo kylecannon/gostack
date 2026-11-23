@@ -74,6 +74,21 @@ var strictSeeds = []string{
 	`{"Ints":[null],"Names":{"a":null},"Stamp":{"Count":"7","Tags":[null,"t"]}}`,
 	`{"Ints":[1,null,{}]}`,
 	`{"Names":{"a":null,"b":[1]}}`,
+	// A member that repeats: v2 adds a repeated map to the one it set and replaces
+	// a repeated list, with a null in the body, with the text null in a string
+	// only, and with a lenient scalar beside it.
+	`{"Names":{"a":"x"},"Names":{"b":"y"}}`,
+	`{"Names":{"a":"x"},"Names":{"b":"y"},"S":"null"}`,
+	`{"Names":{"a":"x"},"Names":{"b":"y"},"I":"5"}`,
+	`{"Names":{"a":"x","c":"z"},"Names":{"a":null,"b":"y"}}`,
+	`{"Names":{"a":"x"},"Names":null,"Names":{"b":"y"}}`,
+	`{"Ints":[1],"Ints":[2],"S":"null"}`,
+	`{"Ints":[1,null],"Ints":[null,2]}`,
+	`{"Ints":[1],"Ints":[null,"5"]}`,
+	// The text null in a string, and a null beside it.
+	`{"S":"null","Ints":[1,2]}`,
+	`{"S":"\"null\"","Ints":[null,2]}`,
+	`{"S":"a\\","Names":{"a":null}}`,
 }
 
 // lenientOnly decodes data the way every decode ran before strict came first.
@@ -129,14 +144,15 @@ func checkStrictAgrees(t *testing.T, data []byte) {
 }
 
 // same compares two decoded values by their json, so that NaN equals NaN,
-// while nil and empty slices, and -0 and 0, still differ.
+// while nil and empty slices, and -0 and 0, still differ. Map keys are written
+// in order, so a map of two entries has one json.
 func same(t *testing.T, want, got *strictAll, data []byte) {
 	t.Helper()
 
-	w, err := json.Marshal(want, lenient)
+	w, err := json.Marshal(want, lenient, json.Deterministic(true))
 	require.NoError(t, err)
 
-	g, err := json.Marshal(got, lenient)
+	g, err := json.Marshal(got, lenient, json.Deterministic(true))
 	require.NoError(t, err)
 	require.Equal(t, string(w), string(g), "%s", data)
 }

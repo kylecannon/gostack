@@ -37,18 +37,34 @@ var strict = json.JoinOptions(
 // The same goes for dropping the nulls of a list or map (nulls.go), which
 // lenient always does and strict does only for a body that holds a null
 // (strictFor).
-var lenient = json.JoinOptions(
-	strict,
-	json.WithMarshalers(json.MarshalToFunc(marshalNonFinite)),
-	json.WithUnmarshalers(json.JoinUnmarshalers(
-		nullDroppers,
+var lenient = lenientWith(nullDroppers)
+
+// lenientKeepNulls is lenient for a decode with KeepNulls: the same readers
+// without the droppers.
+var lenientKeepNulls = lenientWith(nil)
+
+// lenientWith is lenient with drop, when it is not nil, among its unmarshalers.
+//
+//nolint:ireturn // json.Options is the library's interface
+func lenientWith(drop *json.Unmarshalers) json.Options {
+	readers := []*json.Unmarshalers{
 		json.UnmarshalFromFunc(unmarshalNonFinite),
 		json.UnmarshalFromFunc(unmarshalInt32),
 		json.UnmarshalFromFunc(unmarshalInt64),
 		json.UnmarshalFromFunc(unmarshalBool),
 		json.UnmarshalFromFunc(unmarshalBlob),
-	)),
-)
+	}
+
+	if drop != nil {
+		readers = append([]*json.Unmarshalers{drop}, readers...)
+	}
+
+	return json.JoinOptions(
+		strict,
+		json.WithMarshalers(json.MarshalToFunc(marshalNonFinite)),
+		json.WithUnmarshalers(json.JoinUnmarshalers(readers...)),
+	)
+}
 
 // marshalNonFinite writes NaN and the infinities as their names, and leaves
 // every other float to the default encoding.
@@ -96,8 +112,8 @@ func unmarshalNonFinite(dec *jsontext.Decoder, f *float64) error {
 // Decode reads a json request body into a T. An empty body decodes to the
 // zero T, and members the type does not have are ignored. A body that is not
 // valid json gives a 400 SerializationException.
-func Decode[T any](body []byte) (*T, *awserr.Error) {
-	v, _, err := DecodeLenient[T](body)
+func Decode[T any](body []byte, opts ...DecodeOption) (*T, *awserr.Error) {
+	v, _, err := DecodeLenient[T](body, opts...)
 
 	return v, err
 }
@@ -106,19 +122,21 @@ func Decode[T any](body []byte) (*T, *awserr.Error) {
 // Python-style readers of lenient.go: only then can an integer have been
 // clamped to the int32 range, so only then does a caller that echoes the
 // number sent need the body afterwards.
-func DecodeLenient[T any](body []byte) (v *T, usedLenient bool, err *awserr.Error) {
+func DecodeLenient[T any](body []byte, opts ...DecodeOption) (v *T, usedLenient bool, err *awserr.Error) {
 	v = new(T)
 	if len(bytes.TrimSpace(body)) == 0 {
 		return v, false, nil
 	}
 
-	if json.Unmarshal(body, v, strictFor(body)) == nil {
+	first, second := passesFor(body, opts)
+
+	if json.Unmarshal(body, v, first) == nil {
 		return v, false, nil
 	}
 
 	// What the strict pass set is dropped: it can have stopped part way.
 	v = new(T)
-	if json.Unmarshal(body, v, lenient) != nil {
+	if json.Unmarshal(body, v, second) != nil {
 		return nil, true, &awserr.Error{
 			Code:       "SerializationException",
 			Message:    "Start of structure or map found where not expected.",
@@ -128,6 +146,17 @@ func DecodeLenient[T any](body []byte) (v *T, usedLenient bool, err *awserr.Erro
 	}
 
 	return v, true, nil
+}
+
+// passesFor is the settings of the strict pass and of the lenient one for body.
+//
+//nolint:ireturn // json.Options is the library's interface
+func passesFor(body []byte, opts []DecodeOption) (strictPass, lenientPass json.Options) {
+	if keepsNulls(opts) {
+		return strict, lenientKeepNulls
+	}
+
+	return strictFor(body), lenient
 }
 
 // Marshal returns v as json with the same settings Encode uses.

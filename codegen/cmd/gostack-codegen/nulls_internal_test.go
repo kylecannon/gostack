@@ -89,6 +89,26 @@ func Test_generated_collections_DropNulls(t *testing.T) {
 	assert.Positive(t, seen, "the json services have lists of strings")
 }
 
+// The services the LocalStack image tells a null from an absent entry for read
+// a null as v2 does; every other json service drops it (docs/compat.md, "JSON
+// null elements"). The generated decode of a service that keeps nulls passes
+// awsjson.KeepNulls.
+func Test_KeepNulls_is_set_for_the_services_that_tell_a_null_apart(t *testing.T) {
+	t.Parallel()
+
+	var kept []string
+
+	for name, opts := range serviceTable {
+		if opts.KeepNulls {
+			kept = append(kept, name)
+		}
+	}
+
+	assert.ElementsMatch(t, []string{"dynamodb", "dynamodbstreams", "kms"}, kept)
+	assert.Equal(t, ", awsjson.KeepNulls", (&generator{opts: serviceOptions{KeepNulls: true}}).decodeOptions())
+	assert.Empty(t, (&generator{}).decodeOptions())
+}
+
 // collectionOf splits the Go type of a list or map into its element type and
 // "list" or "map", or returns "" for the kind of any other type.
 func collectionOf(typ string) (elem, kind string) {

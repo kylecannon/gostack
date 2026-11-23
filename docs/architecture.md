@@ -516,9 +516,19 @@ written by hand.
   covers a list and a map of `string`, `int32`, `int64`, `float64`, `bool` and
   `[]byte`, every scalar element type the generator writes
   (`scalarTypes` in `model.go`); `Test_generated_collections_DropNulls` in
-  `codegen/cmd/gostack-codegen` fails when a generated list or map holds an
-  element type the decoder does not cover, or the generator gains a scalar
-  one. Choice and why:
+  `codegen/cmd/gostack-codegen` fails when a generated list or map of scalars
+  holds an element type the decoder does not cover, or the generator gains a
+  scalar one. The guard skips a collection of collections
+  (`map[string][]string`, `[]map[string]string`: SSM's `Parameters` and
+  `TargetMaps`, Secrets Manager's `VersionIdsToStages`): a null entry there
+  stays an entry holding a nil collection, as before, and the scalar list inside
+  one is covered through recursion. A map member that repeats adds to the map
+  the first one set, as v2 does (`Test_a_repeated_map_member_adds_to_the_map`).
+  A service whose real implementation tells a null from an absent entry decodes
+  as v2 does: `serviceOptions.KeepNulls` in the generator makes its generated
+  decode pass `awsjson.KeepNulls`. DynamoDB, DynamoDB Streams and KMS take it
+  (docs/compat.md, "JSON null elements", has the image's answers). Choice and
+  why:
   - **Drop (chosen).** botocore-generated clients never send a null element,
     and LocalStack drops it where it acts on one (the Secrets Manager
     provider), so dropping changes nothing a client or the parity suite sees.
@@ -532,12 +542,22 @@ written by hand.
     so. Unverified AWS behavior follows LocalStack (rule 3 under "Behavior
     the suite does not pin"), and a refusal could move a parity test from
     pass to fail if one sends a null.
-  - **Cost.** A body with no `null` byte decodes with the same options as
-    before. A body with one pays for the unmarshalers, which cost a lookup on
-    every value, as the lenient readers do. A list of structures keeps a null
-    as one empty structure, since every handler already refuses a structure
-    with its required members missing; a timestamp element is a pointer and
-    keeps a null as `nil`.
+  - **Cost.** A body with no json null outside a string decodes with the same
+    options as before. A body with one pays for the unmarshalers, which cost a
+    lookup on every value, as the lenient readers do. `hasNullToken` decides:
+    it looks for the text `null` eight bytes to a step (`indexNull`; arm64's
+    `bytes.Index` costs about as much as that on a small body), and places each
+    occurrence by the bytes around it, so that `null` inside a string, as in
+    a `MessageBody` that is json (`{\"a\":null}`), is not counted: no
+    delimiter follows or precedes it, or the quote before it is escaped, which
+    only a string has. It never says no for a body that has a null token, so
+    what it cannot place counts, and so do the occurrences past the eighth; a
+    body that defeats it pays what it paid before and no more. The benchmark
+    cells `CodecDecode/SendMessageJSONBody` and `...64KiB` in
+    `internal/protocol/awsjson` hold a null only inside a string. A list of
+    structures keeps a null as one empty structure, since every handler already
+    refuses a structure with its required members missing; a timestamp element
+    is a pointer and keeps a null as `nil`.
 - **Pre-encoded values:** a json service's `EncodedShapes` option in
   `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
   response can carry already encoded; DynamoDB names `AttributeMap`. Every

@@ -37,8 +37,11 @@ var ErrTooLarge = &awserr.Error{
 //
 // When hold is not nil, what both passes of a body that could decode into more
 // than protocol.FreeDecode would hold is charged to hold before decoding. When
-// hold refuses, DecodeWithin returns protocol.ThrottledJSON.
-func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) (*T, bool, *awserr.Error) {
+// hold refuses, DecodeWithin returns protocol.ThrottledJSON. opts are
+// DecodeLenient's.
+func DecodeWithin[T any](
+	body []byte, budget int64, hold protocol.DecodeHolder, opts ...DecodeOption,
+) (*T, bool, *awserr.Error) {
 	p := planOf(reflect.TypeFor[T]())
 
 	bound := decodePasses * int64(len(body)) * p.perByte
@@ -49,7 +52,7 @@ func DecodeWithin[T any](body []byte, budget int64, hold protocol.DecodeHolder) 
 		}
 	}
 
-	return DecodeLenient[T](body)
+	return DecodeLenient[T](body, opts...)
 }
 
 // chargeDecode refuses body with ErrTooLarge when decoding it as p plans it

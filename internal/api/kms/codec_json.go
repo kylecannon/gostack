@@ -17,319 +17,319 @@ const (
 // decodeCancelKeyDeletionJSON reads the json body of a CancelKeyDeletion request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCancelKeyDeletionJSON(body []byte) (*CancelKeyDeletionInput, *awserr.Error) {
-	return awsjson.Decode[CancelKeyDeletionInput](body)
+	return awsjson.Decode[CancelKeyDeletionInput](body, awsjson.KeepNulls)
 }
 
 // decodeConnectCustomKeyStoreJSON reads the json body of a ConnectCustomKeyStore request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeConnectCustomKeyStoreJSON(body []byte) (*ConnectCustomKeyStoreInput, *awserr.Error) {
-	return awsjson.Decode[ConnectCustomKeyStoreInput](body)
+	return awsjson.Decode[ConnectCustomKeyStoreInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateAliasJSON reads the json body of a CreateAlias request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateAliasJSON(body []byte) (*CreateAliasInput, *awserr.Error) {
-	return awsjson.Decode[CreateAliasInput](body)
+	return awsjson.Decode[CreateAliasInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateCustomKeyStoreJSON reads the json body of a CreateCustomKeyStore request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateCustomKeyStoreJSON(body []byte) (*CreateCustomKeyStoreInput, *awserr.Error) {
-	return awsjson.Decode[CreateCustomKeyStoreInput](body)
+	return awsjson.Decode[CreateCustomKeyStoreInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateGrantJSON reads the json body of a CreateGrant request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateGrantJSON(body []byte) (*CreateGrantInput, *awserr.Error) {
-	return awsjson.Decode[CreateGrantInput](body)
+	return awsjson.Decode[CreateGrantInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateKeyJSON reads the json body of a CreateKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateKeyJSON(body []byte) (*CreateKeyInput, *awserr.Error) {
-	return awsjson.Decode[CreateKeyInput](body)
+	return awsjson.Decode[CreateKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeDecryptJSON reads the json body of a Decrypt request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDecryptJSON(body []byte) (*DecryptInput, *awserr.Error) {
-	return awsjson.Decode[DecryptInput](body)
+	return awsjson.Decode[DecryptInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteAliasJSON reads the json body of a DeleteAlias request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteAliasJSON(body []byte) (*DeleteAliasInput, *awserr.Error) {
-	return awsjson.Decode[DeleteAliasInput](body)
+	return awsjson.Decode[DeleteAliasInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteCustomKeyStoreJSON reads the json body of a DeleteCustomKeyStore request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteCustomKeyStoreJSON(body []byte) (*DeleteCustomKeyStoreInput, *awserr.Error) {
-	return awsjson.Decode[DeleteCustomKeyStoreInput](body)
+	return awsjson.Decode[DeleteCustomKeyStoreInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteImportedKeyMaterialJSON reads the json body of a DeleteImportedKeyMaterial request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteImportedKeyMaterialJSON(body []byte) (*DeleteImportedKeyMaterialInput, *awserr.Error) {
-	return awsjson.Decode[DeleteImportedKeyMaterialInput](body)
+	return awsjson.Decode[DeleteImportedKeyMaterialInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeriveSharedSecretJSON reads the json body of a DeriveSharedSecret request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeriveSharedSecretJSON(body []byte) (*DeriveSharedSecretInput, *awserr.Error) {
-	return awsjson.Decode[DeriveSharedSecretInput](body)
+	return awsjson.Decode[DeriveSharedSecretInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeCustomKeyStoresJSON reads the json body of a DescribeCustomKeyStores request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeCustomKeyStoresJSON(body []byte) (*DescribeCustomKeyStoresInput, *awserr.Error) {
-	return awsjson.Decode[DescribeCustomKeyStoresInput](body)
+	return awsjson.Decode[DescribeCustomKeyStoresInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeKeyJSON reads the json body of a DescribeKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeKeyJSON(body []byte) (*DescribeKeyInput, *awserr.Error) {
-	return awsjson.Decode[DescribeKeyInput](body)
+	return awsjson.Decode[DescribeKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeDisableKeyJSON reads the json body of a DisableKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDisableKeyJSON(body []byte) (*DisableKeyInput, *awserr.Error) {
-	return awsjson.Decode[DisableKeyInput](body)
+	return awsjson.Decode[DisableKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeDisableKeyRotationJSON reads the json body of a DisableKeyRotation request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDisableKeyRotationJSON(body []byte) (*DisableKeyRotationInput, *awserr.Error) {
-	return awsjson.Decode[DisableKeyRotationInput](body)
+	return awsjson.Decode[DisableKeyRotationInput](body, awsjson.KeepNulls)
 }
 
 // decodeDisconnectCustomKeyStoreJSON reads the json body of a DisconnectCustomKeyStore request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDisconnectCustomKeyStoreJSON(body []byte) (*DisconnectCustomKeyStoreInput, *awserr.Error) {
-	return awsjson.Decode[DisconnectCustomKeyStoreInput](body)
+	return awsjson.Decode[DisconnectCustomKeyStoreInput](body, awsjson.KeepNulls)
 }
 
 // decodeEnableKeyJSON reads the json body of a EnableKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeEnableKeyJSON(body []byte) (*EnableKeyInput, *awserr.Error) {
-	return awsjson.Decode[EnableKeyInput](body)
+	return awsjson.Decode[EnableKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeEnableKeyRotationJSON reads the json body of a EnableKeyRotation request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeEnableKeyRotationJSON(body []byte) (*EnableKeyRotationInput, *awserr.Error) {
-	return awsjson.Decode[EnableKeyRotationInput](body)
+	return awsjson.Decode[EnableKeyRotationInput](body, awsjson.KeepNulls)
 }
 
 // decodeEncryptJSON reads the json body of a Encrypt request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeEncryptJSON(body []byte) (*EncryptInput, *awserr.Error) {
-	return awsjson.Decode[EncryptInput](body)
+	return awsjson.Decode[EncryptInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateDataKeyJSON reads the json body of a GenerateDataKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateDataKeyJSON(body []byte) (*GenerateDataKeyInput, *awserr.Error) {
-	return awsjson.Decode[GenerateDataKeyInput](body)
+	return awsjson.Decode[GenerateDataKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateDataKeyPairJSON reads the json body of a GenerateDataKeyPair request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateDataKeyPairJSON(body []byte) (*GenerateDataKeyPairInput, *awserr.Error) {
-	return awsjson.Decode[GenerateDataKeyPairInput](body)
+	return awsjson.Decode[GenerateDataKeyPairInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateDataKeyPairWithoutPlaintextJSON reads the json body of a GenerateDataKeyPairWithoutPlaintext request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateDataKeyPairWithoutPlaintextJSON(body []byte) (*GenerateDataKeyPairWithoutPlaintextInput, *awserr.Error) {
-	return awsjson.Decode[GenerateDataKeyPairWithoutPlaintextInput](body)
+	return awsjson.Decode[GenerateDataKeyPairWithoutPlaintextInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateDataKeyWithoutPlaintextJSON reads the json body of a GenerateDataKeyWithoutPlaintext request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateDataKeyWithoutPlaintextJSON(body []byte) (*GenerateDataKeyWithoutPlaintextInput, *awserr.Error) {
-	return awsjson.Decode[GenerateDataKeyWithoutPlaintextInput](body)
+	return awsjson.Decode[GenerateDataKeyWithoutPlaintextInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateMacJSON reads the json body of a GenerateMac request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateMacJSON(body []byte) (*GenerateMacInput, *awserr.Error) {
-	return awsjson.Decode[GenerateMacInput](body)
+	return awsjson.Decode[GenerateMacInput](body, awsjson.KeepNulls)
 }
 
 // decodeGenerateRandomJSON reads the json body of a GenerateRandom request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGenerateRandomJSON(body []byte) (*GenerateRandomInput, *awserr.Error) {
-	return awsjson.Decode[GenerateRandomInput](body)
+	return awsjson.Decode[GenerateRandomInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetKeyPolicyJSON reads the json body of a GetKeyPolicy request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetKeyPolicyJSON(body []byte) (*GetKeyPolicyInput, *awserr.Error) {
-	return awsjson.Decode[GetKeyPolicyInput](body)
+	return awsjson.Decode[GetKeyPolicyInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetKeyRotationStatusJSON reads the json body of a GetKeyRotationStatus request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetKeyRotationStatusJSON(body []byte) (*GetKeyRotationStatusInput, *awserr.Error) {
-	return awsjson.Decode[GetKeyRotationStatusInput](body)
+	return awsjson.Decode[GetKeyRotationStatusInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetParametersForImportJSON reads the json body of a GetParametersForImport request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetParametersForImportJSON(body []byte) (*GetParametersForImportInput, *awserr.Error) {
-	return awsjson.Decode[GetParametersForImportInput](body)
+	return awsjson.Decode[GetParametersForImportInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetPublicKeyJSON reads the json body of a GetPublicKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetPublicKeyJSON(body []byte) (*GetPublicKeyInput, *awserr.Error) {
-	return awsjson.Decode[GetPublicKeyInput](body)
+	return awsjson.Decode[GetPublicKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeImportKeyMaterialJSON reads the json body of a ImportKeyMaterial request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeImportKeyMaterialJSON(body []byte) (*ImportKeyMaterialInput, *awserr.Error) {
-	return awsjson.Decode[ImportKeyMaterialInput](body)
+	return awsjson.Decode[ImportKeyMaterialInput](body, awsjson.KeepNulls)
 }
 
 // decodeListAliasesJSON reads the json body of a ListAliases request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListAliasesJSON(body []byte) (*ListAliasesInput, *awserr.Error) {
-	return awsjson.Decode[ListAliasesInput](body)
+	return awsjson.Decode[ListAliasesInput](body, awsjson.KeepNulls)
 }
 
 // decodeListGrantsJSON reads the json body of a ListGrants request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListGrantsJSON(body []byte) (*ListGrantsInput, *awserr.Error) {
-	return awsjson.Decode[ListGrantsInput](body)
+	return awsjson.Decode[ListGrantsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListKeyPoliciesJSON reads the json body of a ListKeyPolicies request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListKeyPoliciesJSON(body []byte) (*ListKeyPoliciesInput, *awserr.Error) {
-	return awsjson.Decode[ListKeyPoliciesInput](body)
+	return awsjson.Decode[ListKeyPoliciesInput](body, awsjson.KeepNulls)
 }
 
 // decodeListKeyRotationsJSON reads the json body of a ListKeyRotations request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListKeyRotationsJSON(body []byte) (*ListKeyRotationsInput, *awserr.Error) {
-	return awsjson.Decode[ListKeyRotationsInput](body)
+	return awsjson.Decode[ListKeyRotationsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListKeysJSON reads the json body of a ListKeys request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListKeysJSON(body []byte) (*ListKeysInput, *awserr.Error) {
-	return awsjson.Decode[ListKeysInput](body)
+	return awsjson.Decode[ListKeysInput](body, awsjson.KeepNulls)
 }
 
 // decodeListResourceTagsJSON reads the json body of a ListResourceTags request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListResourceTagsJSON(body []byte) (*ListResourceTagsInput, *awserr.Error) {
-	return awsjson.Decode[ListResourceTagsInput](body)
+	return awsjson.Decode[ListResourceTagsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListRetirableGrantsJSON reads the json body of a ListRetirableGrants request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListRetirableGrantsJSON(body []byte) (*ListRetirableGrantsInput, *awserr.Error) {
-	return awsjson.Decode[ListRetirableGrantsInput](body)
+	return awsjson.Decode[ListRetirableGrantsInput](body, awsjson.KeepNulls)
 }
 
 // decodePutKeyPolicyJSON reads the json body of a PutKeyPolicy request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodePutKeyPolicyJSON(body []byte) (*PutKeyPolicyInput, *awserr.Error) {
-	return awsjson.Decode[PutKeyPolicyInput](body)
+	return awsjson.Decode[PutKeyPolicyInput](body, awsjson.KeepNulls)
 }
 
 // decodeReEncryptJSON reads the json body of a ReEncrypt request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeReEncryptJSON(body []byte) (*ReEncryptInput, *awserr.Error) {
-	return awsjson.Decode[ReEncryptInput](body)
+	return awsjson.Decode[ReEncryptInput](body, awsjson.KeepNulls)
 }
 
 // decodeReplicateKeyJSON reads the json body of a ReplicateKey request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeReplicateKeyJSON(body []byte) (*ReplicateKeyInput, *awserr.Error) {
-	return awsjson.Decode[ReplicateKeyInput](body)
+	return awsjson.Decode[ReplicateKeyInput](body, awsjson.KeepNulls)
 }
 
 // decodeRetireGrantJSON reads the json body of a RetireGrant request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeRetireGrantJSON(body []byte) (*RetireGrantInput, *awserr.Error) {
-	return awsjson.Decode[RetireGrantInput](body)
+	return awsjson.Decode[RetireGrantInput](body, awsjson.KeepNulls)
 }
 
 // decodeRevokeGrantJSON reads the json body of a RevokeGrant request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeRevokeGrantJSON(body []byte) (*RevokeGrantInput, *awserr.Error) {
-	return awsjson.Decode[RevokeGrantInput](body)
+	return awsjson.Decode[RevokeGrantInput](body, awsjson.KeepNulls)
 }
 
 // decodeRotateKeyOnDemandJSON reads the json body of a RotateKeyOnDemand request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeRotateKeyOnDemandJSON(body []byte) (*RotateKeyOnDemandInput, *awserr.Error) {
-	return awsjson.Decode[RotateKeyOnDemandInput](body)
+	return awsjson.Decode[RotateKeyOnDemandInput](body, awsjson.KeepNulls)
 }
 
 // decodeScheduleKeyDeletionJSON reads the json body of a ScheduleKeyDeletion request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeScheduleKeyDeletionJSON(body []byte) (*ScheduleKeyDeletionInput, *awserr.Error) {
-	return awsjson.Decode[ScheduleKeyDeletionInput](body)
+	return awsjson.Decode[ScheduleKeyDeletionInput](body, awsjson.KeepNulls)
 }
 
 // decodeSignJSON reads the json body of a Sign request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeSignJSON(body []byte) (*SignInput, *awserr.Error) {
-	return awsjson.Decode[SignInput](body)
+	return awsjson.Decode[SignInput](body, awsjson.KeepNulls)
 }
 
 // decodeTagResourceJSON reads the json body of a TagResource request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeTagResourceJSON(body []byte) (*TagResourceInput, *awserr.Error) {
-	return awsjson.Decode[TagResourceInput](body)
+	return awsjson.Decode[TagResourceInput](body, awsjson.KeepNulls)
 }
 
 // decodeUntagResourceJSON reads the json body of a UntagResource request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUntagResourceJSON(body []byte) (*UntagResourceInput, *awserr.Error) {
-	return awsjson.Decode[UntagResourceInput](body)
+	return awsjson.Decode[UntagResourceInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateAliasJSON reads the json body of a UpdateAlias request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateAliasJSON(body []byte) (*UpdateAliasInput, *awserr.Error) {
-	return awsjson.Decode[UpdateAliasInput](body)
+	return awsjson.Decode[UpdateAliasInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateCustomKeyStoreJSON reads the json body of a UpdateCustomKeyStore request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateCustomKeyStoreJSON(body []byte) (*UpdateCustomKeyStoreInput, *awserr.Error) {
-	return awsjson.Decode[UpdateCustomKeyStoreInput](body)
+	return awsjson.Decode[UpdateCustomKeyStoreInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateKeyDescriptionJSON reads the json body of a UpdateKeyDescription request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateKeyDescriptionJSON(body []byte) (*UpdateKeyDescriptionInput, *awserr.Error) {
-	return awsjson.Decode[UpdateKeyDescriptionInput](body)
+	return awsjson.Decode[UpdateKeyDescriptionInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdatePrimaryRegionJSON reads the json body of a UpdatePrimaryRegion request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdatePrimaryRegionJSON(body []byte) (*UpdatePrimaryRegionInput, *awserr.Error) {
-	return awsjson.Decode[UpdatePrimaryRegionInput](body)
+	return awsjson.Decode[UpdatePrimaryRegionInput](body, awsjson.KeepNulls)
 }
 
 // decodeVerifyJSON reads the json body of a Verify request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeVerifyJSON(body []byte) (*VerifyInput, *awserr.Error) {
-	return awsjson.Decode[VerifyInput](body)
+	return awsjson.Decode[VerifyInput](body, awsjson.KeepNulls)
 }
 
 // decodeVerifyMacJSON reads the json body of a VerifyMac request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeVerifyMacJSON(body []byte) (*VerifyMacInput, *awserr.Error) {
-	return awsjson.Decode[VerifyMacInput](body)
+	return awsjson.Decode[VerifyMacInput](body, awsjson.KeepNulls)
 }
 
 // AppendJSON appends v as json, as encoding/json/v2 writes it.

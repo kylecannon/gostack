@@ -17,343 +17,343 @@ const (
 // decodeBatchExecuteStatementJSON reads the json body of a BatchExecuteStatement request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeBatchExecuteStatementJSON(body []byte) (*BatchExecuteStatementInput, *awserr.Error) {
-	return awsjson.Decode[BatchExecuteStatementInput](body)
+	return awsjson.Decode[BatchExecuteStatementInput](body, awsjson.KeepNulls)
 }
 
 // decodeBatchGetItemJSON reads the json body of a BatchGetItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeBatchGetItemJSON(body []byte) (*BatchGetItemInput, *awserr.Error) {
-	return awsjson.Decode[BatchGetItemInput](body)
+	return awsjson.Decode[BatchGetItemInput](body, awsjson.KeepNulls)
 }
 
 // decodeBatchWriteItemJSON reads the json body of a BatchWriteItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeBatchWriteItemJSON(body []byte) (*BatchWriteItemInput, *awserr.Error) {
-	return awsjson.Decode[BatchWriteItemInput](body)
+	return awsjson.Decode[BatchWriteItemInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateBackupJSON reads the json body of a CreateBackup request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateBackupJSON(body []byte) (*CreateBackupInput, *awserr.Error) {
-	return awsjson.Decode[CreateBackupInput](body)
+	return awsjson.Decode[CreateBackupInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateGlobalTableJSON reads the json body of a CreateGlobalTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateGlobalTableJSON(body []byte) (*CreateGlobalTableInput, *awserr.Error) {
-	return awsjson.Decode[CreateGlobalTableInput](body)
+	return awsjson.Decode[CreateGlobalTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeCreateTableJSON reads the json body of a CreateTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeCreateTableJSON(body []byte) (*CreateTableInput, *awserr.Error) {
-	return awsjson.Decode[CreateTableInput](body)
+	return awsjson.Decode[CreateTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteBackupJSON reads the json body of a DeleteBackup request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteBackupJSON(body []byte) (*DeleteBackupInput, *awserr.Error) {
-	return awsjson.Decode[DeleteBackupInput](body)
+	return awsjson.Decode[DeleteBackupInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteItemJSON reads the json body of a DeleteItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteItemJSON(body []byte) (*DeleteItemInput, *awserr.Error) {
-	return awsjson.Decode[DeleteItemInput](body)
+	return awsjson.Decode[DeleteItemInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteResourcePolicyJSON reads the json body of a DeleteResourcePolicy request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteResourcePolicyJSON(body []byte) (*DeleteResourcePolicyInput, *awserr.Error) {
-	return awsjson.Decode[DeleteResourcePolicyInput](body)
+	return awsjson.Decode[DeleteResourcePolicyInput](body, awsjson.KeepNulls)
 }
 
 // decodeDeleteTableJSON reads the json body of a DeleteTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDeleteTableJSON(body []byte) (*DeleteTableInput, *awserr.Error) {
-	return awsjson.Decode[DeleteTableInput](body)
+	return awsjson.Decode[DeleteTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeBackupJSON reads the json body of a DescribeBackup request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeBackupJSON(body []byte) (*DescribeBackupInput, *awserr.Error) {
-	return awsjson.Decode[DescribeBackupInput](body)
+	return awsjson.Decode[DescribeBackupInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeContinuousBackupsJSON reads the json body of a DescribeContinuousBackups request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeContinuousBackupsJSON(body []byte) (*DescribeContinuousBackupsInput, *awserr.Error) {
-	return awsjson.Decode[DescribeContinuousBackupsInput](body)
+	return awsjson.Decode[DescribeContinuousBackupsInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeContributorInsightsJSON reads the json body of a DescribeContributorInsights request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeContributorInsightsJSON(body []byte) (*DescribeContributorInsightsInput, *awserr.Error) {
-	return awsjson.Decode[DescribeContributorInsightsInput](body)
+	return awsjson.Decode[DescribeContributorInsightsInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeEndpointsJSON reads the json body of a DescribeEndpoints request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeEndpointsJSON(body []byte) (*DescribeEndpointsInput, *awserr.Error) {
-	return awsjson.Decode[DescribeEndpointsInput](body)
+	return awsjson.Decode[DescribeEndpointsInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeExportJSON reads the json body of a DescribeExport request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeExportJSON(body []byte) (*DescribeExportInput, *awserr.Error) {
-	return awsjson.Decode[DescribeExportInput](body)
+	return awsjson.Decode[DescribeExportInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeGlobalTableJSON reads the json body of a DescribeGlobalTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeGlobalTableJSON(body []byte) (*DescribeGlobalTableInput, *awserr.Error) {
-	return awsjson.Decode[DescribeGlobalTableInput](body)
+	return awsjson.Decode[DescribeGlobalTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeGlobalTableSettingsJSON reads the json body of a DescribeGlobalTableSettings request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeGlobalTableSettingsJSON(body []byte) (*DescribeGlobalTableSettingsInput, *awserr.Error) {
-	return awsjson.Decode[DescribeGlobalTableSettingsInput](body)
+	return awsjson.Decode[DescribeGlobalTableSettingsInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeImportJSON reads the json body of a DescribeImport request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeImportJSON(body []byte) (*DescribeImportInput, *awserr.Error) {
-	return awsjson.Decode[DescribeImportInput](body)
+	return awsjson.Decode[DescribeImportInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeKinesisStreamingDestinationJSON reads the json body of a DescribeKinesisStreamingDestination request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeKinesisStreamingDestinationJSON(body []byte) (*DescribeKinesisStreamingDestinationInput, *awserr.Error) {
-	return awsjson.Decode[DescribeKinesisStreamingDestinationInput](body)
+	return awsjson.Decode[DescribeKinesisStreamingDestinationInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeLimitsJSON reads the json body of a DescribeLimits request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeLimitsJSON(body []byte) (*DescribeLimitsInput, *awserr.Error) {
-	return awsjson.Decode[DescribeLimitsInput](body)
+	return awsjson.Decode[DescribeLimitsInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeTableJSON reads the json body of a DescribeTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeTableJSON(body []byte) (*DescribeTableInput, *awserr.Error) {
-	return awsjson.Decode[DescribeTableInput](body)
+	return awsjson.Decode[DescribeTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeTableReplicaAutoScalingJSON reads the json body of a DescribeTableReplicaAutoScaling request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeTableReplicaAutoScalingJSON(body []byte) (*DescribeTableReplicaAutoScalingInput, *awserr.Error) {
-	return awsjson.Decode[DescribeTableReplicaAutoScalingInput](body)
+	return awsjson.Decode[DescribeTableReplicaAutoScalingInput](body, awsjson.KeepNulls)
 }
 
 // decodeDescribeTimeToLiveJSON reads the json body of a DescribeTimeToLive request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDescribeTimeToLiveJSON(body []byte) (*DescribeTimeToLiveInput, *awserr.Error) {
-	return awsjson.Decode[DescribeTimeToLiveInput](body)
+	return awsjson.Decode[DescribeTimeToLiveInput](body, awsjson.KeepNulls)
 }
 
 // decodeDisableKinesisStreamingDestinationJSON reads the json body of a DisableKinesisStreamingDestination request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeDisableKinesisStreamingDestinationJSON(body []byte) (*KinesisStreamingDestinationInput, *awserr.Error) {
-	return awsjson.Decode[KinesisStreamingDestinationInput](body)
+	return awsjson.Decode[KinesisStreamingDestinationInput](body, awsjson.KeepNulls)
 }
 
 // decodeEnableKinesisStreamingDestinationJSON reads the json body of a EnableKinesisStreamingDestination request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeEnableKinesisStreamingDestinationJSON(body []byte) (*KinesisStreamingDestinationInput, *awserr.Error) {
-	return awsjson.Decode[KinesisStreamingDestinationInput](body)
+	return awsjson.Decode[KinesisStreamingDestinationInput](body, awsjson.KeepNulls)
 }
 
 // decodeExecuteStatementJSON reads the json body of a ExecuteStatement request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeExecuteStatementJSON(body []byte) (*ExecuteStatementInput, *awserr.Error) {
-	return awsjson.Decode[ExecuteStatementInput](body)
+	return awsjson.Decode[ExecuteStatementInput](body, awsjson.KeepNulls)
 }
 
 // decodeExecuteTransactionJSON reads the json body of a ExecuteTransaction request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeExecuteTransactionJSON(body []byte) (*ExecuteTransactionInput, *awserr.Error) {
-	return awsjson.Decode[ExecuteTransactionInput](body)
+	return awsjson.Decode[ExecuteTransactionInput](body, awsjson.KeepNulls)
 }
 
 // decodeExportTableToPointInTimeJSON reads the json body of a ExportTableToPointInTime request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeExportTableToPointInTimeJSON(body []byte) (*ExportTableToPointInTimeInput, *awserr.Error) {
-	return awsjson.Decode[ExportTableToPointInTimeInput](body)
+	return awsjson.Decode[ExportTableToPointInTimeInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetItemJSON reads the json body of a GetItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetItemJSON(body []byte) (*GetItemInput, *awserr.Error) {
-	return awsjson.Decode[GetItemInput](body)
+	return awsjson.Decode[GetItemInput](body, awsjson.KeepNulls)
 }
 
 // decodeGetResourcePolicyJSON reads the json body of a GetResourcePolicy request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeGetResourcePolicyJSON(body []byte) (*GetResourcePolicyInput, *awserr.Error) {
-	return awsjson.Decode[GetResourcePolicyInput](body)
+	return awsjson.Decode[GetResourcePolicyInput](body, awsjson.KeepNulls)
 }
 
 // decodeImportTableJSON reads the json body of a ImportTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeImportTableJSON(body []byte) (*ImportTableInput, *awserr.Error) {
-	return awsjson.Decode[ImportTableInput](body)
+	return awsjson.Decode[ImportTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeListBackupsJSON reads the json body of a ListBackups request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListBackupsJSON(body []byte) (*ListBackupsInput, *awserr.Error) {
-	return awsjson.Decode[ListBackupsInput](body)
+	return awsjson.Decode[ListBackupsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListContributorInsightsJSON reads the json body of a ListContributorInsights request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListContributorInsightsJSON(body []byte) (*ListContributorInsightsInput, *awserr.Error) {
-	return awsjson.Decode[ListContributorInsightsInput](body)
+	return awsjson.Decode[ListContributorInsightsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListExportsJSON reads the json body of a ListExports request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListExportsJSON(body []byte) (*ListExportsInput, *awserr.Error) {
-	return awsjson.Decode[ListExportsInput](body)
+	return awsjson.Decode[ListExportsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListGlobalTablesJSON reads the json body of a ListGlobalTables request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListGlobalTablesJSON(body []byte) (*ListGlobalTablesInput, *awserr.Error) {
-	return awsjson.Decode[ListGlobalTablesInput](body)
+	return awsjson.Decode[ListGlobalTablesInput](body, awsjson.KeepNulls)
 }
 
 // decodeListImportsJSON reads the json body of a ListImports request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListImportsJSON(body []byte) (*ListImportsInput, *awserr.Error) {
-	return awsjson.Decode[ListImportsInput](body)
+	return awsjson.Decode[ListImportsInput](body, awsjson.KeepNulls)
 }
 
 // decodeListTablesJSON reads the json body of a ListTables request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListTablesJSON(body []byte) (*ListTablesInput, *awserr.Error) {
-	return awsjson.Decode[ListTablesInput](body)
+	return awsjson.Decode[ListTablesInput](body, awsjson.KeepNulls)
 }
 
 // decodeListTagsOfResourceJSON reads the json body of a ListTagsOfResource request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeListTagsOfResourceJSON(body []byte) (*ListTagsOfResourceInput, *awserr.Error) {
-	return awsjson.Decode[ListTagsOfResourceInput](body)
+	return awsjson.Decode[ListTagsOfResourceInput](body, awsjson.KeepNulls)
 }
 
 // decodePutItemJSON reads the json body of a PutItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodePutItemJSON(body []byte) (*PutItemInput, *awserr.Error) {
-	return awsjson.Decode[PutItemInput](body)
+	return awsjson.Decode[PutItemInput](body, awsjson.KeepNulls)
 }
 
 // decodePutResourcePolicyJSON reads the json body of a PutResourcePolicy request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodePutResourcePolicyJSON(body []byte) (*PutResourcePolicyInput, *awserr.Error) {
-	return awsjson.Decode[PutResourcePolicyInput](body)
+	return awsjson.Decode[PutResourcePolicyInput](body, awsjson.KeepNulls)
 }
 
 // decodeQueryJSON reads the json body of a Query request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeQueryJSON(body []byte) (*QueryInput, *awserr.Error) {
-	return awsjson.Decode[QueryInput](body)
+	return awsjson.Decode[QueryInput](body, awsjson.KeepNulls)
 }
 
 // decodeRestoreTableFromBackupJSON reads the json body of a RestoreTableFromBackup request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeRestoreTableFromBackupJSON(body []byte) (*RestoreTableFromBackupInput, *awserr.Error) {
-	return awsjson.Decode[RestoreTableFromBackupInput](body)
+	return awsjson.Decode[RestoreTableFromBackupInput](body, awsjson.KeepNulls)
 }
 
 // decodeRestoreTableToPointInTimeJSON reads the json body of a RestoreTableToPointInTime request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeRestoreTableToPointInTimeJSON(body []byte) (*RestoreTableToPointInTimeInput, *awserr.Error) {
-	return awsjson.Decode[RestoreTableToPointInTimeInput](body)
+	return awsjson.Decode[RestoreTableToPointInTimeInput](body, awsjson.KeepNulls)
 }
 
 // decodeScanJSON reads the json body of a Scan request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeScanJSON(body []byte) (*ScanInput, *awserr.Error) {
-	return awsjson.Decode[ScanInput](body)
+	return awsjson.Decode[ScanInput](body, awsjson.KeepNulls)
 }
 
 // decodeTagResourceJSON reads the json body of a TagResource request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeTagResourceJSON(body []byte) (*TagResourceInput, *awserr.Error) {
-	return awsjson.Decode[TagResourceInput](body)
+	return awsjson.Decode[TagResourceInput](body, awsjson.KeepNulls)
 }
 
 // decodeTransactGetItemsJSON reads the json body of a TransactGetItems request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeTransactGetItemsJSON(body []byte) (*TransactGetItemsInput, *awserr.Error) {
-	return awsjson.Decode[TransactGetItemsInput](body)
+	return awsjson.Decode[TransactGetItemsInput](body, awsjson.KeepNulls)
 }
 
 // decodeTransactWriteItemsJSON reads the json body of a TransactWriteItems request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeTransactWriteItemsJSON(body []byte) (*TransactWriteItemsInput, *awserr.Error) {
-	return awsjson.Decode[TransactWriteItemsInput](body)
+	return awsjson.Decode[TransactWriteItemsInput](body, awsjson.KeepNulls)
 }
 
 // decodeUntagResourceJSON reads the json body of a UntagResource request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUntagResourceJSON(body []byte) (*UntagResourceInput, *awserr.Error) {
-	return awsjson.Decode[UntagResourceInput](body)
+	return awsjson.Decode[UntagResourceInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateContinuousBackupsJSON reads the json body of a UpdateContinuousBackups request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateContinuousBackupsJSON(body []byte) (*UpdateContinuousBackupsInput, *awserr.Error) {
-	return awsjson.Decode[UpdateContinuousBackupsInput](body)
+	return awsjson.Decode[UpdateContinuousBackupsInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateContributorInsightsJSON reads the json body of a UpdateContributorInsights request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateContributorInsightsJSON(body []byte) (*UpdateContributorInsightsInput, *awserr.Error) {
-	return awsjson.Decode[UpdateContributorInsightsInput](body)
+	return awsjson.Decode[UpdateContributorInsightsInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateGlobalTableJSON reads the json body of a UpdateGlobalTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateGlobalTableJSON(body []byte) (*UpdateGlobalTableInput, *awserr.Error) {
-	return awsjson.Decode[UpdateGlobalTableInput](body)
+	return awsjson.Decode[UpdateGlobalTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateGlobalTableSettingsJSON reads the json body of a UpdateGlobalTableSettings request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateGlobalTableSettingsJSON(body []byte) (*UpdateGlobalTableSettingsInput, *awserr.Error) {
-	return awsjson.Decode[UpdateGlobalTableSettingsInput](body)
+	return awsjson.Decode[UpdateGlobalTableSettingsInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateItemJSON reads the json body of a UpdateItem request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateItemJSON(body []byte) (*UpdateItemInput, *awserr.Error) {
-	return awsjson.Decode[UpdateItemInput](body)
+	return awsjson.Decode[UpdateItemInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateKinesisStreamingDestinationJSON reads the json body of a UpdateKinesisStreamingDestination request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateKinesisStreamingDestinationJSON(body []byte) (*UpdateKinesisStreamingDestinationInput, *awserr.Error) {
-	return awsjson.Decode[UpdateKinesisStreamingDestinationInput](body)
+	return awsjson.Decode[UpdateKinesisStreamingDestinationInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateTableJSON reads the json body of a UpdateTable request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateTableJSON(body []byte) (*UpdateTableInput, *awserr.Error) {
-	return awsjson.Decode[UpdateTableInput](body)
+	return awsjson.Decode[UpdateTableInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateTableReplicaAutoScalingJSON reads the json body of a UpdateTableReplicaAutoScaling request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateTableReplicaAutoScalingJSON(body []byte) (*UpdateTableReplicaAutoScalingInput, *awserr.Error) {
-	return awsjson.Decode[UpdateTableReplicaAutoScalingInput](body)
+	return awsjson.Decode[UpdateTableReplicaAutoScalingInput](body, awsjson.KeepNulls)
 }
 
 // decodeUpdateTimeToLiveJSON reads the json body of a UpdateTimeToLive request, for a caller that has
 // the body alone. A call's own reader goes through decodeJSON.
 func decodeUpdateTimeToLiveJSON(body []byte) (*UpdateTimeToLiveInput, *awserr.Error) {
-	return awsjson.Decode[UpdateTimeToLiveInput](body)
+	return awsjson.Decode[UpdateTimeToLiveInput](body, awsjson.KeepNulls)
 }
 
 // AppendJSON appends v as json, as encoding/json/v2 writes it.

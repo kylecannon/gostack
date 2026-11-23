@@ -35,6 +35,14 @@ const (
 	benchBody     = "a message body of a typical, unremarkable length for a test queue"
 )
 
+// benchJSONMessage is a message body that is json, with nulls in it.
+const benchJSONMessage = `{"event":"order.created","id":null,"items":[null,{"sku":"a-1","qty":2}],"note":null}`
+
+// benchBigJSONMessage is a json message body of about 64 KiB, with nulls in it.
+func benchBigJSONMessage() string {
+	return `{"rows":[` + strings.Repeat(`{"k":null,"v":"0123456789abcdef"},`, 64<<10/36) + `null]}`
+}
+
 type decodeFixture struct {
 	name string
 	body []byte
@@ -64,6 +72,21 @@ func benchDecodeFixtures() []decodeFixture {
 			name: "SendMessage",
 			body: []byte(`{"QueueUrl":"` + benchQueueURL + `","MessageBody":"` + benchBody + `","DelaySeconds":0,` +
 				`"MessageAttributes":` + benchAttrsJSON(0) + `}`),
+			newV: func() any { return new(sqs.SendMessageInput) },
+		},
+		// A message body that is json itself holds the text null, and the request
+		// holds no json null: the decode must not pay for dropping one
+		// (hasNullToken).
+		{
+			name: "SendMessageJSONBody",
+			body: []byte(`{"QueueUrl":"` + benchQueueURL + `","MessageBody":` + strconv.Quote(benchJSONMessage) +
+				`,"DelaySeconds":0,"MessageAttributes":` + benchAttrsJSON(0) + `}`),
+			newV: func() any { return new(sqs.SendMessageInput) },
+		},
+		{
+			name: "SendMessageJSONBody64KiB",
+			body: []byte(`{"QueueUrl":"` + benchQueueURL + `","MessageBody":` + strconv.Quote(benchBigJSONMessage()) +
+				`,"DelaySeconds":0}`),
 			newV: func() any { return new(sqs.SendMessageInput) },
 		},
 		{

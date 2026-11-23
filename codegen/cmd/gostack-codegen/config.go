@@ -56,6 +56,13 @@ type serviceOptions struct {
 	// that holds awsjson.Encoded in place of each such value. A json service
 	// only; a shape no member reaches fails generation.
 	EncodedShapes []string
+	// KeepNulls makes the json decode read a null in a list or map of scalars as
+	// encoding/json/v2 does, as the zero value, instead of leaving it out
+	// (awsjson.KeepNulls). A service takes it where the real one tells a null from
+	// an absent entry, which dropping cannot express: DynamoDB's own messages for
+	// a null name, set member or attribute value, and KMS's CreateGrant Operations
+	// check (docs/compat.md, "Null elements").
+	KeepNulls bool
 	// Validation gives every operation input a Validate method that checks the
 	// model traits its Checks list and answers every failure at once in AWS's
 	// "N validation errors detected" message. The generated dispatch never
@@ -127,6 +134,7 @@ var serviceTable = map[string]serviceOptions{
 	},
 	"sts": {},
 	"dynamodb": {
+		KeepNulls: true,
 		// An AttributeValue sets exactly one of its members, which the model
 		// does not say: DynamoDB answers a ValidationException for none or two.
 		UnionShapes: []string{"AttributeValue"},
@@ -140,7 +148,7 @@ var serviceTable = map[string]serviceOptions{
 			"UpdateKinesisStreamingConfiguration.ApproximateCreationDateTimePrecision": checkEnum,
 		}},
 	},
-	"dynamodbstreams": {},
+	"dynamodbstreams": {KeepNulls: true},
 	// test_sns.py's platform-application and message-attribute snapshots
 	// answer ValidationError, the query form of the code.
 	"sns": {Validation: &validation{
@@ -157,7 +165,7 @@ var serviceTable = map[string]serviceOptions{
 			"MessageAttributeValue.DataType": checkRequired,
 		},
 	}},
-	"kms": {Validation: &validation{Checks: map[string]check{
+	"kms": {KeepNulls: true, Validation: &validation{Checks: map[string]check{
 		// test_kms.py::TestKMS::test_generate_random_invalid_number_of_bytes[0]
 		// and [1025].
 		"GenerateRandomRequest.NumberOfBytes": checkMin | checkMax,

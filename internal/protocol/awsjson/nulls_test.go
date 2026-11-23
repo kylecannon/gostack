@@ -45,7 +45,28 @@ func Test_Decode_NullElementsAcrossJSONProtocols(t *testing.T) {
 	require.Nil(t, failure)
 	assert.Equal(t, []string{"All"}, sq.AttributeNames)
 
-	enc, failure := awsjson.Decode[kms.EncryptInput]([]byte(`{"EncryptionContext":{"drop":null,"keep":"v","empty":""}}`))
+	sm, failure := awsjson.Decode[secretsmanager.PutSecretValueInput]([]byte(`{"VersionStages":[null,"AWSCURRENT"]}`))
 	require.Nil(t, failure)
-	assert.Equal(t, map[string]string{"keep": "v", "empty": ""}, enc.EncryptionContext)
+	assert.Equal(t, []string{"AWSCURRENT"}, sm.VersionStages)
+
+	attrs, failure := awsjson.Decode[sqs.SetQueueAttributesInput](
+		[]byte(`{"Attributes":{"drop":null,"keep":"v","empty":""}}`))
+	require.Nil(t, failure)
+	assert.Equal(t, map[string]string{"keep": "v", "empty": ""}, attrs.Attributes)
+}
+
+// A service whose real implementation tells a null apart decodes with
+// awsjson.KeepNulls, as the generated dispatch of DynamoDB, DynamoDB Streams
+// and KMS does, and keeps the zero value v2 reads.
+func Test_Decode_KeepNullsOfAGeneratedInput(t *testing.T) {
+	t.Parallel()
+
+	enc, failure := awsjson.Decode[kms.EncryptInput](
+		[]byte(`{"EncryptionContext":{"k":null,"keep":"v"}}`), awsjson.KeepNulls)
+	require.Nil(t, failure)
+	assert.Equal(t, map[string]string{"k": "", "keep": "v"}, enc.EncryptionContext)
+
+	grant, failure := awsjson.Decode[kms.CreateGrantInput]([]byte(`{"Operations":[null]}`), awsjson.KeepNulls)
+	require.Nil(t, failure)
+	assert.Equal(t, []string{""}, grant.Operations)
 }
