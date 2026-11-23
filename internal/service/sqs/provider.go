@@ -91,9 +91,11 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mount:    p.mount,
 		Mutating: mutating,
-		Shutdown: p.Shutdown,
-		Persist:  p,
-		Reset:    p.Reset,
+		// The developer API is not a routing hook: see DeveloperMount.
+		DeveloperMount: p.mountDeveloperAPI,
+		Shutdown:       p.Shutdown,
+		Persist:        p,
+		Reset:          p.Reset,
 		// Stopping the move tasks waits for the message each one is moving, which
 		// no context can cut short, so the budget does not reach Close.
 		Close:   func(context.Context) { p.Close() },

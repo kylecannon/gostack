@@ -15,6 +15,7 @@ import (
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/gateway"
 	"github.com/kylecannon/gostack/internal/service"
+	"github.com/kylecannon/gostack/internal/service/sns/envelope"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,24 +101,17 @@ func FuzzRegionOfToken(f *testing.F) {
 	})
 }
 
-func Test_Provider_subscriptionTokens(t *testing.T) {
-	tests := []struct {
-		name     string
-		settings Settings
-		prefix   string
-		want     int
-	}{
-		{name: "canonical", prefix: developerCanonicalPrefix, want: http.StatusOK},
-		{name: "compat", prefix: developerCompatPrefix, want: http.StatusOK},
-		{
-			name: "compat off", settings: Settings{DisableCompatPaths: true},
-			prefix: developerCompatPrefix, want: http.StatusNotFound,
-		},
-	}
+// The prefixes the gateway scopes the developer mount to. Test_Provider_
+// developerRoutes_compatPaths checks the gateway's own choice of them.
+const (
+	developerCanonicalPrefix = "/_gostack/services/sns"
+	developerCompatPrefix    = "/_aws/sns"
+)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := New(func() Settings { return tt.settings }, nil)
+func Test_Provider_subscriptionTokens(t *testing.T) {
+	for _, prefix := range []string{developerCanonicalPrefix, developerCompatPrefix} {
+		t.Run(prefix, func(t *testing.T) {
+			p := New(nil, nil)
 			st := p.regions.Get("000000000000", "us-east-1")
 			topic := &Topic{ARN: "arn:aws:sns:us-east-1:000000000000:t"}
 			sub := &Subscription{
@@ -130,34 +124,33 @@ func Test_Provider_subscriptionTokens(t *testing.T) {
 			st.mu.Unlock()
 
 			r := chi.NewRouter()
-			p.mountDeveloperAPI(r)
+			r.Route(prefix, p.mountDeveloperAPI)
 
-			status, body := get(t, r, tt.prefix+subscriptionTokensPath+"/"+sub.ARN)
-			require.Equal(t, tt.want, status, body)
+			status, body := get(t, r, prefix+subscriptionTokensPath+"/"+sub.ARN)
+			require.Equal(t, http.StatusOK, status, body)
+			assert.Equal(t, map[string]string{"subscription_token": sub.Token, keySubscriptionARN: sub.ARN}, body)
 
-			if tt.want == http.StatusOK {
-				assert.Equal(t, map[string]string{"subscription_token": sub.Token, keySubscriptionARN: sub.ARN}, body)
+			other := strings.Replace(sub.ARN, "us-east-1", "il-central-1", 1)
+			status, body = get(t, r, prefix+subscriptionTokensPath+"/"+other)
+			assert.Equal(t, http.StatusNotFound, status)
+			assert.Equal(t, map[string]string{
+				"error": "The provided SubscriptionARN is not found", keySubscriptionARN: other,
+			}, body)
 
-				other := strings.Replace(sub.ARN, "us-east-1", "il-central-1", 1)
-				status, body = get(t, r, tt.prefix+subscriptionTokensPath+"/"+other)
-				assert.Equal(t, http.StatusNotFound, status)
-				assert.Equal(t, map[string]string{
-					"error": "The provided SubscriptionARN is not found", keySubscriptionARN: other,
-				}, body)
-
-				status, body = get(t, r, tt.prefix+subscriptionTokensPath+"/randomarnhere")
-				assert.Equal(t, http.StatusBadRequest, status)
-				assert.Equal(t, map[string]string{
-					"error": "The provided SubscriptionARN is invalid", keySubscriptionARN: "randomarnhere",
-				}, body)
-			}
+			status, body = get(t, r, prefix+subscriptionTokensPath+"/randomarnhere")
+			assert.Equal(t, http.StatusBadRequest, status)
+			assert.Equal(t, map[string]string{
+				"error": "The provided SubscriptionARN is invalid", keySubscriptionARN: "randomarnhere",
+			}, body)
 		})
 	}
 }
 
-// Test_Provider_developerRoutes_compatPaths: every developer route answers under
-// /_gostack/services whatever the settings say, and under /_aws only while
-// GOSTACK_COMPAT_PATHS has not turned the LocalStack names off.
+// Test_Provider_developerRoutes_compatPaths: through the real gateway, every
+// developer route answers under /_gostack/services/sns whatever
+// GOSTACK_COMPAT_PATHS says, and under /_aws/sns only while it has not turned
+// the LocalStack names off. The signing certificate, which lives under /_aws/sns
+// too but is a protocol path, answers either way.
 func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{http.MethodGet, subscriptionTokensPath + "/randomarnhere"},
@@ -169,22 +162,36 @@ func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
 	}
 
 	for _, disabled := range []bool{false, true} {
-		p := New(func() Settings { return Settings{DisableCompatPaths: disabled} }, nil)
-		r := chi.NewRouter()
-		p.mountDeveloperAPI(r)
+		p := New(nil, nil)
+		g, err := gateway.New(func() gateway.Settings {
+			return gateway.Settings{Listen: []string{"0.0.0.0:4566"}, DisableCompatPaths: disabled}
+		}, []service.Registration{p.Registration()}, p.MountProtocol, nil)
+		require.NoError(t, err)
+
+		h := g.Handler()
+		send := func(method, path string) (int, string) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader("{}")))
+
+			return w.Code, w.Body.String()
+		}
 
 		for _, route := range routes {
 			for _, prefix := range []string{developerCanonicalPrefix, developerCompatPrefix} {
-				w := httptest.NewRecorder()
-				r.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), route.method, prefix+route.path,
-					strings.NewReader("{}")))
+				// A path that no route takes goes to the gateway's AWS handling.
+				// The same path under a prefix no service has shows what that
+				// answers, so a route is mounted when its answer differs.
+				code, body := send(route.method, prefix+route.path)
+				unroutedCode, unroutedBody := send(route.method, strings.Replace(prefix, "/sns", "/nosuchservice", 1)+route.path)
+				mounted := code != unroutedCode || body != unroutedBody
 
-				// An unmounted path gets the router's own "404 page not found".
-				unmounted := w.Code == http.StatusNotFound && w.Body.String() == "404 page not found\n"
-				assert.Equal(t, disabled && prefix == developerCompatPrefix, unmounted,
-					"%s %s%s compat paths disabled=%v answered %d", route.method, prefix, route.path, disabled, w.Code)
+				assert.Equal(t, !disabled || prefix == developerCanonicalPrefix, mounted,
+					"%s %s%s compat paths disabled=%v answered %d", route.method, prefix, route.path, disabled, code)
 			}
 		}
+
+		code, _ := send(http.MethodGet, envelope.CertPath)
+		assert.Equal(t, http.StatusOK, code, "the certificate with compat paths disabled=%v", disabled)
 	}
 }
 
@@ -194,7 +201,7 @@ func Test_Provider_developerRoutes_compatPaths(t *testing.T) {
 func Test_Provider_confirmByToken(t *testing.T) {
 	p := New(nil, nil)
 	reg := p.Registration()
-	reg.Mount = p.mountDeveloperAPI
+	reg.DeveloperMount = p.mountDeveloperAPI
 
 	g, err := gateway.New(func() gateway.Settings { return gateway.Settings{Listen: []string{"0.0.0.0:4566"}} },
 		[]service.Registration{reg}, nil, nil)

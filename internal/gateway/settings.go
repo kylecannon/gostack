@@ -17,6 +17,13 @@ type Settings struct {
 	// certificate and its key. Empty means a generated self-signed certificate.
 	CustomSSLCertPath string
 
+	// DisableCompatPaths is GOSTACK_COMPAT_PATHS=0: a service's developer
+	// endpoints (Registration.DeveloperMount) are then served under
+	// /_gostack/services/<name> only, and not under LocalStack's /_aws/<name>.
+	// It is read once, when the routes are mounted. The zero value keeps the
+	// /_aws paths, which is the default of GOSTACK_COMPAT_PATHS.
+	DisableCompatPaths bool
+
 	// FailFast is FAIL_FAST: a panic answers 501 instead of 500.
 	FailFast bool
 	// ResponseHeaderEnabled is LOCALSTACK_RESPONSE_HEADER_ENABLED, which is on

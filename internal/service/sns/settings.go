@@ -17,9 +17,4 @@ type Settings struct {
 	// LegacyGCMPublishing is LEGACY_SNS_GCM_PUBLISHING: SNS publishes to a GCM
 	// platform endpoint with the legacy server key instead of FCM's HTTP v1 API.
 	LegacyGCMPublishing bool
-	// DisableCompatPaths is GOSTACK_COMPAT_PATHS=0: the developer endpoints are
-	// then served under /_gostack/services only, and not under LocalStack's
-	// /_aws. It is read when the routes are mounted. The zero value keeps the
-	// /_aws paths, which is the default of GOSTACK_COMPAT_PATHS.
-	DisableCompatPaths bool
 }

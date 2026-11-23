@@ -17,24 +17,28 @@ import (
 // The developer endpoints that list what SNS recorded instead of sending, and
 // the one that opts a number out of SMS. They are LocalStack's
 // SNSServicePlatformEndpointMessagesApiResource, SNSServiceSMSMessagesApiResource
-// and SNSServiceSMSPhoneOptOutResource, under /_gostack/services and /_aws.
+// and SNSServiceSMSPhoneOptOutResource, under /_gostack/services/sns and
+// /_aws/sns: the paths here are relative to the prefix the gateway scopes
+// Registration.DeveloperMount to.
 const (
-	endpointMessagesPath = "/sns/platform-endpoint-messages"
-	smsMessagesPath      = "/sns/sms-messages"
-	phoneOptOutsPath     = "/sns/phone-opt-outs"
+	endpointMessagesPath = "/platform-endpoint-messages"
+	smsMessagesPath      = "/sms-messages"
+	phoneOptOutsPath     = "/phone-opt-outs"
 
 	// maxOptOutBody is the most bytes of an opt-out request read.
 	maxOptOutBody = 1 << 20
 )
 
-// mountMessages adds the routes of the recorded messages and the opt-out
-// under prefix.
-func (p *Provider) mountMessages(r chi.Router, prefix string) {
-	r.Get(prefix+endpointMessagesPath, p.listEndpointMessages)
-	r.Delete(prefix+endpointMessagesPath, p.deleteEndpointMessages)
-	r.Get(prefix+smsMessagesPath, p.listSMSMessages)
-	r.Delete(prefix+smsMessagesPath, p.deleteSMSMessages)
-	r.Post(prefix+phoneOptOutsPath, p.optOutPhoneNumber)
+// mountDeveloperAPI adds the developer routes. It is the DeveloperMount of the
+// registration: the gateway calls it for /_gostack/services/sns, and for
+// /_aws/sns unless GOSTACK_COMPAT_PATHS=0.
+func (p *Provider) mountDeveloperAPI(r chi.Router) {
+	r.Get(subscriptionTokensPath+"/*", p.subscriptionToken)
+	r.Get(endpointMessagesPath, p.listEndpointMessages)
+	r.Delete(endpointMessagesPath, p.deleteEndpointMessages)
+	r.Get(smsMessagesPath, p.listSMSMessages)
+	r.Delete(smsMessagesPath, p.deleteSMSMessages)
+	r.Post(phoneOptOutsPath, p.optOutPhoneNumber)
 }
 
 // messagesScope is the State a call of the endpoints asks about: the account

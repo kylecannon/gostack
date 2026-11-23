@@ -579,6 +579,59 @@ class SettingsFileSelectionTest(unittest.TestCase):
         self.assertLessEqual(set(ledger.DECLARED_AHEAD), set(ledger.DEPENDS_ON))
 
 
+class DeveloperFileSelectionTest(unittest.TestCase):
+    """internal/service/<svc>/developer-*.go holds <svc>'s developer endpoints
+    (Registration.DeveloperMount). The gateway scopes their router to the
+    service's own prefix, so they are no routing hook: a change to one selects
+    <svc> and its dependents, never every service."""
+
+    KNOWN = {"s3", "sqs", "sts", "ssm"}
+
+    def affected(self, paths: list[str]) -> set[str]:
+        with mock.patch.object(ledger, "service_dirs", return_value=self.KNOWN):
+            return ledger.affected_services(paths, self.KNOWN)
+
+    def test_a_developer_file_of_a_service_without_routing_hooks_selects_it_and_its_dependents(self) -> None:
+        self.assertEqual(self.affected(["internal/service/ssm/developer-api.go"]), {"ssm"})
+
+    def test_a_developer_file_of_a_service_in_routing_reach_does_not_select_every_service(self) -> None:
+        # sqs is in ROUTING_REACH for its queue-URL Mount, which is in routes.go.
+        self.assertIn("sqs", ledger.ROUTING_REACH)
+        # s3 calls sqs, so an sqs change runs s3's suite too.
+        self.assertEqual(self.affected(["internal/service/sqs/developer-api.go"]), {"sqs", "s3"})
+        self.assertEqual(self.affected(["internal/service/sqs/developer-messages.go"]), {"sqs", "s3"})
+        self.assertEqual(self.affected(["internal/service/sqs/routes.go"]), self.KNOWN)
+
+    def test_a_developer_file_of_sts_selects_every_service_like_the_rest_of_sts(self) -> None:
+        self.assertEqual(self.affected(["internal/service/sts/developer-api.go"]), self.KNOWN)
+
+    def test_a_developer_file_beside_another_services_routing_code_selects_both(self) -> None:
+        self.assertEqual(self.affected(["internal/service/ssm/developer-api.go", "internal/service/sqs/routes.go"]), self.KNOWN)
+
+    def test_a_developer_test_file_selects_nothing(self) -> None:
+        self.assertEqual(self.affected(["internal/service/sqs/developer-api_test.go"]), set())
+
+    def test_a_file_that_is_not_a_developer_file_is_the_services_own_path(self) -> None:
+        for path in (
+            "internal/service/sqs/developer.go",
+            "internal/service/sqs/mount-developer.go",
+            "internal/service/sqs/developer-api.txt",
+            "internal/service/sqs/sub/developer-api.go",
+            "internal/service/nope/developer-api.go",
+            "internal/service/developer-api.go",
+            "internal/api/sqs/developer-api.go",
+            "cmd/gostack/developer-sqs.go",
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(ledger.developer_service(path))
+        self.assertEqual(self.affected(["internal/service/sqs/sub/developer-api.go"]), self.KNOWN)
+        self.assertEqual(self.affected(["internal/service/sqs/developer.go"]), self.KNOWN)
+
+    def test_a_developer_file_of_a_service_nobody_serves_selects_nothing(self) -> None:
+        with mock.patch.object(ledger, "service_dirs", return_value={"sqs"}):
+            self.assertEqual(ledger.affected_services(["internal/service/ssm/developer-api.go"], {"sqs", "ssm"}), set())
+
+
 class RealDiffSelectionTest(unittest.TestCase):
     """The selection as parity.yml feeds it: `git diff --name-only -z
     --no-renames` from the base, in a temporary repository."""
@@ -701,6 +754,14 @@ class RealDiffSelectionTest(unittest.TestCase):
     def test_a_diff_touching_only_one_services_settings_file_selects_that_service_and_its_dependents(self) -> None:
         self.write("cmd/gostack/settings-sqs.go", "package main\n\n// sqs settings\n")
         self.assertEqual(self.selected(), "s3,sqs")
+
+    def test_a_diff_touching_only_a_services_developer_file_selects_that_service_and_its_dependents(self) -> None:
+        # sqs is in ROUTING_REACH, and its developer endpoints are no hook.
+        self.write("internal/service/sqs/developer-api.go", "package sqs\n")
+        self.assertEqual(self.selected(), "s3,sqs")
+        self.git("reset", "-q", "--hard", self.base)
+        self.write("internal/service/ssm/developer-api.go", "package ssm\n")
+        self.assertEqual(self.selected(), "ssm")
 
     def test_a_new_service_branch_with_its_settings_file_and_two_shared_lines_selects_it_and_its_dependents(self) -> None:
         # The kms branch: its package, its settings file, one import and one
