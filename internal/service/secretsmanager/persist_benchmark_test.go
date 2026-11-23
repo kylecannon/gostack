@@ -83,7 +83,11 @@ func filled(b *testing.B, count int) *secretsmanager.Provider {
 	return p
 }
 
-var snapshotSizes = []int{10, 10_000}
+// snapshotSizes are the secrets a snapshot and a restore run at. 10,000 is left
+// out (docs/standards.md, "Benchmarks"): a restore took 19.0 ms and a snapshot
+// 14.8 ms, the slowest of three runs. The cost grows with the count, so 1,000
+// stands for the ladder.
+var snapshotSizes = []int{10, 1_000}
 
 func BenchmarkSnapshot(b *testing.B) {
 	for _, count := range snapshotSizes {

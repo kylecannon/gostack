@@ -32,16 +32,25 @@ func snapshotBenchProvider(b *testing.B, objects int) *Provider {
 	return p
 }
 
+// snapshotSizes are the objects of a save and of a load of S3's state, which
+// stop at different counts (docs/standards.md, "Benchmarks"): a restore of 1,000
+// objects took 8.5 ms on a runner, over the limit, and a snapshot of them 5.8
+// ms. The cost is linear in the count, so the widest cell under the limit
+// stands for the ladder.
+var snapshotSizes = struct{ snapshot, restore []int }{
+	snapshot: []int{10, 1_000},
+	restore:  []int{10, 500},
+}
+
 // BenchmarkSnapshot measures a save and a load of S3's state by the number of
 // objects it holds.
 func BenchmarkSnapshot(b *testing.B) {
-	for _, objects := range []int{1_000, 10_000} {
-		p := snapshotBenchProvider(b, objects)
-
-		var saved bytes.Buffer
-		require.NoError(b, p.Snapshot(&saved))
-
+	for _, objects := range snapshotSizes.snapshot {
 		b.Run("op=snapshot/objects="+strconv.Itoa(objects), func(b *testing.B) {
+			p := snapshotBenchProvider(b, objects)
+
+			var saved bytes.Buffer
+			require.NoError(b, p.Snapshot(&saved))
 			b.SetBytes(int64(saved.Len()))
 
 			for b.Loop() {
@@ -51,8 +60,12 @@ func BenchmarkSnapshot(b *testing.B) {
 				}
 			}
 		})
+	}
 
+	for _, objects := range snapshotSizes.restore {
 		b.Run("op=restore/objects="+strconv.Itoa(objects), func(b *testing.B) {
+			var saved bytes.Buffer
+			require.NoError(b, snapshotBenchProvider(b, objects).Snapshot(&saved))
 			b.SetBytes(int64(saved.Len()))
 
 			restored := newSnapshotProvider(b)

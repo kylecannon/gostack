@@ -2280,7 +2280,8 @@ is untouched.
   (`Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause`). No
   caller in the tree ends one so, since shutdown's context has a deadline and a
   request's ends `Canceled`. Each round of such a flush has the whole budget.
-  `BenchmarkSavePendingAssets/pending=100` on
+  `BenchmarkSavePendingAssets/pending=100/fs=tmpfs` (named `pending=100` when
+  it ran on the disk) on
   tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
   marker; the first version of the marker took 174, and PR #56's benchmark gate
   read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).
@@ -2444,7 +2445,9 @@ is untouched.
   nothing of its own.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
-  per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5). On macOS, where
+  per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5, a past
+  measurement at those counts: the benchmark now runs the disk at 1 and 10
+  pending, `docs/standards.md`, "Benchmarks"). On macOS, where
   Go's fsync is `F_FULLFSYNC`, 1000 pending took 5 to 7 s with a flush per
   file; with plain fsyncs and one flush (SQ-427) they take about 0.1 s
   (`BenchmarkSyncPending/files=1000`, on an Apple M1 Max under heavy load).

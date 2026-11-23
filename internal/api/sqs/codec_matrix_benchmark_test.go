@@ -164,11 +164,23 @@ func benchReceived(body string) *ReceiveMessageOutput {
 	return out
 }
 
+// tooSlowToGate reports the cell BenchmarkEncodeReceiveMessage leaves out
+// (docs/standards.md, "Benchmarks"): proto=query at payload=1MiB, a response of
+// 10 MiB, took 18.4 ms, the slowest of three runs. proto=query at 64KiB is its
+// widest cell under the limit (2.8 ms), and proto=json at 1MiB stays (1.8 ms).
+func tooSlowToGate(proto string, payload int) bool {
+	return proto == "query" && payload == 1<<20
+}
+
 // BenchmarkEncodeReceiveMessage writes a ReceiveMessage response of ten
 // messages, each of the payload's size.
 func BenchmarkEncodeReceiveMessage(b *testing.B) {
 	for _, proto := range benchProtocols {
 		for _, payload := range benchPayloads {
+			if tooSlowToGate(proto.name, payload.bytes) {
+				continue
+			}
+
 			out := benchReceived(benchBody(payload.bytes))
 			rc := &request.Context{Service: "sqs", Operation: "ReceiveMessage", Protocol: proto.kind, RequestID: "req-1"}
 

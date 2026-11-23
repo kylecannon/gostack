@@ -21,7 +21,7 @@ import (
 // queue is subscribed to, across the payload axis and at concurrency 1 and 16,
 // for example
 //
-//	BenchmarkPutObjectNotified/target=topic-envelope/payload=1KiB/concurrency=16
+//	BenchmarkPutObjectNotified/target=topic-raw/payload=1KiB/concurrency=16
 //
 // The targets are the queue itself, a topic whose subscription takes the message
 // raw (topic-raw), and a topic whose subscription is left at its default, so
@@ -170,10 +170,23 @@ func notifiedServer(b *testing.B, target string) *objectBenchServer {
 	return s
 }
 
+// notifiedTooSlowToGate is tooSlowToGate for PutObjectNotified, and it leaves
+// out the 16 workers of the envelope too: they took 21.1 ms at 1KiB and 27.1 ms
+// at 256KiB, the slowest of three runs (docs/standards.md, "Benchmarks"),
+// against 1.0 and 2.0 ms at one worker. Raw to a topic at 16 workers stays
+// (3.6 ms at 1KiB).
+func notifiedTooSlowToGate(target string, payload benchPayload, workers int) bool {
+	return tooSlowToGate(payload, workers, writeBudget) || (target == notifiedTargetTopicEnvelope && workers > 1)
+}
+
 func BenchmarkPutObjectNotified(b *testing.B) {
 	for _, target := range []string{notifiedTargetQueue, notifiedTargetTopicRaw, notifiedTargetTopicEnvelope} {
 		for _, payload := range benchPayloads[:2] {
 			for _, workers := range benchConcurrency {
+				if notifiedTooSlowToGate(target, payload, workers) {
+					continue
+				}
+
 				name := fmt.Sprintf("target=%s/payload=%s/concurrency=%d", target, payload.name, workers)
 
 				b.Run(name, func(b *testing.B) {
