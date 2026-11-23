@@ -34,15 +34,19 @@ import (
 //
 // A dead-letter call built while the lock is held shows in all four.
 //
-// The cells are sized to take at most 10 ms an operation (docs/standards.md,
-// Benchmarks): 64 lanes of 16 deliveries took 12 ms over SQS and 22 to 771 ms
-// over HTTP. A burst over HTTP costs a connection and a POST each, so it runs
-// fewer lanes, and still takes 17 to 20 ms at 256 KiB: that cell is left out,
-// and the burst at 256 KiB is the SQS one. As kept, SQS 16 lanes of 4 took
-// 3.3 ms at 32 KiB and 3.3 ms at 256 KiB, and HTTP 8 lanes of 2 at 32 KiB 6.9
-// ms, each the slowest of three runs.
+// The cells are sized to take at most 8 ms an operation in the slowest of three
+// runs (docs/standards.md, Benchmarks): 64 lanes of 16 deliveries took 12 ms
+// over SQS and 22 to 771 ms over HTTP. On linux/arm64 in a golang:1.27.4
+// container at a load of 7 to 9, 16 lanes of 4 over SQS took 12.8 ms at 256 KiB
+// and 10.0 ms at 32 KiB, 16 lanes of 2 took 9.7 ms and 8.0 ms, and 8 lanes of 2
+// over HTTP took 24.0 ms at 32 KiB and 2 lanes of 2 10.8 ms: a burst has a
+// floor of 5 to 7 ms (the 1 ms poll for the last dead letter, and the wait for
+// the unrelated publishes in flight), and over HTTP a connection and a POST
+// each. As kept, SQS runs 8 lanes of 2, 6.9 ms at 32 KiB and 7.4 ms at 256 KiB,
+// and HTTP 2 lanes of 1, 7.6 ms, each the slowest of three runs. The HTTP burst
+// at 256 KiB is left out, and the burst at 256 KiB is the SQS one.
 //
-//	BenchmarkBurst/protocol=sqs/lanes=16/perlane=4/payload=256KiB
+//	BenchmarkBurst/protocol=sqs/lanes=8/perlane=2/payload=256KiB
 func BenchmarkBurst(b *testing.B) {
 	for _, protocol := range []string{protocolHTTP, protocolSQS} {
 		lanes, perLane := burstSQSLanes, burstSQSPerLane
@@ -65,10 +69,10 @@ func BenchmarkBurst(b *testing.B) {
 }
 
 const (
-	burstSQSLanes    = 16
-	burstSQSPerLane  = 4
-	burstHTTPLanes   = 8
-	burstHTTPPerLane = 2
+	burstSQSLanes    = 8
+	burstSQSPerLane  = 2
+	burstHTTPLanes   = 2
+	burstHTTPPerLane = 1
 	burstTopic       = "burst"
 	burstVictim      = "burst-victim"
 	burstDLQ         = "burst-dlq"

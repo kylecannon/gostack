@@ -2,11 +2,8 @@ package persist_test
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/persist"
@@ -75,76 +72,15 @@ func BenchmarkAssetsCommit(b *testing.B) {
 	}
 }
 
-// BenchmarkSavePendingAssets measures one save of a service whose state names
-// that many 1 KiB assets committed since the last save, all of which the save
-// makes durable before its snapshot is renamed into place: one syncfs on
-// Linux, an fsync of each asset and of each of their directories elsewhere.
-// The commits are not timed.
-//
-// The 10 ms rule (docs/standards.md, "Benchmarks") leaves out 1000 and 10000
-// pending assets: a save of them took 71 ms and 451 ms, the fastest of three
-// runs at -benchtime=500ms on a darwin/arm64 laptop, where each asset costs one
-// fsync (about 0.3 ms). The 100 stays, and 10 stands for the small end of the
-// ladder. On macOS no cell is under the limit: a save of one asset took 35 ms
-// there, the floor of the snapshot's own fsyncs, so the cells run past 8 ms on
-// that host whatever their size. On Linux the save is one syncfs.
-func BenchmarkSavePendingAssets(b *testing.B) {
-	body := bytes.Repeat([]byte{'x'}, 1<<10)
-
-	for _, pending := range []int{10, 100} {
-		b.Run(fmt.Sprintf("pending=%d", pending), func(b *testing.B) {
-			base := b.TempDir()
-			run := 0
-
-			for b.Loop() {
-				b.StopTimer()
-
-				run++
-				e := benchEngine(filepath.Join(base, strconv.Itoa(run)), flushEvery)
-				s := newShelf()
-				e.Register(shelfService, s)
-
-				a, err := e.Assets(shelfService)
-				if err != nil {
-					b.Fatal(err)
-				}
-
-				for range pending {
-					s.add(commitBody(b, a, body))
-				}
-
-				e.MarkDirty(shelfService)
-				b.StartTimer()
-
-				err = e.Flush(b.Context())
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func commitBody(b *testing.B, a *persist.Assets, body []byte) string {
-	b.Helper()
-
-	w, err := a.Create()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	_, err = w.Write(body)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	id, _, err := w.Commit()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	return id
-}
+// BenchmarkSavePendingAssets, one save of a service with 100, 1000 or 10000
+// pending 1 KiB assets, is left out (docs/standards.md, "Benchmarks"). A save
+// of pending assets ends in one syncfs on Linux, and that floor is what the
+// cell measures, whatever its size: on linux/arm64 (golang:1.27.4 in a
+// container, TMPDIR on a loop-mounted ext4 image) one pending asset took 13.2
+// to 18.8 ms, 10 took 14.0 to 14.6 and 30 took 14.8 to 15.6, the three runs at
+// -benchtime=500ms of each, so shrinking the cell does not bring it under the
+// limit. The payload axis of an asset is covered by BenchmarkAssetsCommit, and
+// the save of the snapshot alone by BenchmarkSQSFlushFsync.
 
 // BenchmarkAssetsOpen opens one asset and reads it whole per iteration.
 func BenchmarkAssetsOpen(b *testing.B) {

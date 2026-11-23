@@ -166,8 +166,10 @@ func benchReceived(body string) *ReceiveMessageOutput {
 
 // tooSlowToGate reports the cell BenchmarkEncodeReceiveMessage leaves out under
 // the 10 ms rule (docs/standards.md, "Benchmarks"): proto=query at payload=1MiB,
-// a response of 10 MiB, took NUMBERS-PENDING. proto=query at 64KiB is its widest
-// cell under the limit, and proto=json at 1MiB stays.
+// a response of 10 MiB, took 18.4 ms, the slowest of three runs at
+// -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. proto=query at
+// 64KiB is its widest cell under the limit (2.8 ms), and proto=json at 1MiB
+// stays (1.8 ms).
 func tooSlowToGate(proto string, payload int) bool {
 	return proto == "query" && payload == 1<<20
 }

@@ -291,18 +291,42 @@ A micro benchmark cell has to be one the gate can compare: one operation of it
 finishes in at most 10 ms, so that a run at the gate's benchtime
 (`BENCH_TIME`, 500 ms) makes at least 50 iterations, the fewest benchstat can
 gate on. A cell is held to it with room to spare, because the gate's runner
-may be slower than the machine it was measured on: its slowest operation over
-three runs at the gate's benchtime is the number to check, and the cell is
-resized or left out when that is near the limit. The rule covers every
+may be slower than the machine it was measured on: **its slowest of three runs
+at the gate's benchtime has to be at most 8 ms**, and the cell is resized or
+left out when it is over. The number is measured on Linux, where the gate runs
+(`make bench-ab` on ubuntu-latest, `b.TempDir` on ext4), never on macOS, where
+an fsync costs 17 to 35 ms and a cell that fsyncs runs past the limit whatever
+its size. A Linux container with `GOTOOLCHAIN` set from `go.mod` and `TMPDIR` on
+an ext4 volume gives the number: `docker run --rm -v "$PWD":/src -w /src
+golang:<toolchain> go test -p 1 -run '^$' -bench <cells> -benchtime=500ms
+-count=3 <pkg>`. The rule covers every
 benchmark in a package, not only its feature cells. A cell over the limit is
 made smaller (fewer subscribers, lanes or messages) until it is under, or it
 is left out, and a cell left out is not a missing row: the payload axis is
-covered by the widest cell that is under the limit. A benchmark whose one
+covered by the widest cell that is under the limit. A cell whose time is a
+fixed floor, such as the syncfs that ends a save of pending assets, cannot be
+made smaller and is left out. A benchmark whose one
 operation is a one-time cost, such as a key generation or a process start,
 cannot be sized to it and does not belong in the micro benchmarks. The cell's
 own comment names the cells left out and the time an operation took (or the
 iterations it reached); `go test -run '^$' -bench . -benchtime=500ms -count=3`
 prints both for each.
+
+A cell is left out in one way: a condition in the benchmark's own matrix loop,
+a predicate it asks or a budget it compares against, and the comment above it
+names what it cuts and the Linux time that cut it (`tooSlowToGate` in `internal/inproc`,
+`internal/api/sqs`, `internal/service/kms`, `internal/service/s3` and
+`internal/service/sns`; `cellOpts.maxCallBytes` in `internal/service/sqs`;
+`maxIterationBatchBytes` in `internal/service/dynamodb`). Never a map of cell
+names, which stops matching without a sound when a cell is renamed, or
+`b.Skip`, which reports a cell that did not run.
+
+A count ladder (keys, secrets, parameters, queues or messages in a snapshot or
+a restore) runs at 10 and 1,000. A step of a hundred shows a cost that is not
+linear, and a larger count runs the same code for longer. A ladder keeps a
+larger count only where its cell measures at most 8 ms on Linux
+(`BenchmarkSnapshot` of `internal/service/ssm` runs 10,000 parameters in 5.8
+ms).
 
 A cell's time does not depend on the cells that ran before it. The collector
 paces itself by the live heap, so a cell that leaves what it recorded held, for
@@ -327,7 +351,7 @@ not apply to a feature is left out, not filled with a placeholder.
 
 A micro benchmark's persistence-on rows sit under the same function as its
 persistence-off rows, with a `persist=on` key first
-(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16`) and no key for
+(`BenchmarkPutObject/persist=on/payload=1MiB/concurrency=1`) and no key for
 off, so the base's rows keep their names. `benchstat -col /persist` sets the two
 side by side.
 

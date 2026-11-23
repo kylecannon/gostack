@@ -171,7 +171,10 @@ func notifiedServer(b *testing.B, target string) *objectBenchServer {
 }
 
 // notifiedTooSlowToGate is tooSlowToGate for PutObjectNotified, and it leaves
-// out the 16 workers of the envelope too: NUMBERS-PENDING.
+// out the 16 workers of the envelope too: they took 21.1 ms at 1KiB and 27.1 ms
+// at 256KiB, the slowest of three runs at -benchtime=500ms on linux/arm64 in a
+// golang:1.27.4 container, against 1.0 and 2.0 ms at one worker. Raw to a topic
+// at 16 workers stays (3.6 ms at 1KiB).
 func notifiedTooSlowToGate(target string, payload benchPayload, workers int) bool {
 	return tooSlowToGate(payload, workers, writeBudget) || (target == notifiedTargetTopicEnvelope && workers > 1)
 }

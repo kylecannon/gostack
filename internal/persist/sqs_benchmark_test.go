@@ -34,11 +34,12 @@ type snapshotCell struct{ queues, messages int }
 // queues is 640 MiB of bodies and 1000 queues of them is 62 GiB. Each cell
 // that holds messages holds a few MiB of bodies instead (the 10 ms rule of
 // docs/standards.md, "Benchmarks", holds it to what one snapshot takes in under
-// 8 ms: queues=10 messages=100 took 10.8 ms and queues=1000 messages=1 11.9 ms
-// on a darwin/arm64 laptop, the fastest of three runs at -benchtime=500ms):
+// 8 ms: queues=10 messages=100 took 11.0 ms and queues=1000 messages=1 12.3 ms
+// on linux/arm64, the slowest of three runs at -benchtime=500ms in a
+// golang:1.27.4 container):
 //
-//	queues=10    messages=40   (a few busy queues)
-//	queues=250   messages=1    (many queues, each with something in it)
+//	queues=10    messages=40   (a few busy queues, 4.4 ms)
+//	queues=250   messages=1    (many queues, each with something in it, 3.1 ms)
 //
 // queues=1000 with messages=100 is dropped. It runs the same code as the cell
 // above it, 100 times larger.
@@ -120,7 +121,11 @@ func newFilledProvider(b *testing.B, queues, messages int) *sqsservice.Provider 
 // which BenchmarkSQSSnapshot still runs. On linux/arm64 (a container with 4
 // cpus, tmpfs), an operation took at most 3.3 ms of flush (queues=1000
 // messages=0) and 4.3 ms of restore (queues=40 messages=1) in three runs at
-// -benchtime=500ms, at 135 or more iterations.
+// -benchtime=500ms, at 135 or more iterations. With TMPDIR on a loop-mounted
+// ext4 image in the same container, the slowest of three runs was 6.7 ms for
+// BenchmarkSQSFlushFsync (queues=250 messages=0, the fsync of the snapshot and
+// its directory), 4.1 ms for BenchmarkSQSRestoreExact (queues=40 messages=1)
+// and 2.2 ms for BenchmarkSQSFlushWrite (queues=1000 messages=0).
 //
 // The gate's runners (linux/amd64, 4 cpus: AMD EPYC 7763 and 9V45, Intel Xeon
 // 6975P-C; 8 hosts, 8 runs each at -benchtime=500ms, verification/SQ-466/

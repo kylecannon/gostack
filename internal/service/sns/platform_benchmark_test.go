@@ -21,10 +21,15 @@ import (
 // are discarded every benchClearEvery iterations, with the timer stopped, so
 // the lists do not grow without end.
 //
-//	BenchmarkPublishEndpoint/route=topic/endpoints=1000/structure=json/payload=256KiB/concurrency=16
+//	BenchmarkPublishEndpoint/route=topic/endpoints=100/structure=json/payload=256B/concurrency=16
 //	BenchmarkPublishSMS/route=direct/numbers=1/payload=256B/concurrency=1
 
-var benchDevices = []int{1, 1000}
+const (
+	devicesSome = 100
+	devicesMany = 1000
+)
+
+var benchDevices = []int{1, devicesSome, devicesMany}
 
 // benchClearEvery is how many iterations a device benchmark records before it
 // discards what it recorded.
@@ -185,16 +190,23 @@ func (d *deviceBench) run(b *testing.B, form string, workers, payload int) {
 // 256 KiB took 10 to 38 ms an iteration, and 5 of the 12 endpoint and sms cells
 // there ran 15 to 46 times. Those cells run at one worker, which still spans
 // every other axis. A publish to a topic of 1,000 endpoints or numbers by 16
-// workers is left out at the smallest payload too: it took 8.5 to 10.2 ms (sms,
-// and endpoint with a plain or json structure), the fastest of three runs at
-// -benchtime=500ms on a darwin/arm64 laptop. The 1,000 at one worker, and 100
-// at 16, stay.
+// workers is left out at the smallest payload too: it took 8.3 ms (endpoint,
+// plain), 8.9 ms (endpoint, json) and 11.1 ms (sms), the slowest of three runs
+// at -benchtime=500ms on linux/arm64 in a golang:1.27.4 container at a load of
+// 9. The fan-out of a topic under concurrency is kept at 100 devices (1.7 ms,
+// the slowest of the three cells, in three runs); 1,000 stays at one worker. A direct publish addresses the first
+// device, so its cells run at 1 and 1,000 devices only, to size the region, and
+// not at 100.
 func tooSlowToGate(route string, devices, payload, workers int) bool {
-	if workers > 1 && route == routeTopic && devices >= 1000 {
+	if workers > 1 && payload > benchPayloads[0].size {
 		return true
 	}
 
-	return workers > 1 && payload > benchPayloads[0].size
+	if route == routeTopic && workers > 1 {
+		return devices == devicesMany
+	}
+
+	return devices == devicesSome
 }
 
 // BenchmarkPublishEndpoint publishes to a platform endpoint with and without

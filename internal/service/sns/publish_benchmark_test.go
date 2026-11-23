@@ -195,16 +195,17 @@ var publishPayloads = []struct {
 	{name256KiB, 256<<10 - benchAttrSize},
 }
 
-// A cell runs only when an operation of it takes at most 10 ms, so that the
-// benchmark job's 500 ms makes the 50 iterations benchstat needs to gate on
+// A cell runs only when its slowest of three runs takes at most 8 ms, so that
+// the benchmark job's 500 ms makes the 50 iterations benchstat needs to gate on
 // (the rule is in docs/standards.md, Benchmarks). That rules out 100
 // subscribers at 256 KiB (40 to 105 ms a publish) and the envelope cells that
 // write a signed body for every subscriber at 100 subscribers above 256 B and
 // at 10 at 256 KiB (about 100 iterations when last measured, 10 to 100 on a
 // busy machine). What is left still spans the matrix: three payloads at 1 and
 // 10 subscribers, 100 subscribers at 256 B and at 16 KiB raw, raw and
-// envelope, standard and FIFO. The slowest of the cells in three runs is one
-// subscriber at 256 KiB, 7.4 ms through the envelope and 6.4 ms raw.
+// envelope, standard and FIFO. The slowest of the cells in three runs at
+// -benchtime=500ms on linux/arm64 in a golang:1.27.4 container is 100
+// subscribers standard raw at 16 KiB, 4.8 ms.
 const (
 	// widestFanOut is the subscriber count that runs the small payload, and
 	// the typical one raw.
@@ -313,21 +314,24 @@ var benchBatchPayloads = []struct {
 
 const benchBatchEntries = 10
 
+// batchSubscribers are the subscriber counts of BenchmarkPublishBatch: those of
+// benchSubscribers but the widest.
+var batchSubscribers = benchSubscribers[:len(benchSubscribers)-1]
+
 // BenchmarkPublishBatch publishes ten entries at once, raw, with no filter
 // policy; the single-publish rows cover those options. As for Publish, a cell
-// that takes over 10 ms an operation is left out: the 100-subscriber cells
-// above the small payload (47 to 54 ms). The slowest of the cells kept took 6.1
-// ms in three runs.
+// whose slowest of three runs is over 8 ms is left out: the 100-subscriber
+// cells, 11.5 ms (standard) and 9.1 ms (fifo) at the small payload and 47 to 54
+// ms above it, on linux/arm64 in a golang:1.27.4 container at a load of 9.
+// Ten subscribers, each entry of ten reaching all of them, stand for the widest
+// fan-out: 4.9 ms standard at 25 KiB entries, the slowest of three runs at
+// -benchtime=500ms.
 //
-//	BenchmarkPublishBatch/subscribers=100/topic=fifo/payload=256B
+//	BenchmarkPublishBatch/subscribers=10/topic=fifo/payload=256B
 func BenchmarkPublishBatch(b *testing.B) {
-	for _, subscribers := range benchSubscribers {
+	for _, subscribers := range batchSubscribers {
 		for _, fifo := range []bool{false, true} {
-			for i, payload := range benchBatchPayloads {
-				if subscribers == widestFanOut && i > 0 {
-					continue
-				}
-
+			for _, payload := range benchBatchPayloads {
 				c := publishCell{subscribers: subscribers, fifo: fifo, raw: true, payload: payload.size}
 				topic := "standard"
 				if fifo {
@@ -380,18 +384,23 @@ func benchPublishBatch(b *testing.B, c publishCell) {
 // BenchmarkPublishBurst times a burst: publishers PublishBatch calls of ten
 // small raw messages at once, each publisher sending batches of them, to a
 // standard topic, and every delivery; any dropped fails the benchmark. The
-// cells are sized to take at most 10 ms an operation (docs/standards.md,
-// Benchmarks), so one publisher and four, at 10 subscribers: 16 publishers
-// took 10 to 11 ms, and eight 10 ms on a busy machine. The burst that owes 160,000 deliveries, 16 publishers of
-// ten batches at 100 subscribers, ran once in 900 ms: too few iterations to
-// gate on; Test_Provider_Publish_burst (lanes_test.go) runs it and checks that
-// every delivery arrives.
+// cells are sized to take at most 8 ms an operation in the slowest of three
+// runs (docs/standards.md, Benchmarks), so one publisher of two batches and two
+// publishers of one, at 10 subscribers. On linux/arm64 in a golang:1.27.4
+// container at a load of 7 to 10, 16 publishers took 10 to 11 ms, four
+// publishers 4.6 to 10.2 ms, and one publisher of five batches 5.1 to 10.3 ms,
+// the cells run in three runs at -benchtime=500ms; as kept, one publisher of
+// two batches took 4.6 ms and two publishers 4.3 ms, the slowest of three. The
+// burst that owes 160,000 deliveries, 16 publishers of ten batches at 100
+// subscribers, ran once in 900 ms: too few iterations to gate on;
+// Test_Provider_Publish_burst (lanes_test.go) runs it and checks that every
+// delivery arrives.
 //
-//	BenchmarkPublishBurst/subscribers=10/publishers=4/batches=1
+//	BenchmarkPublishBurst/subscribers=10/publishers=2/batches=1
 func BenchmarkPublishBurst(b *testing.B) {
 	for _, cell := range []struct{ subscribers, publishers, batches int }{
-		{10, 1, 5},
-		{10, 4, 1},
+		{10, 1, 2},
+		{10, 2, 1},
 	} {
 		name := fmt.Sprintf("subscribers=%d/publishers=%d/batches=%d", cell.subscribers, cell.publishers, cell.batches)
 		b.Run(name, func(b *testing.B) { benchPublishBurst(b, cell.subscribers, cell.publishers, cell.batches) })

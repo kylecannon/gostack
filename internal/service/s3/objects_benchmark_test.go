@@ -30,7 +30,14 @@ import (
 //
 // The matrix is cut to what the 10 ms rule of docs/standards.md, "Benchmarks",
 // allows: tooSlowToGate leaves out a cell whose iteration moves more bytes than
-// the operation's budget, writeBudget or readBudget. NUMBERS-PENDING
+// the operation's budget, writeBudget or readBudget. On linux/arm64 in a
+// golang:1.27.4 container, the slowest of three runs at -benchtime=500ms of a
+// cell left out was 52.0 ms for PutObject at 16MiB, 81.6 ms at 1MiB and 16
+// workers, 13.7 ms at 256KiB and 16 workers, and 19.4 ms for GetObject at 16MiB
+// and 16 workers. The widest cells kept: PutObject 4.6 ms at 1MiB and 4.5 ms at
+// 1KiB and 16 workers, GetObject 3.6 ms at 16MiB and 4.9 ms at 1MiB and 16
+// workers, and, persisted, PutObject 3.2 ms at 1MiB and 3.5 ms at 1KiB and 16
+// workers.
 
 const benchAuth = "AWS4-HMAC-SHA256 Credential=test/20250101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=0"
 

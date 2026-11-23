@@ -39,8 +39,10 @@ import (
 //     ASCII cells measure every other path. The text cells are the non-ASCII
 //     and escape-dense bodies that quote differently from ASCII.
 //   - ReceiveMessage of ten messages at 1MiB, a call that returns 10 MiB:
-//     NUMBERS-PENDING. The 1MiB message received alone and ten of 64KiB stay,
-//     so the payload axis is covered by the widest cells under the limit
+//     9.7 to 24.1 ms over json, query and every text, the slowest of three runs
+//     at -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. The
+//     1MiB message received alone (2.4 ms) and ten of 64KiB (2.3 ms) stay, so
+//     the payload axis is covered by the widest cells under the limit
 //     (cellOpts.maxCallBytes).
 //   - Persistence is measured by the snapshot benchmarks, and the system bench
 //     runs the operations with PERSIST_SQS=1.
