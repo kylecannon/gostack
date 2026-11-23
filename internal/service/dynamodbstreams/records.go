@@ -26,8 +26,10 @@ var (
 )
 
 // record is r as GetRecords returns it. Its images are decoded by dec, which
-// shares allocations between the records of one read; the response holds them
-// until it is written.
+// shares allocations between the records of one read. Each image is decoded
+// into the map dec reuses and copied out by item before the next is decoded,
+// so the response holds no map of dec's; the values it holds share dec's
+// strings, which stay valid after Release.
 func record(info dynamodb.StreamInfo, r *stream.Record, dec *value.Decoder) api.Record {
 	out := api.Record{
 		EventID:      new(eventID(info.Shard.Created(), r.Seq)),
@@ -39,8 +41,8 @@ func record(info dynamodb.StreamInfo, r *stream.Record, dec *value.Decoder) api.
 			// LocalStack's records carry whole seconds.
 			ApproximateCreationDateTime: &protocol.Time{Time: r.At.Truncate(time.Second)},
 			Keys:                        item(r.Keys),
-			NewImage:                    item(dec.Item(r.New, nil)),
-			OldImage:                    item(dec.Item(r.Old, nil)),
+			NewImage:                    item(dec.View(r.New, nil)),
+			OldImage:                    item(dec.View(r.Old, nil)),
 			SequenceNumber:              new(info.Shard.SequenceNumber(r.Seq)),
 			SizeBytes:                   new(r.SizeBytes),
 			StreamViewType:              new(info.ViewType),
