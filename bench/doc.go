@@ -36,8 +36,10 @@
 // the operations it times, its cells, and how to run one cell against an
 // endpoint. sqs.go and s3.go hold them. The orchestrator, the result file,
 // the report and the compare gate know nothing of the service; they read the
-// operations from the cell. A cell id is <service>/<workload>/<options...>, and
-// a cell names the environment variable that turns its persistence on.
+// operations from the cell. A cell id is <service>/<workload>/<options...>, with
+// a mem=<limit> segment after the options and before c=<concurrency> when the
+// cell runs under a memory limit, and a cell names the environment variable that
+// turns its persistence on.
 // `bench run -services s3` runs the cells and the agentic cycle of the named
 // services only.
 //
@@ -148,10 +150,16 @@
 // 15% (a page of 25 from a random key, a third filtered), put 10%, update 10%,
 // delete 5%, batchwrite 5% (25 puts). Each cell is a run of its own on a fresh
 // container, one repetition by default in the make target, because the fill
-// comes first. A container the kernel OOM-killed is a recorded outcome: the cell
-// reports oom_killed, the memory it reached, and the load generator's error, which
-// says how many items the fill had put. Docker inspects State.OOMKilled for it,
-// after the load generator's own failure.
+// comes first. A cell records its peak RSS (anon plus mapped file pages) and its
+// peak usage, the memory its cgroup counts against the limit, page cache
+// included, and items_filled, the items the server had acknowledged when the
+// fill ended. A container the kernel OOM-killed is a failed run with its reason:
+// the cell reports oom_killed, items_filled and the memory it reached, and a
+// run that failed any other way keeps those too. A run that failed waits up to
+// oomSettle for its container to stop, and takes State.OOMKilled together with
+// exit code 137 for the kill, so the load generator's own failure, which comes
+// first, is not read as a death of another kind. -memory is refused by any
+// other profile.
 //
 // # The KMS matrix
 //

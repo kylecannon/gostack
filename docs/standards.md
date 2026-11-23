@@ -457,27 +457,17 @@ rank-sum test of the runs and not by their ranges (`bench/doc.go`, "What else
 is measured" and "The gate"). `make bench-system-quick` shows it under "First
 use".
 
-How a service holds a large data set under a memory limit is measured by the
-large profile, `make bench-system-large` (`bench run -profile large`), which no
-other target runs, because each of its cells takes minutes (`bench/largetable.go`
-has the shape). It measures gostack alone, and nothing but its cells: no startup,
-idle or agentic run. A cell is one container started with `--memory` (1g,
-`BENCH_LARGE_MEMORY` or `-memory`) and `--memory-swap` equal to it, so a
-container that goes over is killed and not swapped. In it one DynamoDB table with
-a global secondary index is filled to 25k, 50k, 100k, 300k or 1M items of 10 to
-30 attributes and 100 B to 4 KiB, each cell's own table, before the clock starts.
-The fill then gives way to a mixed load for `-duration`, 70% reads (GetItem,
-Query on the table and the index, Scan pages, a third of the last two filtered)
-and 30% writes (PutItem, UpdateItem, DeleteItem, BatchWriteItem of 25), at
-concurrency 16 and 64, persistence off and on. A cell records peak RSS,
-throughput, p50 and p99 of each operation and whether the kernel OOM-killed the
-container: a killed cell is a recorded outcome (`oom_killed`, the memory it
-reached, and how many items the fill had put) and not a failed run. A
-persistence-on cell of this profile keeps its directory on the container's disk,
-not in a tmpfs, whose pages the limit would count. `-base-image` measures a base
-and a head in alternation, as in a pull request. The target compares with no
-committed result, since none holds large cells, and it logs the load average
-before each run: the machine it runs on is part of what it measures.
+How a service holds a large data set is measured under a memory limit, by
+`make bench-system-large` (`bench run -profile large`), which no other target
+runs, because each of its cells takes minutes. Its steps and its mix are in
+`bench/doc.go`, "The large profile". Each cell is a container started with
+`--memory` (1g, `BENCH_LARGE_MEMORY` or `-memory`, which no other profile
+accepts) and `--memory-swap` equal to it, so a container that goes over is killed
+and not swapped. An OOM-killed run is recorded as a failed run with its reason.
+The target measures gostack alone and compares with no committed result, since
+none holds large cells. Every profile logs the host's load average before each
+run of a cell: the machine it runs on is part of what it measures. The figure is
+the host's, not the Docker VM's.
 
 A run is a measurement only while its target works. After every run the
 orchestrator checks that the target container is still running; a run whose
@@ -567,7 +557,8 @@ so the entry never expires. Delete the entries in the first change after the
 merge.
 
 A result file is schema 3. A cell id is `<service>/<workload>/<options...>`,
-such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`.
+such as `sqs/messaging/persist=off/payload=256B/queue=standard/shape=single/proto=json/c=16`;
+a cell under a memory limit has a `mem=<limit>` segment before `c=`.
 A cell holds its operations as a map from name to latency, and declares the
 environment variable that turns its persistence on. A service is added by
 registering a workload in `bench/` (`Service`, `Name`, `Ops`, `Cells`, `Run`);

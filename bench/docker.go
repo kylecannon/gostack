@@ -40,7 +40,9 @@ func dockerOutput(ctx context.Context, args ...string) ([]byte, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
+		// What the command wrote before it failed comes back with the error: the load
+		// generator prints how far a failed fill got.
+		return out, fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 
 	return out, nil
@@ -81,6 +83,9 @@ type cpuUsage struct {
 type memoryStats struct {
 	Stats map[string]uint64 `json:"stats"`
 	Usage uint64            `json:"usage"`
+	// MaxUsage is the high-water mark the daemon keeps where the kernel has one
+	// (cgroup v1); cgroup v2 reports none.
+	MaxUsage uint64 `json:"max_usage"`
 }
 
 // rss is the resident memory of the container: anonymous pages plus mapped
@@ -98,6 +103,20 @@ func (s containerStats) rss() uint64 {
 	}
 
 	return s.MemoryStats.Usage
+}
+
+// usage is the memory of the container as its cgroup counts it against the limit:
+// anonymous pages and every page of the page cache, mapped or not. rss leaves the
+// cache out, but a container that persists to disk fills it, and the kernel
+// reclaims it only when the limit is near.
+func (s containerStats) usage() uint64 {
+	return max(s.MemoryStats.Usage, s.MemoryStats.MaxUsage)
+}
+
+// zero reports the counters a container that has stopped returns: nothing at
+// all, which is no sample of its memory.
+func (s containerStats) zero() bool {
+	return s.rss() == 0 && s.usage() == 0
 }
 
 // newDockerAPI connects to the daemon the CLI uses: DOCKER_HOST, else the
@@ -318,25 +337,82 @@ var errTargetDied = errors.New("the target container died during the run")
 // apart treats it as any other death.
 var errOOMKilled = fmt.Errorf("%w: it was OOM-killed", errTargetDied)
 
+const (
+	// oomSettle is how long a run that failed waits for its container to stop before
+	// it reads the container's state. The load generator fails the moment the
+	// connection drops, which can be before the daemon has recorded why the
+	// container stopped.
+	oomSettle = 5 * time.Second
+	oomPoll   = 250 * time.Millisecond
+
+	// exitKilled is the exit status of a process the kernel ended with SIGKILL, as
+	// its out-of-memory killer does.
+	exitKilled = "137"
+	// oomFlag is State.OOMKilled of a container the kernel killed.
+	oomFlag = "true"
+
+	// stateFields are the words of a state line: status, exit code, OOM-killed.
+	stateFields = 3
+)
+
+// state is the container's status, exit code and OOM-killed flag, as
+// `docker inspect` prints them.
+func (i *instance) state(ctx context.Context) (string, error) {
+	out, err := dockerOutput(ctx, "inspect", "--format",
+		"{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}", i.name)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", errTargetDied, i.name, err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
 // alive returns errTargetDied unless the container is still running, and
 // errOOMKilled when the kernel's out-of-memory killer ended it. A run against a
 // target that went away has numbers from before and errors from after it went,
 // so the run is not a measurement of the image.
 func (i *instance) alive(ctx context.Context) error {
-	out, err := dockerOutput(ctx, "inspect", "--format",
-		"{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}", i.name)
-	if err != nil {
-		return fmt.Errorf("%w: %s: %w", errTargetDied, i.name, err)
-	}
+	return i.aliveWithin(ctx, 0)
+}
 
-	state := strings.TrimSpace(string(out))
-	if strings.HasPrefix(state, "running ") {
+// aliveWithin is alive for a run that failed: a container that is still running
+// is given up to wait to stop first, as the daemon records the death a moment
+// after the connections drop.
+func (i *instance) aliveWithin(ctx context.Context, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+
+	for {
+		state, err := i.state(ctx)
+		if err != nil {
+			return err
+		}
+
+		if !strings.HasPrefix(state, "running ") || !time.Now().Before(deadline) {
+			return targetState(i.name, state)
+		}
+
+		err = sleep(ctx, oomPoll)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// targetState reads a container's state line: nil for a running one, errOOMKilled
+// for one the kernel's out-of-memory killer ended, errTargetDied for any other
+// that stopped. The flag alone is not enough: Docker sets it when any process of
+// the container was killed, a healthcheck's among them, so a later exit of the
+// container for another reason would read as one. The kill of the container's own
+// process also has exit code 137.
+func targetState(name, state string) error {
+	fields := strings.Fields(state)
+	if len(fields) == stateFields && fields[0] == "running" {
 		return nil
 	}
 
-	if strings.HasSuffix(state, " true") {
-		return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errOOMKilled, i.name, state)
+	if len(fields) == stateFields && fields[1] == exitKilled && fields[2] == oomFlag {
+		return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errOOMKilled, name, state)
 	}
 
-	return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errTargetDied, i.name, state)
+	return fmt.Errorf("%w: %s is %s (status, exit code, OOM-killed)", errTargetDied, name, state)
 }

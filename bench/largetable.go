@@ -18,8 +18,8 @@ import (
 // limit, one table with a global secondary index, items of a realistic mix put in
 // it before the clock starts, and then a mixed load for a fixed time:
 //
-//	items       100k, 300k and 1M, so a heavier representation reaches the limit
-//	            at one of them
+//	items       25k, 50k, 100k, 300k and 1M, so a heavier representation reaches
+//	            the limit at one of them
 //	persistence off and PERSIST_DYNAMODB=1
 //	concurrency 16 and 64
 //	memory      1g, or -memory
@@ -118,6 +118,9 @@ const ddbAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456
 // first reading), and 1M is past it for a packed one (about 4.5 KiB each).
 var ddbLargeSteps = []int{25_000, 50_000, 100_000, 300_000, 1_000_000}
 
+// ddbLargeLevels are the concurrencies of a large cell.
+var ddbLargeLevels = []int{levelMid, levelHigh}
+
 var errLargeTable = errors.New("large table")
 
 // largeTableWorkload is the mixed load over a table that fills a limited
@@ -131,18 +134,14 @@ func (largeTableWorkload) Ops() []string {
 	return []string{opDDBGet, opDDBQuery, opDDBScan, opDDBPut, opDDBUpdate, opDDBDelete, opDDBBatchWrite}
 }
 
-// Cells is every size at both concurrencies, persistence off and on. Only the
-// large profile has any.
-func (largeTableWorkload) Cells(profile string) []cellSpec {
-	if profile != profileLarge {
-		return nil
-	}
-
-	var cells []cellSpec
+// Cells is every size at both concurrencies, persistence off and on. cellsFor
+// asks for them in the large profile alone.
+func (largeTableWorkload) Cells(string) []cellSpec {
+	cells := make([]cellSpec, 0, len(ddbPersistence)*len(ddbLargeSteps)*len(ddbLargeLevels))
 
 	for _, persistEnv := range ddbPersistence {
 		for _, items := range ddbLargeSteps {
-			for _, level := range []int{levelMid, levelHigh} {
+			for _, level := range ddbLargeLevels {
 				cells = append(cells, ddbLargeCell(persistEnv, items, level))
 			}
 		}
@@ -227,9 +226,9 @@ func (w largeTableWorkload) Run(
 		return runResult{}, err
 	}
 
-	err = dc.fillLargeTable(ctx, table, items)
+	filled, err := dc.fillLargeTable(ctx, table, items)
 	if err != nil {
-		return runResult{}, err
+		return runResult{ItemsFilled: filled}, err
 	}
 
 	mixers := make([]*mixer, cell.Concurrency)
@@ -239,9 +238,12 @@ func (w largeTableWorkload) Run(
 
 	l := loop{workers: cell.Concurrency, duration: duration, ops: w.Ops()}
 
-	return l.run(ctx, func(ctx context.Context, worker int, rec *recorder) {
+	run, err := l.run(ctx, func(ctx context.Context, worker int, rec *recorder) {
 		mixers[worker].cycle(ctx, rec)
 	})
+	run.ItemsFilled = filled
+
+	return run, err
 }
 
 // largeOnly makes the workload a largeWorkload.
@@ -286,9 +288,9 @@ func (c ddbClient) createLargeTable(ctx context.Context) (string, error) {
 }
 
 // fillLargeTable puts items 0 to items-1 with BatchWriteItem on ddbSeedWorkers
-// workers, then reads back the last one. A failure says how many items had been
-// accepted, so a run that a container's death ended says how far the fill got.
-func (c ddbClient) fillLargeTable(ctx context.Context, table string, items int) error {
+// workers, then reads back the last one. It returns the items the server
+// acknowledged, so a run that a container's death ended says how far the fill got.
+func (c ddbClient) fillLargeTable(ctx context.Context, table string, items int) (int, error) {
 	batches := (items + ddbBatchSize - 1) / ddbBatchSize
 
 	var (
@@ -329,15 +331,17 @@ func (c ddbClient) fillLargeTable(ctx context.Context, table string, items int) 
 
 	wg.Wait()
 
+	filled := int(accepted.Load())
+
 	if failure != nil {
-		return fmt.Errorf("seeded %d of %d items: %w", accepted.Load(), items, failure)
+		return filled, fmt.Errorf("seeded %d of %d items: %w", filled, items, failure)
 	}
 
 	if ctx.Err() != nil {
-		return fmt.Errorf("seeded %d of %d items: %w", accepted.Load(), items, ctx.Err())
+		return filled, fmt.Errorf("seeded %d of %d items: %w", filled, items, ctx.Err())
 	}
 
-	return c.checkLastItem(ctx, table, items)
+	return filled, c.checkLastItem(ctx, table, items)
 }
 
 // writeBatch sends a BatchWriteItem and fails when the server left an item

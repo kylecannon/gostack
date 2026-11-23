@@ -99,14 +99,11 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            (go run ./bench compare). Needs Docker. Takes over an hour.
 #   make bench-system-quick  the quick profile for gostack alone: builds one image, writes under
 #                            bin/bench-system, compares the same way. Takes about 5 minutes.
-#   make bench-system-large  the large profile for gostack alone: one DynamoDB table with an index, filled
-#                            to 100k, 300k and 1M items in a container limited to BENCH_LARGE_MEMORY
-#                            (1g), then loaded for BENCH_LARGE_ARGS' -duration, at concurrency 16 and 64,
-#                            persistence off and on. Records peak RSS, throughput, p50 and p99 per
-#                            operation and whether the container was OOM-killed. Writes under
-#                            bin/bench-system-large and compares with nothing. Takes over an hour.
-#                            To measure two images in alternation add -base-image <image>
-#                            -base-commit <sha> -base-out <dir> to BENCH_LARGE_ARGS.
+#   make bench-system-large  the large profile for gostack alone: large tables in a container limited to
+#                            BENCH_LARGE_MEMORY (1g), loaded for BENCH_LARGE_ARGS' -duration (bench/doc.go,
+#                            "The large profile"). Writes under bin/bench-system-large and compares with
+#                            nothing. Takes over an hour. To measure two images in alternation add
+#                            -base-image <image> -base-commit <sha> -base-out <dir> to BENCH_LARGE_ARGS.
 # BENCH_SYSTEM_ARGS passes flags to `bench run`, e.g. "-reps 1 -duration 1s". Container names and
 # the load generator image carry the tag of IMAGE, so runs of different tags do not collide.
 BENCH_COUNT ?= 10
@@ -127,9 +124,11 @@ BENCH_SHARD_LIMIT ?= 60m
 BENCH_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BENCH_SYSTEM_ARGS ?=
 BENCH_TAG = $(lastword $(subst :, ,$(IMAGE)))
-BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
-	-loadgen-image gostack-bench-loadgen:$(BENCH_TAG) -name-suffix -$(BENCH_TAG) -compare-dir bench/results \
-	$(BENCH_SYSTEM_ARGS)
+# The image and the names every bench-system target gives `bench run`.
+BENCH_IMAGE_FLAGS = -gostack-image $(IMAGE) -loadgen-image gostack-bench-loadgen:$(BENCH_TAG) \
+	-name-suffix -$(BENCH_TAG)
+BENCH_RUN = $(BENCH_IMAGE_FLAGS) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
+	-compare-dir bench/results $(BENCH_SYSTEM_ARGS)
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
 # bench-system-large runs one repetition of a cell, because a cell fills a table before it
 # measures; the container limit is BENCH_LARGE_MEMORY.
@@ -387,9 +386,7 @@ bench-system: image image-slim
 bench-system-quick: image
 	go run ./bench run -profile quick -out bin/bench-system $(BENCH_RUN)
 
-# No -compare-dir: no committed result holds large cells, and a cell the kernel kills is a
-# recorded outcome of this profile, not a regression.
+# No -compare-dir: no committed result holds large cells.
 bench-system-large: image
-	go run ./bench run -profile large -out bin/bench-system-large -gostack-image $(IMAGE) \
-		-loadgen-image gostack-bench-loadgen:$(BENCH_TAG) -name-suffix -$(BENCH_TAG) \
+	go run ./bench run -profile large -out bin/bench-system-large $(BENCH_IMAGE_FLAGS) \
 		-memory $(BENCH_LARGE_MEMORY) $(BENCH_LARGE_ARGS)

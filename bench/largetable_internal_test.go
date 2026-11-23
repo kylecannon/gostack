@@ -44,7 +44,9 @@ func Test_large_table_mix_reaches_every_operation(t *testing.T) {
 
 	table, err := dc.createLargeTable(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, dc.fillLargeTable(t.Context(), table, items))
+	filled, err := dc.fillLargeTable(t.Context(), table, items)
+	require.NoError(t, err)
+	assert.Equal(t, items, filled)
 
 	m := &mixer{dc: dc, table: table, items: items, rng: workerRand(0)}
 	rec := newRecorder()
