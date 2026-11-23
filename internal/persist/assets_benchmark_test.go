@@ -2,8 +2,11 @@ package persist_test
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/kylecannon/gostack/internal/persist"
@@ -72,15 +75,102 @@ func BenchmarkAssetsCommit(b *testing.B) {
 	}
 }
 
-// BenchmarkSavePendingAssets, one save of a service with 100, 1000 or 10000
-// pending 1 KiB assets, is left out (docs/standards.md, "Benchmarks"). A save
-// of pending assets ends in one syncfs on Linux, and that floor is what the
-// cell measures, whatever its size: on linux/arm64 (golang:1.27.4 in a
-// container, TMPDIR on a loop-mounted ext4 image) one pending asset took 13.2
-// to 18.8 ms, 10 took 14.0 to 14.6 and 30 took 14.8 to 15.6, the three runs at
-// -benchtime=500ms of each, so shrinking the cell does not bring it under the
-// limit. The payload axis of an asset is covered by BenchmarkAssetsCommit, and
-// the save of the snapshot alone by BenchmarkSQSFlushFsync.
+// savePendingTmpfs and savePendingDisk are the pending counts of
+// BenchmarkSavePendingAssets (docs/standards.md, "Benchmarks"). The first runs
+// on a memory filesystem through memoryDir, where the syncfs that ends a save
+// costs nothing, so it measures the engine's work on each pending asset and its
+// allocations, which the allocation gate holds (it caught the regression of
+// PR #56). Its counts are those of the benchmark before the rule. The second
+// runs on the disk, where the save pays the syncfs of the whole filesystem, a
+// floor of the disk and not of this code, so its counts are the two smallest;
+// the larger ones of the benchmark before the rule are left out. On an ext4
+// loop volume one pending asset took 13.2 to 18.8 ms and 10 took 14.0 to 14.6.
+var (
+	savePendingTmpfs = []int{100, 1000, 10000}
+	savePendingDisk  = []int{1, 10}
+)
+
+// BenchmarkSavePendingAssets measures one save of a service whose state names
+// that many 1 KiB assets committed since the last save, all of which the save
+// makes durable before its snapshot is renamed into place: one syncfs on
+// Linux, an fsync of each asset and of each of their directories elsewhere.
+// The commits are not timed, and neither is the removal of the last save's
+// directory, so that a memory filesystem does not fill as the iterations run.
+func BenchmarkSavePendingAssets(b *testing.B) {
+	for _, pending := range savePendingTmpfs {
+		dir, fs := memoryDir(b, int64(pending)*(2<<10)+8<<20)
+
+		b.Run(fmt.Sprintf("pending=%d/fs=%s", pending, fs), func(b *testing.B) { benchSavePending(b, pending, dir) })
+	}
+
+	for _, pending := range savePendingDisk {
+		b.Run(fmt.Sprintf("pending=%d", pending), func(b *testing.B) { benchSavePending(b, pending, b.TempDir()) })
+	}
+}
+
+// benchSavePending runs one cell of BenchmarkSavePendingAssets with each save's
+// state in its own directory under base.
+func benchSavePending(b *testing.B, pending int, base string) {
+	b.Helper()
+
+	body := bytes.Repeat([]byte{'x'}, 1<<10)
+	run, last := 0, ""
+
+	for b.Loop() {
+		b.StopTimer()
+
+		if last != "" {
+			err := os.RemoveAll(last)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		run++
+		last = filepath.Join(base, strconv.Itoa(run))
+		e := benchEngine(last, flushEvery)
+		s := newShelf()
+		e.Register(shelfService, s)
+
+		a, err := e.Assets(shelfService)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for range pending {
+			s.add(commitBody(b, a, body))
+		}
+
+		e.MarkDirty(shelfService)
+		b.StartTimer()
+
+		err = e.Flush(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func commitBody(b *testing.B, a *persist.Assets, body []byte) string {
+	b.Helper()
+
+	w, err := a.Create()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	_, err = w.Write(body)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	id, _, err := w.Commit()
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	return id
+}
 
 // BenchmarkAssetsOpen opens one asset and reads it whole per iteration.
 func BenchmarkAssetsOpen(b *testing.B) {

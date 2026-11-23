@@ -20,13 +20,12 @@ import (
 // last endpoint has answered. The endpoints are paths of one local server
 // that reads each body and answers 200, so each subscriber is its own lane.
 //
-// As for BenchmarkPublish, a cell is gated only when an operation takes at
-// most 8 ms in its slowest of three runs (docs/standards.md, Benchmarks): one
-// subscriber at 256 B and 256 KiB, ten at 256 KiB raw, and 100 at 256 B.
-// The slowest of the cells kept took 4.5 ms (100 at 256 B enveloped) in three
-// runs at -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. A
-// 100-subscriber publish at 16 KiB raw took 12.8 ms there, and at 256 KiB 11 to
-// 40 ms, so they are left out, and the payload axis at 100 subscribers is
+// As for BenchmarkPublish, the cells kept are those a run can gate on
+// (docs/standards.md, Benchmarks): one subscriber at 256 B and 256 KiB, ten at
+// 256 KiB raw, and 100 at 256 B. The slowest of the cells kept took 4.5 ms (100
+// at 256 B enveloped), the slowest of three runs. A 100-subscriber publish at
+// 16 KiB raw took 12.8 ms, and at 256 KiB 11 to 40 ms, so they are left out, and
+// the payload axis at 100 subscribers is
 // covered by the ten at 256 KiB raw (3.2 ms). The envelope cells left
 // out, 10 at 256 KiB and 100 at 16 KiB, ran 61 to 105 iterations (5 to 8 ms)
 // when they were last measured: each writes and signs a body for every

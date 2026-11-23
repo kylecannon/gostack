@@ -38,12 +38,12 @@ import (
 //     Body text changes only how json quotes a body on the way out; the
 //     ASCII cells measure every other path. The text cells are the non-ASCII
 //     and escape-dense bodies that quote differently from ASCII.
-//   - ReceiveMessage of ten messages at 1MiB, a call that returns 10 MiB:
-//     9.7 to 24.1 ms over json, query and every text, the slowest of three runs
-//     at -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. The
-//     1MiB message received alone (2.4 ms) and ten of 64KiB (2.3 ms) stay, so
-//     the payload axis is covered by the widest cells under the limit
-//     (cellOpts.maxCallBytes).
+//   - ReceiveMessage of ten messages at 1MiB over the query protocol or with a
+//     text body, a call that returns 10 MiB: 9.5 to 24.1 ms, the slowest of
+//     three runs (docs/standards.md, Benchmarks). The json cells with an ASCII
+//     body stay at ten of 1MiB (1.9 ms), as do the 1MiB message received alone
+//     and ten of 64KiB over every protocol and text, so the payload axis is
+//     covered by the widest cells under the limit (cellOpts.maxCallBytes).
 //   - Persistence is measured by the snapshot benchmarks, and the system bench
 //     runs the operations with PERSIST_SQS=1.
 
@@ -69,8 +69,9 @@ type cellOpts struct {
 	attrs   bool  // the attribute cells apply
 	texts   bool  // the text cells apply
 
-	// maxCallBytes, when above 0, leaves out the cells whose call returns more
-	// than that: max messages of the cell's payload.
+	// maxCallBytes, when above 0, leaves out the query and text cells whose call
+	// returns more than that: max messages of the cell's payload. The json cells
+	// with an ASCII body are kept at any size.
 	maxCallBytes int
 }
 
@@ -120,7 +121,8 @@ func (o cellOpts) cells() []cell {
 	var out []cell
 
 	add := func(c cell) {
-		if o.maxCallBytes == 0 || c.max*c.payload.bytes <= o.maxCallBytes {
+		capped := c.proto == protoQueryName || c.text.name != ""
+		if !capped || o.maxCallBytes == 0 || c.max*c.payload.bytes <= o.maxCallBytes {
 			out = append(out, c)
 		}
 	}
@@ -403,8 +405,8 @@ func receiveBody(c cell, queueURL string) *segmented {
 	return w.done()
 }
 
-// maxReceiveBytes is the most one ReceiveMessage cell returns in a call: ten
-// messages of 1MiB are over it, and ten of 64KiB under it.
+// maxReceiveBytes is the most a query or text ReceiveMessage cell returns in a
+// call: ten messages of 1MiB are over it, and ten of 64KiB under it.
 const maxReceiveBytes = 4 << 20
 
 // BenchmarkReceiveMessage receives from a queue that holds ten messages, with a

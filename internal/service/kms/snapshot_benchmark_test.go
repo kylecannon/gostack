@@ -25,10 +25,9 @@ import (
 const persistFrequency = 10 * time.Millisecond
 
 // snapshotSizes are the keys a snapshot and a restore run at. 10,000 is left out
-// under the 10 ms rule (docs/standards.md, "Benchmarks"): a restore took 47.1 ms
-// and a snapshot 31.4 ms, the slowest of three runs at -benchtime=500ms on
-// linux/arm64 in a golang:1.27.4 container. The cost grows with the count, so
-// 1,000 stands for the ladder.
+// (docs/standards.md, "Benchmarks"): a restore took 47.1 ms and a snapshot 31.4
+// ms, the slowest of three runs. The cost grows with the count, so 1,000 stands
+// for the ladder.
 var snapshotSizes = []int{10, 1_000}
 
 // newPersistedBench is a bench whose KMS is persisted under a temp dir, as

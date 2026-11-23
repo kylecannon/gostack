@@ -16,9 +16,8 @@ import (
 // 100 groups. The rows of many small queues are BenchmarkSQSSnapshot and
 // BenchmarkSQSRestoreExact in internal/persist.
 //
-// The queue held 100000 messages in 1000 groups, which the 10 ms rule leaves out
-// (docs/standards.md, "Benchmarks"): the slowest of three runs at
-// -benchtime=500ms on linux/arm64 in a golang:1.27.4 container took 76.5 ms
+// The queue held 100000 messages in 1000 groups, which is left out
+// (docs/standards.md, "Benchmarks"): the slowest of three runs took 76.5 ms
 // (standard) and 177.1 ms (FIFO) to save, and 314.3 ms and 446.8 ms to restore.
 // The cost grows with the count, so the 1000 stands for the ladder, and it no
 // longer shows a save's lock hold or allocation at the size of a very large

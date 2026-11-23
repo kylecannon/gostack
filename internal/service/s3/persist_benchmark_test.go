@@ -16,7 +16,7 @@ import (
 // "Benchmarks", axis "Persistence"). They are sub-benchmarks of the same
 // functions as the persistence-off rows, under a persist=on key:
 //
-//	BenchmarkPutObject/persist=on/payload=1MiB/concurrency=16
+//	BenchmarkPutObject/persist=on/payload=1MiB/concurrency=1
 //
 // benchstat lines them up with the rows that have no persist key by splitting
 // the columns on it: benchstat -col /persist bench.txt.

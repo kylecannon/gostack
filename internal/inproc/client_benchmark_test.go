@@ -83,12 +83,11 @@ func enqueueAll(b *testing.B, client *inproc.Client, calls []inproc.Call, concur
 	answered.Wait()
 }
 
-// tooSlowToGate reports the cells BenchmarkGetObject leaves out under the 10 ms
-// rule (docs/standards.md, "Benchmarks"): payload=8MiB at concurrency=16, 16
-// bodies of 8 MiB an iteration, took 28.1 ms buffered and 9.5 ms streamed, the
-// slowest of three runs at -benchtime=500ms on linux/arm64 in a golang:1.27.4
-// container. The same body at one call stays in both modes (3.8 ms buffered,
-// 1.0 ms streamed), and so does 512B at 16.
+// tooSlowToGate reports the cells BenchmarkGetObject leaves out (docs/standards.md,
+// "Benchmarks"): payload=8MiB at concurrency=16, 16 bodies of 8 MiB an
+// iteration, took 28.1 ms buffered and 9.5 ms streamed, the slowest of three
+// runs. The same body at one call stays in both modes (3.8 ms buffered, 1.0 ms
+// streamed), and so does 512B at 16.
 func tooSlowToGate(size int64, concurrency int) bool {
 	return size == eightMiB && concurrency == 16
 }

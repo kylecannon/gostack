@@ -81,9 +81,8 @@ func BenchmarkIndexInsert(b *testing.B) {
 
 // tooSlowToGate leaves out keys=100000 with no delimiter of
 // BenchmarkListObjectsV2Paging (docs/standards.md, "Benchmarks"): paging the
-// 100,000 keys flat took 30.8 ms, the slowest of three runs at
-// -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. The 100,000
-// keys with a delimiter stay (0.3 ms), and keys=10000 with none covers the flat
+// 100,000 keys flat took 30.8 ms, the slowest of three runs. The 100,000 keys
+// with a delimiter stay (0.3 ms), and keys=10000 with none covers the flat
 // paging (2.6 ms).
 func tooSlowToGate(keys int, delimiter string) bool {
 	return keys == 100_000 && delimiter == ""

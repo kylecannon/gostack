@@ -261,8 +261,14 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// snapshotSizes are the parameters a snapshot and a restore run at. 10,000 is
+// left out (docs/standards.md, "Benchmarks"): a restore of them took 9.6 ms and
+// a snapshot 5.8 to 10.2 ms, the slowest of three runs. The cost grows with the
+// count, so 1,000 stands for the ladder.
+var snapshotSizes = []int{10, 1_000}
+
 func BenchmarkSnapshot(b *testing.B) {
-	for _, n := range benchSizes {
+	for _, n := range snapshotSizes {
 		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
 			p, _ := filled(b, n)
 
@@ -280,15 +286,8 @@ func BenchmarkSnapshot(b *testing.B) {
 	}
 }
 
-// restoreSizes are the parameters a restore runs at. 10,000 is left out under
-// the 10 ms rule (docs/standards.md, "Benchmarks"): a restore of them took 9.6
-// ms, the slowest of three runs at -benchtime=500ms on linux/arm64 in a
-// golang:1.27.4 container. A snapshot of 10,000 took 5.8 ms there and stays on
-// benchSizes. The cost grows with the count, so 1,000 stands for the ladder.
-var restoreSizes = []int{10, 1_000}
-
 func BenchmarkRestore(b *testing.B) {
-	for _, n := range restoreSizes {
+	for _, n := range snapshotSizes {
 		b.Run("params="+strconv.Itoa(n), func(b *testing.B) {
 			p, _ := filled(b, n)
 
@@ -346,12 +345,11 @@ func nextToken(h http.Handler, w *sink, op string, body obj, token string) (stri
 // with a cursor. The benchmarks also ran at 100,000, which took about 8 s of
 // the 12.5 s one run of the two took and showed the same thing.
 //
-// They run at 1,000 under the 10 ms rule (docs/standards.md, "Benchmarks"). At
-// 10,000 the walks took 17.2 ms (DescribeParameters) and 16.1 ms
-// (GetParametersByPath) and the deletion 51.9 ms, the slowest of three runs at
-// -benchtime=500ms on linux/arm64 in a golang:1.27.4 container. A walk from the
-// first parameter on every page would take about 7 ms at 1,000 (the 748 ms
-// above, scaled by the square), against under 2 ms with a cursor.
+// They run at 1,000 (docs/standards.md, "Benchmarks"). At 10,000 the walks took
+// 17.2 ms (DescribeParameters) and 16.1 ms (GetParametersByPath) and the
+// deletion 51.9 ms, the slowest of three runs. A walk from the first parameter
+// on every page would take about 7 ms at 1,000 (the 748 ms above, scaled by the
+// square), against under 2 ms with a cursor.
 const listAllSize = 1_000
 
 // BenchmarkPageThrough reads every parameter of a store a page at a time, one

@@ -29,12 +29,11 @@ const headerCRC32 = "X-Amz-Checksum-Crc32"
 // completion, and with a COMPOSITE CRC32 checked on every part.
 //
 // The cell was 64 MiB in eight 8 MiB parts, which took 177.0 ms with the
-// checksum and 267.7 ms without (the slowest of three runs at -benchtime=500ms
-// on linux/arm64 in a golang:1.27.4 container), so it is left out under the
-// 10 ms rule (docs/standards.md, "Benchmarks"). No cell with more than one part
-// fits it: every part but the last has to be 5 MiB, and one took about 25 ms on
-// a darwin/arm64 laptop. So this measures one part (7.4 ms without the checksum
-// and 6.0 ms with it, on the container), and no longer the assembly of several.
+// checksum and 267.7 ms without (the slowest of three runs), so it is left out
+// (docs/standards.md, "Benchmarks"). No cell with more than one part fits:
+// every part but the last has to be 5 MiB, and one took about 25 ms on a
+// darwin/arm64 laptop. So this measures one part (7.4 ms without the checksum
+// and 6.0 ms with it), and no longer the assembly of several.
 func BenchmarkMultipartUpload(b *testing.B) {
 	const (
 		objectSize = 1 << 20

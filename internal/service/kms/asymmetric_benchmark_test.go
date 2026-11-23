@@ -60,10 +60,9 @@ func specConcurrency(spec string) []int {
 	}
 }
 
-// tooSlowToGate reports the Sign cells the 10 ms rule leaves out (docs/standards.md,
+// tooSlowToGate reports the Sign cells that are left out (docs/standards.md,
 // "Benchmarks"): Sign RSA_3072 at concurrency 16 took 28.8 ms, the slowest of
-// three runs at -benchtime=500ms on linux/arm64 in a golang:1.27.4 container;
-// at one call it takes 3.4 ms. Verify is a public-key operation and keeps every
+// three runs; at one call it takes 3.4 ms. Verify is a public-key operation and keeps every
 // cell (1.5 ms at 16).
 func tooSlowToGate(operation, spec string, workers int) bool {
 	return operation == "Sign" && spec == rsa3072 && workers > 1

@@ -32,14 +32,13 @@ type snapshotCell struct{ queues, messages int }
 // The messages per queue are not 1000 everywhere. A snapshot is one json
 // document held in memory twice over, so 1000 messages of 64KiB in each of 10
 // queues is 640 MiB of bodies and 1000 queues of them is 62 GiB. Each cell
-// that holds messages holds a few MiB of bodies instead (the 10 ms rule of
-// docs/standards.md, "Benchmarks", holds it to what one snapshot takes in under
-// 8 ms: queues=10 messages=100 took 11.0 ms and queues=1000 messages=1 12.3 ms
-// on linux/arm64, the slowest of three runs at -benchtime=500ms in a
-// golang:1.27.4 container):
+// that holds messages holds 25 or 16 MiB of bodies instead, what one snapshot
+// takes in a time the gate can compare (docs/standards.md, "Benchmarks";
+// queues=10 messages=100 took 11.0 ms and queues=1000 messages=1 12.3 ms, the
+// slowest of three runs):
 //
-//	queues=10    messages=40   (a few busy queues, 4.4 ms)
-//	queues=250   messages=1    (many queues, each with something in it, 3.1 ms)
+//	queues=10    messages=40   (a few busy queues, 25 MiB, 4.4 ms)
+//	queues=250   messages=1    (many queues, each with something in it, 16 MiB, 3.1 ms)
 //
 // queues=1000 with messages=100 is dropped. It runs the same code as the cell
 // above it, 100 times larger.
@@ -108,24 +107,21 @@ func newFilledProvider(b *testing.B, queues, messages int) *sqsservice.Provider 
 
 // roundTripCells are the cells of BenchmarkSQSFlushWrite and
 // BenchmarkSQSRestoreExact: snapshotCells cut down to what the gate can compare.
-// One operation of a cell has to finish in 10 ms, so that a run at
-// -benchtime=500ms makes at least 50 iterations (docs/standards.md,
-// "Benchmarks"). The cells of snapshotCells that hold messages hold 62 MiB of
-// bodies, and an operation on them took 61 to 166 ms, 4 to 9 iterations. These
-// hold 2.5 MiB, the 64KiB payload kept:
+// The cells that held messages in snapshotCells before it was cut held 62 MiB of
+// bodies, and an operation on them took 61 to 166 ms (docs/standards.md,
+// "Benchmarks"). These hold 2.5 MiB, the 64KiB payload kept:
 //
 //	queues=10    messages=4    (a few busy queues)
 //	queues=40    messages=1    (many queues, each with something in it)
 //
 // The cells left out are queues=10 messages=100 and queues=1000 messages=1,
-// which BenchmarkSQSSnapshot still runs. On linux/arm64 (a container with 4
-// cpus, tmpfs), an operation took at most 3.3 ms of flush (queues=1000
-// messages=0) and 4.3 ms of restore (queues=40 messages=1) in three runs at
-// -benchtime=500ms, at 135 or more iterations. With TMPDIR on a loop-mounted
-// ext4 image in the same container, the slowest of three runs was 6.7 ms for
-// BenchmarkSQSFlushFsync (queues=250 messages=0, the fsync of the snapshot and
-// its directory), 4.1 ms for BenchmarkSQSRestoreExact (queues=40 messages=1)
-// and 2.2 ms for BenchmarkSQSFlushWrite (queues=1000 messages=0).
+// which BenchmarkSQSSnapshot still runs at the sizes of snapshotCells. An
+// operation took at most 3.3 ms of flush (queues=1000 messages=0) and 4.3 ms of
+// restore (queues=40 messages=1) on tmpfs, and the slowest of three runs on an
+// ext4 volume was 6.7 ms for BenchmarkSQSFlushFsync (queues=250 messages=0, the
+// fsync of the snapshot and its directory), 4.1 ms for BenchmarkSQSRestoreExact
+// (queues=40 messages=1) and 2.2 ms for BenchmarkSQSFlushWrite (queues=1000
+// messages=0).
 //
 // The gate's runners (linux/amd64, 4 cpus: AMD EPYC 7763 and 9V45, Intel Xeon
 // 6975P-C; 8 hosts, 8 runs each at -benchtime=500ms, verification/SQ-466/
@@ -203,13 +199,12 @@ func BenchmarkSQSFlushWrite(b *testing.B) {
 // fsync time is how fast the runner's disk takes their data, and that is not
 // this code.
 //
-// The 10 ms rule of roundTripCells holds for it too, and queues=1000 is left out
-// for it: on the disk of a linux/arm64 container (4 cpus, a Docker VM's disk) an
-// operation took 7.0 to 8.1 ms, too near the limit for a runner with a slower
-// disk. The two below took 1.7 to 9.2 ms (queues=10, a 3.9 KB file) and 2.4 to
-// 5.4 ms (queues=250) there, in 9 runs of -benchtime=500ms with nothing else
-// using the disk, at 93 or more iterations. Those are that VM's disk, which
-// swung that much between runs; no cell is smaller than queues=10.
+// queues=1000 is left out for it (docs/standards.md, "Benchmarks"): on the disk
+// of a Docker VM an operation took 7.0 to 8.1 ms, too near the limit for a
+// runner with a slower disk. The two below took 1.7 to 9.2 ms (queues=10, a 3.9
+// KB file) and 2.4 to 5.4 ms (queues=250) there, in 9 runs with nothing else
+// using the disk. Those are that VM's disk, which swung that much between runs;
+// no cell is smaller than queues=10, and queues=10 is kept at its size on main.
 //
 // The gate's runners (linux/amd64, 8 hosts, 8 runs each at -benchtime=500ms,
 // verification/SQ-466/amd-558134a) timed queues=10 under its old name,
