@@ -599,8 +599,8 @@ anything, and a throttle otherwise:
 | --- | --- | --- |
 | either | fits the room now | admitted (reserved at the two reserving checks) |
 | no, at every weigh | misses | the decode budget's answer, too large |
-| yes, at some weigh | misses the floor: cannot fit alone | the decode budget's answer, too large |
-| yes, at some weigh | fits the floor, or no floor is shown | `400 ThrottlingException` (`protocol.ErrHeapBusy`) |
+| yes, at some weigh | misses the floor, which is zero when none is shown: cannot fit alone | the decode budget's answer, too large |
+| yes, at some weigh | fits the floor; when none is shown, its own bytes and the body fit the room | `400 ThrottlingException` (`protocol.ErrHeapBusy`) |
 
 - **The floor** is what stays live without the other requests: what a
   collection found live, less what they reserve, never below zero, since a
@@ -614,10 +614,16 @@ anything, and a throttle otherwise:
   after its collection began, or when it ran no collection. The check before
   the lane counts nothing live, so its floor is zero.
 - **Sticky busy:** once a check has seen another request's reservation, or one
-  given back during it, it stays a throttle for the rest of that check. Its
-  collection can mark that request's value live just before the request is
-  answered, so the second weigh finds nothing reserved by others and no room
-  for that value alone (SQ-508 M1). The retry, alone, gets the right answer.
+  given back during it, a later miss stays a throttle for the rest of that
+  check unless a fresh floor proves it. Its collection can mark that request's
+  value live just before the request is answered, so the second weigh finds
+  nothing reserved by others and no room for that value alone (SQ-508 M1). The
+  retry, alone, gets the right answer. A floor is fresh when no reservation was
+  given back after the check's own collection began: a request answered after
+  the first weigh and before the collection leaves it fresh, and a miss against
+  it is too large. Sticky busy holds within one weigh attempt; the
+  projected-heap weigh, the lane's own reservation and the final reservation
+  are separate attempts.
 - **What the floor counts as staying:** bodies and decodings held under the
   in-flight bound reserve nothing on the heap. The floor counts them as
   staying, as a check with no other reservation does.
