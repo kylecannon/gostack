@@ -12,22 +12,40 @@ import (
 // verdict was one function (TakeDenseLane, ReserveHeapBeside, fakeHeap), so
 // they run on the earlier code too and fail there.
 
-// collectionMiB is a mebibyte.
-const collectionMiB = 1 << 20
+const (
+	// collectionMiB is a mebibyte.
+	collectionMiB = 1 << 20
+	// collectionHeapRoom is the room these tests weigh against.
+	collectionHeapRoom = 100 * collectionMiB
+)
 
-// collectionRoom gives the fake heap (fakeHeap) room bytes past the in-flight
-// bound and HeapSlack, for one test.
-func collectionRoom(t *testing.T, room int64) {
+// collectionRoom gives the fake heap (fakeHeap) collectionHeapRoom past the
+// in-flight bound and HeapSlack, for one test, and puts back what is reserved
+// and the lane at its end, so that a test that fails before its releases
+// leaves nothing to the next.
+func collectionRoom(t *testing.T) {
 	t.Helper()
 
 	fakeHeap(t, 0, 0)
+
+	heap.mu.Lock()
+	reserved := heap.reserved
+	heap.mu.Unlock()
+
+	t.Cleanup(func() {
+		heap.mu.Lock()
+		heap.reserved = reserved
+		heap.mu.Unlock()
+
+		denseLane.Store(false)
+	})
 
 	bound, _ := InFlight()
 	if bound == 0 {
 		bound = DefaultInFlight
 	}
 
-	debug.SetMemoryLimit(bound + HeapSlack + room)
+	debug.SetMemoryLimit(bound + HeapSlack + collectionHeapRoom)
 }
 
 // Test_TakeDenseLane_AnotherAnsweredDuringTheCollectionStaysBusy (M1): Y keeps
@@ -38,7 +56,7 @@ func collectionRoom(t *testing.T, room int64) {
 // room, for Y's value alone: X is throttled, not refused as too large, and
 // served when sent again.
 func Test_TakeDenseLane_AnotherAnsweredDuringTheCollectionStaysBusy(t *testing.T) {
-	collectionRoom(t, 100*collectionMiB)
+	collectionRoom(t)
 
 	lane, releaseY, err := TakeDenseLane(35*collectionMiB, 35*collectionMiB)
 	require.NoError(t, err)
@@ -73,7 +91,7 @@ func Test_TakeDenseLane_AnotherAnsweredDuringTheCollectionStaysBusy(t *testing.T
 // the final reservation): the same with the body's own bytes reserved, its
 // estimate weighed beside them.
 func Test_ReserveHeapBeside_AnotherAnsweredDuringTheCollectionStaysBusy(t *testing.T) {
-	collectionRoom(t, 100*collectionMiB)
+	collectionRoom(t)
 
 	own, err := ReserveHeapBeside(collectionMiB, 0)
 	require.NoError(t, err)
@@ -106,7 +124,7 @@ func Test_ReserveHeapBeside_AnotherAnsweredDuringTheCollectionStaysBusy(t *testi
 // one was given back during X's attempt, so what the collection found live is
 // not what stays: X is throttled, and served when sent again.
 func Test_TakeDenseLane_AReservationTakenAndGivenBackDuringTheCollectionIsBusy(t *testing.T) {
-	collectionRoom(t, 100*collectionMiB)
+	collectionRoom(t)
 
 	live := int64(60 * collectionMiB) // the table, and an earlier value the last collection found
 	heap.read = func() (int64, int64) { return live, live }

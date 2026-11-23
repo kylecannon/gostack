@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"runtime/debug"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,7 +19,7 @@ const verdictMiB = 1 << 20
 func Test_heapVerdict_Table(t *testing.T) {
 	const m = verdictMiB
 
-	const room = 100 * verdictMiB
+	const room = collectionHeapRoom
 
 	cases := []struct {
 		name string
@@ -110,29 +109,12 @@ func Test_heapVerdict_Table(t *testing.T) {
 	assert.Equal(t, int64(0), heapFloor(10, 20), "the floor is never below zero")
 }
 
-// verdictRoom gives the heap room bytes past the in-flight bound and
-// HeapSlack, with a fake heap (fakeHeap) for one test.
-func verdictRoom(t *testing.T, room int64) {
-	t.Helper()
-
-	fakeHeap(t, 0, 0)
-
-	bound, _ := InFlight()
-	if bound == 0 {
-		bound = DefaultInFlight
-	}
-
-	debug.SetMemoryLimit(bound + HeapSlack + room)
-}
-
 // Test_weighHeap_AStaleFloorIsBusy: a body that would miss the floor were it
 // read from a fresh collection is throttled when another reservation is given
 // back after the collection began: what it found live can be that request's
 // value. Sent again with the floor fresh, the same body is too large.
 func Test_weighHeap_AStaleFloorIsBusy(t *testing.T) {
-	const room = 100 * verdictMiB
-
-	verdictRoom(t, room)
+	collectionRoom(t)
 
 	// Another request reserves 1 byte and a second one 10 MiB; 55 MiB are
 	// live, a table's but for what the two cover.
@@ -165,9 +147,9 @@ func Test_weighHeap_AStaleFloorIsBusy(t *testing.T) {
 // reservation either: what stays without it is the table less that byte. The
 // body is too large on every attempt, not throttled.
 func Test_TakeDenseLane_StoredDataBesideAOneByteReservationIsTooLarge(t *testing.T) {
-	const room = 100 * verdictMiB
+	const room = collectionHeapRoom
 
-	verdictRoom(t, room)
+	collectionRoom(t)
 
 	live := int64(50*verdictMiB + 1)
 	heap.read = func() (int64, int64) { return live, live }
@@ -197,9 +179,7 @@ func Test_TakeDenseLane_StoredDataBesideAOneByteReservationIsTooLarge(t *testing
 // 1-byte reservation either. A body that fits alone beside another's value is
 // throttled, and served once that request is answered.
 func Test_ReserveHeapBeside_StoredDataBesideAOneByteReservationIsTooLarge(t *testing.T) {
-	const room = 100 * verdictMiB
-
-	verdictRoom(t, room)
+	collectionRoom(t)
 
 	own, err := ReserveHeapBeside(10*verdictMiB, 0)
 	require.NoError(t, err)
