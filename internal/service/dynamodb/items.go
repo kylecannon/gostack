@@ -65,8 +65,10 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 		return nil, err
 	}
 
-	change, err := e.data.Write(in.Item, func(old value.Packed) (value.Item, error) {
-		return in.Item, guard.checkPacked(old)
+	packed := prepack(in.Item)
+
+	change, err := e.data.WritePacked(in.Item, func(old value.Packed) (value.Item, value.Packed, error) {
+		return in.Item, packed, guard.checkPacked(old)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -80,6 +82,20 @@ func (p *Provider) PutItem(ctx context.Context, in *api.PutItemInput) (*api.PutI
 	}
 
 	return out, nil
+}
+
+// prepack is a put's item packed before the table's lock is taken, so the
+// write under the lock stores the bytes rather than encoding them there. A put
+// whose condition fails throws them away. An item Pack refuses gives "": the
+// write packs it again and returns the error where it always has, after the
+// condition.
+func prepack(item value.Item) value.Packed {
+	packed, err := value.Pack(item)
+	if err != nil {
+		return ""
+	}
+
+	return packed
 }
 
 // GetItem reads the item with a key, projected by its ProjectionExpression

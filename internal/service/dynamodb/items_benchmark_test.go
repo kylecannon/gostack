@@ -159,6 +159,33 @@ func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
 	}
 }
 
+// BenchmarkPutItemConditionFailed is a PutItem whose condition fails on the
+// stored item it would replace, at concurrency 1: PutItem packs the item
+// before it takes the table's lock, so this is what a refused put pays for
+// the item it throws away. Names carry the payload, for example
+//
+//	BenchmarkPutItemConditionFailed/payload=4KiB
+func BenchmarkPutItemConditionFailed(b *testing.B) {
+	for _, payload := range itemPayloads {
+		b.Run("payload="+payload.name, func(b *testing.B) {
+			s := newStack(b)
+			s.ok(b, opCreate, hashTable(benchTable))
+			s.ok(b, opPut, putBody(0, payload.size))
+
+			body := strings.TrimSuffix(putBody(0, payload.size), "}") +
+				`,"ConditionExpression":"attribute_not_exists(id)"}`
+
+			b.SetBytes(int64(payload.size))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				got := s.call(b, usEast1, opPut, body)
+				require.Equal(b, http.StatusBadRequest, got.status, got.body)
+			}
+		})
+	}
+}
+
 // BenchmarkDeleteItem deletes one stored item a call, with ReturnValues NONE
 // or ALL_OLD; the put that stores it again runs with the timer stopped. Names
 // carry the axes, for example

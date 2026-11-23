@@ -132,7 +132,10 @@ type txAction struct {
 	name  string
 	entry *tableEntry
 	// key locates the item: Put's whole item, or the others' key.
-	key       value.Item
+	key value.Item
+	// packed is Put's item packed before the tables' locks are taken, ""
+	// for the other actions.
+	packed    value.Packed
 	update    *expression.UpdateExpr
 	condition expression.Condition
 	returnOld bool
@@ -146,9 +149,11 @@ type txResult struct {
 	// old is the item stored as the table stores it, "" for none: an update
 	// writes into the item it unpacked, so the item undo puts back, and the
 	// capacity counted, are read from here.
-	old   value.Packed
-	new   value.Item
-	write bool
+	old value.Packed
+	new value.Item
+	// packed is new packed, when a put packed it before the locks, or "".
+	packed value.Packed
+	write  bool
 }
 
 // TransactWriteItems applies up to 100 puts, updates, deletes and condition
@@ -193,6 +198,12 @@ func (p *Provider) runTransaction(
 	engines := make([]*table.Table, len(actions))
 	for i, a := range actions {
 		engines[i] = a.entry.data
+
+		// A put stores its item as it is, so it is packed here, before
+		// the locks. One whose key cancels the transaction is not.
+		if a.op == opPut && a.keyMismatch == "" {
+			a.packed = prepack(a.key)
+		}
 	}
 
 	// A transaction without a token still drops the expired ones, so they
@@ -264,7 +275,9 @@ func applyTransaction(actions []*txAction) ([]txResult, error) {
 			continue
 		}
 
-		_, err := a.entry.data.WriteHeld(a.key, func(value.Packed) (value.Item, error) { return results[i].new, nil })
+		_, err := a.entry.data.WriteHeldPacked(a.key, func(value.Packed) (value.Item, value.Packed, error) {
+			return results[i].new, results[i].packed, nil
+		})
 		if err != nil {
 			undo(actions[:i], results)
 
@@ -314,7 +327,7 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 	case opConditionCheck:
 		return cancellation(reasonNone, "", nil), result, nil
 	case opPut:
-		result.new = a.key
+		result.new, result.packed = a.key, a.packed
 	default: // opUpdate has its item; opDelete stores nothing.
 	}
 

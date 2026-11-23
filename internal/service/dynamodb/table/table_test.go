@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"unsafe"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -291,6 +292,77 @@ func Test_Table_Write_decideError(t *testing.T) {
 	require.ErrorIs(t, err, refused)
 	assert.NotEmpty(t, change.OldPacked)
 	assert.NotNil(t, tbl.Get(value.Item{"pk": s("a"), "sk": n("1")}), "a refused write stores nothing")
+}
+
+// Test_Table_WritePacked: bytes a decide returns with its item are stored as
+// they are, the very string, and its index entries read their keys from them;
+// a decide that returns "" with its item has the write pack that item, and a
+// delete stores nothing whatever bytes come with it.
+func Test_Table_WritePacked(t *testing.T) {
+	item := value.Item{"pk": s("a"), "sk": n("1"), "g": s("x"), "l": s("y"), "v": s("pre")}
+	other := value.Item{"pk": s("a"), "sk": n("1"), "g": s("x"), "l": s("y"), "v": s("decided")}
+	key := value.Item{"pk": s("a"), "sk": n("1")}
+
+	pre, err := value.Pack(item)
+	require.NoError(t, err)
+
+	want, err := value.Pack(other)
+	require.NoError(t, err)
+
+	t.Run("prepacked", func(t *testing.T) {
+		tbl := composite()
+
+		change, err := tbl.WritePacked(item, func(value.Packed) (value.Item, value.Packed, error) {
+			return item, pre, nil
+		})
+		require.NoError(t, err)
+
+		stored := tbl.GetPacked(key)
+		require.Equal(t, pre, stored)
+		assert.Same(t, unsafe.StringData(string(pre)), unsafe.StringData(string(stored)),
+			"the bytes decide returned are stored, not packed again")
+		assert.Equal(t, pre, change.NewPacked)
+		assert.Equal(t, item, change.New)
+		assert.Equal(t, []string{"a/1"}, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
+	})
+
+	t.Run("packedHere", func(t *testing.T) {
+		tbl := composite()
+
+		change, err := tbl.WritePacked(item, func(value.Packed) (value.Item, value.Packed, error) {
+			return other, "", nil
+		})
+		require.NoError(t, err)
+
+		// Pack writes an item's names in map order, so the item packed again
+		// is compared with its names in byte order.
+		stored := tbl.GetPacked(key)
+		require.Equal(t, ordered(want), ordered(stored), "the decided item is packed, not the request's")
+		assert.Equal(t, want.Size(), stored.Size())
+		assert.Len(t, stored, len(want))
+		assert.Equal(t, stored, change.NewPacked)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		tbl := composite()
+		put(t, tbl, item)
+
+		change, err := tbl.WritePacked(key, func(value.Packed) (value.Item, value.Packed, error) {
+			return nil, pre, nil
+		})
+		require.NoError(t, err)
+
+		assert.Empty(t, tbl.GetPacked(key))
+		assert.Empty(t, change.NewPacked)
+		assert.Empty(t, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
+	})
+}
+
+// ordered is the json of p with every map's names in byte order.
+func ordered(p value.Packed) string {
+	var o value.Orderer
+
+	return string(o.Append(nil, p))
 }
 
 func Test_Change_Changed(t *testing.T) {
