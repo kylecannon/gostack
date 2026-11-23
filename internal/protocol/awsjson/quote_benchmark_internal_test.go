@@ -22,7 +22,7 @@ var quoteTexts = []struct{ name, unit string }{
 }
 
 // BenchmarkAppendQuote quotes each kind of text at 256 B, 64 KiB and 1 MiB,
-// with appendQuote and with v2's jsontext.AppendQuote, into a buffer that is
+// with appendStrictQuote and with v2's jsontext.AppendQuote, into a buffer that is
 // already big enough.
 //
 //	BenchmarkAppendQuote/text=cjk/size=64KiB/impl=gostack
@@ -41,7 +41,7 @@ func BenchmarkAppendQuote(b *testing.B) {
 				b.SetBytes(int64(len(s)))
 
 				for b.Loop() {
-					buf, _ = appendQuote(buf[:0], s)
+					buf, _ = appendStrictQuote(buf[:0], s)
 				}
 			})
 
