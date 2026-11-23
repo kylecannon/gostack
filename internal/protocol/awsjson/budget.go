@@ -2,10 +2,12 @@ package awsjson
 
 import (
 	"bytes"
+	"context"
 	"encoding"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"reflect"
@@ -53,9 +55,11 @@ var ErrTooLarge = &awserr.Error{
 // protocol.HeapKeeper (moveBody), so a body walked and decoded past the budget
 // holds the bound no longer than one refused there. One body at a time is
 // walked and decoded past the budget (protocol.TakeDenseLane): another that
-// passes it meanwhile, or while other requests wait for room under the
-// in-flight bound, is answered protocol.ThrottledJSON where its walk passes
-// it, since it could be decoded once they are done.
+// passes it meanwhile waits its turn in the dense queue (protocol.WaitDense)
+// where its walk passes it, its bytes reserved on the heap and the in-flight
+// bound given back, and is answered protocol.ThrottledJSON only when its wait
+// ends first, the lane's holder sheds the queue for room its bytes take, or
+// its request holds nothing of the bound (moveBody).
 // The lane is given back as soon as DecodeWithin returns, on every path. Each
 // reservation lasts until the request is answered when hold keeps it
 // (HeapKeeper.KeepHeap), and until the body is decoded otherwise.
@@ -86,6 +90,10 @@ type reservations struct {
 	lane     func()
 	reserved []func()
 	moved    int64
+	// wait is the request's one deadline for the dense lane and the heap's
+	// room (protocol.WithDenseWait), from moveBody; cancel ends it at end.
+	wait   context.Context //nolint:containedctx // one request's, for its decoding only
+	cancel context.CancelFunc
 }
 
 // keep hands release, a heap reservation's, to the request's HeapKeeper, to
@@ -105,6 +113,10 @@ func (r *reservations) end() {
 
 	for _, release := range r.reserved {
 		release()
+	}
+
+	if r.cancel != nil {
+		r.cancel()
 	}
 }
 
@@ -138,7 +150,12 @@ func chargeDecode(body []byte, p *plan, budget int64, r *reservations) *awserr.E
 	// FreeDecode, so one charged past DecodeBudget has its heap bounded, and
 	// the walk moved its bytes at DecodeBudget.
 	if cost > protocol.DecodeBudget(len(body)) {
-		release, err := protocol.ReserveHeapBeside(heap+allocSize(p.heapSize), r.moved)
+		wait := r.wait
+		if wait == nil {
+			wait = context.Background()
+		}
+
+		release, err := protocol.ReserveHeapBesideContext(wait, heap+allocSize(p.heapSize), r.moved)
 
 		switch {
 		case errors.Is(err, protocol.ErrHeapBusy):
@@ -183,17 +200,30 @@ var (
 // hold is a protocol.HeapKeeper, gives back what the body and its decoding
 // hold of the in-flight bound, so that the room other requests' bodies wait
 // for is free again as soon as it would be were the body refused. It fails,
-// holding what it held and without waiting, with errNoRoom when the heap
-// provably has no room with nothing other requests hold
-// (protocol.ErrNoHeapRoom), and with errBusy when another body has the lane or
-// the heap may have room once other requests are answered
-// (protocol.ErrHeapBusy). It fails with
-// errBusy too, before taking the lane, while any request would still wait for
-// room under the in-flight bound once the body gave back what it holds of it
-// (protocol.BodiesWait): the queue then drains one body at a time, and a
-// dense body walked and decoded beside it, or walked to its end only to be
-// refused, slows what every waiting request waits on. A request that waits
-// only on the body's own bytes does not count: moving the body lets it in.
+// holding what it held, with errNoRoom at once when the heap provably has no
+// room with nothing other requests hold (protocol.ErrNoHeapRoom). When another
+// body has the lane (protocol.ErrDenseLaneTaken) or the heap may have room once
+// other requests are answered (protocol.ErrHeapBusy), a body whose request
+// holds bytes of the in-flight bound waits its turn in the dense queue
+// (protocol.WaitDense). When it joins, its own bytes are reserved on the heap,
+// kept as r keeps a reservation, and the request gives back what it holds of
+// the bound, so a waiting body holds no room that other requests' bodies
+// wait for. It waits until the request's context ends (protocol.DenseWaiter),
+// protocol.DefaultDenseWait passes, or the lane's holder sheds the queue, and
+// then fails with errBusy; a body whose bytes do not fit the heap's room
+// beside what is reserved does not join, and fails with errBusy at once. One
+// whose request holds none of the bound, which no bound counts while it
+// waits, fails with errBusy at once, and also while any body waits, so that
+// it never passes one (protocol.TryDense). Before it joins the queue, it fails
+// with errBusy too, at once and before taking the lane, while any request
+// would still wait for room under the in-flight bound once the body gave back
+// what it holds of it (protocol.BodiesWait): the queue then drains one body at
+// a time, and a dense body walked and decoded beside it, or walked to its end
+// only to be refused, slows what every waiting request waits on. A request
+// that waits only on the body's own bytes does not count: moving the body lets
+// it in. A queued body has given back the bound already, so no request waits
+// on it, and it is not asked again: a later body waiting for the bound never
+// takes an earlier one's turn.
 //
 // The heap's room is weighed for the body and the heap its walk would end at,
 // projected from the heap the first read bytes of it hold, so that a body the
@@ -215,22 +245,42 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	n := int64(len(body))
 	peak := n + projectHeap(heap, read, len(body))
 
+	r.wait, r.cancel = protocol.WithDenseWait(waitContext(r.hold))
+
+	d := &denseTry{wait: r.wait, n: n, peak: peak, own: own}
+
+	// A body that passes the room with nothing live is too large whatever
+	// waits ahead of it, so that is answered before the queue; in its turn the
+	// body is weighed again, beside what is reserved then.
 	err := protocol.CheckHeapRoom(peak)
+
+	switch {
+	case own == 0:
+		if err == nil {
+			err = protocol.TryDense(d.try)
+		}
+	case err == nil || errors.Is(err, protocol.ErrHeapBusy):
+		// A body that joins the queue holds a heap reservation for its bytes
+		// from then on, and gives back the in-flight bound, so that what
+		// other requests' bodies wait for is free while it waits.
+		err = protocol.WaitDense(r.wait, n, func(joined *protocol.DenseSeat) {
+			d.seat = joined
+
+			r.keep(joined.Release)
+			keeper.ReleasePool()
+		}, d.try)
+	default: // too large: err is the answer
+	}
+
 	if err != nil {
 		return moveRefusal(err)
 	}
 
-	if protocol.BodiesWait(own) {
-		return errBusy
-	}
+	r.lane, r.moved = d.lane, n
 
-	lane, release, err := protocol.TakeDenseLane(n, peak)
-	if err != nil {
-		return moveRefusal(err)
+	if d.release != nil {
+		r.keep(d.release)
 	}
-
-	r.lane, r.moved = lane, n
-	r.keep(release)
 
 	if keeps {
 		keeper.ReleasePool()
@@ -239,15 +289,69 @@ func moveBody(body []byte, r *reservations, heap, read int64) error {
 	return nil
 }
 
+// denseTry is moveBody's try at the dense lane for a body of n bytes whose
+// decoding is projected to keep peak, under the request's one deadline, wait:
+// from its seat once it has joined the dense queue (protocol.DenseSeat), and
+// otherwise after the checks before the lane. lane and release are what it
+// took; a seat's reservation is kept when the body joins, so release is nil
+// then.
+type denseTry struct {
+	wait          context.Context //nolint:containedctx // the request's deadline (reservations.wait)
+	n, peak, own  int64
+	seat          *protocol.DenseSeat
+	lane, release func()
+}
+
+func (d *denseTry) try() error {
+	var err error
+
+	if d.seat != nil {
+		// Queued: the seat's reservation is the body's, and becomes the
+		// lane's.
+		d.lane, err = d.seat.TakeLane(d.wait, d.peak)
+		if err != nil {
+			return fmt.Errorf("take the dense lane for %d bytes from the queue: %w", d.peak, err)
+		}
+
+		return nil
+	}
+
+	err = protocol.CheckHeapRoom(d.peak)
+	if err != nil {
+		return fmt.Errorf("weigh the room for %d bytes: %w", d.peak, err)
+	}
+
+	if protocol.BodiesWait(d.own) {
+		return errBusy
+	}
+
+	d.lane, d.release, err = protocol.TakeDenseLaneContext(d.wait, d.n, d.peak)
+	if err != nil {
+		return fmt.Errorf("take the dense lane for %d bytes: %w", d.peak, err)
+	}
+
+	return nil
+}
+
 // moveRefusal is moveBody's answer to a refusal of the lane or the heap:
-// errBusy for what other requests hold (protocol.ErrDenseLaneTaken,
-// protocol.ErrHeapBusy) and errNoRoom otherwise.
+// errBusy for what other requests hold or wait for (protocol.ErrDenseLaneTaken,
+// protocol.ErrHeapBusy, errBusy) and errNoRoom otherwise.
 func moveRefusal(err error) error {
-	if errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
+	if errors.Is(err, errBusy) || errors.Is(err, protocol.ErrDenseLaneTaken) || errors.Is(err, protocol.ErrHeapBusy) {
 		return errBusy
 	}
 
 	return errNoRoom
+}
+
+// waitContext is the context that ends a dense body's wait in the queue: its
+// request's (protocol.DenseWaiter), or none for a hold that names none.
+func waitContext(hold protocol.DecodeHolder) context.Context {
+	if waiter, ok := hold.(protocol.DenseWaiter); ok {
+		return waiter.WaitContext()
+	}
+
+	return context.Background()
 }
 
 // projectHeap is the heap a walk of a body of n bytes ends at, were the rest
