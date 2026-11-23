@@ -36,6 +36,7 @@ make image-slim          # docker/Dockerfile.slim as IMAGE_SLIM
 make bench               # every Benchmark*, BENCH_COUNT runs into BENCH_OUT
 make bench-system        # system bench, full profile; builds both images, over an hour
 make bench-system-quick  # system bench, quick profile, gostack only; about 5 minutes
+make bench-system-large  # large DynamoDB tables under a container memory limit (BENCH_LARGE_MEMORY)
 make -s toolchain        # print the pinned toolchain
 make -s packages FILES=  # print the packages that hold FILES
 ```

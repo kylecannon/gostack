@@ -98,8 +98,10 @@ jobs:
         working-directory: head
         run: make image IMAGE=gostack:head
       # One run measures both images with the head's load generator. It alternates
-      # them in every repeated measurement (base head, head base, ...), so a
-      # runner that slows down or speeds up during the job moves both sides alike.
+      # them in every repeated measurement (base head, head base, ...), and the
+      # round count runs on from one cell to the next, so which side goes first
+      # alternates across cells too. A runner that slows down or speeds up during
+      # the job moves both sides alike.
       # The base's result goes under base/ and the head's under head/. Each cell
       # runs five times a side, not the default three: compare fails a metric
       # whose ranges do not overlap, which three runs a side of pure noise do

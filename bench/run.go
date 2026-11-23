@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +55,132 @@ const (
 	variantNoHealthcheck = "no-healthcheck"
 )
 
+// memoryLimit is what -memory accepts: a number of bytes with a b, k, m or g after
+// it in either case, as docker run --memory takes them (1G, 1g, 512m).
+var memoryLimit = regexp.MustCompile(`^([1-9][0-9]*)([bBkKmMgG]?)$`)
+
+// memoryUnits is what the unit of a -memory value multiplies it by; none is bytes.
+var memoryUnits = map[string]uint64{"": 1, "b": 1, "k": bytesPerKiB, "m": bytesPerMiB, "g": bytesPerGiB}
+
+// memoryFloor is the least docker run --memory accepts, 6 MiB.
+const memoryFloor = 6 * bytesPerMiB
+
+// errMemory reports a -memory value docker run would refuse.
+var errMemory = errors.New("memory limit")
+
+// parseMemory is the bytes of a -memory value. It refuses what docker run
+// --memory would: a value that is not a number with a unit, one too big for a
+// count of bytes, and one under memoryFloor (4096, 2b and 100k are).
+func parseMemory(s string) (uint64, error) {
+	m := memoryLimit.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("%w: want a number of bytes with an optional b, k, m or g, such as 1g", errMemory)
+	}
+
+	n, err := strconv.ParseUint(m[1], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", errMemory, err)
+	}
+
+	unit := memoryUnits[strings.ToLower(m[2])]
+
+	if n > math.MaxUint64/unit {
+		return 0, fmt.Errorf("%w: more than a count of bytes holds", errMemory)
+	}
+
+	if n*unit < memoryFloor {
+		return 0, fmt.Errorf("%w: docker takes at least 6m", errMemory)
+	}
+
+	return n * unit, nil
+}
+
+// profileSpec is what a profile runs, which the run reads from profileSpecs and
+// never from the profile's name. What the table leaves out is each workload's own
+// choice of cells for a profile (its Cells).
+type profileSpec struct {
+	name string
+	// about is the profile's line in the help of -profile.
+	about string
+	// targets is the default of -targets.
+	targets string
+	// settle and idle are the default idle windows.
+	settle, idle time.Duration
+	// footprint is whether the run times startup, first use and idle memory, and
+	// agentic whether it runs each service's create, use and delete cycle.
+	footprint, agentic bool
+	// noHealthcheck is whether the idle windows run a second time on a target with
+	// its HEALTHCHECK off.
+	noHealthcheck bool
+	// large is whether the profile runs the large workloads and no others, and no
+	// other profile runs them. Its cells run under a memory limit, which -memory
+	// replaces.
+	large bool
+}
+
+var profileSpecs = []profileSpec{
+	{
+		name:          profileFull,
+		about:         "the whole matrix",
+		targets:       targetGostack + "," + targetSlim + "," + targetLocalstack,
+		settle:        fullSettle,
+		idle:          fullIdle,
+		footprint:     true,
+		agentic:       true,
+		noHealthcheck: true,
+	},
+	{
+		name:      profileQuick,
+		about:     "each axis once at concurrency 16, and the base cell at 1 and 64",
+		targets:   targetGostack,
+		settle:    quickSettle,
+		idle:      quickIdle,
+		footprint: true,
+		agentic:   true,
+	},
+	// The large profile measures its cells and nothing else: the startup, idle and
+	// agentic runs of the other profiles are not what it is for, and each would add
+	// minutes to a run that is already long.
+	{
+		name:    profileLarge,
+		about:   "the large-table workloads alone, each cell a table of its own under a memory limit",
+		targets: targetGostack,
+		settle:  fullSettle,
+		idle:    fullIdle,
+		large:   true,
+	},
+}
+
+// profileOf is the spec of a profile by name.
+func profileOf(name string) (profileSpec, bool) {
+	i := slices.IndexFunc(profileSpecs, func(p profileSpec) bool { return p.name == name })
+	if i < 0 {
+		return profileSpec{}, false
+	}
+
+	return profileSpecs[i], true
+}
+
+// profileNames lists the profiles as an error says them: "full, quick or large".
+func profileNames() string {
+	names := make([]string, len(profileSpecs))
+	for i, p := range profileSpecs {
+		names[i] = p.name
+	}
+
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
+}
+
+// profileHelp is the help of -profile: each profile and what it runs.
+func profileHelp() string {
+	lines := make([]string, len(profileSpecs))
+	for i, p := range profileSpecs {
+		lines[i] = p.name + ": " + p.about
+	}
+
+	return strings.Join(lines, ". ")
+}
+
 // target is one image to measure. Only a target that persists runs the cells
 // that set a persistence variable, such as PERSIST_SQS=1.
 type target struct {
@@ -92,6 +220,7 @@ type options struct {
 	baseImage        string
 	baseCommit       string
 	baseOut          string
+	memory           string
 	startupRuns      int
 	firstUseRuns     int
 	idleRuns         int
@@ -110,7 +239,7 @@ func parseOptions(args []string) (options, error) {
 	localstack := flags.String("localstack-image", "gostack-parity-localstack:8b9a79f",
 		"the LocalStack image the parity harness builds")
 	targets := flags.String("targets", "", "comma separated targets: gostack, gostack-slim, localstack "+
-		"(default: all for the full profile, gostack for the quick one)")
+		"(default: all for the full profile, gostack for the others)")
 
 	services := flags.String("services", "", "comma separated services whose cells and agentic cycle run (default: all)")
 
@@ -286,8 +415,10 @@ func (o *options) bind(flags *flag.FlagSet) {
 
 		return nil
 	})
-	flags.StringVar(&o.profile, "profile", profileFull,
-		"full: the whole matrix. quick: each axis once at concurrency 16, and the base cell at 1 and 64")
+	flags.StringVar(&o.profile, "profile", profileFull, profileHelp())
+	flags.StringVar(&o.memory, "memory", "",
+		"the memory limit of every cell that has one, as docker run --memory writes it, at least 6m "+
+			"(default: the limit of the cell)")
 	flags.StringVar(&o.loadgenImage, "loadgen-image", "gostack-bench-loadgen:dev",
 		"tag for the load generator image the run builds")
 	flags.StringVar(&o.outDir, "out", "bench/results", "directory for the result files")
@@ -315,8 +446,14 @@ func (o *options) bind(flags *flag.FlagSet) {
 
 // check refuses a setting no run can use.
 func (o *options) check() error {
-	if o.profile != profileFull && o.profile != profileQuick {
-		return fmt.Errorf("-profile %q: want %s or %s", o.profile, profileFull, profileQuick)
+	profile, ok := profileOf(o.profile)
+	if !ok {
+		return fmt.Errorf("-profile %q: want %s", o.profile, profileNames())
+	}
+
+	err := o.checkMemory(profile)
+	if err != nil {
+		return err
 	}
 
 	if o.reps < 1 || o.startupRuns < 1 || o.idleRuns < 1 {
@@ -331,13 +468,30 @@ func (o *options) check() error {
 	return nil
 }
 
-// defaultTargets are the images a profile measures when -targets is not set.
-func defaultTargets(profile string) string {
-	if profile == profileQuick {
-		return targetGostack
+// checkMemory refuses a -memory that the profile cannot use or docker would refuse.
+func (o *options) checkMemory(profile profileSpec) error {
+	if o.memory == "" {
+		return nil
 	}
 
-	return targetGostack + "," + targetSlim + "," + targetLocalstack
+	if !profile.large {
+		return fmt.Errorf("-memory %q: the %s profile has no memory limit to replace; only a profile that runs "+
+			"the large workloads has one", o.memory, o.profile)
+	}
+
+	_, err := parseMemory(o.memory)
+	if err != nil {
+		return fmt.Errorf("-memory %q: %w", o.memory, err)
+	}
+
+	return nil
+}
+
+// defaultTargets are the images a profile measures when -targets is not set.
+func defaultTargets(profile string) string {
+	spec, _ := profileOf(profile)
+
+	return spec.targets
 }
 
 // parseServices reads -services: a comma separated list of services some
@@ -374,17 +528,14 @@ func selectTargets(list string, all []target) []target {
 }
 
 func (o *options) applyProfileDefaults() {
-	settle, idle := fullSettle, fullIdle
-	if o.profile == profileQuick {
-		settle, idle = quickSettle, quickIdle
-	}
+	profile, _ := profileOf(o.profile)
 
 	if o.settle == 0 {
-		o.settle = settle
+		o.settle = profile.settle
 	}
 
 	if o.idle == 0 {
-		o.idle = idle
+		o.idle = profile.idle
 	}
 }
 
@@ -394,6 +545,20 @@ type runner struct {
 	api  *dockerAPI
 	log  io.Writer
 	seq  atomic.Int64
+	// cellRounds counts the runs of every cell so far, so that the sides alternate
+	// across cells: with one repetition a cell has one round, and a count that
+	// began again in each cell would run the base first in all of them.
+	cellRounds int
+	// runCell runs a cell once on a target; nil is cellRun. A test puts a fake here.
+	runCell func(ctx context.Context, t target, spec cellSpec) (runResult, error)
+}
+
+// takeRounds reserves the next n rounds of cell runs and returns the first.
+func (r *runner) takeRounds(n int) int {
+	first := r.cellRounds
+	r.cellRounds += n
+
+	return first
 }
 
 // orchestrate is `bench run`.
@@ -603,7 +768,14 @@ func roundOrder(round, sides int) []int {
 
 // alternate runs a measurement rounds times on every side, in roundOrder.
 func alternate(rounds, sides int, run func(round, side int)) {
-	for round := range rounds {
+	alternateFrom(0, rounds, sides, run)
+}
+
+// alternateFrom is alternate for rounds first to first+rounds-1: the order of a
+// round follows its number, so a caller that counts on across measurements keeps
+// the side that runs first changing from one to the next.
+func alternateFrom(first, rounds, sides int, run func(round, side int)) {
+	for round := first; round < first+rounds; round++ {
 		for _, side := range roundOrder(round, sides) {
 			run(round, side)
 		}
@@ -626,6 +798,44 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 		res[s].ImageBytes = size
 	}
 
+	profile, _ := profileOf(r.opts.profile)
+
+	if profile.footprint {
+		r.footprint(ctx, sides, res)
+	}
+
+	for _, spec := range cellsFor(r.opts.profile, sides[0], r.opts.services...) {
+		if ctx.Err() != nil {
+			break
+		}
+
+		for s, cell := range r.cell(ctx, sides, r.opts.withMemory(spec)) {
+			res[s].noteCell(cell)
+
+			res[s].Cells = append(res[s].Cells, cell)
+		}
+	}
+
+	if profile.agentic {
+		r.agenticAll(ctx, sides, res)
+	}
+
+	return res
+}
+
+// withMemory is the cell with the run's memory limit, when it has one and -memory
+// names another.
+func (o *options) withMemory(spec cellSpec) cellSpec {
+	if spec.limited() && o.memory != "" {
+		spec.Memory = o.memory
+	}
+
+	return spec
+}
+
+// footprint measures what the target costs doing nothing: the time to start,
+// the first use of a service and the idle memory and CPU.
+func (r *runner) footprint(ctx context.Context, sides []target, res []targetResult) {
 	startups, errs := r.startup(ctx, sides)
 	for s := range sides {
 		res[s].Startup = startups[s]
@@ -636,25 +846,9 @@ func (r *runner) measureSides(ctx context.Context, sides []target) []targetResul
 
 	r.idleVariant(ctx, sides, res, variantHealthcheck)
 
-	if r.opts.profile == profileFull {
+	if profile, _ := profileOf(r.opts.profile); profile.noHealthcheck {
 		r.idleVariant(ctx, sides, res, variantNoHealthcheck)
 	}
-
-	for _, spec := range cellsFor(r.opts.profile, sides[0], r.opts.services...) {
-		if ctx.Err() != nil {
-			break
-		}
-
-		for s, cell := range r.cell(ctx, sides, spec) {
-			res[s].noteCell(cell)
-
-			res[s].Cells = append(res[s].Cells, cell)
-		}
-	}
-
-	r.agenticAll(ctx, sides, res)
-
-	return res
 }
 
 // idleVariant measures one idle variant on every side into res.
@@ -830,12 +1024,25 @@ func (r *runner) idleRun(ctx context.Context, t target, variant string, i int) (
 // does not carry into the next.
 func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cellResult {
 	runs := make([][]runResult, len(sides))
+	failedRuns := make([][]failedRun, len(sides))
 	failed := make([][]string, len(sides))
+	first := r.takeRounds(r.opts.reps)
 
-	alternate(r.opts.reps, len(sides), func(rep, s int) {
-		run, err := r.cellRun(ctx, sides[s], spec)
+	runOnce := r.runCell
+	if runOnce == nil {
+		runOnce = r.cellRun
+	}
+
+	alternateFrom(first, r.opts.reps, len(sides), func(round, s int) {
+		rep := round - first
+
+		r.logf("%s: %s: run %d of %d, load average %s", sides[s].label(), spec.id(), rep+1, r.opts.reps,
+			loadAverage(ctx))
+
+		run, err := runOnce(ctx, sides[s], spec)
 		if err != nil {
-			failed[s] = append(failed[s], fmt.Sprintf("run %d: %v", rep+1, err))
+			failed[s] = append(failed[s], failedReason(rep+1, err, run))
+			failedRuns[s] = append(failedRuns[s], failedRun{run: run, oomKilled: errors.Is(err, errOOMKilled)})
 
 			return
 		}
@@ -846,12 +1053,29 @@ func (r *runner) cell(ctx context.Context, sides []target, spec cellSpec) []cell
 	res := make([]cellResult, len(sides))
 
 	for s, t := range sides {
-		r.logf("%s: %s: %d of %d runs", t.label(), spec.id(), len(runs[s]), r.opts.reps)
+		res[s] = withFailed(settleCell(spec, runs[s], failed[s]), failedRuns[s])
 
-		res[s] = settleCell(spec, runs[s], failed[s])
+		r.logf("%s: %s: %d of %d runs, %d OOM-killed", t.label(), spec.id(), len(runs[s]), r.opts.reps,
+			res[s].OOMKilled)
 	}
 
 	return res
+}
+
+// loadAverage is the host's load average as `uptime` prints it, for the log of a
+// run on a machine that is not quiet. It is "unknown" where there is no uptime.
+func loadAverage(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "uptime").Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	_, load, found := strings.Cut(string(out), "load average")
+	if !found {
+		return "unknown"
+	}
+
+	return strings.TrimSpace(strings.TrimLeft(load, "s:"))
 }
 
 // loadgenArgs are the flags of `loadgen cell` that describe the cell.
@@ -867,13 +1091,51 @@ func (c cellSpec) loadgenArgs() []string {
 	return args
 }
 
-func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResult, error) {
-	var extra []string
-	if spec.persists() {
-		extra = []string{"-e", spec.PersistEnv + "=1", "--tmpfs", persistDir}
+// containerArgs are the `docker run` flags of a cell's container: its persistence
+// variable and the memory limit. A persistence directory in memory (tmpfs) is
+// charged to the container's limit, so a cell with a limit keeps it on disk; the
+// limit is the swap limit too, so a container that goes over is killed, not
+// swapped.
+func (c cellSpec) containerArgs() []string {
+	var args []string
+
+	if c.persists() {
+		args = append(args, "-e", c.PersistEnv+"=1")
+
+		if !c.limited() {
+			args = append(args, "--tmpfs", persistDir)
+		}
 	}
 
-	inst, _, err := r.start(ctx, t, extra...)
+	if c.limited() {
+		args = append(args, "--memory", c.Memory, "--memory-swap", c.Memory)
+	}
+
+	return args
+}
+
+// timeout is how long the load generator may take to run the cell: its clock,
+// the slack, and the time the workload needs to fill what it loads.
+func (r *runner) timeout(spec cellSpec) time.Duration {
+	timeout := r.opts.duration + loadgenSlack
+
+	wl, err := findWorkload(spec.Service, spec.Workload)
+	if err != nil {
+		return timeout
+	}
+
+	if seeded, ok := wl.(seededWorkload); ok {
+		timeout += seeded.SeedTime(spec)
+	}
+
+	return timeout
+}
+
+// cellRun runs the cell once on a container of its own. A container the kernel
+// killed for its memory is a failed run that wraps errOOMKilled, and the run
+// returned with it holds the memory the container reached.
+func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResult, error) {
+	inst, _, err := r.start(ctx, t, spec.containerArgs()...)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -885,16 +1147,48 @@ func (r *runner) cellRun(ctx context.Context, t target, spec cellSpec) (runResul
 	used, err := r.sampled(ctx, inst.name, func(ctx context.Context) error {
 		args := append([]string{"cell"}, spec.loadgenArgs()...)
 
-		return r.loadgen(ctx, inst.name, r.opts.duration+loadgenSlack, &run,
+		return r.loadgen(ctx, inst.name, r.timeout(spec), &run,
 			append(args, "-duration", r.opts.duration.String())...)
 	})
 	run.Usage = used
 
-	if err == nil {
-		err = inst.alive(ctx)
+	return endRun(ctx, inst, spec, run, err)
+}
+
+// endRun is the run and its error once the load generator has returned: the load
+// generator's own error, and how the target container stands, read after
+// settleWait.
+func endRun(ctx context.Context, inst *instance, spec cellSpec, run runResult, loadgenErr error) (runResult, error) {
+	return run, runError(loadgenErr, inst.aliveWithin(ctx, spec.settleWait(loadgenErr, run)))
+}
+
+// settleWait is how long a run waits for its container to stop before it reads
+// the container's state. A load generator that failed may have done so the moment
+// the connection dropped, before the daemon recorded why the container stopped.
+// So may the operations of a cell with a memory limit that failed as its container
+// was dying. In any other run a container that is still running costs the whole
+// wait for nothing: a cell without a limit is not OOM-killed.
+func (c cellSpec) settleWait(loadgenErr error, run runResult) time.Duration {
+	if loadgenErr != nil || (c.limited() && run.opErrors() > 0) {
+		return oomSettle
 	}
 
-	return run, err
+	return 0
+}
+
+// runError is the error of a run from what the load generator returned and what
+// the target container's state says. A load generator that failed on a container
+// the kernel killed says why the run failed; one that failed on a container that
+// is running, or died of something else, says it itself.
+func runError(loadgenErr, died error) error {
+	switch {
+	case loadgenErr == nil:
+		return died
+	case errors.Is(died, errOOMKilled):
+		return fmt.Errorf("%w; the load generator said: %w", died, loadgenErr)
+	default:
+		return loadgenErr
+	}
 }
 
 // agentic runs a service's create, use and delete workload on a container of its
@@ -937,6 +1231,12 @@ func (r *runner) loadgen(ctx context.Context, targetName string, timeout time.Du
 
 	raw, err := dockerOutput(ctx, append(cmd, args...)...)
 	if err != nil {
+		// A load generator that failed may have printed what it had measured, such as
+		// how far a fill got; what it printed is kept, and the failure stays the error.
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, out)
+		}
+
 		return err
 	}
 
@@ -948,6 +1248,35 @@ func (r *runner) loadgen(ctx context.Context, targetName string, timeout time.Du
 	return nil
 }
 
+// memoryPeaks is the highest memory readings of a window, and the resident set of
+// each sample in it. A reading of nothing at all is what a container that has
+// stopped returns, and is no reading.
+type memoryPeaks struct {
+	rss, usage uint64
+	samples    []float64
+}
+
+// peak notes a reading in the peaks.
+func (m *memoryPeaks) peak(s containerStats) {
+	if s.zero() {
+		return
+	}
+
+	m.rss = max(m.rss, s.rss())
+	m.usage = max(m.usage, s.usage())
+}
+
+// sample notes a reading in the peaks and in the samples whose median is the
+// resident set of the window.
+func (m *memoryPeaks) sample(s containerStats) {
+	if s.zero() {
+		return
+	}
+
+	m.peak(s)
+	m.samples = append(m.samples, float64(s.rss()))
+}
+
 // sampled runs work while it reads the container's counters: once before, every
 // sampleEvery during, once after. It returns the memory and CPU of the window.
 func (r *runner) sampled(ctx context.Context, container string, work func(context.Context) error) (usage, error) {
@@ -957,10 +1286,11 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 	}
 
 	var (
-		mu      sync.Mutex
-		peak    = first.rss()
-		samples []float64
+		mu    sync.Mutex
+		peaks memoryPeaks
 	)
+
+	peaks.peak(first)
 
 	sampleCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -979,8 +1309,7 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 				now, statsErr := r.api.stats(sampleCtx, container)
 				if statsErr == nil {
 					mu.Lock()
-					peak = max(peak, now.rss())
-					samples = append(samples, float64(now.rss()))
+					peaks.sample(now)
 					mu.Unlock()
 				}
 			}
@@ -994,21 +1323,34 @@ func (r *runner) sampled(ctx context.Context, container string, work func(contex
 
 	last, err := r.api.stats(ctx, container)
 	if err != nil {
-		return usage{}, errors.Join(workErr, fmt.Errorf("read stats: %w", err))
+		// The memory reached before the counters went is what a container the
+		// kernel killed has to show.
+		return windowUsage(first, containerStats{}, peaks), errors.Join(workErr, fmt.Errorf("read stats: %w", err))
 	}
 
-	peak = max(peak, last.rss())
-	used := usage{
-		BaselineRSSBytes: first.rss(), EndRSSBytes: last.rss(), PeakRSSBytes: peak,
-		MedianRSSBytes: uint64(median(samples)),
+	return windowUsage(first, last, peaks), workErr
+}
+
+// windowUsage is the memory and CPU of a window from the counters before and
+// after it and the peaks between. A container that has stopped returns zero
+// counters at the end: the window has no end to read, and its CPU time would run
+// backwards, so what it reached is all it has to show.
+func windowUsage(first, last containerStats, peaks memoryPeaks) usage {
+	peaks.peak(last)
+
+	used := usage{BaselineRSSBytes: first.rss(), PeakRSSBytes: peaks.rss, PeakUsageBytes: peaks.usage}
+	if last.zero() {
+		return used
 	}
+
+	used.EndRSSBytes, used.MedianRSSBytes = last.rss(), uint64(median(peaks.samples))
 
 	if wall := last.Read.Sub(first.Read); wall > 0 {
 		cpuNanos := last.CPUStats.CPUUsage.TotalUsage - first.CPUStats.CPUUsage.TotalUsage
 		used.CPUPercent = float64(cpuNanos) / float64(wall.Nanoseconds()) * percentScale
 	}
 
-	return used, workErr
+	return used
 }
 
 func sleep(ctx context.Context, d time.Duration) error {

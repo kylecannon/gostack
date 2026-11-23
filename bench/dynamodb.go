@@ -76,6 +76,9 @@ const (
 	ddbTableName     = "TableName"
 	ddbItemMember    = "Item"
 	ddbAttributeName = "AttributeName"
+	ddbAttributeType = "AttributeType"
+	ddbKeySchema     = "KeySchema"
+	ddbKeyType       = "KeyType"
 )
 
 // ddbLevels are the concurrencies of every DynamoDB cell.
@@ -193,13 +196,13 @@ func (c ddbClient) createTable(ctx context.Context, viewType string) (name, stre
 	name = "bench-" + strconv.FormatInt(ddbTables.Add(1), 10)
 	input := map[string]any{
 		ddbTableName: name,
-		"KeySchema": []map[string]string{
-			{ddbAttributeName: "pk", "KeyType": "HASH"},
-			{ddbAttributeName: "sk", "KeyType": "RANGE"},
+		ddbKeySchema: []map[string]string{
+			{ddbAttributeName: "pk", ddbKeyType: "HASH"},
+			{ddbAttributeName: "sk", ddbKeyType: "RANGE"},
 		},
 		"AttributeDefinitions": []map[string]string{
-			{ddbAttributeName: "pk", "AttributeType": "S"},
-			{ddbAttributeName: "sk", "AttributeType": "S"},
+			{ddbAttributeName: "pk", ddbAttributeType: "S"},
+			{ddbAttributeName: "sk", ddbAttributeType: "S"},
 		},
 		"BillingMode": "PAY_PER_REQUEST",
 	}
