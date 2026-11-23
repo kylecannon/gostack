@@ -192,6 +192,7 @@ func (t *Table) GetHeldPacked(key value.Item) value.Packed {
 // same key, or nil to delete. It runs under the table's write lock and must
 // not call back into the table. It unpacks old only when it reads it, and the
 // item it unpacks is its own: it may return it, written over.
+// expression.ApplyStored is the only writer into such an item.
 type Decide func(old value.Packed) (value.Item, error)
 
 // Write is the one write path. It calls decide with the item stored at key and

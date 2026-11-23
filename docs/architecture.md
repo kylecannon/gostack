@@ -2578,7 +2578,7 @@ encoded hash key to a slice of entries sorted by range key, binary searched
 for a read or a write. A list of the partition keys in order is rebuilt only
 when a read across partitions (Scan) finds a partition added since. A local or
 global secondary index is a second such store whose entries reference the
-same item maps as the primary; the index list is copy-on-write, published
+same packed item as the primary; the index list is copy-on-write, published
 through an atomic pointer, so a put's key check reads it without the table
 lock. `Range` reads one partition between bounds a `SortCondition` sets, in
 either direction, from an exclusive start key; `Scan` walks the partitions in
@@ -2613,6 +2613,7 @@ with anything else, such as a pooled `Decoder.View`, cannot reach it. A map or
 list below an attribute is still copied before an action changes it, since
 `SET a = b` can share it. Nothing a concurrent reader holds is written:
 readers hold packed strings or their own unpacked copies.
+
 A transaction decides every action first and writes them all through
 `WriteHeld` only when none failed.
 

@@ -433,9 +433,10 @@ func ccDelete(table, key string, extra map[string]any) map[string]any {
 // m.l, in place of whole, so the update writes below an attribute of the item
 // it unpacked. Every version's m holds exactly v and l, so the item written is
 // still one whole version. With no item stored m is missing, and the
-// condition refuses the update rather than the path.
+// condition refuses the update rather than the path. It asks for the item it
+// replaced, ALL_OLD.
 func ccNestedUpdate(table, key string, ver int) map[string]any {
-	body := ccUpdate(table, key, ver, nil)
+	body := ccUpdate(table, key, ver, map[string]any{ccReturnValues: ccAllOld})
 
 	m, _ := ccVersion(key, ver)["m"].(map[string]any)
 	members, _ := m["M"].(map[string]any)
@@ -453,15 +454,21 @@ func ccNestedUpdate(table, key string, ver int) map[string]any {
 }
 
 // nestedWrites makes ops nested updates over keys of table, as writer w, and
-// counts the ones that applied: a key may hold no item when one runs.
+// counts the ones that applied: a key may hold no item when one runs. The old
+// item each returns is one whole version, and not the one it wrote.
 func (c *ccTest) nestedWrites(table string, keys []string, w, ops int, applied *atomic.Int32) {
 	for i := range ops {
 		ver := w*ccWriterSpan + 2*i + 1
+		key := keys[i%len(keys)]
 
-		out, status := c.do(opUpdateItem, ccNestedUpdate(table, keys[i%len(keys)], ver))
+		out, status := c.do(opUpdateItem, ccNestedUpdate(table, key, ver))
 
 		switch {
 		case status == http.StatusOK:
+			if old := c.check("nested update's old item", out["Attributes"], key); old == ver {
+				c.errorf("nested update %s: old item is the version it wrote, %d", key, ver)
+			}
+
 			applied.Add(1)
 		case status == http.StatusBadRequest && out["__type"] == codeConditional:
 		default:
@@ -470,20 +477,46 @@ func (c *ccTest) nestedWrites(table string, keys []string, w, ops int, applied *
 	}
 }
 
-// readStream checks the images of the shard's records from pos on, each a
-// whole version of the record's key, and returns the position to read next.
-func (c *ccTest) readStream(shard dynamodb.StreamShard, pos int, images *atomic.Int32) int {
-	page, err := shard.Read(pos, 1000, 1<<20)
-	if err != nil {
-		c.errorf("stream read at %d: %v", pos, err)
+// ccStream reads a table's stream shard while the writes run, from one
+// goroutine at a time. last holds the new image of each key's latest record,
+// and a key it lacks holds no item: the stream begins with the table, so
+// every key starts empty.
+type ccStream struct {
+	shard  dynamodb.StreamShard
+	pos    int
+	last   map[string]value.Packed
+	images int
+	chain  int
+}
 
-		return pos
+// read checks the shard's records from where the last read stopped. Each
+// image is a whole version of the record's key. A record's old image is the
+// item the key's previous record left, so once unpacked it equals that
+// record's new image, and a key with no item has no old image.
+func (s *ccStream) read(c *ccTest) {
+	page, err := s.shard.Read(s.pos, 1000, 1<<20)
+	if err != nil {
+		c.errorf("stream read at %d: %v", s.pos, err)
+
+		return
 	}
 
 	for _, rec := range page.Records {
 		key := ""
 		if pk := rec.Keys["pk"].S; pk != nil {
 			key = *pk
+		}
+
+		if !bytes.Equal(ccJSON(value.Unpack(rec.Old)), ccJSON(value.Unpack(s.last[key]))) {
+			c.errorf("stream record %d %s: old image is not the item the previous record left", rec.Seq, key)
+		} else if rec.Old != "" {
+			s.chain++
+		}
+
+		if rec.New != "" {
+			s.last[key] = rec.New
+		} else {
+			delete(s.last, key)
 		}
 
 		for _, img := range []value.Packed{rec.Old, rec.New} {
@@ -499,11 +532,11 @@ func (c *ccTest) readStream(shard dynamodb.StreamShard, pos int, images *atomic.
 			}
 
 			c.check("stream image", item, key)
-			images.Add(1)
+			s.images++
 		}
 	}
 
-	return page.Next
+	s.pos = page.Next
 }
 
 // ccFailingPut is a PutItem of version ver whose condition no stored version
@@ -796,7 +829,9 @@ func (c *ccTest) writeMix(table string, keys []string, w, ops int, cancels, cond
 // below an attribute, SET m.v. Every item read is one whole version, no
 // cancelled transaction's version is ever seen, and a failed condition's and a
 // cancelled check's returned item are whole too, as is every old and new image
-// of the stream, read while the writes run.
+// of the stream, read while the writes run. Each record's old image is the
+// item the key's previous record left, and each nested update's ALL_OLD item
+// is a version other than the one it wrote.
 func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	const (
 		writers = 4
@@ -825,9 +860,10 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 		reading                                       sync.WaitGroup
 		seen                                          ccSeen
 		cancels, conditionItems, filtered, expiredAll atomic.Int32
-		nested, images                                atomic.Int32
-		streamPos                                     int
+		nested                                        atomic.Int32
 	)
+
+	stream := ccStream{shard: info.Shard, last: map[string]value.Packed{}}
 
 	done := make(chan struct{})
 
@@ -843,7 +879,7 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 			case <-done:
 				return
 			default:
-				streamPos = c.readStream(info.Shard, streamPos, &images)
+				stream.read(c)
 			}
 		}
 	})
@@ -879,7 +915,7 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	// One more pass once the writes have stopped, so every read path ran at
 	// least once whatever the scheduling.
 	c.readAll(table, readKeys, &seen, &filtered)
-	c.readStream(info.Shard, streamPos, &images)
+	stream.read(c)
 
 	require.Positive(t, cancels.Load(), "a transaction was cancelled")
 	require.Positive(t, conditionItems.Load(), "a failed condition returned the stored item")
@@ -887,7 +923,8 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	require.Greater(t, seen.most(), 1, "readers saw more than one version of a key")
 	require.Positive(t, expiredAll.Load(), "a sweep beside the writers removed an expired version")
 	require.Positive(t, nested.Load(), "a nested update applied")
-	require.Positive(t, images.Load(), "the stream reader checked images")
+	require.Positive(t, stream.images, "the stream reader checked images")
+	require.Positive(t, stream.chain, "a record's old image matched the previous record's new one")
 }
 
 // Test_packedConcurrency_noLostUpdate: workers × rounds ADDs of one to one

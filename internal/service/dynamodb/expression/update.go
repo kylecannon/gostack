@@ -56,7 +56,9 @@ var updateTypeNames = map[string]string{
 	value.TypeM: "MAP", value.TypeL: "LIST", value.TypeNULL: "NULL", value.TypeBOOL: "BOOLEAN",
 }
 
-// UpdateExpr is a parsed UpdateExpression with its placeholders substituted.
+// UpdateExpr is a parsed UpdateExpression, its SET, REMOVE, ADD and DELETE
+// clauses, with its placeholders substituted. ApplyStored writes one into the
+// item a table stores.
 type UpdateExpr struct {
 	actions []*updateAction
 	// order is actions in the order ApplyStored carries them out: every action but
@@ -65,8 +67,6 @@ type UpdateExpr struct {
 	order []*updateAction
 	paths []Path
 }
-
-var _ Update = (*UpdateExpr)(nil)
 
 // ParseUpdate parses text, an UpdateExpression, substituting subs. It adds every
 // "#name" and ":value" the expression uses to used, which may be nil, so the

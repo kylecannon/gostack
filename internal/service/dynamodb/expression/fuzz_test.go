@@ -111,7 +111,7 @@ func FuzzParseKeyCondition(f *testing.F) {
 }
 
 // FuzzParseProjection holds the projection parser to its contract: a
-// ValidationException, or paths that ApplyStored can take from any item.
+// ValidationException, or paths that Apply can take from any item.
 func FuzzParseProjection(f *testing.F) {
 	for _, s := range append(fuzzSeeds, "a, pk, b.c[0]", "l[2].c, l[0]", "#pr.FiveStar, #a[3]") {
 		f.Add(s)

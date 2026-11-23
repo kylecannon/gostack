@@ -151,11 +151,12 @@ func (s *packShape) value(v api.AttributeValue) {
 	}
 }
 
-// base64Extra is what base64 adds to n bytes, or a little over.
+// base64Extra is what padded base64 adds to n bytes: four bytes for every
+// three, the last three counting whole.
 func base64Extra(n int) int {
-	const pad = 2
+	const group, encoded = 3, 4
 
-	return n/3 + pad
+	return (n+group-1)/group*encoded - n
 }
 
 // numberExtra is what the json of n adds to the size ItemSize counts for it,

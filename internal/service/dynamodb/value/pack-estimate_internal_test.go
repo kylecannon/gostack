@@ -31,10 +31,12 @@ func Test_packShape_coversTheJSON(t *testing.T) {
 		list[i] = api.AttributeValue{N: str(strconv.Itoa(i * 7919))}
 	}
 
-	falses, nulls, exponents := Item{}, Item{}, Item{}
+	falses, nulls, exponents, binaries := Item{}, Item{}, Item{}, Item{}
 	for i := range 2000 {
 		name := "a" + strconv.Itoa(i)
 		falses[name] = api.AttributeValue{BOOL: new(false)}
+		// One byte, which base64 writes as four.
+		binaries[name] = api.AttributeValue{B: []byte{byte(i)}}
 		nulls[name] = api.AttributeValue{NULL: new(true)}
 		// One digit, so ItemSize counts two bytes for each of these.
 		exponents[name] = api.AttributeValue{N: str("1e" + strconv.Itoa(100+i%25))}
@@ -54,6 +56,7 @@ func Test_packShape_coversTheJSON(t *testing.T) {
 		"false":      falses,
 		"null":       nulls,
 		"exponents":  exponents,
+		"binaries":   binaries,
 		"zeros":      {"pk": {S: str("k")}, "l": {L: zeros}},
 		"map": {"pk": {S: str("k")}, "m": {M: map[string]api.AttributeValue{
 			"x": {M: map[string]api.AttributeValue{"y": {BOOL: new(true)}, "z": {NULL: new(true)}}},

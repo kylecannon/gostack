@@ -34,14 +34,17 @@ type updateFinal func(parent *api.AttributeValue, el PathElement) error
 //
 // read sees the unpacked item before anything is written. It returns the
 // update to apply, nil for none, or an error that stops the write; a failed
-// condition is one, and may keep the item to report it. Every right-hand side
-// reads the item as stored, so SET a = b, b = a swaps the two. A list index
-// names an element of the stored list: SET and ADD act first, a SET past the
-// end appends, and REMOVE takes elements out last. A missing parent is never
-// created. The update writes into the top-level map in place of a copy of it,
-// but a map or list below an attribute is still copied before an action
-// changes it, since a value the update read, SET a = b, can share it. With no
-// update the item is returned as stored, or the key alone when nothing is.
+// condition is one, and may keep the item to report it. read must not keep
+// old unless it returns an error: the update then writes into it.
+//
+// Every right-hand side reads the item as stored, so SET a = b, b = a swaps
+// the two. A list index names an element of the stored list: SET and ADD act
+// first, a SET past the end appends, and REMOVE takes elements out last. A
+// missing parent is never created. The update writes into the top-level map
+// in place of a copy of it, but a map or list below an attribute is still
+// copied before an action changes it, since a value the update read,
+// SET a = b, can share it. With no update the item is returned as stored, or
+// the key alone when nothing is.
 func ApplyStored(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (value.Item, error) {

@@ -66,11 +66,3 @@ type Projection interface {
 	// path to an attribute that is not there is left out. item is not changed.
 	Apply(item value.Item) value.Item
 }
-
-// Update is a parsed UpdateExpression: its SET, REMOVE, ADD and DELETE
-// clauses. ApplyStored writes one into the item a table stores.
-type Update interface {
-	// Paths returns every path the update writes, so the caller can report the
-	// UPDATED_OLD and UPDATED_NEW return values.
-	Paths() []Path
-}
