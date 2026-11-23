@@ -291,7 +291,7 @@ func whereCase() limitCase {
 		n := strconv.Itoa(lists)
 		scan := "SELECT id FROM " + table + " WHERE " + in
 		query := "SELECT id FROM " + table + " WHERE id = 'a' AND (" + in + ")"
-		found := `{"Items":[{"id":{"S":"a"}}]}`
+		found := foundA
 
 		c.steps = append(c.steps,
 			step{"scan " + n, opStatement, stmt(scan), http.StatusOK, found},

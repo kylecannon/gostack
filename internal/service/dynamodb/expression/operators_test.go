@@ -149,3 +149,57 @@ func Test_ParseUpdate_OperatorCountLast(t *testing.T) {
 		})
 	}
 }
+
+// Test_ParseStatementUpdate_Chains: the value of a PartiQL UPDATE's action takes
+// sums and differences chained, parenthesized or nested in a function, and a
+// list_append anywhere, as the image applies it (SQ-454), each + - and call one
+// operator; a request's UpdateExpression is held to its grammar of one + or - and
+// list_append as the whole value, as the image's UpdateItem holds it.
+//
+//nolint:lll // each row holds the exact text the LocalStack image answered
+func Test_ParseStatementUpdate_Chains(t *testing.T) {
+	t.Parallel()
+
+	const (
+		syntax   = `Invalid UpdateExpression: Syntax error; token: "+", near: ":n+:n"`
+		notHere  = "Invalid UpdateExpression: The function is not allowed to be used this way in an expression; function: list_append"
+		typeList = "Invalid UpdateExpression: Incorrect operand type for operator or function; operator or function: "
+	)
+
+	tests := []struct {
+		name        string
+		giveExpr    string
+		wantRequest string // what an UpdateItem answers
+		wantMsg     string // what a statement answers: "" for a parse
+	}{
+		{"chained sum", "SET a=k0+:n+:n", syntax, ""},
+		{"chained difference", "SET a=k0-:n-:n", `Invalid UpdateExpression: Syntax error; token: "-", near: ":n-:n"`, ""},
+		{"parenthesized left", "SET a=(k0+:n)+:n", `Invalid UpdateExpression: Syntax error; token: "+", near: ")+:n"`, ""},
+		{"list_append in list_append", "SET a=list_append(list_append(l,:l),:l)", notHere, ""},
+		{"list_append in if_not_exists", "SET a=if_not_exists(k0,list_append(l,:l))", notHere, ""},
+		{"list_append in a sum", "SET a=list_append(l,:l)+:n", notHere, typeList + "+, operand type: L"},
+		{"150 actions of two sums", actions(150, "k0+:n+:n"), syntax, ""},
+		{"151 actions of two sums", actions(151, "k0+:n+:n"), syntax, tooManyOperators},
+		{"151 actions of two list_append", actions(151, "list_append(list_append(l,:l),:l)"), notHere, tooManyOperators},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			subs := updateSubs(t, "", operatorSubs)
+
+			_, err := expression.ParseStatementUpdate(tt.giveExpr, subs, nil, nil)
+			if tt.wantMsg == "" {
+				require.NoError(t, err)
+			} else {
+				requireUpdateError(t, err, tt.wantMsg)
+			}
+
+			if len(tt.giveExpr) <= 4096 {
+				_, err = expression.ParseUpdate(tt.giveExpr, subs, nil)
+				requireUpdateError(t, err, tt.wantRequest)
+			}
+		})
+	}
+}

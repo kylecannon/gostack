@@ -384,6 +384,9 @@ func (r *render) updateValue(n *partiql.Node) (string, error) {
 	}
 }
 
+// joinedUpdate renders a sum or difference. The parser groups from the left, so
+// a left operand needs no parentheses and a right one that is itself a sum or
+// difference does: a - (b + c) is not a - b + c.
 func (r *render) joinedUpdate(n *partiql.Node) (string, error) {
 	a, err := r.updateValue(n.Args[0])
 	if err != nil {
@@ -391,6 +394,13 @@ func (r *render) joinedUpdate(n *partiql.Node) (string, error) {
 	}
 
 	b, err := r.updateValue(n.Args[1])
+	if err != nil {
+		return "", err
+	}
 
-	return a + " " + n.Op + " " + b, err
+	if n.Args[1].Kind == partiql.KindArith {
+		b = "(" + b + ")"
+	}
+
+	return a + " " + n.Op + " " + b, nil
 }

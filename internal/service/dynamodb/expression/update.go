@@ -95,7 +95,7 @@ func ParseUpdateRanked(
 		return nil, err
 	}
 
-	return parseUpdateFrom(base, subs, used, rank)
+	return parseUpdateFrom(base, subs, used, rank, false)
 }
 
 // ParseStatementUpdate is ParseUpdateRanked for the actions of a PartiQL UPDATE,
@@ -104,18 +104,24 @@ func ParseUpdateRanked(
 // units and is applied, the statement's own 8,192 bytes bounding the text
 // (SQ-412). The operator count holds as for any UpdateExpression: 300 operators
 // are applied and 301 refused (SQ-452).
+//
+// Nor does it hold the value of an action to an UpdateExpression's grammar of
+// one + or - and list_append as the whole value: the image applies sums and
+// differences chained, parenthesized or nested in a function, and a list_append
+// in any operand, and counts each + - and call as one operator (SQ-454).
 func ParseStatementUpdate(
 	text string, subs Substitutions, used map[string]struct{}, rank []int,
 ) (*UpdateExpr, error) {
-	return parseUpdateFrom(newUnboundedParser(updateExpression, text), subs, used, rank)
+	return parseUpdateFrom(newUnboundedParser(updateExpression, text), subs, used, rank, true)
 }
 
 // parseUpdateFrom parses base, the tokens of an UpdateExpression its caller has
-// held to a size or knows to be bounded.
+// held to a size or knows to be bounded. statement is true for the actions of a
+// PartiQL UPDATE.
 func parseUpdateFrom(
-	base *parser, subs Substitutions, used map[string]struct{}, rank []int,
+	base *parser, subs Substitutions, used map[string]struct{}, rank []int, statement bool,
 ) (*UpdateExpr, error) {
-	p := &updateParser{parser: base}
+	p := &updateParser{parser: base, statement: statement}
 
 	err := p.parse()
 	if err == nil {
@@ -193,7 +199,8 @@ func (u *UpdateExpr) Paths() []Path {
 // updateCheckNames refuses the first, in the order written, of a reserved word
 // used as an attribute name, a function an update expression does not take,
 // and a list_append that is not the whole value of its SET action: DynamoDB
-// takes it nowhere inside another function or a sum, parenthesized or not.
+// takes it nowhere inside another function or a sum, parenthesized or not. A
+// PartiQL UPDATE's list_append may stand anywhere (SQ-454).
 func updateCheckNames(p *updateParser) error {
 	var (
 		err error
@@ -213,7 +220,7 @@ func updateCheckNames(p *updateParser) error {
 			break
 		}
 
-		callErr := updateCheckFunc(call)
+		callErr := updateCheckFunc(call, p.statement)
 		if callErr != nil {
 			return callErr
 		}
@@ -223,7 +230,11 @@ func updateCheckNames(p *updateParser) error {
 }
 
 // updateCheckFunc refuses a function call an update expression does not take.
-func updateCheckFunc(call *updateOperand) error {
+// anywhere is true for a PartiQL UPDATE, whose list_append may stand in any
+// operand.
+//
+//nolint:revive // flag-parameter: who wrote the expression, not a mode
+func updateCheckFunc(call *updateOperand, anywhere bool) error {
 	name := call.tok.text
 
 	if _, cond := updateCondFuncs[name]; cond {
@@ -234,7 +245,7 @@ func updateCheckFunc(call *updateOperand) error {
 		return value.Invalid(msgUpdateBadFunc + name)
 	}
 
-	if name == funcListAppend && !call.whole {
+	if name == funcListAppend && !call.whole && !anywhere {
 		return value.Invalid(msgUpdateFuncPlace + name)
 	}
 
@@ -435,16 +446,41 @@ func updateCheckCall(op *updateOperand) error {
 	return updateCheckValueTypes(op.args, name, value.TypeL)
 }
 
-// updateCheckValueTypes refuses the first of args that is a value of a type
-// other than want.
+// numberTypes is how DynamoDB Local names the type of a sum or difference in
+// the message of an operand it refuses (SQ-454): the number types it holds.
+const numberTypes = "{INT,N,FLOAT,HD,DOUBLE,DECIMAL}"
+
+// updateCheckValueTypes refuses the first of args whose type is known before
+// any item is read and is not want: a value, a sum or difference, which is a
+// number, and a list_append, which is a list. A path, and if_not_exists, whose
+// type is the item's, are left to the item.
 func updateCheckValueTypes(args []*updateOperand, operator, want string) error {
 	for _, arg := range args {
-		if t := value.Type(&arg.val); arg.kind == updateOpValue && t != want {
-			return value.Invalid(msgUpdateOperand + "operator or function: " + operator + ", operand type: " + t)
+		t, shown := updateStaticType(arg)
+		if t != "" && t != want {
+			return value.Invalid(msgUpdateOperand + "operator or function: " + operator + ", operand type: " + shown)
 		}
 	}
 
 	return nil
+}
+
+// updateStaticType is the type of op that holds whatever the item is, and the
+// name DynamoDB Local gives it in a message, or "" for an operand that takes
+// its type from the item.
+func updateStaticType(op *updateOperand) (typ, shown string) {
+	switch {
+	case op.kind == updateOpValue:
+		t := value.Type(&op.val)
+
+		return t, t
+	case op.kind == updateOpPlus || op.kind == updateOpMinus:
+		return value.TypeN, numberTypes
+	case op.kind == updateOpCall && op.tok.text == funcListAppend:
+		return value.TypeL, value.TypeL
+	default:
+		return "", ""
+	}
 }
 
 // updateCheckAction refuses an ADD value that is not a number or a set, and a

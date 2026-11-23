@@ -37,12 +37,18 @@ type exprs struct {
 // Every parser of an expression takes it, so a new way into one cannot leave it
 // out; only ExecuteStatement, BatchExecuteStatement and ExecuteTransaction
 // mark their calls with forStatement.
-type origin int
+type origin struct {
+	statement bool
+	// unwritten is, for a statement, the operators its WHERE wrote that the
+	// condition or filter it compiles to does not hold: the key equalities and
+	// the ANDs that joined them. The image counts them toward the 300 of the
+	// WHERE (SQ-454).
+	unwritten int
+}
 
-const (
-	fromRequest origin = iota
-	fromStatement
-)
+// fromStatement is the origin of a PartiQL statement; the zero origin is a
+// request's.
+var fromStatement = origin{statement: true}
 
 // originKey marks the context of a call a PartiQL statement compiled to.
 type originKey struct{}
@@ -50,6 +56,15 @@ type originKey struct{}
 // forStatement marks ctx for the item operations a PartiQL statement runs as.
 func forStatement(ctx context.Context) context.Context {
 	return context.WithValue(ctx, originKey{}, fromStatement)
+}
+
+// withUnwritten marks ctx, which forStatement has marked, with the operators of
+// the statement's WHERE that its filter does not hold (origin.unwritten).
+func withUnwritten(ctx context.Context, operators int) context.Context {
+	from := originOf(ctx)
+	from.unwritten = operators
+
+	return context.WithValue(ctx, originKey{}, from)
 }
 
 // originOf is the origin of the call ctx belongs to.
@@ -114,12 +129,17 @@ func (x *exprs) condition(kind expression.Kind, src *string) (expression.Conditi
 		return nil, nil //nolint:nilnil // no expression
 	}
 
-	parse := expression.ParseCondition
-	if x.from == fromStatement {
-		parse = expression.ParseStatementCondition
+	var (
+		c   expression.Condition
+		err error
+	)
+
+	if x.from.statement {
+		c, err = expression.ParseStatementCondition(kind, *src, x.subs, x.used, x.from.unwritten)
+	} else {
+		c, err = expression.ParseCondition(kind, *src, x.subs, x.used)
 	}
 
-	c, err := parse(kind, *src, x.subs, x.used)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", kind, err)
 	}
@@ -136,7 +156,7 @@ func (x *exprs) projection(src *string) (expression.Projection, error) {
 	}
 
 	parse := expression.ParseProjection
-	if x.from == fromStatement {
+	if x.from.statement {
 		parse = expression.ParseStatementProjection
 	}
 
@@ -161,7 +181,7 @@ func (x *exprs) updateRanked(src *string, rank []int) (*expression.UpdateExpr, e
 	}
 
 	parse := expression.ParseUpdateRanked
-	if x.from == fromStatement {
+	if x.from.statement {
 		parse = expression.ParseStatementUpdate
 	}
 

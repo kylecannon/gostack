@@ -24,7 +24,7 @@ func ParseCondition(kind Kind, src string, subs Substitutions, used map[string]s
 		return nil, err
 	}
 
-	return conditionFrom(p, subs, used)
+	return conditionFrom(p, subs, used, 0)
 }
 
 // ParseStatementCondition is ParseCondition for the WHERE of a PartiQL
@@ -33,14 +33,22 @@ func ParseCondition(kind Kind, src string, subs Substitutions, used map[string]s
 // answered, the statement's own 8,192 bytes bounding the text (SQ-452). The
 // operator count and every other check apply to it as to any condition.
 //
+// The image counts the operators of the WHERE as written, the key equalities
+// and the ANDs that join them included, where the statement compiles to a
+// condition that holds none of them. unwritten is how many operators the
+// statement wrote that src does not: they count toward the 300, and toward
+// nothing else (SQ-454).
+//
 //nolint:ireturn // the parsed forms are the interfaces expression.go declares
-func ParseStatementCondition(kind Kind, src string, subs Substitutions, used map[string]struct{}) (Condition, error) {
-	return conditionFrom(newUnboundedParser(kind, src), subs, used)
+func ParseStatementCondition(
+	kind Kind, src string, subs Substitutions, used map[string]struct{}, unwritten int,
+) (Condition, error) {
+	return conditionFrom(newUnboundedParser(kind, src), subs, used, unwritten)
 }
 
 //nolint:ireturn // as ParseCondition
-func conditionFrom(p *parser, subs Substitutions, used map[string]struct{}) (Condition, error) {
-	c, r, err := parseChecked(p, subs, used)
+func conditionFrom(p *parser, subs Substitutions, used map[string]struct{}, unwritten int) (Condition, error) {
+	c, r, err := parseChecked(p, subs, used, unwritten)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +57,11 @@ func conditionFrom(p *parser, subs Substitutions, used map[string]struct{}) (Con
 }
 
 // parseChecked parses a condition grammar expression and runs the checks every
-// condition-grammar member shares.
-func parseChecked(p *parser, subs Substitutions, used map[string]struct{}) (*cond, *resolver, error) {
+// condition-grammar member shares. unwritten operators count toward the limit
+// with the ones src holds.
+func parseChecked(
+	p *parser, subs Substitutions, used map[string]struct{}, unwritten int,
+) (*cond, *resolver, error) {
 	c, err := p.parseCondition()
 	if err != nil {
 		return nil, nil, err
@@ -63,7 +74,7 @@ func parseChecked(p *parser, subs Substitutions, used map[string]struct{}) (*con
 		return nil, nil, err
 	}
 
-	if n := countOperators(c); n > maxOperators {
+	if n := countOperators(c) + unwritten; n > maxOperators {
 		return nil, nil, r.fail(msgTooManyOperators)
 	}
 
