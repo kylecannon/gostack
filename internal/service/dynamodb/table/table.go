@@ -388,8 +388,9 @@ func (t *Table) Scan(indexName string, start value.Item, visit func(value.Item) 
 
 	keys := data.order
 	if data.needsSort() {
-		// A partition was added between the two locks: read the partitions
-		// that were there, as a scan running beside writes may.
+		// A partition was added or dropped between the two locks: read the
+		// partitions that are still there, as a scan running beside writes
+		// may.
 		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return data.parts[k] == nil })
 	}
 

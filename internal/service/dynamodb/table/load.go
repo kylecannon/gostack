@@ -50,12 +50,8 @@ func (t *Table) ImageHeld() Image {
 	}
 
 	if img.sorted {
-		// A delete drops an emptied partition from parts but leaves its key
-		// in order until the next rebuild.
 		for _, hash := range t.primary.order {
-			if p := t.primary.parts[hash]; p != nil {
-				visit(hash, p)
-			}
+			visit(hash, t.primary.parts[hash])
 		}
 	} else {
 		img.parts = make([]imagePart, 0, len(t.primary.parts))

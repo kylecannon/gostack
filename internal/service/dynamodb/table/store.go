@@ -43,7 +43,8 @@ func searchFirst(p *partition, sortKey, tie string) int {
 
 // store holds partitions by encoded hash key value. Partitions are kept in a
 // map; order lists their keys sorted, and is rebuilt when a partition has been
-// added since, for a read across partitions.
+// added or dropped since, for a read across partitions. While sorted is true,
+// order holds exactly the keys of parts.
 type store struct {
 	parts  map[string]*partition
 	order  []string
@@ -103,11 +104,12 @@ func (s *store) remove(hash, sortKey, tie string) {
 	p.entries = slices.Delete(p.entries, i, i+1)
 	if len(p.entries) == 0 {
 		delete(s.parts, hash)
+		s.sorted = false
 	}
 }
 
 // sortedKeys returns the partition keys in order. It rebuilds the order when a
-// partition was added since the last call, so the caller holds the write lock
+// partition was added or dropped since the last call, so the caller holds the write lock
 // when needsSort reports true.
 func (s *store) sortedKeys() []string {
 	if !s.sorted {
