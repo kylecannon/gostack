@@ -120,11 +120,13 @@ func appendTyped(list []map[string]api.AttributeValue, items []value.Packed, pro
 
 	names := distinct(topNames(projection), nil)
 
+	var dec value.Decoder
+
 	for _, item := range items {
 		if projection == nil {
-			list = append(list, value.Unpack(item))
+			list = append(list, dec.Item(item, nil))
 		} else {
-			list = append(list, projection.Apply(item.Attrs(names)))
+			list = append(list, projection.Apply(dec.View(item, names)))
 		}
 	}
 

@@ -197,6 +197,74 @@ func (p Packed) Attrs(names []string) Item {
 	return u.object(len(names), names)
 }
 
+// maxDecoderChunk caps the strings a Decoder takes in one allocation.
+const maxDecoderChunk = 512
+
+// Decoder decodes the items of one read, sharing allocations between them: its
+// S and N values point into chunks of strings that it never writes twice, so
+// a value it decoded stays valid after the next call, and View reuses one map.
+// It is not safe for concurrent use.
+type Decoder struct {
+	view Item
+	strs []string
+}
+
+// View decodes the attributes of p that names lists, every one for nil names,
+// into a map the next call to View clears: for a filter, which reads the item
+// and drops it, or a projection, which copies the values it keeps. It returns
+// nil for no item.
+func (d *Decoder) View(p Packed, names []string) Item {
+	if p == "" {
+		return nil
+	}
+
+	if d.view == nil {
+		d.view = make(Item, max(len(names), 1))
+	}
+
+	clear(d.view)
+
+	return d.decode(p, names, d.view)
+}
+
+// Item decodes as View does into a map of its own, which the caller keeps.
+func (d *Decoder) Item(p Packed, names []string) Item {
+	if p == "" {
+		return nil
+	}
+
+	return d.decode(p, names, nil)
+}
+
+func (d *Decoder) decode(p Packed, names []string, into Item) Item {
+	h := p.header()
+
+	need := h.scalars
+	if names != nil {
+		need = min(need, len(names))
+	}
+
+	// A chunk that cannot hold the item's scalars is left to the values that
+	// point into it, and a new one taken: the strings never move.
+	if cap(d.strs)-len(d.strs) < need {
+		const growth = 2
+
+		d.strs = make([]string, 0, max(need, min(growth*cap(d.strs), maxDecoderChunk)))
+	}
+
+	u := unpacker{s: string(p), i: h.body, strs: d.strs, into: into}
+
+	hint := h.attrs
+	if names != nil {
+		hint = len(names)
+	}
+
+	m := u.object(hint, names)
+	d.strs = u.strs
+
+	return m
+}
+
 // header reads the header of p.
 func (p Packed) header() packHeader {
 	var h packHeader
@@ -214,12 +282,19 @@ type unpacker struct {
 	s    string
 	i    int
 	strs []string
+	// into, when not nil, is the empty map the top object is read into.
+	into Item
 }
 
 // object reads a map of attribute values, all of them or, when want is not
 // nil, those it names; hint sizes the map.
 func (u *unpacker) object(hint int, want []string) Item {
-	m := make(Item, hint)
+	m := u.into
+	if m == nil {
+		m = make(Item, hint)
+	}
+
+	u.into = nil
 	u.i++ // {
 
 	if u.s[u.i] == '}' {

@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"math"
 	"slices"
+	"sync"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
@@ -73,6 +74,8 @@ type reader struct {
 	// index holds, when it does not hold them all, and those the filter and
 	// the projection read, nil for all of them.
 	indexNames, filterNames, projectionNames []string
+	// dec decodes the stored items visit reads.
+	dec value.Decoder
 }
 
 // page is what a reader read: its items are maps, or, for a read that writes
@@ -113,27 +116,45 @@ func holdsAll(spec *table.IndexSpec) bool {
 }
 
 // distinct is the names of a and b, each once, leaving out the empty name. It
-// is nil when there are none, which decode reads as every attribute.
+// is nil when there are none, which a Decoder reads as every attribute.
 func distinct(a, b []string) []string {
-	var out []string
+	out := make([]string, 0, len(a)+len(b))
 
-	for _, name := range slices.Concat(a, b) {
-		if name != "" && !slices.Contains(out, name) {
-			out = append(out, name)
+	for _, list := range [][]string{a, b} {
+		for _, name := range list {
+			if name != "" && !slices.Contains(out, name) {
+				out = append(out, name)
+			}
 		}
+	}
+
+	if len(out) == 0 {
+		return nil
 	}
 
 	return out
 }
 
-// decode is the item stored, or, when names is not nil, its attributes names
-// lists.
-func decode(stored value.Packed, names []string) value.Item {
-	if names == nil {
-		return value.Unpack(stored)
+// maxPooledEncoded is the longest list of items giveEncoded keeps for reuse.
+const maxPooledEncoded = 1 << 16
+
+// encodedLists holds the lists a page grows its items in before output copies
+// them out at their size.
+var encodedLists = sync.Pool{New: func() any { return new([]awsjson.Encoded) }}
+
+func takeEncoded() []awsjson.Encoded {
+	lp, _ := encodedLists.Get().(*[]awsjson.Encoded)
+
+	return (*lp)[:0]
+}
+
+func giveEncoded(list []awsjson.Encoded) {
+	if cap(list) > maxPooledEncoded {
+		return
 	}
 
-	return stored.Attrs(names)
+	clear(list)
+	encodedLists.Put(&list)
 }
 
 // read visits items from the engine, through visit, and fills the page:
@@ -206,7 +227,7 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 	var item value.Item
 
 	if r.indexNames != nil {
-		item = stored.Attrs(r.indexNames)
+		item = r.indexItem(stored)
 		pg.indexBytes += value.ItemSize(item)
 	} else {
 		pg.indexBytes += stored.Size()
@@ -220,7 +241,7 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 	if r.filter != nil {
 		view := item
 		if view == nil {
-			view = decode(stored, r.filterNames)
+			view = r.dec.View(stored, r.filterNames)
 		}
 
 		ok, err := r.filter.Eval(view)
@@ -241,19 +262,34 @@ func (r *reader) visit(pg *page, stored value.Packed) bool {
 	case r.selectMode == selectCount:
 	case r.projection != nil:
 		if item == nil {
-			item = decode(stored, r.projectionNames)
+			item = r.dec.View(stored, r.projectionNames)
 		}
 
 		pg.items = append(pg.items, r.projection.Apply(item))
 	case item != nil:
 		pg.items = append(pg.items, item)
 	case r.typed:
-		pg.items = append(pg.items, value.Unpack(stored))
+		pg.items = append(pg.items, r.dec.Item(stored, nil))
 	default:
+		if pg.encoded == nil {
+			pg.encoded = takeEncoded()
+		}
+
 		pg.encoded = append(pg.encoded, stored.Encoded())
 	}
 
 	return true
+}
+
+// indexItem is what an index that holds less than every attribute holds of
+// stored. The page keeps that item itself only when it neither projects nor
+// counts it; otherwise it is a view the next decode reuses.
+func (r *reader) indexItem(stored value.Packed) value.Item {
+	if r.projection == nil && r.selectMode != selectCount {
+		return r.dec.Item(stored, r.indexNames)
+	}
+
+	return r.dec.View(stored, r.indexNames)
 }
 
 // keyOf is the key of a stored item a page ends at: the table's key
@@ -620,7 +656,11 @@ func (pg *page) output(selectMode string) output {
 	switch {
 	case selectMode == selectCount:
 	case pg.encoded != nil:
-		out.ItemsJSON = pg.encoded
+		// The page grew its list in a reused one; the output takes a copy of
+		// its own size, which the response holds until it is written.
+		out.ItemsJSON = slices.Clone(pg.encoded)
+		giveEncoded(pg.encoded)
+		pg.encoded = nil
 	default:
 		out.Items = pg.items
 		if out.Items == nil {
