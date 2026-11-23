@@ -6,62 +6,6 @@ import (
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
-// appendJSONOutputSource appends v as a json object.
-func appendJSONOutputSource(w *awsjson.Writer, v *OutputSource) {
-	start := w.ObjectStart()
-	if v.OutputSourceId != nil {
-		w.Raw(`,"OutputSourceId":`)
-		w.String(*v.OutputSourceId)
-	}
-	if v.OutputSourceType != nil {
-		w.Raw(`,"OutputSourceType":`)
-		w.String(*v.OutputSourceType)
-	}
-	w.ObjectEnd(start)
-}
-
-// appendJSONParameter appends v as a json object.
-func appendJSONParameter(w *awsjson.Writer, v *Parameter) {
-	start := w.ObjectStart()
-	if v.Name != nil {
-		w.Raw(`,"Name":`)
-		w.String(*v.Name)
-	}
-	if v.Type != nil {
-		w.Raw(`,"Type":`)
-		w.String(*v.Type)
-	}
-	if v.Value != nil {
-		w.Raw(`,"Value":`)
-		w.String(*v.Value)
-	}
-	if v.Version != nil {
-		w.Raw(`,"Version":`)
-		w.Int64(*v.Version)
-	}
-	if v.Selector != nil {
-		w.Raw(`,"Selector":`)
-		w.String(*v.Selector)
-	}
-	if v.SourceResult != nil {
-		w.Raw(`,"SourceResult":`)
-		w.String(*v.SourceResult)
-	}
-	if v.LastModifiedDate != nil && !v.LastModifiedDate.IsZero() {
-		w.Raw(`,"LastModifiedDate":`)
-		w.Time(v.LastModifiedDate)
-	}
-	if v.ARN != nil {
-		w.Raw(`,"ARN":`)
-		w.String(*v.ARN)
-	}
-	if v.DataType != nil {
-		w.Raw(`,"DataType":`)
-		w.String(*v.DataType)
-	}
-	w.ObjectEnd(start)
-}
-
 // appendJSONParameterHistory appends v as a json object.
 func appendJSONParameterHistory(w *awsjson.Writer, v *ParameterHistory) {
 	start := w.ObjectStart()
@@ -1837,7 +1781,7 @@ func appendJSONUpdateMaintenanceWindowTaskOutput(w *awsjson.Writer, v *UpdateMai
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueMaintenanceWindowTaskParameterValueExpression(w, e0)
+			appendJSONMaintenanceWindowTaskParameterValueExpression(w, &e0)
 		}
 		w.Byte('}')
 	}

@@ -1371,7 +1371,7 @@ func appendJSONBatchGetItemOutput(w *awsjson.Writer, v *BatchGetItemOutput) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueKeysAndAttributes(w, e0)
+			appendJSONKeysAndAttributes(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -1554,13 +1554,6 @@ func appendJSONCapacity(w *awsjson.Writer, v *Capacity) {
 	w.ObjectEnd(start)
 }
 
-// appendJSONMapValueCapacity appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueCapacity(w *awsjson.Writer, v Capacity) {
-	appendJSONCapacity(w, &v)
-}
-
 // appendJSONConsumedCapacity appends v as a json object.
 func appendJSONConsumedCapacity(w *awsjson.Writer, v *ConsumedCapacity) {
 	start := w.ObjectStart()
@@ -1595,7 +1588,7 @@ func appendJSONConsumedCapacity(w *awsjson.Writer, v *ConsumedCapacity) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueCapacity(w, e0)
+			appendJSONCapacity(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -1610,7 +1603,7 @@ func appendJSONConsumedCapacity(w *awsjson.Writer, v *ConsumedCapacity) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueCapacity(w, e0)
+			appendJSONCapacity(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -2785,13 +2778,6 @@ func appendJSONKeysAndAttributes(w *awsjson.Writer, v *KeysAndAttributes) {
 		w.Byte('}')
 	}
 	w.ObjectEnd(start)
-}
-
-// appendJSONMapValueKeysAndAttributes appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueKeysAndAttributes(w *awsjson.Writer, v KeysAndAttributes) {
-	appendJSONKeysAndAttributes(w, &v)
 }
 
 // appendJSONKinesisDataStreamDestination appends v as a json object.

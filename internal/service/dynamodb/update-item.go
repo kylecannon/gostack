@@ -3,7 +3,6 @@ package dynamodb
 import (
 	"context"
 	"fmt"
-	"maps"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
@@ -30,24 +29,30 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 	}
 
 	change, err := e.data.Write(in.Key, func(stored value.Packed) (value.Item, error) {
-		// The update writes into the item unpacked here, which is its own.
-		old := value.Unpack(stored)
-
-		failed := plan.guard.check(old)
-		if failed != nil {
-			return nil, failed
-		}
-
-		if len(in.AttributeUpdates) > 0 {
-			update, legacyErr := legacyUpdate(in.AttributeUpdates, in.Key, old)
-			if legacyErr != nil {
-				return nil, legacyErr
+		// The item stored is unpacked once, for the condition and the legacy
+		// AttributeUpdates that read it, and the update writes into it.
+		updated, applyErr := expression.ApplyStored(in.Key, stored, func(old value.Item) (*expression.UpdateExpr, error) {
+			failed := plan.guard.check(old)
+			if failed != nil {
+				return nil, failed
 			}
 
-			plan.update = update
+			if len(in.AttributeUpdates) > 0 {
+				update, legacyErr := legacyUpdate(in.AttributeUpdates, in.Key, old)
+				if legacyErr != nil {
+					return nil, legacyErr
+				}
+
+				plan.update = update
+			}
+
+			return plan.update, nil
+		})
+		if applyErr != nil {
+			return nil, fmt.Errorf("update: %w", applyErr)
 		}
 
-		return applyUpdate(plan.update, in.Key, old)
+		return updated, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
@@ -172,26 +177,6 @@ func updateExpressions(
 	}
 
 	return update, cond, nil
-}
-
-// applyUpdate is the item an update makes of old: the expression applied, or
-// with none, old as it is or the key alone when nothing is stored. old is the
-// caller's own, just unpacked, and the update writes into it.
-func applyUpdate(update *expression.UpdateExpr, key, old value.Item) (value.Item, error) {
-	if update != nil {
-		updated, err := update.ApplyOwned(key, old)
-		if err != nil {
-			return nil, fmt.Errorf("update: %w", err)
-		}
-
-		return updated, nil
-	}
-
-	if old != nil {
-		return old, nil
-	}
-
-	return maps.Clone(key), nil
 }
 
 // updateReturnValues checks UpdateItem's ReturnValues, any of the five.

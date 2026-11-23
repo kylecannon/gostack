@@ -68,14 +68,8 @@ type Projection interface {
 }
 
 // Update is a parsed UpdateExpression: its SET, REMOVE, ADD and DELETE
-// clauses.
+// clauses. ApplyStored writes one into the item a table stores.
 type Update interface {
-	// Apply returns the item the update makes of old, which is nil when no
-	// item is stored at the key; key holds the key attributes, which the new
-	// item keeps. old is not changed. An error is the ValidationException
-	// DynamoDB raises on evaluation, such as adding to a value of another type
-	// or an update to a key attribute.
-	Apply(key, old value.Item) (value.Item, error)
 	// Paths returns every path the update writes, so the caller can report the
 	// UPDATED_OLD and UPDATED_NEW return values.
 	Paths() []Path

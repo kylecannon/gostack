@@ -59,7 +59,7 @@ var updateTypeNames = map[string]string{
 // UpdateExpr is a parsed UpdateExpression with its placeholders substituted.
 type UpdateExpr struct {
 	actions []*updateAction
-	// order is actions in the order Apply carries them out: every action but
+	// order is actions in the order ApplyStored carries them out: every action but
 	// REMOVE by ascending path, then REMOVE by descending path, so that list
 	// indexes keep naming the elements of the old item.
 	order []*updateAction
@@ -507,7 +507,7 @@ func updateCheckAction(act *updateAction) error {
 	}
 }
 
-// updateOrder returns actions in the order Apply carries them out.
+// updateOrder returns actions in the order ApplyStored carries them out.
 func updateOrder(actions []*updateAction) []*updateAction {
 	order := slices.Clone(actions)
 	slices.SortStableFunc(order, func(a, b *updateAction) int {

@@ -52,13 +52,13 @@ func ownedSet(v, extra string) string {
 		`"ExpressionAttributeValues":{":v":{"N":"` + v + `"}}` + extra + `}`
 }
 
-// Test_applyOwned_readersSeeTheOldItem: UpdateItem applies its update into the
+// Test_applyStored_readersSeeTheOldItem: UpdateItem applies its update into the
 // item it unpacked from the stored one. Each reader of the old item still reads
 // it as it was before the update: the stream's old image, ReturnValues ALL_OLD
 // and UPDATED_OLD, the item a failed condition returns, the item stored after
 // an update that fails part way, a transaction cancelled after deciding an
 // update, and the index entry under the old key.
-func Test_applyOwned_readersSeeTheOldItem(t *testing.T) {
+func Test_applyStored_readersSeeTheOldItem(t *testing.T) {
 	t.Run("stream images and ALL_OLD", func(t *testing.T) {
 		s := newOwned(t)
 
@@ -103,10 +103,13 @@ func Test_applyOwned_readersSeeTheOldItem(t *testing.T) {
 	t.Run("an update that fails part way stores nothing", func(t *testing.T) {
 		s := newOwned(t)
 
-		// SET n is applied before m.x + missing fails, into the unpacked item.
+		// SET a is written into the unpacked item before SET q.z fails on
+		// its missing parent q: actions run in path order, after every
+		// right-hand side has been evaluated.
 		got := s.call(t, usEast1, "UpdateItem", `{"TableName":"owned","Key":{"id":{"S":"a"}},`+
-			`"UpdateExpression":"SET n = :v, m.x = missing + :v","ExpressionAttributeValues":{":v":{"N":"2"}}}`)
+			`"UpdateExpression":"SET a = :v, q.z = :v","ExpressionAttributeValues":{":v":{"N":"2"}}}`)
 		require.Equal(t, http.StatusBadRequest, got.status, got.body)
+		require.Contains(t, got.body, "The document path provided in the update expression is invalid for update")
 		require.JSONEq(t, ownedItem, ownedStored(t, s))
 		require.Len(t, s.records(t, "owned"), 1, "no record of a write that failed")
 	})

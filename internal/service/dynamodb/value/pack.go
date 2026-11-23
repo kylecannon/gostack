@@ -60,9 +60,10 @@ func Pack(item Item) (Packed, error) {
 	buf := binary.AppendUvarint((*bp)[:0], uint64(size))   //nolint:gosec // G115: see above
 	buf = binary.AppendUvarint(buf, uint64(shape.scalars)) //nolint:gosec // G115: see above
 	buf = binary.AppendUvarint(buf, uint64(len(item)))
-	// A scratch buffer the pool lost, or one too small for the item, grows
-	// once to a little over the item's json size, not by append's steps,
-	// whose sum is about five times a large item.
+	// A scratch buffer the pool lost, or one too small for the item, grows to
+	// a little over the item's json size, not by append's steps, whose sum is
+	// about five times a large item. It usually grows once: the json of a
+	// string with control bytes, escaped to six bytes each, can outgrow it.
 	buf = slices.Grow(buf, size+shape.extra+packWrapping)
 	head := len(buf)
 
@@ -141,6 +142,11 @@ func (s *packShape) value(v api.AttributeValue) {
 		for _, b := range v.BS {
 			s.extra += packPerElement + base64Extra(len(b))
 		}
+	case v.BOOL != nil:
+		// ItemSize counts one byte for the json's true or false.
+		s.extra += len("false")
+	case v.NULL != nil:
+		s.extra += len("true")
 	default:
 	}
 }
@@ -153,9 +159,11 @@ func base64Extra(n int) int {
 }
 
 // numberExtra is what the json of n adds to the size ItemSize counts for it,
-// about one byte for two digits, or a little over.
+// or over. ItemSize counts one byte for two significant digits, and at least
+// one, so an exponent or zeros that it does not count, as in 1e125, can make
+// the json all but len(n) bytes longer.
 func numberExtra(n string) int {
-	return len(n)/2 + 1
+	return len(n) - 1
 }
 
 // packHeader is what the header of a Packed holds, and where its json starts.

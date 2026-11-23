@@ -2482,9 +2482,10 @@ Kinesis. The state is two files, LocalStack's split:
   `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
   snapshot 0.57 s allocating 46 MiB; restore 2.23 s allocating 1.24 GiB,
   against 1.20 GiB the restored state holds (`held-B`). Restore allocates no more than the state it builds plus the file
-  once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
-  this shape. `bin/gostack` loading that file, saving once and shutting down
-  peaks at 1.46 GB resident (`/usr/bin/time -l`).
+  once (`bound-B`); the state itself is the floor. These figures were taken
+  with items held as maps; with packed items they are re-measured at SQ-442
+  closeout, as is the peak resident size of `bin/gostack` loading that file,
+  saving once and shutting down (`/usr/bin/time -l`).
 
 **SNS.** `PERSIST_SNS=1` persists SNS alone, at `<base>/sns/store.{json,bin}`.
 LocalStack's `API_DEPENDENCIES` has no `sns` entry, so the queues SNS delivers
@@ -2586,19 +2587,32 @@ order. Both hand the caller whole stored items, and the caller projects.
 Each table has its own `sync.RWMutex`, and nothing locks across tables except
 `table.Lock` and `table.ReadLock`, which take several tables' locks in the
 order of their creation ids, so a transaction or batch that spans tables
-cannot deadlock against another. Stored items are immutable: a write replaces
-the whole map, so a reader may keep what it was handed and no read copies an
-item.
+cannot deadlock against another. A stored item is a `value.Packed`, an
+immutable string: a write replaces the whole string, so a reader may keep
+what it was handed and no read copies an item.
 
 **The write path.** Every write, from `PutItem` to a PartiQL `UPDATE`, a
 transaction or a time to live removal, goes through `Table.Write` (or
-`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `decide` with
-the stored item under the table's write lock and stores what `decide` returns,
-nil to delete; a condition expression, an update expression and the return
-values are all evaluated inside `decide`, so nothing changes between the check
-and the write. It updates the indexes under the same lock and returns a
-`Change` with the old and new item. `Change.Changed()` is false for a put
-that stores an equal item, which is what keeps such a put out of the stream.
+`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `table.Decide`
+with the stored item as the table stores it, a `value.Packed`, under the
+table's write lock, and packs and stores the `value.Item` that `decide`
+returns, nil to delete; a condition expression, an update expression and the
+return values are all evaluated inside `decide`, so nothing changes between
+the check and the write. `decide` unpacks the stored item only when something
+reads it. It updates the indexes under the same lock and returns a `Change`
+with the old item still packed (`OldPacked`), the new item and its packed
+form; there is no unpacked old item, and a caller that answers one, such as
+`ReturnValues` `ALL_OLD`, unpacks `OldPacked` again. `Change.Changed()`
+compares the new item with `OldPacked` in place, and is false for a put that
+stores an equal item, which is what keeps such a put out of the stream.
+
+The ownership rule: an update writes only into an item that
+`expression.ApplyStored` has just unpacked from the stored string, its own,
+in place of a copy. `ApplyStored` takes the `value.Packed`, so a map shared
+with anything else, such as a pooled `Decoder.View`, cannot reach it. A map or
+list below an attribute is still copied before an action changes it, since
+`SET a = b` can share it. Nothing a concurrent reader holds is written:
+readers hold packed strings or their own unpacked copies.
 A transaction decides every action first and writes them all through
 `WriteHeld` only when none failed.
 
@@ -2648,10 +2662,11 @@ table's `stream.Log`. DynamoDB Streams reads the logs through `dynamodb.Streams`
 A time to live removal goes through `Table.Expire`, whose record carries the
 `dynamodb.amazonaws.com` service identity.
 
-**What is held in memory.** Everything. Each item is a
-`map[string]api.AttributeValue`, referenced once from the primary store and
-once from each index that projects it; about 1.3 KB per item of 100 bytes
-(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records,
+**What is held in memory.** Everything. Each item is a `value.Packed`, one
+immutable string holding a short header and the item's json, referenced once
+from the primary store and once from each index that projects it; the heap
+per item of 100 bytes is re-measured at SQ-442 closeout (Persistence,
+"DynamoDB"). Each stream shard holds up to 256 MiB of records,
 in heap as `stream.Charge` estimates it, for 24 hours. `TransactWriteItems` client request tokens are held for their
 10-minute window and swept when a later transaction looks. Time to live
 removes nothing unless asked: the hourly sweep runs only under

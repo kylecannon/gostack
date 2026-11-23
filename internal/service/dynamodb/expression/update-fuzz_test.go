@@ -75,7 +75,7 @@ func requireUpdatedNew(t *testing.T, u *expression.UpdateExpr, old, updated valu
 }
 
 // updateFuzzApply parses expr over the fuzz substitutions and applies it to
-// the fuzz item. It checks old is unchanged, the key survives, and the
+// the fuzz item as a write does. It checks the key survives and the
 // UPDATED_NEW property holds.
 func updateFuzzApply(t *testing.T, expr string) {
 	t.Helper()
@@ -86,11 +86,8 @@ func updateFuzzApply(t *testing.T, expr string) {
 	}
 
 	old := updateItem(t, updateFuzzItem)
-	before := updateJSON(t, old)
 
-	updated, err := u.Apply(updateItem(t, updateKey), old)
-	require.Equal(t, before, updateJSON(t, old), "Apply changed the old item")
-
+	updated, err := applyUpdate(t, u, updateItem(t, updateKey), old)
 	if err != nil {
 		return
 	}
@@ -178,7 +175,7 @@ func Test_UpdateExpr_UpdatedNew(t *testing.T) {
 	}
 }
 
-// BenchmarkUpdateApply measures Apply by the number of SET actions and the
+// BenchmarkUpdateApply measures ApplyStored by the number of SET actions and the
 // size of the item they update.
 func BenchmarkUpdateApply(b *testing.B) {
 	for _, clauses := range []int{1, 4, 16} {
@@ -211,12 +208,15 @@ func benchUpdateApply(b *testing.B, clauses, size int) {
 	require.NoError(b, err)
 
 	key := value.Item{"pk": {S: new("k")}}
-	old := value.Item{"pk": {S: new("k")}, "pad": {S: new(strings.Repeat("x", size))}}
+	stored := packItem(b, value.Item{"pk": {S: new("k")}, "pad": {S: new(strings.Repeat("x", size))}})
+	read := func(value.Item) (*expression.UpdateExpr, error) { return u, nil }
 
 	b.SetBytes(int64(size))
 
+	// Each op is a write's: it unpacks the item stored and applies the update
+	// into it, so it counts the unpack the old Apply's copy did not.
 	for b.Loop() {
-		_, err = u.Apply(key, old)
+		_, err = expression.ApplyStored(key, stored, read)
 		if err != nil {
 			b.Fatal(err)
 		}

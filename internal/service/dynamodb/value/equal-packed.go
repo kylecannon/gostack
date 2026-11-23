@@ -97,8 +97,10 @@ func (u *unpacker) equalValue(v *api.AttributeValue) bool {
 		u.boolean()
 
 		equal = true
-	default: // TypeBOOL
+	case TypeBOOL:
 		equal = *u.boolean() == *v.BOOL
+	default: // no type a packed item holds
+		return false
 	}
 
 	if !equal {

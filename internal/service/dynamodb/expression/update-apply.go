@@ -27,40 +27,49 @@ const (
 // el of parent, a map or list the update owns.
 type updateFinal func(parent *api.AttributeValue, el PathElement) error
 
-// Apply returns the item the update makes of old. Every right-hand side reads
-// old, so SET a = b, b = a swaps the two. A list index names an element of the
-// old list: SET and ADD act first, a SET past the end appends, and REMOVE
-// takes elements out last. A missing parent is never created. The new item
-// shares the values the update leaves alone with old; old is not changed.
-func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
-	err := u.checkKey(key)
+// ApplyStored returns the item an update makes of stored, the item the table
+// holds at key, empty when there is none. It unpacks stored once, into an item
+// that is its own, and that is the only item an update writes into: a map
+// shared with anything else, such as a pooled Decoder.View, cannot be passed.
+//
+// read sees the unpacked item before anything is written. It returns the
+// update to apply, nil for none, or an error that stops the write; a failed
+// condition is one, and may keep the item to report it. Every right-hand side
+// reads the item as stored, so SET a = b, b = a swaps the two. A list index
+// names an element of the stored list: SET and ADD act first, a SET past the
+// end appends, and REMOVE takes elements out last. A missing parent is never
+// created. The update writes into the top-level map in place of a copy of it,
+// but a map or list below an attribute is still copied before an action
+// changes it, since a value the update read, SET a = b, can share it. With no
+// update the item is returned as stored, or the key alone when nothing is.
+func ApplyStored(
+	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
+) (value.Item, error) {
+	item := value.Unpack(stored)
+
+	u, err := read(item)
 	if err != nil {
 		return nil, err
 	}
 
-	item := make(value.Item, len(old)+len(key))
-	maps.Copy(item, old)
+	if u == nil {
+		if item != nil {
+			return item, nil
+		}
+
+		return maps.Clone(key), nil
+	}
+
+	err = u.checkKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if item == nil {
+		item = make(value.Item, len(key))
+	}
 
 	return u.applyTo(key, item)
-}
-
-// ApplyOwned is Apply for a caller that owns old and drops it, such as a
-// write that has just unpacked the item stored: the update writes into old,
-// the top-level map, in place of a copy of it, and returns it, or a new item
-// when old is nil. On an error old may be part written, and must not be read.
-// A map or list below an attribute is still copied before an action changes
-// it: a value the update read, SET a = b, can share it.
-func (u *UpdateExpr) ApplyOwned(key, old value.Item) (value.Item, error) {
-	err := u.checkKey(key)
-	if err != nil {
-		return nil, err
-	}
-
-	if old == nil {
-		old = make(value.Item, len(key))
-	}
-
-	return u.applyTo(key, old)
 }
 
 // checkKey refuses an update of an attribute of key.
@@ -74,8 +83,9 @@ func (u *UpdateExpr) checkKey(key value.Item) error {
 	return nil
 }
 
-// apply is Apply's body: it evaluates the update against item and then writes
-// it into item, which holds the old item's attributes and is the caller's.
+// applyTo evaluates the update against item and then writes it into item,
+// which holds the stored item's attributes and is ApplyStored's own. On an
+// error item may be part written.
 func (u *UpdateExpr) applyTo(key, item value.Item) (value.Item, error) {
 	// Every right-hand side is computed before the first write.
 	results, err := u.evaluate(item)
@@ -343,7 +353,7 @@ func updateFinalFor(act *updateAction, v api.AttributeValue) updateFinal {
 	}
 }
 
-// copies records, by the path to each, the maps and lists an Apply has already
+// copies records, by the path to each, the maps and lists an ApplyStored has already
 // copied, so that the actions under one of them change the copy and a thousand
 // of them under one map copy it once and not a thousand times (SQ-452). No
 // action path is a prefix of another (updateCheckOverlap), so a copy is never

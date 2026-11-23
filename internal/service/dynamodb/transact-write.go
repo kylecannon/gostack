@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -298,37 +299,23 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 	stored := a.entry.data.GetHeldPacked(a.key)
 	result := txResult{old: stored}
 
-	// The item stored is unpacked once, for the condition and the update that
-	// read it, and the update writes into it.
-	var old value.Item
-	if a.condition != nil || a.op == opUpdate {
-		old = value.Unpack(stored)
+	updated, failed, err := a.against(stored)
+	if err != nil {
+		return api.CancellationReason{}, txResult{}, err
 	}
 
-	if a.condition != nil {
-		ok, err := a.condition.Eval(old)
-		if err != nil {
-			return api.CancellationReason{}, txResult{}, fmt.Errorf("condition: %w", err)
-		}
-
-		if !ok {
-			return a.conditionFailed(old), result, nil
-		}
+	if failed != nil {
+		return *failed, result, nil
 	}
+
+	result.new = updated
 
 	switch a.op {
 	case opConditionCheck:
 		return cancellation(reasonNone, "", nil), result, nil
 	case opPut:
 		result.new = a.key
-	case opUpdate:
-		updated, err := applyUpdate(a.update, a.key, old)
-		if err != nil {
-			return api.CancellationReason{}, txResult{}, err
-		}
-
-		result.new = updated
-	default: // opDelete stores nothing.
+	default: // opUpdate has its item; opDelete stores nothing.
 	}
 
 	if result.new != nil {
@@ -348,6 +335,75 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 	result.write = true
 
 	return cancellation(reasonNone, "", nil), result, nil
+}
+
+// against evaluates the action against stored, the item stored at its key:
+// the item an update writes, or the reason the action fails with when its
+// condition does not hold. Only an update or a condition unpacks stored.
+func (a *txAction) against(stored value.Packed) (value.Item, *api.CancellationReason, error) {
+	if a.op == opUpdate {
+		return a.applyUpdate(stored)
+	}
+
+	if a.condition == nil {
+		return nil, nil, nil
+	}
+
+	reason, holds, err := a.check(value.Unpack(stored))
+	if err != nil || holds {
+		return nil, nil, err
+	}
+
+	return nil, &reason, nil
+}
+
+// errTxConditionFailed stops an update action whose condition does not hold
+// before the update writes; applyUpdate answers it as the action's reason.
+var errTxConditionFailed = errors.New("condition failed")
+
+// applyUpdate is the item an update action writes, or the reason it fails
+// with when its condition does not hold. The item stored is unpacked once,
+// for the condition and the update that read it, and the update writes into
+// it.
+func (a *txAction) applyUpdate(stored value.Packed) (value.Item, *api.CancellationReason, error) {
+	var failed api.CancellationReason
+
+	updated, err := expression.ApplyStored(a.key, stored, func(old value.Item) (*expression.UpdateExpr, error) {
+		reason, holds, err := a.check(old)
+		if err == nil && !holds {
+			failed, err = reason, errTxConditionFailed
+		}
+
+		return a.update, err
+	})
+	if errors.Is(err, errTxConditionFailed) {
+		return nil, &failed, nil
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("update: %w", err)
+	}
+
+	return updated, nil, nil
+}
+
+// check evaluates the action's condition, if it has one, on old, the item
+// stored: whether it holds, and the reason the action fails with when not.
+func (a *txAction) check(old value.Item) (api.CancellationReason, bool, error) {
+	if a.condition == nil {
+		return api.CancellationReason{}, true, nil
+	}
+
+	ok, err := a.condition.Eval(old)
+	if err != nil {
+		return api.CancellationReason{}, false, fmt.Errorf("condition: %w", err)
+	}
+
+	if !ok {
+		return a.conditionFailed(old), false, nil
+	}
+
+	return api.CancellationReason{}, true, nil
 }
 
 // conditionFailed is the reason of an action whose condition does not hold:

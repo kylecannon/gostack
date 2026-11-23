@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/stretchr/testify/require"
 )
 
@@ -427,6 +429,83 @@ func ccDelete(table, key string, extra map[string]any) map[string]any {
 	return ccWith(map[string]any{fieldTable: table, ccKeyMember: ccKeyOf(key)}, extra)
 }
 
+// ccNestedUpdate is ccUpdate with m written member by member, SET m.v and
+// m.l, in place of whole, so the update writes below an attribute of the item
+// it unpacked. Every version's m holds exactly v and l, so the item written is
+// still one whole version. With no item stored m is missing, and the
+// condition refuses the update rather than the path.
+func ccNestedUpdate(table, key string, ver int) map[string]any {
+	body := ccUpdate(table, key, ver, nil)
+
+	m, _ := ccVersion(key, ver)["m"].(map[string]any)
+	members, _ := m["M"].(map[string]any)
+	names, _ := body[ccNamesMember].(map[string]any)
+	values, _ := body[ccValuesMember].(map[string]any)
+	expr, _ := body[ccUpdateMember].(string)
+
+	delete(values, ":m")
+	names["#v"], names["#l"] = "v", "l"
+	values[":mv"], values[":ml"] = members["v"], members["l"]
+	body[ccUpdateMember] = strings.Replace(expr, "#m = :m", "#m.#v = :mv, #m.#l = :ml", 1)
+	body[ccConditionMember] = "attribute_exists(#m)"
+
+	return body
+}
+
+// nestedWrites makes ops nested updates over keys of table, as writer w, and
+// counts the ones that applied: a key may hold no item when one runs.
+func (c *ccTest) nestedWrites(table string, keys []string, w, ops int, applied *atomic.Int32) {
+	for i := range ops {
+		ver := w*ccWriterSpan + 2*i + 1
+
+		out, status := c.do(opUpdateItem, ccNestedUpdate(table, keys[i%len(keys)], ver))
+
+		switch {
+		case status == http.StatusOK:
+			applied.Add(1)
+		case status == http.StatusBadRequest && out["__type"] == codeConditional:
+		default:
+			c.errorf("nested update: %d %s", status, ccJSON(out))
+		}
+	}
+}
+
+// readStream checks the images of the shard's records from pos on, each a
+// whole version of the record's key, and returns the position to read next.
+func (c *ccTest) readStream(shard dynamodb.StreamShard, pos int, images *atomic.Int32) int {
+	page, err := shard.Read(pos, 1000, 1<<20)
+	if err != nil {
+		c.errorf("stream read at %d: %v", pos, err)
+
+		return pos
+	}
+
+	for _, rec := range page.Records {
+		key := ""
+		if pk := rec.Keys["pk"].S; pk != nil {
+			key = *pk
+		}
+
+		for _, img := range []value.Packed{rec.Old, rec.New} {
+			if img == "" {
+				continue
+			}
+
+			var item map[string]any
+			if json.Unmarshal(ccJSON(value.Unpack(img)), &item) != nil {
+				c.errorf("stream image at %d: not json", rec.Seq)
+
+				continue
+			}
+
+			c.check("stream image", item, key)
+			images.Add(1)
+		}
+	}
+
+	return page.Next
+}
+
 // ccFailingPut is a PutItem of version ver whose condition no stored version
 // meets, asking for the stored item when it fails.
 func ccFailingPut(table, key string, ver int) map[string]any {
@@ -713,9 +792,11 @@ func (c *ccTest) writeMix(table string, keys []string, w, ops int, cancels, cond
 // Test_packedConcurrency_wholeVersionReads: GetItem, Query, Scan with and
 // without a filter or projection, BatchGetItem and TransactGetItems read keys
 // that PutItem, UpdateItem, DeleteItem, TransactWriteItems (some cancelled)
-// and time-to-live sweeps write at the same time. Every item read is one
-// whole version, no cancelled transaction's version is ever seen, and a
-// failed condition's and a cancelled check's returned item are whole too.
+// and time-to-live sweeps write at the same time, with updates that write
+// below an attribute, SET m.v. Every item read is one whole version, no
+// cancelled transaction's version is ever seen, and a failed condition's and a
+// cancelled check's returned item are whole too, as is every old and new image
+// of the stream, read while the writes run.
 func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	const (
 		writers = 4
@@ -725,11 +806,16 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	)
 
 	c := newCCTest(t)
-	c.table(table)
+	require.NotNil(t, c.ok(opCreate, ccWith(ccTableBody(table), map[string]any{
+		"StreamSpecification": map[string]any{"StreamEnabled": true, "StreamViewType": "NEW_AND_OLD_IMAGES"},
+	})))
 	require.NotNil(t, c.ok("UpdateTimeToLive", map[string]any{
 		fieldTable: table, "TimeToLiveSpecification": map[string]any{"Enabled": true, ccAttrNameMember: "exp"},
 	}))
 	require.NotNil(t, c.ok(opPut, ccPut(table, ccAnchor, 1, nil)))
+
+	info, ok := c.s.provider.StreamByARN(streamCtx(t), c.s.latestStreamARN(t, table))
+	require.True(t, ok)
 
 	keys := ccKeys(4)
 	readKeys := append(ccKeys(4), ccAnchor)
@@ -739,6 +825,8 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 		reading                                       sync.WaitGroup
 		seen                                          ccSeen
 		cancels, conditionItems, filtered, expiredAll atomic.Int32
+		nested, images                                atomic.Int32
+		streamPos                                     int
 	)
 
 	done := make(chan struct{})
@@ -746,6 +834,19 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	for w := 1; w <= writers; w++ {
 		writing.Go(func() { c.writeMix(table, keys, w, ops, &cancels, &conditionItems) })
 	}
+
+	writing.Go(func() { c.nestedWrites(table, keys, writers+1, ops, &nested) })
+
+	reading.Go(func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				streamPos = c.readStream(info.Shard, streamPos, &images)
+			}
+		}
+	})
 
 	reading.Go(func() {
 		for {
@@ -778,12 +879,15 @@ func Test_packedConcurrency_wholeVersionReads(t *testing.T) {
 	// One more pass once the writes have stopped, so every read path ran at
 	// least once whatever the scheduling.
 	c.readAll(table, readKeys, &seen, &filtered)
+	c.readStream(info.Shard, streamPos, &images)
 
 	require.Positive(t, cancels.Load(), "a transaction was cancelled")
 	require.Positive(t, conditionItems.Load(), "a failed condition returned the stored item")
 	require.Positive(t, filtered.Load(), "the filtered scan returned items")
 	require.Greater(t, seen.most(), 1, "readers saw more than one version of a key")
 	require.Positive(t, expiredAll.Load(), "a sweep beside the writers removed an expired version")
+	require.Positive(t, nested.Load(), "a nested update applied")
+	require.Positive(t, images.Load(), "the stream reader checked images")
 }
 
 // Test_packedConcurrency_noLostUpdate: workers × rounds ADDs of one to one

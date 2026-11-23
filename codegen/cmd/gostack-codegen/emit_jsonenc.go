@@ -162,9 +162,17 @@ func (g *generator) emitJSONEncoders(p *printer) error {
 }
 
 // isMapValueStruct reports whether a map value of shape r is a struct written
-// through its appendJSONMapValue<Struct> function.
-func isMapValueStruct(r ref, encoded []string) bool {
-	return r.shape.Type == spec.TypeStructure && !r.shape.Document && !slices.Contains(encoded, r.name)
+// through its appendJSONMapValue<Struct> function: one that holds a struct of
+// its own type below it, as AttributeValue does. Only there does the range
+// variable escape; any other struct's encoder leaves it on the stack.
+func (g *generator) isMapValueStruct(r ref, encoded []string) bool {
+	if r.shape.Type != spec.TypeStructure || r.shape.Document || slices.Contains(encoded, r.name) {
+		return false
+	}
+
+	st, ok := g.structs[g.goTypeName(r.name)]
+
+	return ok && g.reachesItself(st)
 }
 
 // jsonMapValueStructs names the structs held as map values below structs.
@@ -189,7 +197,7 @@ func (g *generator) jsonMapValueStructs(structs []*structType) map[string]bool {
 				return
 			}
 
-			if isMapValueStruct(value, encoded) {
+			if g.isMapValueStruct(value, encoded) {
 				out[g.goTypeName(value.name)] = true
 			}
 
@@ -445,7 +453,7 @@ func (g *generator) emitJSONMap(
 	p.f("%s\tw.String(%s)", in, k)
 	p.f("%s\tw.Byte(':')", in)
 
-	if isMapValueStruct(value, encoded) {
+	if g.isMapValueStruct(value, encoded) {
 		p.f("%s\tappendJSONMapValue%s(w, %s)", in, g.goTypeName(value.name), e)
 	} else {
 		err = g.emitJSONValue(p, value, e, siteElement, depth+1, in+"\t", encoded)

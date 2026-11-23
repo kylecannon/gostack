@@ -329,7 +329,7 @@ func appendJSONGetMaintenanceWindowExecutionTaskOutput(w *awsjson.Writer, v *Get
 					first1 = false
 					w.String(k1)
 					w.Byte(':')
-					appendJSONMapValueMaintenanceWindowTaskParameterValueExpression(w, e1)
+					appendJSONMaintenanceWindowTaskParameterValueExpression(w, &e1)
 				}
 				w.Byte('}')
 			}
@@ -493,7 +493,7 @@ func appendJSONGetMaintenanceWindowTaskOutput(w *awsjson.Writer, v *GetMaintenan
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueMaintenanceWindowTaskParameterValueExpression(w, e0)
+			appendJSONMaintenanceWindowTaskParameterValueExpression(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -564,7 +564,7 @@ func appendJSONGetOpsMetadataOutput(w *awsjson.Writer, v *GetOpsMetadataOutput) 
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueMetadataValue(w, e0)
+			appendJSONMetadataValue(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -1444,7 +1444,7 @@ func appendJSONInventoryResultEntity(w *awsjson.Writer, v *InventoryResultEntity
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueInventoryResultItem(w, e0)
+			appendJSONInventoryResultItem(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -1497,13 +1497,6 @@ func appendJSONInventoryResultItem(w *awsjson.Writer, v *InventoryResultItem) {
 		w.Byte(']')
 	}
 	w.ObjectEnd(start)
-}
-
-// appendJSONMapValueInventoryResultItem appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueInventoryResultItem(w *awsjson.Writer, v InventoryResultItem) {
-	appendJSONInventoryResultItem(w, &v)
 }
 
 // appendJSONLabelParameterVersionOutput appends v as a json object.
@@ -2397,7 +2390,7 @@ func appendJSONMaintenanceWindowTask(w *awsjson.Writer, v *MaintenanceWindowTask
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueMaintenanceWindowTaskParameterValueExpression(w, e0)
+			appendJSONMaintenanceWindowTaskParameterValueExpression(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -2479,13 +2472,6 @@ func appendJSONMaintenanceWindowTaskParameterValueExpression(w *awsjson.Writer, 
 	w.ObjectEnd(start)
 }
 
-// appendJSONMapValueMaintenanceWindowTaskParameterValueExpression appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueMaintenanceWindowTaskParameterValueExpression(w *awsjson.Writer, v MaintenanceWindowTaskParameterValueExpression) {
-	appendJSONMaintenanceWindowTaskParameterValueExpression(w, &v)
-}
-
 // appendJSONMetadataValue appends v as a json object.
 func appendJSONMetadataValue(w *awsjson.Writer, v *MetadataValue) {
 	start := w.ObjectStart()
@@ -2494,13 +2480,6 @@ func appendJSONMetadataValue(w *awsjson.Writer, v *MetadataValue) {
 		w.String(*v.Value)
 	}
 	w.ObjectEnd(start)
-}
-
-// appendJSONMapValueMetadataValue appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueMetadataValue(w *awsjson.Writer, v MetadataValue) {
-	appendJSONMetadataValue(w, &v)
 }
 
 // appendJSONModifyDocumentPermissionOutput appends v as a json object.
@@ -2620,7 +2599,7 @@ func appendJSONOpsEntity(w *awsjson.Writer, v *OpsEntity) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueOpsEntityItem(w, e0)
+			appendJSONOpsEntityItem(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -2661,13 +2640,6 @@ func appendJSONOpsEntityItem(w *awsjson.Writer, v *OpsEntityItem) {
 		w.Byte(']')
 	}
 	w.ObjectEnd(start)
-}
-
-// appendJSONMapValueOpsEntityItem appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueOpsEntityItem(w *awsjson.Writer, v OpsEntityItem) {
-	appendJSONOpsEntityItem(w, &v)
 }
 
 // appendJSONOpsItem appends v as a json object.
@@ -2754,7 +2726,7 @@ func appendJSONOpsItem(w *awsjson.Writer, v *OpsItem) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueOpsItemDataValue(w, e0)
+			appendJSONOpsItemDataValue(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -2801,13 +2773,6 @@ func appendJSONOpsItemDataValue(w *awsjson.Writer, v *OpsItemDataValue) {
 		w.String(*v.Type)
 	}
 	w.ObjectEnd(start)
-}
-
-// appendJSONMapValueOpsItemDataValue appends v, a map value, as a json object.
-//
-//go:noinline
-func appendJSONMapValueOpsItemDataValue(w *awsjson.Writer, v OpsItemDataValue) {
-	appendJSONOpsItemDataValue(w, &v)
 }
 
 // appendJSONOpsItemEventSummary appends v as a json object.
@@ -2956,7 +2921,7 @@ func appendJSONOpsItemSummary(w *awsjson.Writer, v *OpsItemSummary) {
 			first0 = false
 			w.String(k0)
 			w.Byte(':')
-			appendJSONMapValueOpsItemDataValue(w, e0)
+			appendJSONOpsItemDataValue(w, &e0)
 		}
 		w.Byte('}')
 	}
@@ -3013,6 +2978,62 @@ func appendJSONOpsMetadata(w *awsjson.Writer, v *OpsMetadata) {
 	if v.CreationDate != nil && !v.CreationDate.IsZero() {
 		w.Raw(`,"CreationDate":`)
 		w.Time(v.CreationDate)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONOutputSource appends v as a json object.
+func appendJSONOutputSource(w *awsjson.Writer, v *OutputSource) {
+	start := w.ObjectStart()
+	if v.OutputSourceId != nil {
+		w.Raw(`,"OutputSourceId":`)
+		w.String(*v.OutputSourceId)
+	}
+	if v.OutputSourceType != nil {
+		w.Raw(`,"OutputSourceType":`)
+		w.String(*v.OutputSourceType)
+	}
+	w.ObjectEnd(start)
+}
+
+// appendJSONParameter appends v as a json object.
+func appendJSONParameter(w *awsjson.Writer, v *Parameter) {
+	start := w.ObjectStart()
+	if v.Name != nil {
+		w.Raw(`,"Name":`)
+		w.String(*v.Name)
+	}
+	if v.Type != nil {
+		w.Raw(`,"Type":`)
+		w.String(*v.Type)
+	}
+	if v.Value != nil {
+		w.Raw(`,"Value":`)
+		w.String(*v.Value)
+	}
+	if v.Version != nil {
+		w.Raw(`,"Version":`)
+		w.Int64(*v.Version)
+	}
+	if v.Selector != nil {
+		w.Raw(`,"Selector":`)
+		w.String(*v.Selector)
+	}
+	if v.SourceResult != nil {
+		w.Raw(`,"SourceResult":`)
+		w.String(*v.SourceResult)
+	}
+	if v.LastModifiedDate != nil && !v.LastModifiedDate.IsZero() {
+		w.Raw(`,"LastModifiedDate":`)
+		w.Time(v.LastModifiedDate)
+	}
+	if v.ARN != nil {
+		w.Raw(`,"ARN":`)
+		w.String(*v.ARN)
+	}
+	if v.DataType != nil {
+		w.Raw(`,"DataType":`)
+		w.String(*v.DataType)
 	}
 	w.ObjectEnd(start)
 }
