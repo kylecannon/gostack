@@ -99,6 +99,12 @@ IMAGE_BUILD_ARGS = --build-arg GOTOOLCHAIN=$(GOTOOLCHAIN) --build-arg VERSION=$(
 #                            (go run ./bench compare). Needs Docker. Takes over an hour.
 #   make bench-system-quick  the quick profile for gostack alone: builds one image, writes under
 #                            bin/bench-system, compares the same way. Takes about 5 minutes.
+#   make bench-system-large  the large profile for gostack alone: large tables in a container with a
+#                            memory limit (BENCH_LARGE_MEMORY; bench/doc.go, "The large profile", has
+#                            the default), loaded for BENCH_LARGE_ARGS' -duration. Writes under
+#                            bin/bench-system-large and compares with nothing. Takes over an hour. To
+#                            measure two images in alternation add -base-image <image> -base-commit
+#                            <sha> -base-out <dir> to BENCH_LARGE_ARGS.
 # BENCH_SYSTEM_ARGS passes flags to `bench run`, e.g. "-reps 1 -duration 1s". Container names and
 # the load generator image carry the tag of IMAGE, so runs of different tags do not collide.
 BENCH_COUNT ?= 10
@@ -119,13 +125,19 @@ BENCH_SHARD_LIMIT ?= 60m
 BENCH_MAKEFILE := $(abspath $(firstword $(MAKEFILE_LIST)))
 BENCH_SYSTEM_ARGS ?=
 BENCH_TAG = $(lastword $(subst :, ,$(IMAGE)))
-BENCH_RUN = -gostack-image $(IMAGE) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
-	-loadgen-image gostack-bench-loadgen:$(BENCH_TAG) -name-suffix -$(BENCH_TAG) -compare-dir bench/results \
-	$(BENCH_SYSTEM_ARGS)
+# The image and the names every bench-system target gives `bench run`.
+BENCH_IMAGE_FLAGS = -gostack-image $(IMAGE) -loadgen-image gostack-bench-loadgen:$(BENCH_TAG) \
+	-name-suffix -$(BENCH_TAG)
+BENCH_RUN = $(BENCH_IMAGE_FLAGS) -slim-image $(IMAGE_SLIM) -localstack-image $(LOCALSTACK_IMAGE) \
+	-compare-dir bench/results $(BENCH_SYSTEM_ARGS)
 LOCALSTACK_IMAGE ?= gostack-parity-localstack:8b9a79f
+# bench-system-large runs one repetition of a cell, because a cell fills a table before it
+# measures. BENCH_LARGE_MEMORY, when set, is the container limit; when not, the bench's own default.
+BENCH_LARGE_MEMORY ?=
+BENCH_LARGE_ARGS ?= -reps 1 -duration 30s
 
 
-.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check features features-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-select bench-system bench-system-quick
+.PHONY: fmt lint fix fix-check test build tidy-check toolchain packages gen gen-check features features-check fuzz parity parity-baseline parity-check parity-prune image image-slim bench bench-ab bench-build bench-select bench-system bench-system-quick bench-system-large
 
 fmt:
 	$(LINT) fmt $(FMT_ARGS)
@@ -374,3 +386,8 @@ bench-system: image image-slim
 
 bench-system-quick: image
 	go run ./bench run -profile quick -out bin/bench-system $(BENCH_RUN)
+
+# No -compare-dir: no committed result holds large cells.
+bench-system-large: image
+	go run ./bench run -profile large -out bin/bench-system-large $(BENCH_IMAGE_FLAGS) \
+		$(if $(BENCH_LARGE_MEMORY),-memory $(BENCH_LARGE_MEMORY)) $(BENCH_LARGE_ARGS)

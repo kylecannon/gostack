@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -113,6 +114,13 @@ type opSpread struct {
 
 // cellResult is every run of one cell. Ops holds each operation the workload
 // timed, by name.
+//
+// peak_usage_bytes, items_filled, oom_killed and spec.memory were added to schema
+// 3 without a bump, as failed_runs was: a file written before them has none, and
+// no field changed its meaning. So was the memory of a cell with no completed run:
+// peak_rss_bytes and baseline_rss_bytes there hold what its failed runs reached,
+// where they held nothing. compare reads none of the new fields, and does not
+// read the figures of a cell with a problem.
 type cellResult struct {
 	ID           string              `json:"id"`
 	Spec         cellSpec            `json:"spec"`
@@ -121,20 +129,41 @@ type cellResult struct {
 	CyclesPerSec spread              `json:"cycles_per_sec"`
 	// OpsPerSec counts every timed operation of every kind, so a cycle of a put
 	// and a get is two.
-	OpsPerSec        spread         `json:"ops_per_sec"`
-	BaselineRSSBytes spread         `json:"baseline_rss_bytes"`
-	PeakRSSBytes     spread         `json:"peak_rss_bytes"`
-	CPUPercent       spread         `json:"cpu_percent"`
-	Counters         map[string]int `json:"counters,omitempty"`
+	OpsPerSec        spread `json:"ops_per_sec"`
+	BaselineRSSBytes spread `json:"baseline_rss_bytes"`
+	PeakRSSBytes     spread `json:"peak_rss_bytes"`
+	// PeakUsageBytes is the peak of the memory the cgroup counts against the
+	// container's limit, page cache included; PeakRSSBytes leaves the cache out.
+	PeakUsageBytes spread         `json:"peak_usage_bytes,omitzero"`
+	CPUPercent     spread         `json:"cpu_percent"`
+	Counters       map[string]int `json:"counters,omitempty"`
+	// ItemsFilled is the items the server had acknowledged when the fill of a
+	// workload that has one first stopped: all of them in a cell that completed,
+	// and how far the furthest failed run got in one that did not.
+	ItemsFilled int `json:"items_filled,omitempty"`
 	// Problem is set when no run of the cell completed, so the cell has no figures.
 	Problem string `json:"problem,omitempty"`
 	// FailedRuns names each repetition that did not complete (the load generator
-	// failed, or the target container was gone when the run ended) and why. Such a
-	// run is left out of the figures, so Runs is the number that completed, and
-	// compare reads a side that has failed runs as having a problem. The field was
-	// added to schema 3 without a bump: a file without it has no failed runs, and
-	// no field changed its meaning.
+	// failed, or the target container was gone when the run ended) and why, and
+	// ends with what the run reached before it failed: its peak RSS, its peak usage
+	// and how many items its fill had put in (failedReason). Such a run is left out
+	// of the figures, so Runs is the number that completed, and compare reads a side
+	// that has failed runs as having a problem. The field was added to schema 3
+	// without a bump: a file without it has no failed runs, and no field changed its
+	// meaning.
 	FailedRuns []string `json:"failed_runs,omitempty"`
+	// OOMKilled counts the runs whose container the kernel killed for going over
+	// its memory limit (Spec.Memory). Each is in FailedRuns too. A cell none of
+	// whose runs completed keeps the memory its failed runs reached in
+	// PeakRSSBytes and PeakUsageBytes, which is how far the target got.
+	OOMKilled int `json:"oom_killed,omitempty"`
+}
+
+// failedRun is a run that did not complete, with what it measured before it
+// failed: its memory, and how far a fill got.
+type failedRun struct {
+	run       runResult
+	oomKilled bool
 }
 
 // settleCell is the result of a cell from the runs that completed and the
@@ -148,6 +177,42 @@ func settleCell(spec cellSpec, runs []runResult, failed []string) cellResult {
 	cell.FailedRuns = failed
 
 	return cell
+}
+
+// withFailed is the cell with its failed runs recorded: how many the kernel
+// OOM-killed, and, when no run completed, the memory they reached and the items
+// the fill had put. A cell with completed runs keeps their figures, and what its
+// failed runs reached is in their FailedRuns entries (failedReason). A run that
+// failed before it had a container to read has no memory to show, and is left
+// out of the figures.
+func withFailed(c cellResult, failed []failedRun) cellResult {
+	for _, f := range failed {
+		if f.oomKilled {
+			c.OOMKilled++
+		}
+	}
+
+	if c.Runs > 0 {
+		return c
+	}
+
+	var baseline, peak, usage []float64
+
+	for _, f := range failed {
+		c.ItemsFilled = max(c.ItemsFilled, f.run.ItemsFilled)
+
+		if f.run.Usage.PeakRSSBytes == 0 {
+			continue
+		}
+
+		baseline = append(baseline, float64(f.run.Usage.BaselineRSSBytes))
+		peak = append(peak, float64(f.run.Usage.PeakRSSBytes))
+		usage = append(usage, float64(f.run.Usage.PeakUsageBytes))
+	}
+
+	c.BaselineRSSBytes, c.PeakRSSBytes, c.PeakUsageBytes = spreadOf(baseline), spreadOf(peak), spreadOf(usage)
+
+	return c
 }
 
 // summarizeCell folds the runs of one cell.
@@ -168,14 +233,19 @@ func summarizeCell(spec cellSpec, runs []runResult) cellResult {
 
 	n := len(runs)
 	rate, opsRate, base := make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
-	peak, cpu := make([]float64, 0, n), make([]float64, 0, n)
+	peak, usage, cpu := make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
 
-	for _, run := range runs {
+	for i, run := range runs {
 		rate = append(rate, run.CyclesPerSec)
 		opsRate = append(opsRate, run.opsPerSec())
 		base = append(base, float64(run.Usage.BaselineRSSBytes))
 		peak = append(peak, float64(run.Usage.PeakRSSBytes))
+		usage = append(usage, float64(run.Usage.PeakUsageBytes))
 		cpu = append(cpu, run.Usage.CPUPercent)
+
+		if i == 0 || run.ItemsFilled < cell.ItemsFilled {
+			cell.ItemsFilled = run.ItemsFilled
+		}
 
 		for name, n := range run.Counters {
 			if cell.Counters == nil {
@@ -188,6 +258,7 @@ func summarizeCell(spec cellSpec, runs []runResult) cellResult {
 
 	cell.CyclesPerSec, cell.OpsPerSec = spreadOf(rate), spreadOf(opsRate)
 	cell.BaselineRSSBytes, cell.PeakRSSBytes, cell.CPUPercent = spreadOf(base), spreadOf(peak), spreadOf(cpu)
+	cell.PeakUsageBytes = spreadOf(usage)
 
 	return cell
 }
@@ -414,6 +485,7 @@ func (r report) markdown() string {
 		"the runs, with the range in the JSON. Memory is the resident set of the container (anon plus mapped file "+
 		"pages). CPU is a percentage of one core.\n\n", r.Settings.Reps, r.Settings.CellSeconds)
 
+	r.memoryNote(&b)
 	r.footprintTable(&b)
 
 	for _, t := range r.Targets {
@@ -445,7 +517,33 @@ func (r report) notes(b *strings.Builder) {
 	b.WriteString("\n")
 }
 
+// memoryNote says what a memory limit in a cell id means. It writes nothing when
+// no cell has one.
+func (r report) memoryNote(b *strings.Builder) {
+	limited := func(c cellResult) bool { return c.Spec.limited() }
+
+	if !slices.ContainsFunc(r.Targets, func(t targetResult) bool { return slices.ContainsFunc(t.Cells, limited) }) {
+		return
+	}
+
+	fmt.Fprintf(b, "A cell whose id has mem= ran in a container with that memory limit and the same swap limit. "+
+		"Peak RSS is the resident set; Peak usage is the memory the container's cgroup counts against the limit, "+
+		"page cache included. Both are the highest of readings taken every %s (cgroup v2 keeps no high-water "+
+		"mark), so a container killed between two readings reached a little more than its peak shows. "+
+		"Items in is how many items the server had acknowledged when the fill stopped. "+
+		"A run whose container the kernel killed for going over the limit is a failed run, reported as "+
+		"OOM-killed with the memory it had reached.\n\n", sampleEvery)
+}
+
+// footprintTable writes the idle and startup rows of the targets that have any. It
+// writes nothing when no target was timed.
 func (r report) footprintTable(b *strings.Builder) {
+	if !slices.ContainsFunc(r.Targets, func(t targetResult) bool {
+		return !t.Startup.MS.zero() || !t.Idle.Healthcheck.RSSBytes.zero()
+	}) {
+		return
+	}
+
 	b.WriteString("## Image, startup and idle\n\n")
 	fmt.Fprintf(b, "Startup is the median of %d containers. Idle is the median of %d containers, each sampled for "+
 		"%.0f s after %.0f s.\n\n",
@@ -507,12 +605,20 @@ func cellTable(b *strings.Builder, t targetResult) {
 
 		ops := orderedOps(heads[i].Service, heads[i].Workload, cells)
 
-		b.WriteString("| Cell | " + strings.Join(ops, " | ") + " | Cycles/s | Ops/s | Peak RSS |\n")
-		b.WriteString("|---|" + strings.Repeat("---:|", len(ops)+cycleColumns) + "\n")
+		extra := limitedColumns(cells)
+
+		b.WriteString("| Cell | " + strings.Join(ops, " | ") + " | Cycles/s | Ops/s | Peak RSS |")
+
+		for _, col := range extra {
+			b.WriteString(" " + col.head + " |")
+		}
+
+		b.WriteString("\n|---|" + strings.Repeat("---:|", len(ops)+cycleColumns+len(extra)) + "\n")
 
 		for _, c := range cells {
 			if c.Problem != "" {
-				fmt.Fprintf(b, "| `%s` | %s |%s\n", c.ID, c.Problem, strings.Repeat(" |", len(ops)+cycleColumns-1))
+				fmt.Fprintf(b, "| `%s` | %s |%s\n", c.ID, problemText(c),
+					strings.Repeat(" |", len(ops)+cycleColumns+len(extra)-1))
 
 				continue
 			}
@@ -523,12 +629,102 @@ func cellTable(b *strings.Builder, t targetResult) {
 				fmt.Fprintf(b, " %s |", opPair(c.Ops[op]))
 			}
 
-			fmt.Fprintf(b, " %.0f | %.0f | %s |\n", c.CyclesPerSec.Median, c.OpsPerSec.Median,
-				mib(uint64(c.PeakRSSBytes.Median)))
+			peak := mib(uint64(c.PeakRSSBytes.Median))
+			if c.OOMKilled > 0 {
+				peak += fmt.Sprintf(" (%d runs OOM-killed)", c.OOMKilled)
+			}
+
+			fmt.Fprintf(b, " %.0f | %.0f | %s |", c.CyclesPerSec.Median, c.OpsPerSec.Median, peak)
+
+			for _, col := range extra {
+				b.WriteString(" " + col.value(c) + " |")
+			}
+
+			b.WriteString("\n")
 		}
 
 		fmt.Fprintln(b)
 	}
+}
+
+// column is a column of a cell table that only some workloads have.
+type column struct {
+	head  string
+	value func(cellResult) string
+}
+
+// limitedColumns are the columns of the cells that ran under a memory limit: what
+// the cgroup counted against it, and how many items the fill had put in. A group
+// of cells none of which had a limit has neither.
+func limitedColumns(cells []cellResult) []column {
+	if !slices.ContainsFunc(cells, func(c cellResult) bool { return c.Spec.limited() }) {
+		return nil
+	}
+
+	return []column{
+		{"Peak usage", func(c cellResult) string { return mib(uint64(c.PeakUsageBytes.Median)) }},
+		{"Items in", func(c cellResult) string {
+			if c.ItemsFilled == 0 {
+				return noValue
+			}
+
+			return strconv.Itoa(c.ItemsFilled)
+		}},
+	}
+}
+
+// problemText is what a cell with no completed run shows in its row. A cell the
+// kernel killed says so, with the limit, in place of the load generator's error,
+// which is in the Problems list, and adds the memory the failed runs reached and
+// the items the fill had put in. Any other row is the cell's problem, whose
+// entries each end with what their run reached (failedReason).
+func problemText(c cellResult) string {
+	if c.OOMKilled == 0 {
+		return c.Problem
+	}
+
+	text := fmt.Sprintf("**OOM-killed** at the %s limit in %d of %d runs", c.Spec.Memory, c.OOMKilled, len(c.FailedRuns))
+
+	reached := reachedText(c.ItemsFilled, uint64(c.PeakRSSBytes.Median), uint64(c.PeakUsageBytes.Median))
+	if reached == "" {
+		return text
+	}
+
+	return text + ", " + reached
+}
+
+// reachedText is how far a target got, as the items its fill had put in and the
+// peaks of its memory, leaving out what is zero: nothing was read of it.
+func reachedText(items int, rss, usage uint64) string {
+	var reached []string
+
+	if items > 0 {
+		reached = append(reached, strconv.Itoa(items)+" items in")
+	}
+
+	if rss > 0 {
+		reached = append(reached, "peak RSS "+mib(rss))
+	}
+
+	if usage > 0 {
+		reached = append(reached, "peak usage "+mib(usage))
+	}
+
+	return strings.Join(reached, ", ")
+}
+
+// failedReason is the entry of a failed run in FailedRuns: its number, why it
+// failed, and what it reached before it did, which a cell with other runs that
+// completed keeps nowhere else.
+func failedReason(n int, err error, run runResult) string {
+	reason := fmt.Sprintf("run %d: %v", n, err)
+
+	reached := reachedText(run.ItemsFilled, run.Usage.PeakRSSBytes, run.Usage.PeakUsageBytes)
+	if reached == "" {
+		return reason
+	}
+
+	return reason + " (" + reached + ")"
 }
 
 // agenticServices lists the services some target has an agentic result for, and
@@ -551,7 +747,13 @@ func (r report) agenticServices() []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
+// agenticTable writes a row for each service and target of the agentic workload.
+// It writes nothing when no target has a result.
 func (r report) agenticTable(b *strings.Builder) {
+	if !slices.ContainsFunc(r.Targets, func(t targetResult) bool { return len(t.Agentic) > 0 }) {
+		return
+	}
+
 	b.WriteString("## Agentic workload\n\n")
 	fmt.Fprintf(b, "%d cycles of create, use and delete per service, at concurrency %d.\n\n",
 		r.Settings.Cycles, r.Settings.CycleConcurrency)
