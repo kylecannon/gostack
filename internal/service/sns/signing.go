@@ -24,20 +24,13 @@ const defaultHost = "localhost.localstack.cloud:4566"
 // the one whose certificate is served, and a second Signer would sign with a
 // key no served certificate verifies.
 //
-// TEMPORARY: it also mounts the developer endpoints (mountDeveloperAPI), through
-// the one hook the process hands internalapi. Registration.DeveloperMount
-// (added by SQ-270) is their home: set it to mountDeveloperAPI with the routes
-// written relative to /_gostack/services/sns and /_aws/sns, as SQS's are, and
-// drop the call below and Settings.DisableCompatPaths, since the gateway's own
-// DisableCompatPaths decides the /_aws names
-// (Test_Provider_developerRoutes_compatPaths becomes a gateway-level check).
-// Registration.Mount would make SNS a routing hook in the parity tables, which
-// it is not.
+// The developer endpoints under /_gostack/services/sns and /_aws/sns are not
+// protocol paths: they are Registration.DeveloperMount (mountDeveloperAPI), and
+// the gateway's GOSTACK_COMPAT_PATHS switch turns their /_aws names off. The
+// certificate lives under /_aws/sns too and stays on.
 func (p *Provider) MountProtocol(r chi.Router) {
 	r.Method(http.MethodGet, envelope.CertPath, p.signer)
 	r.Method(http.MethodHead, envelope.CertPath, p.signer)
-
-	p.mountDeveloperAPI(r)
 }
 
 // Envelope returns the signed JSON body of in, as it is delivered to a

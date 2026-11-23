@@ -1057,8 +1057,14 @@ use what they declare, which `Test_developerFilesHoldNoRoutingHook` checks
 to one selects its service and the services that depend on it and never every
 service. A path under the prefix that no developer route takes goes on to the
 gateway's AWS handling, as any unmatched path does.
+SQS and SNS use it (`developer-*.go` in each package). SNS's signing
+certificate, which sits under `/_aws/sns` too, is a protocol path and stays
+outside it: the provider's `MountProtocol` hands it to `internalapi.Deps.Protocol`.
 Protocol paths that must stay up under `GOSTACK_COMPAT_PATHS=0` do not belong
-here (see below).
+here (see below). DynamoDB's `dynamodb/expired` is the one developer endpoint
+still on `Mount` (with its own compat switch): it is under the gateway's
+namespaces, so it is not a routing hook either, and it is in no
+`developer-*.go` file.
 
 Two LocalStack paths have no canonical twin of the same shape.
 `/_localstack/plugins` and `/_localstack/diagnose` (only under `DEBUG`) return

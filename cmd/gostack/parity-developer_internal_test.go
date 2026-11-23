@@ -52,14 +52,16 @@ func Test_developerFilesHoldNoRoutingHook(t *testing.T) {
 				"%s.%s is %s, declared in a developer-*.go file: it holds no routing hook", reg.Metadata.Name, hook, name)
 		}
 
-		// A service that mounts its developer endpoints some other way (SNS,
-		// through internalapi.Deps.Protocol, until it moves to DeveloperMount)
-		// has no developer mount to keep apart yet. It is not in ROUTING_REACH
-		// either, so a developer file of it selects only it and its dependents
-		// whatever the rule.
-		if len(declared) == 0 || reg.DeveloperMount == nil {
+		// A service with no developer file has nothing to keep apart. One with
+		// such a file must mount it through DeveloperMount: the file selects
+		// only the service and its dependents (parity/ledger.py), which is right
+		// only for code the router scoped to the service's prefix runs.
+		if len(declared) == 0 {
 			continue
 		}
+
+		require.NotNil(t, reg.DeveloperMount,
+			"%s has developer-*.go files and no DeveloperMount: they select only its suites", reg.Metadata.Name)
 
 		developers++
 
