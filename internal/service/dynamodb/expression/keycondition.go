@@ -67,7 +67,7 @@ func ParseKeyConditionText(src string, subs Substitutions, used map[string]struc
 		return nil, err
 	}
 
-	c, _, err := parseChecked(p, subs, used)
+	c, _, err := parseChecked(p, subs, used, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -527,23 +527,8 @@ caller's account and region, as LocalStack does.
   compiles to to no size, as in the image; the 300 operators and 100 `IN`
   operands of any expression hold for it. A `WHERE` of 4,000 parentheses nested
   (an 8,055-byte statement) is answered `500 Internal Server Error` by the
-  image, where it answered 3,000 deep, and gostack answers it.
-- Arithmetic chained in one action of a PartiQL `UPDATE`, `SET a = a + 1 + 1`
-  or `SET a = (a + 1) + 1`, and a `list_append` inside a `list_append`: the
-  image applies them, and counts each `+` and `list_append` toward the 300
-  operators. gostack compiles the statement to an `UpdateExpression`, which
-  takes one `+` or `-` in an action and `list_append` only as its whole value,
-  and answers `Syntax error` or "The function is not allowed to be used this
-  way in an expression" at any count (probed in SQ-452).
-- The operators of a PartiQL statement's `WHERE` that are counted: the image
-  counts every one written, the key equality and the `AND` after it included.
-  gostack counts the condition the statement compiles to, which holds neither
-  for a `DELETE`, a `SELECT` of one hash key or an `EXISTS`, so `WHERE id = 'a'
-  AND (` 150 comparisons joined by `OR` `)` is refused by the image at 301
-  operators and answered by gostack, 2 apart on a table with a hash key only (a
-  range key was not probed). An `UPDATE` adds an `attribute_exists` and an
-  `AND` to its condition, which stand in for them, and is refused at the same
-  count.
+  image, where it answered 3,000 deep: gostack's answer, the statement's, is
+  kept, and the image's `500` is not copied.
 
 ## DynamoDB batches and transactions
 

@@ -185,7 +185,7 @@ func (r *reader) checkProjection() error {
 // given, that names one a global index does not hold. A statement's WHERE is
 // left alone, as the image leaves it (docs/compat.md).
 func (r *reader) checkFilterProjected(names []string) error {
-	if r.from == fromStatement {
+	if r.from.statement {
 		return nil
 	}
 
