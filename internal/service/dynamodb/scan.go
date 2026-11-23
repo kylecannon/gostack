@@ -37,8 +37,6 @@ func (p *Provider) Scan(ctx context.Context, in *api.ScanInput) (*api.ScanOutput
 		return nil, fmt.Errorf("scan: %w", err)
 	}
 
-	r.typed = originOf(ctx).statement
-
 	pg, err := r.read(func(visit func(string, value.Packed) bool) error {
 		return e.data.Scan(indexName(r.index), r.start, visit)
 	})
@@ -77,7 +75,7 @@ func (r *reader) scanChecks(in *api.ScanInput) error {
 
 	filter, err := x.condition(expression.FilterExpression, in.FilterExpression)
 	if err == nil {
-		r.projection, err = x.projection(in.ProjectionExpression)
+		r.project.projection, err = x.projection(in.ProjectionExpression)
 	}
 
 	if filter != nil {

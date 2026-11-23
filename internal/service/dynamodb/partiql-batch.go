@@ -268,7 +268,7 @@ func (p *Provider) runBatch(ctx context.Context, b *batchStatement) api.BatchSta
 			return batchError(err, b.read.table)
 		}
 
-		return api.BatchStatementResponse{TableName: &b.read.table, Item: out.Item}
+		return api.BatchStatementResponse{TableName: &b.read.table, Item: out.Item, ItemJSON: out.ItemJSON}
 	default:
 		item, _, err := p.runWrite(ctx, b.write, nil)
 		if err != nil {

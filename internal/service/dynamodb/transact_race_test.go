@@ -114,7 +114,9 @@ func Test_transact_oppositeOrder(t *testing.T) {
 				return
 			}
 
-			if a, b := *out.Responses[0].Item["v"].N, *out.Responses[1].Item["v"].N; a != b {
+			// A TransactGetItems with no projection answers each item as json.
+			a := *value.UnpackJSON(out.Responses[0].ItemJSON)["v"].N
+			if b := *value.UnpackJSON(out.Responses[1].ItemJSON)["v"].N; a != b {
 				failed <- errors.New("half-written transaction seen: tabB " + a + ", tabA " + b)
 
 				return
