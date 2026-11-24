@@ -2659,15 +2659,37 @@ Kinesis. The state is two files, LocalStack's split:
   1,000,000 items across four tables measures 125 to 158 ms (Apple M1 Max at
   load average 249; one table of 1,000,000 items measured about 56 ms on the
   same machine unloaded).
-  Snapshot and restore of one table of 1,000,000 items of about 100 bytes
-  (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
-  `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
-  snapshot 0.57 s allocating 46 MiB; restore 2.23 s allocating 1.24 GiB,
-  against 1.20 GiB the restored state holds (`held-B`). Restore allocates no more than the state it builds plus the file
-  once (`bound-B`); the state itself is the floor. These figures were taken
-  with items held as maps; with packed items they are re-measured at SQ-442
-  closeout, as is the peak resident size of `bin/gostack` loading that file,
-  saving once and shutting down (`/usr/bin/time -l`).
+  Snapshot and restore of one table of 1,000,000 items of about 100 bytes (a
+  172,789,304 byte file, 165 MiB, in the shape `generated` writes in
+  `snapshot_benchmark_test.go`: one table, a keys-only global index on `g`),
+  `BenchmarkSnapshot` and `BenchmarkRestore` at `-benchtime 1x -count 6` with
+  `GOSTACK_BENCH_LARGE=1`, medians of the six runs. Apple M1 Max, 10 cores,
+  64 GiB, macOS, at load average 12 to 14 for the benchmarks and 15 to 21 for
+  the resident runs. `main` at 7550fb2a holds items as maps; packed items are
+  56ab4f9b:
+
+  | | `main` | packed |
+  |---|---|---|
+  | Snapshot | 0.53 s, 45.9 MiB allocated | 0.69 s, 45.9 MiB allocated |
+  | Restore | 2.24 s, 1.26 GiB allocated | 1.44 s, 1.05 GiB allocated |
+  | State the restore holds (`held-B`) | 1.22 GiB | 366 MiB |
+  | Restore allocation bound (`bound-B`) | 1.38 GiB | 531 MiB |
+  | Peak resident size: load, save once, shut down | 1.38 GiB | 1.07 GiB |
+
+  The figures taken on `main` before packed items were snapshot 0.57 s
+  allocating 46 MiB, restore 2.23 s allocating 1.24 GiB, and 1.20 GiB held.
+  Packed items cut restore time by 36% and the state it holds by 71%, and make
+  the snapshot 29% slower. `bound-B` is the state plus the file once, which
+  restore stayed under with maps; with packed items restore allocates 2.0
+  times `bound-B`, so that bound no longer holds. The peak resident size is
+  3.0 times `held-B`; which phase sets it was not measured.
+
+  The resident figure is `bin/gostack` with `SERVICES=dynamodb`,
+  `PERSIST_DYNAMODB=1` and `PERSIST_BASE_DIR` set to a directory holding
+  `dynamodb/store.json`, a file of that shape written by a throwaway script.
+  Once `Ready.` is logged one `PutItem` marks dynamodb dirty, and a SIGTERM
+  makes the shutdown save once. `/usr/bin/time -l` reports the maximum
+  resident set size; three runs of each binary differ by less than 0.1%.
 
 **SNS.** `PERSIST_SNS=1` persists SNS alone, at `<base>/sns/store.{json,bin}`.
 LocalStack's `API_DEPENDENCIES` has no `sns` entry, so the queues SNS delivers
@@ -2849,9 +2871,13 @@ A time to live removal goes through `Table.Expire`, whose record carries the
 
 **What is held in memory.** Everything. Each item is a `value.Packed`, one
 immutable string holding a short header and the item's json, referenced once
-from the primary store and once from each index that projects it; the heap
-per item of 100 bytes is re-measured at SQ-442 closeout (Persistence,
-"DynamoDB"). Each stream shard holds up to 256 MiB of records,
+from the primary store and once from each index that projects it. The heap
+per item of 100 bytes is 384 B, `held-B` divided by the 1,000,000 items of the
+table (Persistence, "DynamoDB"), against 1,311 B on `main` with items as maps.
+In `make bench-system-large` under a 1 GiB container limit (local OrbStack,
+linux/arm64, 2026-11-24), `main` is OOM-killed at about 85,000 items and
+packed items holds 300,000; the peak resident size at 50,000 items is 806 MiB
+on `main` and 261 MiB packed. Each stream shard holds up to 256 MiB of records,
 in heap as `stream.Charge` estimates it, for 24 hours. `TransactWriteItems` client request tokens are held for their
 10-minute window and swept when a later transaction looks. Time to live
 removes nothing unless asked: the hourly sweep runs only under
