@@ -93,7 +93,7 @@ func BenchmarkAssetsCommit(b *testing.B) {
 // 0.6 ms for 1,000 and 5.8 ms for 10,000.
 //
 // Every engine of a cell serves all its iterations. One run of each memory
-// cell at -benchtime 500ms takes 1.3 to 1.7 s on a 4 CPU Linux container, in
+// cell at -benchtime 500ms takes 1.3 to 1.9 s on a 4 CPU Linux container, in
 // two runs 2.3 to 2.4, 2.5 and 2.2 to 2.4 times what it times at 100, 1,000
 // and 10,000 pending, and the disk benchmark 1.7 to 1.9 s, 1.1 to 1.4 times.
 // A memory cell that falls back to the disk takes 1.0 to 3.0 s, at most 4.8
