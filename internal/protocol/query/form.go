@@ -196,6 +196,24 @@ func CutFormAnswer(err error) *awserr.Error {
 	}
 }
 
+// CutAction returns the Action of r, from its URL or else from the pairs of its
+// form body that a cut read (ErrFormCut) kept whole, or "" when neither has
+// one. A service that refuses a body for its length (protocol.ErrBodyLong)
+// names the operation this way: the read keeps what came before the refusal,
+// up to protocol.FreeBody bytes, and an SDK writes the Action first. The pair
+// after the last "&" may be partial, so it is dropped.
+func CutAction(r *http.Request) string {
+	var kept string
+
+	if put, ok := r.Body.(*formBody); ok && put.err != nil {
+		kept = put.body[:max(strings.LastIndexByte(put.body, '&'), 0)]
+	}
+
+	values, _ := parsePairs(r.URL.RawQuery, kept, nil, nil)
+
+	return values.Get("Action")
+}
+
 // RequestForm returns the parameters of r the way werkzeug's request.values
 // does: the pairs of the URL query come first, then those of a form body, so
 // the first value of a name is the one in the URL. The body is read at most

@@ -64,6 +64,28 @@ func RequestTimeout() *awserr.Error {
 // retry.
 var ErrBusy = errors.New("protocol: the request bodies in flight are at their bound")
 
+// ErrBodyLong is what reading a metered body fails with once it states or has
+// read more than its service takes (BoundBody). The read past FreeBody that
+// finds it fails, holding nothing, so a body that states a longer length is
+// refused before it is admitted, and one of unknown length holds no more than
+// the bound. The service answers it as a request too long to be valid.
+var ErrBodyLong = errors.New("protocol: the request body is longer than its service takes")
+
+// BoundBody makes the metered body of the request whose context is ctx fail
+// with ErrBodyLong past limit bytes, for a service none of whose valid requests
+// is longer: the gateway calls it once it knows the service, before the body
+// is read. A body charged already, one that a form read to find its service,
+// keeps what it holds and is not bounded: its service judges it once read.
+func BoundBody(ctx context.Context, limit int64) {
+	c := ChargeOf(ctx)
+	if c == nil || c.meter == nil || c.meter.read > FreeBody || limit <= 0 {
+		return
+	}
+
+	c.meter.limit = limit
+	c.meter.most = min(c.meter.most, limit)
+}
+
 // The answers to a request whose body failed with ErrBusy, one per protocol.
 // Each code is one the AWS SDKs retry as throttling (aws-sdk-go-v2's
 // retry.DefaultThrottleErrorCodes, botocore's _retry.json "throttling"
@@ -443,6 +465,7 @@ type BodyMeter struct {
 	ctx    context.Context //nolint:containedctx // the request's, for the wait while it is read
 	pool   *bodyPool
 	most   int64
+	limit  int64 // the most its service takes (BoundBody), zero for none
 	length int64
 	read   int64
 	held   int64
@@ -632,7 +655,19 @@ func (m *BodyMeter) clearDeadline() {
 // charge charges n more bytes read, as Read describes.
 func (m *BodyMeter) charge(n int64) error {
 	m.read += n
-	if m.read <= FreeBody || m.read <= m.held || m.held >= m.most {
+	if m.read <= FreeBody {
+		return nil
+	}
+
+	if m.limit > 0 && max(m.read, m.length) > m.limit {
+		m.Release()
+		m.decode.Release()
+		m.err = ErrBodyLong
+
+		return m.err
+	}
+
+	if m.read <= m.held || m.held >= m.most {
 		return nil
 	}
 

@@ -62,6 +62,10 @@ func (h *heldResponse) markSenderFault() {
 // serve is the Registration's Serve: the generated dispatcher in front of p. A
 // query call is answered in the type its Accept header names.
 func (p *Provider) serve(w http.ResponseWriter, rc *request.Context) {
+	if refuseTooLong(w, rc) {
+		return
+	}
+
 	if rc.Protocol != protocol.KindQuery || rc.Request == nil {
 		sqsapi.Serve(p, w, rc)
 

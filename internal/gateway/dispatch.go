@@ -58,6 +58,10 @@ func (g *Gateway) serveAWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reg := &g.regs[match.Index]
+	// Before the form is read for its Action: a body longer than any of the
+	// service's valid requests is refused at FreeBody, holding nothing.
+	protocol.BoundBody(r.Context(), reg.MaxRequest)
+
 	identity := account.Resolve(r, g.settings().ParityAWSAccessKeyID)
 
 	if r.Header.Get("Authorization") != identity.Authorization {
