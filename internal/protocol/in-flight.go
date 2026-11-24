@@ -188,14 +188,24 @@ func BodiesWait(own int64) bool {
 
 	room := pool.capacity - (pool.used - own)
 
-	for _, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
+	for i, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
 		for _, w := range queue {
-			room -= w.n
-			// A step that waits for a safe order, not for room, waits
-			// whatever the caller gives back.
-			if room < 0 || (w.g != nil && !pool.safe(w.g, w.n)) {
+			if room < w.n {
 				return true
 			}
+
+			// A step that waits for a safe order, not for room, waits
+			// whatever the caller gives back, and holds up only the steps
+			// behind it (grant).
+			if pool.blocked(w) {
+				if i == 0 {
+					break
+				}
+
+				return true
+			}
+
+			room -= w.n
 		}
 	}
 
@@ -331,6 +341,12 @@ func (p *bodyPool) safe(g *grower, n int64) bool {
 	return g.joined || g.claim-n <= free
 }
 
+// blocked reports whether w is a step of a body of unknown length that would
+// leave the pool unsafe (safe).
+func (p *bodyPool) blocked(w *bodyWaiter) bool {
+	return w.g != nil && !p.safe(w.g, w.n)
+}
+
 // finish takes g out of the bodies of unknown length being read, at its end
 // or when it is released, and gives back n bytes: what it holds from then on
 // is only given back.
@@ -415,12 +431,23 @@ func (p *bodyPool) release(n int64) {
 
 // grant lets waiters in, in order, while the one at the head fits and, for a
 // step of a body of unknown length, leaves the pool safe. A body's first step
-// makes it the youngest of the bodies of unknown length being read.
+// makes it the youngest of the bodies of unknown length being read. A step at
+// the head of p.steps that fits but is not safe waits for another such body to
+// read on or end, not for room, so the steps behind it wait and the decodings
+// and bodies behind them are let in (blocked).
 func (p *bodyPool) grant() {
 	for _, queue := range []*[]*bodyWaiter{&p.steps, &p.growing, &p.starting} {
 		for len(*queue) > 0 {
 			w := (*queue)[0]
-			if p.used+w.n > p.capacity || (w.g != nil && !p.safe(w.g, w.n)) {
+			if p.used+w.n > p.capacity {
+				return
+			}
+
+			if p.blocked(w) {
+				if queue == &p.steps {
+					break
+				}
+
 				return
 			}
 
@@ -733,7 +760,13 @@ func (m *BodyMeter) grow() error {
 		room = decodeRoom(m.pool, m.plan*body+FreeBody)
 	}
 
-	busy := m.pool.step(m.ctx, m.grower, body+room-m.held-m.prepaid)
+	// The step takes only the room past what the decode hold holds now: a
+	// decoding that charges as the body is read (restxml) may have covered
+	// more between two steps (Cover), and those bytes stay the hold's.
+	hold := m.decode.Held()
+	more := max(room-hold, 0)
+
+	busy := m.pool.step(m.ctx, m.grower, body-m.held+more)
 	if busy != nil {
 		m.Release()
 		m.decode.Release()
@@ -742,8 +775,18 @@ func (m *BodyMeter) grow() error {
 		return busy
 	}
 
-	m.held, m.prepaid = body, room
-	m.decode.prepaid(m.pool, room)
+	m.held = body
+	if more > 0 {
+		m.decode.prepaid(m.pool, room)
+	}
+
+	// What the steps took is still all the hold holds only while Cover has
+	// not changed it; once it has, decoding owns the hold, and trim leaves it.
+	if hold == m.prepaid {
+		m.prepaid = m.decode.Held()
+	} else {
+		m.prepaid = 0
+	}
 
 	return nil
 }

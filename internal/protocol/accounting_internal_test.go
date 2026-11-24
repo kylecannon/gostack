@@ -84,8 +84,9 @@ func (a *accountingTally) observe(c *Charge, m *BodyMeter) {
 
 // Test_Charge_AccountingStaysExact is SQ-445's accounting stress with the
 // heap path: 64 clients drive the body meter, the decode hold and both queues
-// with cancels, timeouts, lying lengths and double releases, under four
-// settings of the cap and the bound. Half the bodies read in full take the
+// with cancels, timeouts, lying lengths, double releases and decoding covered
+// between reads (restxml's), under four settings of the cap and the bound.
+// Half the bodies read in full take the
 // path of one decoded past DecodeBudget (awsjson's moveBody): take the dense
 // lane with the body's bytes reserved on the heap (TakeDenseLane), give back
 // the pool, sometimes lose the client before the walk, then reserve the walk's
@@ -261,10 +262,20 @@ func accountingRead(
 
 	buf := make([]byte, 16<<10+r.Intn(64<<10))
 
+	// A quarter of the bodies are decoded as they are read, as restxml's
+	// are: decoding covers more between reads, past the room the body's
+	// steps took for it.
+	cover := r.Intn(4) == 0
+
 	var err error
 	for err == nil {
 		_, err = m.Read(buf)
 		tally.observe(c, m)
+
+		if cover && r.Intn(4) == 0 {
+			_, _ = c.HoldDecode(int64(r.Intn(int(4*m.read + 1))))
+			tally.observe(c, m)
+		}
 	}
 
 	return c, m, err

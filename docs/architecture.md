@@ -372,6 +372,20 @@ How each piece is bounded, and why this way:
   `gateway.ServedAsInternal` is a different test: it also accepts the
   `x-localstack-data` header, which any client can send, so it only decides
   what a stopping gateway still serves.
+- **Per-service request bound** (`service.Registration.MaxRequest`,
+  `protocol.BoundBody`): the longest body, as encoded, of any valid request to
+  the service. Only SQS sets one (`sqs/request-limit.go`: 6 MiB and 64 KiB, a
+  1 MiB message or batch with every character json's six-byte escape). The
+  gateway bounds the body before it reads any, and SQS bounds a queue-URL call
+  before its route reads the form. A body that states a longer length fails
+  with `protocol.ErrBodyLong` at its first read past `FreeBody`, holding none
+  of the pool; one of unknown length fails once it passes the bound, its share
+  cut to the bound so it never holds more. The service answers it
+  (compat.md, "SQS request length"), naming a form's operation from the URL
+  or the pairs read whole before the cut (`query.CutAction`). An unsigned form
+  whose Action is only in its body is read whole by service detection before
+  the gateway knows the service, so it is bounded only by
+  `GOSTACK_MAX_REQUEST_BODY`; closing that needs `internal/route`.
 - **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
   The gateway meters a body from a listener that states more than
   `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
@@ -399,10 +413,17 @@ How each piece is bounded, and why this way:
   still being read could reach its claim in the order the bodies were admitted,
   counting what every other request holds as given back once it ends, so the
   oldest can always finish; its steps wait ahead of younger bodies' steps, which
-  wait ahead of decodings that grow, which wait ahead of new bodies. A body
-  that reaches its end never waits for decode room while it holds its bytes. A
-  younger body of unknown length behind older ones still arriving grows to
-  about 16 MiB beside them, then waits for them to end. A waiter is served in order for up to 5 s,
+  wait ahead of decodings that grow, which wait ahead of new bodies. A step
+  that fits but waits for that order waits for another body to read on or end,
+  not for room: the steps behind it wait with it, and the decodings and new
+  bodies behind them are let in, so a stated 100 KiB body is admitted at once
+  beside it (`Test_BodyPool_SafetyBlockedStepStallsNoOne`). A step takes only
+  the decode room past what the request's decode hold holds, which a decoding
+  that charges as the body arrives may have raised between two steps
+  (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
+  waits for decode room while it holds its bytes. A younger body of unknown
+  length behind older ones still arriving grows to about 16 MiB beside them,
+  then waits for them to end. A waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
   throttling error. net/http notices a client that went away only once the
   body has been read, so a waiter whose client left keeps its place, holding
