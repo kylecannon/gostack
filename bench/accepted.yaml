@@ -49,3 +49,1029 @@
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=100B/concurrency=1
+  unit: sec/op
+  max: +20%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+10.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=100B/concurrency=64
+  unit: B/s
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+21.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=100B/concurrency=64
+  unit: sec/op
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+21.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=1
+  unit: B/op
+  max: +60%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+40.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=1
+  unit: B/s
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+31.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=1
+  unit: sec/op
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+31.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=16
+  unit: B/op
+  max: +60%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+40.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=16
+  unit: B/s
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+30.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=32KiB/concurrency=16
+  unit: sec/op
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+30.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+35.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=1
+  unit: B/s
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+24.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=1
+  unit: sec/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+24.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+34.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=16
+  unit: B/s
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+32.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+32.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=64
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+34.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=64
+  unit: B/s
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+23.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: BatchWriteItem/payload=4KiB/concurrency=64
+  unit: sec/op
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+23.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/api/dynamodb
+  benchmark: EncodeQuery/form=encoded/items=10/payload=100B
+  unit: B/s
+  max: +25%
+  reason: the pre-encoded response path costs 3-8 ns a call on the runners; the same rows were +1-6% on the previous runner run (+12.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/api/dynamodb
+  benchmark: EncodeQuery/form=encoded/items=10/payload=100B
+  unit: sec/op
+  max: +25%
+  reason: the pre-encoded response path costs 3-8 ns a call on the runners; the same rows were +1-6% on the previous runner run (+12.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/api/dynamodb
+  benchmark: EncodeTransactGetItems/form=encoded/items=1/payload=100B
+  unit: sec/op
+  max: +20%
+  reason: the pre-encoded response path costs 3-8 ns a call on the runners; the same rows were +1-6% on the previous runner run (+10.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/api/dynamodb
+  benchmark: EncodeTransactGetItems/form=encoded/items=1/payload=4KiB
+  unit: B/s
+  max: +25%
+  reason: the pre-encoded response path costs 3-8 ns a call on the runners; the same rows were +1-6% on the previous runner run (+13.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/api/dynamodb
+  benchmark: EncodeTransactGetItems/form=encoded/items=1/payload=4KiB
+  unit: sec/op
+  max: +25%
+  reason: the pre-encoded response path costs 3-8 ns a call on the runners; the same rows were +1-6% on the previous runner run (+13.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: GetRecords/limit=1/payload=100B
+  unit: B/s
+  max: +20%
+  reason: one 100 B record writes its image through the pre-encoded path; every larger GetRecords cell is 20-40% faster (+12.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: GetRecords/limit=1/payload=100B
+  unit: sec/op
+  max: +20%
+  reason: one 100 B record writes its image through the pre-encoded path; every larger GetRecords cell is 20-40% faster (+12.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=1
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=1
+  unit: B/s
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+22.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=1
+  unit: sec/op
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+22.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=16
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=64
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=64
+  unit: B/s
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+26.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=399KiB/concurrency=64
+  unit: sec/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+26.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=1
+  unit: B/s
+  max: +20%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+11.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=1
+  unit: sec/op
+  max: +20%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+11.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=16
+  unit: B/s
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/payload=4KiB/concurrency=64
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=1
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+32.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+32.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=16
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=16
+  unit: B/s
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+28.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=16
+  unit: sec/op
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+28.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=64
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=64
+  unit: B/s
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+26.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=399KiB/concurrency=64
+  unit: sec/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+26.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=1
+  unit: B/s
+  max: +25%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+12.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=1
+  unit: sec/op
+  max: +25%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+12.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=16
+  unit: B/s
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+18.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+18.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=64
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+25.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=64
+  unit: B/s
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItem/persist=on/payload=4KiB/concurrency=64
+  unit: sec/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=attributes/payload=64KiB
+  unit: B/op
+  max: +20%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+10.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=399KiB
+  unit: B/op
+  max: +55%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+36.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=399KiB
+  unit: B/s
+  max: +65%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+44.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=399KiB
+  unit: sec/op
+  max: +65%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+44.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=4KiB
+  unit: B/op
+  max: +45%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+28.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=4KiB
+  unit: B/s
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+23.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=4KiB
+  unit: sec/op
+  max: +35%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+23.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=64KiB
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+35.1% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=64KiB
+  unit: B/s
+  max: +60%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+40.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=binary/payload=64KiB
+  unit: sec/op
+  max: +60%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+40.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=399KiB
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+33.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=399KiB
+  unit: B/s
+  max: +55%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+39.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=399KiB
+  unit: sec/op
+  max: +55%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+39.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=4KiB
+  unit: B/op
+  max: +40%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+24.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=4KiB
+  unit: B/s
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=4KiB
+  unit: sec/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=64KiB
+  unit: B/op
+  max: +50%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+34.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=64KiB
+  unit: B/s
+  max: +55%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+39.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PutItemStream/shape=string/payload=64KiB
+  unit: sec/op
+  max: +55%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+39.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=KEYS_ONLY/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=KEYS_ONLY/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=NEW_AND_OLD_IMAGES/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=NEW_AND_OLD_IMAGES/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=NEW_IMAGE/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=NEW_IMAGE/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=OLD_IMAGE/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=OLD_IMAGE/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=off/payload=4KiB/concurrency=1
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=off/payload=4KiB/concurrency=16
+  unit: B/op
+  max: +30%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+16.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodbstreams
+  benchmark: PutItem_stream/view=off/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +20%
+  reason: packed items encode each written item once more into its stored form (about 0.5 ns a byte); the large-table system bench is faster at the HTTP level and holds 4.9x the items in 1 GiB (+10.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+27.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+27.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=gsi/filter=on/concurrency=16
+  unit: B/s
+  max: +35%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+23.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=gsi/filter=on/concurrency=16
+  unit: sec/op
+  max: +35%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+23.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+27.6% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+27.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=table/filter=on/concurrency=16
+  unit: B/s
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+24.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=100B/op=Scan/target=table/filter=on/concurrency=16
+  unit: sec/op
+  max: +40%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+24.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +30%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+19.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +30%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+19.2% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=16
+  unit: B/s
+  max: +25%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+12.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=16
+  unit: sec/op
+  max: +25%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+12.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +35%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+22.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +35%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+22.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=table/filter=on/concurrency=16
+  unit: B/s
+  max: +30%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+16.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=1/payload=4KiB/op=Scan/target=table/filter=on/concurrency=16
+  unit: sec/op
+  max: +30%
+  reason: a filtered scan of a one-item table grows the stack under the read lock when it decodes the packed item; a few microseconds a call (+16.7% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: RemoveExpired/items=1000/expired=all
+  unit: sec/op
+  max: +30%
+  reason: the TTL sweep reads the expiry number out of the packed json of each item (+17.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: RemoveExpired/items=1000/expired=none
+  unit: sec/op
+  max: +35%
+  reason: the TTL sweep reads the expiry number out of the packed json of each item (+21.4% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: RemoveExpired/items=10000/expired=none
+  unit: B/op
+  max: +30%
+  reason: the TTL sweep reads the expiry number out of the packed json of each item (+16.3% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: RemoveExpired/items=10000/expired=none
+  unit: sec/op
+  max: +25%
+  reason: the TTL sweep reads the expiry number out of the packed json of each item (+15.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4
+  unit: B/op
+  max: +30%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+19.9% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4
+  unit: sec/op
+  max: +25%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+15.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4/records=1000/streams=off
+  unit: B/op
+  max: +30%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+19.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4/records=1000/streams=off
+  unit: sec/op
+  max: +30%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+16.5% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4/records=1000/streams=on
+  unit: B/op
+  max: +25%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+16.0% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4/records=1000/streams=on
+  unit: sec/op
+  max: +25%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+13.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: SnapshotCut/items=10000/tables=4/records=100000/streams=off
+  unit: B/op
+  max: +30%
+  reason: packed items cut the live heap about 3x, so a cut runs the collector more often, and the image copies the packed bytes; accepted as a cost of the smaller heap (+19.8% on the runners, worst of two runs)
+  pr: 79
+  commit: e10d655bb875c05bdf06d2c68bdf02d3d538b89f
