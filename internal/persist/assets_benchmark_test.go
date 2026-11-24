@@ -40,7 +40,7 @@ func benchAssets(b *testing.B) (*persist.Assets, string) {
 
 // BenchmarkAssetsCommit writes and renames one asset per iteration, which is
 // what a persisted PutObject adds to the ephemeral store's cost; the fsync is
-// the next save's (BenchmarkSavePendingAssetsDisk). The file is unlinked
+// the next save's (BenchmarkSavePendingDisk). The file is unlinked
 // after each one, so the disk does not fill.
 func BenchmarkAssetsCommit(b *testing.B) {
 	for _, payload := range assetPayloads {
@@ -75,7 +75,7 @@ func BenchmarkAssetsCommit(b *testing.B) {
 	}
 }
 
-// savePendingDisk is the pending counts of BenchmarkSavePendingAssetsDisk
+// savePendingDisk is the pending counts of BenchmarkSavePendingDisk
 // (docs/standards.md, "Benchmarks"), which run on the disk, where the save pays
 // the syncfs of the whole filesystem, a floor of the disk and not of this code,
 // so they are the two smallest; the larger ones of the benchmark before the
@@ -83,98 +83,168 @@ func BenchmarkAssetsCommit(b *testing.B) {
 // asset and 2.6 ms for 10.
 //
 // The counts that run on a memory filesystem through memoryDir are one
-// top-level benchmark each (BenchmarkSavePendingAssets100, 1000 and 10000),
-// where the syncfs that ends a save costs nothing, so they measure the engine's
-// work on each pending asset and its allocations, which the allocation gate
-// holds (it caught the regression of PR #56). Their counts are those of the
+// top-level benchmark each (BenchmarkSavePending100, 1000 and 10000), where
+// the syncfs that ends a save costs nothing, so they measure the engine's work
+// on each pending asset and its allocations, which the allocation gate holds
+// (it caught the regression of PR #56). Their counts are those of the
 // benchmark before the rule. The slowest of ten runs on a runner: 0.2 ms for
-// 100, 0.6 ms for 1,000 and 5.8 ms for 10,000. One run of each at -benchtime
-// 500ms takes 18, 31 and 23 s on a 4 CPU Linux container, where the untimed
-// commits of each iteration are most of it, and all five cells in one
-// benchmark came to 1h10m14s of `bench select`'s estimate on a runner, over
-// what a shard job holds. A top-level benchmark is the smallest unit `bench
-// select` places in a shard, so it can now put these in separate shards. The
-// disk counts left the old name too: a name the base also has is run on the
-// base with the base's cells, which the head's estimate does not see.
+// 100, 0.6 ms for 1,000 and 5.8 ms for 10,000.
+//
+// Every engine of a cell serves all its iterations. One run of each memory
+// cell at -benchtime 500ms takes 1.3 to 1.6 s on a 4 CPU Linux container,
+// under 2.5 times what it times, and the disk benchmark 1.8 s. Until SQ-547
+// each iteration built an engine, committed its assets and removed the last
+// one's directory, untimed, and a memory cell took 18 to 34 s for 0.6 s timed
+// (BenchmarkSavePendingAssets100, 1000 and 10000): `bench select` estimates a
+// shard from one run, and a shard job ran out of its hour on them.
 var savePendingDisk = []int{1, 10}
 
-// BenchmarkSavePendingAssetsDisk measures one save of a service whose state
-// names that many 1 KiB assets committed since the last save, all of which the
-// save makes durable before its snapshot is renamed into place: one syncfs on
+// BenchmarkSavePendingDisk measures one save of a service whose state names
+// that many 1 KiB assets committed since the last save, all of which the save
+// makes durable before its snapshot is renamed into place: one syncfs on
 // Linux, an fsync of each asset and of each of their directories elsewhere.
-// The commits are not timed, and neither is the removal of the last save's
-// directory, so that a memory filesystem does not fill as the iterations run.
-// It holds the disk counts; the others are the benchmarks below.
-func BenchmarkSavePendingAssetsDisk(b *testing.B) {
+// Between saves, untimed, the last save's assets are unlinked and as many new
+// ones committed, so each save has new bytes to make durable. It holds the disk
+// counts; the others are the benchmarks below.
+func BenchmarkSavePendingDisk(b *testing.B) {
 	for _, pending := range savePendingDisk {
-		b.Run(fmt.Sprintf("pending=%d", pending), func(b *testing.B) { benchSavePending(b, pending, b.TempDir()) })
+		b.Run(fmt.Sprintf("pending=%d", pending), func(b *testing.B) {
+			dir := b.TempDir()
+			p := newPendingShelf(b, dir, pending)
+
+			benchSavePending(b, []*pendingShelf{p}, func(p *pendingShelf) {
+				for _, id := range p.ids {
+					p.s.drop(id)
+
+					err := os.Remove(blobFile(dir, id))
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+
+				p.ids = commitPending(b, p.s, p.a, pending)
+			})
+		})
 	}
 }
 
-// BenchmarkSavePendingAssets100 is BenchmarkSavePendingAssetsDisk at 100 pending
-// assets on a memory filesystem.
-func BenchmarkSavePendingAssets100(b *testing.B) { benchSavePendingMemory(b, 100) }
+// BenchmarkSavePending100 is BenchmarkSavePendingDisk at 100 pending assets on
+// a memory filesystem.
+func BenchmarkSavePending100(b *testing.B) { benchSavePendingMemory(b, 100, 8) }
 
-// BenchmarkSavePendingAssets1000 is BenchmarkSavePendingAssetsDisk at 1,000 pending
-// assets on a memory filesystem.
-func BenchmarkSavePendingAssets1000(b *testing.B) { benchSavePendingMemory(b, 1000) }
+// BenchmarkSavePending1000 is BenchmarkSavePendingDisk at 1,000 pending assets
+// on a memory filesystem.
+func BenchmarkSavePending1000(b *testing.B) { benchSavePendingMemory(b, 1000, 4) }
 
-// BenchmarkSavePendingAssets10000 is BenchmarkSavePendingAssetsDisk at 10,000
-// pending assets on a memory filesystem.
-func BenchmarkSavePendingAssets10000(b *testing.B) { benchSavePendingMemory(b, 10000) }
+// BenchmarkSavePending10000 is BenchmarkSavePendingDisk at 10,000 pending
+// assets on a memory filesystem.
+func BenchmarkSavePending10000(b *testing.B) { benchSavePendingMemory(b, 10000, 1) }
 
 // benchSavePendingMemory runs the one cell of a top-level benchmark that holds
 // a count of pending assets on a memory filesystem, named for the filesystem it
-// got: the disk when there is no room in memory.
-func benchSavePendingMemory(b *testing.B, pending int) {
+// got: the disk when there is no room in memory. Its engines' assets are put
+// back as pending with persist.PendAgain, so no iteration writes or removes a
+// file: on a memory filesystem the save's syncfs has no bytes to write back, so
+// whether they are new does not change it.
+//
+// It saves engines of their own in turn, so that the timer stops once for that
+// many saves: a stop costs about 0.3 ms on a 4 CPU Linux container, twice a
+// save of 100 pending assets.
+func benchSavePendingMemory(b *testing.B, pending, engines int) {
 	b.Helper()
 
-	dir, fs := memoryDir(b, int64(pending)*(2<<10)+8<<20)
+	dir, fs := memoryDir(b, int64(engines*pending)*(2<<10)+8<<20)
 
-	b.Run(fmt.Sprintf("pending=%d/fs=%s", pending, fs), func(b *testing.B) { benchSavePending(b, pending, dir) })
+	b.Run(fmt.Sprintf("pending=%d/fs=%s", pending, fs), func(b *testing.B) {
+		shelves := make([]*pendingShelf, engines)
+		for i := range shelves {
+			shelves[i] = newPendingShelf(b, filepath.Join(dir, strconv.Itoa(i)), pending)
+		}
+
+		benchSavePending(b, shelves, func(p *pendingShelf) { persist.PendAgain(p.a, p.ids) })
+	})
 }
 
-// benchSavePending runs one cell of a BenchmarkSavePendingAssets* benchmark
-// with each save's state in its own directory under base.
-func benchSavePending(b *testing.B, pending int, base string) {
+// pendingShelf is an engine whose shelf names ids, assets it committed.
+type pendingShelf struct {
+	e   *persist.Engine
+	s   *shelf
+	a   *persist.Assets
+	ids []string
+}
+
+// newPendingShelf starts an engine with its state under dir, commits pending
+// assets, and saves them once. The first save of an engine allocates the timer
+// of its slow flushes and finds no state file to replace, so every save the
+// benchmark times is a later one, as a service's saves are.
+func newPendingShelf(b *testing.B, dir string, pending int) *pendingShelf {
+	b.Helper()
+
+	e := benchEngine(dir, flushEvery)
+	b.Cleanup(func() { _ = e.Close(b.Context()) })
+
+	s := newShelf()
+	e.Register(shelfService, s)
+
+	a, err := e.Assets(shelfService)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p := &pendingShelf{e: e, s: s, a: a, ids: commitPending(b, s, a, pending)}
+	e.MarkDirty(shelfService)
+
+	err = e.Flush(b.Context())
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	return p
+}
+
+// benchSavePending times one save of one of shelves an iteration, in turn.
+// Before each round, untimed, pend leaves each shelf's assets pending again.
+func benchSavePending(b *testing.B, shelves []*pendingShelf, pend func(p *pendingShelf)) {
+	b.Helper()
+
+	next := len(shelves)
+
+	for b.Loop() {
+		if next == len(shelves) {
+			b.StopTimer()
+
+			for _, p := range shelves {
+				pend(p)
+				p.e.MarkDirty(shelfService)
+			}
+
+			next = 0
+
+			b.StartTimer()
+		}
+
+		err := shelves[next].e.Flush(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		next++
+	}
+}
+
+// commitPending commits count 1 KiB assets and adds each to s.
+func commitPending(b *testing.B, s *shelf, a *persist.Assets, count int) []string {
 	b.Helper()
 
 	body := bytes.Repeat([]byte{'x'}, 1<<10)
-	run, last := 0, ""
+	ids := make([]string, count)
 
-	for b.Loop() {
-		b.StopTimer()
-
-		if last != "" {
-			err := os.RemoveAll(last)
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-
-		run++
-		last = filepath.Join(base, strconv.Itoa(run))
-		e := benchEngine(last, flushEvery)
-		s := newShelf()
-		e.Register(shelfService, s)
-
-		a, err := e.Assets(shelfService)
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		for range pending {
-			s.add(commitBody(b, a, body))
-		}
-
-		e.MarkDirty(shelfService)
-		b.StartTimer()
-
-		err = e.Flush(b.Context())
-		if err != nil {
-			b.Fatal(err)
-		}
+	for i := range ids {
+		ids[i] = commitBody(b, a, body)
+		s.add(ids[i])
 	}
+
+	return ids
 }
 
 func commitBody(b *testing.B, a *persist.Assets, body []byte) string {

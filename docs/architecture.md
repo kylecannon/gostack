@@ -2278,12 +2278,17 @@ is untouched.
   (`Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause`). No
   caller in the tree ends one so, since shutdown's context has a deadline and a
   request's ends `Canceled`. Each round of such a flush has the whole budget.
-  `BenchmarkSavePendingAssets100/pending=100/fs=tmpfs` (before the tmpfs counts
-  became benchmarks of their own, `BenchmarkSavePendingAssets/pending=100/fs=tmpfs`,
-  and `pending=100` when it ran on the disk) on
-  tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
-  marker; the first version of the marker took 174, and PR #56's benchmark gate
-  read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).
+  `BenchmarkSavePending100/pending=100/fs=tmpfs` (named
+  `BenchmarkSavePendingAssets100` until SQ-547,
+  `BenchmarkSavePendingAssets/pending=100/fs=tmpfs` before the tmpfs counts
+  became benchmarks of their own, and `pending=100` when it ran on the disk) on
+  tmpfs, which takes `syncfs`, saves in 156 allocations a flush on linux/arm64,
+  as without the marker; the first version of the marker took 174, and PR #56's
+  benchmark gate read the 10.83%
+  (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`). The engine's
+  first save also makes the watch's timer and grows its registry, 3 allocations
+  once, and its stat of a state file that is not there yet takes 1 more; the
+  benchmark times only later saves, as a running service makes.
   A shutdown whose saves all complete leaves none. The startup `Load` logs
   one warning for the services that have a marker, at warn: `persist: a save
   was abandoned at its deadline before this start, so what changed after the
@@ -2445,8 +2450,8 @@ is untouched.
 - With 1 KiB assets pending on a Linux Docker named volume, a save of 1000
   takes about 33 ms and of 10,000 about 155 ms, against 0.4 s and 5 s with
   per-file fsyncs (`BenchmarkSavePendingAssets`, median of 5, a past
-  measurement at those counts: the benchmark now runs the disk at 1 and 10
-  pending, `docs/standards.md`, "Benchmarks"). On macOS, where
+  measurement at those counts: `BenchmarkSavePendingDisk` now runs the disk at
+  1 and 10 pending, `docs/standards.md`, "Benchmarks"). On macOS, where
   Go's fsync is `F_FULLFSYNC`, 1000 pending took 5 to 7 s with a flush per
   file; with plain fsyncs and one flush (SQ-427) they take about 0.1 s
   (`BenchmarkSyncPending/files=1000`, on an Apple M1 Max under heavy load).
