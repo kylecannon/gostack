@@ -17,8 +17,25 @@ import (
 // item, BatchGetItem 25, and Query and Scan every item, page after page.
 // GetItem and BatchGetItem take no filter. It uses the harness alone, so the
 // same file measures a tree that stores items as maps.
+//
+// A cell whose iteration costs more than maxItemReadMicros (itemReadCell.cost)
+// is left out, so that the slowest of its runs is at most 8 ms: of the 60 cells
+// 20 are, among them every Query and Scan of items of 30 attributes at 16 and
+// 64 callers and every filter and projection of items of 4 at 64. Their
+// slowest runs were 8.1 to 110.7 ms in a container of 4 CPUs (three runs). It
+// keeps the whole ladder for GetItem and every cell at concurrency 1, and at 16
+// and 64 the plain reads of items of 4 attributes, served from their bytes.
+// Two cells that fit are left out with them, 30 attributes at 16, a Scan with a
+// projection (6.8 ms) and a plain BatchGetItem (4.4 ms), which the cost is
+// not fine enough to keep.
 
-const itemReadCount = 100
+const (
+	itemReadCount = 100
+
+	// maxItemReadMicros is the most an iteration of one cell may cost, in
+	// microseconds a worker spends reading an item.
+	maxItemReadMicros = 7_000
+)
 
 // The forms of a cell.
 const (
@@ -35,8 +52,39 @@ type itemReadCell struct {
 	items          int
 }
 
+// cost is what one iteration of the cell costs for workers callers on items of
+// attrs attributes, in microseconds, as measured in a container of 4 CPUs per
+// item read: 1 for a plain read of items of 4, which the store serves from
+// their bytes, 4 for a filter or projection of them, which decodes them, 14
+// for items of 30 and 8 for a projection of those, and twice that for
+// BatchGetItem, which looks up each key.
+func (c itemReadCell) cost(attrs, workers int) int {
+	var perItem int
+
+	switch {
+	case attrs > itemReadSmall && c.form == formProjection:
+		perItem = 8
+	case attrs > itemReadSmall:
+		perItem = 14
+	case c.form == formPlain:
+		perItem = 1
+	default:
+		perItem = 4
+	}
+
+	if c.op == opBatchGet {
+		perItem *= 2
+	}
+
+	return c.items * workers * perItem
+}
+
+// itemReadSmall is the attribute count of the small items; the others are
+// wide.
+const itemReadSmall = 4
+
 func BenchmarkItemReads(b *testing.B) {
-	for _, attrs := range []int{4, 30} {
+	for _, attrs := range []int{itemReadSmall, 30} {
 		b.Run(fmt.Sprintf("attrs=%d", attrs), func(b *testing.B) {
 			s := newStack(b)
 			s.ok(b, opCreate, readTable)
@@ -47,6 +95,10 @@ func BenchmarkItemReads(b *testing.B) {
 
 			for _, cell := range itemReadCells() {
 				for _, workers := range itemReadConcurrency {
+					if cell.cost(attrs, workers) > maxItemReadMicros {
+						continue
+					}
+
 					name := fmt.Sprintf("op=%s/form=%s/concurrency=%d", cell.op, cell.form, workers)
 					b.Run(name, func(b *testing.B) {
 						b.ReportAllocs()

@@ -60,18 +60,35 @@ const (
 	// One iteration is a call from every worker, so its cost grows with
 	// workers times the work of one call. A cell whose iteration would carry
 	// more than these is left out: at make bench's 500 ms it runs under 50
-	// iterations, too few for benchstat to judge (SQ-302). That drops the
-	// 32 KiB batches at concurrency 64 and 100 actions at 16 and 64.
-	maxIterationBatchBytes = 16 << 20
-	maxIterationActions    = 640
+	// iterations, too few for benchstat to judge (SQ-302), and the slowest of
+	// its runs has to be at most 8 ms. The slowest operations on the gate's
+	// runners (4 CPUs, ten runs) of what each limit leaves out and keeps:
+	//
+	//   - maxIterationBatchBytes, for BatchGetItem: the 32 KiB batches at
+	//     concurrency 64, 51 MB of items. Kept: 32 KiB at 16 (12.8 MB), under
+	//     5 ms, and 4 KiB at 64, 6.3 ms.
+	//   - maxIterationWriteBytes, for BatchWriteItem, 4 MiB because a write
+	//     costs about three times a read of the same bytes: the 32 KiB batches
+	//     at 16 (11.8 ms) and the 4 KiB ones at 64 (9.2 ms). Kept: 4 KiB at
+	//     16 (1.6 MB) and 100 B at 64, 5.9 ms.
+	//   - maxIterationActions, for TransactGetItems and the PartiQL update
+	//     (BenchmarkPartiQLUpdateWidth): 100 actions at 16 and 64. Kept: 10 at
+	//     64, under 5 ms.
+	//   - maxIterationWriteActions, for TransactWriteItems: 10 actions at 64
+	//     (10.1 ms) and 100 at 16 and 64. Kept: 10 at 16 and 100 at 1.
+	maxIterationBatchBytes   = 16 << 20
+	maxIterationWriteBytes   = 4 << 20
+	maxIterationActions      = 640
+	maxIterationWriteActions = 320
 )
 
 // batchMatrix runs one sub-benchmark for every batch payload at every
-// concurrency within maxIterationBatchBytes, each on a fresh stack holding the
-// table bench. prepare runs before the timer for each worker.
+// concurrency whose iteration carries at most maxBytes, each on a fresh stack
+// holding the table bench. prepare runs before the timer for each worker.
 func batchMatrix(
 	b *testing.B,
 	operation string,
+	maxBytes int,
 	prepare func(b *testing.B, s *stack, worker, size int),
 	body func(worker, size int) string,
 ) {
@@ -79,7 +96,7 @@ func batchMatrix(
 
 	for _, payload := range batchPayloads {
 		for _, workers := range itemConcurrency {
-			if payload.size*maxBenchBatch*workers > maxIterationBatchBytes {
+			if payload.size*maxBenchBatch*workers > maxBytes {
 				continue
 			}
 
@@ -106,23 +123,27 @@ func batchMatrix(
 
 // BenchmarkBatchWriteItem: each call puts 25 of the worker's items.
 func BenchmarkBatchWriteItem(b *testing.B) {
-	batchMatrix(b, opBatchWrite, func(*testing.B, *stack, int, int) {}, batchWriteBody)
+	batchMatrix(b, opBatchWrite, maxIterationWriteBytes, func(*testing.B, *stack, int, int) {}, batchWriteBody)
 }
 
 // BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
 // BatchWriteItem put before the timer starts.
 //
-// One more row reads 40 items of 399 KiB of newlines, about as much as one
-// BatchGetItem returns: each newline is two bytes of json, so the body is
-// about 31 MiB, and the buffer it grows is past what the json encoder keeps
-// of its large buffers.
+// One more row reads 12 items of 399 KiB of newlines: each newline is two
+// bytes of json, so the body is about 9 MiB, a large json response buffer
+// grown by a read of escape-dense text. It had 40 items, about as much as one
+// BatchGetItem returns and 31 MiB of json, past the 32 MiB of large buffers the
+// json encoder keeps, but that took 11.0 to 18.5 ms on the gate's runners (ten
+// runs), at 0.3 to 0.5 ms an item, and 12 items take at most 8 ms. What the row
+// no longer reads is the buffer kept past that 32 MiB; the encoder's own tests
+// hold that.
 func BenchmarkBatchGetItem(b *testing.B) {
-	batchMatrix(b, opBatchGet, func(b *testing.B, s *stack, worker, size int) {
+	batchMatrix(b, opBatchGet, maxIterationBatchBytes, func(b *testing.B, s *stack, worker, size int) {
 		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
 	}, func(worker, _ int) string { return batchGetBody(worker) })
 
-	b.Run("payload=399KiB/items=40/text=newlines/concurrency=1", func(b *testing.B) {
-		const items = 40
+	b.Run("payload=399KiB/items=12/text=newlines/concurrency=1", func(b *testing.B) {
+		const items = 12
 
 		s := newStack(b)
 		s.ok(b, opCreate, hashTable(benchTable))
@@ -151,14 +172,15 @@ func BenchmarkBatchGetItem(b *testing.B) {
 }
 
 // transactMatrix runs one sub-benchmark for every number of actions at every
-// concurrency within maxIterationActions, each on a fresh stack holding the
-// table bench, with body(worker, actions) the request of each worker.
-func transactMatrix(b *testing.B, operation string, body func(worker, actions int) string) {
+// concurrency whose iteration holds at most maxActions of them, each on a fresh
+// stack holding the table bench, with body(worker, actions) the request of each
+// worker.
+func transactMatrix(b *testing.B, operation string, maxActions int, body func(worker, actions int) string) {
 	b.Helper()
 
 	for _, actions := range transactActions {
 		for _, workers := range itemConcurrency {
-			if actions*workers > maxIterationActions {
+			if actions*workers > maxActions {
 				continue
 			}
 
@@ -195,7 +217,7 @@ func transactMatrix(b *testing.B, operation string, body func(worker, actions in
 // items under a condition that holds, so every call evaluates and writes all
 // of them.
 func BenchmarkTransactWriteItems(b *testing.B) {
-	transactMatrix(b, opTransactWrite, func(worker, actions int) string {
+	transactMatrix(b, opTransactWrite, maxIterationWriteActions, func(worker, actions int) string {
 		list := make([]string, actions)
 		for i := range list {
 			list[i] = fmt.Sprintf(`{"Update":{"TableName":%q,"Key":{"id":{"S":"k-%d-%d"}},`+
@@ -209,7 +231,7 @@ func BenchmarkTransactWriteItems(b *testing.B) {
 
 // BenchmarkTransactGetItems: each get one of the worker's items.
 func BenchmarkTransactGetItems(b *testing.B) {
-	transactMatrix(b, opTransactGet, func(worker, actions int) string {
+	transactMatrix(b, opTransactGet, maxIterationActions, func(worker, actions int) string {
 		list := make([]string, actions)
 		for i := range list {
 			list[i] = fmt.Sprintf(`{"Get":{"TableName":%q,"Key":{"id":{"S":"k-%d-%d"}}}}`, benchTable, worker, i)

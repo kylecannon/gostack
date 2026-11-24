@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -90,21 +91,37 @@ const largeEnv = "GOSTACK_BENCH_LARGE"
 // The large cases add 100,000 and 1,000,000 items of 100 B and 100,000 of
 // 4 KiB; a million items of 4 KiB would be 4 GB.
 func snapshotCases() []snapshotCase {
-	cases := []snapshotCase{
+	return slices.Concat([]snapshotCase{
 		{1_000, itemPayloads[0]},
 		{10_000, itemPayloads[0]},
 		{1_000, itemPayloads[1]},
+	}, largeCases())
+}
+
+// restoreCases are snapshotCases cut to what a restore reads in at most 8 ms,
+// the slowest of its runs. A restore costs about 4 times a snapshot of the same
+// table: on the gate's runners (ten runs) 10,000 items of 100 B took 19.2 to
+// 20.0 ms and 1,000 of 4 KiB 8.1 to 8.9 ms, where the snapshots of them took at
+// most 5.1 ms. So a restore stops at 1,000 items of 100 B and takes 500 of
+// 4 KiB, about half its time. The large cases are not cut.
+func restoreCases() []snapshotCase {
+	return slices.Concat([]snapshotCase{
+		{1_000, itemPayloads[0]},
+		{500, itemPayloads[1]},
+	}, largeCases())
+}
+
+// largeCases are the cases under largeEnv, none without it.
+func largeCases() []snapshotCase {
+	if os.Getenv(largeEnv) != "1" {
+		return nil
 	}
 
-	if os.Getenv(largeEnv) == "1" {
-		cases = append(cases,
-			snapshotCase{100_000, itemPayloads[0]},
-			snapshotCase{1_000_000, itemPayloads[0]},
-			snapshotCase{100_000, itemPayloads[1]},
-		)
+	return []snapshotCase{
+		{100_000, itemPayloads[0]},
+		{1_000_000, itemPayloads[0]},
+		{100_000, itemPayloads[1]},
 	}
-
-	return cases
 }
 
 func (c snapshotCase) name() string {
@@ -178,7 +195,7 @@ func BenchmarkSnapshot(b *testing.B) {
 }
 
 func BenchmarkRestore(b *testing.B) {
-	for _, c := range snapshotCases() {
+	for _, c := range restoreCases() {
 		b.Run(c.name(), func(b *testing.B) {
 			file := generated(c.items, c.payload.size)
 			p := dynamodb.New(func() dynamodb.Settings { return dynamodb.Settings{} }, nil)

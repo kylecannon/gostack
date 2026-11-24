@@ -41,12 +41,13 @@ import (
 //     decodeBody.widest is the most workers a body is sent with. The slowest
 //     runs of the cells left out: the 400 KB dense item 47 ms and the 15 MB
 //     batches 366 ms (dense) and 13.6 ms (string) at concurrency 1, 208 ms
-//     (string) at 16; the 1 MB dense batch 17 ms at 16 and the 1 MB string
-//     batch 13.1 ms at 64. A body past the budget cannot be shrunk under the
-//     limit: the smallest, about 56,000 numbers, takes 18 ms. The dense item is
-//     measured at 10,000 numbers instead, under the budget. The payload axis is
-//     covered by the widest cells under the limit: the 1 MB batch and the 400 KB
-//     string.
+//     (string) at 16; the 1 MB dense batch 17 ms at 16, the 1 MB string batch
+//     13.1 ms at 64 and 8.5 ms at 16 (7.0 to 8.5 ms over ten runs on the gate's
+//     runners), and the 400 KB string item 14.7 ms at 64. A body past the
+//     budget cannot be shrunk under the limit: the smallest, about 56,000
+//     numbers, takes 18 ms. The dense item is measured at 10,000 numbers
+//     instead, under the budget. The payload axis is covered by the widest
+//     cells under the limit: the 1 MB batch and the 400 KB string.
 
 const (
 	shapeDense  = "dense"
@@ -90,9 +91,9 @@ func decodeShapes() []decodeBody {
 		{opPut, "PutItem100KB", shapeDense, 1, func(w int) string {
 			return missing(denseItem(fmt.Sprint("p", w), numberList(denseNumbers)))
 		}},
-		{opPut, "PutItem400KB", shapeString, 64, func(w int) string { return missing(text(fmt.Sprint("p", w), 400_000)) }},
+		{opPut, "PutItem400KB", shapeString, 16, func(w int) string { return missing(text(fmt.Sprint("p", w), 400_000)) }},
 		{opBatchWrite, "1MB", shapeDense, 1, convoyBatchToMissing},
-		{opBatchWrite, "1MB", shapeString, 16, batch(func(w, i int) string {
+		{opBatchWrite, "1MB", shapeString, 1, batch(func(w, i int) string {
 			return text(fmt.Sprint("b", w, "-", i), 40_000)
 		})},
 	}

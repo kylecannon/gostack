@@ -65,21 +65,37 @@ type itemPayload struct {
 	size int
 }
 
-// itemMatrix runs one sub-benchmark for every payload at every concurrency,
-// each on a fresh stack holding the table bench, keyed by id.
-func itemMatrix(b *testing.B, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
+const (
+	// The most bytes of items one iteration of PutItem or GetItem carries,
+	// workers times the payload. A cell over it is left out, as the slowest of
+	// its runs has to be at most 8 ms. PutItem at 399 KiB and concurrency 64,
+	// 25.5 MB, took 17.0 to 20.1 ms on the gate's runners (ten runs), 19.7 to
+	// 23.1 ms with persist=on; at 16, 6.4 MB, 5.0 to 6.8 ms. GetItem reads the
+	// same bytes in at most 5.8 ms, so keeps every cell.
+	maxIterationPutBytes = 8 << 20
+	maxIterationGetBytes = 32 << 20
+)
+
+// itemMatrix runs one sub-benchmark for every payload at every concurrency
+// whose iteration carries at most maxBytes, each on a fresh stack holding the
+// table bench, keyed by id.
+func itemMatrix(b *testing.B, maxBytes int, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
 	b.Helper()
-	itemMatrixOn(b, newStack, run)
+	itemMatrixOn(b, newStack, maxBytes, run)
 }
 
 // itemMatrixOn is itemMatrix on the stacks mk builds.
 func itemMatrixOn(
-	b *testing.B, mk func(testing.TB) *stack, run func(b *testing.B, s *stack, p itemPayload, workers int),
+	b *testing.B, mk func(testing.TB) *stack, maxBytes int, run func(b *testing.B, s *stack, p itemPayload, workers int),
 ) {
 	b.Helper()
 
 	for _, payload := range itemPayloads {
 		for _, workers := range itemConcurrency {
+			if payload.size*workers > maxBytes {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers), func(b *testing.B) {
 				s := mk(b)
 				s.ok(b, opCreate, hashTable(benchTable))
@@ -139,8 +155,8 @@ func (s *stack) fanOut(b *testing.B, operation string, workers int, body func(wo
 }
 
 func BenchmarkPutItem(b *testing.B) {
-	itemMatrix(b, benchPut)
-	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, benchPut) })
+	itemMatrix(b, maxIterationPutBytes, benchPut)
+	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, maxIterationPutBytes, benchPut) })
 }
 
 func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
@@ -217,7 +233,7 @@ func BenchmarkDeleteItem(b *testing.B) {
 }
 
 func BenchmarkGetItem(b *testing.B) {
-	itemMatrix(b, func(b *testing.B, s *stack, p itemPayload, workers int) {
+	itemMatrix(b, maxIterationGetBytes, func(b *testing.B, s *stack, p itemPayload, workers int) {
 		for worker := range workers {
 			s.ok(b, opPut, putBody(worker, p.size))
 		}

@@ -46,6 +46,15 @@ func BenchmarkPartiQLSelect(b *testing.B) {
 // the axes, for example
 //
 //	BenchmarkPartiQLSelectWidth/items=1000/paths=1000/shape=top/concurrency=16
+//
+// A cell whose iteration costs more than selectWidthBudget (selectShape.units)
+// is left out: the slowest of a cell's runs has to be at most 8 ms. On the
+// gate's runners (ten runs) the cells left out took 8.6 to 228 ms: every list
+// of 300 paths or more at concurrency 16, the nested lists of 300 and more
+// paths over 1,000 items at concurrency 1 (9.4 to 29.4 ms), and the nested
+// list over 1,000 items at 16, one path. What it keeps is the width of the
+// list at concurrency 1 (to 1,000 paths over 1,000 items of the top shape, and
+// over 100 of the nested), and concurrency 16 for the one-path list.
 func BenchmarkPartiQLSelectWidth(b *testing.B) {
 	for _, n := range []int{100, 1000} {
 		s := newStack(b)
@@ -57,13 +66,17 @@ func BenchmarkPartiQLSelectWidth(b *testing.B) {
 		}
 
 		for _, paths := range []int{1, 300, 601, 1000} {
-			for _, shape := range []struct{ name, prefix string }{{"top", "k"}, {"nested", "m.k"}} {
+			for _, shape := range selectShapes {
 				cell := selectCell{
 					readUnkeyed, viaStatement, opStatement,
 					stmt("SELECT " + selectList(shape.prefix, paths) + " FROM bench"), n,
 				}
 
 				for _, workers := range readConcurrency {
+					if shape.units(n, paths, workers) > selectWidthBudget {
+						continue
+					}
+
 					name := fmt.Sprintf("items=%d/paths=%d/shape=%s/concurrency=%d", n, paths, shape.name, workers)
 					b.Run(name, func(b *testing.B) {
 						b.ReportAllocs()
@@ -78,6 +91,41 @@ func BenchmarkPartiQLSelectWidth(b *testing.B) {
 	}
 }
 
+// selectWidthBudget is the most selectWidthUnits an iteration of
+// BenchmarkPartiQLSelectWidth costs: 16,500 units are 8 ms. The slowest of ten
+// runs on the gate's runners, for the cells it keeps and the ones it leaves out
+// at its edge:
+//
+//	top, 1,000 items, 1 path, 16 workers (16,064 units)   7.2 ms
+//	top, 100 items, 300 paths, 16 workers (20,800)         12.7 ms
+//	nested, 100 items, 1,000 paths, 1 worker (10,350)      5.5 ms
+//	nested, 1,000 items, 300 paths, 1 worker (20,950)      9.4 ms
+//	nested, 1,000 items, 1 path, 16 workers (17,056)       9.0 ms
+const selectWidthBudget = 16_500
+
+// selectShape is a shape of the list BenchmarkPartiQLSelectWidth reads: paths
+// prefix0, prefix1 and on, top-level attributes the read projects, or ones
+// below an attribute, which it reads whole (whole) and takes the paths from.
+type selectShape struct {
+	name, prefix string
+	whole        bool
+}
+
+var selectShapes = []selectShape{{"top", "k", false}, {"nested", "m.k", true}}
+
+// units is what an iteration of BenchmarkPartiQLSelectWidth costs, in visits
+// of one item (about 0.5 us on a 4 CPU runner): every worker visits every item
+// and compiles the list, a path costing 4 units, and a path below an attribute
+// is also read from each item whole, 1 unit for 16 items and paths.
+func (s selectShape) units(items, paths, workers int) int {
+	perCall := items + 4*paths
+	if s.whole {
+		perCall += items * paths / 16
+	}
+
+	return workers * perCall
+}
+
 // BenchmarkPartiQLSelectNarrow is BenchmarkPartiQLSelectWidth's nested shape for
 // a list the items hold all of: n items whose map has k0 to k29, read through
 // the first `paths` of them. The result of each item is as wide as the list, so
@@ -85,8 +133,17 @@ func BenchmarkPartiQLSelectWidth(b *testing.B) {
 // example
 //
 //	BenchmarkPartiQLSelectNarrow/items=100/paths=10/concurrency=16
+//
+// A cell whose iteration builds more than maxNarrowResults values (items times
+// paths times workers) is left out: 30 paths at 16 workers, 48,000 of them,
+// took 14.5 to 20.2 ms on the gate's runners (ten runs), and 10 paths at 16,
+// 16,000, took 6.4 to 6.8 ms, so the slowest of a cell's runs stays at most
+// 8 ms. The 30-path list is kept at concurrency 1.
 func BenchmarkPartiQLSelectNarrow(b *testing.B) {
-	const held = 30
+	const (
+		held             = 30
+		maxNarrowResults = 16_000
+	)
 
 	members := make([]string, held)
 	for i := range members {
@@ -109,6 +166,10 @@ func BenchmarkPartiQLSelectNarrow(b *testing.B) {
 		}
 
 		for _, workers := range readConcurrency {
+			if n*paths*workers > maxNarrowResults {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("items=%d/paths=%d/concurrency=%d", n, paths, workers), func(b *testing.B) {
 				b.ReportAllocs()
 
@@ -124,10 +185,20 @@ func BenchmarkPartiQLSelectNarrow(b *testing.B) {
 // number of SET actions it lists, one item to each of its concurrent callers.
 // Names carry the axes, for example
 //
-//	BenchmarkPartiQLUpdateWidth/actions=600/concurrency=16
+//	BenchmarkPartiQLUpdateWidth/actions=600/concurrency=1
+//
+// A cell whose iteration lists more than maxIterationActions actions over its
+// workers is left out, so the slowest of a cell's runs stays at most 8 ms: on
+// the gate's runners (ten runs) 100 actions at 16 took 9.9 to 10.6 ms, 300 at
+// 16 23.5 to 26.0 ms and 600 at 16 41.6 to 57.7 ms. 600 at 1 took 4.1 to
+// 5.0 ms and is kept.
 func BenchmarkPartiQLUpdateWidth(b *testing.B) {
 	for _, actions := range []int{1, 100, 300, 600} {
 		for _, workers := range readConcurrency {
+			if actions*workers > maxIterationActions {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("actions=%d/concurrency=%d", actions, workers), func(b *testing.B) {
 				s := newStack(b)
 				s.ok(b, opCreate, hashTable(benchTable))

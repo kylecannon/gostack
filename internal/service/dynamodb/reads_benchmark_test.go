@@ -24,7 +24,10 @@ import (
 // 1 MB pages, on each of concurrency simultaneous callers. The filter keeps
 // every item, so it adds its evaluation and not a smaller result. 500 items of
 // 4 KiB are three pages; 10,000 items made ops of 60 to 340 ms, too slow for
-// the benchstat gate's ten runs a row.
+// the benchstat gate's ten runs a row. A cell that would carry more than
+// maxIterationReadItems or maxIterationReadBytes in one iteration is left out
+// (readFits): 100 or 500 items of 4 KiB at concurrency 16, and 500 of 100 B with
+// a filter at 16.
 //
 // The text cells hold non-ASCII or escape-dense strings, which json quotes
 // differently from ASCII, and only on a plain Query of 100 items: the text
@@ -99,8 +102,35 @@ func BenchmarkReads(b *testing.B) {
 	}
 }
 
+// What one iteration of a read cell may carry, counted over its workers. The
+// slowest of a cell's runs has to be at most 8 ms:
+//
+//   - maxIterationReadItems counts an item a filter evaluates twice. 500 items
+//     of 100 B at 16 workers are 8,000 without a filter, 4.7 to 6.1 ms on the
+//     gate's runners (ten runs), and 16,000 with one, 7.4 to 9.8 ms; the
+//     filtered cells are left out, the unfiltered ones kept.
+//   - maxIterationReadBytes: 100 items of 4 KiB at 16 workers, 6.5 MB, took
+//     6.3 to 10.7 ms and 500 of them 26 to 43 ms. 500 at 1 worker, 2.0 MB, took
+//     3.3 to 5.1 ms, and are kept.
+const (
+	maxIterationReadItems = 8_000
+	maxIterationReadBytes = 4 << 20
+)
+
+// readFits reports whether one iteration of a cell reading n items of size
+// bytes on each of workers callers, through the filter expression filter (none
+// when empty), is within what a read cell carries.
+func readFits(n, size, workers int, filter string) bool {
+	items := n * workers
+	if filter != "" {
+		items *= 2
+	}
+
+	return items <= maxIterationReadItems && n*size*workers <= maxIterationReadBytes
+}
+
 // readCells runs every operation, target, filter and concurrency over the
-// filled table.
+// filled table that readFits.
 func readCells(b *testing.B, s *stack, n, size int) {
 	b.Helper()
 
@@ -110,6 +140,10 @@ func readCells(b *testing.B, s *stack, n, size int) {
 				body := readBody(op, target, filter.expr)
 
 				for _, workers := range readConcurrency {
+					if !readFits(n, size, workers, filter.expr) {
+						continue
+					}
+
 					name := fmt.Sprintf("op=%s/target=%s/filter=%s/concurrency=%d", op, target, filter.name, workers)
 					b.Run(name, func(b *testing.B) {
 						b.SetBytes(int64(n * size * workers))
