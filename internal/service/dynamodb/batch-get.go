@@ -3,8 +3,10 @@ package dynamodb
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/expression"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
@@ -37,14 +39,22 @@ func (p *Provider) BatchGetItem(ctx context.Context, in *api.BatchGetItemInput) 
 	}
 
 	out := &api.BatchGetItemOutput{
-		Responses:       make(map[string][]map[string]api.AttributeValue, len(gets)),
 		UnprocessedKeys: map[string]api.KeysAndAttributes{},
 	}
 	used := tableConsumption{}
 	read, full := 0, false
 
+	// The items go out as they are stored when no table's are projected: the
+	// encoder writes Responses or ResponsesJSON, not some tables of each.
+	encoded := !slices.ContainsFunc(gets, func(g batchGet) bool { return g.projection != nil })
+	if encoded {
+		out.ResponsesJSON = make(map[string][]awsjson.Encoded, len(gets))
+	} else {
+		out.Responses = make(map[string][]map[string]api.AttributeValue, len(gets))
+	}
+
 	for _, g := range gets {
-		items := make([]map[string]api.AttributeValue, 0, len(g.request.Keys))
+		items := make([]value.Packed, 0, len(g.request.Keys))
 		cost := used.on(g.name)
 
 		for i, key := range g.request.Keys {
@@ -54,12 +64,12 @@ func (p *Provider) BatchGetItem(ctx context.Context, in *api.BatchGetItemInput) 
 				break
 			}
 
-			stored := g.entry.data.Get(key)
-			if stored == nil {
+			stored := g.entry.data.GetPacked(key)
+			if stored == "" {
 				continue
 			}
 
-			size := value.ItemSize(stored)
+			size := stored.Size()
 			if read+size > maxBatchGetBytes {
 				full = true
 				out.UnprocessedKeys[g.name] = g.unprocessed(i)
@@ -70,24 +80,58 @@ func (p *Provider) BatchGetItem(ctx context.Context, in *api.BatchGetItemInput) 
 			read += size
 			cost.table += readUnits(size, g.request.ConsistentRead)
 
-			if g.projection != nil {
-				stored = g.projection.Apply(stored)
-			}
-
 			items = append(items, stored)
 		}
 
 		// A table named once by name and once by ARN answers under its name.
-		if earlier, ok := out.Responses[g.name]; ok {
-			items = append(earlier, items...)
+		if encoded {
+			out.ResponsesJSON[g.name] = appendEncoded(out.ResponsesJSON[g.name], items)
+		} else {
+			out.Responses[g.name] = appendTyped(out.Responses[g.name], items, g.projection)
 		}
-
-		out.Responses[g.name] = items
 	}
 
 	out.ConsumedCapacity = used.report(in.ReturnConsumedCapacity)
 
 	return out, nil
+}
+
+// appendEncoded appends the json of items to list, which it makes when it is
+// nil, so a table with no items answers an empty list.
+func appendEncoded(list []awsjson.Encoded, items []value.Packed) []awsjson.Encoded {
+	if list == nil {
+		list = make([]awsjson.Encoded, 0, len(items))
+	}
+
+	for _, item := range items {
+		list = append(list, item.Encoded())
+	}
+
+	return list
+}
+
+// appendTyped appends items, decoded and projected by projection when it is
+// not nil, to list, which it makes when it is nil.
+func appendTyped(list []map[string]api.AttributeValue, items []value.Packed, projection expression.Projection,
+) []map[string]api.AttributeValue {
+	if list == nil {
+		list = make([]map[string]api.AttributeValue, 0, len(items))
+	}
+
+	pj := newProjector(projection)
+
+	var dec value.Decoder
+	defer dec.Release()
+
+	for _, item := range items {
+		if projection == nil {
+			list = append(list, dec.Item(item, nil))
+		} else {
+			list = append(list, pj.apply(&dec, item))
+		}
+	}
+
+	return list
 }
 
 // unprocessed is the request for the keys from the i-th on, as the caller

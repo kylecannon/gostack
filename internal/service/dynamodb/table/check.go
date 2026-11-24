@@ -91,11 +91,11 @@ func (t *Table) CheckItem(item value.Item) error {
 	return nil
 }
 
-// checkStored is what every stored item meets, a restored one included: the
-// table's key attributes present with values DynamoDB accepts, and the item's
-// size. It leaves out the index keys, since an index added over stored items
-// leaves out the ones its key does not fit (indexed) and keeps them in the
-// table.
+// checkStored is what every stored item meets: the table's key attributes
+// present with values DynamoDB accepts, and the item's size. A restore meets
+// the same in checkLoaded, which reads the keys from the packed item. It
+// leaves out the index keys, since an index added over stored items leaves out
+// the ones its key does not fit (indexed) and keeps them in the table.
 func (t *Table) checkStored(item value.Item) error {
 	for _, attr := range t.keyAttributes() {
 		if _, ok := item[attr.Name]; !ok {

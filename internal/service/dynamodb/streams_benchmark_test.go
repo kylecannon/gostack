@@ -109,3 +109,45 @@ func BenchmarkPutItemStream(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkUpdateItemStream is UpdateItem through the real gateway on a table
+// whose stream records every write: the item holds a string of the payload's
+// size that the update leaves as it is, and the update sets a number that
+// differs from the one stored, so each leaves a MODIFY record. A NEW_IMAGE
+// record holds the untouched string in its new image, an OLD_IMAGE one in its
+// old image; the cells are named by view type and payload.
+//
+//	BenchmarkUpdateItemStream/view=NEW_IMAGE/payload=4KiB
+func BenchmarkUpdateItemStream(b *testing.B) {
+	for _, view := range []string{"NEW_IMAGE", "NEW_AND_OLD_IMAGES"} {
+		for _, payload := range streamPayloads {
+			b.Run(fmt.Sprintf("view=%s/payload=%s", view, payload.name), func(b *testing.B) {
+				s := newStack(b)
+				s.ok(b, opCreate, fmt.Sprintf(streamTable, view))
+				// The shard's retention timer would hold its records past the
+				// cell, and every later cell would run on a larger heap.
+				b.Cleanup(dynamodb.Shard(s.provider, usEast1, "streamed").Stop)
+
+				s.ok(b, opPut, fmt.Sprintf(`{"TableName":"streamed","Item":{"id":{"S":"k"},"n":{"N":"0"},"d":{"S":%q}}}`,
+					strings.Repeat("x", payload.size)))
+
+				bodies := [2]string{}
+				for i := range bodies {
+					bodies[i] = fmt.Sprintf(`{"TableName":"streamed","Key":{"id":{"S":"k"}},"UpdateExpression":"SET n = :v",`+
+						`"ExpressionAttributeValues":{":v":{"N":"%d"}}}`, i+1)
+				}
+
+				b.SetBytes(int64(payload.size))
+				b.ReportAllocs()
+
+				i := 0
+				for b.Loop() {
+					got := s.call(b, usEast1, opUpdateItem, bodies[i%2])
+					require.Equal(b, http.StatusOK, got.status, got.body)
+
+					i++
+				}
+			})
+		}
+	}
+}

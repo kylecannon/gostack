@@ -1,13 +1,18 @@
 package dynamodb_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/request"
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,7 +80,7 @@ func Test_stream_records(t *testing.T) {
 	got := s.records(t, "streamed")
 
 	type row struct {
-		event string
+		event stream.Event
 		size  int64
 		seq   int
 	}
@@ -92,9 +97,9 @@ func Test_stream_records(t *testing.T) {
 		{stream.Remove, 38, 4},
 		{stream.Modify, 26, 5},
 	}, rows)
-	require.Nil(t, got[0].Old)
-	require.Nil(t, got[3].New)
-	require.Equal(t, "Fred", *got[4].Old["id"].S)
+	require.Empty(t, got[0].Old)
+	require.Empty(t, got[3].New)
+	require.Equal(t, "Fred", *value.Unpack(got[4].Old)["id"].S)
 }
 
 // Test_stream_viewTypes: KEYS_ONLY keeps neither image, NEW_IMAGE the new one,
@@ -115,8 +120,8 @@ func Test_stream_viewTypes(t *testing.T) {
 
 			got := s.records(t, "streamed")
 			require.Len(t, got, 2)
-			require.Equal(t, tc.new, got[1].New != nil)
-			require.Equal(t, tc.old, got[1].Old != nil)
+			require.Equal(t, tc.new, got[1].New != "")
+			require.Equal(t, tc.old, got[1].Old != "")
 			require.Equal(t, tc.size, got[1].SizeBytes)
 			require.Equal(t, "Fred", *got[1].Keys["id"].S)
 		})
@@ -164,4 +169,44 @@ func Test_stream_specification(t *testing.T) {
 
 	s.ok(t, "DeleteTable", `{"TableName":"streamed"}`)
 	require.Empty(t, s.provider.StreamList(streamCtx(t)))
+}
+
+// Test_stream_loadsMainSnapshot restores a streams snapshot that main wrote,
+// before a record held its images packed (testdata/snapshot-main-streams.*:
+// four tables of every view type, every kind of attribute, an update that
+// changes an image and a time-to-live removal), reads its records through the
+// stream, and saves the streams snapshot again. The file is main's byte for
+// byte, so what changed in memory changed nothing on disk.
+func Test_stream_loadsMainSnapshot(t *testing.T) {
+	tables, err := os.ReadFile("testdata/snapshot-main-streams.tables.json")
+	require.NoError(t, err)
+
+	streams, err := os.ReadFile("testdata/snapshot-main-streams.streams.json")
+	require.NoError(t, err)
+
+	// The file's records were written at 2026-11-23T09:54Z, and a record past
+	// the 24-hour retention reads as trimmed, so the clock stays a minute past
+	// them however long after that the test runs.
+	written := time.Date(2026, time.November, 23, 9, 55, 0, 0, time.UTC)
+
+	s := newStack(t)
+	dynamodb.SetClock(s.provider, func() time.Time { return written })
+	require.NoError(t, s.provider.Restore(bytes.NewReader(tables)))
+	require.NoError(t, s.provider.RestoreStreams(bytes.NewReader(streams)))
+
+	orders := s.records(t, "orders")
+	require.Len(t, orders, 5, "every record the file held for orders is back")
+	require.Equal(t, stream.Modify, orders[2].Event)
+	require.Equal(t, "renamed", *value.Unpack(orders[2].New)["name"].S)
+	require.Equal(t, "first", *value.Unpack(orders[2].Old)["name"].S)
+	require.Empty(t, s.records(t, "keys")[0].New, "a KEYS_ONLY record holds no image")
+
+	last := s.records(t, "ttl")
+	require.True(t, last[len(last)-1].Expired, "the time-to-live removal is still marked")
+
+	savedOf(t, s.provider)
+
+	var again bytes.Buffer
+	require.NoError(t, s.provider.SnapshotStreams(&again))
+	require.Equal(t, string(streams), again.String())
 }

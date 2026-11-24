@@ -1008,14 +1008,17 @@ written by hand.
   (SQ-455). rest-json and error bodies still go through v2.
 - **Pre-encoded values:** a json service's `EncodedShapes` option in
   `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
-  response can carry already encoded; DynamoDB names `AttributeMap`. Every
+  response can carry already encoded; DynamoDB and DynamoDB Streams name
+`AttributeMap`. Every
   member of a struct below an output whose shape is one of them, or a list or
   map that holds one, gets a sibling field, its name with `JSON` appended and
   tagged `json:"-"`, of the same list and map structure with
   `awsjson.Encoded` (`[]byte`) in place of each encoded value:
   `GetItemOutput.ItemJSON awsjson.Encoded`, `QueryOutput.ItemsJSON` and
   `ScanOutput.ItemsJSON []awsjson.Encoded`,
-  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`. The
+  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`, and
+  DynamoDB Streams' `StreamRecord.NewImageJSON`, `OldImageJSON` and
+  `KeysJSON`, of which GetRecords sets the first two. The
   generated encoder writes the sibling in place of the member when it is set
   (a list or map when not nil, a single value when not empty) and the member
   otherwise; each `awsjson.Encoded` is appended to the response buffer as it
@@ -1257,18 +1260,22 @@ stream as a `StreamInfo` whose shard is the read side of `stream.Log`
 the records' snapshot (`StreamSnapshotter`), which `PERSIST_DYNAMODBSTREAMS`
 saves under DynamoDB Streams' own name. Beside `dynamodb` the service imports
 two of DynamoDB's packages: `dynamodb/stream` for the `Record` and `Page` a read
-returns and the errors it names, and `dynamodb/value` for the `Item` a record
-holds and the `ValidationException` both services answer alike. DynamoDB Streams keeps no
+returns and the errors it names, and `dynamodb/value` for the `Packed` images of
+a record, which GetRecords writes as they are stored (`StreamRecord.NewImageJSON`
+and `OldImageJSON`, pre-encoded values, with no decoding), and the
+`ValidationException` both services answer alike. A record's keys are stored as
+an `Item` and go through the typed `Keys`. DynamoDB Streams keeps no
 state of its own: its iterators carry their position, issue time and shard.
 Each shard keeps records for 24 hours, on a timer armed only while it holds
 records, and at most 256 MiB of them, oldest trimmed first. The bound counts
 heap, not DynamoDB's size: `stream.Charge` is `value.HeapSize` of a record's
-keys and images, estimated from the value tree's lengths and capacities
-without reflection, plus 256 bytes for its slot in the shard. Where the layout
-leaves a range, such as a slice's size class, the estimate takes the top of
-it. A map's capacity is not visible, so the estimate takes what insertion
-leaves; a map made with a larger hint (UpdateItem's at the 8-entry small-map
-boundary) or one that shrank holds a few hundred bytes more than counted. Each
+keys, estimated from the value tree's lengths and capacities without
+reflection, plus `value.PackedHeap` of each image, which is one string and so
+its length rounded up as the allocator rounds it, plus 256 bytes for its slot
+in the shard. Where the layout leaves a range, such as a slice's size class,
+the estimate takes the top of it. A map's capacity is not visible, so the
+estimate for the keys takes what insertion leaves; a map made with a larger
+hint or one that shrank holds a few hundred bytes more than counted. Each
 image is charged whole, though a record's new image is the table's item until
 a later write replaces it and is then the next record's old image, so a shard
 usually holds less than the bound. `stream/charge_test.go`
@@ -2593,7 +2600,7 @@ Kinesis. The state is two files, LocalStack's split:
   `Followed(false)` before it frees the pair for another flush: a failed
   table save, a streams save that failed before its snapshot, a flush
   cancelled between the two saves, Stop's flush), or at the next cut, so it lives for one flush
-  and at most one is held. It is a `[]stream.Record` of 96 bytes a record;
+  and at most one is held. It is a `[]stream.Record` of 88 bytes a record;
   the item images are shared with the shard. A record is charged at least
   `RecordOverhead` and the heap of its keys map, 736 bytes for a one-letter
   key, so a shard at its bound holds at most about 365,000 records and the
@@ -2659,14 +2666,37 @@ Kinesis. The state is two files, LocalStack's split:
   1,000,000 items across four tables measures 125 to 158 ms (Apple M1 Max at
   load average 249; one table of 1,000,000 items measured about 56 ms on the
   same machine unloaded).
-  Snapshot and restore of one table of 1,000,000 items of about 100 bytes
-  (a 173 MB file), `BenchmarkSnapshot` and `BenchmarkRestore` at
-  `-benchtime 1x -count 6` with `GOSTACK_BENCH_LARGE=1` on that machine:
-  snapshot 0.57 s allocating 46 MiB; restore 2.23 s allocating 1.24 GiB,
-  against 1.20 GiB the restored state holds (`held-B`). Restore allocates no more than the state it builds plus the file
-  once (`bound-B`); the state itself is the floor, at about 1.3 KB per item of
-  this shape. `bin/gostack` loading that file, saving once and shutting down
-  peaks at 1.46 GB resident (`/usr/bin/time -l`).
+  Snapshot and restore of one table of 1,000,000 items of about 100 bytes (a
+  172,789,304 byte file, 165 MiB, in the shape `generated` writes in
+  `snapshot_benchmark_test.go`: one table, a keys-only global index on `g`),
+  `BenchmarkSnapshot` and `BenchmarkRestore` at `-benchtime 1x -count 6` with
+  `GOSTACK_BENCH_LARGE=1`, medians of the six runs. Apple M1 Max, 10 cores,
+  64 GiB, macOS, at load average 12 to 14 for the benchmarks and 15 to 21 for
+  the resident runs. `main` at 7550fb2a holds items as maps; packed items are
+  56ab4f9b:
+
+  | | `main` | packed |
+  |---|---|---|
+  | Snapshot | 0.53 s, 45.9 MiB allocated | 0.69 s, 45.9 MiB allocated |
+  | Restore | 2.24 s, 1.26 GiB allocated | 1.44 s, 1.05 GiB allocated |
+  | State the restore holds (`held-B`) | 1.22 GiB | 366 MiB |
+  | Restore allocation bound (`bound-B`) | 1.38 GiB | 531 MiB |
+  | Peak resident size: load, save once, shut down | 1.38 GiB | 1.07 GiB |
+
+  The figures taken on `main` before packed items were snapshot 0.57 s
+  allocating 46 MiB, restore 2.23 s allocating 1.24 GiB, and 1.20 GiB held.
+  Packed items cut restore time by 36% and the state it holds by 71%, and make
+  the snapshot 29% slower. `bound-B` is the state plus the file once, which
+  restore stayed under with maps; with packed items restore allocates 2.0
+  times `bound-B`, so that bound no longer holds. The peak resident size is
+  3.0 times `held-B`; which phase sets it was not measured.
+
+  The resident figure is `bin/gostack` with `SERVICES=dynamodb`,
+  `PERSIST_DYNAMODB=1` and `PERSIST_BASE_DIR` set to a directory holding
+  `dynamodb/store.json`, a file of that shape written by a throwaway script.
+  Once `Ready.` is logged one `PutItem` marks dynamodb dirty, and a SIGTERM
+  makes the shutdown save once. `/usr/bin/time -l` reports the maximum
+  resident set size; three runs of each binary differ by less than 0.1%.
 
 **SNS.** `PERSIST_SNS=1` persists SNS alone, at `<base>/sns/store.{json,bin}`.
 LocalStack's `API_DEPENDENCIES` has no `sns` entry, so the queues SNS delivers
@@ -2738,7 +2768,7 @@ DynamoDB sections after it; the operations at 501 are in `docs/features.md`.
 
 | Package | Holds |
 |---|---|
-| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. |
+| `value` | The attribute value model over the generated `api.AttributeValue`: the exactly-one-member check, numbers parsed to 38 digits and rewritten in canonical plain-decimal form in place, set rules, key order and equality, item size as DynamoDB counts it, the 32-level nesting bound. `Packed`, an item as one string (its json after a header), and the `Decoder` that reads attributes of one without unpacking the rest; `JSONPacker`, which packs an item from the json a snapshot holds, and `Orderer`, which writes a packed item as the snapshot does, each map's names in byte order. |
 | `table` | One table's items under its key schema, its secondary indexes, the write path and the ordered reads. No handler state. |
 | `expression` | The four expression languages: one lexer, one path parser, one reserved-word list, a parsed form per language. |
 | `partiql` | The PartiQL parser. It knows no tables. |
@@ -2759,7 +2789,7 @@ encoded hash key to a slice of entries sorted by range key, binary searched
 for a read or a write. A list of the partition keys in order is rebuilt only
 when a read across partitions (Scan) finds a partition added since. A local or
 global secondary index is a second such store whose entries reference the
-same item maps as the primary; the index list is copy-on-write, published
+same packed item as the primary; the index list is copy-on-write, published
 through an atomic pointer, so a put's key check reads it without the table
 lock. `Range` reads one partition between bounds a `SortCondition` sets, in
 either direction, from an exclusive start key; `Scan` walks the partitions in
@@ -2768,19 +2798,35 @@ order. Both hand the caller whole stored items, and the caller projects.
 Each table has its own `sync.RWMutex`, and nothing locks across tables except
 `table.Lock` and `table.ReadLock`, which take several tables' locks in the
 order of their creation ids, so a transaction or batch that spans tables
-cannot deadlock against another. Stored items are immutable: a write replaces
-the whole map, so a reader may keep what it was handed and no read copies an
-item.
+cannot deadlock against another. A stored item is a `value.Packed`, an
+immutable string: a write replaces the whole string, so a reader may keep
+what it was handed and no read copies an item.
 
 **The write path.** Every write, from `PutItem` to a PartiQL `UPDATE`, a
 transaction or a time to live removal, goes through `Table.Write` (or
-`WriteHeld` under `Lock`, or `Expire`). It calls the handler's `decide` with
-the stored item under the table's write lock and stores what `decide` returns,
-nil to delete; a condition expression, an update expression and the return
-values are all evaluated inside `decide`, so nothing changes between the check
-and the write. It updates the indexes under the same lock and returns a
-`Change` with the old and new item. `Change.Changed()` is false for a put
-that stores an equal item, which is what keeps such a put out of the stream.
+`WriteHeld` under `Lock`, or `Expire`, which takes the expired item and a
+predicate it asks of the stored one under the lock, and returns whether it
+removed one). It calls the handler's `table.Decide`
+with the stored item as the table stores it, a `value.Packed`, under the
+table's write lock, and packs and stores the `value.Item` that `decide`
+returns, nil to delete; a condition expression, an update expression and the
+return values are all evaluated inside `decide`, so nothing changes between
+the check and the write. `decide` unpacks the stored item only when something
+reads it. It updates the indexes under the same lock and returns a `Change`
+with the old item still packed (`OldPacked`), the new item and its packed
+form; there is no unpacked old item, and a caller that answers one, such as
+`ReturnValues` `ALL_OLD`, unpacks `OldPacked` again. `Change.Changed()`
+compares the new item with `OldPacked` in place, and is false for a put that
+stores an equal item, which is what keeps such a put out of the stream.
+
+The ownership rule: an update writes only into an item that
+`expression.ApplyStored` has just unpacked from the stored string, its own,
+in place of a copy. `ApplyStored` takes the `value.Packed`, so a map shared
+with anything else, such as a pooled `Decoder.View`, cannot reach it. A map or
+list below an attribute is still copied before an action changes it, since
+`SET a = b` can share it. Nothing a concurrent reader holds is written:
+readers hold packed strings or their own unpacked copies.
+
 A transaction decides every action first and writes them all through
 `WriteHeld` only when none failed.
 
@@ -2830,10 +2876,15 @@ table's `stream.Log`. DynamoDB Streams reads the logs through `dynamodb.Streams`
 A time to live removal goes through `Table.Expire`, whose record carries the
 `dynamodb.amazonaws.com` service identity.
 
-**What is held in memory.** Everything. Each item is a
-`map[string]api.AttributeValue`, referenced once from the primary store and
-once from each index that projects it; about 1.3 KB per item of 100 bytes
-(Persistence, "DynamoDB"). Each stream shard holds up to 256 MiB of records,
+**What is held in memory.** Everything. Each item is a `value.Packed`, one
+immutable string holding a short header and the item's json, referenced once
+from the primary store and once from each index that projects it. The heap
+per item of 100 bytes is 384 B, `held-B` divided by the 1,000,000 items of the
+table (Persistence, "DynamoDB"), against 1,311 B on `main` with items as maps.
+In `make bench-system-large` under a 1 GiB container limit (local OrbStack,
+linux/arm64, 2026-11-24), `main` is OOM-killed at about 85,000 items and
+packed items holds 300,000; the peak resident size at 50,000 items is 806 MiB
+on `main` and 261 MiB packed. Each stream shard holds up to 256 MiB of records,
 in heap as `stream.Charge` estimates it, for 24 hours. `TransactWriteItems` client request tokens are held for their
 10-minute window and swept when a later transaction looks. Time to live
 removes nothing unless asked: the hourly sweep runs only under
@@ -2845,8 +2896,8 @@ are under Persistence, "DynamoDB". The format: `{"v":1,"accounts":[…],
 "states":[{"account","region","tables":[{"meta","shard","items"}]}]}` in
 `dynamodb/store.*`, items as the wire writes them with numbers canonical, and
 the shard records in `dynamodbstreams/store.*`. Restore rebuilds the indexes
-from the items with `table.Load`, which sizes each partition before it fills
-it and sorts it once.
+from the items with `table.LoadPacked`, which sizes each partition before it
+fills it and sorts it once.
 
 ### KMS (`internal/service/kms`)
 

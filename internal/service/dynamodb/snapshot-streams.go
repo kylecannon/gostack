@@ -197,7 +197,7 @@ func writeShard(enc *jsontext.Encoder, c *shardCut) error {
 
 	for _, r := range c.records {
 		saved = recordSaved{
-			Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
+			Seq: r.Seq, Event: r.Event.String(), Keys: r.Keys, New: value.Unpack(r.New), Old: value.Unpack(r.Old),
 			SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
 		}
 
@@ -226,8 +226,31 @@ func (p *Provider) RestoreStreams(r io.Reader) error {
 		return fmt.Errorf("read dynamodbstreams snapshot: %w", err)
 	}
 
+	attach, err := p.packRestored(&file)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range attach {
+		f()
+	}
+
+	return nil
+}
+
+// packRestored packs the records of every shard of file that its table still
+// has, and returns what attaches each to its shard. Every record is converted
+// before any shard takes one, so a record that cannot be packed leaves every
+// shard without records, as one that fails the check does. Each shard's
+// decoded records are let go as soon as they are packed, or passed over, so
+// the file's typed images and the packed ones are not all held at once.
+func (p *Provider) packRestored(file *streamsFile) ([]func(), error) {
+	attach := make([]func(), 0, len(file.Shards))
+
 	for i := range file.Shards {
 		saved := &file.Shards[i]
+		decoded := saved.Records
+		saved.Records = nil
 
 		e := p.states.Get(saved.Account, saved.Region).table(saved.Table)
 		if e == nil {
@@ -242,18 +265,44 @@ func (p *Provider) RestoreStreams(r io.Reader) error {
 			continue
 		}
 
-		records := make([]stream.Record, len(saved.Records))
-		for j, r := range saved.Records {
-			records[j] = stream.Record{
-				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
-				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
-			}
+		records, err := savedRecords(decoded)
+		if err != nil {
+			return nil, fmt.Errorf("read dynamodbstreams snapshot: %w", err)
 		}
 
-		shard.Attach(records)
+		attach = append(attach, func() { shard.Attach(records) })
 	}
 
-	return nil
+	return attach, nil
+}
+
+// savedRecords is the records of a shard's snapshot as the shard keeps them,
+// each image packed as the table stores it. check has accepted the records,
+// so the event is known and every image is a valid item.
+func savedRecords(saved []recordSaved) ([]stream.Record, error) {
+	records := make([]stream.Record, len(saved))
+
+	for i := range saved {
+		r := &saved[i]
+		records[i] = stream.Record{
+			Seq: r.Seq, Keys: r.Keys, SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
+		}
+		records[i].Event, _ = stream.ParseEvent(r.Event)
+
+		var err error
+
+		records[i].New, err = value.Pack(r.New)
+		if err != nil {
+			return nil, fmt.Errorf("%w: record %d: %w", errSnapshot, r.Seq, err)
+		}
+
+		records[i].Old, err = value.Pack(r.Old)
+		if err != nil {
+			return nil, fmt.Errorf("%w: record %d: %w", errSnapshot, r.Seq, err)
+		}
+	}
+
+	return records, nil
 }
 
 // check refuses records GetRecords could not answer: an unknown event, no
@@ -265,7 +314,7 @@ func (f *streamsFile) check() error {
 
 	for i := range f.Shards {
 		for _, r := range f.Shards[i].Records {
-			if !slices.Contains([]string{stream.Insert, stream.Modify, stream.Remove}, r.Event) || len(r.Keys) == 0 {
+			if _, known := stream.ParseEvent(r.Event); !known || len(r.Keys) == 0 {
 				return fmt.Errorf("%w: record %d of table %q is not valid", errSnapshot, r.Seq, f.Shards[i].Table)
 			}
 

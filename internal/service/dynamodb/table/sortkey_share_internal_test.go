@@ -71,19 +71,46 @@ func Test_Table_Write_sortKeySharesTheItemsBytes(t *testing.T) {
 
 		require.NoError(t, value.ValidateItem(item))
 
-		_, err := tbl.Write(key, func(value.Item) (value.Item, error) { return item, nil })
+		_, err := tbl.Write(key, func(value.Packed) (value.Item, error) { return item, nil })
 		require.NoError(t, err)
 
 		sk := item["sk"]
+		checkShared(t, tbl, typ, itemData(&sk))
+	}
+}
 
-		for name, data := range map[string]*store{"table": &tbl.primary, "index": &tbl.index("bySk").data} {
-			require.Len(t, data.parts, 1, "%s %s", typ, name)
+// checkShared checks the one entry of the table and of its index bySk: a
+// string range key lies in the bytes of the packed item, and a binary one, which
+// the packed item holds in base64, is one copy both entries share. Neither is
+// request, the bytes of the key in the item written.
+func checkShared(t *testing.T, tbl *Table, typ string, request *byte) {
+	t.Helper()
 
-			for _, p := range data.parts {
-				require.Len(t, p.entries, 1, "%s %s", typ, name)
-				assert.Same(t, itemData(&sk), stringData(p.entries[0].sort), "%s %s entry", typ, name)
-			}
+	var entries []entry
+
+	for _, data := range []*store{&tbl.primary, &tbl.index("bySk").data} {
+		require.Len(t, data.parts, 1, typ)
+
+		for _, p := range data.parts {
+			require.Len(t, p.entries, 1, typ)
+			entries = append(entries, p.entries[0])
 		}
+	}
+
+	for _, e := range entries {
+		assert.NotSame(t, request, stringData(e.sort), "%s entry shares the request's bytes", typ)
+	}
+
+	if typ == "B" {
+		assert.Same(t, stringData(entries[0].sort), stringData(entries[1].sort), "B entries share one copy")
+
+		return
+	}
+
+	for _, e := range entries {
+		start := uintptr(unsafe.Pointer(unsafe.StringData(string(e.item))))
+		at := uintptr(unsafe.Pointer(stringData(e.sort)))
+		assert.True(t, at >= start && at+uintptr(len(e.sort)) <= start+uintptr(len(e.item)), "S entry is in the packed item")
 	}
 }
 
@@ -93,15 +120,10 @@ func Test_Table_Load_sortKeySharesTheItemsBytes(t *testing.T) {
 		tbl := shareTable(typ)
 		item, _ := shareKeys(typ)
 
-		require.NoError(t, tbl.Load([]value.Item{item}))
-
 		sk := item["sk"]
+		request := itemData(&sk)
 
-		for name, data := range map[string]*store{"table": &tbl.primary, "index": &tbl.index("bySk").data} {
-			for _, p := range data.parts {
-				require.Len(t, p.entries, 1, "%s %s", typ, name)
-				assert.Same(t, itemData(&sk), stringData(p.entries[0].sort), "%s %s entry", typ, name)
-			}
-		}
+		require.NoError(t, tbl.Load([]value.Item{item}))
+		checkShared(t, tbl, typ, request)
 	}
 }

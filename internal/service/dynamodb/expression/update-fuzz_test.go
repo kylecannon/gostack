@@ -75,7 +75,7 @@ func requireUpdatedNew(t *testing.T, u *expression.UpdateExpr, old, updated valu
 }
 
 // updateFuzzApply parses expr over the fuzz substitutions and applies it to
-// the fuzz item. It checks old is unchanged, the key survives, and the
+// the fuzz item as a write does. It checks the key survives and the
 // UPDATED_NEW property holds.
 func updateFuzzApply(t *testing.T, expr string) {
 	t.Helper()
@@ -86,11 +86,8 @@ func updateFuzzApply(t *testing.T, expr string) {
 	}
 
 	old := updateItem(t, updateFuzzItem)
-	before := updateJSON(t, old)
 
-	updated, err := u.Apply(updateItem(t, updateKey), old)
-	require.Equal(t, before, updateJSON(t, old), "Apply changed the old item")
-
+	updated, err := applyUpdate(t, u, updateItem(t, updateKey), old)
 	if err != nil {
 		return
 	}
@@ -179,21 +176,68 @@ func Test_UpdateExpr_UpdatedNew(t *testing.T) {
 }
 
 // BenchmarkUpdateApply measures Apply by the number of SET actions and the
-// size of the item they update.
+// size of the item they update: the update alone, on an item already decoded,
+// as main measured it. BenchmarkUpdateApplyStored adds the unpack a write does.
 func BenchmarkUpdateApply(b *testing.B) {
+	benchUpdateApplyMatrix(b, func(b *testing.B, u *expression.UpdateExpr, key, old value.Item) {
+		b.Helper()
+
+		var err error
+
+		for b.Loop() {
+			_, err = u.Apply(key, old)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// BenchmarkUpdateApplyStored measures ApplyStored as a write runs it: it
+// unpacks the item stored and applies the update into it, so each op reads the
+// whole item, which Apply's copy of the top-level map does not. The end to end
+// cost is BenchmarkUpdateItem's payload rows.
+func BenchmarkUpdateApplyStored(b *testing.B) {
+	benchUpdateApplyMatrix(b, func(b *testing.B, u *expression.UpdateExpr, key, old value.Item) {
+		b.Helper()
+
+		stored := packItem(b, old)
+		read := func(value.Item) (*expression.UpdateExpr, error) { return u, nil }
+
+		for b.Loop() {
+			_, err := expression.ApplyStored(key, stored, read)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+// benchUpdateApplyMatrix runs apply on each cell: an update of clauses SET
+// actions on an item of a key and a string of the cell's size.
+func benchUpdateApplyMatrix(b *testing.B, apply func(b *testing.B, u *expression.UpdateExpr, key, old value.Item)) {
+	b.Helper()
+
 	for _, clauses := range []int{1, 4, 16} {
 		for _, size := range []struct {
 			name  string
 			bytes int
 		}{{"1KiB", 1 << 10}, {"64KiB", 64 << 10}, {"390KiB", 390 << 10}} {
 			b.Run("clauses="+strconv.Itoa(clauses)+"/item="+size.name, func(b *testing.B) {
-				benchUpdateApply(b, clauses, size.bytes)
+				u := benchUpdateExpr(b, clauses)
+				key := value.Item{"pk": {S: new("k")}}
+				old := value.Item{"pk": {S: new("k")}, "pad": {S: new(strings.Repeat("x", size.bytes))}}
+
+				b.SetBytes(int64(size.bytes))
+				apply(b, u, key, old)
 			})
 		}
 	}
 }
 
-func benchUpdateApply(b *testing.B, clauses, size int) {
+// benchUpdateExpr is an update of clauses SET actions, each of a function and
+// an addition.
+func benchUpdateExpr(b *testing.B, clauses int) *expression.UpdateExpr {
 	b.Helper()
 
 	actions := make([]string, clauses)
@@ -210,15 +254,5 @@ func benchUpdateApply(b *testing.B, clauses, size int) {
 	u, err := expression.ParseUpdate("SET "+strings.Join(actions, ", "), subs, nil)
 	require.NoError(b, err)
 
-	key := value.Item{"pk": {S: new("k")}}
-	old := value.Item{"pk": {S: new("k")}, "pad": {S: new(strings.Repeat("x", size))}}
-
-	b.SetBytes(int64(size))
-
-	for b.Loop() {
-		_, err = u.Apply(key, old)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
+	return u
 }

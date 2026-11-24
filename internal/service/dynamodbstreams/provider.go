@@ -321,6 +321,7 @@ func (p *Provider) GetRecords(ctx context.Context, in *api.GetRecordsInput) (*ap
 	}
 
 	out := &api.GetRecordsOutput{Records: make([]api.Record, len(page.Records))}
+
 	for i := range page.Records {
 		out.Records[i] = record(info, &page.Records[i])
 	}

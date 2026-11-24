@@ -14,12 +14,42 @@ import (
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
-// Event names.
+// Event is the kind of write a record is of. It is one byte so that a Record,
+// which a snapshot copies by the thousand, stays 88 bytes. The zero Event is
+// none of the three.
+type Event uint8
+
+// The events.
 const (
-	Insert = "INSERT"
-	Modify = "MODIFY"
-	Remove = "REMOVE"
+	Insert Event = iota + 1
+	Modify
+	Remove
 )
+
+// eventNames are the names the wire and the snapshot give the events, by
+// Event.
+var eventNames = [...]string{Insert: "INSERT", Modify: "MODIFY", Remove: "REMOVE"}
+
+// String is the event's name as DynamoDB writes it, "" for an Event that is
+// none of the three.
+func (e Event) String() string {
+	if int(e) >= len(eventNames) {
+		return ""
+	}
+
+	return eventNames[e]
+}
+
+// ParseEvent is the Event of name, and false for a name that is none.
+func ParseEvent(name string) (Event, bool) {
+	for _, e := range []Event{Insert, Modify, Remove} {
+		if eventNames[e] == name {
+			return e, true
+		}
+	}
+
+	return 0, false
+}
 
 // Retention is how long a record is kept: 24 hours, as DynamoDB keeps them.
 const Retention = 24 * time.Hour
@@ -44,26 +74,30 @@ var ErrTrimmed = errors.New("stream: position trimmed")
 // lies past its end.
 var ErrPosition = errors.New("stream: no such sequence number")
 
-// Record is one stream record. Keys, New and Old are the engine's immutable
-// items, so a record costs no copy of them; a nil image is one the view type
-// leaves out.
+// Record is one stream record. New and Old are the packed items the table
+// stored: immutable strings that hold only their own bytes, so a record costs
+// no copy of them and pins no other item. The empty Packed is an image the
+// view type leaves out. Keys is the record's own copy of the key attributes: a
+// key read from a packed item shares its bytes and would pin all of them,
+// however small the key.
 type Record struct {
-	Seq   int
-	Event string
-	Keys  value.Item
-	New   value.Item
-	Old   value.Item
+	Seq  int
+	Keys value.Item
+	New  value.Packed
+	Old  value.Packed
 	// SizeBytes is DynamoDB's size of the record, its keys' and images'
 	// ItemSize, which the wire carries and a read's byte limit counts. The
 	// byte bound charges the heap instead (Charge).
 	SizeBytes int64
 	// At is when the write applied.
-	At time.Time
+	At    time.Time
+	Event Event
 	// Expired marks a time-to-live removal, made by the service.
 	Expired bool
 	// charge is what the shard counted for the record against its byte
 	// bound, so trimming it takes back the same. It fills the padding after
-	// Expired, so a Record stays 88 bytes: a snapshot copies every record.
+	// Event and Expired, so a Record stays 88 bytes: a snapshot copies every
+	// record (Test_record_chargeFitsPadding).
 	// It holds Charge up to math.MaxUint32 (4 GiB less a byte); a record
 	// charged more counts that (storedCharge).
 	charge uint32
@@ -72,21 +106,23 @@ type Record struct {
 // storedCharge is a charge as a record keeps it, at most math.MaxUint32. That
 // is past MaxBytes, so a record charged it still trims every older record and
 // is trimmed by the next append, as its whole charge would be
-// (Test_log_saturatedChargeTrims). No record comes near it: the densest item
-// value.MaxItemSize allows, a list of empty strings whose array append has
-// doubled, is charged about 336 bytes an ItemSize byte, so the largest record,
-// keys and two such images, about 394 MiB (Test_charge_largestRecord).
+// (Test_log_saturatedChargeTrims). No record comes near it: an image is a
+// packed item, charged its string's length (value.PackedHeap), and the
+// densest item value.MaxItemSize allows, a list of empty strings, packs to
+// about ten bytes an ItemSize byte, so the largest record, two such images
+// and keys, is about 8 MiB (Test_charge_largestRecord).
 func storedCharge(charge int64) uint32 {
 	return uint32(min(charge, math.MaxUint32)) //nolint:gosec // G115: capped; a heap size is not negative.
 }
 
-// Charge is what r counts against a shard's byte bound: the heap its keys and
-// images take, as value.HeapSize estimates it, and RecordOverhead. It charges
-// each image whole, though an image can be shared: New is the table's item
-// until a later write replaces it, and then the next record's Old. The bound
-// therefore errs toward holding less than it allows.
+// Charge is what r counts against a shard's byte bound: the heap its keys take,
+// as value.HeapSize estimates it, its two packed images' own bytes
+// (value.PackedHeap), and RecordOverhead. It charges each image whole, though
+// an image can be shared: New is the table's item until a later write replaces
+// it, and then the next record's Old. The bound therefore errs toward holding
+// less than it allows.
 func Charge(r *Record) int64 {
-	return value.HeapSize(r.Keys) + value.HeapSize(r.New) + value.HeapSize(r.Old) + RecordOverhead
+	return value.HeapSize(r.Keys) + value.PackedHeap(r.New) + value.PackedHeap(r.Old) + RecordOverhead
 }
 
 // Page is what one Read returns.

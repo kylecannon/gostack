@@ -17,7 +17,9 @@ func scanKeys(t *testing.T, tbl *table.Table, index string) []string {
 
 	var got []string
 
-	require.NoError(t, tbl.Scan(index, nil, func(item value.Item) bool {
+	require.NoError(t, tbl.Scan(index, nil, func(_ string, packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		key := *item["pk"].S + "/" + *item["sk"].N
 		if g, ok := item["g"]; ok {
 			key += " g=" + *g.S
@@ -105,12 +107,14 @@ func Test_Table_ImageHeld(t *testing.T) {
 		img := tbl.ImageHeld()
 		unlock()
 
-		items := img.Items()
+		var got []string
 
-		got := make([]string, 0, len(items))
-		for _, item := range items {
+		require.NoError(t, img.Each(func(packed value.Packed) error {
+			item := value.Unpack(packed)
 			got = append(got, *item["pk"].S+"/"+*item["sk"].N)
-		}
+
+			return nil
+		}))
 
 		return got
 	}
@@ -137,7 +141,14 @@ func Test_Table_ImageHeld(t *testing.T) {
 	put(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
 	remove(t, tbl, value.Item{"pk": s("p1"), "sk": n("1")})
 
-	require.Len(t, img.Items(), len(loadItems()))
+	held := 0
+
+	require.NoError(t, img.Each(func(value.Packed) error {
+		held++
+
+		return nil
+	}))
+	require.Equal(t, len(loadItems()), held)
 	require.Equal(t, keys(), image(), "after writes that add a partition")
 
 	// The order is current (keys() scanned); emptying a partition leaves its
@@ -159,6 +170,39 @@ func Test_Table_ImageHeld(t *testing.T) {
 	require.Equal(t, keys(), got, "ImageHeld first, after a write that adds a partition")
 }
 
+// Test_Table_ImageHeld_putsPartitionsInOrder: an image taken before any Scan
+// has built the partition order holds the partitions in map order, and Each
+// puts them in Scan's order. With 64 partitions, map order is Scan's order by
+// chance about once in 10^89 runs.
+func Test_Table_ImageHeld_putsPartitionsInOrder(t *testing.T) {
+	tbl := composite()
+
+	for i := range 64 {
+		put(t, tbl, value.Item{"pk": s("p" + strconv.Itoa(63-i)), "sk": n(strconv.Itoa(i % 3))})
+	}
+
+	unlock := table.ReadLock(tbl)
+	img := tbl.ImageHeld()
+	unlock()
+
+	var got []string
+
+	require.NoError(t, img.Each(func(packed value.Packed) error {
+		item := value.Unpack(packed)
+		got = append(got, *item["pk"].S+"/"+*item["sk"].N)
+
+		return nil
+	}))
+
+	want := make([]string, 0, len(got))
+	for _, key := range scanKeys(t, tbl, "") {
+		want = append(want, strings.Fields(key)[0])
+	}
+
+	require.Len(t, got, 64)
+	require.Equal(t, want, got)
+}
+
 // Test_Table_Load_hashOnly checks a table without a range key, which Load
 // fills in one pass.
 func Test_Table_Load_hashOnly(t *testing.T) {
@@ -170,7 +214,9 @@ func Test_Table_Load_hashOnly(t *testing.T) {
 
 	var got []string
 
-	require.NoError(t, tbl.Scan("", nil, func(item value.Item) bool {
+	require.NoError(t, tbl.Scan("", nil, func(_ string, packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		got = append(got, *item["pk"].S)
 
 		return true

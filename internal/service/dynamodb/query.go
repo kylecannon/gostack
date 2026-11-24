@@ -53,8 +53,10 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 
 	forward := in.ScanIndexForward == nil || *in.ScanIndexForward
 
-	pg, err := r.read(func(visit func(value.Item) bool) error {
-		return e.data.Range(indexName(r.index), &hash, cond, r.start, forward, visit)
+	pg, err := r.read(func(visit func(string, value.Packed) bool) error {
+		return e.data.Range(indexName(r.index), &hash, cond, r.start, forward, func(stored value.Packed) bool {
+			return visit("", stored)
+		})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -64,7 +66,8 @@ func (p *Provider) Query(ctx context.Context, in *api.QueryInput) (*api.QueryOut
 	out := pg.output(r.selectMode)
 
 	return &api.QueryOutput{
-		Items: out.Items, Count: out.Count, ScannedCount: out.ScannedCount, LastEvaluatedKey: out.LastEvaluatedKey,
+		Items: out.Items, ItemsJSON: out.ItemsJSON, Count: out.Count, ScannedCount: out.ScannedCount,
+		LastEvaluatedKey: out.LastEvaluatedKey,
 		ConsumedCapacity: used.report(in.ReturnConsumedCapacity, r.name),
 	}, nil
 }
@@ -249,7 +252,7 @@ func (r *reader) parseQuery(in *api.QueryInput) (*expression.KeyText, error) {
 		return nil, err
 	}
 
-	r.projection, err = x.projection(in.ProjectionExpression)
+	r.project.projection, err = x.projection(in.ProjectionExpression)
 	if err != nil {
 		return nil, err
 	}

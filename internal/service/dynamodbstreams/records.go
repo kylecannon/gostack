@@ -25,12 +25,16 @@ var (
 	servicePrincipal = "dynamodb.amazonaws.com"
 )
 
-// record is r as GetRecords returns it. The images are the engine's immutable
-// items, so their strings, numbers and binaries are shared, not copied.
+// record is r as GetRecords returns it. The new and old images are stored
+// packed, and the response writes their json as it is (NewImageJSON and
+// OldImageJSON): no decoding and no copy, since a Packed never changes and its
+// bytes stay valid until the response is written. An image the view type
+// leaves out is no Packed and leaves its member out. The keys are stored as an
+// item, which item copies to this API's type.
 func record(info dynamodb.StreamInfo, r *stream.Record) api.Record {
 	out := api.Record{
 		EventID:      new(eventID(info.Shard.Created(), r.Seq)),
-		EventName:    new(r.Event),
+		EventName:    new(r.Event.String()),
 		EventVersion: new(eventVersion),
 		EventSource:  new(eventSource),
 		AwsRegion:    new(info.Region),
@@ -38,8 +42,8 @@ func record(info dynamodb.StreamInfo, r *stream.Record) api.Record {
 			// LocalStack's records carry whole seconds.
 			ApproximateCreationDateTime: &protocol.Time{Time: r.At.Truncate(time.Second)},
 			Keys:                        item(r.Keys),
-			NewImage:                    item(r.New),
-			OldImage:                    item(r.Old),
+			NewImageJSON:                r.New.Encoded(),
+			OldImageJSON:                r.Old.Encoded(),
 			SequenceNumber:              new(info.Shard.SequenceNumber(r.Seq)),
 			SizeBytes:                   new(r.SizeBytes),
 			StreamViewType:              new(info.ViewType),

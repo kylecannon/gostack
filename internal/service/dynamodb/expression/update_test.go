@@ -56,6 +56,31 @@ func updateItem(t *testing.T, s string) value.Item {
 	return item
 }
 
+// packItem packs an item as a table stores it, or "" for none.
+func packItem(tb testing.TB, item value.Item) value.Packed {
+	tb.Helper()
+
+	if item == nil {
+		return ""
+	}
+
+	p, err := value.Pack(item)
+	require.NoError(tb, err)
+
+	return p
+}
+
+// applyUpdate applies u to old as a write does: old is packed as the table
+// stores it, and ApplyStored unpacks it and writes the update into that.
+func applyUpdate(tb testing.TB, u *expression.UpdateExpr, key, old value.Item) (value.Item, error) {
+	tb.Helper()
+
+	//nolint:wrapcheck // the test checks the error itself
+	return expression.ApplyStored(key, packItem(tb, old), func(value.Item) (*expression.UpdateExpr, error) {
+		return u, nil
+	})
+}
+
 // updateSubs builds the substitutions of a test from JSON names and values.
 func updateSubs(t *testing.T, names, values string) expression.Substitutions {
 	t.Helper()

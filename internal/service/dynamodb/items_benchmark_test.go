@@ -159,6 +159,63 @@ func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
 	}
 }
 
+// BenchmarkPutItemConditionFailed is a PutItem whose condition fails on the
+// stored item it would replace, at concurrency 1: PutItem packs the item
+// before it takes the table's lock, so this is what a refused put pays for
+// the item it throws away. Names carry the payload, for example
+//
+//	BenchmarkPutItemConditionFailed/payload=4KiB
+func BenchmarkPutItemConditionFailed(b *testing.B) {
+	for _, payload := range itemPayloads {
+		b.Run("payload="+payload.name, func(b *testing.B) {
+			s := newStack(b)
+			s.ok(b, opCreate, hashTable(benchTable))
+			s.ok(b, opPut, putBody(0, payload.size))
+
+			body := strings.TrimSuffix(putBody(0, payload.size), "}") +
+				`,"ConditionExpression":"attribute_not_exists(id)"}`
+
+			b.SetBytes(int64(payload.size))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				got := s.call(b, usEast1, opPut, body)
+				require.Equal(b, http.StatusBadRequest, got.status, got.body)
+			}
+		})
+	}
+}
+
+// BenchmarkDeleteItem deletes one stored item a call, with ReturnValues NONE
+// or ALL_OLD; the put that stores it again runs with the timer stopped. Names
+// carry the axes, for example
+//
+//	BenchmarkDeleteItem/payload=4KiB/return=ALL_OLD
+func BenchmarkDeleteItem(b *testing.B) {
+	for _, payload := range itemPayloads[:2] {
+		for _, returned := range []string{"NONE", "ALL_OLD"} {
+			b.Run(fmt.Sprintf("payload=%s/return=%s", payload.name, returned), func(b *testing.B) {
+				s := newStack(b)
+				s.ok(b, opCreate, hashTable(benchTable))
+
+				put := putBody(0, payload.size)
+				body := fmt.Sprintf(`{"TableName":%q,"Key":{"id":{"S":"k-0"}},"ReturnValues":%q}`, benchTable, returned)
+
+				b.SetBytes(int64(payload.size))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					b.StopTimer()
+					s.ok(b, opPut, put)
+					b.StartTimer()
+
+					s.ok(b, opDeleteI, body)
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkGetItem(b *testing.B) {
 	itemMatrix(b, func(b *testing.B, s *stack, p itemPayload, workers int) {
 		for worker := range workers {

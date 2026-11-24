@@ -6,159 +6,16 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"slices"
-	"strconv"
 	"unicode/utf8"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
-	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
-// The item codec of the DynamoDB snapshot. Items are most of a snapshot, so
-// they skip json v2's reflection both ways: appendItem writes an item as the
-// wire does, names in order, and itemParser reads one back from the raw value
-// the decoder has already checked for syntax.
-
-// appendItem appends item as a json object, its names in byte order, so the
-// same item always gives the same bytes. names is scratch for the sort.
-func appendItem(dst []byte, item value.Item, names []string) ([]byte, []string) {
-	names = names[:0]
-	for name := range item {
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
-	dst = append(dst, '{')
-
-	for i, name := range names {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-
-		dst = awsjson.AppendQuote(dst, name)
-		dst = append(dst, ':')
-		v := item[name]
-		dst = appendValue(dst, &v)
-	}
-
-	return append(dst, '}'), names
-}
-
-// appendValue appends v as a json object holding each member that is set, in
-// a fixed order. A stored value has exactly one.
-func appendValue(dst []byte, v *api.AttributeValue) []byte {
-	dst = append(dst, '{')
-	start := len(dst)
-	dst = appendScalars(dst, start, v)
-	dst = appendCollections(dst, start, v)
-
-	return append(dst, '}')
-}
-
-// appendMember appends a member's name, after a comma unless it is the first
-// of the object that starts at start.
-func appendMember(dst []byte, start int, name string) []byte {
-	if len(dst) > start {
-		dst = append(dst, ',')
-	}
-
-	dst = append(dst, '"')
-	dst = append(dst, name...)
-
-	return append(dst, '"', ':')
-}
-
-// appendScalars appends the S, N, B, NULL and BOOL members of v that are set.
-func appendScalars(dst []byte, start int, v *api.AttributeValue) []byte {
-	if v.S != nil {
-		dst = awsjson.AppendQuote(appendMember(dst, start, "S"), *v.S)
-	}
-
-	if v.N != nil {
-		dst = awsjson.AppendQuote(appendMember(dst, start, "N"), *v.N)
-	}
-
-	if v.B != nil {
-		dst = appendBytes(appendMember(dst, start, "B"), v.B)
-	}
-
-	if v.NULL != nil {
-		dst = strconv.AppendBool(appendMember(dst, start, "NULL"), *v.NULL)
-	}
-
-	if v.BOOL != nil {
-		dst = strconv.AppendBool(appendMember(dst, start, "BOOL"), *v.BOOL)
-	}
-
-	return dst
-}
-
-// appendCollections appends the SS, NS, BS, M and L members of v that are set.
-func appendCollections(dst []byte, start int, v *api.AttributeValue) []byte {
-	if v.SS != nil {
-		dst = appendStrings(appendMember(dst, start, "SS"), v.SS)
-	}
-
-	if v.NS != nil {
-		dst = appendStrings(appendMember(dst, start, "NS"), v.NS)
-	}
-
-	if v.BS != nil {
-		dst = append(appendMember(dst, start, "BS"), '[')
-
-		for i, b := range v.BS {
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-
-			dst = appendBytes(dst, b)
-		}
-
-		dst = append(dst, ']')
-	}
-
-	if v.M != nil {
-		dst, _ = appendItem(appendMember(dst, start, "M"), v.M, nil)
-	}
-
-	if v.L != nil {
-		dst = append(appendMember(dst, start, "L"), '[')
-
-		for i := range v.L {
-			if i > 0 {
-				dst = append(dst, ',')
-			}
-
-			dst = appendValue(dst, &v.L[i])
-		}
-
-		dst = append(dst, ']')
-	}
-
-	return dst
-}
-
-func appendStrings(dst []byte, list []string) []byte {
-	dst = append(dst, '[')
-
-	for i, s := range list {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-
-		dst = awsjson.AppendQuote(dst, s)
-	}
-
-	return append(dst, ']')
-}
-
-func appendBytes(dst []byte, b []byte) []byte {
-	dst = append(dst, '"')
-	dst = base64.StdEncoding.AppendEncode(dst, b)
-
-	return append(dst, '"')
-}
+// The item reader of the DynamoDB snapshot, for an item value.JSONPacker
+// leaves to it. Items are most of a snapshot, so it skips json v2's
+// reflection: itemParser reads an item from the raw value the decoder has
+// already checked for syntax. value.Orderer writes them.
 
 // maxInterned bounds the attribute names one restore shares between items.
 const maxInterned = 4096

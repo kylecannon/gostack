@@ -4,6 +4,7 @@ package dynamodbstreams
 
 import (
 	"github.com/kylecannon/gostack/internal/protocol"
+	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 )
 
 // AttributeValue is a structure of the dynamodbstreams API.
@@ -137,8 +138,11 @@ type StreamDescription struct {
 type StreamRecord struct {
 	ApproximateCreationDateTime *protocol.Time            `json:"ApproximateCreationDateTime,omitzero"`
 	Keys                        map[string]AttributeValue `json:"Keys,omitzero"`
+	KeysJSON                    awsjson.Encoded           `json:"-"`
 	NewImage                    map[string]AttributeValue `json:"NewImage,omitzero"`
+	NewImageJSON                awsjson.Encoded           `json:"-"`
 	OldImage                    map[string]AttributeValue `json:"OldImage,omitzero"`
+	OldImageJSON                awsjson.Encoded           `json:"-"`
 	SequenceNumber              *string                   `json:"SequenceNumber,omitzero"`
 	SizeBytes                   *int64                    `json:"SizeBytes,omitzero"`
 	StreamViewType              *string                   `json:"StreamViewType,omitzero"`

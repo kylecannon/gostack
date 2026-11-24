@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 
 	"github.com/kylecannon/gostack/internal/protocol"
@@ -79,12 +80,18 @@ func (w *Writer) EncodedMember(s string) {
 	w.buf = append(w.buf, s...)
 }
 
-// Encoded appends v as it is, and null for an empty v.
+// Encoded appends v as it is, and null for an empty v. A buffer too small for
+// v doubles: the values of a list come one after another, and append's growth
+// by a quarter would copy a long list's buffer several times more.
 func (w *Writer) Encoded(v Encoded) {
 	if len(v) == 0 {
 		w.Null()
 
 		return
+	}
+
+	if len(v) > cap(w.buf)-len(w.buf) {
+		w.buf = slices.Grow(w.buf, max(len(v), cap(w.buf)))
 	}
 
 	w.buf = append(w.buf, v...)

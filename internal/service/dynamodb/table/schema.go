@@ -61,19 +61,33 @@ type IndexSpec struct {
 	Projection Projection
 }
 
-// Project returns the attributes of item that the index holds: all of them,
-// or the table's and the index's key attributes and, for ProjectInclude, the
-// listed ones. tableKey is the key schema of the table.
-func (s *IndexSpec) Project(tableKey KeySchema, item value.Item) value.Item {
-	if s.Projection.Type == ProjectAll || s.Projection.Type == "" {
-		return item
-	}
+// HoldsAll reports whether the index holds every attribute of an item.
+func (s *IndexSpec) HoldsAll() bool {
+	return s.Projection.Type == ProjectAll || s.Projection.Type == ""
+}
 
+// Held is the names of the attributes a projecting index holds: the table's
+// and the index's key attributes and, for ProjectInclude, the listed ones.
+// The names may repeat and may be empty. NonKeyAttributes count only for
+// ProjectInclude. It is meaningless when HoldsAll. tableKey is the key schema
+// of the table.
+func (s *IndexSpec) Held(tableKey KeySchema) []string {
 	names := []string{tableKey.Hash.Name, tableKey.Range.Name, s.Key.Hash.Name, s.Key.Range.Name}
 	if s.Projection.Type == ProjectInclude {
 		names = append(names, s.Projection.NonKeyAttributes...)
 	}
 
+	return names
+}
+
+// Project returns the attributes of item that the index holds: all of them,
+// or those Held. tableKey is the key schema of the table.
+func (s *IndexSpec) Project(tableKey KeySchema, item value.Item) value.Item {
+	if s.HoldsAll() {
+		return item
+	}
+
+	names := s.Held(tableKey)
 	out := make(value.Item, len(names))
 
 	for _, name := range names {

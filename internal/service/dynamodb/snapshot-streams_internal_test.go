@@ -23,10 +23,13 @@ func Test_SnapshotStreams_sameBytesAsTheFileType(t *testing.T) {
 	at := time.Date(2026, 11, 20, 10, 0, 0, 123456789, time.UTC)
 	created := at.Add(-time.Hour)
 
+	packed, err := value.Pack(image)
+	require.NoError(t, err)
+
 	records := []stream.Record{
-		{Seq: 1, Event: stream.Insert, Keys: keys, New: image, SizeBytes: 12, At: at},
-		{Seq: 2, Event: stream.Modify, Keys: keys, New: image, Old: image, SizeBytes: 20, At: at.Add(time.Second)},
-		{Seq: 3, Event: stream.Remove, Keys: value.Item{"id": {S: &other}}, Old: image, SizeBytes: 9, At: at, Expired: true},
+		{Seq: 1, Event: stream.Insert, Keys: keys, New: packed, SizeBytes: 12, At: at},
+		{Seq: 2, Event: stream.Modify, Keys: keys, New: packed, Old: packed, SizeBytes: 20, At: at.Add(time.Second)},
+		{Seq: 3, Event: stream.Remove, Keys: value.Item{"id": {S: &other}}, Old: packed, SizeBytes: 9, At: at, Expired: true},
 	}
 	cut := []shardCut{
 		{account: "000000000000", region: "us-west-2", table: "b", created: created, records: records[:1]},
@@ -42,7 +45,7 @@ func Test_SnapshotStreams_sameBytesAsTheFileType(t *testing.T) {
 
 		for _, r := range c.records {
 			saved.Records = append(saved.Records, recordSaved{
-				Seq: r.Seq, Event: r.Event, Keys: r.Keys, New: r.New, Old: r.Old,
+				Seq: r.Seq, Event: r.Event.String(), Keys: r.Keys, New: value.Unpack(r.New), Old: value.Unpack(r.Old),
 				SizeBytes: r.SizeBytes, At: r.At, Expired: r.Expired,
 			})
 		}
@@ -123,4 +126,31 @@ func Test_SnapshotStreams_holdsOneArrayOfTheRecords(t *testing.T) {
 	require.Greater(t, w.samples, 4, "the snapshot is sampled while it writes")
 	require.Less(t, w.peak, base+copySize/2,
 		"peak live heap %d MiB with %d MiB before it, the copy %d MiB", w.peak>>20, base>>20, copySize>>20)
+}
+
+// Test_RestoreStreams_letsGoOfDecodedRecords: once a shard of the restored
+// file is packed or passed over, the file no longer holds its decoded records,
+// so the typed images of every shard are not held at once with the packed ones.
+func Test_RestoreStreams_letsGoOfDecodedRecords(t *testing.T) {
+	id, big := "k", string(make([]byte, 1<<10))
+	image := value.Item{"id": {S: &id}, "big": {S: &big}}
+	at := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+
+	shard := func(table string) shardSaved {
+		return shardSaved{
+			Account: "000000000000", Region: usEast1, Table: table, Created: at,
+			Records: []recordSaved{{Seq: 1, Event: "INSERT", Keys: value.Item{"id": {S: &id}}, New: image, At: at}},
+		}
+	}
+
+	file := streamsFile{Version: snapshotVersion, Shards: []shardSaved{shard("gone"), shard("also-gone")}}
+	p := New(func() Settings { return Settings{} }, nil)
+
+	attach, err := p.packRestored(&file)
+	require.NoError(t, err)
+	require.Empty(t, attach, "a shard whose table is gone takes no records")
+
+	for i := range file.Shards {
+		require.Nil(t, file.Shards[i].Records, "shard %d: the file lets go of the records it decoded", i)
+	}
 }

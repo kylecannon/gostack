@@ -13,6 +13,7 @@ import (
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
 	"github.com/kylecannon/gostack/internal/service/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,7 +114,9 @@ func Test_transact_oppositeOrder(t *testing.T) {
 				return
 			}
 
-			if a, b := *out.Responses[0].Item["v"].N, *out.Responses[1].Item["v"].N; a != b {
+			// A TransactGetItems with no projection answers each item as json.
+			a := *value.UnpackJSON(out.Responses[0].ItemJSON)["v"].N
+			if b := *value.UnpackJSON(out.Responses[1].ItemJSON)["v"].N; a != b {
 				failed <- errors.New("half-written transaction seen: tabB " + a + ", tabA " + b)
 
 				return
@@ -165,7 +168,8 @@ func Test_transact_tokenWindow(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			return *out.Item["v"].N
+			// A request's GetItem answers the stored item as json.
+			return *value.UnpackJSON(out.ItemJSON)["v"].N
 		}
 		mismatch := func(err error) bool {
 			var e *awserr.Error

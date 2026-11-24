@@ -144,14 +144,98 @@ func (g *generator) emitJSONEncoders(p *printer) error {
 		p.blank()
 	}
 
-	for _, st := range g.jsonEncodedStructs() {
+	structs := g.jsonEncodedStructs()
+	values := g.jsonMapValueStructs(structs)
+
+	for _, st := range structs {
 		err := g.emitStructEncoder(p, st)
 		if err != nil {
 			return fmt.Errorf("json encoder of %s: %w", st.goName, err)
 		}
+
+		if values[st.goName] {
+			emitMapValueEncoder(p, st)
+		}
 	}
 
 	return nil
+}
+
+// isMapValueStruct reports whether a map value of shape r is a struct written
+// through its appendJSONMapValue<Struct> function: one that holds a struct of
+// its own type below it, as AttributeValue does. Only there does the range
+// variable escape; any other struct's encoder leaves it on the stack.
+func (g *generator) isMapValueStruct(r ref, encoded []string) bool {
+	if r.shape.Type != spec.TypeStructure || r.shape.Document || slices.Contains(encoded, r.name) {
+		return false
+	}
+
+	st, ok := g.structs[g.goTypeName(r.name)]
+
+	return ok && g.reachesItself(st)
+}
+
+// jsonMapValueStructs names the structs held as map values below structs.
+func (g *generator) jsonMapValueStructs(structs []*structType) map[string]bool {
+	out := map[string]bool{}
+
+	var walk func(r ref, encoded []string)
+	walk = func(r ref, encoded []string) {
+		if r.shape.Document {
+			return
+		}
+
+		switch r.shape.Type {
+		case spec.TypeList:
+			elem, err := resolve(g.p, r.shape.Member)
+			if err == nil {
+				walk(elem, encoded)
+			}
+		case spec.TypeMap:
+			value, err := resolve(g.p, r.shape.Value)
+			if err != nil {
+				return
+			}
+
+			if g.isMapValueStruct(value, encoded) {
+				out[g.goTypeName(value.name)] = true
+			}
+
+			walk(value, encoded)
+		default:
+		}
+	}
+
+	for _, st := range structs {
+		for _, f := range st.fields {
+			if !inJSONBody(st, f) {
+				continue
+			}
+
+			walk(f.pair.p, nil)
+
+			if f.encoded != nil {
+				walk(f.pair.p, g.opts.EncodedShapes)
+			}
+		}
+	}
+
+	return out
+}
+
+// emitMapValueEncoder writes appendJSONMapValue<Struct>, which takes a map value
+// by value. A map's range variable whose address goes to a recursive encoder,
+// as AttributeValue's does through its M member, escapes and costs an
+// allocation per member; a parameter's copy does not. Inlined, the copy would
+// be the range variable again, so the function is never inlined.
+func emitMapValueEncoder(p *printer, st *structType) {
+	p.f("// appendJSONMapValue%s appends v, a map value, as a json object.", st.goName)
+	p.f("//")
+	p.f("//go:noinline")
+	p.f("func appendJSONMapValue%s(w *awsjson.Writer, v %s) {", st.goName, st.goName)
+	p.f("\tappendJSON%s(w, &v)", st.goName)
+	p.f("}")
+	p.blank()
 }
 
 func (g *generator) emitStructEncoder(p *printer, st *structType) error {
@@ -369,9 +453,13 @@ func (g *generator) emitJSONMap(
 	p.f("%s\tw.String(%s)", in, k)
 	p.f("%s\tw.Byte(':')", in)
 
-	err = g.emitJSONValue(p, value, e, siteElement, depth+1, in+"\t", encoded)
-	if err != nil {
-		return err
+	if g.isMapValueStruct(value, encoded) {
+		p.f("%s\tappendJSONMapValue%s(w, %s)", in, g.goTypeName(value.name), e)
+	} else {
+		err = g.emitJSONValue(p, value, e, siteElement, depth+1, in+"\t", encoded)
+		if err != nil {
+			return err
+		}
 	}
 
 	p.f("%s}", in)

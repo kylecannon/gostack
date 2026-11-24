@@ -2,7 +2,6 @@ package dynamodb
 
 import (
 	"context"
-	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
+	"github.com/kylecannon/gostack/internal/service/dynamodb/table"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 )
 
@@ -30,9 +30,6 @@ const (
 	// sweepPeriod is how often the worker sweeps, LocalStack's hour.
 	sweepPeriod = time.Hour
 )
-
-// errNotExpired abandons the removal of an item that is no longer expired.
-var errNotExpired = errors.New("not expired")
 
 // expiry is the sweep timer. timer is nil while none is armed.
 type expiry struct {
@@ -156,9 +153,9 @@ func (s *State) entries() []*tableEntry {
 }
 
 // removeExpired removes the table's items whose time to live attribute is a
-// number at or before threshold, and returns how many it removed. It reads
-// the keys first and removes each through the engine's write path, checking
-// again under the write lock, so an item written since is kept.
+// number at or before threshold, and returns how many it removed. It collects
+// the expired items first and removes each through the engine's write path,
+// checking again under the write lock, so an item written since is kept.
 func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 	e.mu.RLock()
 	attribute, on := ttlAttribute(e.meta.TTL)
@@ -168,13 +165,13 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 		return 0
 	}
 
-	schema := e.data.Key()
+	// The time to live attribute is read in place, and an expired item is
+	// kept as the table stores it, which names its key: nothing is decoded.
+	var found []value.Packed
 
-	var keys []value.Item
-
-	_ = e.data.Scan("", nil, func(item value.Item) bool {
-		if expired(item, attribute, threshold) {
-			keys = append(keys, keyOf(item, schema.Hash.Name, schema.Range.Name))
+	_ = e.data.Scan("", nil, func(_ string, packed value.Packed) bool {
+		if expired(packed, attribute, threshold) {
+			found = append(found, packed)
 		}
 
 		return true
@@ -182,8 +179,8 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 
 	removed := 0
 
-	for _, key := range keys {
-		if e.expire(key, attribute, threshold) {
+	for _, item := range found {
+		if e.expire(item, attribute, threshold) {
 			removed++
 		}
 	}
@@ -191,37 +188,39 @@ func (e *tableEntry) removeExpired(threshold *api.AttributeValue) int {
 	return removed
 }
 
-// expire removes the item at key when it is still expired, and reports
-// whether it did. It is the one place a time to live removal reaches the
-// engine's write path, so the stream record of a removal hangs off it.
-func (e *tableEntry) expire(key value.Item, attribute string, threshold *api.AttributeValue) bool {
-	change, err := e.data.Expire(key, func(old value.Item) (value.Item, error) {
-		if old == nil || !expired(old, attribute, threshold) {
-			return old, errNotExpired
-		}
-
-		return nil, nil //nolint:nilnil // nil deletes, as Write takes it
+// expire removes the item at the key of item when the item stored there now
+// is still expired, and reports whether it did. It is the one place a time to
+// live removal reaches the engine's write path, so the stream record of a
+// removal hangs off it.
+func (e *tableEntry) expire(item value.Packed, attribute string, threshold *api.AttributeValue) bool {
+	return e.data.Expire(item, func(stored value.Packed) bool {
+		return expired(stored, attribute, threshold)
 	})
-
-	return err == nil && change.Old != nil
 }
 
 // expired reports whether the item's attribute is a number at or before
-// threshold, the filter LocalStack's sweep scans with.
-func expired(item value.Item, attribute string, threshold *api.AttributeValue) bool {
-	v, ok := item[attribute]
+// threshold, the filter LocalStack's sweep scans with. It reads the number
+// in place.
+func expired(item value.Packed, attribute string, threshold *api.AttributeValue) bool {
+	n, ok := item.Number(attribute)
 
-	return ok && v.N != nil && value.Compare(&v, threshold) <= 0
+	return ok && expiredNumber(n, threshold)
 }
 
-// keyOf is the key of a stored item.
-func keyOf(item value.Item, hash, rng string) value.Item {
-	key := value.Item{hash: item[hash]}
-	if rng != "" {
-		key[rng] = item[rng]
+// expiredNumber reports whether the number n is at or before threshold.
+func expiredNumber(n string, threshold *api.AttributeValue) bool {
+	v := api.AttributeValue{N: &n}
+
+	return value.Compare(&v, threshold) <= 0
+}
+
+// keyNames is the names of the key attributes of schema.
+func keyNames(schema table.KeySchema) []string {
+	if schema.HasRange() {
+		return []string{schema.Hash.Name, schema.Range.Name}
 	}
 
-	return key
+	return []string{schema.Hash.Name}
 }
 
 // armExpiry arms the sweep timer when DYNAMODB_REMOVE_EXPIRED_ITEMS is set and

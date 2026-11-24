@@ -67,12 +67,17 @@ func (p *Provider) BatchWriteItem(ctx context.Context, in *api.BatchWriteItemInp
 				continue
 			}
 
-			change, err := t.entry.data.Write(w.key, func(value.Item) (value.Item, error) { return w.item, nil })
+			// A delete's item is nil, and so are its bytes.
+			packed := prepack(w.item)
+
+			change, err := t.entry.data.WritePacked(w.key, func(value.Packed) (value.Item, value.Packed, error) {
+				return w.item, packed, nil
+			})
 			if err != nil {
 				return nil, fmt.Errorf("batch write: %w", err)
 			}
 
-			used.on(t.name).add(writeCapacity(t.entry, change.Old, change.New))
+			used.on(t.name).add(writeCapacity(t.entry, change.OldPacked, change.New))
 		}
 	}
 

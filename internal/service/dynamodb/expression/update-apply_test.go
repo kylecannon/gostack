@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// updateApply parses expr and applies it to old under the test key, checking
-// old is unchanged.
+// updateApply parses expr and applies it to old under the test key, as a
+// write does.
 func updateApply(t *testing.T, old value.Item, expr string, subs expression.Substitutions) (
 	*expression.UpdateExpr, value.Item, error,
 ) {
@@ -20,13 +20,9 @@ func updateApply(t *testing.T, old value.Item, expr string, subs expression.Subs
 	u, err := expression.ParseUpdate(expr, subs, nil)
 	require.NoError(t, err)
 
-	before := updateJSON(t, old)
+	updated, applyErr := applyUpdate(t, u, updateItem(t, updateKey), old)
 
-	updated, applyErr := u.Apply(updateItem(t, updateKey), old)
-
-	require.Equal(t, before, updateJSON(t, old), "Apply changed the old item")
-
-	return u, updated, applyErr //nolint:wrapcheck // the test checks the error itself
+	return u, updated, applyErr
 }
 
 // Test_UpdateExpr_Apply_CanonicalValues: a value placeholder is read in

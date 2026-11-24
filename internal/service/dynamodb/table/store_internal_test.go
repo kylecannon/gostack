@@ -18,13 +18,13 @@ func Test_store_walkersSkipADeadKey(t *testing.T) {
 
 	for _, pk := range []string{"a", "b", "c"} {
 		item := value.Item{"pk": str(pk), "g": str("g" + pk)}
-		_, err := tbl.Write(item, func(value.Item) (value.Item, error) { return item, nil })
+		_, err := tbl.Write(item, func(value.Packed) (value.Item, error) { return item, nil })
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, tbl.Scan("", nil, func(value.Item) bool { return true }))
+	require.NoError(t, tbl.Scan("", nil, func(string, value.Packed) bool { return true }))
 
-	_, err := tbl.Write(value.Item{"pk": str("b")}, func(value.Item) (value.Item, error) {
+	_, err := tbl.Write(value.Item{"pk": str("b")}, func(value.Packed) (value.Item, error) {
 		return nil, nil //nolint:nilnil // a nil item is the engine's delete
 	})
 	require.NoError(t, err)
@@ -33,26 +33,25 @@ func Test_store_walkersSkipADeadKey(t *testing.T) {
 	require.Len(t, tbl.primary.order, 3, "the order keeps the emptied partition's key")
 	require.Len(t, tbl.primary.parts, 2)
 
-	pks := func(items []value.Item) []string {
-		got := make([]string, 0, len(items))
-		for _, item := range items {
-			got = append(got, *item["pk"].S)
-		}
-
-		return got
-	}
+	pk := func(packed value.Packed) string { return *value.Unpack(packed)["pk"].S }
 
 	tbl.mu.RLock()
 	img := tbl.ImageHeld()
 	tbl.mu.RUnlock()
-	require.Equal(t, []string{"a", "c"}, pks(img.Items()), "ImageHeld")
 
-	var scanned []value.Item
-	require.NoError(t, tbl.Scan("", nil, func(item value.Item) bool {
-		scanned = append(scanned, item)
+	var imaged []string
+	require.NoError(t, img.Each(func(packed value.Packed) error {
+		imaged = append(imaged, pk(packed))
+		return nil
+	}))
+	require.Equal(t, []string{"a", "c"}, imaged, "ImageHeld")
+
+	var scanned []string
+	require.NoError(t, tbl.Scan("", nil, func(_ string, packed value.Packed) bool {
+		scanned = append(scanned, pk(packed))
 		return true
 	}))
-	require.Equal(t, []string{"a", "c"}, pks(scanned), "Scan")
+	require.Equal(t, []string{"a", "c"}, scanned, "Scan")
 
 	require.NotPanics(t, func() {
 		tbl.AddIndex(IndexSpec{

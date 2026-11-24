@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"unsafe"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
@@ -55,7 +56,7 @@ func put(t *testing.T, tbl *table.Table, item value.Item) table.Change {
 
 	require.NoError(t, value.ValidateItem(item))
 
-	change, err := tbl.Write(item, func(value.Item) (value.Item, error) { return item, nil })
+	change, err := tbl.Write(item, func(value.Packed) (value.Item, error) { return item, nil })
 	require.NoError(t, err)
 
 	return change
@@ -64,7 +65,7 @@ func put(t *testing.T, tbl *table.Table, item value.Item) table.Change {
 func remove(t *testing.T, tbl *table.Table, key value.Item) table.Change {
 	t.Helper()
 
-	change, err := tbl.Write(key, func(value.Item) (value.Item, error) {
+	change, err := tbl.Write(key, func(value.Packed) (value.Item, error) {
 		return nil, nil //nolint:nilnil // a nil item is the engine's delete
 	})
 	require.NoError(t, err)
@@ -80,7 +81,9 @@ func keysOf(
 
 	var got []string
 
-	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(item value.Item) bool {
+	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		got = append(got, *item["pk"].S+"/"+*item["sk"].N)
 
 		return true
@@ -102,13 +105,13 @@ func Test_Table_indexesFollowOverwriteAndDelete(t *testing.T) {
 
 	// Overwrite a/1 with another g and no l: it leaves both old index entries.
 	change := put(t, tbl, value.Item{"pk": s("a"), "sk": n("1.0"), "g": s("y")})
-	assert.Equal(t, "x", *change.Old["g"].S)
+	assert.Equal(t, "x", *value.Unpack(change.OldPacked)["g"].S)
 	assert.Equal(t, []string{keyA2}, keysOf(t, tbl, "byG", s("x"), table.SortCondition{}, nil, true))
 	assert.Equal(t, []string{keyA1}, keysOf(t, tbl, "byG", s("y"), table.SortCondition{}, nil, true))
 	assert.Empty(t, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
 
 	change = remove(t, tbl, value.Item{"pk": s("a"), "sk": n("2")})
-	assert.NotNil(t, change.Old)
+	assert.NotEmpty(t, change.OldPacked)
 	assert.Nil(t, change.New)
 	assert.Empty(t, keysOf(t, tbl, "byG", s("x"), table.SortCondition{}, nil, true))
 
@@ -201,7 +204,9 @@ func Test_Table_Range_beginsWith(t *testing.T) {
 
 	prefix := table.SortCondition{Op: table.SortBeginsWith, Values: []api.AttributeValue{s("ab")}}
 	require.NoError(t, tbl.Range("", new(s("p")), prefix, nil, true,
-		func(item value.Item) bool {
+		func(packed value.Packed) bool {
+			item := value.Unpack(packed)
+
 			got = append(got, *item["sk"].S)
 
 			return true
@@ -219,7 +224,7 @@ func Test_Table_Range_indexStartKey(t *testing.T) {
 	assert.Equal(t, []string{"p/2", "p/3"}, keysOf(t, tbl, "byG", s("same"), table.SortCondition{}, start, true),
 		"items sharing an index key are ordered by table key")
 
-	err := tbl.Range("nope", new(s("p")), table.SortCondition{}, nil, true, func(value.Item) bool { return true })
+	err := tbl.Range("nope", new(s("p")), table.SortCondition{}, nil, true, func(value.Packed) bool { return true })
 	require.ErrorIs(t, err, table.ErrNoIndex)
 }
 
@@ -234,7 +239,9 @@ func Test_Table_Scan(t *testing.T) {
 	scan := func(start value.Item, limit int) []string {
 		var got []string
 
-		require.NoError(t, tbl.Scan("", start, func(item value.Item) bool {
+		require.NoError(t, tbl.Scan("", start, func(_ string, packed value.Packed) bool {
+			item := value.Unpack(packed)
+
 			got = append(got, *item["pk"].S+"/"+*item["sk"].N)
 
 			return len(got) < limit
@@ -282,7 +289,7 @@ func Test_Table_AddIndex_afterDeleteEmptiesPartition(t *testing.T) {
 
 	put(t, tbl, value.Item{"pk": s("a"), "q": s("x")})
 	put(t, tbl, value.Item{"pk": s("b"), "q": s("y")})
-	require.NoError(t, tbl.Scan("", nil, func(value.Item) bool { return true }))
+	require.NoError(t, tbl.Scan("", nil, func(string, value.Packed) bool { return true }))
 	remove(t, tbl, value.Item{"pk": s("a")})
 
 	require.NotPanics(t, func() {
@@ -302,24 +309,98 @@ func Test_Table_Write_decideError(t *testing.T) {
 	put(t, tbl, value.Item{"pk": s("a"), "sk": n("1")})
 
 	refused := errors.New("refused")
-	change, err := tbl.Write(value.Item{"pk": s("a"), "sk": n("1")}, func(value.Item) (value.Item, error) {
+	change, err := tbl.Write(value.Item{"pk": s("a"), "sk": n("1")}, func(value.Packed) (value.Item, error) {
 		return nil, refused
 	})
 
 	require.ErrorIs(t, err, refused)
-	assert.NotNil(t, change.Old)
+	assert.NotEmpty(t, change.OldPacked)
 	assert.NotNil(t, tbl.Get(value.Item{"pk": s("a"), "sk": n("1")}), "a refused write stores nothing")
 }
 
-func Test_Change_Changed(t *testing.T) {
-	item := value.Item{"pk": s("a")}
-	same := value.Item{"pk": s("a")}
-	other := value.Item{"pk": s("a"), "x": n("1")}
+// Test_Table_WritePacked: bytes a decide returns with its item are stored as
+// they are, the very string, and its index entries read their keys from them;
+// a decide that returns "" with its item has the write pack that item, and a
+// delete stores nothing whatever bytes come with it.
+func Test_Table_WritePacked(t *testing.T) {
+	item := value.Item{"pk": s("a"), "sk": n("1"), "g": s("x"), "l": s("y"), "v": s("pre")}
+	other := value.Item{"pk": s("a"), "sk": n("1"), "g": s("x"), "l": s("y"), "v": s("decided")}
+	key := value.Item{"pk": s("a"), "sk": n("1")}
 
-	assert.False(t, table.Change{Old: item, New: same}.Changed())
-	assert.True(t, table.Change{Old: item, New: other}.Changed())
+	pre, err := value.Pack(item)
+	require.NoError(t, err)
+
+	want, err := value.Pack(other)
+	require.NoError(t, err)
+
+	t.Run("prepacked", func(t *testing.T) {
+		tbl := composite()
+
+		change, err := tbl.WritePacked(item, func(value.Packed) (value.Item, value.Packed, error) {
+			return item, pre, nil
+		})
+		require.NoError(t, err)
+
+		stored := tbl.GetPacked(key)
+		require.Equal(t, pre, stored)
+		assert.Same(t, unsafe.StringData(string(pre)), unsafe.StringData(string(stored)),
+			"the bytes decide returned are stored, not packed again")
+		assert.Equal(t, pre, change.NewPacked)
+		assert.Equal(t, item, change.New)
+		assert.Equal(t, []string{"a/1"}, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
+	})
+
+	t.Run("packedHere", func(t *testing.T) {
+		tbl := composite()
+
+		change, err := tbl.WritePacked(item, func(value.Packed) (value.Item, value.Packed, error) {
+			return other, "", nil
+		})
+		require.NoError(t, err)
+
+		// Pack writes an item's names in map order, so the item packed again
+		// is compared with its names in byte order.
+		stored := tbl.GetPacked(key)
+		require.Equal(t, ordered(want), ordered(stored), "the decided item is packed, not the request's")
+		assert.Equal(t, want.Size(), stored.Size())
+		assert.Len(t, stored, len(want))
+		assert.Equal(t, stored, change.NewPacked)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		tbl := composite()
+		put(t, tbl, item)
+
+		change, err := tbl.WritePacked(key, func(value.Packed) (value.Item, value.Packed, error) {
+			return nil, pre, nil
+		})
+		require.NoError(t, err)
+
+		assert.Empty(t, tbl.GetPacked(key))
+		assert.Empty(t, change.NewPacked)
+		assert.Empty(t, keysOf(t, tbl, "byL", s("a"), table.SortCondition{}, nil, true))
+	})
+}
+
+// ordered is the json of p with every map's names in byte order.
+func ordered(p value.Packed) string {
+	var o value.Orderer
+
+	return string(o.Append(nil, p))
+}
+
+func Test_Change_Changed(t *testing.T) {
+	item := value.Item{"pk": s("a"), "m": {M: value.Item{"x": n("1"), "y": s("b")}}}
+	same := value.Item{"pk": s("a"), "m": {M: value.Item{"y": s("b"), "x": n("1")}}}
+	other := value.Item{"pk": s("a"), "m": {M: value.Item{"x": n("2"), "y": s("b")}}}
+
+	packed, err := value.Pack(item)
+	require.NoError(t, err)
+
+	assert.False(t, table.Change{OldPacked: packed, New: same}.Changed())
+	assert.True(t, table.Change{OldPacked: packed, New: other}.Changed())
 	assert.True(t, table.Change{New: item}.Changed())
-	assert.True(t, table.Change{Old: item}.Changed())
+	assert.True(t, table.Change{OldPacked: packed}.Changed())
 	assert.False(t, table.Change{}.Changed())
 }
 
@@ -436,7 +517,7 @@ func Test_Lock_overlappingTables(t *testing.T) {
 
 			for _, tbl := range []*table.Table{a, b} {
 				item := value.Item{"pk": s("k"), "sk": n(strconv.Itoa(i))}
-				_, err := tbl.WriteHeld(item, func(value.Item) (value.Item, error) { return item, nil })
+				_, err := tbl.WriteHeld(item, func(value.Packed) (value.Item, error) { return item, nil })
 				assert.NoError(t, err)
 			}
 		})
@@ -460,4 +541,10 @@ func Test_IndexSpec_Project(t *testing.T) {
 
 	spec.Projection = table.Projection{Type: table.ProjectKeysOnly}
 	assert.Equal(t, value.Item{"pk": s("a"), "g": s("b")}, spec.Project(key, item))
+
+	// NonKeyAttributes count for INCLUDE alone.
+	spec.Projection = table.Projection{Type: table.ProjectKeysOnly, NonKeyAttributes: []string{"x"}}
+	assert.Equal(t, value.Item{"pk": s("a"), "g": s("b")}, spec.Project(key, item))
+	assert.NotContains(t, spec.Held(key), "x")
+	assert.False(t, spec.HoldsAll())
 }

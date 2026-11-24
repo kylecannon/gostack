@@ -101,7 +101,9 @@ func rangeKeys(
 	got := []api.AttributeValue{}
 	hash := sortHash(index)
 
-	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(item value.Item) bool {
+	require.NoError(t, tbl.Range(index, &hash, cond, start, forward, func(packed value.Packed) bool {
+		item := value.Unpack(packed)
+
 		got = append(got, item["sk"])
 
 		return true

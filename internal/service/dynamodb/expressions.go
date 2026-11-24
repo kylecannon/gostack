@@ -44,6 +44,9 @@ type origin struct {
 	// the ANDs that joined them. The image counts them toward the 300 of the
 	// WHERE (SQ-454).
 	unwritten int
+	// shape is, for a SELECT of paths below the top level, how the read takes
+	// them from each item its projection keeps (reader.projected).
+	shape *selectShape
 }
 
 // fromStatement is the origin of a PartiQL statement; the zero origin is a
@@ -63,6 +66,15 @@ func forStatement(ctx context.Context) context.Context {
 func withUnwritten(ctx context.Context, operators int) context.Context {
 	from := originOf(ctx)
 	from.unwritten = operators
+
+	return context.WithValue(ctx, originKey{}, from)
+}
+
+// withShape marks ctx, which forStatement has marked, with how a SELECT takes
+// its paths from each item (origin.shape).
+func withShape(ctx context.Context, shape *selectShape) context.Context {
+	from := originOf(ctx)
+	from.shape = shape
 
 	return context.WithValue(ctx, originKey{}, from)
 }
@@ -301,16 +313,25 @@ func capacities(m map[string]float64) map[string]api.Capacity {
 // Local counts it: the table's units on the larger image, and on each index
 // whose entry the write changed, the larger projected image when the item
 // keeps its index key, both when it moves, and the one there is when it
-// enters or leaves the index.
-func writeCapacity(e *tableEntry, old, updated value.Item) consumption {
+// enters or leaves the index. old is the item as the table stored it, "" for
+// none.
+func writeCapacity(e *tableEntry, old value.Packed, updated value.Item) consumption {
 	return indexedWriteCapacity(e.data.Key(), e.indexSpecs(), old, updated)
 }
 
 // indexedWriteCapacity is writeCapacity on a table with key schema key and
 // the indexes specs, for a caller that holds the table's lock and so cannot
-// take the entry's.
-func indexedWriteCapacity(key table.KeySchema, specs []table.IndexSpec, old, updated value.Item) consumption {
-	c := consumption{table: writeUnits(old, updated)}
+// take the entry's. The table's units read only the old item's size; the
+// old item is unpacked only for a table with indexes, whose units read its
+// attributes.
+func indexedWriteCapacity(key table.KeySchema, specs []table.IndexSpec, packed value.Packed, updated value.Item,
+) consumption {
+	c := consumption{table: sizeUnits(max(packed.Size(), value.ItemSize(updated)))}
+	if len(specs) == 0 {
+		return c
+	}
+
+	old := value.Unpack(packed)
 
 	for _, spec := range specs {
 		oldIn, newIn := inIndex(&spec, old), inIndex(&spec, updated)

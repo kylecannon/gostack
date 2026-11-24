@@ -48,9 +48,8 @@ const (
 // tree. It never reads a type at run time. Where the layout leaves a range,
 // such as a slice's size class, it takes the top of it. A map's capacity it
 // cannot see: it takes what insertion or a hint near the length leaves, so a
-// map made with a larger hint, such as UpdateItem's at the small-map
-// boundary, or one that shrank, can hold a few hundred bytes more than
-// counted. It is not DynamoDB's size, which ItemSize is.
+// map made with a larger hint, or one that shrank, can hold a few hundred
+// bytes more than counted. It is not DynamoDB's size, which ItemSize is.
 func HeapSize(item Item) int64 {
 	if item == nil {
 		return 0
@@ -136,6 +135,13 @@ func setHeap(v *api.AttributeValue) int {
 	}
 
 	return total
+}
+
+// PackedHeap is the heap a packed item takes: its one string, rounded up as
+// the allocator rounds it, 0 for no item. Where HeapSize estimates a decoded
+// item from its tree, a packed one is a single allocation of a known length.
+func PackedHeap(p Packed) int64 {
+	return int64(allocBytes(len(p)))
 }
 
 // allocBytes is at least what an allocation of n bytes takes once its size

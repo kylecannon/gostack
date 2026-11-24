@@ -2,6 +2,7 @@ package dynamodb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -131,7 +132,10 @@ type txAction struct {
 	name  string
 	entry *tableEntry
 	// key locates the item: Put's whole item, or the others' key.
-	key       value.Item
+	key value.Item
+	// packed is Put's item packed before the tables' locks are taken, ""
+	// for the other actions.
+	packed    value.Packed
 	update    *expression.UpdateExpr
 	condition expression.Condition
 	returnOld bool
@@ -142,8 +146,14 @@ type txAction struct {
 
 // txResult is what one action does once every condition holds.
 type txResult struct {
-	old, new value.Item
-	write    bool
+	// old is the item stored as the table stores it, "" for none: an update
+	// writes into the item it unpacked, so the item undo puts back, and the
+	// capacity counted, are read from here.
+	old value.Packed
+	new value.Item
+	// packed is new packed, when a put packed it before the locks, or "".
+	packed value.Packed
+	write  bool
 }
 
 // TransactWriteItems applies up to 100 puts, updates, deletes and condition
@@ -188,6 +198,12 @@ func (p *Provider) runTransaction(
 	engines := make([]*table.Table, len(actions))
 	for i, a := range actions {
 		engines[i] = a.entry.data
+
+		// A put stores its item as it is, so it is packed here, before
+		// the locks. One whose key cancels the transaction is not.
+		if a.op == opPut && a.keyMismatch == "" {
+			a.packed = prepack(a.key)
+		}
 	}
 
 	// A transaction without a token still drops the expired ones, so they
@@ -259,7 +275,9 @@ func applyTransaction(actions []*txAction) ([]txResult, error) {
 			continue
 		}
 
-		_, err := a.entry.data.WriteHeld(a.key, func(value.Item) (value.Item, error) { return results[i].new, nil })
+		_, err := a.entry.data.WriteHeldPacked(a.key, func(value.Packed) (value.Item, value.Packed, error) {
+			return results[i].new, results[i].packed, nil
+		})
 		if err != nil {
 			undo(actions[:i], results)
 
@@ -276,8 +294,8 @@ func applyTransaction(actions []*txAction) ([]txResult, error) {
 func undo(actions []*txAction, results []txResult) {
 	for i, a := range slices.Backward(actions) {
 		if results[i].write {
-			_, _ = a.entry.data.WriteHeld(a.key, func(value.Item) (value.Item, error) {
-				return results[i].old, nil
+			_, _ = a.entry.data.WriteHeld(a.key, func(value.Packed) (value.Item, error) {
+				return value.Unpack(results[i].old), nil
 			})
 		}
 	}
@@ -291,33 +309,26 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 		return cancellation(reasonValidation, a.keyMismatch, nil), txResult{}, nil
 	}
 
-	old := a.entry.data.GetHeld(a.key)
-	result := txResult{old: old}
+	stored := a.entry.data.GetHeldPacked(a.key)
+	result := txResult{old: stored}
 
-	if a.condition != nil {
-		ok, err := a.condition.Eval(old)
-		if err != nil {
-			return api.CancellationReason{}, txResult{}, fmt.Errorf("condition: %w", err)
-		}
-
-		if !ok {
-			return a.conditionFailed(old), result, nil
-		}
+	updated, failed, err := a.against(stored)
+	if err != nil {
+		return api.CancellationReason{}, txResult{}, err
 	}
+
+	if failed != nil {
+		return *failed, result, nil
+	}
+
+	result.new = updated
 
 	switch a.op {
 	case opConditionCheck:
 		return cancellation(reasonNone, "", nil), result, nil
 	case opPut:
-		result.new = a.key
-	case opUpdate:
-		updated, err := applyUpdate(a.update, a.key, old)
-		if err != nil {
-			return api.CancellationReason{}, txResult{}, err
-		}
-
-		result.new = updated
-	default: // opDelete stores nothing.
+		result.new, result.packed = a.key, a.packed
+	default: // opUpdate has its item; opDelete stores nothing.
 	}
 
 	if result.new != nil {
@@ -337,6 +348,75 @@ func (a *txAction) decide() (api.CancellationReason, txResult, error) {
 	result.write = true
 
 	return cancellation(reasonNone, "", nil), result, nil
+}
+
+// against evaluates the action against stored, the item stored at its key:
+// the item an update writes, or the reason the action fails with when its
+// condition does not hold. Only an update or a condition unpacks stored.
+func (a *txAction) against(stored value.Packed) (value.Item, *api.CancellationReason, error) {
+	if a.op == opUpdate {
+		return a.applyUpdate(stored)
+	}
+
+	if a.condition == nil {
+		return nil, nil, nil
+	}
+
+	reason, holds, err := a.check(value.Unpack(stored))
+	if err != nil || holds {
+		return nil, nil, err
+	}
+
+	return nil, &reason, nil
+}
+
+// errTxConditionFailed stops an update action whose condition does not hold
+// before the update writes; applyUpdate answers it as the action's reason.
+var errTxConditionFailed = errors.New("condition failed")
+
+// applyUpdate is the item an update action writes, or the reason it fails
+// with when its condition does not hold. The item stored is unpacked once,
+// for the condition and the update that read it, and the update writes into
+// it.
+func (a *txAction) applyUpdate(stored value.Packed) (value.Item, *api.CancellationReason, error) {
+	var failed api.CancellationReason
+
+	updated, err := expression.ApplyStored(a.key, stored, func(old value.Item) (*expression.UpdateExpr, error) {
+		reason, holds, err := a.check(old)
+		if err == nil && !holds {
+			failed, err = reason, errTxConditionFailed
+		}
+
+		return a.update, err
+	})
+	if errors.Is(err, errTxConditionFailed) {
+		return nil, &failed, nil
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("update: %w", err)
+	}
+
+	return updated, nil, nil
+}
+
+// check evaluates the action's condition, if it has one, on old, the item
+// stored: whether it holds, and the reason the action fails with when not.
+func (a *txAction) check(old value.Item) (api.CancellationReason, bool, error) {
+	if a.condition == nil {
+		return api.CancellationReason{}, true, nil
+	}
+
+	ok, err := a.condition.Eval(old)
+	if err != nil {
+		return api.CancellationReason{}, false, fmt.Errorf("condition: %w", err)
+	}
+
+	if !ok {
+		return a.conditionFailed(old), false, nil
+	}
+
+	return api.CancellationReason{}, true, nil
 }
 
 // conditionFailed is the reason of an action whose condition does not hold:
@@ -393,8 +473,8 @@ func transactCapacity(actions []*txAction, results []txResult) tableConsumption 
 
 		switch {
 		case a.op == opConditionCheck:
-			used.on(a.name).table += transactUnits * readUnits(value.ItemSize(r.old), new(true))
-		case a.op == opDelete && r.old == nil:
+			used.on(a.name).table += transactUnits * readUnits(r.old.Size(), new(true))
+		case a.op == opDelete && r.old == "":
 			used.on(a.name).table++
 		default:
 			c := indexedWriteCapacity(a.entry.data.Key(), a.entry.data.IndexesHeld(), r.old, r.new)

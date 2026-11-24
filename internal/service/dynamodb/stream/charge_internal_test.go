@@ -2,6 +2,7 @@ package stream
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -14,12 +15,12 @@ import (
 // recordFields is Record without its charge.
 type recordFields struct {
 	Seq       int
-	Event     string
 	Keys      value.Item
-	New       value.Item
-	Old       value.Item
+	New       value.Packed
+	Old       value.Packed
 	SizeBytes int64
 	At        time.Time
+	Event     Event
 	Expired   bool
 }
 
@@ -29,6 +30,7 @@ type recordFields struct {
 func Test_record_chargeFitsPadding(t *testing.T) {
 	require.Equal(t, unsafe.Sizeof(recordFields{}), unsafe.Sizeof(Record{}),
 		"a Record is as large as its fields without the charge")
+	require.EqualValues(t, 88, unsafe.Sizeof(Record{}), "a Record stays 88 bytes")
 }
 
 // Test_storedCharge_saturates: a record keeps its charge up to
@@ -69,13 +71,12 @@ func Test_log_saturatedChargeTrims(t *testing.T) {
 }
 
 // Test_charge_largestRecord: the largest charge a stored item can bring is far
-// below where storedCharge saturates. The most heap an item holds for each
-// byte of its ItemSize is a list of empty strings or of empty maps, each
-// element counted a byte or four but pinning a list slot and a pointer or a
-// map; the list's array is taken at twice its length, the most append leaves
-// it. A record is its keys and at most two images, each at most
-// value.MaxItemSize, and the keys are part of an image, so three such images
-// bound it.
+// below where storedCharge saturates. An image is a packed item, charged its
+// string's length, so the most it holds for each byte of its ItemSize is a
+// list of empty strings or of empty maps, each element counted a byte or four
+// but packed as an object of its own (`{"S":""}`). A record is its keys and
+// at most two images, each at most value.MaxItemSize; the keys are the
+// table's key attributes, at most 2048 bytes of hash key and 1024 of range.
 func Test_charge_largestRecord(t *testing.T) {
 	const elements = 1 << 12
 
@@ -85,17 +86,24 @@ func Test_charge_largestRecord(t *testing.T) {
 		"empty maps":    func() api.AttributeValue { return api.AttributeValue{M: map[string]api.AttributeValue{}} },
 	}
 
+	hash, rng := strings.Repeat("h", 2048), strings.Repeat("r", 1024)
+	keys := value.Item{"h": {S: &hash}, "r": {S: &rng}}
+
 	for name, element := range dense {
-		list := make([]api.AttributeValue, elements, 2*elements)
+		list := make([]api.AttributeValue, elements)
 		for i := range list {
 			list[i] = element()
 		}
 
 		item := value.Item{"l": {L: list}}
-		perByte := float64(value.HeapSize(item)) / float64(value.ItemSize(item))
-		largest := int64(3*perByte*value.MaxItemSize) + RecordOverhead
 
-		t.Logf("%s: %.1f heap bytes an ItemSize byte, largest record charge %d (%.0f MiB)",
+		packed, err := value.Pack(item)
+		require.NoError(t, err)
+
+		perByte := float64(value.PackedHeap(packed)) / float64(value.ItemSize(item))
+		largest := int64(2*perByte*value.MaxItemSize) + value.HeapSize(keys) + RecordOverhead
+
+		t.Logf("%s: %.1f packed bytes an ItemSize byte, largest record charge %d (%.1f MiB)",
 			name, perByte, largest, float64(largest)/(1<<20))
 		require.Less(t, largest, int64(math.MaxUint32)/8, "a record's charge stays far below saturation")
 	}
