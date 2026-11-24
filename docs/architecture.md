@@ -1008,14 +1008,17 @@ written by hand.
   (SQ-455). rest-json and error bodies still go through v2.
 - **Pre-encoded values:** a json service's `EncodedShapes` option in
   `codegen/cmd/gostack-codegen/config.go` names shapes whose values a
-  response can carry already encoded; DynamoDB names `AttributeMap`. Every
+  response can carry already encoded; DynamoDB and DynamoDB Streams name
+`AttributeMap`. Every
   member of a struct below an output whose shape is one of them, or a list or
   map that holds one, gets a sibling field, its name with `JSON` appended and
   tagged `json:"-"`, of the same list and map structure with
   `awsjson.Encoded` (`[]byte`) in place of each encoded value:
   `GetItemOutput.ItemJSON awsjson.Encoded`, `QueryOutput.ItemsJSON` and
   `ScanOutput.ItemsJSON []awsjson.Encoded`,
-  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`. The
+  `BatchGetItemOutput.ResponsesJSON map[string][]awsjson.Encoded`, and
+  DynamoDB Streams' `StreamRecord.NewImageJSON`, `OldImageJSON` and
+  `KeysJSON`, of which GetRecords sets the first two. The
   generated encoder writes the sibling in place of the member when it is set
   (a list or map when not nil, a single value when not empty) and the member
   otherwise; each `awsjson.Encoded` is appended to the response buffer as it
@@ -1257,9 +1260,11 @@ stream as a `StreamInfo` whose shard is the read side of `stream.Log`
 the records' snapshot (`StreamSnapshotter`), which `PERSIST_DYNAMODBSTREAMS`
 saves under DynamoDB Streams' own name. Beside `dynamodb` the service imports
 two of DynamoDB's packages: `dynamodb/stream` for the `Record` and `Page` a read
-returns and the errors it names, and `dynamodb/value` for the `Decoder` that
-reads the `Packed` images of a record into the `Item` a response writes, and
-the `ValidationException` both services answer alike. DynamoDB Streams keeps no
+returns and the errors it names, and `dynamodb/value` for the `Packed` images of
+a record, which GetRecords writes as they are stored (`StreamRecord.NewImageJSON`
+and `OldImageJSON`, pre-encoded values, with no decoding), and the
+`ValidationException` both services answer alike. A record's keys are stored as
+an `Item` and go through the typed `Keys`. DynamoDB Streams keeps no
 state of its own: its iterators carry their position, issue time and shard.
 Each shard keeps records for 24 hours, on a timer armed only while it holds
 records, and at most 256 MiB of them, oldest trimmed first. The bound counts

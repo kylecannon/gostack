@@ -25,12 +25,13 @@ var (
 	servicePrincipal = "dynamodb.amazonaws.com"
 )
 
-// record is r as GetRecords returns it. Its images are decoded by dec, which
-// shares allocations between the records of one read. Each image is decoded
-// into the map dec reuses and copied out by item before the next is decoded,
-// so the response holds no map of dec's; the values it holds share dec's
-// strings, which stay valid after Release.
-func record(info dynamodb.StreamInfo, r *stream.Record, dec *value.Decoder) api.Record {
+// record is r as GetRecords returns it. The new and old images are stored
+// packed, and the response writes their json as it is (NewImageJSON and
+// OldImageJSON): no decoding and no copy, since a Packed never changes and its
+// bytes stay valid until the response is written. An image the view type
+// leaves out is no Packed and leaves its member out. The keys are stored as an
+// item, which item copies to this API's type.
+func record(info dynamodb.StreamInfo, r *stream.Record) api.Record {
 	out := api.Record{
 		EventID:      new(eventID(info.Shard.Created(), r.Seq)),
 		EventName:    new(r.Event.String()),
@@ -41,8 +42,8 @@ func record(info dynamodb.StreamInfo, r *stream.Record, dec *value.Decoder) api.
 			// LocalStack's records carry whole seconds.
 			ApproximateCreationDateTime: &protocol.Time{Time: r.At.Truncate(time.Second)},
 			Keys:                        item(r.Keys),
-			NewImage:                    item(dec.View(r.New, nil)),
-			OldImage:                    item(dec.View(r.Old, nil)),
+			NewImageJSON:                r.New.Encoded(),
+			OldImageJSON:                r.Old.Encoded(),
 			SequenceNumber:              new(info.Shard.SequenceNumber(r.Seq)),
 			SizeBytes:                   new(r.SizeBytes),
 			StreamViewType:              new(info.ViewType),

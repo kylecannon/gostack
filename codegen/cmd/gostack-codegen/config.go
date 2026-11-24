@@ -140,7 +140,11 @@ var serviceTable = map[string]serviceOptions{
 			"UpdateKinesisStreamingConfiguration.ApproximateCreationDateTimePrecision": checkEnum,
 		}},
 	},
-	"dynamodbstreams": {},
+	"dynamodbstreams": {
+		// A record's images are stored packed, and GetRecords writes them
+		// straight from their json: StreamRecord's NewImage, OldImage and Keys.
+		EncodedShapes: []string{"AttributeMap"},
+	},
 	// test_sns.py's platform-application and message-attribute snapshots
 	// answer ValidationError, the query form of the code.
 	"sns": {Validation: &validation{
