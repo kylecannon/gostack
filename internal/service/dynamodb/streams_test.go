@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/kylecannon/gostack/internal/request"
+	"github.com/kylecannon/gostack/internal/service/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/stream"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
 	"github.com/stretchr/testify/require"
@@ -182,7 +184,13 @@ func Test_stream_loadsMainSnapshot(t *testing.T) {
 	streams, err := os.ReadFile("testdata/snapshot-main-streams.streams.json")
 	require.NoError(t, err)
 
+	// The file's records were written at 2026-11-23T09:54Z, and a record past
+	// the 24-hour retention reads as trimmed, so the clock stays a minute past
+	// them however long after that the test runs.
+	written := time.Date(2026, time.November, 23, 9, 55, 0, 0, time.UTC)
+
 	s := newStack(t)
+	dynamodb.SetClock(s.provider, func() time.Time { return written })
 	require.NoError(t, s.provider.Restore(bytes.NewReader(tables)))
 	require.NoError(t, s.provider.RestoreStreams(bytes.NewReader(streams)))
 
