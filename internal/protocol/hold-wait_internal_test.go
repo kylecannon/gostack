@@ -75,17 +75,16 @@ func Test_DecodeHold_NoHoldAndWait(t *testing.T) {
 }
 
 // Test_BodyMeter_UnknownLengthBurstServed: a burst of bodies that state no
-// length, more than the bound holds at once, is served in the order it
-// arrives: each body is admitted in one step with the room its decoding is
-// planned to hold, so no body holds part of the bound while it waits for more,
-// and its decoding finds its room paid.
+// length, more than the bound holds at once, is served: each step a body takes
+// leaves every body being read a safe way to its claim, so none waits on bytes
+// only a body behind it could give back, and its decoding finds its room paid.
 func Test_BodyMeter_UnknownLengthBurstServed(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, DefaultInFlight, DefaultBodyWait)
 
 	const (
-		// Each body is admitted alone, so the burst takes about 64 bodies
-		// times 17 reads a millisecond apart, well within the wait.
+		// At worst one body is read at a time, so the burst takes about 64
+		// bodies times 17 reads a millisecond apart, well within the wait.
 		size   = 1<<20 + 64
 		bodies = 64
 	)
@@ -133,6 +132,139 @@ func Test_BodyMeter_UnknownLengthBurstServed(t *testing.T) {
 	assertQueuesEmpty(t)
 }
 
+// pipedBody is a metered, armed body that states no length, read by ReadBody on
+// its own goroutine from what the test writes to w. done gets ReadBody's error.
+type pipedBody struct {
+	charge *Charge
+	w      *io.PipeWriter
+	done   chan error
+}
+
+func newPipedBody(t *testing.T) *pipedBody {
+	t.Helper()
+
+	r, w := io.Pipe()
+	c := new(Charge)
+	ctx := WithCharge(t.Context(), c)
+	m := NewBodyMeter(ctx, r, -1)
+	require.NotNil(t, m)
+	c.Meter(m)
+	ArmBody(ctx)
+
+	b := &pipedBody{charge: c, w: w, done: make(chan error, 1)}
+
+	go func() {
+		_, err := ReadBody(m, -1)
+		b.done <- err
+	}()
+
+	t.Cleanup(func() { _ = w.Close() })
+
+	return b
+}
+
+func (b *pipedBody) write(t *testing.T, n int) {
+	t.Helper()
+
+	_, err := b.w.Write(make([]byte, n))
+	require.NoError(t, err)
+}
+
+// poolState reads what the pool's lock guards, for a test that waits on it.
+func poolState[T any](read func(p *bodyPool) T) T {
+	pool := inFlight.Load()
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	return read(pool)
+}
+
+// Test_BodyMeter_SlowUnknownLengthHoldsWhatItRead: bodies of unknown length
+// still arriving hold what they have read, in steps, not the most they may
+// hold, so a body that states its length and fits beside them is admitted at
+// once. Were each admitted as the largest body it may be with its decode
+// room, the second would wait for the first to end and the third and the
+// stated body behind it, so the stated body would be throttled.
+func Test_BodyMeter_SlowUnknownLengthHoldsWhatItRead(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, 200*time.Millisecond)
+
+	slow := make([]*pipedBody, 3)
+	for i := range slow {
+		slow[i] = newPipedBody(t)
+		slow[i].write(t, 100<<10)
+	}
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.growers) }) == len(slow)
+	}, 2*time.Second, time.Millisecond, "every slow body holds a step")
+
+	_, held := InFlight()
+	assert.LessOrEqual(t, held, int64(len(slow)*(256<<10)), "each holds a step near what it read")
+
+	m, ctx := meteredBody(t, 1<<20, 1<<20)
+	_, err := ReadBody(m, 1<<20)
+	require.NoError(t, err, "a stated body that fits beside the slow ones is admitted at once")
+	ReleaseBody(ctx)
+
+	for _, b := range slow {
+		b.write(t, 1)
+		require.NoError(t, b.w.Close())
+		require.NoError(t, <-b.done)
+		b.charge.Release()
+	}
+
+	_, held = InFlight()
+	assert.Zero(t, held, "every request gives back all it held")
+	assertQueuesEmpty(t)
+}
+
+// Test_BodyPool_OldestBodyStepsFirst: a younger body of unknown length whose
+// next step would leave the oldest one no way to its claim waits, though the
+// bound has room for it, and the oldest body's steps are granted ahead of it.
+// So the oldest reaches its end, and the younger one is served after it. Were
+// the oldest body's steps queued behind the younger one's, each would wait on
+// the other until the wait ended.
+func Test_BodyPool_OldestBodyStepsFirst(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, 2*time.Second)
+
+	older := newPipedBody(t)
+	older.write(t, 1<<20)
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.growers) }) == 1
+	}, 2*time.Second, time.Millisecond)
+
+	// The younger body's step to 8 MiB, with 16 MiB of decode room, would
+	// leave less than the older body still needs to reach its claim.
+	younger := newPipedBody(t)
+	younger.write(t, 4<<20+1)
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.steps) }) == 1
+	}, 2*time.Second, time.Millisecond, "the younger body's step waits")
+
+	bound, held := InFlight()
+	assert.Less(t, held+8<<20+16<<20, bound, "it waits for a safe order, not for room")
+	assert.True(t, BodiesWait(0), "a step that waits on safety counts as waiting")
+
+	older.write(t, 15<<20)
+	require.NoError(t, older.w.Close())
+	require.NoError(t, <-older.done, "the older body reaches its end")
+
+	older.charge.Release()
+
+	younger.write(t, 12<<20-1)
+	require.NoError(t, younger.w.Close())
+	require.NoError(t, <-younger.done, "the younger body is served after it")
+	younger.charge.Release()
+
+	_, held = InFlight()
+	assert.Zero(t, held, "every request gives back all it held")
+	assertQueuesEmpty(t)
+}
+
 // slowReader reads at most 64 KiB at a time and yields between reads, as a
 // body arriving in chunks does, so bodies read in step with one another.
 type slowReader struct {
@@ -152,6 +284,8 @@ func assertQueuesEmpty(t *testing.T) {
 	pool.mu.Lock()
 	defer pool.mu.Unlock()
 
+	assert.Empty(t, pool.steps)
 	assert.Empty(t, pool.growing)
 	assert.Empty(t, pool.starting)
+	assert.Empty(t, pool.growers)
 }
