@@ -236,7 +236,7 @@ func (p *Provider) executeSelect(
 
 // selectShape is how the read of a SELECT of paths below the top level takes
 // them from each item: it decodes the parts sel names, and puts each path
-// under its alias (shapeItem).
+// under its alias (shapeSelected).
 type selectShape struct {
 	sel   *value.Selection
 	paths []partiql.Path
@@ -583,24 +583,69 @@ func wholePaths(paths []partiql.Path, r *render) *string {
 }
 
 // shapeItem puts each projected path of item under its alias; with no paths,
-// the item is as read.
+// the item is as read. A long list is counted against the item (heldPaths) to
+// size the result, which suits an item that holds all that its source gave: an
+// index's part of a stored item.
 func shapeItem(item value.Item, paths []partiql.Path) value.Item {
 	if item == nil || paths == nil {
 		return item
 	}
 
-	// A short list names mostly what the item holds, so the result is sized
-	// for it, and a map that grows instead costs a narrow SELECT an allocation
-	// and 204 bytes an item (SQ-452). Most of a long list names nothing the item
-	// holds, and a map sized for it costs every item the list's length
-	// (SQ-412), so a long list is counted against the item first and the map
-	// sized for what it holds: no more than the list's length, and a map that
-	// grows from small to that costs 21% more (SQ-456).
 	size := len(paths)
 	if size > shapeHintMax {
 		size = heldPaths(item, paths)
 	}
 
+	return shapeInto(item, paths, size)
+}
+
+// shapeSelected is shapeItem for an item the read decoded with only the parts
+// the paths name (Decoder.ViewSelect). What the decoder kept bounds what the
+// paths can hold, so a long list sizes the result from it (keptMembers) and
+// each path is looked up once, in shapeInto.
+func shapeSelected(item value.Item, paths []partiql.Path) value.Item {
+	if item == nil || paths == nil {
+		return item
+	}
+
+	size := len(paths)
+	if size > shapeHintMax {
+		size = min(size, keptMembers(item))
+	}
+
+	return shapeInto(item, paths, size)
+}
+
+// keptMembers is how many values the paths of a SELECT can take from item,
+// which the read decoded with only the parts they name: each member of a map,
+// which the decoder kept for a path, and one for any other value. It is a bound
+// and not a count: a value a path takes whole counts its members, which the
+// result holds once, and a list counts one for however many elements its paths
+// cut it at.
+func keptMembers(item value.Item) int {
+	n := 0
+
+	for _, v := range item {
+		if v.M != nil {
+			n += len(v.M)
+		} else {
+			n++
+		}
+	}
+
+	return n
+}
+
+// shapeInto is the result of a SELECT of paths for item, in a map made for size
+// entries.
+//
+// A short list names mostly what the item holds, so the result is sized for
+// it, and a map that grows instead costs a narrow SELECT an allocation and 204
+// bytes an item (SQ-452). Most of a long list names nothing the item holds, and
+// a map sized for it costs every item the list's length (SQ-412), so the caller
+// sizes the map for what the item holds: no more than the list's length, and a
+// map that grows from small to that costs 21% more (SQ-456).
+func shapeInto(item value.Item, paths []partiql.Path, size int) value.Item {
 	out := make(value.Item, size)
 
 	var cuts cutPaths
