@@ -129,16 +129,19 @@ func applySplicing(
 func spliceInto(
 	stored value.Packed, names []string, item value.Item, oldSize int, worth func(cost, stored int) bool,
 ) (value.Packed, error) {
+	// The cost is settled before values is made: a map of large values holds
+	// each in an allocation of its own, which an update left to pack would
+	// make for nothing.
+	if !worth(oldSize+attrsSize(item, names), stored.Size()) {
+		return "", nil
+	}
+
 	values := make(value.Item, len(names))
 
 	for _, name := range names {
 		if v, ok := item[name]; ok {
 			values[name] = v
 		}
-	}
-
-	if !worth(oldSize+attrsSize(values, names), stored.Size()) {
-		return "", nil
 	}
 
 	packed, err := value.Splice(stored, names, values)

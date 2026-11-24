@@ -94,7 +94,9 @@ func spliceJoin(h packHeader, body string, names []string, added string) Packed 
 	// added's and a comma.
 	var out strings.Builder
 
-	out.Grow(headerLen(h.size, h.scalars, h.attrs) + len(body) + len(added) + len(","))
+	grown := headerLen(h.size, h.scalars, h.attrs) + len(body) + len(added) + len(",")
+
+	out.Grow(grown)
 	out.Write(appendHeader(header[:0], h.size, h.scalars, h.attrs))
 	out.WriteByte('{')
 
@@ -112,7 +114,10 @@ func spliceJoin(h packHeader, body string, names []string, added string) Packed 
 
 	// The buffer is the Packed unless it is left holding much more than the
 	// item, as when a large attribute was removed or replaced by a small one.
-	if out.Cap()-out.Len() > out.Len()/packSlack {
+	// The slack is counted from what was asked for, as Pack counts it: the
+	// runtime rounds a large allocation up to whole pages, which Cap reports,
+	// and a 64 KiB item would be copied a second time for that rounding.
+	if grown-out.Len() > out.Len()/packSlack {
 		return Packed(strings.Clone(out.String()))
 	}
 
