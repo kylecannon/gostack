@@ -388,16 +388,17 @@ func (zeros) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// fillInFlight takes the whole in-flight bound with two bodies at the cap, so a
+// fillInFlight takes the whole in-flight bound with a body at the cap that
+// states no length, which is admitted with the room for its decoding, so a
 // body longer than protocol.FreeBody waits wait for room and is throttled. The
-// bound, the wait and the charges are given back when the test ends.
+// bound, the wait and the charge are given back when the test ends.
 func fillInFlight(t *testing.T, wait time.Duration) {
 	t.Helper()
 
-	protocol.SetInFlight(1) // raised to the least it may be: two bodies at the cap
+	protocol.SetInFlight(1) // raised to the least it may be: a body at the cap and its decoding
 	protocol.SetBodyWait(wait)
 
-	var charges [2]protocol.Charge
+	var charges [1]protocol.Charge
 
 	for i := range charges {
 		ctx := protocol.WithCharge(context.Background(), &charges[i])

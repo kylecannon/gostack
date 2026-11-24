@@ -184,9 +184,12 @@ func SetBodyWait(wait time.Duration) {
 }
 
 // bodyPool is a weighted semaphore of bytes. Waiters are served in order, a
-// body that already holds some of the pool ahead of one that holds none, so
-// that bodies part way through their read finish and give their bytes back
-// instead of waiting on bodies that have not started.
+// request that already holds some of the pool ahead of one that holds none, so
+// that requests part way through finish and give their bytes back instead of
+// waiting on bodies that have not started. Nothing waits for more while it
+// keeps what it holds of the pool: a body is charged in one step (admit), and
+// a decoding that needs more gives back what it holds and waits for all of it
+// (regrow). So no two requests can each wait for the bytes the other holds.
 type bodyPool struct {
 	mu       sync.Mutex
 	capacity int64
@@ -215,6 +218,40 @@ func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) e
 	w := &bodyWaiter{n: n, ready: make(chan struct{})}
 	*queue = append(*queue, w)
 	p.mu.Unlock()
+
+	return p.wait(ctx, w, queue)
+}
+
+// regrow makes what a holder of held bytes holds want bytes, want more than
+// held: at once when no one waits ahead of it and the room is there, and
+// otherwise it gives held back and waits in p.growing for all of want, in the
+// order the growing waiters came. The give-back and the joining happen under
+// one lock, so a body that arrives meanwhile cannot take the bytes given back.
+// On ErrBusy the holder holds nothing.
+func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
+	p.mu.Lock()
+
+	if len(p.growing) == 0 && p.used+want-held <= p.capacity {
+		p.used += want - held
+		p.mu.Unlock()
+
+		return nil
+	}
+
+	p.used -= held
+	w := &bodyWaiter{n: want, ready: make(chan struct{})}
+	p.growing = append(p.growing, w)
+	p.grant()
+	p.mu.Unlock()
+
+	return p.wait(ctx, w, &p.growing)
+}
+
+// wait waits for w, in queue, to be granted, until ctx ends or the body wait
+// (SetBodyWait) passes; then it takes w out of queue, or gives back what it
+// was granted as it gave up, and fails with ErrBusy.
+func (p *bodyPool) wait(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
+	n := w.n
 
 	timer := time.NewTimer(time.Duration(bodyWait.Load()))
 	defer timer.Stop()
@@ -279,10 +316,10 @@ func removeWaiter(queue []*bodyWaiter, w *bodyWaiter) []*bodyWaiter {
 // once something that buffers the body (ReadRequest, rest.CapBody) arms it
 // through the request's context (ArmBody), however the body has been wrapped
 // since. Reading a body that is streamed (an S3 object) leaves it unarmed, so
-// it is never charged. It charges the length the body states, or what has been
-// read in steps that double when it states none, up to its share of the bound
-// (bodyShare), and holds it until Release. A BodyMeter is read and released on
-// the request's own goroutine.
+// it is never charged. It charges the length the body states, or its share of
+// the bound (bodyShare) when it states none until its end shows what it read,
+// and holds it until Release. A BodyMeter is read and released on the
+// request's own goroutine.
 type BodyMeter struct {
 	body   io.ReadCloser
 	ctx    context.Context //nolint:containedctx // the request's, for the wait while it is read
@@ -300,6 +337,9 @@ type BodyMeter struct {
 	// (Charge.Meter), which the room planned is charged to.
 	plan   int64
 	decode *DecodeHold
+	// prepaid is the room a body of unknown length was admitted with for its
+	// decoding, which trim cuts to what it read.
+	prepaid int64
 
 	// deadline sets the connection's read deadline (IdleBy); timed is whether
 	// one is set now.
@@ -335,9 +375,10 @@ func (p *bodyPool) bodyShare() int64 {
 // Read reads the body and, once the meter is armed, charges it past FreeBody.
 // A body that states its length is charged all of it at once, the first time
 // it reads past FreeBody, together with the room its decoding is planned to
-// hold (admit). One that states none is charged in steps that double, and at
-// its end keeps only what it read. When the bound leaves no room before the
-// wait ends, it gives back what the body held and fails with ErrBusy.
+// hold (admit). One that states none is charged as the largest body it may be,
+// and at its end keeps only what it read and the room planned for that (trim).
+// When the bound leaves no room before the wait ends, it holds nothing and
+// fails with ErrBusy.
 func (m *BodyMeter) Read(p []byte) (int, error) {
 	if m.err != nil {
 		return 0, m.err
@@ -382,10 +423,7 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 	}
 
 	if errors.Is(err, io.EOF) && m.held > m.read {
-		// A body of unknown length was charged up to twice what it read;
-		// what it holds from here on is what it read.
-		m.pool.release(m.held - m.read)
-		m.held = m.read
+		m.trim()
 	}
 
 	return n, err
@@ -423,6 +461,22 @@ func (m *BodyMeter) IdleBy(set func(time.Time) error) {
 	m.deadline = set
 }
 
+// trim makes a body of unknown length, at its end, hold what it read, and the
+// room planned for its decoding what a body that stated that length is
+// admitted with, unless decoding has charged more of it already.
+func (m *BodyMeter) trim() {
+	release := m.held - m.read
+	m.held = m.read
+
+	if m.prepaid > 0 && m.decode.held == m.prepaid {
+		room := min(decodeRoom(m.pool, m.plan*m.read+FreeBody), m.prepaid)
+		release += m.prepaid - room
+		m.decode.held, m.prepaid = room, room
+	}
+
+	m.pool.release(release)
+}
+
 // idle sets the read deadline for the next read, when IdleBy gave a way to.
 func (m *BodyMeter) idle() {
 	idle := time.Duration(bodyIdle.Load())
@@ -448,47 +502,33 @@ func (m *BodyMeter) clearDeadline() {
 // charge charges n more bytes read, as Read describes.
 func (m *BodyMeter) charge(n int64) error {
 	m.read += n
-	if m.read <= FreeBody || m.read <= m.held || m.held >= m.most {
+	if m.read <= FreeBody || m.held > 0 {
 		return nil
 	}
 
-	if m.held == 0 && m.length > 0 {
-		return m.admit()
-	}
-
-	const growth = 2
-
-	queue := &m.pool.starting
-	if m.held > 0 {
-		queue = &m.pool.growing
-	}
-
-	want := min(max(growth*m.held, m.read, growth*FreeBody), m.most)
-
-	busy := m.pool.acquire(m.ctx, want-m.held, queue)
-	if busy != nil {
-		m.Release()
-		m.err = busy
-
-		return busy
-	}
-
-	m.held = want
-
-	return nil
+	return m.admit()
 }
 
-// admit charges a body that states its length all of it, and the room its
-// decoding is planned to hold (DecodeHold.planned), in one step, in the order
-// bodies arrive: a body that holds part of the bound never waits for more while
-// others hold the rest, whether for its own bytes or for decoding them. A body
-// over MaxBody is refused once read, so nothing is planned for its decoding.
+// admit charges a body, the first time it reads past FreeBody, all it may
+// hold, and the room its decoding is planned to hold (DecodeHold.planned), in
+// one step, in the order bodies arrive: a body that holds part of the bound
+// never waits for more while others hold the rest, whether for its own bytes
+// or for decoding them. A body that states its length may hold that length;
+// one that states none may hold its share of the bound (bodyShare), and keeps
+// at its end only what it read and the room planned for that (trim). A body
+// that states a length over MaxBody is refused once read, so nothing is
+// planned for its decoding.
 func (m *BodyMeter) admit() error {
-	want := min(max(m.length, m.read), m.most)
+	length, legal := m.length, m.length < m.most
+	if length < 0 {
+		length, legal = m.most, true
+	}
+
+	want := min(max(length, m.read), m.most)
 
 	var room int64
-	if m.decode != nil && m.length < m.most {
-		room = m.decode.planned(m.pool, m.plan*m.length+FreeBody)
+	if m.decode != nil && legal {
+		room = m.decode.planned(m.pool, m.plan*length+FreeBody)
 	}
 
 	busy := m.pool.acquire(m.ctx, want+room, &m.pool.starting)
@@ -501,6 +541,10 @@ func (m *BodyMeter) admit() error {
 
 	m.held = want
 	m.decode.prepaid(m.pool, room)
+
+	if m.length < 0 {
+		m.prepaid = room
+	}
 
 	return nil
 }
