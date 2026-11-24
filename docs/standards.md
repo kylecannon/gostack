@@ -313,7 +313,7 @@ gone, and on the disk at the smallest counts only
 `BenchmarkSavePending100`, `1000` and `10000`, one benchmark each so the
 bench workflow can place them in separate shards). Untimed setup counts
 against the shard as much as the timed loop: these keep their engines and
-assets across iterations, so one run takes 1.3 to 1.8 s on a 4 CPU Linux
+assets across iterations, so one run takes 1.3 to 1.9 s on a 4 CPU Linux
 container, where rebuilding them each iteration took 18 to 34 s for 0.6 s
 timed. A benchmark whose one
 operation is a one-time cost, such as a key generation or a process start,

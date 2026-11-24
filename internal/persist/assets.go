@@ -389,14 +389,8 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	dir := blobsDir + "/" + id[:2]
 	path := dir + "/" + id
 
-	// The id is known as committed before its file is in blobs, so a sweep that
-	// lists the file also finds the id and keeps it. After a failed sync a
-	// sweep removes nothing until a restart, so the id is not tracked.
 	a.mu.Lock()
-	tracked := a.failed == nil
-	if tracked {
-		a.committed[id] = struct{}{}
-	}
+	a.trackLocked(id)
 	a.mu.Unlock()
 
 	err = a.root.Rename(tmp, path)
@@ -414,19 +408,35 @@ func (a *Assets) commit(f *os.File, tmp string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	a.pendLocked(id)
+
+	return id, nil
+}
+
+// trackLocked records id as committed before its file is renamed into blobs,
+// so a sweep that lists the file also finds the id and keeps it. After a failed
+// sync a sweep removes nothing until a restart, so the id is not tracked. The
+// caller holds mu.
+func (a *Assets) trackLocked(id string) {
+	if a.failed == nil {
+		a.committed[id] = struct{}{}
+	}
+}
+
+// pendLocked leaves id, whose file is in blobs, for the next save: fresh unless
+// a save is under way, and unsynced. After a failed sync no save syncs again,
+// so the id is only fresh, which lets Remove delete it at once: no snapshot on
+// disk can name it. The caller holds mu.
+func (a *Assets) pendLocked(id string) {
 	if !a.saving {
 		a.fresh[id] = struct{}{}
 	}
 
-	// After a failed sync no save syncs again, so the id is only fresh, which
-	// lets Remove delete it at once: no snapshot on disk can name it.
 	if a.failed == nil {
 		a.unsynced[id] = struct{}{}
 	} else {
 		delete(a.committed, id)
 	}
-
-	return id, nil
 }
 
 // sync makes every asset committed and not yet synced durable, with its

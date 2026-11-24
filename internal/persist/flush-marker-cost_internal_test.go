@@ -14,7 +14,11 @@ import (
 // The tests here pin what the abandoned-save marker costs a flush that is in
 // time (SQ-461): PR #56's benchmark gate read two more allocations per flush
 // for the allowance, seven for the deadline's AfterFunc and the run's map, and
-// ten for a lstat of the marker, on a save of 157 allocations.
+// ten for a lstat of the marker, on a save of 157 allocations
+// (BenchmarkSavePendingAssets100, which timed an engine's first save on a
+// runner; the 174 it read is 10.83% more). Its successor,
+// BenchmarkSavePending100, times later saves: 156 allocations in a 4 CPU
+// linux/arm64 container, where a first save takes 160.
 
 // markerPath returns where the marker of the service "svc" is in dir.
 func markerPath(dir string) string {
