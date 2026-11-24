@@ -411,7 +411,10 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 		w.Raw(`,"ApproximateCreationDateTime":`)
 		w.Time(v.ApproximateCreationDateTime)
 	}
-	if v.Keys != nil {
+	if len(v.KeysJSON) != 0 {
+		w.EncodedMember(`,"Keys":`)
+		w.Encoded(v.KeysJSON)
+	} else if v.Keys != nil {
 		w.Raw(`,"Keys":`)
 		w.Byte('{')
 		first0 := true
@@ -426,7 +429,10 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 		}
 		w.Byte('}')
 	}
-	if v.NewImage != nil {
+	if len(v.NewImageJSON) != 0 {
+		w.EncodedMember(`,"NewImage":`)
+		w.Encoded(v.NewImageJSON)
+	} else if v.NewImage != nil {
 		w.Raw(`,"NewImage":`)
 		w.Byte('{')
 		first0 := true
@@ -441,7 +447,10 @@ func appendJSONStreamRecord(w *awsjson.Writer, v *StreamRecord) {
 		}
 		w.Byte('}')
 	}
-	if v.OldImage != nil {
+	if len(v.OldImageJSON) != 0 {
+		w.EncodedMember(`,"OldImage":`)
+		w.Encoded(v.OldImageJSON)
+	} else if v.OldImage != nil {
 		w.Raw(`,"OldImage":`)
 		w.Byte('{')
 		first0 := true
