@@ -309,9 +309,13 @@ covered by the widest cell that is under the limit. A cell whose time is a
 fixed floor of the disk, such as the syncfs that ends a save of pending assets,
 cannot be made smaller: it runs on a memory filesystem, where the floor is
 gone, and on the disk at the smallest counts only
-(`BenchmarkSavePendingAssetsDisk`, with the memory filesystem counts in
-`BenchmarkSavePendingAssets100`, `1000` and `10000`, one benchmark each so the
-bench workflow can place them in separate shards). A benchmark whose one
+(`BenchmarkSavePendingDisk`, with the memory filesystem counts in
+`BenchmarkSavePending100`, `1000` and `10000`, one benchmark each so the
+bench workflow can place them in separate shards). Untimed setup counts
+against the shard as much as the timed loop: these keep their engines and
+assets across iterations, so one run takes 1.3 to 1.9 s on a 4 CPU Linux
+container, where rebuilding them each iteration took 18 to 34 s for 0.6 s
+timed. A benchmark whose one
 operation is a one-time cost, such as a key generation or a process start,
 cannot be sized to it and does not belong in the micro benchmarks. The cell's
 own comment names the cells left out and the time an operation took (or the
