@@ -2278,8 +2278,8 @@ is untouched.
   (`Test_Engine_FlushMarksAContextWithNoDeadlineThatEndsWithADeadlineCause`). No
   caller in the tree ends one so, since shutdown's context has a deadline and a
   request's ends `Canceled`. Each round of such a flush has the whole budget.
-  `BenchmarkSavePendingAssets/pending=100/fs=tmpfs` (named `pending=100` when
-  it ran on the disk) on
+  `BenchmarkSavePendingAssets100/pending=100/fs=tmpfs` (before the tmpfs counts
+  became benchmarks of their own, `BenchmarkSavePendingAssets/pending=100`) on
   tmpfs, which takes `syncfs`, saves in 157 allocations a flush, as without the
   marker; the first version of the marker took 174, and PR #56's benchmark gate
   read the 10.83% (`Test_Engine_FlushInTimeArmsNothingForAContextWithNoDeadline`).

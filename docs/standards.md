@@ -309,7 +309,9 @@ covered by the widest cell that is under the limit. A cell whose time is a
 fixed floor of the disk, such as the syncfs that ends a save of pending assets,
 cannot be made smaller: it runs on a memory filesystem, where the floor is
 gone, and on the disk at the smallest counts only
-(`BenchmarkSavePendingAssets`). A benchmark whose one
+(`BenchmarkSavePendingAssets`, with the memory filesystem counts in
+`BenchmarkSavePendingAssets100`, `1000` and `10000`, one benchmark each so the
+bench workflow can give each its own shard). A benchmark whose one
 operation is a one-time cost, such as a key generation or a process start,
 cannot be sized to it and does not belong in the micro benchmarks. The cell's
 own comment names the cells left out and the time an operation took (or the
