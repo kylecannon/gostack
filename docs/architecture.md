@@ -391,9 +391,18 @@ How each piece is bounded, and why this way:
   twice) plus `FreeBody` for structure; a query form plans nothing, since its
   pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
   dense with elements, charges the rest in steps as it decodes. A body of
-  unknown length (chunked or gzip) is charged in doubling steps of what has
-  arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
-  ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  unknown length (chunked or gzip) holds only what has arrived: it is charged
+  in doubling steps, as `ReadBody`'s buffers grow, each with the decode room
+  planned for that much, and keeps only what it read and the room planned for
+  that once it ends. Its claim is the most it may hold: its share and the room
+  planned for that. A step is granted only when every body of unknown length
+  still being read could reach its claim in the order the bodies were admitted,
+  counting what every other request holds as given back once it ends, so the
+  oldest can always finish; its steps wait ahead of younger bodies' steps, which
+  wait ahead of decodings that grow, which wait ahead of new bodies. A body
+  that reaches its end never waits for decode room while it holds its bytes. A
+  younger body of unknown length behind older ones still arriving grows to
+  about 16 MiB beside them, then waits for them to end. A waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
   throttling error. net/http notices a client that went away only once the
   body has been read, so a waiter whose client left keeps its place, holding
@@ -894,11 +903,24 @@ memory.
   other json body over about 5 MiB is throttled while it does; four such query
   clients hold the whole pool. A client that states 16 MiB and sends one byte
   holds nothing.
-- Bodies of unknown length grow in doubling steps, and decoding past its plan
-  (rest-xml as it decodes, a dense json body once) in 1 MiB steps, so many of
-  them at once can each hold part of the pool and wait to grow until the
-  oldest waiters give up at 5 s, which answers them in waves of the wait.
-  Bodies that state their length and decode within their plan do not: 128
+- Nothing bounds how long a body may take to arrive other than the idle
+  timeout between its bytes: the server sets `ReadHeaderTimeout` and no
+  `ReadTimeout`. A client that sends one byte every idle period keeps what it
+  holds for as long as it keeps sending. A body of unknown length holds only
+  what it has read, but while it is read, a younger body of unknown length
+  grows only to about 16 MiB beside it. A minimum rate or a total body
+  deadline would change what clients are answered, so it is a separate
+  decision.
+- Decoding past its plan grows in 1 MiB steps while it keeps what it decoded
+  (rest-xml as it decodes), so many such decodings at once can each hold part
+  of the pool and wait to grow until the oldest waiters give up at 5 s, which
+  answers them in waves of the wait. A decoding that has decoded nothing yet
+  gives back its room while it waits (a dense json body), and a body of
+  unknown length grows only in steps that leave every such body a way to its
+  end: 128 chunked or gzip 1 MiB `SendMessage` calls sent at once are all
+  served in about 0.4 s, and 64 chunked 16 MiB ones are all read and answered
+  in about 1.5 s. Bodies that state their length and decode within their plan
+  never wait while they hold part of the pool: 128
   legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
   served, and so are as many as fill the pool when they all decode at the same
   moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
