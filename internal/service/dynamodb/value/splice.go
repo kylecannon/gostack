@@ -20,6 +20,10 @@ import (
 // no stored item, and stored itself when names reach no attribute it holds
 // and values is empty. The error is Pack's, for a string in values that is
 // not valid UTF-8.
+//
+// A splice is not always cheaper than Pack: it decodes the old values of
+// names and encodes values. When to splice and when to pack is decided by
+// spliceWorth in expression/update-apply.go, which counts both.
 func Splice(stored Packed, names []string, values Item) (Packed, error) {
 	if stored == "" {
 		return "", nil

@@ -48,41 +48,47 @@ type updateFinal func(parent *api.AttributeValue, el PathElement) error
 func ApplyStored(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (value.Item, error) {
-	item, _, err := applyToStored(key, stored, read)
+	item, u, err := readStored(key, stored, read)
+	if err != nil || u == nil {
+		return item, err
+	}
 
-	return item, err
+	return u.applyStored(key, item)
 }
 
 // ApplyStoredPacked is ApplyStored that also returns the new item packed, as
 // value.Pack packs it: the stored item with the attributes the update wrote
-// spliced in (value.Splice), so the attributes it left are copied and not
-// encoded again. The packed item is "" when nothing was stored, or when the
-// update wrote half the item or more, and the caller packs the new item.
+// spliced in (value.Splice), so the attributes it left, the key's among them,
+// are copied where they are and not encoded again. The packed item is ""
+// when nothing was stored, when spliceWorth says a splice does not pay, or
+// when the splice does not hold as many attributes as the item, and the
+// caller packs the new item. With no update it is stored itself.
 func ApplyStoredPacked(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (value.Item, value.Packed, error) {
 	return applySplicing(key, stored, read, spliceWorth)
 }
 
-// spliceWorth reports whether a splice of attributes written size bytes into
-// a stored item of stored bytes pays: whether they are less than half of it.
+// spliceWorth reports whether a splice pays: whether cost, the size of the
+// old values of the attributes the update wrote and of their new values
+// added, is less than half of stored, the stored item's size.
 //
-// A splice decodes the old values of the attributes the update wrote, for
-// the header, encodes their new ones and copies the rest. Packing the item
-// whole encodes all of it once. An update that leaves less than half the
-// item, as its size goes, leaves too little to copy to pay for the decode:
-// 50 legacy PUT actions over a 51-attribute item took 20% longer spliced.
-func spliceWorth(written, stored int) bool { return 2*written < stored }
+// A splice decodes the old value of each attribute the update wrote, for the
+// header, encodes its new one and copies the rest. Packing the item whole
+// encodes all of it once. Both halves of the cost count: a REMOVE of most of
+// the item writes no new value, but its splice decodes what it removes. 50
+// legacy PUT actions over a 51-attribute item took 20% longer spliced.
+func spliceWorth(cost, stored int) bool { return 2*cost < stored }
 
-// applySplicing is ApplyStoredPacked splicing when worth, given the size of
-// the attributes the update wrote and of the stored item, says it pays.
+// applySplicing is ApplyStoredPacked splicing when worth, given the cost of
+// the splice and the size of the stored item, says it pays.
 func applySplicing(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
-	worth func(written, stored int) bool,
+	worth func(cost, stored int) bool,
 ) (value.Item, value.Packed, error) {
-	item, u, err := applyToStored(key, stored, read)
-	if err != nil || stored == "" {
-		return item, "", err
+	item, u, err := readStored(key, stored, read)
+	if err != nil {
+		return nil, "", err
 	}
 
 	// With no update the item is stored's, unchanged.
@@ -90,39 +96,81 @@ func applySplicing(
 		return item, stored, nil
 	}
 
-	names := u.written(key)
+	if stored == "" {
+		item, err = u.applyStored(key, item)
 
+		return item, "", err
+	}
+
+	// The old values are measured before the update writes over them.
+	names := u.written()
+	oldSize := attrsSize(item, names)
+
+	item, err = u.applyStored(key, item)
+	if err != nil {
+		return nil, "", err
+	}
+
+	packed, err := spliceInto(stored, names, item, oldSize, worth)
+
+	return item, packed, err
+}
+
+// spliceInto is the item, the update of stored that wrote the top-level
+// attributes names, as value.Splice packs it, or "" when worth says the splice
+// does not pay. oldSize is the size of the attributes names held before the
+// update.
+//
+// names must list every top-level attribute the update changed. The splice
+// holds as many attributes as item or it is not returned, so a name missing
+// from names that the update added or removed leaves the item to the caller
+// to pack; one whose value it changed in place is not caught here, and the
+// tests of written hold that none is.
+func spliceInto(
+	stored value.Packed, names []string, item value.Item, oldSize int, worth func(cost, stored int) bool,
+) (value.Packed, error) {
 	values := make(value.Item, len(names))
-	size := 0
 
 	for _, name := range names {
 		if v, ok := item[name]; ok {
 			values[name] = v
-			size += len(name) + value.Size(&v)
 		}
 	}
 
-	if !worth(size, stored.Size()) {
-		return item, "", nil
+	if !worth(oldSize+attrsSize(values, names), stored.Size()) {
+		return "", nil
 	}
 
 	packed, err := value.Splice(stored, names, values)
 	if err != nil {
-		return nil, "", err //nolint:wrapcheck // the encoder's own error, as value.Pack returns it
+		return "", err //nolint:wrapcheck // the encoder's own error, as value.Pack returns it
 	}
 
-	// A splice keeps every attribute the update did not write, so it holds
-	// the attributes item does; one that does not is left to the caller to
-	// pack.
 	if packed.Len() != len(item) {
-		return item, "", nil
+		return "", nil
 	}
 
-	return item, packed, nil
+	return packed, nil
 }
 
-// applyToStored is ApplyStored, and the update read returned.
-func applyToStored(
+// attrsSize is the size, as ItemSize counts it, of the attributes of item
+// that names lists.
+func attrsSize(item value.Item, names []string) int {
+	size := 0
+
+	for _, name := range names {
+		if v, ok := item[name]; ok {
+			size += len(name) + value.Size(&v)
+		}
+	}
+
+	return size
+}
+
+// readStored unpacks stored into an item that is its own and returns it with
+// the update read returns for it. With no update the item is the one
+// ApplyStored returns: stored's, or the key alone when nothing is stored.
+func readStored(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (value.Item, *UpdateExpr, error) {
 	item := value.Unpack(stored)
@@ -132,37 +180,34 @@ func applyToStored(
 		return nil, nil, err
 	}
 
-	if u == nil {
-		if item != nil {
-			return item, nil, nil
-		}
-
+	if u == nil && item == nil {
 		return maps.Clone(key), nil, nil
 	}
 
-	err = u.checkKey(key)
+	return item, u, nil
+}
+
+// applyStored applies the update to item, unpacked from the item stored at
+// key, nil when there is none.
+func (u *UpdateExpr) applyStored(key, item value.Item) (value.Item, error) {
+	err := u.checkKey(key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	if item == nil {
 		item = make(value.Item, len(key))
 	}
 
-	item, err = u.applyTo(key, item)
-
-	return item, u, err
+	return u.applyTo(key, item)
 }
 
-// written is the top-level attributes an update applied with key writes,
-// sorted and each once: the first name of each path it writes, and the key's,
-// which the update copies into the item.
-func (u *UpdateExpr) written(key value.Item) []string {
-	names := make([]string, 0, len(key)+len(u.paths))
-
-	for name := range key {
-		names = append(names, name)
-	}
+// written is the top-level attributes the update writes, sorted and each
+// once: the first name of each path. It holds no key attribute, which
+// checkKey refuses to update; applyTo copies the key into the item, but over
+// the stored key, which is the same.
+func (u *UpdateExpr) written() []string {
+	names := make([]string, 0, len(u.paths))
 
 	for _, path := range u.paths {
 		names = append(names, path[0].Name)

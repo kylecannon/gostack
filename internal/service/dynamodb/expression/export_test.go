@@ -25,8 +25,24 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 func ApplyStoredSpliced(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (value.Item, value.Packed, error) {
-	return applySplicing(key, stored, read, func(int, int) bool { return true })
+	return applySplicing(key, stored, read, spliceAlways)
 }
+
+// SpliceChecked is spliceInto splicing whatever it costs: item, the update of
+// stored that wrote names, packed, or "" when the splice does not hold as many
+// attributes as item. A test hands it names the update did not write.
+func SpliceChecked(stored value.Packed, names []string, item value.Item) (value.Packed, error) {
+	return spliceInto(stored, names, item, 0, spliceAlways)
+}
+
+// WrittenNames is the top-level attributes the update writes, as the splice is
+// handed them.
+func (u *UpdateExpr) WrittenNames() []string {
+	return u.written()
+}
+
+// spliceAlways says every splice pays.
+func spliceAlways(int, int) bool { return true }
 
 // Clash is the pair findPathClash names for the tests of this package: One is
 // the path being added, Two the path it names second.
