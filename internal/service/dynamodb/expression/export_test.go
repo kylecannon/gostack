@@ -19,6 +19,15 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 	return u.applyTo(key, maps.Clone(old))
 }
 
+// ApplyStoredSpliced is ApplyStoredPacked splicing every update into a
+// stored item, however much of it the update writes, for the property that a
+// splice packs what unpacking, applying and packing does.
+func ApplyStoredSpliced(
+	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
+) (value.Item, value.Packed, error) {
+	return applySplicing(key, stored, read, func(int, int) bool { return true })
+}
+
 // Clash is the pair findPathClash names for the tests of this package: One is
 // the path being added, Two the path it names second.
 type Clash struct {

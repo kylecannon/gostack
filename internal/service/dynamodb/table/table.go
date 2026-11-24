@@ -196,10 +196,11 @@ func (t *Table) GetHeldPacked(key value.Item) value.Packed {
 type Decide func(old value.Packed) (value.Item, error)
 
 // DecidePacked is Decide that may also return the new item packed: the bytes
-// value.Pack returns for that item, which the write then stores as they are
-// instead of packing the item under the table's lock. "" has the write pack
-// the item, as Write does. The bytes are not checked against the item: a
-// caller returns them only for the item they were packed from.
+// value.Pack returns for that item, or value.Splice, whose members may come in
+// another order, which the write then stores as they are instead of packing
+// the item under the table's lock. "" has the write pack the item, as Write
+// does. The bytes are not checked against the item: a caller returns them
+// only for the item they were packed from.
 type DecidePacked func(old value.Packed) (value.Item, value.Packed, error)
 
 // Write is the one write path. It calls decide with the item stored at key and

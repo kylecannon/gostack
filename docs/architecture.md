@@ -2827,6 +2827,23 @@ list below an attribute is still copied before an action changes it, since
 `SET a = b` can share it. Nothing a concurrent reader holds is written:
 readers hold packed strings or their own unpacked copies.
 
+`UpdateItem` does not pack the item it made. `expression.ApplyStoredPacked`
+hands `value.Splice` the top-level attributes the update writes, the first
+name of each path and the key's, and their new values. `Splice` copies every
+other member of the stored json as it is, encodes only the new values, and
+works the header out from the old one: the size and the two counts add up per
+top-level attribute, so it subtracts the old values of those attributes and
+adds the new ones. The write stores those bytes through `DecidePacked`. A
+`SET n = :v` on a 390 KiB item then copies the item once instead of encoding
+it, which is what the generated encoder cost per byte. The bytes differ from
+`value.Pack`'s only in member order, which `Pack` takes from the map anyway,
+so `Orderer` writes both the same. With nothing stored, or when the
+attributes the update writes come to half the stored item's size or more,
+`UpdateItem` packs the new item as before: the splice decodes the old values
+it replaces, and 50 legacy `PUT` actions over a 51-attribute item ran 20%
+slower spliced than packed. `FuzzSplice` holds the splice to unpack, apply and
+pack, header and ordered json. The transaction's update action still packs.
+
 A transaction decides every action first and writes them all through
 `WriteHeld` only when none failed.
 

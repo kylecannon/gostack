@@ -96,10 +96,7 @@ func Pack(item Item) (Packed, error) {
 // json over the wrapping's prefix, so that neither the json nor a copy of it
 // moves. On an error packed is nil and buf may hold part of the item.
 func packInto(buf []byte, item Item, size, scalars, estimate int) ([]byte, []byte, error) {
-	// Sizes and counts are never negative.
-	buf = binary.AppendUvarint(buf, uint64(size))    //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(scalars)) //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(len(item)))
+	buf = appendHeader(buf, size, scalars, len(item))
 	// A scratch buffer the pool lost, or one too small for the item, grows to
 	// a little over the item's json size, not by append's steps, whose sum is
 	// about five times a large item. It usually grows once: the json of a
@@ -221,6 +218,30 @@ func numberExtra(n string) int {
 // packHeader is what the header of a Packed holds, and where its json starts.
 type packHeader struct {
 	size, scalars, attrs, body int
+}
+
+// appendHeader appends the header of a Packed: the item's size, the count of
+// its S and N values and the count of its attributes.
+func appendHeader(buf []byte, size, scalars, attrs int) []byte {
+	// Sizes and counts are never negative.
+	buf = binary.AppendUvarint(buf, uint64(size))    //nolint:gosec // G115: see above
+	buf = binary.AppendUvarint(buf, uint64(scalars)) //nolint:gosec // G115: see above
+
+	return binary.AppendUvarint(buf, uint64(attrs)) //nolint:gosec // G115: see above
+}
+
+// headerLen is the length of the header appendHeader writes.
+func headerLen(size, scalars, attrs int) int {
+	return uvarintLen(size) + uvarintLen(scalars) + uvarintLen(attrs)
+}
+
+func uvarintLen(v int) int {
+	n := 1
+	for ; v > uvarintBits; v >>= 7 {
+		n++
+	}
+
+	return n
 }
 
 // uvarintBits are the value bits of a byte of a uvarint; the byte above them
@@ -890,9 +911,7 @@ func (u *unpacker) member(sel *Selection) Item {
 // its closing brace.
 func (u *unpacker) skipMembers() {
 	for {
-		u.skipString()
-		u.i++ // :
-		u.skip()
+		u.rawMember()
 
 		c := u.s[u.i]
 		u.i++
@@ -901,6 +920,23 @@ func (u *unpacker) skipMembers() {
 			return
 		}
 	}
+}
+
+// rawMember steps over the member of an object at u.i, and returns its name
+// as the encoder wrote it, quotes and escapes included, and its value. It
+// leaves u.i at the comma or the brace that follows the value. It is the one
+// walk over members that keeps their bytes as they are; a read that decodes
+// the names reads them with str.
+func (u *unpacker) rawMember() (name, val string) {
+	start := u.i
+	u.skipString()
+	name = u.s[start:u.i]
+	u.i++ // :
+
+	from := u.i
+	u.skip()
+
+	return name, u.s[from:u.i]
 }
 
 // selectionAt is below[j], nil when there is none.

@@ -2,7 +2,6 @@ package value
 
 import (
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json/jsontext"
 	"slices"
 	"strings"
@@ -42,10 +41,7 @@ func (k *JSONPacker) Pack(raw []byte) (Packed, bool) {
 		return "", false
 	}
 
-	// Sizes and counts are never negative.
-	k.buf = binary.AppendUvarint(k.buf[:0], uint64(size))   //nolint:gosec // G115: see above
-	k.buf = binary.AppendUvarint(k.buf, uint64(sc.scalars)) //nolint:gosec // G115: see above
-	k.buf = binary.AppendUvarint(k.buf, uint64(attrs))      //nolint:gosec // G115: see above
+	k.buf = appendHeader(k.buf[:0], size, sc.scalars, attrs)
 	k.buf = append(k.buf, raw...)
 
 	return Packed(k.buf), true

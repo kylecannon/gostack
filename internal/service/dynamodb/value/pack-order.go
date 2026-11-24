@@ -48,15 +48,8 @@ func (o *Orderer) object(dst []byte, s string, i int) []byte {
 
 	if s[u.i] != '}' {
 		for {
-			start := u.i
-			u.skipString()
-			raw := s[start:u.i]
-			u.i++ // :
-
-			from := u.i
-			u.skip()
-
-			o.members = append(o.members, member{name: memberName(raw), raw: raw, value: s[from:u.i]})
+			raw, val := u.rawMember()
+			o.members = append(o.members, member{name: memberName(raw), raw: raw, value: val})
 
 			if s[u.i] == '}' {
 				break
