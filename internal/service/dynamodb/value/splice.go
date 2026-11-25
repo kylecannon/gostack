@@ -34,7 +34,7 @@ func Splice(stored Packed, names []string, values Item) (Packed, error) {
 	// Attrs of no names would decode every attribute.
 	var old Item
 	if len(names) > 0 {
-		old = stored.Attrs(names)
+		old = attrsSorted(stored, names)
 	}
 
 	if len(old) == 0 && len(values) == 0 {

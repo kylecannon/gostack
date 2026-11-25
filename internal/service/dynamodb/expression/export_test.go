@@ -16,7 +16,9 @@ func (u *UpdateExpr) Apply(key, old value.Item) (value.Item, error) {
 		return nil, err
 	}
 
-	return u.applyTo(key, maps.Clone(old))
+	item, _, err := u.applyTo(key, maps.Clone(old))
+
+	return item, err
 }
 
 // ApplyStoredSpliced is ApplyStoredPacked splicing every update into a
@@ -28,11 +30,45 @@ func ApplyStoredSpliced(
 	return applySplicing(key, stored, read, spliceAlways)
 }
 
-// SpliceChecked is spliceInto splicing whatever it costs: item, the update of
-// stored that wrote names, packed, or "" when the splice does not hold as many
-// attributes as item. A test hands it names the update did not write.
+// SpliceCosts is the sizes ApplyStoredSpliced settles a splice on: old, the
+// size of the old values of the attributes the update writes, and cost, that
+// and the size of their new values. Both are 0 when it settles nothing.
+func SpliceCosts(
+	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
+) (old, cost int, err error) {
+	var costs []int
+
+	_, _, err = applySplicing(key, stored, read, func(cost, _ int) bool {
+		costs = append(costs, cost)
+
+		return true
+	})
+	if len(costs) < 2 {
+		return 0, 0, err
+	}
+
+	return costs[len(costs)-2], costs[len(costs)-1], err
+}
+
+// AttrsSize is the size, as ItemSize counts it, of the attributes of item that
+// names lists.
+func AttrsSize(item value.Item, names []string) int {
+	size := 0
+
+	for _, name := range names {
+		if v, ok := item[name]; ok {
+			size += len(name) + value.Size(&v)
+		}
+	}
+
+	return size
+}
+
+// SpliceChecked is spliceInto: item, the update of stored that wrote names,
+// packed, or "" when the splice does not hold as many attributes as item. A
+// test hands it names the update did not write.
 func SpliceChecked(stored value.Packed, names []string, item value.Item) (value.Packed, error) {
-	return spliceInto(stored, names, item, 0, spliceAlways)
+	return spliceInto(stored, names, item)
 }
 
 // WrittenNames is the top-level attributes the update writes, as the splice is

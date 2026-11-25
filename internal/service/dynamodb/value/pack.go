@@ -335,6 +335,19 @@ func (p Packed) Attrs(names []string) Item {
 	return u.object(viewHint(h, names), names, nil)
 }
 
+// attrsSorted is p.Attrs for names in order, each once, which it finds among
+// the item's by binary search and not one by one.
+func attrsSorted(p Packed, names []string) Item {
+	if p == "" {
+		return nil
+	}
+
+	h := p.header()
+	u := unpacker{s: string(p), i: h.body, sorted: true}
+
+	return u.object(viewHint(h, names), names, nil)
+}
+
 // Number returns the text of the attribute name of p when it is a number, and
 // false when p has no such attribute or it is of another type. For a name the
 // encoder writes without escapes it reads the json in place and allocates
@@ -786,6 +799,17 @@ type unpacker struct {
 	// (Decoder.indexOf). That object takes it; one below it looks its names
 	// up one by one.
 	index map[string]int
+	// sorted is set when the names the top object wants are in order
+	// (attrsSorted), which finds them by binary search. That object takes it,
+	// as it takes index.
+	sorted bool
+}
+
+// wantLookup is how members finds a name in want: by index when it is not
+// nil, by binary search when want is sorted, else one by one.
+type wantLookup struct {
+	index  map[string]int
+	sorted bool
 }
 
 // object reads a map of attribute values, all of them or, when want is not
@@ -797,12 +821,12 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 		m = make(Item, hint)
 	}
 
-	index := u.index
-	u.reuse, u.index = nil, nil
+	look := wantLookup{index: u.index, sorted: u.sorted}
+	u.reuse, u.index, u.sorted = nil, nil, false
 	u.i++ // {
 
 	if u.s[u.i] != '}' {
-		u.members(m, want, index, below, reused)
+		u.members(m, want, look, below, reused)
 	} else {
 		u.i++
 		u.open = false
@@ -811,9 +835,9 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 	return m
 }
 
-// members reads the members of an object, from its first, into m. index, when
-// not nil, is the place of each name of want.
-func (u *unpacker) members(m Item, want []string, index map[string]int, below []*Selection, reused bool) {
+// members reads the members of an object, from its first, into m. look finds
+// each name in want.
+func (u *unpacker) members(m Item, want []string, look wantLookup, below []*Selection, reused bool) {
 	found := 0
 
 	for {
@@ -822,7 +846,7 @@ func (u *unpacker) members(m Item, want []string, index map[string]int, below []
 
 		j := -1
 		if want != nil && found < len(want) {
-			j = wantedAt(want, index, name)
+			j = wantedAt(want, look, name)
 		}
 
 		switch {
@@ -859,15 +883,19 @@ func (u *unpacker) members(m Item, want []string, index map[string]int, below []
 	}
 }
 
-// wantedAt is the place of name in want, -1 when it is not there; index, when
-// not nil, holds each name's place.
-func wantedAt(want []string, index map[string]int, name string) int {
-	if index == nil {
+// wantedAt is the place of name in want, -1 when it is not there.
+func wantedAt(want []string, look wantLookup, name string) int {
+	switch {
+	case look.index != nil:
+		if j, ok := look.index[name]; ok {
+			return j
+		}
+	case look.sorted:
+		if j, ok := slices.BinarySearch(want, name); ok {
+			return j
+		}
+	default:
 		return slices.Index(want, name)
-	}
-
-	if j, ok := index[name]; ok {
-		return j
 	}
 
 	return -1

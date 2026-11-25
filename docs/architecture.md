@@ -2853,8 +2853,13 @@ and encodes the other, and a cost of half the stored item's size or more
 packs. A `REMOVE` of most of the item counts what it removes, and 50 legacy
 `PUT` actions over a 51-attribute item ran 20% slower spliced than packed.
 Or the splice holds a different count of attributes than the new item, which
-means the update changed an attribute it did not name. An update that
-changes nothing hands back the stored bytes themselves. `FuzzSplice` holds
+means the update changed an attribute it did not name. Two requests hand
+back the stored bytes themselves: one with no update, and a `REMOVE` of
+attributes the item does not hold. Any other update encodes what it writes
+again, `SET a = :same` included. The update decides between the two paths
+before it lists its names: it measures the old values first and packs as
+soon as they alone reach half the item, and it takes the new values' size
+from the item's size, which the apply measures anyway. `FuzzSplice` holds
 the splice, chained over several updates, to unpack, apply and pack: the
 whole header, the ordered json, and the item.
 

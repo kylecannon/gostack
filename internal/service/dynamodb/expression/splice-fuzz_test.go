@@ -181,7 +181,9 @@ func (g *spliceGen) targets(item value.Item) []string {
 	targets := []string{"new", "big"}
 	for _, name := range slices.Sorted(maps.Keys(item)) {
 		isKey := name == splicePK || name == spliceSK
-		if name != "big" && (!isKey || g.rng.IntN(8) == 0) {
+		// "new" and "big" are listed once, as an AttributeUpdates map lists
+		// a name, whether or not an earlier update of the chain added them.
+		if name != "big" && name != "new" && (!isKey || g.rng.IntN(8) == 0) {
 			targets = append(targets, name)
 		}
 	}
@@ -384,6 +386,15 @@ func requireSpliceMatches(t *testing.T, seed1, seed2 uint64) int {
 			require.Empty(t, changedOutside(value.Unpack(stored[i]), want, u.WrittenNames()),
 				"attributes update %q changed that WrittenNames does not list", up.text)
 			require.Empty(t, spliceMismatch(stored[i], want, gotPacked, u.WrittenNames()), "update %q", up.text)
+
+			// The sizes the splice was settled on, the new values' worked out
+			// from the item's, are those of the attributes it wrote.
+			oldSize, cost, err := expression.SpliceCosts(key, stored[i], up.read)
+			require.NoError(t, err)
+
+			wantOld := expression.AttrsSize(value.Unpack(stored[i]), u.WrittenNames())
+			require.Equal(t, wantOld, oldSize, "old size, update %q", up.text)
+			require.Equal(t, wantOld+expression.AttrsSize(want, u.WrittenNames()), cost, "cost, update %q", up.text)
 
 			stored[i], next = gotPacked, want
 			spliced++
@@ -774,4 +785,116 @@ func Test_ApplyStoredPacked_spliceWorth(t *testing.T) {
 			require.Empty(t, packed, "no stored item")
 		})
 	}
+}
+
+// Test_ApplyStoredPacked_spliceWorthBoundary: an update whose cost, its old
+// values and its new ones, is exactly half the stored item packs, and the same
+// update of an item one byte larger splices. The stored item is the case's
+// item and a padding string sized to put the cost at half of it. Several
+// paths below one attribute count that attribute once: counted once per path,
+// the map of the nested case would cost twice as much and pack at both sizes.
+func Test_ApplyStoredPacked_spliceWorthBoundary(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]api.AttributeValue{
+		":n": {N: new("2")},
+		":s": {S: new(strings.Repeat("y", 10))},
+	}
+	pk := api.AttributeValue{S: new("k")}
+
+	tests := []struct {
+		name       string
+		giveItem   value.Item
+		giveUpdate string
+	}{
+		{
+			name:       "a SET of an attribute held",
+			giveItem:   value.Item{"pk": pk, "a": {S: new(strings.Repeat("x", 10))}},
+			giveUpdate: "SET a = :s",
+		},
+		{
+			name:       "a REMOVE, which costs its old value alone",
+			giveItem:   value.Item{"pk": pk, "a": {S: new(strings.Repeat("x", 20))}},
+			giveUpdate: "REMOVE a",
+		},
+		{
+			name:       "a SET of a new attribute, which costs its new value alone",
+			giveItem:   value.Item{"pk": pk},
+			giveUpdate: "SET b = :s",
+		},
+		{
+			name: "two SETs below one map",
+			giveItem: value.Item{"pk": pk, "m": {M: map[string]api.AttributeValue{
+				"x": {N: new("1")}, "y": {S: new(strings.Repeat("x", 10))},
+			}}},
+			giveUpdate: "SET m.x = :n, m.y = :s",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			u, err := expression.ParseUpdate(tt.giveUpdate, expression.Substitutions{Values: values}, nil)
+			require.NoError(t, err)
+
+			read := func(value.Item) (*expression.UpdateExpr, error) { return u, nil }
+			key := value.Item{"pk": pk}
+
+			bare, err := value.Pack(tt.giveItem)
+			require.NoError(t, err)
+
+			want, err := expression.ApplyStored(key, bare, read)
+			require.NoError(t, err)
+
+			names := u.WrittenNames()
+			cost := expression.AttrsSize(tt.giveItem, names) + expression.AttrsSize(want, names)
+
+			// The padding's own size is its name's three bytes and its length.
+			half := 2*cost - value.ItemSize(tt.giveItem) - len("pad")
+			require.Positive(t, half)
+
+			for _, pad := range []int{half, half + 1} {
+				item := maps.Clone(tt.giveItem)
+				item["pad"] = api.AttributeValue{S: new(strings.Repeat("p", pad))}
+
+				stored, err := value.Pack(item)
+				require.NoError(t, err)
+				require.Equal(t, 2*cost+pad-half, stored.Size())
+
+				got, packed, err := expression.ApplyStoredPacked(key, stored, read)
+				require.NoError(t, err)
+
+				if pad == half {
+					require.Empty(t, packed, "a cost of half the item packs")
+
+					continue
+				}
+
+				require.NotEmpty(t, packed, "a cost under half the item splices")
+				require.Empty(t, spliceMismatch(stored, got, packed, names))
+			}
+		})
+	}
+}
+
+// Test_ApplyStoredPacked_spliceError: a splice that fails, on a string that is
+// not valid UTF-8, returns the encoder's error and no item.
+func Test_ApplyStoredPacked_spliceError(t *testing.T) {
+	t.Parallel()
+
+	item := value.Item{"pk": {S: new("k")}, "pad": {S: new(strings.Repeat("p", 1<<10))}}
+	stored, err := value.Pack(item)
+	require.NoError(t, err)
+
+	values := map[string]api.AttributeValue{":invalid": {S: new("\xff")}}
+
+	u, err := expression.ParseUpdate("SET n = :invalid", expression.Substitutions{Values: values}, nil)
+	require.NoError(t, err)
+
+	got, packed, err := expression.ApplyStoredPacked(value.Item{"pk": item["pk"]}, stored,
+		func(value.Item) (*expression.UpdateExpr, error) { return u, nil })
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.Empty(t, packed)
 }
