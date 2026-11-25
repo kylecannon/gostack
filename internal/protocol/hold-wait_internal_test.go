@@ -219,51 +219,6 @@ func Test_BodyMeter_SlowUnknownLengthHoldsWhatItRead(t *testing.T) {
 	assertQueuesEmpty(t)
 }
 
-// Test_BodyPool_OldestBodyStepsFirst: a younger body of unknown length whose
-// next step would leave the oldest one no way to its claim waits, though the
-// bound has room for it, and the oldest body's steps are granted ahead of it.
-// So the oldest reaches its end, and the younger one is served after it. Were
-// the oldest body's steps queued behind the younger one's, each would wait on
-// the other until the wait ended.
-func Test_BodyPool_OldestBodyStepsFirst(t *testing.T) {
-	SetMaxBody(DefaultMaxBody)
-	withBound(t, DefaultInFlight, 2*time.Second)
-
-	older := newPipedBody(t)
-	older.write(t, 1<<20)
-
-	require.Eventually(t, func() bool {
-		return poolState(func(p *bodyPool) int { return len(p.growers) }) == 1
-	}, 2*time.Second, time.Millisecond)
-
-	// The younger body's step to 8 MiB, with 16 MiB of decode room, would
-	// leave less than the older body still needs to reach its claim.
-	younger := newPipedBody(t)
-	younger.write(t, 4<<20+1)
-
-	require.Eventually(t, func() bool {
-		return poolState(func(p *bodyPool) int { return len(p.steps) }) == 1
-	}, 2*time.Second, time.Millisecond, "the younger body's step waits")
-
-	bound, held := InFlight()
-	assert.Less(t, held+8<<20+16<<20, bound, "it waits for a safe order, not for room")
-
-	older.write(t, 15<<20)
-	require.NoError(t, older.w.Close())
-	require.NoError(t, <-older.done, "the older body reaches its end")
-
-	older.charge.Release()
-
-	younger.write(t, 12<<20-1)
-	require.NoError(t, younger.w.Close())
-	require.NoError(t, <-younger.done, "the younger body is served after it")
-	younger.charge.Release()
-
-	_, held = InFlight()
-	assert.Zero(t, held, "every request gives back all it held")
-	assertQueuesEmpty(t)
-}
-
 // slowReader reads at most 64 KiB at a time and yields between reads, as a
 // body arriving in chunks does, so bodies read in step with one another.
 type slowReader struct {
@@ -335,46 +290,49 @@ func Test_BodyMeter_StepKeepsWhatCoverTook(t *testing.T) {
 // safe order, which only another body of unknown length reaching its end can
 // give, bodies that state their length and fit are admitted at once, and a
 // dense body is not refused for it. Were the step to hold up the queues behind
-// it, each would wait until the older body ended or its wait did.
+// it, each would wait until the younger body ended or its wait did. The two
+// bodies of unknown length claim 48 MiB each of the 64: the older holds 16 MiB
+// and the younger 40, so the older body's next step is safe only once the
+// younger one ends.
 func Test_BodyPool_SafetyBlockedStepStallsNoOne(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, DefaultInFlight, 2*time.Second)
 
-	older := newPipedBody(t)
-	older.write(t, 1<<20)
+	const mib = 1 << 20
 
-	require.Eventually(t, func() bool {
-		return poolState(func(p *bodyPool) int { return len(p.growers) }) == 1
-	}, 2*time.Second, time.Millisecond)
+	pool := inFlight.Load()
+	older, younger := &grower{claim: 48 * mib}, &grower{claim: 48 * mib}
+	ctx := t.Context()
 
-	younger := newPipedBody(t)
-	younger.write(t, 4<<20+1)
+	require.NoError(t, pool.step(ctx, older, mib))
+	require.NoError(t, pool.step(ctx, younger, mib))
+	require.NoError(t, pool.step(ctx, younger, 39*mib))
+	require.NoError(t, pool.step(ctx, older, 15*mib))
+
+	olderDone := make(chan error, 1)
+
+	go func() { olderDone <- pool.step(ctx, older, mib) }()
 
 	require.Eventually(t, func() bool {
 		return poolState(func(p *bodyPool) int { return len(p.steps) }) == 1
-	}, 2*time.Second, time.Millisecond, "the younger body's step waits for a safe order")
+	}, 2*time.Second, time.Millisecond, "the older body's step waits for a safe order")
 
 	assert.False(t, BodiesWait(0), "a step that waits for a safe order holds up no dense body")
 
 	for i := range 12 {
 		size := 100<<10 + i*(900<<10)/11
 		start := time.Now()
-		m, ctx := meteredBody(t, size, int64(size))
+		m, callCtx := meteredBody(t, size, int64(size))
 		_, err := ReadBody(m, int64(size))
 		require.NoError(t, err, "call %d is admitted", i)
 		assert.Less(t, time.Since(start), 100*time.Millisecond, "call %d is not held up", i)
-		ReleaseBody(ctx)
+		ReleaseBody(callCtx)
 	}
 
-	older.write(t, 15<<20)
-	require.NoError(t, older.w.Close())
-	require.NoError(t, <-older.done)
-	older.charge.Release()
-
-	younger.write(t, 12<<20-1)
-	require.NoError(t, younger.w.Close())
-	require.NoError(t, <-younger.done)
-	younger.charge.Release()
+	require.NoError(t, pool.step(ctx, younger, 8*mib), "the younger body reaches its claim")
+	pool.finish(younger, 48*mib)
+	require.NoError(t, <-olderDone, "the older body's step comes once the younger body ends")
+	pool.finish(older, 17*mib)
 
 	_, held := InFlight()
 	assert.Zero(t, held, "every request gives back all it held")

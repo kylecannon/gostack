@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -195,11 +196,10 @@ func BodiesWait(own int64) bool {
 			}
 
 			// A step that waits for a safe order, not for room, waits
-			// whatever the caller gives back, and holds up only the steps
-			// behind it (grant).
+			// whatever the caller gives back, and holds up no one (grant).
 			if pool.blocked(w) {
 				if i == 0 {
-					break
+					continue
 				}
 
 				return true
@@ -231,10 +231,10 @@ func SetBodyWait(wait time.Duration) {
 // neither waits for more while it keeps what it holds. A body of unknown length
 // holds only what it has read, and grows in steps (BodyMeter.grow) while it
 // holds the steps before; each step is granted only when, after it, every such
-// body could still reach its claim, the most it may hold, in the order they
-// were admitted (safe), counting what every other request holds as given back
-// once it finishes. So the oldest such body can always finish, and none waits
-// for bytes that only a body waiting behind it could give back.
+// body could still reach its claim, the most it may hold, in some order (safe),
+// counting what every other request holds as given back once it finishes. So
+// some such body can always finish, and a step that waits for one to finish
+// lets the steps of the others pass it (grant).
 type bodyPool struct {
 	mu       sync.Mutex
 	capacity int64
@@ -315,15 +315,16 @@ func (p *bodyPool) take(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter
 }
 
 // safe reports whether, were g to hold n bytes more, every body of unknown
-// length could still reach its claim in the order they were admitted, g last
-// when it holds nothing yet: what the pool has left once every other request
-// gives back what it holds covers the oldest one's need, and each one's bytes,
-// given back, cover the next one's with it.
+// length could still reach its claim in some order (the banker's check): what
+// the pool has left once every other request gives back what it holds covers
+// the need of one of them, its bytes, given back, cover the next one's with
+// it, and so on. With one resource, taking them in order of their need is such
+// an order whenever any is.
 func (p *bodyPool) safe(g *grower, n int64) bool {
+	type claim struct{ held, need int64 }
+
+	claims := make([]claim, 0, len(p.growers)+1)
 	free := p.capacity - n
-	for _, o := range p.growers {
-		free -= o.held
-	}
 
 	for _, o := range p.growers {
 		held := o.held
@@ -331,14 +332,25 @@ func (p *bodyPool) safe(g *grower, n int64) bool {
 			held += n
 		}
 
-		if o.claim-held > free {
+		free -= o.held
+		claims = append(claims, claim{held: held, need: o.claim - held})
+	}
+
+	if !g.joined {
+		claims = append(claims, claim{held: n, need: g.claim - n})
+	}
+
+	slices.SortFunc(claims, func(a, b claim) int { return cmp.Compare(a.need, b.need) })
+
+	for _, c := range claims {
+		if c.need > free {
 			return false
 		}
 
-		free += held
+		free += c.held
 	}
 
-	return g.joined || g.claim-n <= free
+	return true
 }
 
 // blocked reports whether w is a step of a body of unknown length that would
@@ -431,42 +443,74 @@ func (p *bodyPool) release(n int64) {
 
 // grant lets waiters in, in order, while the one at the head fits and, for a
 // step of a body of unknown length, leaves the pool safe. A body's first step
-// makes it the youngest of the bodies of unknown length being read. A step at
-// the head of p.steps that fits but is not safe waits for another such body to
-// read on or end, not for room, so the steps behind it wait and the decodings
-// and bodies behind them are let in (blocked).
+// makes it the youngest of the bodies of unknown length being read.
+//
+// The steps are scanned oldest body first. A step that fits but is not safe
+// waits for another such body to read on or end, not for room, so it is passed
+// over: a younger body's step that fits and is safe is let in ahead of it, and
+// the scan starts again from the oldest, since that may have made it safe
+// (nextStep). A step that does not fit stops the scan and everything behind
+// it, so nothing younger takes the room it waits for.
 func (p *bodyPool) grant() {
-	for _, queue := range []*[]*bodyWaiter{&p.steps, &p.growing, &p.starting} {
+	for {
+		i, short := p.nextStep()
+		if short {
+			return
+		}
+
+		if i < 0 {
+			break
+		}
+
+		p.let(&p.steps, i)
+	}
+
+	for _, queue := range []*[]*bodyWaiter{&p.growing, &p.starting} {
 		for len(*queue) > 0 {
 			w := (*queue)[0]
-			if p.used+w.n > p.capacity {
+			if p.used+w.n > p.capacity || p.blocked(w) {
 				return
 			}
 
-			if p.blocked(w) {
-				if queue == &p.steps {
-					break
-				}
-
-				return
-			}
-
-			p.used += w.n
-			if g := w.g; g != nil {
-				if !g.joined {
-					p.seq++
-					g.seq, g.joined = p.seq, true
-					p.growers = append(p.growers, g)
-				}
-
-				g.held += w.n
-			}
-
-			close(w.ready)
-			(*queue)[0] = nil
-			*queue = (*queue)[1:]
+			p.let(queue, 0)
 		}
 	}
+}
+
+// nextStep returns where in p.steps the oldest step that fits and leaves the
+// pool safe is, or -1 when there is none; short reports that a step older than
+// any such one does not fit.
+func (p *bodyPool) nextStep() (i int, short bool) {
+	for i, w := range p.steps {
+		if p.used+w.n > p.capacity {
+			return -1, true
+		}
+
+		if !p.blocked(w) {
+			return i, false
+		}
+	}
+
+	return -1, false
+}
+
+// let grants the waiter at i in queue and takes it out of queue.
+func (p *bodyPool) let(queue *[]*bodyWaiter, i int) {
+	w := (*queue)[i]
+
+	p.used += w.n
+	if g := w.g; g != nil {
+		if !g.joined {
+			p.seq++
+			g.seq, g.joined = p.seq, true
+			p.growers = append(p.growers, g)
+		}
+
+		g.held += w.n
+	}
+
+	close(w.ready)
+	*queue = slices.Delete(*queue, i, i+1)
 }
 
 func removeWaiter(queue []*bodyWaiter, w *bodyWaiter) []*bodyWaiter {

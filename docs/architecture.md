@@ -410,20 +410,30 @@ How each piece is bounded, and why this way:
   planned for that much, and keeps only what it read and the room planned for
   that once it ends. Its claim is the most it may hold: its share and the room
   planned for that. A step is granted only when every body of unknown length
-  still being read could reach its claim in the order the bodies were admitted,
-  counting what every other request holds as given back once it ends, so the
-  oldest can always finish; its steps wait ahead of younger bodies' steps, which
-  wait ahead of decodings that grow, which wait ahead of new bodies. A step
-  that fits but waits for that order waits for another body to read on or end,
-  not for room: the steps behind it wait with it, and the decodings and new
-  bodies behind them are let in, so a stated 100 KiB body is admitted at once
-  beside it (`Test_BodyPool_SafetyBlockedStepStallsNoOne`). A step takes only
+  still being read could still reach its claim in some order (the banker's
+  check: sorted by what each still needs, the free room and each one's bytes,
+  given back in turn, cover the next one's need), counting what every other
+  request holds as given back once it ends. Steps are scanned oldest body
+  first, ahead of decodings that grow, which wait ahead of new bodies, and new
+  bodies are let in strictly in the order they came. A step that fits but
+  fails the check waits for another body to read on or end, not for room, so
+  it is passed over: a younger body's step that fits and passes is granted
+  ahead of it, and the decodings and new bodies behind are let in, so a stated
+  100 KiB body is admitted at once beside it
+  (`Test_BodyPool_SafetyBlockedStepStallsNoOne`). The older step comes once a
+  younger body it waits on ends (`Test_BodyPool_YoungerFinishesThenOlder`,
+  `Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody`). A step that does
+  not fit stops the scan, so nothing younger takes the room it waits for. This
+  is the user's ruling of 2026-11-25 on SQ-434 (design B): steps of bodies
+  already admitted may pass a safety-blocked older step, and an older body can
+  be throttled when a younger one took the large allowance first. A step takes only
   the decode room past what the request's decode hold holds, which a decoding
   that charges as the body arrives may have raised between two steps
   (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
   waits for decode room while it holds its bytes. A younger body of unknown
-  length behind older ones still arriving grows to about 16 MiB beside them,
-  then waits for them to end. A waiter is served in order for up to 5 s,
+  length behind older ones still arriving grows to its end beside them when
+  it can finish first (`Test_BodyMeter_FastBodyBehindSlowOnesServed`). A
+  waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
   throttling error. net/http notices a client that went away only once the
   body has been read, so a waiter whose client left keeps its place, holding
@@ -928,8 +938,9 @@ memory.
   timeout between its bytes: the server sets `ReadHeaderTimeout` and no
   `ReadTimeout`. A client that sends one byte every idle period keeps what it
   holds for as long as it keeps sending. A body of unknown length holds only
-  what it has read, but while it is read, a younger body of unknown length
-  grows only to about 16 MiB beside it. A minimum rate or a total body
+  what it has read, and a younger body of unknown length that can finish
+  first grows beside it; an older one's step that needs a younger body to end
+  first waits for it, and is throttled if that takes past the wait. A minimum rate or a total body
   deadline would change what clients are answered, so it is a separate
   decision.
 - Decoding past its plan grows in 1 MiB steps while it keeps what it decoded
