@@ -18,23 +18,26 @@ import (
 // GetItem and BatchGetItem take no filter. It uses the harness alone, so the
 // same file measures a tree that stores items as maps.
 //
-// A cell whose iteration costs more than maxItemReadMicros (itemReadCell.cost)
+// A cell whose iteration costs more than maxItemReadUnits (itemReadCell.cost)
 // is left out, so that the slowest of its runs is at most 8 ms: of the 60 cells
-// 20 are, among them every Query and Scan of items of 30 attributes at 16 and
-// 64 callers and every filter and projection of items of 4 at 64. Their
-// slowest runs were 8.1 to 110.7 ms in a container of 4 CPUs (three runs). It
-// keeps the whole ladder for GetItem and every cell at concurrency 1, and at 16
-// and 64 the plain reads of items of 4 attributes, served from their bytes.
-// Two cells that fit are left out with them, 30 attributes at 16, a Scan with a
-// projection (6.8 ms) and a plain BatchGetItem (4.4 ms), which the cost is
-// not fine enough to keep.
+// 6 are, the Query and the Scan of items of 30 attributes at 64 callers, plain,
+// with a filter and with a projection. Their slowest runs were 9.8 to 26.8 ms
+// on the gate's runners (ten runs, bench run 45505878281 of PR 84, main
+// a0e13bb3). The other 54 took at most 7.3 ms, the slowest being the Query and
+// the Scan of items of 4 attributes with a projection at 64 (7.3 and 7.0 ms)
+// and of items of 30 with a filter at 16 (7.3 and 7.2 ms). That keeps the whole
+// ladder for GetItem and BatchGetItem, every cell at concurrency 1 and 16, and
+// at 64 the Query and Scan of the small items. Query and Scan of 30 attributes
+// above concurrency 1 stay at 16.
 
 const (
 	itemReadCount = 100
 
-	// maxItemReadMicros is the most an iteration of one cell may cost, in
-	// microseconds a worker spends reading an item.
-	maxItemReadMicros = 7_000
+	// maxItemReadUnits is the most an iteration of one cell may cost
+	// (tooSlowToGate), in units of 0.1 us: 80,000 are 8 ms on a 4 CPU runner.
+	// It sits between the dearest cell it keeps, 76,800 units, 7.3 ms, and the
+	// cheapest it leaves out, 102,400 units, 9.8 ms.
+	maxItemReadUnits = 80_000
 )
 
 // The forms of a cell.
@@ -53,26 +56,28 @@ type itemReadCell struct {
 }
 
 // cost is what one iteration of the cell costs for workers callers on items of
-// attrs attributes, in microseconds, as measured in a container of 4 CPUs per
-// item read: 1 for a plain read of items of 4, which the store serves from
-// their bytes, 4 for a filter or projection of them, which decodes them, 14
-// for items of 30 and 8 for a projection of those, and twice that for
-// BatchGetItem, which looks up each key.
+// attrs attributes, in units of 0.1 us per item read, as the slowest runs of
+// Query and Scan at 16 and 64 callers on the gate's runners (4 CPUs) read: 5 for
+// a plain read of items of 4, which the store serves from their bytes, 12 for a
+// filter or projection of them, which decodes them, 45 for items of 30 and 16
+// for a projection of those. BatchGetItem of the small items looks up each key,
+// and costs twice that; of the wide ones it is no dearer than a Query (3.2 us an
+// item plain at 64 callers, 3.1 with a projection).
 func (c itemReadCell) cost(attrs, workers int) int {
 	var perItem int
 
 	switch {
 	case attrs > itemReadSmall && c.form == formProjection:
-		perItem = 8
+		perItem = 16
 	case attrs > itemReadSmall:
-		perItem = 14
+		perItem = 45
 	case c.form == formPlain:
-		perItem = 1
+		perItem = 5
 	default:
-		perItem = 4
+		perItem = 12
 	}
 
-	if c.op == opBatchGet {
+	if c.op == opBatchGet && attrs <= itemReadSmall {
 		perItem *= 2
 	}
 
@@ -95,7 +100,7 @@ func BenchmarkItemReads(b *testing.B) {
 
 			for _, cell := range itemReadCells() {
 				for _, workers := range itemReadConcurrency {
-					if cell.cost(attrs, workers) > maxItemReadMicros {
+					if tooSlowToGate(cell.cost(attrs, workers), maxItemReadUnits) {
 						continue
 					}
 

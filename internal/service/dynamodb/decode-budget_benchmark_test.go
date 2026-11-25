@@ -35,40 +35,64 @@ import (
 //     decoded waits its turn in the dense queue (protocol.WaitDense), so an
 //     iteration of 16 or 64 of them takes 16 or 64 times one, past the time
 //     limit below. The queue's matrix is BenchmarkDenseAdmission.
-//   - A cell whose slowest operation over three runs at the gate's benchtime
-//     passes 8 ms is left out, so that the gate makes at least 50 iterations
-//     (docs/standards.md, "Every feature ships its benchmark matrix");
-//     decodeBody.widest is the most workers a body is sent with. The slowest
-//     runs of the cells left out: the 400 KB dense item 47 ms and the 15 MB
-//     batches 366 ms (dense) and 13.6 ms (string) at concurrency 1, 208 ms
-//     (string) at 16; the 1 MB dense batch 17 ms at 16, the 1 MB string batch
-//     13.1 ms at 64 and 8.5 ms at 16 (7.0 to 8.5 ms over ten runs on the gate's
-//     runners), and the 400 KB string item 14.7 ms at 64. A body past the
+//   - A cell whose iteration costs more than maxDecodeMicros
+//     (decodeBody.microsPerKB) is left out, so that the gate makes at least 50
+//     iterations and the slowest of its runs is at most 8 ms (docs/standards.md,
+//     "Every feature ships its benchmark matrix"). On the gate's runners (ten
+//     runs, bench run 45505878281 of PR 84, main a0e13bb3) the cells left out
+//     took: the 400 KB string item at 64, 13.1 to 19.9 ms; the 1 MB string batch
+//     at 16, 9.5 to 13.3 ms; and, at concurrency 1, the dense item of 10,000
+//     numbers (100 KB), 9.2 to 13.2 ms, and the 1 MB dense batch, 7.6 to
+//     10.0 ms, which are measured at half that size. Earlier, on another run, the
+//     400 KB dense item took 47 ms and the 15 MB batches 366 ms (dense) and
+//     13.6 ms (string) at concurrency 1 and 208 ms (string) at 16. A body past the
 //     budget cannot be shrunk under the limit: the smallest, about 56,000
-//     numbers, takes 18 ms. The dense item is measured at 10,000 numbers
-//     instead, under the budget. The payload axis is covered by the widest
-//     cells under the limit: the 1 MB batch and the 400 KB string.
+//     numbers, takes 18 ms. The payload axis is covered by the widest cells
+//     under the limit: the 500 KB dense batch and the 400 KB string (6.7 ms at
+//     16 callers, the slowest kept). The classes the cuts would empty keep a
+//     cell each: PutItem at concurrency 64 is the string of 25 KB, and
+//     BatchWriteItem above concurrency 1 is 250 KB of strings, at 16.
+//     Those two and the dense bodies at half their size, 5,000 numbers (50 KB)
+//     and 12 items (500 KB), were not timed on the runners. The slowest of five
+//     runs on a Mac of 10 CPUs (local) were 2.1 ms (dense item), 2.7 ms (dense
+//     batch), 1.6 ms (25 KB at 64) and 4.5 ms (250 KB at 16); the Mac took 0.7
+//     to 1.6 times the runner's time on the cells both ran. By the runner's times
+//     for twice their size the dense bodies are the nearest the limit, 4.6 to
+//     6.6 ms and 3.8 to 5.0 ms.
 
 const (
 	shapeDense  = "dense"
 	shapeString = "string"
 )
 
-// denseNumbers is how many {"N":"1"} the dense PutItem holds: a 100 KB body that
-// decodes into 1.6 MB, a tenth of what DynamoDB's 400 KB item limit allows
-// (numbers).
-const denseNumbers = 10_000
+// maxDecodeMicros is the most one iteration of a cell may cost, in
+// microseconds of decoding, so that its slowest run is at most 8 ms.
+// decodeBody.microsPerKB prices a body, per kilobyte of it for each caller, as
+// the slowest run on the gate's runners for a kilobyte of the body: 1 for a
+// string, which 400 KB at 16 callers, 6,400 microseconds, took 4.1 to 6.6 ms
+// for, 130 for a list of small values (10,000 numbers, 100 KB, 13.2 ms) and 10
+// for the batch of records (1 MB, 10.0 ms).
+const maxDecodeMicros = 7_000
 
-// decodeBody is one body of the matrix, sent with at most widest workers.
+// denseNumbers is how many {"N":"1"} the dense PutItem holds: a 50 KB body that
+// decodes into 0.8 MB, a 26th of what DynamoDB's 400 KB item limit allows
+// (numbers).
+const denseNumbers = 5_000
+
+// denseBatchItems is how many items the dense batch holds, of the 25 a batch
+// takes: 12 are about 500 KB.
+const denseBatchItems = 12
+
+// decodeBody is one body of the matrix, priced microsPerKB for each caller.
 type decodeBody struct {
 	operation, name, shape string
-	widest                 int
+	microsPerKB            int
 	body                   func(worker int) string
 }
 
 // decodeShapes are the bodies: a PutItem of a list of small values (dense) and
-// of a 400 KB string, and BatchWriteItem of 1 MB, as a batch of records
-// (dense) and of strings.
+// of strings of 400 KB and 25 KB, and BatchWriteItem as a batch of records
+// (dense) and of strings of 1 MB and 250 KB.
 func decodeShapes() []decodeBody {
 	missing := func(item string) string { return `{"TableName":"missing","Item":` + item + `}` }
 
@@ -88,28 +112,34 @@ func decodeShapes() []decodeBody {
 	}
 
 	return []decodeBody{
-		{opPut, "PutItem100KB", shapeDense, 1, func(w int) string {
+		{opPut, "PutItem50KB", shapeDense, 130, func(w int) string {
 			return missing(denseItem(fmt.Sprint("p", w), numberList(denseNumbers)))
 		}},
-		{opPut, "PutItem400KB", shapeString, 16, func(w int) string { return missing(text(fmt.Sprint("p", w), 400_000)) }},
-		{opBatchWrite, "1MB", shapeDense, 1, convoyBatchToMissing},
+		{opPut, "PutItem400KB", shapeString, 1, func(w int) string { return missing(text(fmt.Sprint("p", w), 400_000)) }},
+		{opPut, "PutItem25KB", shapeString, 1, func(w int) string { return missing(text(fmt.Sprint("p", w), 25_000)) }},
+		{opBatchWrite, "500KB", shapeDense, 10, denseBatchToMissing},
 		{opBatchWrite, "1MB", shapeString, 1, batch(func(w, i int) string {
 			return text(fmt.Sprint("b", w, "-", i), 40_000)
+		})},
+		{opBatchWrite, "250KB", shapeString, 1, batch(func(w, i int) string {
+			return text(fmt.Sprint("b", w, "-", i), 10_000)
 		})},
 	}
 }
 
-// convoyBatchToMissing is convoyBatch aimed at the table that does not exist.
-func convoyBatchToMissing(worker int) string {
-	return strings.Replace(convoyBatch(worker), `"burst"`, `"missing"`, 1)
+// denseBatchToMissing is convoyBatch of denseBatchItems items, aimed at the
+// table that does not exist.
+func denseBatchToMissing(worker int) string {
+	return strings.Replace(textBatchOf(worker, denseBatchItems, 36_000, 36_000), `"burst"`, `"missing"`, 1)
 }
 
 func BenchmarkDecodeBudget(b *testing.B) {
 	// Every body sent together is under the budget, so none takes the dense lane
-	// and none is throttled for it. What a cell sends at once is at most 16 MB,
-	// a quarter of the in-flight bound, so no worker waits for room under it
-	// today; the wait is long so that a cell that grows to one that does is
-	// measured, served one worker after another, and not throttled.
+	// and none is throttled for it. What a cell sends at once is at most 6.5 MB
+	// (the 400 KB string at 16), a tenth of the in-flight bound, so no worker
+	// waits for room under it today; the wait is long so that a cell that grows
+	// to one that does is measured, served one worker after another, and not
+	// throttled.
 	roomyMemoryLimit(b)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 	protocol.SetBodyWait(5 * time.Minute)
@@ -122,7 +152,9 @@ func BenchmarkDecodeBudget(b *testing.B) {
 		dense := passesBudget(b, shape.operation, shape.body(0))
 
 		for _, workers := range itemConcurrency {
-			if workers > shape.widest || (workers > 1 && dense) {
+			size := len(shape.body(0)) * workers
+
+			if (workers > 1 && dense) || tooSlowToGate(size/1000*shape.microsPerKB, maxDecodeMicros) {
 				continue
 			}
 
@@ -130,8 +162,6 @@ func BenchmarkDecodeBudget(b *testing.B) {
 			for worker := range workers {
 				bodies[worker] = shape.body(worker)
 			}
-
-			size := len(bodies[0]) * workers
 
 			b.Run(fmt.Sprintf("op=%s/body=%s/shape=%s/concurrency=%d", shape.operation, shape.name,
 				shape.shape, workers), func(b *testing.B) {

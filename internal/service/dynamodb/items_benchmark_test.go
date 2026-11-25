@@ -65,34 +65,33 @@ type itemPayload struct {
 	size int
 }
 
-const (
-	// The most bytes of items one iteration of PutItem or GetItem carries,
-	// workers times the payload. A cell over it is left out, as the slowest of
-	// its runs has to be at most 8 ms. PutItem at 399 KiB and concurrency 64,
-	// 25.5 MB, took 17.0 to 20.1 ms on the gate's runners (ten runs), 19.7 to
-	// 23.1 ms with persist=on; at 16, 6.4 MB, 5.0 to 6.8 ms. GetItem reads the
-	// same bytes in at most 5.8 ms, so keeps every cell.
-	maxIterationPutBytes = 8 << 20
-	maxIterationGetBytes = 32 << 20
-)
+// maxIterationPutBytes is the most bytes of items one iteration of PutItem
+// carries, workers times the payload. A cell over it is left out
+// (tooSlowToGate), as the slowest of its runs has to be at most 8 ms. On the
+// gate's runners (ten runs, bench run 45505878281 of PR 84) PutItem at 399 KiB
+// and concurrency 64, 25.5 MB, took 12.3 to 14.1 ms, and 14.0 to 16.8 ms with
+// persist=on; at 16, 6.4 MB, it took 3.7 to 4.0 ms, and 4.2 to 4.5 ms with
+// persist=on, which the budget keeps. GetItem reads the same bytes in at most
+// 4.4 ms (399 KiB at 64), so keeps every cell (unbudgeted).
+const maxIterationPutBytes = 8 << 20
 
 // itemMatrix runs one sub-benchmark for every payload at every concurrency
-// whose iteration carries at most maxBytes, each on a fresh stack holding the
-// table bench, keyed by id.
-func itemMatrix(b *testing.B, maxBytes int, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
+// whose iteration carries at most budget bytes, each on a fresh stack holding
+// the table bench, keyed by id.
+func itemMatrix(b *testing.B, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
 	b.Helper()
-	itemMatrixOn(b, newStack, maxBytes, run)
+	itemMatrixOn(b, newStack, budget, run)
 }
 
 // itemMatrixOn is itemMatrix on the stacks mk builds.
 func itemMatrixOn(
-	b *testing.B, mk func(testing.TB) *stack, maxBytes int, run func(b *testing.B, s *stack, p itemPayload, workers int),
+	b *testing.B, mk func(testing.TB) *stack, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int),
 ) {
 	b.Helper()
 
 	for _, payload := range itemPayloads {
 		for _, workers := range itemConcurrency {
-			if payload.size*workers > maxBytes {
+			if tooSlowToGate(payload.size*workers, budget) {
 				continue
 			}
 
@@ -233,7 +232,7 @@ func BenchmarkDeleteItem(b *testing.B) {
 }
 
 func BenchmarkGetItem(b *testing.B) {
-	itemMatrix(b, maxIterationGetBytes, func(b *testing.B, s *stack, p itemPayload, workers int) {
+	itemMatrix(b, unbudgeted, func(b *testing.B, s *stack, p itemPayload, workers int) {
 		for worker := range workers {
 			s.ok(b, opPut, putBody(worker, p.size))
 		}

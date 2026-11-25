@@ -87,7 +87,9 @@ type snapshotCase struct {
 // docs/architecture.md (Persistence, "DynamoDB") quotes the million-item rows.
 const largeEnv = "GOSTACK_BENCH_LARGE"
 
-// snapshotCases are the item counts at each item size, each op under 50 ms.
+// snapshotCases are the item counts at each item size, each op at most 8 ms:
+// the slowest, 10,000 items of 100 B, took 5.6 to 6.1 ms on the gate's runners
+// (ten runs, bench run 45505878281 of PR 84, main a0e13bb3).
 // The large cases add 100,000 and 1,000,000 items of 100 B and 100,000 of
 // 4 KiB; a million items of 4 KiB would be 4 GB.
 func snapshotCases() []snapshotCase {
@@ -99,11 +101,14 @@ func snapshotCases() []snapshotCase {
 }
 
 // restoreCases are snapshotCases cut to what a restore reads in at most 8 ms,
-// the slowest of its runs. A restore costs about 4 times a snapshot of the same
-// table: on the gate's runners (ten runs) 10,000 items of 100 B took 19.2 to
-// 20.0 ms and 1,000 of 4 KiB 8.1 to 8.9 ms, where the snapshots of them took at
-// most 5.1 ms. So a restore stops at 1,000 items of 100 B and takes 500 of
-// 4 KiB, about half its time. The large cases are not cut.
+// the slowest of its runs. A restore costs 3 to 12 times a snapshot of the same
+// table: on the gate's runners (ten runs, bench run 45505878281 of PR 84, main
+// a0e13bb3) 10,000 items of 100 B took 18.8 to 19.8 ms and 1,000 of 4 KiB 7.6
+// to 8.7 ms, where the snapshots of them took 6.1 and 0.7 ms at most. So a
+// restore stops at 1,000 items of 100 B (2.2 to 2.4 ms) and takes 500 of 4 KiB
+// (3.9 to 4.3 ms), about half the time of 1,000. Those are its two counts, the
+// second kept for the 10,000 and the 1,000 of 4 KiB it loses. The large cases
+// are not cut.
 func restoreCases() []snapshotCase {
 	return slices.Concat([]snapshotCase{
 		{1_000, itemPayloads[0]},
