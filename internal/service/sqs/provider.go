@@ -91,6 +91,8 @@ func (p *Provider) Registration() service.Registration {
 		Serve:    p.serve,
 		Mount:    p.mount,
 		Mutating: mutating,
+		// A body longer than any valid request is answered at FreeBody.
+		MaxRequest: maxRequest,
 		// The developer API is not a routing hook: see DeveloperMount.
 		DeveloperMount: p.mountDeveloperAPI,
 		Shutdown:       p.Shutdown,

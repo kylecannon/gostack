@@ -334,6 +334,7 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		returned := false
 
 		r = r.WithContext(protocol.WithCharge(context.WithValue(r.Context(), callKey{}, state), &state.charge))
+		state.charge.StopWaitsWith(g.stopping)
 
 		// A request that one service makes to another through the gateway
 		// (inproc) carries request.MarkInternal, which no header or listener
@@ -342,7 +343,10 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		if request.IsInternal(r.Context()) {
 			state.charge.ExemptDecode()
 		} else if meter := meterBody(r); meter != nil {
-			meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+			if meter.Charges() {
+				meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+			}
+
 			state.charge.Meter(meter)
 			r.Body = meter
 		}
