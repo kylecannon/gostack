@@ -67,7 +67,9 @@ func lex(src string) ([]token, bool) {
 	var out []token
 
 	for {
-		l.skipSpace()
+		if !l.skipSpace() {
+			return nil, false
+		}
 
 		if l.off >= len(l.src) {
 			return append(out, token{kind: tokEOF, at: Pos{Line: l.line, Col: l.col}}), true
@@ -88,7 +90,11 @@ func (l *lexer) advance(n int) {
 	l.col += n
 }
 
-func (l *lexer) skipSpace() {
+// skipSpace moves past white space and comments: a `--` comment to the end of
+// its line, and a `/* ... */` comment, which ends at the first `*/` and does not
+// nest (verification/SQ-418 c6). It reports false for a block comment that is
+// never closed.
+func (l *lexer) skipSpace() bool {
 	for l.off < len(l.src) {
 		switch c := l.src[l.off]; {
 		case c == '\n':
@@ -98,13 +104,25 @@ func (l *lexer) skipSpace() {
 		case c == ' ' || c == '\t' || c == '\r':
 			l.advance(1)
 		case strings.HasPrefix(l.src[l.off:], "--"):
-			for l.off < len(l.src) && l.src[l.off] != '\n' {
-				l.advance(1)
+			end := strings.IndexByte(l.src[l.off:], '\n')
+			if end < 0 {
+				end = len(l.src) - l.off
 			}
+
+			l.advanceText(l.src[l.off : l.off+end])
+		case strings.HasPrefix(l.src[l.off:], "/*"):
+			end := strings.Index(l.src[l.off+2:], "*/")
+			if end < 0 {
+				return false
+			}
+
+			l.advanceText(l.src[l.off : l.off+2+end+2])
 		default:
-			return
+			return true
 		}
 	}
+
+	return true
 }
 
 func (l *lexer) next() (token, bool) {
@@ -159,10 +177,12 @@ func (l *lexer) next() (token, bool) {
 	}
 }
 
-// advanceText moves past text, which may span lines.
+// advanceText moves past text, which may span lines. A column counts the
+// characters before it, as the image's does, where a byte offset would count an
+// "é" as two (verification/SQ-418 diff.txt).
 func (l *lexer) advanceText(text string) {
-	for i := range len(text) {
-		if text[i] == '\n' {
+	for _, r := range text {
+		if r == '\n' {
 			l.line++
 			l.col = 1
 		} else {

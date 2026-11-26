@@ -19,6 +19,9 @@ const (
 	// msgExistsOnlyTx refuses an EXISTS outside ExecuteTransaction, in the
 	// image's words, which name no statement (SQ-467 image-probe.log).
 	msgExistsOnlyTx = "EXISTS can only be used in ExecuteTransaction write requests."
+	// msgUnsupportedTx refuses, inside a transaction, an EXISTS around an
+	// expression that is not a SELECT, as the image does (SQ-418 c4).
+	msgUnsupportedTx = "Unsupported operation in transaction."
 )
 
 // conditionFailedError is a ConditionalCheckFailedException that carries the item
@@ -68,14 +71,9 @@ type writeStatement struct {
 func (c caller) compileWrite(
 	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
 ) (*writeStatement, error) {
-	name, e, err := c.statementTable(&stmt.Table)
+	name, e, err := c.writeTable(stmt, params)
 	if err != nil {
-		// DynamoDB Local looks an INSERT's table up without checking its name.
-		if stmt.Kind == partiql.Insert && isCode(err, codeValidation) {
-			return nil, api.NewResourceNotFoundException(msgTableNotFound)
-		}
-
-		return nil, fmt.Errorf("statement: %w", err)
+		return nil, err
 	}
 
 	key := e.data.Key()
@@ -90,7 +88,7 @@ func (c caller) compileWrite(
 
 	w.key, rest, err = singleItem(stmt.Where, key, r)
 	if err != nil {
-		return nil, err
+		return nil, beforeTable(stmt, params, err)
 	}
 
 	cond, err := renderCond(joinAll(rest), r)
@@ -131,6 +129,43 @@ func (c caller) compileWrite(
 	}
 
 	return w.checked(err)
+}
+
+// writeTable looks up the table of a write, after the refusals that come before
+// it (refusedFirst). A table that is refused is answered after the statement's
+// own expressions (beforeTable).
+func (c caller) writeTable(stmt *partiql.Statement, params []api.AttributeValue) (string, *tableEntry, error) {
+	err := refusedFirst(stmt, params)
+	if err != nil {
+		return "", nil, err
+	}
+
+	name, e, err := c.statementTable(&stmt.Table)
+	if err == nil {
+		return name, e, nil
+	}
+
+	// DynamoDB Local looks an INSERT's table up without checking its name.
+	if stmt.Kind == partiql.Insert && isCode(err, codeValidation) {
+		return "", nil, api.NewResourceNotFoundException(msgTableNotFound)
+	}
+
+	return "", nil, beforeTable(stmt, params, fmt.Errorf("statement: %w", err))
+}
+
+// refusedFirst is what the image refuses of a write before it looks the table
+// up: for an EXISTS, which holds its SELECT's aliases unread, the table's name,
+// as a SELECT checks it first; and for a statement with an alias, the alias,
+// after the statement's own expressions.
+func refusedFirst(stmt *partiql.Statement, params []api.AttributeValue) error {
+	switch {
+	case stmt.Kind == partiql.Exists:
+		return statementName(stmt.Table)
+	case stmt.Aliased:
+		return beforeTable(stmt, params, value.Invalid(partiql.MsgAliasing))
+	default:
+		return nil
+	}
 }
 
 // checked is w when it compiled, err nil, and its expressions parse.

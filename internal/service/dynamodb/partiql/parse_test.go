@@ -115,6 +115,62 @@ func Test_Value_errors(t *testing.T) {
 	}
 }
 
+// Test_Parse_orderGaps: the forms the image takes that the parser once refused
+// (SQ-418): a REMOVE of one path, a path step in quotes, an alias it parses and
+// leaves to the caller to refuse, and a comment in a block.
+func Test_Parse_orderGaps(t *testing.T) {
+	s, err := partiql.Parse("UPDATE t REMOVE a REMOVE b.c SET d = 1, e = 2 WHERE id = 'a'")
+	require.NoError(t, err)
+	require.Len(t, s.Actions, 4)
+
+	for _, src := range []string{"UPDATE t REMOVE a, b WHERE id = 'a'", "UPDATE t REMOVE a, WHERE id = 'a'"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src)
+	}
+
+	for _, step := range []string{"m['x']", `m["x"]`, "m[x]", "m.x"} {
+		s, err = partiql.Parse("SELECT " + step + " FROM t")
+		require.NoError(t, err, step)
+		require.Equal(t, partiql.Path{{Name: "m"}, {Name: "x"}}, s.Projection[0], step)
+	}
+
+	s, err = partiql.Parse("SELECT m[1]['x'][2] FROM t")
+	require.NoError(t, err)
+	require.Equal(t, partiql.Path{{Name: "m"}, {Index: 1, IsIndex: true}, {Name: "x"}, {Index: 2, IsIndex: true}},
+		s.Projection[0])
+
+	_, err = partiql.Parse("SELECT m[''] FROM t")
+	require.EqualError(t, err, partiql.MsgEmptyComponent)
+
+	aliases := map[string][2]bool{
+		"SELECT a AS z FROM t": {true, false}, "SELECT a z, b FROM t": {true, false}, "SELECT a FROM t u": {true, true},
+		"SELECT a FROM t AS u WHERE id = 1": {true, true}, "UPDATE t AS u SET a = 1": {true, true},
+		"DELETE FROM t u WHERE id = 1": {true, true}, "SELECT a FROM t WHERE id = 1": {false, false},
+	}
+	for src, want := range aliases {
+		s, err = partiql.Parse(src)
+		require.NoError(t, err, src)
+		require.Equal(t, want, [2]bool{s.Aliased, s.TableAliased}, src)
+	}
+
+	for _, src := range []string{"SELECT a AS FROM t", "SELECT * AS z FROM t", "SELECT a AS 'z' FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
+
+	s, err = partiql.Parse("SELECT /* a\n*/ a /**/ FROM /*/ b */ t -- c /*\n WHERE /* d */ id = 'x/*y*/'")
+	require.NoError(t, err)
+	require.Equal(t, "t", s.Table)
+
+	for _, src := range []string{"SELECT a FROM t /* open", "SELECT a FROM t /*/", "SELECT /* /* */ */ a FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
+
+	_, err = partiql.Parse("SELECT /* é\n😀 */ f(x) FROM t")
+	require.EqualError(t, err, "Unexpected path component at 2:6:1")
+}
+
 // FuzzParse: no statement panics the parser or the value builder. A table
 // name may be empty ("FROM \"\""); the lookup refuses it.
 func FuzzParse(f *testing.F) {

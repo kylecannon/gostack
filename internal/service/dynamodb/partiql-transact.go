@@ -235,7 +235,13 @@ func (c caller) refuseTxStatement(parsed *txStatements, i, n int, params []api.A
 		return parsed.refused[i]
 	}
 
-	_, err := c.compileWrite(parsed.stmts[i], params, false)
+	// The image names the statement's own expressions before any of it.
+	err := beforeTable(parsed.stmts[i], params, nil)
+	if err != nil {
+		return txCompileError(i, n, err)
+	}
+
+	_, err = c.compileWrite(parsed.stmts[i], params, false)
 	if _, shaped := errors.AsType[*shapeError](err); shaped || isCode(err, codeNotFound) {
 		return txCompileError(i, n, err)
 	}

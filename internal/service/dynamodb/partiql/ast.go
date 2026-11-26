@@ -55,6 +55,13 @@ type Statement struct {
 	Returning Returning
 	// Params is how many ? parameters the statement holds.
 	Params int
+	// Aliased is set on a statement that names an alias, for a projected path
+	// or the table. The image parses one and refuses it later, where the
+	// caller puts it among the statement's other refusals (MsgAliasing).
+	Aliased bool
+	// TableAliased is set when the alias is the table's, which a SELECT refuses
+	// before it checks the table's name, where one of its list follows the name.
+	TableAliased bool
 }
 
 // Action is one SET or REMOVE of an UPDATE. Value is nil for a REMOVE.

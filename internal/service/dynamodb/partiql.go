@@ -159,24 +159,36 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 	return stmt, nil
 }
 
-// parseFailure is the answer to a statement that did not parse. Outside a
-// transaction (exists false) an EXISTS around an expression is refused as an
-// EXISTS, where inside one it is not well formed.
-//
-//nolint:revive // flag-parameter: whether the operation runs EXISTS
+// parseFailure is the answer to a statement that did not parse. An EXISTS
+// around an expression is refused as an EXISTS outside a transaction (exists
+// false), and inside one as an operation it does not support.
 func parseFailure(err error, exists bool) error {
 	pe, ok := errors.AsType[*partiql.Error](err)
-	if ok && pe.ExistsOnly && !exists {
-		return value.Invalid(msgExistsOnlyTx)
-	}
 
-	return statementError(err)
+	switch {
+	case ok && pe.ExistsOnly && exists:
+		return value.Invalid(msgUnsupportedTx)
+	case ok && pe.ExistsOnly:
+		return value.Invalid(msgExistsOnlyTx)
+	default:
+		return statementError(err)
+	}
 }
 
 // executeSelect runs a SELECT as a Query or a Scan.
 func (p *Provider) executeSelect(
 	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
 ) (*api.ExecuteStatementOutput, error) {
+	r := newRender(in.Parameters)
+
+	// The image checks the table's name, an alias and the list's overlap
+	// before it looks the table up, so a missing table or index, a WHERE
+	// without the key and an ORDER BY with no WHERE come after them.
+	projected, aliases, err := checkSelect(stmt, r)
+	if err != nil {
+		return nil, err
+	}
+
 	_, e, err := p.caller(ctx).statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
@@ -200,13 +212,6 @@ func (p *Provider) executeSelect(
 	}
 
 	start, err := decodeToken(in.NextToken)
-	if err != nil {
-		return nil, err
-	}
-
-	r := newRender(in.Parameters)
-
-	projected, aliases, err := projection(stmt.Projection, r)
 	if err != nil {
 		return nil, err
 	}

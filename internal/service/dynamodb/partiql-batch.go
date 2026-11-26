@@ -38,6 +38,15 @@ type readStatement struct {
 func (c caller) compileRead(
 	stmt *partiql.Statement, params []api.AttributeValue, consistent *bool,
 ) (*readStatement, error) {
+	r := newRender(params)
+
+	// As ExecuteStatement does (checkSelect), the image names the table's name,
+	// an alias and the list's overlap before the table, its index and its key.
+	projected, nested, err := checkSelect(stmt, r)
+	if err != nil {
+		return nil, err
+	}
+
 	name, e, err := c.statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
@@ -46,8 +55,6 @@ func (c caller) compileRead(
 	if stmt.Index != "" {
 		return nil, errNotSingle
 	}
-
-	r := newRender(params)
 
 	key, rest, err := singleItem(stmt.Where, e.data.Key(), r)
 
@@ -77,11 +84,6 @@ func (c caller) compileRead(
 		}
 
 		return nil, errNotSingle
-	}
-
-	projected, nested, err := projection(stmt.Projection, r)
-	if err != nil {
-		return nil, err
 	}
 
 	if nested != nil {

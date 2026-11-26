@@ -122,10 +122,18 @@ func (r *render) operand(n *partiql.Node) (string, error) {
 		return "", value.Invalid(msgMissingCompare)
 	case n.Kind == partiql.KindCall:
 		return r.call(n)
+	case n.Kind == partiql.KindArith:
+		// A sum has no place in a condition; handing it to cond would hand it
+		// back here, without end.
+		return "", value.Invalid(msgConditionOperator + n.Op)
 	default:
 		return r.cond(n)
 	}
 }
+
+// msgConditionOperator refuses an arithmetic operator in a condition; the
+// operator follows.
+const msgConditionOperator = "Unsupported operator in Condition Expression. Operator: "
 
 // The functions a condition may call, and those an UPDATE's SET may.
 var (

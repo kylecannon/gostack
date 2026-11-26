@@ -70,12 +70,85 @@ func statementFailure(err error) error {
 func (c caller) statementTable(name *string) (string, *tableEntry, error) {
 	resolved, e, err := c.lookup(name)
 
+	return resolved, e, statementNameError(err)
+}
+
+// statementName checks a statement's table name alone, as statementTable does
+// before it looks the table up.
+func statementName(name string) error {
+	resolved := tableName(name)
+
+	return statementNameError(checkName(&resolved))
+}
+
+// statementNameError is err in DynamoDB Local's PartiQL words when it refuses
+// the table name.
+func statementNameError(err error) error {
 	ae := asAWSError(err)
 	if ae != nil && ae.Code == codeValidation && ae.Message == msgTableName {
-		return "", nil, value.Invalid(msgStatementTable)
+		return value.Invalid(msgStatementTable)
 	}
 
-	return resolved, e, err
+	return err
+}
+
+// checkSelect makes the checks the image makes of a SELECT before it looks its
+// table up: the table's name, then an alias, then the paths of the list as
+// one (SQ-418 c5). It renders the list into r.
+func checkSelect(stmt *partiql.Statement, r *render) (*string, []partiql.Path, error) {
+	if stmt.TableAliased {
+		return nil, nil, value.Invalid(partiql.MsgAliasing)
+	}
+
+	err := statementName(stmt.Table)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if stmt.Aliased {
+		return nil, nil, value.Invalid(partiql.MsgAliasing)
+	}
+
+	return projection(stmt.Projection, r)
+}
+
+// beforeTable is the answer to a write whose table or key is refused: the
+// error of the statement's own expressions when they have one, which the image
+// names first (SQ-418 c2, c3, c5). An INSERT holds none.
+func beforeTable(stmt *partiql.Statement, params []api.AttributeValue, refused error) error {
+	if stmt.Kind == partiql.Insert {
+		return refused
+	}
+
+	r := newRender(params)
+
+	cond, err := renderCond(stmt.Where, r)
+	if err != nil {
+		return err
+	}
+
+	var (
+		update *string
+		rank   []int
+	)
+
+	if stmt.Kind == partiql.Update {
+		var text string
+
+		text, rank, err = r.update(stmt.Actions)
+		if err != nil {
+			return err
+		}
+
+		update = &text
+	}
+
+	err = checkStatementExprs(r.attributeNames(), r.attributeValues(), cond, update, rank, 0)
+	if err != nil {
+		return err
+	}
+
+	return refused
 }
 
 // checkRangeTypes refuses a Query's range key conditions whose values are not
