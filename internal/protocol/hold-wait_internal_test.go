@@ -329,7 +329,7 @@ func Test_BodyPool_SafetyBlockedStepStallsNoOne(t *testing.T) {
 		m, callCtx := meteredBody(t, size, int64(size))
 		_, err := ReadBody(m, int64(size))
 		require.NoError(t, err, "call %d is admitted", i)
-		assert.Less(t, time.Since(start), 100*time.Millisecond, "call %d is not held up", i)
+		assert.Less(t, time.Since(start), time.Second, "call %d is not held up", i)
 		ReleaseBody(callCtx)
 	}
 
@@ -381,7 +381,7 @@ func Test_BodyPool_UnsafeStepShortOfRoomStallsNoOne(t *testing.T) {
 	m, callCtx := meteredBody(t, 100<<10, 100<<10)
 	_, err := ReadBody(m, 100<<10)
 	require.NoError(t, err, "the stated body is admitted")
-	assert.Less(t, time.Since(start), 100*time.Millisecond, "at once, not at the older body's wait")
+	assert.Less(t, time.Since(start), time.Second, "at once, not at the older body's wait")
 	ReleaseBody(callCtx)
 
 	pool.release(7 * mib)

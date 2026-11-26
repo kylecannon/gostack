@@ -15,12 +15,26 @@ import (
 // A Charge is used on the request's own goroutine.
 type Charge struct {
 	ctx    context.Context //nolint:containedctx // the request's, for the waits while it is decoded
-	meter  *BodyMeter
 	decode DecodeHold
 	heap   []func() // the releases of its heap reservations (KeepHeap)
+	// stop is the channel whose close ends the request's waits on the pool
+	// while it holds nothing of it (StopWaitsWith), or nil.
+	stop <-chan struct{}
 }
 
 type chargeKey struct{}
+
+// StopWaitsWith makes the close of stop end the request's waits on the
+// in-flight bound while it holds nothing of it: its body queued for admission,
+// or its decoding while it holds neither body bytes nor decode room. Each such
+// wait fails with ErrBusy. A wait while it holds some of the bound goes on
+// until its own context or the body wait ends it. The gateway hands every
+// request the channel it closes as it begins to shut down, so a body it queued
+// is answered with its service's throttle within the drain, not cut when the
+// drain ends. Only a waiter reads it.
+func (c *Charge) StopWaitsWith(stop <-chan struct{}) {
+	c.stop = stop
+}
 
 // WithCharge returns ctx carrying c, for a request whose context is ctx. For a
 // request that one service makes to another through the gateway (inproc), the
@@ -44,7 +58,6 @@ func ChargeOf(ctx context.Context) *Charge {
 // with the room its decoding is planned to hold (BodyMeter.Read), which m
 // charges to the request's decode hold.
 func (c *Charge) Meter(m *BodyMeter) {
-	c.meter = m
 	m.decode = &c.decode
 	c.decode.body = m
 }
@@ -67,7 +80,7 @@ func (c *Charge) ExemptDecode() {
 
 // ReleaseBody gives back what the request's body holds and stops charging it.
 func (c *Charge) ReleaseBody() {
-	c.meter.Release()
+	c.decode.body.Release()
 }
 
 // ReleaseDecode gives back what decoding holds. Decoding is over by then.
@@ -95,8 +108,8 @@ func (c *Charge) ReleasePool() {
 // the in-flight bound now.
 func (c *Charge) PoolHeld() int64 {
 	held := c.decode.Held()
-	if c.meter != nil {
-		held += c.meter.held
+	if c.decode.body != nil {
+		held += c.decode.body.held
 	}
 
 	return held
@@ -150,10 +163,10 @@ func ArmBody(ctx context.Context) {
 // of an ordinary body (TextDecode, FormDecode). A body already admitted keeps
 // the plan it was admitted with.
 func armBodyFor(ctx context.Context, plan int64) {
-	if c := ChargeOf(ctx); c != nil && c.meter != nil {
-		c.meter.armed = true
-		if c.meter.held == 0 {
-			c.meter.plan = plan
+	if c := ChargeOf(ctx); c != nil && c.decode.body != nil {
+		c.decode.body.armed = true
+		if c.decode.body.held == 0 {
+			c.decode.body.plan = plan
 		}
 	}
 }

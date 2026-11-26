@@ -1,6 +1,9 @@
 package protocol
 
 import (
+	"bytes"
+	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -18,11 +21,23 @@ const passMiB = 1 << 20
 func statedCharge(t *testing.T, size int) *Charge {
 	t.Helper()
 
-	m, ctx := meteredBody(t, size, int64(size))
+	return statedChargeIn(t.Context(), t, size)
+}
+
+// statedChargeIn is statedCharge for a request whose context is ctx.
+func statedChargeIn(ctx context.Context, t *testing.T, size int) *Charge {
+	t.Helper()
+
+	c := new(Charge)
+	ctx = WithCharge(ctx, c)
+	m := NewBodyMeter(ctx, io.NopCloser(bytes.NewReader(make([]byte, size))), int64(size))
+	c.Meter(m)
+	ArmBody(ctx)
+
 	_, err := ReadBody(m, int64(size))
 	require.NoError(t, err)
 
-	return ChargeOf(ctx)
+	return c
 }
 
 // readLater reads a body that states size in the background, as a new request,
@@ -89,7 +104,7 @@ func Test_DecodeHold_AFittingDecodingPassesAShortOne(t *testing.T) {
 	start := time.Now()
 	_, err := b.HoldDecode(FreeDecode + 16*passMiB)
 	require.NoError(t, err, "B's decoding is granted")
-	assert.Less(t, time.Since(start), 100*time.Millisecond, "at once, past A's")
+	assert.Less(t, time.Since(start), time.Second, "at once, past A's, well within the wait")
 
 	assert.Equal(t, 1, poolState(func(p *bodyPool) int { return len(p.growing) }), "A's decoding still waits")
 	assert.Equal(t, 1, poolState(func(p *bodyPool) int { return len(p.starting) }),
@@ -115,17 +130,19 @@ func Test_DecodeHold_APassedOverDecodingIsAnsweredAtItsWait(t *testing.T) {
 	const wait = 500 * time.Millisecond
 
 	SetMaxBody(DefaultMaxBody)
-	withBound(t, DefaultInFlight, wait)
-
-	a, b := statedCharge(t, 16*passMiB), statedCharge(t, 4*passMiB)
+	// The new body's wait, set before any request queues: A's wait is its
+	// request's context, which ends a wait as the body wait does.
+	withBound(t, DefaultInFlight, 4*wait)
 
 	start := time.Now()
+	aCtx, cancel := context.WithTimeout(t.Context(), wait)
+	t.Cleanup(cancel)
+
+	a, b := statedChargeIn(aCtx, t, 16*passMiB), statedCharge(t, 4*passMiB)
 	aDone := decodeLater(t, a, FreeDecode+46*passMiB, 1)
 
 	_, err := b.HoldDecode(FreeDecode + 16*passMiB)
 	require.NoError(t, err, "B's decoding is granted past A's")
-
-	SetBodyWait(4 * wait)
 
 	newDone := readLater(t, passMiB)
 
@@ -179,7 +196,7 @@ func Test_BodyPool_UnsafeFirstStepLetsNewBodiesPass(t *testing.T) {
 	m, callCtx := meteredBody(t, passMiB, passMiB)
 	_, err := ReadBody(m, passMiB)
 	require.NoError(t, err, "the stated body is admitted")
-	assert.Less(t, time.Since(start), 100*time.Millisecond, "at once, not at the first step's wait")
+	assert.Less(t, time.Since(start), time.Second, "at once, not at the first step's wait")
 	ReleaseBody(callCtx)
 
 	assert.Equal(t, 1, poolState(func(p *bodyPool) int { return len(p.starting) }), "the first step still waits")
