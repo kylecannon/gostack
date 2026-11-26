@@ -526,3 +526,48 @@
   reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
   pr: 84
   commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PartiQLSelectWidth/items=100/paths=300/shape=top/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PartiQLSelectWidth/items=100/paths=1/shape=top/concurrency=16
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PartiQLSelectWidth/items=100/paths=1/shape=nested/concurrency=16
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PartiQLSelect/items=100/payload=4KiB/read=key/via=batch/concurrency=16
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: PartiQLSelect/items=100/payload=4KiB/read=key/via=transaction/concurrency=16
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
