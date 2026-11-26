@@ -88,6 +88,19 @@ func Test_Splice(t *testing.T) {
 			wantItem:   `{"q\"t":{"N":"1"},"a\n":{"S":"y "}}`,
 		},
 		{
+			// The header's count of S and N values comes from stepping over
+			// what is removed: a map member named S or N is not a value of
+			// that type, and a string or set can hold brackets and quotes.
+			name: "remove values of every type, nested",
+			giveItem: `{"m":{"M":{"S":{"S":"]}\"{"},"N":{"L":[{"N":"1"},{"M":{}},{"L":[]},` +
+				`{"SS":["a","b\"]"]},{"NS":["1","2"]},{"BS":["AQ==","Ag=="]},{"B":"AQ=="},` +
+				`{"BOOL":false},{"NULL":true},{"M":{"N":{"N":"3"}}}]}}},` +
+				`"s":{"S":"x"},"l":{"L":[{"S":"y"},{"N":"4"}]},"keep":{"N":"7"}}`,
+			giveNames:  []string{"l", "m", "s"},
+			giveValues: `{"s":{"M":{"S":{"N":"5"}}}}`,
+			wantItem:   `{"keep":{"N":"7"},"s":{"M":{"S":{"N":"5"}}}}`,
+		},
+		{
 			name:       "a name the item does not hold, removed",
 			giveItem:   spliceA,
 			giveNames:  []string{"z"},

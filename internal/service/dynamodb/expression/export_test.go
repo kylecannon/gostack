@@ -31,8 +31,9 @@ func ApplyStoredSpliced(
 }
 
 // SpliceCosts is the sizes ApplyStoredSpliced settles a splice on: old, the
-// size of the old values of the attributes the update writes, and cost, that
-// and the size of their new values. Both are 0 when it settles nothing.
+// size of the old values of the attributes the update writes, and cost, that,
+// the size of their new values and spliceEntry for each new value. Both are 0
+// when it settles nothing.
 func SpliceCosts(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 ) (old, cost int, err error) {
@@ -68,13 +69,28 @@ func AttrsSize(item value.Item, names []string) int {
 // packed, or "" when the splice does not hold as many attributes as item. A
 // test hands it names the update did not write.
 func SpliceChecked(stored value.Packed, names []string, item value.Item) (value.Packed, error) {
-	return spliceInto(stored, names, item)
+	return spliceInto(stored, names, item, value.ItemSize(item))
+}
+
+// SpliceCostOf is the cost spliceWorth weighs for an update of old into item
+// that wrote names: the size of the old values and the new ones, and
+// spliceEntry for each new one.
+func SpliceCostOf(old, item value.Item, names []string) int {
+	cost := AttrsSize(old, names) + AttrsSize(item, names)
+
+	for _, name := range names {
+		if _, ok := item[name]; ok {
+			cost += spliceEntry
+		}
+	}
+
+	return cost
 }
 
 // WrittenNames is the top-level attributes the update writes, as the splice is
 // handed them.
 func (u *UpdateExpr) WrittenNames() []string {
-	return u.written()
+	return u.written(nil)
 }
 
 // spliceAlways says every splice pays.

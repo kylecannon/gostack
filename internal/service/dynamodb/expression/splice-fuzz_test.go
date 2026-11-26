@@ -394,7 +394,8 @@ func requireSpliceMatches(t *testing.T, seed1, seed2 uint64) int {
 
 			wantOld := expression.AttrsSize(value.Unpack(stored[i]), u.WrittenNames())
 			require.Equal(t, wantOld, oldSize, "old size, update %q", up.text)
-			require.Equal(t, wantOld+expression.AttrsSize(want, u.WrittenNames()), cost, "cost, update %q", up.text)
+			require.Equal(t, expression.SpliceCostOf(value.Unpack(stored[i]), want, u.WrittenNames()), cost,
+				"cost, update %q", up.text)
 
 			stored[i], next = gotPacked, want
 			spliced++
@@ -788,7 +789,8 @@ func Test_ApplyStoredPacked_spliceWorth(t *testing.T) {
 }
 
 // Test_ApplyStoredPacked_spliceWorthBoundary: an update whose cost, its old
-// values and its new ones, is exactly half the stored item packs, and the same
+// values, its new ones and an entry for each new one, is exactly half the
+// stored item packs, and the same
 // update of an item one byte larger splices. The stored item is the case's
 // item and a padding string sized to put the cost at half of it. Several
 // paths below one attribute count that attribute once: counted once per path,
@@ -848,7 +850,7 @@ func Test_ApplyStoredPacked_spliceWorthBoundary(t *testing.T) {
 			require.NoError(t, err)
 
 			names := u.WrittenNames()
-			cost := expression.AttrsSize(tt.giveItem, names) + expression.AttrsSize(want, names)
+			cost := expression.SpliceCostOf(tt.giveItem, want, names)
 
 			// The padding's own size is its name's three bytes and its length.
 			half := 2*cost - value.ItemSize(tt.giveItem) - len("pad")
@@ -875,6 +877,49 @@ func Test_ApplyStoredPacked_spliceWorthBoundary(t *testing.T) {
 				require.Empty(t, spliceMismatch(stored, got, packed, names))
 			}
 		})
+	}
+}
+
+// Test_ApplyStoredPacked_smallItemAllocates: a SET of one number in an item of
+// three attributes with a 100-byte string, as BenchmarkUpdateItemStream's
+// payload=100B cells update it, packs, since the entry of its new value costs
+// more than the splice saves, and allocates what ApplyStored does, so the
+// caller's Pack is the update's one encoding. The same update beside a 4 KiB
+// string splices. It is not parallel: AllocsPerRun refuses a parallel test.
+func Test_ApplyStoredPacked_smallItemAllocates(t *testing.T) {
+	values := map[string]api.AttributeValue{":v": {N: new("1")}}
+
+	u, err := expression.ParseUpdate("SET n = :v", expression.Substitutions{Values: values}, nil)
+	require.NoError(t, err)
+
+	read := func(value.Item) (*expression.UpdateExpr, error) { return u, nil } //nolint:unparam // ApplyStored's read
+
+	for _, tt := range []struct {
+		payload     int
+		wantSpliced bool
+	}{{payload: 100}, {payload: 4 << 10, wantSpliced: true}} {
+		item := value.Item{"id": {S: new("k")}, "n": {N: new("0")}, "d": {S: new(strings.Repeat("x", tt.payload))}}
+		key := value.Item{"id": item["id"]}
+
+		stored, err := value.Pack(item)
+		require.NoError(t, err)
+
+		_, packed, err := expression.ApplyStoredPacked(key, stored, read)
+		require.NoError(t, err)
+		require.Equal(t, tt.wantSpliced, packed != "", "payload %d spliced", tt.payload)
+
+		if tt.wantSpliced {
+			continue
+		}
+
+		want := testing.AllocsPerRun(100, func() {
+			_, err = expression.ApplyStored(key, stored, read)
+		})
+		got := testing.AllocsPerRun(100, func() {
+			_, _, err = expression.ApplyStoredPacked(key, stored, read)
+		})
+		require.NoError(t, err)
+		require.InDelta(t, want, got, 0, "allocations of an update of payload %d", tt.payload)
 	}
 }
 

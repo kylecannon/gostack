@@ -2831,15 +2831,19 @@ readers hold packed strings or their own unpacked copies.
 bytes instead of packing the item it made. `PartiQL` `ExecuteStatement` and a
 `BatchExecuteStatement` `UPDATE` run through `UpdateItem` and splice too;
 `TransactWriteItems` and `ExecuteTransaction` apply their update actions with
-`ApplyStored` and repack. `expression.ApplyStoredPacked` hands `value.Splice`
-the top-level attributes the update writes, the first name of each path, and
-their new values. Key attributes are never among them: an update of one is
-refused, so a key keeps its place in the stored json, where the key reads in
-the table's `store` and `unstore` find it early. `Splice` copies every other
+`ApplyStored` and repack. `expression.ApplyStoredPacked` hands
+`value.SpliceSized` the top-level attributes the update writes, the first
+name of each path, their new values, and the new item's size, which the apply
+measures. Key attributes are never among them: an update of one is refused,
+so a key keeps its place in the stored json, where the key reads in the
+table's `store` and `unstore` find it early. `SpliceSized` copies every other
 member of the stored json as it is, encodes only the new values after them,
-and works the header out from the old one: the size and the two counts add
-up per top-level attribute, so it subtracts the old values of those
-attributes and adds the new ones. The write stores those bytes through
+and works the rest of the header out from the old one: the two counts add up
+per top-level attribute, so it subtracts what the members it removes held,
+counting their S and N values as it steps over them, and adds what the new
+values hold. It decodes no old value, and it writes the result in one
+allocation of the result's length, which it counts before writing. The write
+stores those bytes through
 `DecidePacked`, and `table.packFor` packs the item only when it is handed
 none. A `SET n = :v` on a 390 KiB item then copies the item once instead of
 encoding it. The bytes differ from `value.Pack`'s only in member order, which
@@ -2848,10 +2852,16 @@ encoding it. The bytes differ from `value.Pack`'s only in member order, which
 `ApplyStoredPacked` hands back no bytes, and `packFor` packs the new item, in
 three cases. Nothing was stored. The splice does not pay
 (`expression.spliceWorth`): its cost is the size of the old values of the
-attributes written plus the size of their new values, since it decodes one
-and encodes the other, and a cost of half the stored item's size or more
-packs. A `REMOVE` of most of the item counts what it removes, and 50 legacy
-`PUT` actions over a 51-attribute item ran 20% slower spliced than packed.
+attributes written plus the size of their new values, since it walks one and
+encodes the other, plus `spliceEntry`, 160 bytes, for each new value, and a
+cost of half the stored item's size or more packs. A `REMOVE` of most of the
+item counts what it removes, and 50 legacy `PUT` actions over a 51-attribute
+item ran 20% slower spliced than packed. The entry is the allocation the
+splice makes for each new value: it encodes them from a map of their own,
+and a map holds an `AttributeValue`, 160 bytes, behind a pointer of its own.
+`Pack` encodes the item's own map and makes none, so a `SET` of one number in
+a 100-byte item packs, as `BenchmarkUpdateItemStream`'s `payload=100B` cells
+do, at the allocations of an update before the splice.
 Or the splice holds a different count of attributes than the new item, which
 means the update changed an attribute it did not name. Two requests hand
 back the stored bytes themselves: one with no update, and a `REMOVE` of

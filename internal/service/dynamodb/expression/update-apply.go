@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"unsafe"
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/service/dynamodb/value"
@@ -58,8 +59,8 @@ func ApplyStored(
 
 // ApplyStoredPacked is ApplyStored that also returns the new item packed, as
 // value.Pack packs it: the stored item with the attributes the update wrote
-// spliced in (value.Splice), so the attributes it left, the key's among them,
-// are copied where they are and not encoded again. The packed item is ""
+// spliced in (value.SpliceSized), so the attributes it left, the key's among
+// them, are copied where they are and not encoded again. The packed item is ""
 // when nothing was stored, when spliceWorth says a splice does not pay, or
 // when the splice does not hold as many attributes as the item, and the
 // caller packs the new item. With no update it is stored itself.
@@ -71,14 +72,24 @@ func ApplyStoredPacked(
 
 // spliceWorth reports whether a splice pays: whether cost, the size of the
 // old values of the attributes the update wrote and of their new values
-// added, is less than half of stored, the stored item's size.
+// added, and spliceEntry for each of those the item keeps, is less than half
+// of stored, the stored item's size.
 //
-// A splice decodes the old value of each attribute the update wrote, for the
-// header, encodes its new one and copies the rest. Packing the item whole
-// encodes all of it once. Both halves of the cost count: a REMOVE of most of
-// the item writes no new value, but its splice decodes what it removes. 50
-// legacy PUT actions over a 51-attribute item took 20% longer spliced.
+// A splice steps over the old value of each attribute the update wrote,
+// counting its S and N values for the header, encodes its new one and copies
+// the rest. Packing the item whole encodes all of it once. Both halves of the
+// cost count: a REMOVE of most of the item writes no new value, but its
+// splice walks what it removes. 50 legacy PUT actions over a 51-attribute
+// item took 20% longer spliced.
 func spliceWorth(cost, stored int) bool { return 2*cost < stored }
+
+// spliceEntry is what a splice costs for each attribute it encodes, over the
+// value's own size: the new values are encoded from a map of their own, which
+// holds each AttributeValue, at 160 bytes over the 128 a map keeps in place,
+// in an allocation of its own. Pack encodes the item's map and makes none. On
+// an item of a few hundred bytes, such as UpdateItem setting one number of an
+// item of three attributes, that allocation costs more than the splice saves.
+const spliceEntry = int(unsafe.Sizeof(api.AttributeValue{}))
 
 // applySplicing is ApplyStoredPacked splicing when worth, given the cost of
 // the splice and the size of the stored item, says it pays.
@@ -87,7 +98,8 @@ func spliceWorth(cost, stored int) bool { return 2*cost < stored }
 // old values it writes, and stops once they alone are too much. The size of
 // the new values is worked out from the item's, which applyTo measures
 // anyway, and only an update that splices lists, sorts and dedupes the
-// names it writes.
+// names it writes. The splice is handed the item's size, so it decodes none
+// of the old values again.
 func applySplicing(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
 	worth func(cost, stored int) bool,
@@ -115,7 +127,7 @@ func applySplicing(
 
 	// The old values are measured before the update writes over them.
 	storedSize := stored.Size()
-	oldSize, pays := u.writtenSize(item, storedSize, worth)
+	oldSize, held, pays := u.writtenSize(item, storedSize, worth)
 
 	item, size, err := u.applyTo(key, item)
 	if err != nil || !pays {
@@ -123,13 +135,19 @@ func applySplicing(
 	}
 
 	// Every attribute the update did not write is as stored, so the new
-	// values' size is the old values' and what the item's size changed by.
+	// values' size is the old values' and what the item's size changed by,
+	// and the written attributes the item keeps are those it held and what
+	// its count of attributes changed by.
 	newSize := oldSize + size - storedSize
-	if !worth(oldSize+newSize, storedSize) {
+	kept := held + len(item) - stored.Len()
+
+	if !worth(oldSize+newSize+kept*spliceEntry, storedSize) {
 		return item, "", nil
 	}
 
-	packed, err := spliceInto(stored, u.written(), item)
+	var names [writtenInline]string
+
+	packed, err := spliceInto(stored, u.written(names[:0]), item, size)
 	if err != nil {
 		return nil, "", err
 	}
@@ -138,15 +156,16 @@ func applySplicing(
 }
 
 // writtenSize is the size, as ItemSize counts it, of the attributes of item
-// that the update writes, each counted once, and whether worth says that a
-// splice of that much of an item of storedSize may pay. It stops at the
-// first attribute that tips worth, and the size is then only part counted.
+// that the update writes, each counted once, how many of them item holds, and
+// whether worth says that a splice of that much of an item of storedSize may
+// pay. It stops at the first attribute that tips worth, and the size and
+// count are then only part counted.
 func (u *UpdateExpr) writtenSize(
 	item value.Item, storedSize int, worth func(cost, stored int) bool,
-) (int, bool) {
+) (int, int, bool) {
 	var counted map[string]struct{}
 
-	size := 0
+	size, held := 0, 0
 
 	for _, path := range u.paths {
 		name := path[0].Name
@@ -171,32 +190,37 @@ func (u *UpdateExpr) writtenSize(
 		if v, ok := item[name]; ok {
 			size += len(name) + value.Size(&v)
 			if !worth(size, storedSize) {
-				return size, false
+				return size, held, false
 			}
+
+			held++
 		}
 	}
 
-	return size, worth(size, storedSize)
+	return size, held, worth(size, storedSize)
 }
 
 // spliceInto is item, the update of stored that wrote the top-level
-// attributes names, as value.Splice packs it.
+// attributes names, as value.SpliceSized packs it: size is item's, as
+// ItemSize counts it.
 //
 // names must list every top-level attribute the update changed. The splice
 // holds as many attributes as item or "" is returned, so a name missing from
 // names that the update added or removed leaves the item to the caller to
 // pack; one whose value it changed in place is not caught here, and the tests
 // of written hold that none is.
-func spliceInto(stored value.Packed, names []string, item value.Item) (value.Packed, error) {
+func spliceInto(stored value.Packed, names []string, item value.Item, size int) (value.Packed, error) {
 	values := make(value.Item, len(names))
 
+	// Each value put here is allocated: a map holds an AttributeValue, which
+	// is over 128 bytes, behind a pointer. spliceEntry counts that.
 	for _, name := range names {
 		if v, ok := item[name]; ok {
 			values[name] = v
 		}
 	}
 
-	packed, err := value.Splice(stored, names, values)
+	packed, err := value.SpliceSized(stored, names, values, size)
 	if err != nil {
 		return "", err //nolint:wrapcheck // the encoder's own error, as value.Pack returns it
 	}
@@ -248,10 +272,9 @@ func (u *UpdateExpr) applyStored(key, item value.Item) (value.Item, error) {
 // written is the top-level attributes the update writes, sorted and each
 // once: the first name of each path. It holds no key attribute, which
 // checkKey refuses to update; applyTo copies the key into the item, but over
-// the stored key, which is the same.
-func (u *UpdateExpr) written() []string {
-	names := make([]string, 0, len(u.paths))
-
+// the stored key, which is the same. They are appended to names, whose room
+// a caller can hold on its stack.
+func (u *UpdateExpr) written(names []string) []string {
 	for _, path := range u.paths {
 		names = append(names, path[0].Name)
 	}
@@ -260,6 +283,10 @@ func (u *UpdateExpr) written() []string {
 
 	return slices.Compact(names)
 }
+
+// writtenInline is how many names written lists in room on its caller's
+// stack; an update that writes more lists them on the heap.
+const writtenInline = 8
 
 // checkKey refuses an update of an attribute of key.
 func (u *UpdateExpr) checkKey(key value.Item) error {
