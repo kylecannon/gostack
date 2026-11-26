@@ -30,25 +30,48 @@ func ApplyStoredSpliced(
 	return applySplicing(key, stored, read, spliceAlways)
 }
 
-// SpliceCosts is the sizes ApplyStoredSpliced settles a splice on: old, the
-// size of the old values of the attributes the update writes, and cost, that,
-// the size of their new values and spliceEntry for each new value. Both are 0
-// when it settles nothing.
+// SpliceSizes is the sizes ApplyStoredSpliced settles a splice on: Floor,
+// the spliceEntry of the whole writes it weighs before it looks at the item;
+// Old, the size of the old values of the attributes the update writes; and
+// Cost, that, the size of their new values and spliceEntry for each new
+// value. All are 0 when it settles nothing.
+type SpliceSizes struct {
+	Floor, Old, Cost int
+}
+
+// SpliceCosts is the SpliceSizes of an update of stored.
 func SpliceCosts(
 	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
-) (old, cost int, err error) {
+) (SpliceSizes, error) {
 	var costs []int
 
-	_, _, err = applySplicing(key, stored, read, func(cost, _ int) bool {
+	_, _, err := applySplicing(key, stored, read, func(cost, _ int) bool {
 		costs = append(costs, cost)
 
 		return true
 	})
-	if len(costs) < 2 {
-		return 0, 0, err
+	if len(costs) < 3 {
+		return SpliceSizes{}, err
 	}
 
-	return costs[len(costs)-2], costs[len(costs)-1], err
+	return SpliceSizes{Floor: costs[0], Old: costs[len(costs)-2], Cost: costs[len(costs)-1]}, err
+}
+
+// SpliceWorthCalls is how many times ApplyStoredPacked weighs a splice of an
+// update: 1 when the whole writes alone decide that it packs, and the item's
+// attributes are not looked at.
+func SpliceWorthCalls(
+	key value.Item, stored value.Packed, read func(old value.Item) (*UpdateExpr, error),
+) (int, error) {
+	calls := 0
+
+	_, _, err := applySplicing(key, stored, read, func(cost, stored int) bool {
+		calls++
+
+		return spliceWorth(cost, stored)
+	})
+
+	return calls, err
 }
 
 // AttrsSize is the size, as ItemSize counts it, of the attributes of item that

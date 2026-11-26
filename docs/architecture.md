@@ -2867,7 +2867,11 @@ means the update changed an attribute it did not name. Two requests hand
 back the stored bytes themselves: one with no update, and a `REMOVE` of
 attributes the item does not hold. Any other update encodes what it writes
 again, `SET a = :same` included. The update decides between the two paths
-before it lists its names: it measures the old values first and packs as
+before it lists its names. It first counts its `SET` and `ADD` actions of a
+whole top-level attribute, each of which leaves a new value and so costs
+`spliceEntry`, and packs when those alone reach half the item, as the SET of
+10 or 50 numbers in `BenchmarkUpdateItem` does, without looking at the item.
+Otherwise it measures the old values and packs as
 soon as they alone reach half the item, and it takes the new values' size
 from the item's size, which the apply measures anyway. `FuzzSplice` holds
 the splice, chained over several updates, to unpack, apply and pack: the

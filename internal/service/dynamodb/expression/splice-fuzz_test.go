@@ -389,13 +389,19 @@ func requireSpliceMatches(t *testing.T, seed1, seed2 uint64) int {
 
 			// The sizes the splice was settled on, the new values' worked out
 			// from the item's, are those of the attributes it wrote.
-			oldSize, cost, err := expression.SpliceCosts(key, stored[i], up.read)
+			sizes, err := expression.SpliceCosts(key, stored[i], up.read)
 			require.NoError(t, err)
 
 			wantOld := expression.AttrsSize(value.Unpack(stored[i]), u.WrittenNames())
-			require.Equal(t, wantOld, oldSize, "old size, update %q", up.text)
-			require.Equal(t, expression.SpliceCostOf(value.Unpack(stored[i]), want, u.WrittenNames()), cost,
+			require.Equal(t, wantOld, sizes.Old, "old size, update %q", up.text)
+			require.Equal(t, expression.SpliceCostOf(value.Unpack(stored[i]), want, u.WrittenNames()), sizes.Cost,
 				"cost, update %q", up.text)
+
+			// The floor that packs an update before the item is looked at is
+			// under the spliceEntry part of the cost, so it never packs an
+			// update the whole cost would splice.
+			entries := sizes.Cost - wantOld - expression.AttrsSize(want, u.WrittenNames())
+			require.LessOrEqual(t, sizes.Floor, entries, "floor, update %q", up.text)
 
 			stored[i], next = gotPacked, want
 			spliced++
@@ -920,6 +926,78 @@ func Test_ApplyStoredPacked_smallItemAllocates(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.InDelta(t, want, got, 0, "allocations of an update of payload %d", tt.payload)
+	}
+}
+
+// Test_ApplyStoredPacked_wholeWritesPack: an update whose whole writes alone
+// cost a splice half the item packs on the first weighing, before it walks
+// the old values, as BenchmarkUpdateItem's SET of 10 and 50 numbers does. An
+// update the floor leaves open walks them and weighs again.
+func Test_ApplyStoredPacked_wholeWritesPack(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]api.AttributeValue{":v": {N: new("1")}, ":s": {SS: []string{"x"}}}
+	item := value.Item{"id": {S: new("k")}, "d": {S: new(strings.Repeat("x", 4<<10))}}
+
+	for i := range 50 {
+		item["a"+strconv.Itoa(i)] = api.AttributeValue{N: new("0")}
+	}
+
+	key := value.Item{"id": item["id"]}
+
+	sets := func(n int) string {
+		actions := make([]string, n)
+		for i := range actions {
+			actions[i] = "a" + strconv.Itoa(i) + " = :v"
+		}
+
+		return "SET " + strings.Join(actions, ", ")
+	}
+
+	small := maps.Clone(item)
+	delete(small, "d")
+
+	tests := []struct {
+		name       string
+		giveItem   value.Item
+		giveUpdate string
+		wantWalk   bool
+		wantSplice bool
+	}{
+		{name: "10 SETs of a small item", giveItem: small, giveUpdate: sets(10)},
+		{name: "50 SETs of a small item", giveItem: small, giveUpdate: sets(50)},
+		{name: "50 ADDs of a small item", giveItem: small, giveUpdate: "ADD " +
+			strings.ReplaceAll(strings.TrimPrefix(sets(50), "SET "), " =", "")},
+		{name: "one SET of a 4 KiB item", giveItem: item, giveUpdate: "SET a0 = :v", wantWalk: true, wantSplice: true},
+		{name: "REMOVEs are no floor", giveItem: small, giveUpdate: "REMOVE a0, a1", wantWalk: true, wantSplice: true},
+		{name: "a nested SET is no floor", giveItem: value.Item{
+			"id": item["id"], "m": {M: value.Item{"x": {N: new("0")}}},
+		}, giveUpdate: "SET m.x = :v", wantWalk: true},
+		{name: "a DELETE is no floor", giveItem: value.Item{
+			"id": item["id"], "s": {SS: []string{"x", "y"}},
+		}, giveUpdate: "DELETE s :s", wantWalk: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stored, err := value.Pack(tt.giveItem)
+			require.NoError(t, err)
+
+			u, err := expression.ParseUpdate(tt.giveUpdate, expression.Substitutions{Values: values}, nil)
+			require.NoError(t, err)
+
+			read := func(value.Item) (*expression.UpdateExpr, error) { return u, nil }
+
+			calls, err := expression.SpliceWorthCalls(key, stored, read)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantWalk, calls > 1, "%q weighed %d times", tt.giveUpdate, calls)
+
+			_, packed, err := expression.ApplyStoredPacked(key, stored, read)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantSplice, packed != "", "%q spliced", tt.giveUpdate)
+		})
 	}
 }
 

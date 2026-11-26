@@ -94,8 +94,10 @@ const spliceEntry = int(unsafe.Sizeof(api.AttributeValue{}))
 // applySplicing is ApplyStoredPacked splicing when worth, given the cost of
 // the splice and the size of the stored item, says it pays.
 //
-// An update left to pack does one thing ApplyStored does not: it walks the
-// old values it writes, and stops once they alone are too much. The size of
+// An update left to pack does at most one thing ApplyStored does not: it
+// walks the old values it writes, and stops once they alone are too much.
+// It skips the walk when its whole writes, which it counts from its actions
+// alone, already cost too much, as 10 SETs of a number do. The size of
 // the new values is worked out from the item's, which applyTo measures
 // anyway, and only an update that splices lists, sorts and dedupes the
 // names it writes. The splice is handed the item's size, so it decodes none
@@ -125,9 +127,15 @@ func applySplicing(
 		return nil, "", err
 	}
 
-	// The old values are measured before the update writes over them.
+	// An update whose whole writes alone cost too much packs without a look
+	// at the item. Otherwise the old values are measured before the update
+	// writes over them.
 	storedSize := stored.Size()
-	oldSize, held, pays := u.writtenSize(item, storedSize, worth)
+	oldSize, held, pays := 0, 0, worth(u.wholeWrites()*spliceEntry, storedSize)
+
+	if pays {
+		oldSize, held, pays = u.writtenSize(item, storedSize, worth)
+	}
 
 	item, size, err := u.applyTo(key, item)
 	if err != nil || !pays {
@@ -198,6 +206,22 @@ func (u *UpdateExpr) writtenSize(
 	}
 
 	return size, held, worth(size, storedSize)
+}
+
+// wholeWrites is how many SET and ADD actions write a top-level attribute
+// whole. Each leaves its attribute in the item, at a name no other action
+// writes, so it is a floor under the written attributes the item keeps, and
+// each of those costs a splice spliceEntry.
+func (u *UpdateExpr) wholeWrites() int {
+	n := 0
+
+	for _, act := range u.actions {
+		if len(act.target.path) == 1 && (act.clause == updateSet || act.clause == updateAdd) {
+			n++
+		}
+	}
+
+	return n
 }
 
 // spliceInto is item, the update of stored that wrote the top-level
