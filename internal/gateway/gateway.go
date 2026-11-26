@@ -66,8 +66,10 @@ type Gateway struct {
 	// to startShutdown, have all returned, or in EndShutdown when none started.
 	released chan struct{}
 	// stopping closes as the shutdown begins (startShutdown). New hands it to
-	// the in-flight bound (protocol.StopQueued), where it ends the waits of
-	// the bodies queued for admission, so each is answered with its throttle.
+	// the in-flight bound (protocol.StopQueued; the last gateway made wins),
+	// where it ends the waits of the requests that hold nothing of the bound,
+	// bodies queued for admission and decodings, so each is answered with its
+	// throttle.
 	stopping chan struct{}
 
 	// tlsConfig is the certificate Listen loaded, for Serve.

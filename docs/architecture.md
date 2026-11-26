@@ -399,7 +399,9 @@ How each piece is bounded, and why this way:
   room its decoding is planned to hold, the first time it reads past
   `FreeBody`: all or nothing, in order behind other new bodies, so a body
   that waits holds nothing while it waits, and an admitted body never waits
-  on the pool while it holds part of it, for its bytes or for decoding them.
+  on the pool while it holds part of it, for its bytes or for decoding them
+  within the plan. A decoding past its plan waits while the body keeps its
+  bytes.
   The plan follows the reader that arms the meter: json and xml plan twice
   the body (`protocol.TextDecode`: json decodes twice, xml charges its text
   twice) plus `FreeBody` for structure; a query form plans nothing, since its
@@ -439,7 +441,7 @@ How each piece is bounded, and why this way:
   the decode room past what the request's decode hold holds, which a decoding
   that charges as the body arrives may have raised between two steps
   (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
-  waits for decode room while it holds its bytes. A younger body of unknown
+  waits for the decode room planned while it holds its bytes. A younger body of unknown
   length behind older ones still arriving grows to its end beside them when
   it can finish first (`Test_BodyMeter_FastBodyBehindSlowOnesServed`). A
   waiter is served in order for up to 5 s,
@@ -962,7 +964,7 @@ memory.
   stay held, and the decodings that wait are served strictly in order. A
   stated 16 MiB json body whose decoding needs 46 MiB, and a 4 MiB one behind
   it needing 16 MiB, wait with 44 MiB free: the first fits only once the
-  second's request ends, so both wait out the 5 s, one of the two is throttled
+  second's request ends, so both wait out the 5 s, at least one is throttled
   then, and a stated 1 MiB body arriving behind them waits as long. Main
   stalls the same way, holding each decoding's room as well (SQ-434 seam
   review, finding 1). A body of unknown length grows only in steps that leave

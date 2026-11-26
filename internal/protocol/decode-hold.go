@@ -135,7 +135,8 @@ func (h *DecodeHold) Held() int64 {
 
 // grow makes the hold take want, as Cover describes: a hold that nothing has
 // decoded into gives back what it holds while it waits (regrow), so holds that
-// each hold part of the bound never wait on one another for it.
+// each hold part of the bound never wait on one another for it. Its request's
+// body bytes stay held while it waits (bodyPool).
 func (h *DecodeHold) grow(ctx context.Context, want int64) error {
 	bare := h.held == 0 && (h.body == nil || h.body.held == 0)
 

@@ -442,7 +442,7 @@ func (w *bodyWaiter) watchStop() {
 // The gateway hands over the channel it closes as it begins to shut down, so a
 // body it queued is answered with its service's throttle within the drain, not
 // cut when the drain ends. It holds for whatever bound SetInFlight sets, before
-// or after; a nil channel stops nothing.
+// or after; the last call wins, and a nil channel stops nothing.
 func StopQueued(stop <-chan struct{}) {
 	queuedStop.Store(&stop)
 }
@@ -806,8 +806,10 @@ func (m *BodyMeter) charge(n int64) error {
 // admit charges a body that states its length all of it, and the room its
 // decoding is planned to hold (DecodeHold.planned), in one step, in the order
 // bodies arrive: a body that holds part of the bound never waits for more while
-// others hold the rest, whether for its own bytes or for decoding them. A body
-// over MaxBody is refused once read, so nothing is planned for its decoding.
+// others hold the rest, whether for its own bytes or for decoding them within
+// the plan; a decoding past it waits while the body keeps its bytes (regrow). A
+// body over MaxBody is refused once read, so nothing is planned for its
+// decoding.
 func (m *BodyMeter) admit() error {
 	want := min(max(m.length, m.read), m.most)
 
@@ -837,7 +839,7 @@ func (m *BodyMeter) admit() error {
 // planned for decoding that much (decodeRoom), which the request's decode hold
 // keeps. Its claim, the most it may hold, is its share and the room planned
 // for that, so a body that reaches its end never waits for room to decode
-// while it holds its bytes. The pool grants the step once it leaves every body
+// within that plan while it holds its bytes. The pool grants the step once it leaves every body
 // of unknown length a safe way to its claim (bodyPool.safe). When the step
 // does not come before the wait ends, the body gives back all it holds, its
 // decode room too, and fails with ErrBusy.
