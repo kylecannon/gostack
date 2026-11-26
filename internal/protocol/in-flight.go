@@ -1,12 +1,14 @@
 package protocol
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,6 +64,28 @@ func RequestTimeout() *awserr.Error {
 // waits. A service answers it with its protocol's throttling error, which SDKs
 // retry.
 var ErrBusy = errors.New("protocol: the request bodies in flight are at their bound")
+
+// ErrBodyLong is what reading a metered body fails with once it states or has
+// read more than its service takes (BoundBody). The read past FreeBody that
+// finds it fails, holding nothing, so a body that states a longer length is
+// refused before it is admitted, and one of unknown length holds no more than
+// the bound. The service answers it as a request too long to be valid.
+var ErrBodyLong = errors.New("protocol: the request body is longer than its service takes")
+
+// BoundBody makes the metered body of the request whose context is ctx fail
+// with ErrBodyLong past limit bytes, for a service none of whose valid requests
+// is longer: the gateway calls it once it knows the service, before the body
+// is read. A body charged already, one that a form read to find its service,
+// keeps what it holds and is not bounded: its service judges it once read.
+func BoundBody(ctx context.Context, limit int64) {
+	c := ChargeOf(ctx)
+	if c == nil || c.meter == nil || c.meter.read > FreeBody || limit <= 0 {
+		return
+	}
+
+	c.meter.limit = limit
+	c.meter.most = min(c.meter.most, limit)
+}
 
 // The answers to a request whose body failed with ErrBusy, one per protocol.
 // Each code is one the AWS SDKs retry as throttling (aws-sdk-go-v2's
@@ -165,12 +189,20 @@ func BodiesWait(own int64) bool {
 
 	room := pool.capacity - (pool.used - own)
 
-	for _, queue := range [][]*bodyWaiter{pool.growing, pool.starting} {
+	for _, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
 		for _, w := range queue {
-			room -= w.n
-			if room < 0 {
+			// A step, or a body's first step, that waits for a safe order
+			// waits whatever the caller gives back, fits or not, and holds up
+			// no one (grant).
+			if pool.blocked(w) {
+				continue
+			}
+
+			if room < w.n {
 				return true
 			}
+
+			room -= w.n
 		}
 	}
 
@@ -184,37 +216,243 @@ func SetBodyWait(wait time.Duration) {
 }
 
 // bodyPool is a weighted semaphore of bytes. Waiters are served in order, a
-// body that already holds some of the pool ahead of one that holds none, so
-// that bodies part way through their read finish and give their bytes back
-// instead of waiting on bodies that have not started.
+// request that already holds some of the pool ahead of one that holds none, so
+// that requests part way through finish and give their bytes back instead of
+// waiting on bodies that have not started: the steps of bodies of unknown
+// length still being read (steps), oldest body first, then the decodings that
+// need more (growing), then bodies not yet admitted (starting), each in the
+// order they came but for the waiters grant lets pass.
+//
+// A body that states its length is charged in one step (admit), and a decoding
+// that needs more gives back the decode room it holds and waits for all it
+// needs (regrow). Its request's body bytes stay held while it waits, so a
+// decoding that does not fit beside the bodies of the others may wait for one
+// of those requests to end: a decoding behind it that fits is let in past it,
+// and no new body is let in while it waits. A decoding whose request holds
+// nothing, a body too short to be metered, comes straight to p.growing, so
+// such requests may keep passing it: what bounds its wait is its own wait, at
+// whose end it is answered unless enough room was given back first.
+//
+// A body of unknown length holds only what it has read, and grows in steps
+// (BodyMeter.grow) while it holds the steps before; each step is granted only
+// when, after it, every such body could still reach its claim, the most it may
+// hold, in some order (safe), counting what every other request holds as given
+// back once it finishes. So some such body can always finish, and a step that
+// waits for one to finish lets the steps of the others pass it (grant). A
+// body's first step waits in p.starting, and one that waits for a safe order
+// lets the bodies queued behind it there pass it, in their order.
 type bodyPool struct {
 	mu       sync.Mutex
 	capacity int64
 	used     int64
+	steps    []*bodyWaiter
 	growing  []*bodyWaiter
 	starting []*bodyWaiter
+	// growers are the bodies of unknown length being read that hold some of
+	// the pool, in the order they were admitted; seq numbers them.
+	growers []*grower
+	seq     uint64
+}
+
+// grower is the pool's record of a body of unknown length being read: what it
+// holds of the pool, its body's step and the decode room planned for it, and
+// its claim, the most it may hold. It is changed only under the pool's lock.
+type grower struct {
+	held   int64
+	claim  int64
+	seq    uint64
+	joined bool
 }
 
 type bodyWaiter struct {
 	n     int64
+	g     *grower // the body of unknown length n is a step of, or nil
 	ready chan struct{}
+	// bare marks a waiter whose request holds nothing of the pool: a body
+	// queued for admission, or a decoding whose request holds no body bytes
+	// and no decode room. take gives it the shutdown stop (StopQueued), which
+	// then ends its wait.
+	bare bool
+	stop <-chan struct{}
 }
 
 // acquire takes n bytes of the pool, or waits for them in queue, which is
 // &p.growing or &p.starting.
 func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) error {
+	return p.take(ctx, &bodyWaiter{n: n, ready: make(chan struct{})}, queue)
+}
+
+// step takes n more bytes for the body of unknown length g, in p.steps once g
+// holds some of the pool and in p.starting until then, as bodyPool describes.
+// bare reports that the request holds nothing of the pool but what g holds.
+func (p *bodyPool) step(ctx context.Context, g *grower, n int64, bare bool) error {
+	w := &bodyWaiter{n: n, g: g, ready: make(chan struct{})}
+
+	p.mu.Lock()
+	joined := g.joined
+	p.mu.Unlock()
+
+	if joined {
+		return p.take(ctx, w, &p.steps)
+	}
+
+	w.bare = bare
+
+	return p.take(ctx, w, &p.starting)
+}
+
+// take queues w in queue, lets in what may come in, and waits for w unless it
+// came in. A step joins p.steps ahead of the steps of younger bodies.
+func (p *bodyPool) take(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
+	w.watchStop()
+
 	p.mu.Lock()
 
-	if len(p.growing) == 0 && len(*queue) == 0 && p.used+n <= p.capacity {
-		p.used += n
+	if queue == &p.steps {
+		i := 0
+		for i < len(p.steps) && p.steps[i].g.seq < w.g.seq {
+			i++
+		}
+
+		p.steps = slices.Insert(p.steps, i, w)
+	} else {
+		*queue = append(*queue, w)
+	}
+
+	p.grant()
+	p.mu.Unlock()
+
+	select {
+	case <-w.ready:
+		return nil
+	default:
+	}
+
+	return p.wait(ctx, w, queue)
+}
+
+// safe reports whether, were g to hold n bytes more, every body of unknown
+// length could still reach its claim in some order (the banker's check): what
+// the pool has left once every other request gives back what it holds covers
+// the need of one of them, its bytes, given back, cover the next one's with
+// it, and so on. With one resource, taking them in order of their need is such
+// an order whenever any is.
+func (p *bodyPool) safe(g *grower, n int64) bool {
+	type claim struct{ held, need int64 }
+
+	claims := make([]claim, 0, len(p.growers)+1)
+	free := p.capacity - n
+
+	for _, o := range p.growers {
+		held := o.held
+		if o == g {
+			held += n
+		}
+
+		free -= o.held
+		claims = append(claims, claim{held: held, need: o.claim - held})
+	}
+
+	if !g.joined {
+		claims = append(claims, claim{held: n, need: g.claim - n})
+	}
+
+	slices.SortFunc(claims, func(a, b claim) int { return cmp.Compare(a.need, b.need) })
+
+	for _, c := range claims {
+		if c.need > free {
+			return false
+		}
+
+		free += c.held
+	}
+
+	return true
+}
+
+// blocked reports whether w is a step of a body of unknown length that would
+// leave the pool unsafe (safe).
+func (p *bodyPool) blocked(w *bodyWaiter) bool {
+	return w.g != nil && !p.safe(w.g, w.n)
+}
+
+// finish takes g out of the bodies of unknown length being read, at its end
+// or when it is released, and gives back n bytes: what it holds from then on
+// is only given back.
+func (p *bodyPool) finish(g *grower, n int64) {
+	p.mu.Lock()
+
+	if i := slices.Index(p.growers, g); i >= 0 {
+		p.growers = slices.Delete(p.growers, i, i+1)
+	}
+
+	g.joined = false
+	p.used -= n
+	p.grant()
+	p.mu.Unlock()
+}
+
+// regrow makes what a holder of held bytes holds want bytes, want more than
+// held: at once when no one waits ahead of it and the room is there, and
+// otherwise it gives held back and waits in p.growing for all of want, let in
+// as grant describes. The give-back and the joining happen under
+// one lock, so a body that arrives meanwhile cannot take the bytes given back.
+// bare reports that the request holds nothing else of the pool. On ErrBusy the
+// holder holds nothing.
+func (p *bodyPool) regrow(ctx context.Context, held, want int64, bare bool) error {
+	p.mu.Lock()
+
+	if len(p.steps) == 0 && len(p.growing) == 0 && p.used+want-held <= p.capacity {
+		p.used += want - held
 		p.mu.Unlock()
 
 		return nil
 	}
 
-	w := &bodyWaiter{n: n, ready: make(chan struct{})}
-	*queue = append(*queue, w)
+	p.used -= held
+	w := &bodyWaiter{n: want, ready: make(chan struct{}), bare: bare}
+	w.watchStop()
+	p.growing = append(p.growing, w)
+	p.grant()
 	p.mu.Unlock()
+
+	return p.wait(ctx, w, &p.growing)
+}
+
+// queuedStop is the channel StopQueued set, or nil.
+var queuedStop atomic.Pointer[<-chan struct{}]
+
+// watchStop makes a bare waiter's wait end when the shutdown stop closes
+// (StopQueued).
+func (w *bodyWaiter) watchStop() {
+	if !w.bare {
+		return
+	}
+
+	if stop := queuedStop.Load(); stop != nil {
+		w.stop = *stop
+	}
+}
+
+// StopQueued sets the channel whose close ends the waits of the requests that
+// hold nothing of the in-flight bound, the bodies queued for admission and
+// the decodings of requests that hold neither body bytes nor decode room:
+// each fails with ErrBusy. A request that holds some of the bound keeps
+// waiting for its next step until its own context or the body wait ends it.
+// The gateway hands over the channel it closes as it begins to shut down, so a
+// body it queued is answered with its service's throttle within the drain, not
+// cut when the drain ends. It holds for whatever bound SetInFlight sets, before
+// or after; the last call wins, and a nil channel stops nothing.
+func StopQueued(stop <-chan struct{}) {
+	queuedStop.Store(&stop)
+}
+
+// wait waits for w, in queue, to be granted, until ctx ends, the body wait
+// (SetBodyWait) passes or, for a request that holds nothing (bodyWaiter.bare),
+// the shutdown stop (StopQueued) closes; then it takes w out of queue, or gives
+// back what it was granted as it gave up, and fails with ErrBusy.
+func (p *bodyPool) wait(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
+	n := w.n
 
 	timer := time.NewTimer(time.Duration(bodyWait.Load()))
 	defer timer.Stop()
@@ -224,6 +462,7 @@ func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) e
 		return nil
 	case <-ctx.Done():
 	case <-timer.C:
+	case <-w.stop:
 	}
 
 	p.mu.Lock()
@@ -232,6 +471,9 @@ func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) e
 	select {
 	case <-w.ready: // granted as it gave up: give it back
 		p.used -= n
+		if w.g != nil {
+			w.g.held -= n
+		}
 	default:
 		*queue = removeWaiter(*queue, w)
 	}
@@ -248,21 +490,105 @@ func (p *bodyPool) release(n int64) {
 	p.mu.Unlock()
 }
 
-// grant lets waiters in, in order, while the one at the head fits.
+// grant lets waiters in: the steps, then the decodings that grow, then the
+// bodies not yet admitted, as bodyPool describes. A body's first step makes it
+// the youngest of the bodies of unknown length being read.
+//
+// The steps are scanned oldest body first. A step that is not safe waits for
+// another such body to read on or end, not for room, so it is passed over
+// whether or not it fits: a younger body's step that is safe and fits is let
+// in ahead of it, and the scan starts again from the oldest, since that may
+// have made it safe (nextStep). A safe step that does not fit stops the scan
+// and everything behind it, so nothing younger takes the room it waits for.
+//
+// Every decoding that fits is let in, in the order they came, past one that
+// does not; while any is left waiting, no new body is let in. The new bodies
+// come in the order they came; a first step that is not safe is passed
+// over, and the first one that does not fit stops them. Letting one in never
+// makes a passed-over first step safe: it adds a body of unknown length or
+// none, so the scan goes on from where it is.
 func (p *bodyPool) grant() {
-	for _, queue := range []*[]*bodyWaiter{&p.growing, &p.starting} {
-		for len(*queue) > 0 {
-			w := (*queue)[0]
-			if p.used+w.n > p.capacity {
-				return
-			}
-
-			p.used += w.n
-			close(w.ready)
-			(*queue)[0] = nil
-			*queue = (*queue)[1:]
+	for {
+		i, short := p.nextStep()
+		if short {
+			return
 		}
+
+		if i < 0 {
+			break
+		}
+
+		p.let(&p.steps, i)
 	}
+
+	for i := 0; i < len(p.growing); {
+		if p.used+p.growing[i].n > p.capacity {
+			i++
+
+			continue
+		}
+
+		p.let(&p.growing, i)
+	}
+
+	if len(p.growing) > 0 {
+		return
+	}
+
+	for i := 0; i < len(p.starting); {
+		w := p.starting[i]
+		if p.blocked(w) {
+			i++
+
+			continue
+		}
+
+		if p.used+w.n > p.capacity {
+			return
+		}
+
+		p.let(&p.starting, i)
+	}
+}
+
+// nextStep returns where in p.steps the oldest step that leaves the pool safe
+// and fits is, or -1 when there is none; short reports that a safe step older
+// than any such one does not fit. Safety is tested first: a step that is not
+// safe waits for another body to read on or end whether or not it fits, and
+// room given to it would not let it in.
+func (p *bodyPool) nextStep() (i int, short bool) {
+	for i, w := range p.steps {
+		if p.blocked(w) {
+			continue
+		}
+
+		if p.used+w.n > p.capacity {
+			return -1, true
+		}
+
+		return i, false
+	}
+
+	return -1, false
+}
+
+// let grants the waiter at i in queue and takes it out of queue.
+func (p *bodyPool) let(queue *[]*bodyWaiter, i int) {
+	w := (*queue)[i]
+
+	p.used += w.n
+	if g := w.g; g != nil {
+		if !g.joined {
+			p.seq++
+			g.seq, g.joined = p.seq, true
+			p.growers = append(p.growers, g)
+		}
+
+		g.held += w.n
+	}
+
+	close(w.ready)
+	*queue = slices.Delete(*queue, i, i+1)
 }
 
 func removeWaiter(queue []*bodyWaiter, w *bodyWaiter) []*bodyWaiter {
@@ -288,6 +614,7 @@ type BodyMeter struct {
 	ctx    context.Context //nolint:containedctx // the request's, for the wait while it is read
 	pool   *bodyPool
 	most   int64
+	limit  int64 // the most its service takes (BoundBody), zero for none
 	length int64
 	read   int64
 	held   int64
@@ -300,6 +627,12 @@ type BodyMeter struct {
 	// (Charge.Meter), which the room planned is charged to.
 	plan   int64
 	decode *DecodeHold
+	// grower is a body of unknown length's record in the pool while it is
+	// read (grow); prepaid is the decode room its steps took for its decoding,
+	// which trim cuts to what it read, and rooms whether its steps take any.
+	grower  *grower
+	prepaid int64
+	rooms   bool
 
 	// deadline sets the connection's read deadline (IdleBy); timed is whether
 	// one is set now.
@@ -335,9 +668,10 @@ func (p *bodyPool) bodyShare() int64 {
 // Read reads the body and, once the meter is armed, charges it past FreeBody.
 // A body that states its length is charged all of it at once, the first time
 // it reads past FreeBody, together with the room its decoding is planned to
-// hold (admit). One that states none is charged in steps that double, and at
-// its end keeps only what it read. When the bound leaves no room before the
-// wait ends, it gives back what the body held and fails with ErrBusy.
+// hold (admit). One that states none is charged in steps that double, each
+// with the room planned for decoding it (grow), and at its end keeps only what
+// it read and the room planned for that (trim). When the bound leaves no room
+// before the wait ends, it holds nothing and fails with ErrBusy.
 func (m *BodyMeter) Read(p []byte) (int, error) {
 	if m.err != nil {
 		return 0, m.err
@@ -381,11 +715,8 @@ func (m *BodyMeter) Read(p []byte) (int, error) {
 		}
 	}
 
-	if errors.Is(err, io.EOF) && m.held > m.read {
-		// A body of unknown length was charged up to twice what it read;
-		// what it holds from here on is what it read.
-		m.pool.release(m.held - m.read)
-		m.held = m.read
+	if errors.Is(err, io.EOF) && m.grower != nil {
+		m.trim()
 	}
 
 	return n, err
@@ -407,6 +738,13 @@ func (m *BodyMeter) Release() {
 	m.done = true
 	m.clearDeadline()
 
+	if m.grower != nil {
+		m.pool.finish(m.grower, m.held)
+		m.grower, m.held = nil, 0
+
+		return
+	}
+
 	if m.held > 0 {
 		m.pool.release(m.held)
 		m.held = 0
@@ -421,6 +759,25 @@ func (m *BodyMeter) Release() {
 // meets it. An S3 object stream is never armed, so never bounded here.
 func (m *BodyMeter) IdleBy(set func(time.Time) error) {
 	m.deadline = set
+}
+
+// trim makes a body of unknown length, at its end, hold what it read, and the
+// room planned for its decoding what a body that stated that length is
+// admitted with, unless decoding has charged more of it already or a Cover has
+// returned it as covered (DecodeHold.spent), and takes it out of the bodies
+// being read (bodyPool.finish).
+func (m *BodyMeter) trim() {
+	release := max(m.held-m.read, 0)
+	m.held -= release
+
+	if m.prepaid > 0 && m.decode.held == m.prepaid && !m.decode.spent {
+		room := min(decodeRoom(m.pool, m.plan*m.read+FreeBody), m.prepaid)
+		release += m.prepaid - room
+		m.decode.held, m.prepaid = room, room
+	}
+
+	m.pool.finish(m.grower, release)
+	m.grower = nil
 }
 
 // idle sets the read deadline for the next read, when IdleBy gave a way to.
@@ -448,41 +805,36 @@ func (m *BodyMeter) clearDeadline() {
 // charge charges n more bytes read, as Read describes.
 func (m *BodyMeter) charge(n int64) error {
 	m.read += n
-	if m.read <= FreeBody || m.read <= m.held || m.held >= m.most {
+	if m.read <= FreeBody {
 		return nil
 	}
 
-	if m.held == 0 && m.length > 0 {
-		return m.admit()
-	}
-
-	const growth = 2
-
-	queue := &m.pool.starting
-	if m.held > 0 {
-		queue = &m.pool.growing
-	}
-
-	want := min(max(growth*m.held, m.read, growth*FreeBody), m.most)
-
-	busy := m.pool.acquire(m.ctx, want-m.held, queue)
-	if busy != nil {
+	if m.limit > 0 && max(m.read, m.length) > m.limit {
 		m.Release()
-		m.err = busy
+		m.decode.Release()
+		m.err = ErrBodyLong
 
-		return busy
+		return m.err
 	}
 
-	m.held = want
+	if m.read <= m.held || m.held >= m.most {
+		return nil
+	}
 
-	return nil
+	if m.length < 0 {
+		return m.grow()
+	}
+
+	return m.admit()
 }
 
 // admit charges a body that states its length all of it, and the room its
 // decoding is planned to hold (DecodeHold.planned), in one step, in the order
 // bodies arrive: a body that holds part of the bound never waits for more while
-// others hold the rest, whether for its own bytes or for decoding them. A body
-// over MaxBody is refused once read, so nothing is planned for its decoding.
+// others hold the rest, whether for its own bytes or for decoding them within
+// the plan; a decoding past it waits while the body keeps its bytes (regrow). A
+// body over MaxBody is refused once read, so nothing is planned for its
+// decoding.
 func (m *BodyMeter) admit() error {
 	want := min(max(m.length, m.read), m.most)
 
@@ -491,7 +843,9 @@ func (m *BodyMeter) admit() error {
 		room = m.decode.planned(m.pool, m.plan*m.length+FreeBody)
 	}
 
-	busy := m.pool.acquire(m.ctx, want+room, &m.pool.starting)
+	w := &bodyWaiter{n: want + room, ready: make(chan struct{}), bare: m.decode.Held() == 0}
+
+	busy := m.pool.take(m.ctx, w, &m.pool.starting)
 	if busy != nil {
 		m.Release()
 		m.err = busy
@@ -501,6 +855,65 @@ func (m *BodyMeter) admit() error {
 
 	m.held = want
 	m.decode.prepaid(m.pool, room)
+
+	return nil
+}
+
+// grow charges a body that states no length its next step: twice what it holds
+// or what it has read, up to its share of the bound (bodyShare), with the room
+// planned for decoding that much (decodeRoom), which the request's decode hold
+// keeps. Its claim, the most it may hold, is its share and the room planned
+// for that, so a body that reaches its end never waits for room to decode
+// within that plan while it holds its bytes. The pool grants the step once it leaves every body
+// of unknown length a safe way to its claim (bodyPool.safe). When the step
+// does not come before the wait ends, the body gives back all it holds, its
+// decode room too, and fails with ErrBusy.
+func (m *BodyMeter) grow() error {
+	const growth = 2
+
+	if m.grower == nil {
+		var room int64
+		if m.decode != nil {
+			room = m.decode.planned(m.pool, m.plan*m.most+FreeBody)
+		}
+
+		m.grower, m.rooms = &grower{claim: m.most + room}, room > 0
+	}
+
+	body := min(max(growth*m.held, m.read, growth*FreeBody), m.most)
+
+	var room int64
+	if m.rooms {
+		room = decodeRoom(m.pool, m.plan*body+FreeBody)
+	}
+
+	// The step takes only the room past what the decode hold holds now: a
+	// decoding that charges as the body is read (restxml) may have covered
+	// more between two steps (Cover), and those bytes stay the hold's.
+	hold := m.decode.Held()
+	more := max(room-hold, 0)
+
+	busy := m.pool.step(m.ctx, m.grower, body-m.held+more, hold == 0)
+	if busy != nil {
+		m.Release()
+		m.decode.Release()
+		m.err = busy
+
+		return busy
+	}
+
+	m.held = body
+	if more > 0 {
+		m.decode.prepaid(m.pool, room)
+	}
+
+	// What the steps took is still all the hold holds only while Cover has
+	// not changed it; once it has, decoding owns the hold, and trim leaves it.
+	if hold == m.prepaid {
+		m.prepaid = m.decode.Held()
+	} else {
+		m.prepaid = 0
+	}
 
 	return nil
 }

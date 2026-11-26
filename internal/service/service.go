@@ -102,6 +102,12 @@ type Registration struct {
 	// (awsjson.DecodeWithin, protocol.ReserveHeapBeside), and is throttled or
 	// refused otherwise.
 	DecodeFactor int
+	// MaxRequest is the longest body, as encoded, of any valid request to the
+	// service, or zero for protocol.MaxBody alone. The gateway bounds a body to
+	// it (protocol.BoundBody) before it reads any, so a longer one fails with
+	// protocol.ErrBodyLong holding none of the in-flight bound, or no more than
+	// MaxRequest when it states no length, and Serve answers it.
+	MaxRequest int64
 
 	// ClaimHost reports whether a request to host is the service's, before any
 	// other detection: LocalStack's ServiceLoaderForDataPlane, which knows a

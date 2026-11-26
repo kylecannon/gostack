@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -56,9 +57,42 @@ func LimitBody(r io.Reader) io.Reader {
 // (ArmBody), which is how every reader that buffers a json request body reads
 // it. A body that states FreeBody bytes or fewer has no meter to arm.
 func ReadRequest(r *http.Request) ([]byte, error) {
+	if put, ok := r.Body.(*putBack); ok && put.Len() == len(put.body) {
+		return put.body, put.err
+	}
+
 	armRequest(r, TextDecode)
 
 	return ReadBody(r.Body, r.ContentLength)
+}
+
+// PutBack puts body and err, what ReadRequest returned for r, back on r, so the
+// next ReadRequest returns them as they are, without reading or copying the
+// body again, and any other reader reads body and then err.
+func PutBack(r *http.Request, body []byte, err error) {
+	r.Body = &putBack{Reader: bytes.NewReader(body), body: body, err: err, rest: r.Body}
+}
+
+// putBack is a request body PutBack put back.
+type putBack struct {
+	*bytes.Reader
+
+	body []byte
+	err  error
+	rest io.Closer
+}
+
+func (b *putBack) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if errors.Is(err, io.EOF) && b.err != nil {
+		return n, b.err
+	}
+
+	return n, err //nolint:wrapcheck // io.Reader: the error of the Read it delegates to.
+}
+
+func (b *putBack) Close() error {
+	return b.rest.Close()
 }
 
 // ReadRequestText is ReadRequest for a reader that wants the body as text, read

@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	"github.com/kylecannon/gostack/internal/protocol"
 	"github.com/kylecannon/gostack/internal/route"
 	"github.com/kylecannon/gostack/internal/service"
 	"github.com/kylecannon/gostack/internal/tlscert"
@@ -64,6 +65,12 @@ type Gateway struct {
 	// released closes when the Shutdown functions, started by the first call
 	// to startShutdown, have all returned, or in EndShutdown when none started.
 	released chan struct{}
+	// stopping closes as the shutdown begins (startShutdown). New hands it to
+	// the in-flight bound (protocol.StopQueued; the last gateway made wins),
+	// where it ends the waits of the requests that hold nothing of the bound,
+	// bodies queued for admission and decodings, so each is answered with its
+	// throttle.
+	stopping chan struct{}
 
 	// tlsConfig is the certificate Listen loaded, for Serve.
 	tlsConfig *tls.Config
@@ -97,10 +104,13 @@ func New(
 	g := &Gateway{
 		settings: settings, regs: regs, table: table, eng: eng,
 		unnamed: make([]atomic.Bool, len(regs)), released: make(chan struct{}),
+		stopping: make(chan struct{}),
 	}
 	g.cors = newCORSRules(settings())
 	g.corsEnforced, g.corsOpen = newCORSHandlers(g.cors)
 	g.handler = buildRouter(g, internal)
+
+	protocol.StopQueued(g.stopping)
 
 	return g, nil
 }
@@ -368,6 +378,7 @@ func (g *Gateway) Serve(ctx context.Context, listeners ...net.Listener) error {
 // never began has no functions to run, and Released closes at once.
 func (g *Gateway) EndShutdown() {
 	if g.phase.Swap(phaseStopped) == phaseRunning {
+		close(g.stopping)
 		close(g.released)
 	}
 }
@@ -381,6 +392,8 @@ func (g *Gateway) startShutdown() bool {
 	if !g.phase.CompareAndSwap(phaseRunning, phaseStopping) {
 		return false
 	}
+
+	close(g.stopping)
 
 	go func() {
 		defer close(g.released)

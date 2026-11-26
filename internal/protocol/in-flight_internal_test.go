@@ -70,8 +70,8 @@ func Test_BodyMeter_ChargesOnlyWhenArmed(t *testing.T) {
 	require.Len(t, body, 4<<20)
 
 	_, held = InFlight()
-	assert.GreaterOrEqual(t, held, int64(4<<20))
-	assert.LessOrEqual(t, held, int64(8<<20), "charged in steps that double, never past twice what was read")
+	assert.Equal(t, int64(4<<20+8<<20), held,
+		"what it read, and the decode room a body that states that length is admitted with")
 
 	ReleaseBody(ctx)
 
@@ -93,21 +93,17 @@ func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 	bound, _ := InFlight()
 	require.Equal(t, 2*(DefaultMaxBody+1), bound, "the bound has room for a body and its decoding")
 
-	first, _ := meteredBody(t, int(DefaultMaxBody), -1)
+	// A body at the cap of unknown length holds the bound with its decode
+	// room.
+	first, firstCtx := meteredBody(t, int(DefaultMaxBody), -1)
 	_, err := ReadBody(first, -1)
 	require.NoError(t, err)
-
-	filler, _ := meteredBody(t, int(DefaultMaxBody), -1)
-	_, err = ReadBody(filler, -1)
-	require.NoError(t, err)
-
-	defer filler.Release()
 
 	second, _ := meteredBody(t, 1<<20, -1)
 	_, err = ReadBody(second, -1)
 	require.ErrorIs(t, err, ErrBusy, "no room within the wait")
 
-	waiting, _ := meteredBody(t, 1<<20, -1)
+	waiting, waitingCtx := meteredBody(t, 1<<20, -1)
 	done := make(chan error, 1)
 
 	go func() {
@@ -116,11 +112,10 @@ func Test_BodyMeter_WaitsThenThrottles(t *testing.T) {
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	first.Release()
+	ReleaseBody(firstCtx)
 
 	require.NoError(t, <-done, "room that comes within the wait admits the body")
-	waiting.Release()
-	filler.Release()
+	ReleaseBody(waitingCtx)
 
 	_, held := InFlight()
 	assert.Zero(t, held)
@@ -174,13 +169,13 @@ func Test_BodyMeter_StatedLengthAtOnce(t *testing.T) {
 
 	// The rest of the bound is taken, so the next body waits holding nothing
 	// and gives up holding nothing.
-	rest, _ := meteredBody(t, int(DefaultMaxBody), -1)
-	_, err = ReadBody(rest, -1)
-	require.NoError(t, err)
-
-	defer rest.Release()
-
 	bound, held := InFlight()
+	pool := inFlight.Load()
+	require.NoError(t, pool.acquire(t.Context(), bound-held-int64(size), &pool.starting))
+
+	defer pool.release(bound - held - int64(size))
+
+	bound, held = InFlight()
 	late, _ := meteredBody(t, int(bound-held)+1, bound-held+1)
 	_, err = ReadBody(late, -1)
 	require.ErrorIs(t, err, ErrBusy)
@@ -253,7 +248,8 @@ func Test_BodyMeter_UnknownLengthKeepsWhatItRead(t *testing.T) {
 	require.Len(t, body, size)
 
 	_, held := InFlight()
-	assert.Equal(t, int64(size), held, "the body holds what it read, not the 2 MiB step it reached")
+	assert.Equal(t, int64(size+2<<20), held,
+		"the body holds what it read and the decode room planned for that, not the share it was admitted with")
 
 	ReleaseBody(ctx)
 

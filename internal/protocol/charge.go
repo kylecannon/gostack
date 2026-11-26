@@ -46,6 +46,7 @@ func ChargeOf(ctx context.Context) *Charge {
 func (c *Charge) Meter(m *BodyMeter) {
 	c.meter = m
 	m.decode = &c.decode
+	c.decode.body = m
 }
 
 // HoldDecode is DecodeHolder: it makes the request's charge cover cost bytes of
