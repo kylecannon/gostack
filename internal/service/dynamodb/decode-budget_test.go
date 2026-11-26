@@ -570,10 +570,15 @@ func convoyBatch(client int) string {
 // textBatch is convoyBatch with a string of firstText bytes in the first item
 // and of text bytes in the others.
 func textBatch(client, firstText, text int) string {
-	record := `{"M":{"a":{"S":"alpha"},"b":{"N":"12345"},"c":{"BOOL":true},"d":{"S":"delta delta"}}}`
-	requests := make([]string, 0, batchItems)
+	return textBatchOf(client, batchItems, firstText, text)
+}
 
-	for i := range batchItems {
+// textBatchOf is textBatch of items items.
+func textBatchOf(client, items, firstText, text int) string {
+	record := `{"M":{"a":{"S":"alpha"},"b":{"N":"12345"},"c":{"BOOL":true},"d":{"S":"delta delta"}}}`
+	requests := make([]string, 0, items)
+
+	for i := range items {
 		length := text
 		if i == 0 {
 			length = firstText

@@ -59,19 +59,48 @@ const (
 
 	// One iteration is a call from every worker, so its cost grows with
 	// workers times the work of one call. A cell whose iteration would carry
-	// more than these is left out: at make bench's 500 ms it runs under 50
-	// iterations, too few for benchstat to judge (SQ-302). That drops the
-	// 32 KiB batches at concurrency 64 and 100 actions at 16 and 64.
-	maxIterationBatchBytes = 16 << 20
-	maxIterationActions    = 640
+	// more than these is left out (tooSlowToGate): at make bench's 500 ms it
+	// runs under 50 iterations, too few for benchstat to judge (SQ-302), and
+	// the slowest of its runs has to be at most 8 ms. The slowest of ten runs
+	// on the gate's runners (4 CPUs, bench run 45505878281 of PR 84, main
+	// a0e13bb3) of what each limit leaves out and keeps:
+	//
+	//   - maxIterationBatchBytes, for BatchGetItem: the 32 KiB batches at
+	//     concurrency 64, 51 MB of items, which main already left out. Kept:
+	//     32 KiB at 16 (12.8 MB), 2.8 ms, and 4 KiB at 64, 4.3 ms.
+	//   - maxIterationWriteBytes, for BatchWriteItem, 4 MiB of the bytes of its
+	//     items and writeItemOverhead for each. A write costs about three
+	//     times a read of the same bytes, and a small item costs more than its
+	//     bytes. Left out: the 32 KiB batches at 16 (15.3 ms), the 4 KiB ones
+	//     at 64 (11.4 ms) and the 100 B ones at 64 (8.5 ms, with the bytes
+	//     alone 160 KB). Kept: 4 KiB at 16, 4.1 ms, and 100 B at 16, 1.9 ms.
+	//     BatchWriteItem has no cell at concurrency 64 for that, which
+	//     TransactWriteItems, BatchGetItem and PutItem still have.
+	//   - maxIterationActions, for TransactGetItems: 100 actions at 16 and 64,
+	//     which main already left out. Kept: 10 at 64, 2.0 ms.
+	//   - maxIterationWriteActions, for TransactWriteItems: 10 actions at 64
+	//     (12.4 ms) and 100 at 16 and 64. Kept: 10 at 16, 3.1 ms, and 100 at
+	//     1, 1.6 ms.
+	maxIterationBatchBytes   = 16 << 20
+	maxIterationWriteBytes   = 4 << 20
+	maxIterationActions      = 640
+	maxIterationWriteActions = 320
+
+	// writeItemOverhead is the bytes a BatchWriteItem is charged for each item
+	// besides its own: 4 KiB, the cost of the item's write at 5 us on a 4 CPU
+	// runner (100 B at 64 workers, 1,600 items, took 6.3 to 8.5 ms) against
+	// 0.8 us for each KiB it holds.
+	writeItemOverhead = 4 << 10
 )
 
 // batchMatrix runs one sub-benchmark for every batch payload at every
-// concurrency within maxIterationBatchBytes, each on a fresh stack holding the
-// table bench. prepare runs before the timer for each worker.
+// concurrency whose iteration, items of the payload's size and overhead each
+// besides, carries at most budget, each on a fresh stack holding the table
+// bench. prepare runs before the timer for each worker.
 func batchMatrix(
 	b *testing.B,
 	operation string,
+	budget, overhead int,
 	prepare func(b *testing.B, s *stack, worker, size int),
 	body func(worker, size int) string,
 ) {
@@ -79,7 +108,7 @@ func batchMatrix(
 
 	for _, payload := range batchPayloads {
 		for _, workers := range itemConcurrency {
-			if payload.size*maxBenchBatch*workers > maxIterationBatchBytes {
+			if tooSlowToGate(maxBenchBatch*workers*(payload.size+overhead), budget) {
 				continue
 			}
 
@@ -106,23 +135,30 @@ func batchMatrix(
 
 // BenchmarkBatchWriteItem: each call puts 25 of the worker's items.
 func BenchmarkBatchWriteItem(b *testing.B) {
-	batchMatrix(b, opBatchWrite, func(*testing.B, *stack, int, int) {}, batchWriteBody)
+	batchMatrix(b, opBatchWrite, maxIterationWriteBytes, writeItemOverhead, func(*testing.B, *stack, int, int) {},
+		batchWriteBody)
 }
 
 // BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
 // BatchWriteItem put before the timer starts.
 //
-// One more row reads 40 items of 399 KiB of newlines, about as much as one
-// BatchGetItem returns: each newline is two bytes of json, so the body is
-// about 31 MiB, and the buffer it grows is past what the json encoder keeps
-// of its large buffers.
+// One more row reads 12 items of 399 KiB of newlines: each newline is two
+// bytes of json, so the body is about 9 MiB, a large json response buffer
+// grown by a read of escape-dense text. It had 40 items, about as much as one
+// BatchGetItem returns and 31 MiB of json, past the 32 MiB of large buffers the
+// json encoder keeps, and took 14.0 to 27.8 ms (items=40) on the gate's runners
+// (ten runs, bench run 45505878281 of PR 84), 0.35 to 0.7 ms an item. At 12
+// items it took 4.0 to 5.2 ms there. What the row no longer reads is the
+// buffer kept past that 32 MiB, and no cell measures what keeping it costs now:
+// the encoder's tests (internal/protocol/awsjson/buffers_internal_test.go) hold
+// what it keeps, not its time.
 func BenchmarkBatchGetItem(b *testing.B) {
-	batchMatrix(b, opBatchGet, func(b *testing.B, s *stack, worker, size int) {
+	batchMatrix(b, opBatchGet, maxIterationBatchBytes, 0, func(b *testing.B, s *stack, worker, size int) {
 		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
 	}, func(worker, _ int) string { return batchGetBody(worker) })
 
-	b.Run("payload=399KiB/items=40/text=newlines/concurrency=1", func(b *testing.B) {
-		const items = 40
+	b.Run("payload=399KiB/items=12/text=newlines/concurrency=1", func(b *testing.B) {
+		const items = 12
 
 		s := newStack(b)
 		s.ok(b, opCreate, hashTable(benchTable))
@@ -151,14 +187,15 @@ func BenchmarkBatchGetItem(b *testing.B) {
 }
 
 // transactMatrix runs one sub-benchmark for every number of actions at every
-// concurrency within maxIterationActions, each on a fresh stack holding the
-// table bench, with body(worker, actions) the request of each worker.
-func transactMatrix(b *testing.B, operation string, body func(worker, actions int) string) {
+// concurrency whose iteration holds at most budget of them, each on a fresh
+// stack holding the table bench, with body(worker, actions) the request of each
+// worker.
+func transactMatrix(b *testing.B, operation string, budget int, body func(worker, actions int) string) {
 	b.Helper()
 
 	for _, actions := range transactActions {
 		for _, workers := range itemConcurrency {
-			if actions*workers > maxIterationActions {
+			if tooSlowToGate(actions*workers, budget) {
 				continue
 			}
 
@@ -195,7 +232,7 @@ func transactMatrix(b *testing.B, operation string, body func(worker, actions in
 // items under a condition that holds, so every call evaluates and writes all
 // of them.
 func BenchmarkTransactWriteItems(b *testing.B) {
-	transactMatrix(b, opTransactWrite, func(worker, actions int) string {
+	transactMatrix(b, opTransactWrite, maxIterationWriteActions, func(worker, actions int) string {
 		list := make([]string, actions)
 		for i := range list {
 			list[i] = fmt.Sprintf(`{"Update":{"TableName":%q,"Key":{"id":{"S":"k-%d-%d"}},`+
@@ -209,7 +246,7 @@ func BenchmarkTransactWriteItems(b *testing.B) {
 
 // BenchmarkTransactGetItems: each get one of the worker's items.
 func BenchmarkTransactGetItems(b *testing.B) {
-	transactMatrix(b, opTransactGet, func(worker, actions int) string {
+	transactMatrix(b, opTransactGet, maxIterationActions, func(worker, actions int) string {
 		list := make([]string, actions)
 		for i := range list {
 			list[i] = fmt.Sprintf(`{"Get":{"TableName":%q,"Key":{"id":{"S":"k-%d-%d"}}}}`, benchTable, worker, i)

@@ -65,21 +65,39 @@ type itemPayload struct {
 	size int
 }
 
-// itemMatrix runs one sub-benchmark for every payload at every concurrency,
-// each on a fresh stack holding the table bench, keyed by id.
-func itemMatrix(b *testing.B, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
+// maxIterationPutBytes is the most bytes of items one iteration of PutItem
+// carries, workers times the payload. A cell over it is left out
+// (tooSlowToGate), as the slowest of its runs has to be at most 8 ms. On the
+// gate's runners (ten runs, bench run 45505878281 of PR 84) PutItem at 399 KiB
+// and concurrency 64, 25.5 MB, took 12.3 to 14.1 ms, and 14.0 to 16.8 ms with
+// persist=on; at 16, 6.4 MB, it took 3.7 to 4.0 ms, and 4.2 to 4.5 ms with
+// persist=on, which the budget keeps. On the slower runner of bench run
+// 45732740061 (1.65 times this family's time) the cells at 16 took 5.1 to
+// 6.0 ms and, with persist=on, 5.8 to 7.1 ms: the dearest cell kept, over the
+// 6.5 ms margin and under 8. GetItem reads the same bytes in at most
+// 4.4 ms (399 KiB at 64), so keeps every cell (unbudgeted).
+const maxIterationPutBytes = 8 << 20
+
+// itemMatrix runs one sub-benchmark for every payload at every concurrency
+// whose iteration carries at most budget bytes, each on a fresh stack holding
+// the table bench, keyed by id.
+func itemMatrix(b *testing.B, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
 	b.Helper()
-	itemMatrixOn(b, newStack, run)
+	itemMatrixOn(b, newStack, budget, run)
 }
 
 // itemMatrixOn is itemMatrix on the stacks mk builds.
 func itemMatrixOn(
-	b *testing.B, mk func(testing.TB) *stack, run func(b *testing.B, s *stack, p itemPayload, workers int),
+	b *testing.B, mk func(testing.TB) *stack, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int),
 ) {
 	b.Helper()
 
 	for _, payload := range itemPayloads {
 		for _, workers := range itemConcurrency {
+			if tooSlowToGate(payload.size*workers, budget) {
+				continue
+			}
+
 			b.Run(fmt.Sprintf("payload=%s/concurrency=%d", payload.name, workers), func(b *testing.B) {
 				s := mk(b)
 				s.ok(b, opCreate, hashTable(benchTable))
@@ -139,8 +157,8 @@ func (s *stack) fanOut(b *testing.B, operation string, workers int, body func(wo
 }
 
 func BenchmarkPutItem(b *testing.B) {
-	itemMatrix(b, benchPut)
-	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, benchPut) })
+	itemMatrix(b, maxIterationPutBytes, benchPut)
+	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, maxIterationPutBytes, benchPut) })
 }
 
 func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
@@ -217,7 +235,7 @@ func BenchmarkDeleteItem(b *testing.B) {
 }
 
 func BenchmarkGetItem(b *testing.B) {
-	itemMatrix(b, func(b *testing.B, s *stack, p itemPayload, workers int) {
+	itemMatrix(b, unbudgeted, func(b *testing.B, s *stack, p itemPayload, workers int) {
 		for worker := range workers {
 			s.ok(b, opPut, putBody(worker, p.size))
 		}
