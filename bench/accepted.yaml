@@ -112,3 +112,417 @@
   reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
   pr: 84
   commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=gsi/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=gsi/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=gsi/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=gsi/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Query/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=table/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=gsi/filter=on/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=latin/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=latin/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjk/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjk/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=emoji/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=emoji/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=json/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=json/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=viet/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=viet/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjkascii/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjkascii/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=jsonpretty/op=Query/target=table/filter=off/concurrency=1
+  unit: sec/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=jsonpretty/op=Query/target=table/filter=off/concurrency=1
+  unit: B/s
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: allocs/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=500/payload=4KiB/op=Scan/target=gsi/filter=off/concurrency=1
+  unit: allocs/op
+  max: +50%
+  reason: product code is identical; on main this cell runs after a 4 KiB concurrency=16 Reads cell whose large response buffers stay pooled and raise the heap goal at random, so main collects up to 2.5x less often; the change cuts those cells, and on main's own binary the cell measures the same as head once they are left out
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
