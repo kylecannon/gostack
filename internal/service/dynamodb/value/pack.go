@@ -939,7 +939,9 @@ func (u *unpacker) member(sel *Selection) Item {
 // its closing brace.
 func (u *unpacker) skipMembers() {
 	for {
-		u.rawMember()
+		u.skipString()
+		u.i++ // :
+		u.skip()
 
 		c := u.s[u.i]
 		u.i++
@@ -948,23 +950,6 @@ func (u *unpacker) skipMembers() {
 			return
 		}
 	}
-}
-
-// rawMember steps over the member of an object at u.i, and returns its name
-// as the encoder wrote it, quotes and escapes included, and its value. It
-// leaves u.i at the comma or the brace that follows the value. It is the one
-// walk over members that keeps their bytes as they are; a read that decodes
-// the names reads them with str.
-func (u *unpacker) rawMember() (name, val string) {
-	start := u.i
-	u.skipString()
-	name = u.s[start:u.i]
-	u.i++ // :
-
-	from := u.i
-	u.skip()
-
-	return name, u.s[from:u.i]
 }
 
 // selectionAt is below[j], nil when there is none.
