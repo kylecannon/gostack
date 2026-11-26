@@ -81,14 +81,13 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	gateway.Record(r, rc)
 
 	if strings.EqualFold(r.Header.Get("Content-Type"), jsonContentType) {
-		// Some SDKs send the json protocol to the queue URL. The call carries
-		// its QueueUrl in the body.
-		rc.Protocol = protocol.KindJSON
-		rc.Operation = route.Operation(r, protocol.KindJSON, nil)
-		rc.Request = r.WithContext(request.With(r.Context(), rc))
-		sqsapi.Serve(p, w, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
-		p.markChanged(rc.Operation)
+		p.serveQueueURLJSON(w, r, rc)
 
+		return
+	}
+
+	rc.Request = r
+	if refuseTooLong(w, rc) { //nolint:contextcheck // it takes the context from rc.Request.
 		return
 	}
 
@@ -96,7 +95,7 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	// of the call.
 	form, formErr := query.RequestForm(r)
 	if formErr != nil {
-		writeQueryError(w, rc, query.MalformedQueryString())
+		writeQueryError(w, rc, formAnswer(formErr))
 
 		return
 	}
@@ -126,6 +125,34 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	sqsapi.ServeValidated(p, held, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
 	held.markSenderFault()
 	held.sendAs(w, negotiateMime(r))
+	p.markChanged(rc.Operation)
+}
+
+// formAnswer is the answer to a queue-URL call whose form read failed with
+// err: Throttling when the bodies in flight left the form no room or the
+// shutdown stopped its wait, as at "/", since its Action may be among the
+// pairs lost (query.CutFormAnswer), and MalformedQueryString otherwise.
+func formAnswer(err error) *awserr.Error {
+	cut := query.CutFormAnswer(err)
+	if cut != nil {
+		return cut
+	}
+
+	return query.MalformedQueryString()
+}
+
+// serveQueueURLJSON answers a json call sent to a queue URL: some SDKs send the
+// json protocol there. The call carries its QueueUrl in the body.
+func (p *Provider) serveQueueURLJSON(w http.ResponseWriter, r *http.Request, rc *request.Context) {
+	rc.Protocol = protocol.KindJSON
+	rc.Operation = route.Operation(r, protocol.KindJSON, nil)
+	rc.Request = r.WithContext(request.With(r.Context(), rc))
+
+	if refuseTooLong(w, rc) { //nolint:contextcheck // it takes the context from rc.Request.
+		return
+	}
+
+	sqsapi.Serve(p, w, rc) //nolint:contextcheck // the generated Serve takes the context from rc.Request.
 	p.markChanged(rc.Operation)
 }
 

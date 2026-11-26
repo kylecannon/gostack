@@ -16,8 +16,10 @@ import (
 )
 
 // fillInFlight sets an in-flight bound of one body at the cap and takes all of
-// it with a metered body read to the end, so any other body the gateway meters
-// waits wait and is throttled. The bound, the wait and the charge are given
+// it with a metered body of unknown length read past the cap: such a body is
+// admitted in one step as the largest body it may be with the room planned for
+// decoding it, which at this bound is all of it. So any other body the gateway
+// meters waits and is throttled. The bound, the wait and the charge are given
 // back when the test ends.
 func fillInFlight(t *testing.T, wait time.Duration) {
 	t.Helper()
@@ -25,7 +27,7 @@ func fillInFlight(t *testing.T, wait time.Duration) {
 	protocol.SetInFlight(1) // raised to the least it may be: two bodies at the cap
 	protocol.SetBodyWait(wait)
 
-	var charges [2]protocol.Charge
+	var charges [1]protocol.Charge
 
 	for i := range charges {
 		ctx := protocol.WithCharge(context.Background(), &charges[i])

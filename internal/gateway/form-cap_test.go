@@ -388,16 +388,17 @@ func (zeros) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// fillInFlight takes the whole in-flight bound with two bodies at the cap, so a
+// fillInFlight takes the whole in-flight bound with a body at the cap that
+// states no length, which is admitted with the room for its decoding, so a
 // body longer than protocol.FreeBody waits wait for room and is throttled. The
-// bound, the wait and the charges are given back when the test ends.
+// bound, the wait and the charge are given back when the test ends.
 func fillInFlight(t *testing.T, wait time.Duration) {
 	t.Helper()
 
-	protocol.SetInFlight(1) // raised to the least it may be: two bodies at the cap
+	protocol.SetInFlight(1) // raised to the least it may be: a body at the cap and its decoding
 	protocol.SetBodyWait(wait)
 
-	var charges [2]protocol.Charge
+	var charges [1]protocol.Charge
 
 	for i := range charges {
 		ctx := protocol.WithCharge(context.Background(), &charges[i])
@@ -529,9 +530,9 @@ func Test_Gateway_formBusy(t *testing.T) {
 }
 
 // Test_Gateway_formBusyQueueURL: a form posted to a queue URL when the bodies
-// in flight leave it no room is answered MalformedQueryString by the SQS
-// provider's own route (serveQueueURL), not Throttling: that route reports any
-// failure to read the form as the one error.
+// in flight leave it no room is answered 400 Throttling by the SQS provider's
+// own route (serveQueueURL), as the same form at "/" is, and not
+// MalformedQueryString: the cut form may hold its Action.
 func Test_Gateway_formBusyQueueURL(t *testing.T) {
 	provider := sqs.New(func() sqs.Settings {
 		return sqs.Settings{EndpointStrategy: sqs.StrategyStandard, Host: "localhost.localstack.cloud:4566"}
@@ -545,6 +546,6 @@ func Test_Gateway_formBusyQueueURL(t *testing.T) {
 	resp, got := call(t, handler, newRequest(t, http.MethodPost, "http://localhost:4566/000000000000/q", body, headers))
 
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, got)
-	assert.Contains(t, got, "<Code>"+malformedQuery+"</Code>")
-	assert.NotContains(t, got, "Throttling")
+	assert.Contains(t, got, "<Code>Throttling</Code>")
+	assert.NotContains(t, got, malformedQuery)
 }
