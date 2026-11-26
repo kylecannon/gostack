@@ -41,9 +41,21 @@ func Test_spliceJoin_allocatesOnce(t *testing.T) {
 // attribute of a small item, as UpdateItem's SET of one number does, writes
 // the result in one allocation of the item's size, though the member it
 // removes is more of the item than Pack's slack allows: the result's length is
-// counted before it is written.
+// counted before it is written. The payloads run through every length from 0
+// to 63 bytes, so the result's length crosses the runtime's size classes, 16
+// bytes apart there, and a length counted one short would need a second
+// allocation at the first past a class.
 func Test_spliceJoin_replaceAllocatesOnce(t *testing.T) {
-	for _, payload := range []int{0, 100, 4 << 10} {
+	const swept = 64
+
+	payloads := make([]int, swept, swept+2)
+	for payload := range swept {
+		payloads[payload] = payload
+	}
+
+	payloads = append(payloads, 100, 4<<10)
+
+	for _, payload := range payloads {
 		t.Run(strconv.Itoa(payload), func(t *testing.T) {
 			stored, err := Pack(Item{
 				"id": {S: new("k")},
