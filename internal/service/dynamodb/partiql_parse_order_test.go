@@ -187,13 +187,43 @@ func Test_partiql_commaRemove(t *testing.T) {
 		require.Equal(t, want, tx, src)
 	}
 
-	// One REMOVE for each path, and a SET list, are what the image takes.
-	for _, src := range []string{
-		"UPDATE ptord REMOVE c REMOVE x WHERE id = `a`",
-		"UPDATE ptord REMOVE c SET x = 2, y = 3 WHERE id = `a`",
+	// None of the refusals wrote anything.
+	require.JSONEq(t, ordItem1, ordBody(t, s, "SELECT * FROM ptord WHERE id = 'a'"))
+
+	// One REMOVE for each path, and a SET list, are what the image takes; each
+	// is read back.
+	for _, row := range []struct{ src, item string }{
+		{
+			"UPDATE ptord REMOVE c REMOVE x WHERE id = `a`",
+			`{"Items":[{"id":{"S":"a"},"m":{"M":{"x":{"N":"5"}}}}]}`,
+		},
+		{
+			"UPDATE ptord REMOVE c SET x = 2, y = 3 WHERE id = `a`",
+			`{"Items":[{"id":{"S":"a"},"x":{"N":"2"},"y":{"N":"3"},"m":{"M":{"x":{"N":"5"}}}}]}`,
+		},
 	} {
-		ordBody(t, s, src)
+		ordBody(t, s, row.src)
+		require.JSONEq(t, row.item, ordBody(t, s, "SELECT * FROM ptord WHERE id = 'a'"), row.src)
 	}
+}
+
+// ordItem1 is the item ordStack puts, as a SELECT of it answers.
+const ordItem1 = `{"Items":[{"id":{"S":"a"},"x":{"N":"1"},"m":{"M":{"x":{"N":"5"}}}}]}`
+
+// Test_partiql_pathStepInQuotesWrites: SET m['x'] and REMOVE m['x'] write the
+// path m.x, and the item read back shows it.
+func Test_partiql_pathStepInQuotesWrites(t *testing.T) {
+	s := ordStack(t)
+
+	ordBody(t, s, "UPDATE ptord SET m['y'] = 7 SET m[\"z\"] = 'q' WHERE id = `a`")
+	require.JSONEq(t,
+		`{"Items":[{"id":{"S":"a"},"x":{"N":"1"},"m":{"M":{"x":{"N":"5"},"y":{"N":"7"},"z":{"S":"q"}}}}]}`,
+		ordBody(t, s, "SELECT * FROM ptord WHERE id = 'a'"))
+
+	ordBody(t, s, "UPDATE ptord REMOVE m['x'] REMOVE m[\"z\"] WHERE id = `a`")
+	require.JSONEq(t,
+		`{"Items":[{"id":{"S":"a"},"x":{"N":"1"},"m":{"M":{"y":{"N":"7"}}}}]}`,
+		ordBody(t, s, "SELECT * FROM ptord WHERE id = 'a'"))
 }
 
 // Test_partiql_pathStepInQuotes: m['x'], m["x"] and m[x] are the path m.x, in a
@@ -312,6 +342,11 @@ func Test_partiql_blockComments(t *testing.T) {
 	} {
 		require.JSONEq(t, want, ordBody(t, s, src), src)
 	}
+
+	// A comment's opener inside a string is the string's (cm-in-str).
+	ordBody(t, s, "INSERT INTO ptord VALUE {'id': 'c', 's': 'x/*y*/ -- z'}")
+	require.JSONEq(t, `{"Items":[{"s":{"S":"x/*y*/ -- z"}}]}`,
+		ordBody(t, s, "SELECT s /* c */ FROM ptord WHERE id = 'c'"))
 
 	for _, src := range []string{
 		"SELECT * FROM ptord WHERE id = 'a' /* open",

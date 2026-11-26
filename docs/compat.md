@@ -492,27 +492,41 @@ caller's account and region, as LocalStack does.
   gostack names first.
 - A PartiQL statement's own expressions are named before its table and key for
   an `UPDATE` and a `DELETE` (a function, an operand, an operator count, an
-  overlap), and for a `SELECT` its list's overlap, as the image does. Not yet:
-  a `SELECT`'s `WHERE` function error comes after a missing table here and
-  before it in the image; an `UPDATE` with no `WHERE` at all names a missing
-  table here and the missing key condition in the image; a `WHERE` with `x IN 5`,
-  a bare `AND x`, or a `size(x)` as a condition is refused in other words by the
-  parser (the image: "IN operator must have a left hand argument of type
-  Variable Reference and right hand argument of type Seq", "The arguments to
+  overlap), and for a `SELECT` its list's and its `WHERE`'s errors (a function,
+  an alias, an empty path step, an overlap), as the image does, before a missing
+  table, key or index, in a batch and a transaction too. Not yet: an `UPDATE`
+  with no `WHERE` at all names a missing table here and the missing key
+  condition in the image; a `WHERE` with a bare `AND x`, or a `size(x)` as a
+  condition, is refused here in other words than the image's ("The arguments to
   AND/OR must be Expressions", "Incorrect operand type for operator or
-  function; operator or function: AND, operand type: N"); a `DELETE` whose
-  extra condition fails on an item that is not there answers
-  `ConditionalCheckFailedException` here and `200` in the image; a transaction
-  prefixes a projected function's "Unexpected path component" with the
-  statement's index in the image and not here.
+  function; operator or function: AND, operand type: N"), the same words in an
+  `ExecuteStatement`, a batch and a transaction, whether the table is there or
+  not; `x IN 5` is refused in other words by the parser (the image: "IN operator
+  must have a left hand argument of type Variable Reference and right hand
+  argument of type Seq"); a `DELETE` whose extra condition fails on an item that
+  is not there answers `ConditionalCheckFailedException` here and `200` in the
+  image; a transaction prefixes a projected function's "Unexpected path
+  component" with the statement's index in the image and not here; an
+  `INSERT ... RETURNING` in a transaction lacks the `TransactStatements[i]`
+  prefix (as on main). A `SELECT`'s own list or `WHERE` error (an alias, a
+  function, an empty step; `UPDATE ... SET m[''] = ?` too) is read in the image
+  before the count of its `?` parameters, and here after it. The image reserves
+  `ALL`, `DISTINCT`, `AS`, `ASC`, `DESC`, `LIMIT`, `MODIFIED`, `OLD`, `NEW`,
+  `ONLY`, `PIVOT` and `UNPIVOT` (gostack does too). Two clauses the image parses
+  and refuses are not well formed here: `SELECT VALUE x ...` ("Select
+  projection doesn't support value or pivot keywords") and a `LIMIT` ("Unsupported
+  clause: LIMIT at 1:40:1"). Other keywords the image reserves were not probed.
 - `RETURNING ALL NEW a` (no `*`): the image answers "Expected '*' after (
   MODIFIED | ALL ) ( NEW | OLD ) in RETURNING clause" after the statement's
   own expressions and the table and key; gostack answers "Statement wasn't well
   formed". A path step the image reads in another way than gostack: `['x']` at
   the start of a path ("Unexpected path component"), `m[?]`, `l[-1]` ("List
   index is not within the allowable range"), `id['x']` as a key ("Key
-  attributes must be scalars"), and `m['x']` after `ORDER BY` ("Argument to
-  ORDER BY must be of type VariableReference").
+  attributes must be scalars"). `ORDER BY m['x']` is read as `ORDER BY m.x`
+  and answers `200` in `ExecuteStatement` here, where the image answers
+  "Argument to ORDER BY must be of type VariableReference"; so does `ORDER BY
+  x` on a non-key attribute (the image: "Variable reference x in ORDER BY
+  clause must be part of the primary key").
 - `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
   within ExecuteTransaction must specify the primary key in the where clause.";
   the image answers "Reads on indices are not supported within transactions.".
