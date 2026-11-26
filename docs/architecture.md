@@ -433,8 +433,9 @@ How each piece is bounded, and why this way:
   check there holds up every new body behind it, stated ones included, until a
   body of unknown length reads on or ends or its wait does: with two such
   bodies holding 16 and 24 MiB and 24 MiB free, a stated 1 MiB body behind it
-  is throttled at 5 s (SQ-434 seam review, finding 3; main has no such check
-  and admits both at once). A step takes only
+  waits 5 s, and is throttled or let in as the first step's own wait ends
+  (SQ-434 seam review, finding 3; main has no such check and admits both at
+  once). A step takes only
   the decode room past what the request's decode hold holds, which a decoding
   that charges as the body arrives may have raised between two steps
   (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
