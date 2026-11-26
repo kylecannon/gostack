@@ -92,10 +92,20 @@ func statementNameError(err error) error {
 	return err
 }
 
-// checkSelect makes the checks the image makes of a SELECT before it looks its
+// aliasRefusal is the refusal of a statement that names an alias, nil when it
+// names none.
+func aliasRefusal(stmt *partiql.Statement) error {
+	if stmt.Aliased {
+		return value.Invalid(partiql.MsgAliasing)
+	}
+
+	return nil
+}
+
+// selectChecks makes the checks the image makes of a SELECT before it looks its
 // table up: the table's name, then an alias, then the paths of the list as
 // one (SQ-418 c5). It renders the list into r.
-func checkSelect(stmt *partiql.Statement, r *render) (*string, []partiql.Path, error) {
+func selectChecks(stmt *partiql.Statement, r *render) (*string, []partiql.Path, error) {
 	if stmt.TableAliased {
 		return nil, nil, value.Invalid(partiql.MsgAliasing)
 	}
@@ -105,22 +115,37 @@ func checkSelect(stmt *partiql.Statement, r *render) (*string, []partiql.Path, e
 		return nil, nil, err
 	}
 
-	if stmt.Aliased {
-		return nil, nil, value.Invalid(partiql.MsgAliasing)
+	err = aliasRefusal(stmt)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return projection(stmt.Projection, r)
 }
 
-// beforeTable is the answer to a write whose table or key is refused: the
-// error of the statement's own expressions when they have one, which the image
-// names first (SQ-418 c2, c3, c5). An INSERT holds none.
+// beforeTable is the answer to a statement whose table or key is refused, or
+// that failed on a condition or update of its own: the error of the
+// statement's own expressions when they have one, which the image names first
+// (SQ-418 c2, c3, c5, p2a f2). They are rendered here whole and afresh, a
+// SELECT's list first as the read renders it, so that every path to the error
+// quotes the same text, with the same placeholders and operator count, whether
+// the table is there or not. An INSERT holds none.
 func beforeTable(stmt *partiql.Statement, params []api.AttributeValue, refused error) error {
 	if stmt.Kind == partiql.Insert {
 		return refused
 	}
 
 	r := newRender(params)
+
+	var err error
+
+	if stmt.Kind == partiql.Select {
+		// Its list was checked already; this gives its placeholders to r.
+		_, _, err = projection(stmt.Projection, r)
+		if err != nil {
+			return err
+		}
+	}
 
 	cond, err := renderCond(stmt.Where, r)
 	if err != nil {

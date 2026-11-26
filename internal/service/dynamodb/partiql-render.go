@@ -1,6 +1,8 @@
 package dynamodb
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +19,8 @@ const (
 	msgSetFuncTarget  = "The first argument to %s must equal the assignment value"
 	msgSetFuncValue   = "The second argument to %s must be a value with type SET at "
 	msgUpdateFunc     = "The function is not allowed in an update expression; function: "
+	// msgEmptyComponent refuses a path step that names an empty string.
+	msgEmptyComponent = "Path component cannot be an empty string"
 )
 
 // render turns a statement's expressions into DynamoDB's expression
@@ -110,7 +114,7 @@ const rootKeyName = "root"
 func (r *render) operand(n *partiql.Node) (string, error) {
 	switch {
 	case n.Kind == partiql.KindPath:
-		return r.path(n.Path), nil
+		return r.userPath(n.Path)
 	case partiql.IsValue(n):
 		v, err := r.resolve(n)
 		if err != nil {
@@ -126,9 +130,40 @@ func (r *render) operand(n *partiql.Node) (string, error) {
 		// A sum has no place in a condition; handing it to cond would hand it
 		// back here, without end.
 		return "", value.Invalid(msgConditionOperator + n.Op)
-	default:
+	case isConditionKind(n.Kind):
 		return r.cond(n)
+	default:
+		// cond hands what it does not render here: a kind neither knows must
+		// end here, not go back.
+		return "", fmt.Errorf("%w: %d", errNodeKind, n.Kind)
 	}
+}
+
+// errNodeKind is a node of a kind the renderer has no case for, which the
+// parser does not make.
+var errNodeKind = errors.New("partiql: no rendering for a node of this kind")
+
+// isConditionKind reports whether cond renders a node of kind k itself.
+func isConditionKind(k partiql.Kind) bool {
+	switch k {
+	case partiql.KindAnd, partiql.KindOr, partiql.KindNot, partiql.KindCompare, partiql.KindBetween,
+		partiql.KindIn, partiql.KindIsNull, partiql.KindIsMissing:
+		return true
+	default:
+		return false
+	}
+}
+
+// userPath is the path a statement wrote, rendered with its names as
+// placeholders, or the image's refusal of a step that names an empty string,
+// made where the image makes it: as the path is put to use, in the order of the
+// statement's expressions (SQ-418 p2a e1, p2b o).
+func (r *render) userPath(p partiql.Path) (string, error) {
+	if p.Empty() {
+		return "", value.Invalid(msgEmptyComponent)
+	}
+
+	return r.path(p), nil
 }
 
 // msgConditionOperator refuses an arithmetic operator in a condition; the
@@ -310,15 +345,18 @@ func (r *render) update(actions []partiql.Action) (string, []int, error) {
 // updateAction renders one action of an UPDATE, and says which clause it
 // belongs to.
 func (r *render) updateAction(a partiql.Action) (int, string, error) {
-	target := r.path(a.Path)
+	target, err := r.userPath(a.Path)
+	if err != nil {
+		return 0, "", err
+	}
 
 	switch {
 	case a.Value == nil:
 		return clauseRemove, target, nil
 	case a.Value.Kind == partiql.KindCall && (a.Value.Name == "set_add" || a.Value.Name == "set_delete"):
-		operand, err := r.setFunc(a)
-		if err != nil {
-			return 0, "", err
+		operand, setErr := r.setFunc(a)
+		if setErr != nil {
+			return 0, "", setErr
 		}
 
 		if a.Value.Name == "set_add" {
@@ -327,9 +365,9 @@ func (r *render) updateAction(a partiql.Action) (int, string, error) {
 
 		return clauseDelete, target + " " + operand, nil
 	default:
-		v, err := r.updateValue(a.Value)
+		v, valueErr := r.updateValue(a.Value)
 
-		return clauseSet, target + " = " + v, err
+		return clauseSet, target + " = " + v, valueErr
 	}
 }
 

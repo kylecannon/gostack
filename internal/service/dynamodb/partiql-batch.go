@@ -40,27 +40,31 @@ func (c caller) compileRead(
 ) (*readStatement, error) {
 	r := newRender(params)
 
-	// As ExecuteStatement does (checkSelect), the image names the table's name,
+	// As ExecuteStatement does (selectChecks), the image names the table's name,
 	// an alias and the list's overlap before the table, its index and its key.
-	projected, nested, err := checkSelect(stmt, r)
+	projected, nested, err := selectChecks(stmt, r)
 	if err != nil {
 		return nil, err
 	}
 
+	// What is refused after that is refused after the WHERE's own errors, which
+	// the image names first: an unknown function or a wrong operand before a
+	// missing table, a missing key or the filter (beforeTable renders the WHERE
+	// whole, as ExecuteStatement's read does, so that the text agrees).
 	name, e, err := c.statementTable(&stmt.Table)
 	if err != nil {
-		return nil, fmt.Errorf("statement: %w", err)
+		return nil, beforeTable(stmt, params, fmt.Errorf("statement: %w", err))
 	}
 
 	if stmt.Index != "" {
-		return nil, errNotSingle
+		return nil, beforeTable(stmt, params, errNotSingle)
 	}
 
 	key, rest, err := singleItem(stmt.Where, e.data.Key(), r)
 
 	_, shaped := errors.AsType[*shapeError](err)
 	if shaped {
-		return nil, errNotSingle
+		return nil, beforeTable(stmt, params, errNotSingle)
 	}
 
 	if err != nil {
@@ -68,22 +72,7 @@ func (c caller) compileRead(
 	}
 
 	if len(rest) > 0 {
-		// The rest is refused as a filter, after its own errors: an unknown
-		// function or a wrong operand is named before the select is refused.
-		var filter string
-
-		filter, err = r.cond(joinAll(rest))
-		if err != nil {
-			return nil, err
-		}
-
-		err = checkStatementExprs(
-			r.attributeNames(), r.attributeValues(), &filter, nil, nil, keyOperators(e.data.Key()))
-		if err != nil {
-			return nil, err
-		}
-
-		return nil, errNotSingle
+		return nil, beforeTable(stmt, params, errNotSingle)
 	}
 
 	if nested != nil {

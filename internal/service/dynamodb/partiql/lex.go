@@ -3,6 +3,7 @@ package partiql
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // tokKind is the kind of a token.
@@ -141,7 +142,9 @@ func (l *lexer) next() (token, bool) {
 			kind = tokQuoted
 		}
 
-		start.Len = n
+		// The length counts characters, as the column does: the image's
+		// 'é' is 3 long (SQ-418 p2a t5-dup).
+		start.Len = utf8.RuneCountInString(l.src[l.off : l.off+n])
 		l.advanceText(l.src[l.off : l.off+n])
 
 		return token{kind: kind, text: text, at: start}, true

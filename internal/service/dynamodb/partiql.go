@@ -128,10 +128,10 @@ func (m *mixing) check(stmt *partiql.Statement) error {
 	return nil
 }
 
-// parseStatement parses a request's statement and checks it has a value for
-// each of its parameters; one that does not is returned with the error, as it
-// has a kind (mixing). An EXISTS parses only where exists allows it, in a
-// transaction.
+// parseStatement parses a request's statement and refuses a DISTINCT and a
+// statement that has no value for one of its parameters; those are returned
+// with the error, as the statement has a kind (mixing). An EXISTS parses only
+// where exists allows it, in a transaction.
 //
 //nolint:revive // flag-parameter: whether the operation runs EXISTS
 func parseStatement(src *string, params []api.AttributeValue, exists bool) (*partiql.Statement, error) {
@@ -150,6 +150,13 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 
 	if stmt.Kind == partiql.Exists && !exists {
 		return nil, value.Invalid(msgExistsOnlyTx)
+	}
+
+	// DISTINCT comes before the parameters, and before everything else of the
+	// statement (SQ-418 p2b d-1, d-27). The SELECT of an EXISTS is read for its
+	// WHERE alone (p2c x-d1).
+	if stmt.Distinct && stmt.Kind == partiql.Select {
+		return stmt, value.Invalid(partiql.MsgDistinct)
 	}
 
 	if stmt.Params > len(params) {
@@ -183,15 +190,16 @@ func (p *Provider) executeSelect(
 
 	// The image checks the table's name, an alias and the list's overlap
 	// before it looks the table up, so a missing table or index, a WHERE
-	// without the key and an ORDER BY with no WHERE come after them.
-	projected, aliases, err := checkSelect(stmt, r)
+	// without the key and an ORDER BY with no WHERE come after them, and
+	// after the WHERE's own errors (beforeTable).
+	projected, aliases, err := selectChecks(stmt, r)
 	if err != nil {
 		return nil, err
 	}
 
 	_, e, err := p.caller(ctx).statementTable(&stmt.Table)
 	if err != nil {
-		return nil, fmt.Errorf("statement: %w", err)
+		return nil, beforeTable(stmt, in.Parameters, fmt.Errorf("statement: %w", err))
 	}
 
 	key := e.data.Key()
@@ -201,7 +209,7 @@ func (p *Provider) executeSelect(
 	if stmt.Index != "" {
 		spec, ok := e.findIndex(stmt.Index)
 		if !ok {
-			return nil, value.Invalid(msgScanNoIndex + stmt.Index)
+			return nil, beforeTable(stmt, in.Parameters, value.Invalid(msgScanNoIndex+stmt.Index))
 		}
 
 		key, index = spec.Key, &stmt.Index
@@ -228,7 +236,9 @@ func (p *Provider) executeSelect(
 
 	pg, err := p.runSelect(ctx, q, stmt.Where, key, r)
 	if err != nil {
-		return nil, err
+		// A WHERE of its own mistake is named as a batch and a transaction
+		// name it, with the same text (beforeTable).
+		return nil, beforeTable(stmt, in.Parameters, err)
 	}
 
 	// A page with nothing projected holds the items as stored, which go out
@@ -527,6 +537,14 @@ func renderCond(n *partiql.Node, r *render) (*string, error) {
 func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error) {
 	if paths == nil {
 		return nil, nil, nil
+	}
+
+	// A step that names an empty string is refused before the list's overlap
+	// (SQ-418 p2b o-4).
+	for _, path := range paths {
+		if path.Empty() {
+			return nil, nil, value.Invalid(msgEmptyComponent)
+		}
 	}
 
 	whole := newRender(nil)

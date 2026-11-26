@@ -52,9 +52,9 @@ func (p *Provider) ExecuteTransaction(
 	return p.transactWrites(ctx, in, stmts)
 }
 
-// txStatements are a transaction's parsed statements. A statement whose
-// parameters do not match, or that has a RETURNING clause, is refused when its
-// turn to compile comes (refused). The image looks a RETURNING statement's
+// txStatements are a transaction's parsed statements. A statement that is a
+// DISTINCT, whose parameters do not match, or that has a RETURNING clause, is
+// refused when its turn to compile comes (refused). The image looks a RETURNING statement's
 // table and key up before it refuses the clause, so returning marks those.
 type txStatements struct {
 	stmts     []*partiql.Statement
@@ -67,9 +67,9 @@ type txStatements struct {
 // parseTransaction parses a transaction's statements and makes the checks on
 // the whole of it, statement by statement in order, as the image does: an empty
 // or long statement, a syntax error, and a statement that mixes reads and writes
-// with those before it refuse the call where it stands. A parameter mismatch
-// and a RETURNING clause are left to each statement's turn after that, with the
-// rest of what is wrong with it (SQ-467 image-probe.log).
+// with those before it refuse the call where it stands. A DISTINCT, a parameter
+// mismatch and a RETURNING clause are left to each statement's turn after that,
+// with the rest of what is wrong with it (SQ-467 image-probe.log).
 func parseTransaction(reqs []api.ParameterizedStatement) (*txStatements, error) {
 	switch {
 	case len(reqs) == 0:
@@ -94,8 +94,9 @@ func parseTransaction(reqs []api.ParameterizedStatement) (*txStatements, error) 
 		stmt, err := parseStatement(reqs[i].Statement, reqs[i].Parameters, true)
 
 		switch {
-		case err != nil && messageOf(err) == partiql.MsgParamCount:
-			out.refused[i] = txFailed(i, partiql.MsgParamCount)
+		case err != nil && stmt != nil:
+			// A DISTINCT or a parameter mismatch, of a statement that has a kind.
+			out.refused[i] = txFailed(i, messageOf(err))
 		case err != nil:
 			return nil, err
 		case stmt.Returning != partiql.ReturnNone:
@@ -235,8 +236,9 @@ func (c caller) refuseTxStatement(parsed *txStatements, i, n int, params []api.A
 		return parsed.refused[i]
 	}
 
-	// The image names the statement's own expressions before any of it.
-	err := beforeTable(parsed.stmts[i], params, nil)
+	// The image names the statement's own expressions before any of it, and
+	// then an alias, before it refuses the clause (SQ-418 p2a a4).
+	err := beforeTable(parsed.stmts[i], params, aliasRefusal(parsed.stmts[i]))
 	if err != nil {
 		return txCompileError(i, n, err)
 	}

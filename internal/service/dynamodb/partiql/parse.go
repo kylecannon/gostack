@@ -145,6 +145,18 @@ const MsgVariable = "Unsupported operation: VariableReference"
 func (p *parser) selectStatement() (*Statement, error) {
 	s := &Statement{Kind: Select}
 
+	// A set quantifier: ALL is the default and changes nothing, where DISTINCT
+	// parses and is refused later (Statement.Distinct).
+	switch {
+	case p.peek().is("DISTINCT"):
+		p.i++
+
+		s.Distinct = true
+	case p.peek().is("ALL"):
+		p.i++
+	default:
+	}
+
 	if p.peek().punct("*") {
 		p.i++
 	} else {
@@ -604,14 +616,16 @@ func (p *parser) path() (Path, error) {
 	}
 }
 
-// MsgEmptyComponent refuses a path step written `[”]`.
-const MsgEmptyComponent = "Path component cannot be an empty string"
-
 // MsgAliasing is the refusal of a statement that names an alias.
 const MsgAliasing = "Aliasing is not supported"
 
+// MsgDistinct is the refusal of a SELECT DISTINCT.
+const MsgDistinct = "Unsupported token in expression: DISTINCT"
+
 // bracketStep reads what follows a `[` of a path: a list index, or a name in
 // quotes or bare, which the image reads as the step `.name` (`m['x']` is `m.x`).
+// A step with no name, `[”]`, is read as one: the image refuses it where the
+// path is put to use, with the statement's other expressions (Path.Empty).
 func (p *parser) bracketStep() (Step, error) {
 	t := p.take()
 
@@ -626,10 +640,6 @@ func (p *parser) bracketStep() (Step, error) {
 
 		step = Step{Index: n, IsIndex: true}
 	case t.kind == tokString || t.kind == tokQuoted || (t.kind == tokIdent && !reserved(t.text)):
-		if t.text == "" {
-			return Step{}, &Error{Message: MsgEmptyComponent}
-		}
-
 		step = Step{Name: t.text}
 	default:
 		return Step{}, errMalformed
@@ -642,15 +652,24 @@ func (p *parser) bracketStep() (Step, error) {
 	return step, nil
 }
 
-// reserved reports whether a bare identifier is a keyword of the grammar,
-// which only a quoted identifier may spell.
+// reservedWords are the keywords of the grammar, which only a quoted identifier
+// may spell. The last ten are the image's: it answers each, as an attribute
+// name, a table name or an alias, as not well formed (SQ-418 p2b, p2c). The
+// image reserves others of the PartiQL grammar that were not probed.
+var reservedWords = [...]string{
+	"SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "BETWEEN", "IN", "IS", "NULL", "MISSING", "TRUE",
+	"FALSE", "INSERT", "INTO", "VALUE", "UPDATE", "SET", "REMOVE", "DELETE", "RETURNING", "EXISTS", "ORDER",
+	"BY", "ALL", "DISTINCT", "AS", "ASC", "DESC", "LIMIT", "MODIFIED", "OLD", "NEW", "ONLY", "PIVOT", "UNPIVOT",
+}
+
+// reserved reports whether a bare identifier is a keyword of the grammar. It
+// compares without a case-folded copy, so the check costs no allocation.
 func reserved(s string) bool {
-	switch strings.ToUpper(s) {
-	case "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "BETWEEN", "IN", "IS", "NULL", "MISSING", "TRUE",
-		"FALSE", "INSERT", "INTO", "VALUE", "UPDATE", "SET", "REMOVE", "DELETE", "RETURNING", "EXISTS", "ORDER",
-		"BY":
-		return true
-	default:
-		return false
+	for _, w := range reservedWords {
+		if len(w) == len(s) && strings.EqualFold(w, s) {
+			return true
+		}
 	}
+
+	return false
 }

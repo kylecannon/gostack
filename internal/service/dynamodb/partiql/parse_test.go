@@ -98,6 +98,11 @@ func Test_Value_errors(t *testing.T) {
 			"missing", "INSERT INTO t VALUE {'id': 'k', 'm': MISSING}",
 			"Unsupported data type: MISSING under key root at 1:38:7",
 		},
+		{
+			// A token's length counts characters, as the image's does: 'é' is 3 (SQ-418).
+			"key of characters", "INSERT INTO t VALUE {'é': 'e', 'é': 'f'}",
+			"Duplicate keys in tuple. Key: é under root at 1:32:3",
+		},
 	}
 
 	for _, tc := range cases {
@@ -123,6 +128,28 @@ func Test_Parse_orderGaps(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, s.Actions, 4)
 
+	wantActions := []struct {
+		path  partiql.Path
+		value string
+	}{
+		{partiql.Path{{Name: "a"}}, ""},
+		{partiql.Path{{Name: "b"}, {Name: "c"}}, ""},
+		{partiql.Path{{Name: "d"}}, "1"},
+		{partiql.Path{{Name: "e"}}, "2"},
+	}
+	for i, want := range wantActions {
+		require.Equal(t, want.path, s.Actions[i].Path, i)
+
+		if want.value == "" {
+			require.Nil(t, s.Actions[i].Value, i)
+
+			continue
+		}
+
+		require.Equal(t, partiql.LitNumber, s.Actions[i].Value.Literal.Kind, i)
+		require.Equal(t, want.value, s.Actions[i].Value.Literal.Text, i)
+	}
+
 	for _, src := range []string{"UPDATE t REMOVE a, b WHERE id = 'a'", "UPDATE t REMOVE a, WHERE id = 'a'"} {
 		_, err = partiql.Parse(src)
 		require.EqualError(t, err, partiql.MsgNotWellFormed+src)
@@ -139,8 +166,18 @@ func Test_Parse_orderGaps(t *testing.T) {
 	require.Equal(t, partiql.Path{{Name: "m"}, {Index: 1, IsIndex: true}, {Name: "x"}, {Index: 2, IsIndex: true}},
 		s.Projection[0])
 
-	_, err = partiql.Parse("SELECT m[''] FROM t")
-	require.EqualError(t, err, partiql.MsgEmptyComponent)
+	// A step with no name parses: the image refuses it where the path is used.
+	for _, src := range []string{"SELECT m[''] FROM t", `SELECT m[""] FROM t`} {
+		s, err = partiql.Parse(src)
+		require.NoError(t, err, src)
+		require.True(t, s.Projection[0].Empty(), src)
+		require.Equal(t, partiql.Path{{Name: "m"}, {Name: ""}}, s.Projection[0], src)
+	}
+
+	for _, src := range []string{"SELECT m[' FROM t", "SELECT m[''  FROM t", "SELECT m['' FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
 
 	aliases := map[string][2]bool{
 		"SELECT a AS z FROM t": {true, false}, "SELECT a z, b FROM t": {true, false}, "SELECT a FROM t u": {true, true},
@@ -161,6 +198,9 @@ func Test_Parse_orderGaps(t *testing.T) {
 	s, err = partiql.Parse("SELECT /* a\n*/ a /**/ FROM /*/ b */ t -- c /*\n WHERE /* d */ id = 'x/*y*/'")
 	require.NoError(t, err)
 	require.Equal(t, "t", s.Table)
+	require.Equal(t, partiql.KindCompare, s.Where.Kind)
+	require.Equal(t, partiql.LitString, s.Where.Args[1].Literal.Kind)
+	require.Equal(t, "x/*y*/", s.Where.Args[1].Literal.Text, "a comment inside a string is the string's")
 
 	for _, src := range []string{"SELECT a FROM t /* open", "SELECT a FROM t /*/", "SELECT /* /* */ */ a FROM t"} {
 		_, err = partiql.Parse(src)

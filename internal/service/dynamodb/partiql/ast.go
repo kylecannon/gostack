@@ -62,6 +62,10 @@ type Statement struct {
 	// TableAliased is set when the alias is the table's, which a SELECT refuses
 	// before it checks the table's name, where one of its list follows the name.
 	TableAliased bool
+	// Distinct is set on a SELECT DISTINCT, which the image parses and refuses
+	// (MsgDistinct) before anything else of the statement but its mixing with
+	// other statements.
+	Distinct bool
 }
 
 // Action is one SET or REMOVE of an UPDATE. Value is nil for a REMOVE.
@@ -80,6 +84,18 @@ type Step struct {
 
 // Path is a document path, its first step a name.
 type Path []Step
+
+// Empty reports whether a step of p names an empty string, as `m[”]` does,
+// which the image refuses where the path is used.
+func (p Path) Empty() bool {
+	for _, s := range p {
+		if !s.IsIndex && s.Name == "" {
+			return true
+		}
+	}
+
+	return false
+}
 
 // Alias is the name a projected path's value takes in a SELECT's result: the
 // path from its last name on, as DynamoDB Local names it ("m.k" is "k",

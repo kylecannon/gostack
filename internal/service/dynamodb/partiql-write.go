@@ -65,13 +65,13 @@ type writeStatement struct {
 }
 
 // compileWrite compiles a write statement against its table. returnOld is
-// ReturnValuesOnConditionCheckFailure's ALL_OLD.
-//
-//nolint:revive // flag-parameter: what the request asked for, not a mode
+// ReturnValuesOnConditionCheckFailure's ALL_OLD. A mistake of the statement's
+// own expressions is named as it is where the table is not there: rendered
+// whole, once (beforeTable).
 func (c caller) compileWrite(
 	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
 ) (*writeStatement, error) {
-	name, e, err := c.writeTable(stmt, params)
+	name, e, err := c.lookupWriteTable(stmt, params)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +93,12 @@ func (c caller) compileWrite(
 
 	cond, err := renderCond(joinAll(rest), r)
 	if err != nil {
-		return nil, err
+		return nil, beforeTable(stmt, params, err)
 	}
 
 	w.unwritten = keyOperators(key)
 
-	var onFailure *string
-	if returnOld {
-		onFailure = new(returnAllOld)
-	}
+	onFailure := oldOnFailure(returnOld)
 
 	switch stmt.Kind {
 	case partiql.Update:
@@ -128,13 +125,30 @@ func (c caller) compileWrite(
 		}
 	}
 
-	return w.checked(err)
+	checked, err := w.checked(err)
+	if err != nil {
+		return nil, beforeTable(stmt, params, err)
+	}
+
+	return checked, nil
 }
 
-// writeTable looks up the table of a write, after the refusals that come before
-// it (refusedFirst). A table that is refused is answered after the statement's
-// own expressions (beforeTable).
-func (c caller) writeTable(stmt *partiql.Statement, params []api.AttributeValue) (string, *tableEntry, error) {
+// oldOnFailure is ReturnValuesOnConditionCheckFailure for a statement that asks
+// for the old item when its condition fails, nil when it does not.
+//
+//nolint:revive // flag-parameter: what the request asked for, not a mode
+func oldOnFailure(returnOld bool) *string {
+	if returnOld {
+		return new(returnAllOld)
+	}
+
+	return nil
+}
+
+// lookupWriteTable looks up the table of a write, after the refusals that come
+// before it (refusedFirst). A table that is refused is answered after the
+// statement's own expressions (beforeTable).
+func (c caller) lookupWriteTable(stmt *partiql.Statement, params []api.AttributeValue) (string, *tableEntry, error) {
 	err := refusedFirst(stmt, params)
 	if err != nil {
 		return "", nil, err
@@ -154,15 +168,18 @@ func (c caller) writeTable(stmt *partiql.Statement, params []api.AttributeValue)
 }
 
 // refusedFirst is what the image refuses of a write before it looks the table
-// up: for an EXISTS, which holds its SELECT's aliases unread, the table's name,
-// as a SELECT checks it first; and for a statement with an alias, the alias,
-// after the statement's own expressions.
+// up. An EXISTS reads its SELECT's list unread and refuses the table's alias
+// before anything else of it, the table's name next, as a SELECT does
+// (SQ-418 p2a x6, p2b x); a statement with an alias refuses it after the
+// statement's own expressions.
 func refusedFirst(stmt *partiql.Statement, params []api.AttributeValue) error {
 	switch {
+	case stmt.Kind == partiql.Exists && stmt.TableAliased:
+		return value.Invalid(partiql.MsgAliasing)
 	case stmt.Kind == partiql.Exists:
 		return statementName(stmt.Table)
 	case stmt.Aliased:
-		return beforeTable(stmt, params, value.Invalid(partiql.MsgAliasing))
+		return beforeTable(stmt, params, aliasRefusal(stmt))
 	default:
 		return nil
 	}
