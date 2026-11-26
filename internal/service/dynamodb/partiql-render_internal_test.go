@@ -45,11 +45,42 @@ func isLogic(k partiql.Kind) bool {
 	}
 }
 
-// regular reports whether the WHERE n renders to text the expression parser
-// reads: conditions joined by AND, OR and NOT, over comparisons of operands. The
-// parser of statements reads more than that (a bare operand under an AND), and
-// the text it is rendered to then has no reading.
+// callArity is how many arguments each function the renderer passes on takes; a
+// call of any other count has no reading as an expression.
+var callArity = map[string]int{
+	"begins_with": 2, "contains": 2, "attribute_type": 2, "size": 1, "attribute_exists": 1,
+	"attribute_not_exists": 1, "list_append": 2, "if_not_exists": 2, "set_add": 2, "set_delete": 2,
+}
+
+// regularStatement reports whether stmt's WHERE and the values of its actions
+// are regular.
+func regularStatement(stmt *partiql.Statement) bool {
+	if stmt.Where != nil && (nonCondition(stmt.Where) || !regular(stmt.Where)) {
+		return false
+	}
+
+	for _, a := range stmt.Actions {
+		if a.Value != nil && !regular(a.Value) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// regular reports whether n renders to text the expression parser reads:
+// conditions joined by AND, OR and NOT, over comparisons of operands, and
+// functions of the number of arguments they take. The parser of statements
+// reads more than that (a bare operand under an AND, a call of no arguments),
+// and the text it is rendered to then has no reading.
 func regular(n *partiql.Node) bool {
+	if n.Kind == partiql.KindCall {
+		arity, known := callArity[n.Name]
+		if !known || len(n.Args) != arity {
+			return false
+		}
+	}
+
 	switch n.Kind {
 	case partiql.KindAnd, partiql.KindOr, partiql.KindNot:
 		for _, a := range n.Args {
@@ -132,7 +163,7 @@ func FuzzPartiQLRender(f *testing.F) {
 		}
 
 		err = checkStatementExprs(r.attributeNames(), r.attributeValues(), cond, updateText, rank, 0)
-		if err != nil && isSyntaxError(err) && (stmt.Where == nil || (regular(stmt.Where) && !nonCondition(stmt.Where))) {
+		if err != nil && isSyntaxError(err) && regularStatement(stmt) {
 			t.Fatalf("%q renders %q and %q, which the expression parser does not read: %v", src, textOf(cond), update, err)
 		}
 	})
