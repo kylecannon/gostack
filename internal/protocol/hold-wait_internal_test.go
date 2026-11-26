@@ -19,8 +19,9 @@ import (
 // needs, in order, so the first fits once the others gave theirs back, and
 // each one served gives back room for the next. With a hold that kept its room
 // while it waited, every hold would wait on the others until the wait ended.
-// The bodies' bytes stay held, so a decoding at the head that does not fit
-// beside them waits until a request behind it ends (bodyPool).
+// The bodies' bytes stay held, so a decoding that does not fit beside them
+// waits until another request ends, and the ones that fit pass it
+// (Test_DecodeHold_AFittingDecodingPassesAShortOne).
 func Test_DecodeHold_NoHoldAndWait(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, DefaultInFlight, 2*time.Second)

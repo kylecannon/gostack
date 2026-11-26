@@ -417,7 +417,8 @@ How each piece is bounded, and why this way:
   given back in turn, cover the next one's need), counting what every other
   request holds as given back once it ends. Steps are scanned oldest body
   first, ahead of decodings that grow, which wait ahead of new bodies, and new
-  bodies are let in strictly in the order they came. A step that fails the
+  bodies that pass the check are let in strictly in the order they came. A
+  step that fails the
   check waits for another body to read on or end, not for room, so it is
   passed over whether or not it fits: a younger body's step that passes and
   fits is granted ahead of it, and the decodings and new bodies behind are let
@@ -432,12 +433,12 @@ How each piece is bounded, and why this way:
   steps of bodies already admitted may pass a safety-blocked older step, and an
   older body can be throttled when a younger one took the large allowance
   first. A body's first step waits among the new bodies, and one that fails the
-  check there holds up every new body behind it, stated ones included, until a
-  body of unknown length reads on or ends or its wait does: with two such
-  bodies holding 16 and 24 MiB and 24 MiB free, a stated 1 MiB body behind it
-  waits 5 s, and is throttled or let in as the first step's own wait ends
-  (SQ-434 seam review, finding 3; main has no such check and admits both at
-  once). A step takes only
+  check there is passed over the same way: with two such bodies holding 16 and
+  24 MiB and 24 MiB free, a stated 1 MiB body behind it is admitted at once,
+  and the first step comes once one of them ends
+  (`Test_BodyPool_UnsafeFirstStepLetsNewBodiesPass`; the user's ruling of
+  2026-11-25 on SQ-434 seam review finding 3). A first step that passes the
+  check and does not fit stops the new bodies behind it. A step takes only
   the decode room past what the request's decode hold holds, which a decoding
   that charges as the body arrives may have raised between two steps
   (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
@@ -961,13 +962,23 @@ memory.
   of the pool and wait to grow until the oldest waiters give up at 5 s, which
   answers them in waves of the wait. A decoding that has decoded nothing yet
   gives back its room while it waits (a dense json body), but its body's bytes
-  stay held, and the decodings that wait are served strictly in order. A
-  stated 16 MiB json body whose decoding needs 46 MiB, and a 4 MiB one behind
-  it needing 16 MiB, wait with 44 MiB free: the first fits only once the
-  second's request ends, so both wait out the 5 s, at least one is throttled
-  then, and a stated 1 MiB body arriving behind them waits as long. Main
-  stalls the same way, holding each decoding's room as well (SQ-434 seam
-  review, finding 1). A body of unknown length grows only in steps that leave
+  stay held, so it may not fit until another request ends. A decoding that
+  fits is let in past one that does not, and no new body is let in while any
+  decoding waits. The decoding of a body too short to be metered holds nothing
+  before it waits, so such requests can keep passing: what bounds a
+  passed-over decoding is its own 5 s wait, at which it is throttled unless
+  enough room came back first. A stated 16 MiB json
+  body whose decoding needs 46 MiB and a 4 MiB one behind it needing 16 MiB
+  hold 20 MiB of bodies, with 44 MiB free: the second decoding is granted at
+  once, the first once the second's request ends, and a stated 1 MiB body
+  arriving meanwhile is admitted after the first, with no throttle
+  (`Test_DecodeHold_AFittingDecodingPassesAShortOne`). Had the second request
+  kept its room, the first would be throttled at its wait and the new body
+  admitted then (`Test_DecodeHold_APassedOverDecodingIsAnsweredAtItsWait`).
+  When no waiting decoding fits, one is throttled at 5 s, as on main, which
+  serves them strictly in order and holds each one's room while it waits.
+  This is the user's ruling of 2026-11-25 on SQ-434 seam review finding 1. A
+  body of unknown length grows only in steps that leave
   every such body a way to its end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
   1 MiB json `SendMessage` calls sent at once are all served in 0.45 to
   0.51 s; 64 chunked 16 MiB json `PutItem` bodies (a claim of about 48 MiB

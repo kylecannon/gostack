@@ -118,7 +118,9 @@ func Test_DecodeHold_StopEndsADecodingThatHoldsNothing(t *testing.T) {
 	stopped := make(chan error, 1)
 
 	go func() {
-		_, err := bare.HoldDecode(FreeDecode + 2*mib)
+		// More than the decoding above gave back: one that fits would be let
+		// in past it (grant).
+		_, err := bare.HoldDecode(FreeDecode + 8*mib)
 		stopped <- err
 	}()
 

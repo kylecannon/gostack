@@ -189,16 +189,13 @@ func BodiesWait(own int64) bool {
 
 	room := pool.capacity - (pool.used - own)
 
-	for i, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
+	for _, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
 		for _, w := range queue {
-			// A step that waits for a safe order waits whatever the caller
-			// gives back, fits or not, and holds up no one (grant).
+			// A step, or a body's first step, that waits for a safe order
+			// waits whatever the caller gives back, fits or not, and holds up
+			// no one (grant).
 			if pool.blocked(w) {
-				if i == 0 {
-					continue
-				}
-
-				return true
+				continue
 			}
 
 			if room < w.n {
@@ -224,14 +221,17 @@ func SetBodyWait(wait time.Duration) {
 // waiting on bodies that have not started: the steps of bodies of unknown
 // length still being read (steps), oldest body first, then the decodings that
 // need more (growing), then bodies not yet admitted (starting), each in the
-// order they came.
+// order they came but for the waiters grant lets pass.
 //
 // A body that states its length is charged in one step (admit), and a decoding
 // that needs more gives back the decode room it holds and waits for all it
-// needs (regrow). Its request's body bytes stay held while it waits, and
-// p.growing is served strictly in order: a decoding at its head that does not
-// fit beside the bodies of the decodings behind it waits, and the queues behind
-// it with it, until one of those requests ends, at the latest at its own wait.
+// needs (regrow). Its request's body bytes stay held while it waits, so a
+// decoding that does not fit beside the bodies of the others may wait for one
+// of those requests to end: a decoding behind it that fits is let in past it,
+// and no new body is let in while it waits. A decoding whose request holds
+// nothing, a body too short to be metered, comes straight to p.growing, so
+// such requests may keep passing it: what bounds its wait is its own wait, at
+// whose end it is answered unless enough room was given back first.
 //
 // A body of unknown length holds only what it has read, and grows in steps
 // (BodyMeter.grow) while it holds the steps before; each step is granted only
@@ -240,7 +240,7 @@ func SetBodyWait(wait time.Duration) {
 // back once it finishes. So some such body can always finish, and a step that
 // waits for one to finish lets the steps of the others pass it (grant). A
 // body's first step waits in p.starting, and one that waits for a safe order
-// holds up the bodies queued behind it there.
+// lets the bodies queued behind it there pass it, in their order.
 type bodyPool struct {
 	mu       sync.Mutex
 	capacity int64
@@ -394,8 +394,8 @@ func (p *bodyPool) finish(g *grower, n int64) {
 
 // regrow makes what a holder of held bytes holds want bytes, want more than
 // held: at once when no one waits ahead of it and the room is there, and
-// otherwise it gives held back and waits in p.growing for all of want, in the
-// order the growing waiters came. The give-back and the joining happen under
+// otherwise it gives held back and waits in p.growing for all of want, let in
+// as grant describes. The give-back and the joining happen under
 // one lock, so a body that arrives meanwhile cannot take the bytes given back.
 // bare reports that the request holds nothing else of the pool. On ErrBusy the
 // holder holds nothing.
@@ -490,9 +490,9 @@ func (p *bodyPool) release(n int64) {
 	p.mu.Unlock()
 }
 
-// grant lets waiters in, in order, while the one at the head fits and, for a
-// step of a body of unknown length, leaves the pool safe. A body's first step
-// makes it the youngest of the bodies of unknown length being read.
+// grant lets waiters in: the steps, then the decodings that grow, then the
+// bodies not yet admitted, as bodyPool describes. A body's first step makes it
+// the youngest of the bodies of unknown length being read.
 //
 // The steps are scanned oldest body first. A step that is not safe waits for
 // another such body to read on or end, not for room, so it is passed over
@@ -500,6 +500,13 @@ func (p *bodyPool) release(n int64) {
 // in ahead of it, and the scan starts again from the oldest, since that may
 // have made it safe (nextStep). A safe step that does not fit stops the scan
 // and everything behind it, so nothing younger takes the room it waits for.
+//
+// Every decoding that fits is let in, in the order they came, past one that
+// does not; while any is left waiting, no new body is let in. The new bodies
+// come in the order they came; a first step that is not safe is passed
+// over, and the first one that does not fit stops them. Letting one in never
+// makes a passed-over first step safe: it adds a body of unknown length or
+// none, so the scan goes on from where it is.
 func (p *bodyPool) grant() {
 	for {
 		i, short := p.nextStep()
@@ -514,15 +521,33 @@ func (p *bodyPool) grant() {
 		p.let(&p.steps, i)
 	}
 
-	for _, queue := range []*[]*bodyWaiter{&p.growing, &p.starting} {
-		for len(*queue) > 0 {
-			w := (*queue)[0]
-			if p.blocked(w) || p.used+w.n > p.capacity {
-				return
-			}
+	for i := 0; i < len(p.growing); {
+		if p.used+p.growing[i].n > p.capacity {
+			i++
 
-			p.let(queue, 0)
+			continue
 		}
+
+		p.let(&p.growing, i)
+	}
+
+	if len(p.growing) > 0 {
+		return
+	}
+
+	for i := 0; i < len(p.starting); {
+		w := p.starting[i]
+		if p.blocked(w) {
+			i++
+
+			continue
+		}
+
+		if p.used+w.n > p.capacity {
+			return
+		}
+
+		p.let(&p.starting, i)
 	}
 }
 
