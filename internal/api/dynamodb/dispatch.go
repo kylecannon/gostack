@@ -2479,7 +2479,7 @@ func readBody(rc *request.Context) ([]byte, *awserr.Error) {
 		}
 	}
 	if protocol.OverBody(len(body)) {
-		return nil, protocol.BodyTooLarge()
+		return nil, &awserr.Error{Code: "413", StatusCode: 413, Fault: awserr.FaultSender}
 	}
 	if !utf8.Valid(body) {
 		return nil, errBodyNotUTF8
