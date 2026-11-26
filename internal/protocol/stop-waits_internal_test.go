@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test_BodyPool_StopEndsOnlyTheQueuedWaits: when the pool's stop (StopQueued)
+// Test_BodyPool_StopEndsOnlyTheQueuedWaits: when the request's stop (Charge.StopWaitsWith)
 // closes, a body queued for admission whose request holds nothing stops
 // waiting at once, long before the body wait, and fails with ErrBusy. A body
 // of unknown length that holds some of the pool and waits for its next step,
@@ -19,11 +19,11 @@ func Test_BodyPool_StopEndsOnlyTheQueuedWaits(t *testing.T) {
 	t.Cleanup(func() { SetBodyWait(DefaultBodyWait) })
 
 	stop := make(chan struct{})
-	StopQueued(stop)
-	t.Cleanup(func() { StopQueued(nil) })
+	c := new(Charge)
+	ctx := WithCharge(t.Context(), c)
+	c.StopWaitsWith(stop)
 
 	p := &bodyPool{capacity: 64}
-	ctx := t.Context()
 	running := &grower{claim: 32}
 	holding := &grower{claim: 16}
 
@@ -81,14 +81,12 @@ func Test_BodyPool_StopEndsOnlyTheQueuedWaits(t *testing.T) {
 // holds nothing of the bound, neither body bytes nor decode room (a body short
 // enough not to be metered), is answered as the shutdown stop closes, as a
 // body queued for admission is; a decoding whose request's body holds bytes
-// keeps waiting and is granted once room is given back. The stop is set before
-// the bound is: it holds for whatever bound SetInFlight sets.
+// keeps waiting and is granted once room is given back. Both requests carry
+// the stop (Charge.StopWaitsWith).
 func Test_DecodeHold_StopEndsADecodingThatHoldsNothing(t *testing.T) {
 	const mib = 1 << 20
 
 	stop := make(chan struct{})
-	StopQueued(stop)
-	t.Cleanup(func() { StopQueued(nil) })
 
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, DefaultInFlight, time.Minute)
@@ -98,6 +96,8 @@ func Test_DecodeHold_StopEndsADecodingThatHoldsNothing(t *testing.T) {
 	require.NoError(t, err)
 
 	holding := ChargeOf(holdingCtx)
+	holding.StopWaitsWith(stop)
+
 	pool := inFlight.Load()
 	_, held := InFlight()
 	require.NoError(t, pool.acquire(t.Context(), DefaultInFlight-held, &pool.starting), "the rest of the bound")
@@ -115,6 +115,8 @@ func Test_DecodeHold_StopEndsADecodingThatHoldsNothing(t *testing.T) {
 
 	bare := new(Charge)
 	bareCtx := WithCharge(t.Context(), bare)
+	bare.StopWaitsWith(stop)
+
 	stopped := make(chan error, 1)
 
 	go func() {

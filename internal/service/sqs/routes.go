@@ -95,7 +95,7 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	// of the call.
 	form, formErr := query.RequestForm(r)
 	if formErr != nil {
-		writeQueryError(w, rc, query.MalformedQueryString())
+		writeQueryError(w, rc, formAnswer(formErr))
 
 		return
 	}
@@ -126,6 +126,19 @@ func (p *Provider) serveQueueURL(w http.ResponseWriter, r *http.Request) {
 	held.markSenderFault()
 	held.sendAs(w, negotiateMime(r))
 	p.markChanged(rc.Operation)
+}
+
+// formAnswer is the answer to a queue-URL call whose form read failed with
+// err: Throttling when the bodies in flight left the form no room or the
+// shutdown stopped its wait, as at "/", since its Action may be among the
+// pairs lost (query.CutFormAnswer), and MalformedQueryString otherwise.
+func formAnswer(err error) *awserr.Error {
+	cut := query.CutFormAnswer(err)
+	if cut != nil {
+		return cut
+	}
+
+	return query.MalformedQueryString()
 }
 
 // serveQueueURLJSON answers a json call sent to a queue URL: some SDKs send the

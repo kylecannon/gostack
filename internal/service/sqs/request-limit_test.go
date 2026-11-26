@@ -120,6 +120,21 @@ func formHeaders() map[string]string {
 // service, which answers with its own count.
 func Test_RequestLimit_OverTheLongestValidRequest(t *testing.T) {
 	withInFlightBound(t)
+	overTheLongestValidRequest(t)
+}
+
+// Test_RequestLimit_OverTheLongestValidRequestWithNoPool: the same bound holds
+// with the in-flight bound off (GOSTACK_MAX_IN_FLIGHT_BODIES=0), where no body
+// is charged: each body is answered as above and read no further.
+func Test_RequestLimit_OverTheLongestValidRequestWithNoPool(t *testing.T) {
+	bound, _ := protocol.InFlight()
+	require.Zero(t, bound, "no in-flight bound")
+
+	overTheLongestValidRequest(t)
+}
+
+func overTheLongestValidRequest(t *testing.T) {
+	t.Helper()
 
 	s := newStack(t)
 	jc := s.as(protoJSON)
@@ -238,16 +253,24 @@ func Test_RequestLimit_LongestValidRequestServed(t *testing.T) {
 	jc := s.as(protoJSON)
 	queueURL := jc.createQueue("q", nil)
 
-	send := []byte(`{"QueueUrl":"` + queueURL + `","MessageBody":"` + strings.Repeat(`a`, 1<<20) + `"}`)
+	const escaped = "\\u0061" // "a", as an encoder may write any character
+
+	send := []byte(`{"QueueUrl":"` + queueURL + `","MessageBody":"` + strings.Repeat(escaped, 1<<20) + `"}`)
+	require.Greater(t, len(send), longestValid-protocol.FreeBody, "near the bound")
+	require.LessOrEqual(t, len(send), longestValid)
+
 	r, _ := sendRaw(t, s, "/", send, -1, jsonHeaders("SendMessage"))
 	assert.Equal(t, http.StatusOK, r.status, r.body)
 
 	entries := make([]string, 10)
 	for i := range entries {
-		entries[i] = fmt.Sprintf(`{"Id":"%080d",`+`"MessageBody":"%s"}`, i, strings.Repeat(`a`, (1<<20)/10))
+		entries[i] = fmt.Sprintf(`{"Id":"%080d",`+`"MessageBody":"%s"}`, i, strings.Repeat(escaped, (1<<20)/10))
 	}
 
 	batch := []byte(`{"QueueUrl":"` + queueURL + `","Entries":[` + strings.Join(entries, ",") + `]}`)
+	require.Greater(t, len(batch), longestValid-protocol.FreeBody, "near the bound")
+	require.LessOrEqual(t, len(batch), longestValid)
+
 	r, _ = sendRaw(t, s, "/", batch, int64(len(batch)), jsonHeaders("SendMessageBatch"))
 	require.Equal(t, http.StatusOK, r.status, r.body)
 	assert.Len(t, jc.decode(r).json["Successful"], 10, r.body)

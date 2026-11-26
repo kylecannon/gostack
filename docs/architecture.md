@@ -380,7 +380,11 @@ How each piece is bounded, and why this way:
   before its route reads the form. A body that states a longer length fails
   with `protocol.ErrBodyLong` at its first read past `FreeBody`, holding none
   of the pool; one of unknown length fails once it passes the bound, its share
-  cut to the bound so it never holds more. The service answers it
+  cut to the bound plus one byte so it never holds more. With the pool off
+  (`GOSTACK_MAX_IN_FLIGHT_BODIES=0`) the gateway still meters such a body, to
+  bound it only: it charges nothing and sets no idle deadline
+  (`Test_RequestLimit_OverTheLongestValidRequestWithNoPool`). The service,
+  not the gateway, answers it, at `/` and on the routes it mounts
   (compat.md, "SQS request length"), naming a form's operation from the URL
   or the pairs read whole before the cut (`query.CutAction`). An unsigned form
   whose Action is only in its body is read whole by service detection before
@@ -395,7 +399,8 @@ How each piece is bounded, and why this way:
   share, so a request alone always fits: json and query charge their whole
   cost at once, known before they build anything; rest-xml grows in 1 MiB
   steps as it decodes. A body that states its length is charged all of it, up
-  to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte), together with the
+  to its share (`GOSTACK_MAX_REQUEST_BODY` plus one byte, or its service's
+  bound plus one byte, so a body of exactly the bound is planned for), together with the
   room its decoding is planned to hold, the first time it reads past
   `FreeBody`: all or nothing, in order behind other new bodies, so a body
   that waits holds nothing while it waits, and an admitted body never waits
@@ -978,6 +983,16 @@ memory.
   When no waiting decoding fits, one is throttled at 5 s, as on main, which
   serves them strictly in order and holds each one's room while it waits.
   This is the user's ruling of 2026-11-25 on SQ-434 seam review finding 1. A
+  decoding that fits is let in past a step of a body of unknown length that
+  passes the safe check and is short of room too, and a decoding that fits
+  where it is takes the rest there without giving its room back first; the
+  step and the new bodies behind it stay stopped
+  (`Test_DecodeHold_AFittingDecodingPassesAShortStep`,
+  `Test_DecodeHold_AFittingRegrowKeepsItsRoom`; the user's ruling of
+  2026-11-26 on the second seam review). Decode room a body of unknown
+  length's request holds counts as that body's in the safe check, whether its
+  steps or a `Cover` took it, since it is given back only when the body ends
+  (`Test_DecodeHold_CoverRoomCountsToItsGrowingBody`). A
   body of unknown length grows only in steps that leave
   every such body a way to its end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
   1 MiB json `SendMessage` calls sent at once are all served in 0.45 to
@@ -1019,9 +1034,13 @@ memory.
   once with its service's throttle; before, it was cut with no answer when the
   drain ended. The throttle is the protocol's: 400 `ThrottlingException` for
   json, 400 `Throttling` for query, 503 `SlowDown` for S3. `gateway.New` hands
-  the channel it closes as it begins to stop to `protocol.StopQueued`, which
-  holds it for whatever bound `SetInFlight` sets, before or after; only a
-  waiter reads it, so a request costs nothing more. The stop stays closed
+  each request the channel it closes as it begins to stop, on the request's
+  charge (`protocol.Charge.StopWaitsWith`, set in `recoverPanic` beside the
+  body meter): a field store, and only a waiter reads it, so a request costs
+  no allocation more. Another gateway's shutdown leaves the request waiting
+  (`Test_Gateway_ShutdownStopsOnlyItsOwnQueuedBodies`). A grant that lands as
+  the stop closes is kept (`Test_BodyPool_AGrantFoundAtTheStopIsKept`). The
+  stop stays closed
   through the drain, so a body that queues for admission after it is answered
   with the throttle as well. A request that holds some of the pool keeps
   waiting, a chunked body for its next step or a decoding in `Cover`, and is

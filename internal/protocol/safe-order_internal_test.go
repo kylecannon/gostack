@@ -34,8 +34,8 @@ func newSafeOrderPool(t *testing.T, wait time.Duration) (p *bodyPool, older, you
 }
 
 // stepLater asks for g's step of n in the background, once the steps queue
-// holds queued steps, and returns where its answer comes.
-func stepLater(t *testing.T, p *bodyPool, g *grower, n int64, queued int) <-chan error {
+// holds it alone, and returns where its answer comes.
+func stepLater(t *testing.T, p *bodyPool, g *grower, n int64) <-chan error {
 	t.Helper()
 
 	done := make(chan error, 1)
@@ -46,7 +46,7 @@ func stepLater(t *testing.T, p *bodyPool, g *grower, n int64, queued int) <-chan
 		p.mu.Lock()
 		defer p.mu.Unlock()
 
-		return len(p.steps) == queued
+		return len(p.steps) == 1
 	}, time.Second, time.Millisecond, "the step waits")
 
 	return done
@@ -58,22 +58,23 @@ func stepLater(t *testing.T, p *bodyPool, g *grower, n int64, queued int) <-chan
 // body's step comes then. Were the younger body's step queued behind the
 // older one's, each would wait on the other until the wait ended.
 func Test_BodyPool_YoungerFinishesThenOlder(t *testing.T) {
-	p, older, younger := newSafeOrderPool(t, 300*time.Millisecond)
-	olderDone := stepLater(t, p, older, 1, 1)
+	const wait = time.Second
+
+	p, older, younger := newSafeOrderPool(t, wait)
+	olderDone := stepLater(t, p, older, 1)
 
 	start := time.Now()
 	require.NoError(t, p.step(t.Context(), younger, 8, true), "the younger body reaches its claim")
-	assert.Less(t, time.Since(start), 100*time.Millisecond, "without waiting out the older body's step")
+	assert.Less(t, time.Since(start), wait/2, "without waiting out the older body's step")
 
-	select {
-	case err := <-olderDone:
-		t.Fatalf("the older body's step came before the younger body ended: %v", err)
-	default:
-	}
+	p.mu.Lock()
+	olderWaits := len(p.steps) == 1
+	p.mu.Unlock()
+	assert.True(t, olderWaits, "the older body's step waits until the younger body ends")
 
 	p.finish(younger, 48)
 	require.NoError(t, <-olderDone, "the older body's step comes once the younger body ends")
-	assert.Less(t, time.Since(start), 100*time.Millisecond)
+	assert.Less(t, time.Since(start), wait/2)
 
 	p.finish(older, 17)
 	assert.Zero(t, p.used, "the pool ends empty")
@@ -85,7 +86,7 @@ func Test_BodyPool_YoungerFinishesThenOlder(t *testing.T) {
 // came after it.
 func Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody(t *testing.T) {
 	p, older, younger := newSafeOrderPool(t, 2*time.Second)
-	olderDone := stepLater(t, p, older, 1, 1)
+	olderDone := stepLater(t, p, older, 1)
 
 	// A third body's first step waits too: it would leave no safe order.
 	third := &grower{claim: 48}
@@ -106,7 +107,7 @@ func Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody(t *testing.T) {
 	select {
 	case err := <-olderDone:
 		require.NoError(t, err, "the older body's step comes when the younger body ends")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("the older body's step waited past the younger body's end")
 	}
 

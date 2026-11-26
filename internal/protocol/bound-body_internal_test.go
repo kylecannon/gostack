@@ -66,3 +66,27 @@ func (p *peekHeld) Read(b []byte) (int, error) {
 }
 
 func (*peekHeld) Close() error { return nil }
+
+// Test_BoundBody_PlansDecodeRoomForTheLongestValidBody: a body that states
+// exactly its service's bound, SQS's 6,356,992 bytes, is admitted with the
+// decode room planned for it, as a body within MaxBody is: it is valid, so it
+// is decoded.
+func Test_BoundBody_PlansDecodeRoomForTheLongestValidBody(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, time.Second)
+
+	const limit = 6<<20 + FreeBody
+
+	m, ctx := meteredBody(t, limit, limit)
+	BoundBody(ctx, limit)
+
+	_, err := ReadBody(m, limit)
+	require.NoError(t, err)
+	assert.Equal(t, int64(limit), m.held, "the body is admitted whole")
+	assert.Positive(t, ChargeOf(ctx).decode.Held(), "with the room its decoding is planned to hold")
+
+	ChargeOf(ctx).Release()
+
+	_, held := InFlight()
+	assert.Zero(t, held)
+}

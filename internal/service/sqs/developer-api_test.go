@@ -2,6 +2,7 @@ package sqs_test
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
@@ -973,6 +974,10 @@ func bytesAllocatedBy(fn func()) uint64 {
 	return after.TotalAlloc - before.TotalAlloc
 }
 
+// Test_BodyCap_aGzipBombStopsAtTheCap: a gzip bomb stops at the cap without
+// inflating. A json operation at "/" stops sooner, at SQS's longest valid
+// request (maxRequest), and is answered as a message over AWS's size, with the
+// in-flight bound off as on; the developer routes stop at the cap.
 func Test_BodyCap_aGzipBombStopsAtTheCap(t *testing.T) {
 	bomb := string(gzipBomb(t))
 
@@ -998,6 +1003,8 @@ func Test_BodyCap_aGzipBombStopsAtTheCap(t *testing.T) {
 		}
 	}
 
+	wants := map[string]string{"a json operation": "Message must be shorter than 1048576 bytes"}
+
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
 			f := newDevFixture(t, nil)
@@ -1007,7 +1014,7 @@ func Test_BodyCap_aGzipBombStopsAtTheCap(t *testing.T) {
 			bytesAllocated := bytesAllocatedBy(func() { got = f.s.send(call) })
 
 			require.Equal(t, http.StatusBadRequest, got.status, got.body)
-			require.Contains(t, got.body, devOverLimit)
+			require.Contains(t, got.body, cmp.Or(wants[name], devOverLimit))
 			require.Less(t, bytesAllocated, uint64(bombBound), "the bomb must stop at the cap")
 			t.Logf("%s: %d MiB allocated for a %d KiB body", name, bytesAllocated/mebibyte, len(bomb)/1024)
 		})

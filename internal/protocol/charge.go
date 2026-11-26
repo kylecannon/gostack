@@ -18,9 +18,24 @@ type Charge struct {
 	meter  *BodyMeter
 	decode DecodeHold
 	heap   []func() // the releases of its heap reservations (KeepHeap)
+	// stop is the channel whose close ends the request's waits on the pool
+	// while it holds nothing of it (StopWaitsWith), or nil.
+	stop <-chan struct{}
 }
 
 type chargeKey struct{}
+
+// StopWaitsWith makes the close of stop end the request's waits on the
+// in-flight bound while it holds nothing of it: its body queued for admission,
+// or its decoding while it holds neither body bytes nor decode room. Each such
+// wait fails with ErrBusy. A wait while it holds some of the bound goes on
+// until its own context or the body wait ends it. The gateway hands every
+// request the channel it closes as it begins to shut down, so a body it queued
+// is answered with its service's throttle within the drain, not cut when the
+// drain ends. Only a waiter reads it.
+func (c *Charge) StopWaitsWith(stop <-chan struct{}) {
+	c.stop = stop
+}
 
 // WithCharge returns ctx carrying c, for a request whose context is ctx. For a
 // request that one service makes to another through the gateway (inproc), the

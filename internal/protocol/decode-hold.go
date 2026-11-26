@@ -52,10 +52,11 @@ type DecodeHold struct {
 // Cover makes the hold cover cost bytes of decoding for a request whose
 // context is ctx, waiting for room as a body does, and returns what it covers.
 // A hold that has to wait before any Cover returned gives back what it holds,
-// which nothing has decoded into, and waits for all it needs behind the holds
-// that waited before it; on ErrBusy it holds nothing. One that a Cover returned
-// before keeps what it holds while it waits, since the decoder holds those
-// bytes, and on ErrBusy keeps them until Release.
+// which nothing has decoded into, and waits for all it needs, let in once it
+// fits whether or not the holds that waited before it do (bodyPool); on
+// ErrBusy it holds nothing. One that a Cover returned before keeps what it
+// holds while it waits, since the decoder holds those bytes, and on ErrBusy
+// keeps them until Release.
 // One request's charge stops at the bound less one body's share (bodyShare),
 // at least as much as that share, so a request alone always fits whatever the
 // bound and the service's decode factor; what it decodes beyond that is not
@@ -118,7 +119,7 @@ func (h *DecodeHold) Release() {
 	h.free = true
 
 	if h.held > 0 {
-		h.pool.release(h.held)
+		h.pool.giveBack(h.held, h.owner())
 		h.held = 0
 	}
 }
@@ -139,9 +140,10 @@ func (h *DecodeHold) Held() int64 {
 // body bytes stay held while it waits (bodyPool).
 func (h *DecodeHold) grow(ctx context.Context, want int64) error {
 	bare := h.held == 0 && (h.body == nil || h.body.held == 0)
+	owner := h.owner()
 
 	if !h.spent {
-		err := h.pool.regrow(ctx, h.held, want, bare)
+		err := h.pool.regrow(ctx, h.held, want, bare, owner)
 		if err != nil {
 			h.held = 0
 
@@ -153,7 +155,7 @@ func (h *DecodeHold) grow(ctx context.Context, want int64) error {
 		return nil
 	}
 
-	w := &bodyWaiter{n: want - h.held, ready: make(chan struct{}), bare: bare}
+	w := &bodyWaiter{n: want - h.held, owner: owner, ready: make(chan struct{}), bare: bare}
 
 	err := h.pool.take(ctx, w, &h.pool.growing)
 	if err != nil {
@@ -163,6 +165,17 @@ func (h *DecodeHold) grow(ctx context.Context, want int64) error {
 	h.held = want
 
 	return nil
+}
+
+// owner is the body of unknown length the request reads while it is read
+// (BodyMeter.grower), which what the hold holds is counted to in the pool's
+// safe order (bodyWaiter.owner), or nil.
+func (h *DecodeHold) owner() *grower {
+	if h.body == nil {
+		return nil
+	}
+
+	return h.body.grower
 }
 
 // planned is what Cover would hold from pool for a decoding that costs cost, for
