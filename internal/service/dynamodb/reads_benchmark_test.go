@@ -24,7 +24,11 @@ import (
 // 1 MB pages, on each of concurrency simultaneous callers. The filter keeps
 // every item, so it adds its evaluation and not a smaller result. 500 items of
 // 4 KiB are three pages; 10,000 items made ops of 60 to 340 ms, too slow for
-// the benchstat gate's ten runs a row.
+// the benchstat gate's ten runs a row. A cell that would carry more than
+// maxIterationReadItems or maxIterationReadBytes in one iteration is left out
+// (readTooSlow): 100 or 500 items of 4 KiB at concurrency 16, and 500 of 100 B
+// with a filter at 16. What that leaves of the reads over 1 MB pages is
+// concurrency 1; pagedReads keeps a paged read at 16 by a Limit of 25.
 //
 // The text cells hold non-ASCII or escape-dense strings, which json quotes
 // differently from ASCII, and only on a plain Query of 100 items: the text
@@ -54,19 +58,12 @@ func BenchmarkReads(b *testing.B) {
 	for _, n := range readSizes {
 		for _, payload := range readPayloads {
 			b.Run(fmt.Sprintf("items=%d/payload=%s", n, payload.name), func(b *testing.B) {
-				s := newStack(b)
-				s.ok(b, opCreate, readTable)
-
-				data := strings.Repeat("x", payload.size)
-				for i := range n {
-					s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
-						`"},"g":{"S":"G"},"d":{"S":"`+data+`"}}}`)
-				}
-
-				readCells(b, s, n, payload.size)
+				readCells(b, filledReads(b, n, payload.size), n, payload.size)
 			})
 		}
 	}
+
+	pagedReads(b)
 
 	const textItems = 100
 
@@ -99,8 +96,94 @@ func BenchmarkReads(b *testing.B) {
 	}
 }
 
+// filledReads is a stack holding readTable, filled with n items of size bytes
+// under one partition key.
+func filledReads(b *testing.B, n, size int) *stack {
+	b.Helper()
+
+	s := newStack(b)
+	s.ok(b, opCreate, readTable)
+
+	data := strings.Repeat("x", size)
+	for i := range n {
+		s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
+			`"},"g":{"S":"G"},"d":{"S":"`+data+`"}}}`)
+	}
+
+	return s
+}
+
+// pagedReads reads 100 items of 100 B in pages of 25 (Limit), four calls for
+// each of 16 callers, each carrying the start key of the one before: the
+// paged read under concurrency, which the 1 MB pages leave out: a result of
+// more than 1 MB over 16 callers is more than 16 MB, 2.5 times the 6.5 MB cells
+// that took up to 9.3 ms on the runners. A new cell, not timed on the runners:
+// on a Mac of 10 CPUs the slowest of five runs was 2.8 ms (Query) and 2.5 ms
+// (Scan) (local).
+func pagedReads(b *testing.B) {
+	const (
+		n       = 100
+		limit   = 25
+		workers = 16
+	)
+
+	payload := readPayloads[0]
+
+	b.Run(fmt.Sprintf("items=%d/payload=%s/limit=%d", n, payload.name, limit), func(b *testing.B) {
+		s := filledReads(b, n, payload.size)
+
+		for _, op := range []string{opQuery, opScan} {
+			body := readBody(op, "table", "") + fmt.Sprintf(`,"Limit":%d`, limit)
+
+			b.Run(fmt.Sprintf("op=%s/target=table/filter=off/concurrency=%d", op, workers), func(b *testing.B) {
+				b.SetBytes(int64(n * payload.size * workers))
+				b.ReportAllocs()
+
+				for b.Loop() {
+					require.NoError(b, fanOutErr(workers, func(int) error { return s.readAll(b, op, body, n) }))
+				}
+			})
+		}
+	})
+}
+
+// What one iteration of a read cell may carry, counted over its workers
+// (tooSlowToGate). The slowest of a cell's runs has to be at most 8 ms. The
+// times are the slowest of ten runs on the gate's runners (bench run 45505878281
+// of PR 84, main a0e13bb3):
+//
+//   - maxIterationReadItems counts an item a filter evaluates twice. 500 items
+//     of 100 B at 16 workers are 8,000 without a filter, 4.3 to 6.7 ms, and
+//     16,000 with one, 4.6 to 10.0 ms: the four filtered cells took 7.9 (Query
+//     on the table), 8.0 (Scan on the index), 9.2 and 10.0 ms. The two of them
+//     under 8 ms are left out with the other two, which they share the budget
+//     with, as is 100 items of 4 KiB at 16 below. The filtered cells are left
+//     out, the unfiltered ones kept.
+//   - maxIterationReadBytes: 100 items of 4 KiB at 16 workers, 6.5 MB, took
+//     6.0 to 9.3 ms (the Scan without a filter, on the table and on the index,
+//     7.7 and 7.9 ms, shares the budget with the Query without a filter,
+//     8.4 and 8.2 ms, and the filtered cells, 9.0 to 9.3) and 500 of them 26 to
+//     40 ms. 500 at 1 worker, 2.0 MB, took 3.0 to 5.0 ms, and are kept. The
+//     unkeyed reads of BenchmarkPartiQLSelect take the same budget.
+const (
+	maxIterationReadItems = 8_000
+	maxIterationReadBytes = 4 << 20
+)
+
+// readTooSlow reports whether one iteration of a cell reading n items of size
+// bytes on each of workers callers, through the filter expression filter (none
+// when empty), is over what a read cell carries.
+func readTooSlow(n, size, workers int, filter string) bool {
+	items := n * workers
+	if filter != "" {
+		items *= 2
+	}
+
+	return tooSlowToGate(items, maxIterationReadItems) || tooSlowToGate(n*size*workers, maxIterationReadBytes)
+}
+
 // readCells runs every operation, target, filter and concurrency over the
-// filled table.
+// filled table that readTooSlow leaves in.
 func readCells(b *testing.B, s *stack, n, size int) {
 	b.Helper()
 
@@ -110,6 +193,10 @@ func readCells(b *testing.B, s *stack, n, size int) {
 				body := readBody(op, target, filter.expr)
 
 				for _, workers := range readConcurrency {
+					if readTooSlow(n, size, workers, filter.expr) {
+						continue
+					}
+
 					name := fmt.Sprintf("op=%s/target=%s/filter=%s/concurrency=%d", op, target, filter.name, workers)
 					b.Run(name, func(b *testing.B) {
 						b.SetBytes(int64(n * size * workers))

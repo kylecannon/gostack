@@ -332,12 +332,25 @@ runner, among them DeriveSharedSecret on P384 at 8.1 ms; the cell at the lower
 count has to fit under 8 ms at the one-call time times its calls), a condition in the matrix loop (`publishCells` and `BenchmarkBurst` in
 `internal/service/sns`), a predicate the loop asks (`tooSlowToGate` in
 `internal/inproc`, `internal/api/sqs`, `internal/service/kms`,
-`internal/service/s3` and `internal/service/sns`) and a budget a predicate
-compares against (`writeBudget` and `readBudget` in `internal/service/s3`,
-`cellOpts.maxCallBytes` in `internal/service/sqs`,
-`maxIterationBatchBytes` in `internal/service/dynamodb`). Never a map of cell
-names, which stops matching without a sound when a cell is renamed, or
+`internal/service/dynamodb`, `internal/service/s3` and `internal/service/sns`)
+and a budget a predicate compares against (`writeBudget` and `readBudget` in
+`internal/service/s3`, `cellOpts.maxCallBytes` in `internal/service/sqs`, and in
+`internal/service/dynamodb`, one for each family of cells: `maxIterationBatchBytes`,
+`maxIterationWriteBytes`, `maxIterationActions`, `maxIterationWriteActions`,
+`maxIterationPutBytes`, `maxIterationReadItems`, `maxIterationReadBytes`,
+`selectWidthBudget`, `maxNarrowResults`, `maxUpdateWidthActions`,
+`maxItemReadUnits`, `maxDecodeMicros` and `maxExpiredAllItems`). Never a map of
+cell names, which stops matching without a sound when a cell is renamed, or
 `b.Skip`, which reports a cell that did not run.
+
+A budget is one number for a family, so a cell that fits is cut only when it
+shares its budget with one that does not, and the comment above the budget names
+it with its time (`maxIterationReadBytes`: the Scans of 100 items of 4 KiB at 16
+callers took 7.7 and 7.9 ms, beside Queries of 8.2 and 8.4). A family none of
+whose cells is over the limit passes `unbudgeted`. A class of cells that a
+budget would empty keeps one cell under the limit, resized if it has to be, and
+its comment names it (`pagedReads`, a read over pages at 16 callers, by a
+`Limit` of 25).
 
 A count ladder (keys, secrets, parameters, queues or messages in a snapshot or
 a restore) runs at 10 and 1,000. A step of a hundred shows a cost that is not
