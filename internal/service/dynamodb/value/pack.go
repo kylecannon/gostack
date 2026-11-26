@@ -96,10 +96,7 @@ func Pack(item Item) (Packed, error) {
 // json over the wrapping's prefix, so that neither the json nor a copy of it
 // moves. On an error packed is nil and buf may hold part of the item.
 func packInto(buf []byte, item Item, size, scalars, estimate int) ([]byte, []byte, error) {
-	// Sizes and counts are never negative.
-	buf = binary.AppendUvarint(buf, uint64(size))    //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(scalars)) //nolint:gosec // G115: see above
-	buf = binary.AppendUvarint(buf, uint64(len(item)))
+	buf = appendHeader(buf, size, scalars, len(item))
 	// A scratch buffer the pool lost, or one too small for the item, grows to
 	// a little over the item's json size, not by append's steps, whose sum is
 	// about five times a large item. It usually grows once: the json of a
@@ -223,6 +220,30 @@ type packHeader struct {
 	size, scalars, attrs, body int
 }
 
+// appendHeader appends the header of a Packed: the item's size, the count of
+// its S and N values and the count of its attributes.
+func appendHeader(buf []byte, size, scalars, attrs int) []byte {
+	// Sizes and counts are never negative.
+	buf = binary.AppendUvarint(buf, uint64(size))    //nolint:gosec // G115: see above
+	buf = binary.AppendUvarint(buf, uint64(scalars)) //nolint:gosec // G115: see above
+
+	return binary.AppendUvarint(buf, uint64(attrs)) //nolint:gosec // G115: see above
+}
+
+// headerLen is the length of the header appendHeader writes.
+func headerLen(size, scalars, attrs int) int {
+	return uvarintLen(size) + uvarintLen(scalars) + uvarintLen(attrs)
+}
+
+func uvarintLen(v int) int {
+	n := 1
+	for ; v > uvarintBits; v >>= 7 {
+		n++
+	}
+
+	return n
+}
+
 // uvarintBits are the value bits of a byte of a uvarint; the byte above them
 // marks one that another follows.
 const (
@@ -310,6 +331,19 @@ func (p Packed) Attrs(names []string) Item {
 
 	h := p.header()
 	u := unpacker{s: string(p), i: h.body}
+
+	return u.object(viewHint(h, names), names, nil)
+}
+
+// attrsSorted is p.Attrs for names in order, each once, which it finds among
+// the item's by binary search and not one by one.
+func attrsSorted(p Packed, names []string) Item {
+	if p == "" {
+		return nil
+	}
+
+	h := p.header()
+	u := unpacker{s: string(p), i: h.body, sorted: true}
 
 	return u.object(viewHint(h, names), names, nil)
 }
@@ -758,6 +792,12 @@ type unpacker struct {
 	// chunked is set when strs is a Decoder's chunk, whose strings outlive
 	// the read.
 	chunked bool
+	// sorted is set when the names the top object wants are in order
+	// (attrsSorted), which finds them by binary search. That object takes it,
+	// as it takes index. It sits with the other flags, in the padding after
+	// them: one word more would grow the frame of every function that builds
+	// an unpacker, Orderer.object among them, which the snapshot runs per item.
+	sorted bool
 	// parts, when not nil, holds the map each Selection's part of a map is
 	// read into (ViewSelect).
 	parts map[*Selection]*reusedMap
@@ -765,6 +805,13 @@ type unpacker struct {
 	// (Decoder.indexOf). That object takes it; one below it looks its names
 	// up one by one.
 	index map[string]int
+}
+
+// wantLookup is how members finds a name in want: by index when it is not
+// nil, by binary search when want is sorted, else one by one.
+type wantLookup struct {
+	index  map[string]int
+	sorted bool
 }
 
 // object reads a map of attribute values, all of them or, when want is not
@@ -776,12 +823,12 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 		m = make(Item, hint)
 	}
 
-	index := u.index
-	u.reuse, u.index = nil, nil
+	look := wantLookup{index: u.index, sorted: u.sorted}
+	u.reuse, u.index, u.sorted = nil, nil, false
 	u.i++ // {
 
 	if u.s[u.i] != '}' {
-		u.members(m, want, index, below, reused)
+		u.members(m, want, look, below, reused)
 	} else {
 		u.i++
 		u.open = false
@@ -790,9 +837,9 @@ func (u *unpacker) object(hint int, want []string, below []*Selection) Item {
 	return m
 }
 
-// members reads the members of an object, from its first, into m. index, when
-// not nil, is the place of each name of want.
-func (u *unpacker) members(m Item, want []string, index map[string]int, below []*Selection, reused bool) {
+// members reads the members of an object, from its first, into m. look finds
+// each name in want.
+func (u *unpacker) members(m Item, want []string, look wantLookup, below []*Selection, reused bool) {
 	found := 0
 
 	for {
@@ -801,7 +848,7 @@ func (u *unpacker) members(m Item, want []string, index map[string]int, below []
 
 		j := -1
 		if want != nil && found < len(want) {
-			j = wantedAt(want, index, name)
+			j = wantedAt(want, look, name)
 		}
 
 		switch {
@@ -838,15 +885,19 @@ func (u *unpacker) members(m Item, want []string, index map[string]int, below []
 	}
 }
 
-// wantedAt is the place of name in want, -1 when it is not there; index, when
-// not nil, holds each name's place.
-func wantedAt(want []string, index map[string]int, name string) int {
-	if index == nil {
+// wantedAt is the place of name in want, -1 when it is not there.
+func wantedAt(want []string, look wantLookup, name string) int {
+	switch {
+	case look.index != nil:
+		if j, ok := look.index[name]; ok {
+			return j
+		}
+	case look.sorted:
+		if j, ok := slices.BinarySearch(want, name); ok {
+			return j
+		}
+	default:
 		return slices.Index(want, name)
-	}
-
-	if j, ok := index[name]; ok {
-		return j
 	}
 
 	return -1

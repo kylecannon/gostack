@@ -28,10 +28,12 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 		return nil, err
 	}
 
-	change, err := e.data.Write(in.Key, func(stored value.Packed) (value.Item, error) {
+	change, err := e.data.WritePacked(in.Key, func(stored value.Packed) (value.Item, value.Packed, error) {
 		// The item stored is unpacked once, for the condition and the legacy
-		// AttributeUpdates that read it, and the update writes into it.
-		updated, applyErr := expression.ApplyStored(in.Key, stored, func(old value.Item) (*expression.UpdateExpr, error) {
+		// AttributeUpdates that read it, and the update writes into it. The
+		// attributes it writes are spliced into the stored item's bytes, so
+		// the ones it leaves are not packed again.
+		read := func(old value.Item) (*expression.UpdateExpr, error) {
 			failed := plan.guard.check(old)
 			if failed != nil {
 				return nil, failed
@@ -47,12 +49,14 @@ func (p *Provider) UpdateItem(ctx context.Context, in *api.UpdateItemInput) (*ap
 			}
 
 			return plan.update, nil
-		})
-		if applyErr != nil {
-			return nil, fmt.Errorf("update: %w", applyErr)
 		}
 
-		return updated, nil
+		updated, packed, applyErr := expression.ApplyStoredPacked(in.Key, stored, read)
+		if applyErr != nil {
+			return nil, "", fmt.Errorf("update: %w", applyErr)
+		}
+
+		return updated, packed, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("item: %w", err)
