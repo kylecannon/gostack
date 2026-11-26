@@ -304,14 +304,14 @@ func Test_BodyPool_SafetyBlockedStepStallsNoOne(t *testing.T) {
 	older, younger := &grower{claim: 48 * mib}, &grower{claim: 48 * mib}
 	ctx := t.Context()
 
-	require.NoError(t, pool.step(ctx, older, mib))
-	require.NoError(t, pool.step(ctx, younger, mib))
-	require.NoError(t, pool.step(ctx, younger, 39*mib))
-	require.NoError(t, pool.step(ctx, older, 15*mib))
+	require.NoError(t, pool.step(ctx, older, mib, true))
+	require.NoError(t, pool.step(ctx, younger, mib, true))
+	require.NoError(t, pool.step(ctx, younger, 39*mib, true))
+	require.NoError(t, pool.step(ctx, older, 15*mib, true))
 
 	olderDone := make(chan error, 1)
 
-	go func() { olderDone <- pool.step(ctx, older, mib) }()
+	go func() { olderDone <- pool.step(ctx, older, mib, true) }()
 
 	require.Eventually(t, func() bool {
 		return poolState(func(p *bodyPool) int { return len(p.steps) }) == 1
@@ -329,7 +329,7 @@ func Test_BodyPool_SafetyBlockedStepStallsNoOne(t *testing.T) {
 		ReleaseBody(callCtx)
 	}
 
-	require.NoError(t, pool.step(ctx, younger, 8*mib), "the younger body reaches its claim")
+	require.NoError(t, pool.step(ctx, younger, 8*mib, true), "the younger body reaches its claim")
 	pool.finish(younger, 48*mib)
 	require.NoError(t, <-olderDone, "the older body's step comes once the younger body ends")
 	pool.finish(older, 17*mib)

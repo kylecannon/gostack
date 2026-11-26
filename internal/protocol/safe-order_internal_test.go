@@ -25,10 +25,10 @@ func newSafeOrderPool(t *testing.T, wait time.Duration) (p *bodyPool, older, you
 	older, younger = &grower{claim: 48}, &grower{claim: 48}
 	ctx := t.Context()
 
-	require.NoError(t, p.step(ctx, older, 1))
-	require.NoError(t, p.step(ctx, younger, 1))
-	require.NoError(t, p.step(ctx, younger, 39), "the younger body may grow: it can finish first")
-	require.NoError(t, p.step(ctx, older, 15), "8 left, the younger body's need")
+	require.NoError(t, p.step(ctx, older, 1, true))
+	require.NoError(t, p.step(ctx, younger, 1, true))
+	require.NoError(t, p.step(ctx, younger, 39, true), "the younger body may grow: it can finish first")
+	require.NoError(t, p.step(ctx, older, 15, true), "8 left, the younger body's need")
 
 	return p, older, younger
 }
@@ -40,7 +40,7 @@ func stepLater(t *testing.T, p *bodyPool, g *grower, n int64, queued int) <-chan
 
 	done := make(chan error, 1)
 
-	go func() { done <- p.step(t.Context(), g, n) }()
+	go func() { done <- p.step(t.Context(), g, n, true) }()
 
 	require.Eventually(t, func() bool {
 		p.mu.Lock()
@@ -62,7 +62,7 @@ func Test_BodyPool_YoungerFinishesThenOlder(t *testing.T) {
 	olderDone := stepLater(t, p, older, 1, 1)
 
 	start := time.Now()
-	require.NoError(t, p.step(t.Context(), younger, 8), "the younger body reaches its claim")
+	require.NoError(t, p.step(t.Context(), younger, 8, true), "the younger body reaches its claim")
 	assert.Less(t, time.Since(start), 100*time.Millisecond, "without waiting out the older body's step")
 
 	select {
@@ -91,7 +91,7 @@ func Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody(t *testing.T) {
 	third := &grower{claim: 48}
 	thirdDone := make(chan error, 1)
 
-	go func() { thirdDone <- p.step(t.Context(), third, 1) }()
+	go func() { thirdDone <- p.step(t.Context(), third, 1, true) }()
 
 	require.Eventually(t, func() bool {
 		p.mu.Lock()
@@ -100,7 +100,7 @@ func Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody(t *testing.T) {
 		return len(p.starting) == 1
 	}, time.Second, time.Millisecond, "the third body waits to start")
 
-	require.NoError(t, p.step(t.Context(), younger, 8))
+	require.NoError(t, p.step(t.Context(), younger, 8, true))
 	p.finish(younger, 48)
 
 	select {

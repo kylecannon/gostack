@@ -983,13 +983,20 @@ memory.
   stated, 303 to 320 MiB sent chunked, 269 to 286 MiB for `%41` and 162 to
   248 MiB for the SQS forms; the container never reaches its limit and no
   run is OOM-killed. That leaves the copy uncharged.
-- At shutdown a body or decoding waiting for room is answered at once with
-  its service's throttle (`protocol.StopWaitsWith`, closed as the gateway
-  begins to stop); before, it was cut with no answer when the drain ended.
-  The stop stays closed through the drain, so a wait that begins after it, a
-  step, a decoding's `Cover` or a call one service makes to another through
-  the gateway, is answered with the throttle as well.
-  `Test_BodyPool_StopEndsTheWaits`, `Test_Gateway_ShutdownAnswersQueuedBodies`.
+- At shutdown a body queued for admission whose request holds nothing of the
+  pool, a stated body or the first step of one of unknown length, is
+  answered at once with its service's throttle; before, it was cut with no
+  answer when the drain ended. The stop is the pool's: `gateway.New` hands
+  it the channel it closes as it begins to stop (`protocol.StopQueued`), and
+  only a waiter reads it, so a request costs nothing more. A request that
+  holds some of the pool keeps waiting, a chunked body for its next step or
+  a decoding in `Cover`, is served when room frees within the drain, and is
+  ended by the drain deadline through its context otherwise, as before. The
+  stop stays closed through the drain, so a body that queues for admission
+  after it is answered with the throttle as well.
+  `Test_BodyPool_StopEndsOnlyTheQueuedWaits`,
+  `Test_Gateway_ShutdownAnswersQueuedBodies`,
+  `Test_Gateway_ShutdownServesAdmittedBodies`.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,

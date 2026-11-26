@@ -1,9 +1,11 @@
 package gateway_test
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,6 +79,95 @@ func Test_Gateway_ShutdownAnswersQueuedBodies(t *testing.T) {
 	assert.Less(t, time.Since(start), 5*time.Second, "answered as the shutdown begins, not at the body wait")
 
 	_ = holder.Close()
+
+	assert.Eventually(t, func() bool {
+		_, held := protocol.InFlight()
+
+		return held == 0
+	}, 5*time.Second, time.Millisecond, "nothing is held once both are gone")
+}
+
+// sentSQS answers every SendMessage as sent.
+type sentSQS struct{ sqsapi.Unimplemented }
+
+func (sentSQS) SendMessage(context.Context, *sqsapi.SendMessageInput) (*sqsapi.SendMessageOutput, error) {
+	return &sqsapi.SendMessageOutput{}, nil
+}
+
+// Test_Gateway_ShutdownServesAdmittedBodies: a chunked body already admitted
+// and growing when the shutdown begins keeps waiting for its next step, and is
+// served to completion once room frees within the drain. The shutdown stop
+// answers only bodies that hold nothing of the pool. The chunked body sends
+// 1 MiB and is admitted; a json body that states the cap and stalls then
+// holds most of the pool, so the chunked body's next step waits for room.
+// BeginShutdown runs, the stalled body goes away, and the chunked body is
+// answered 200.
+func Test_Gateway_ShutdownServesAdmittedBodies(t *testing.T) {
+	withInFlight(t, time.Minute)
+
+	reg := generatedRegistration(sqsapi.Metadata, func(w http.ResponseWriter, rc *request.Context) {
+		sqsapi.Serve(sentSQS{}, w, rc)
+	})
+	g := newGateway(t, newSettings(), []service.Registration{reg})
+
+	server := httptest.NewServer(g.Handler())
+	defer server.Close()
+
+	head := "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-amz-json-1.0\r\n" +
+		"X-Amz-Target: AmazonSQS.SendMessage\r\nAuthorization: " + signed("test", usEast1, nameSQS) + "\r\n"
+
+	growing, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	require.NoError(t, err)
+
+	defer func() { _ = growing.Close() }()
+
+	chunk := func(data string) string { return strconv.FormatInt(int64(len(data)), 16) + "\r\n" + data + "\r\n" }
+
+	_, err = growing.Write([]byte(head + "Transfer-Encoding: chunked\r\n\r\n" +
+		chunk(`{"QueueUrl":"q","MessageBody":"`+strings.Repeat("a", 1<<20))))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		_, held := protocol.InFlight()
+
+		return held > 1<<20
+	}, 5*time.Second, time.Millisecond, "the chunked body is admitted")
+
+	holder := stallStating(t, server, head, `{"QueueUrl":"`+strings.Repeat("a", 128<<10), protocol.DefaultMaxBody)
+
+	require.Eventually(t, func() bool {
+		_, held := protocol.InFlight()
+
+		return held > protocol.DefaultInFlight/2
+	}, 5*time.Second, time.Millisecond, "the stated body holds most of the pool")
+
+	// The rest of the chunked body: the writes block once the gateway stops
+	// reading, while its next step waits for room.
+	sent := make(chan error, 1)
+
+	go func() {
+		rest := chunk(strings.Repeat("a", 8<<20)) + chunk(`"}`) + "0\r\n\r\n"
+		_, werr := growing.Write([]byte(rest))
+		sent <- werr
+	}()
+
+	require.Eventually(t, func() bool { return protocol.BodiesWait(0) }, 5*time.Second, time.Millisecond,
+		"the chunked body's next step waits for room")
+
+	g.BeginShutdown()
+
+	require.NoError(t, growing.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+
+	_, err = growing.Read(make([]byte, 1))
+	require.ErrorIs(t, err, os.ErrDeadlineExceeded, "the admitted body is not answered as the shutdown begins")
+
+	_ = holder.Close()
+
+	status, body := answerOf(t, growing, 10*time.Second)
+
+	assert.Equal(t, http.StatusOK, status, body)
+	assert.NotContains(t, body, throttled)
+	require.NoError(t, <-sent)
 
 	assert.Eventually(t, func() bool {
 		_, held := protocol.InFlight()

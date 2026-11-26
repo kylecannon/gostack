@@ -246,6 +246,9 @@ type bodyPool struct {
 	// the pool, in the order they were admitted; seq numbers them.
 	growers []*grower
 	seq     uint64
+	// stop, once closed, ends the waits of the bodies queued for admission
+	// whose request holds nothing of the pool (StopQueued).
+	stop <-chan struct{}
 }
 
 // grower is the pool's record of a body of unknown length being read: what it
@@ -262,6 +265,10 @@ type bodyWaiter struct {
 	n     int64
 	g     *grower // the body of unknown length n is a step of, or nil
 	ready chan struct{}
+	// bare marks a body queued for admission whose request holds nothing of
+	// the pool; take gives it the pool's stop, which then ends its wait.
+	bare bool
+	stop <-chan struct{}
 }
 
 // acquire takes n bytes of the pool, or waits for them in queue, which is
@@ -272,7 +279,8 @@ func (p *bodyPool) acquire(ctx context.Context, n int64, queue *[]*bodyWaiter) e
 
 // step takes n more bytes for the body of unknown length g, in p.steps once g
 // holds some of the pool and in p.starting until then, as bodyPool describes.
-func (p *bodyPool) step(ctx context.Context, g *grower, n int64) error {
+// bare reports that the request holds nothing of the pool but what g holds.
+func (p *bodyPool) step(ctx context.Context, g *grower, n int64, bare bool) error {
 	w := &bodyWaiter{n: n, g: g, ready: make(chan struct{})}
 
 	p.mu.Lock()
@@ -283,6 +291,8 @@ func (p *bodyPool) step(ctx context.Context, g *grower, n int64) error {
 		return p.take(ctx, w, &p.steps)
 	}
 
+	w.bare = bare
+
 	return p.take(ctx, w, &p.starting)
 }
 
@@ -290,6 +300,10 @@ func (p *bodyPool) step(ctx context.Context, g *grower, n int64) error {
 // came in. A step joins p.steps ahead of the steps of younger bodies.
 func (p *bodyPool) take(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
 	p.mu.Lock()
+
+	if w.bare {
+		w.stop = p.stop
+	}
 
 	if queue == &p.steps {
 		i := 0
@@ -400,35 +414,41 @@ func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
 	return p.wait(ctx, w, &p.growing)
 }
 
-type stopKey struct{}
+// StopQueued sets the channel whose close ends the waits of the bodies queued
+// for admission to the in-flight bound whose request holds nothing of it: each
+// fails with ErrBusy. A request that holds some of the bound keeps waiting for
+// its next step until its own context or the body wait ends it. The gateway
+// hands over the channel it closes as it begins to shut down, so a body it
+// queued is answered with its service's throttle within the drain, not cut
+// when the drain ends. It sets the bound SetInFlight last made, and does
+// nothing when there is none.
+func StopQueued(stop <-chan struct{}) {
+	pool := inFlight.Load()
+	if pool == nil {
+		return
+	}
 
-// StopWaitsWith returns ctx carrying stop: a body or decoding of the request
-// whose context is ctx that waits for room in the in-flight bound stops waiting
-// and fails with ErrBusy when stop closes. The gateway closes it as it begins
-// to shut down, so a body it queued is answered with its service's throttle
-// within the drain, not cut when the drain ends.
-func StopWaitsWith(ctx context.Context, stop <-chan struct{}) context.Context {
-	return context.WithValue(ctx, stopKey{}, stop)
+	pool.mu.Lock()
+	pool.stop = stop
+	pool.mu.Unlock()
 }
 
 // wait waits for w, in queue, to be granted, until ctx ends, the body wait
-// (SetBodyWait) passes or the request's stop (StopWaitsWith) closes; then it
-// takes w out of queue, or gives back what it was granted as it gave up, and
-// fails with ErrBusy.
+// (SetBodyWait) passes or, for a body that holds nothing (bodyWaiter.bare),
+// the pool's stop (StopQueued) closes; then it takes w out of queue, or gives
+// back what it was granted as it gave up, and fails with ErrBusy.
 func (p *bodyPool) wait(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
 	n := w.n
 
 	timer := time.NewTimer(time.Duration(bodyWait.Load()))
 	defer timer.Stop()
 
-	stop, _ := ctx.Value(stopKey{}).(<-chan struct{})
-
 	select {
 	case <-w.ready:
 		return nil
 	case <-ctx.Done():
 	case <-timer.C:
-	case <-stop:
+	case <-w.stop:
 	}
 
 	p.mu.Lock()
@@ -777,7 +797,9 @@ func (m *BodyMeter) admit() error {
 		room = m.decode.planned(m.pool, m.plan*m.length+FreeBody)
 	}
 
-	busy := m.pool.acquire(m.ctx, want+room, &m.pool.starting)
+	w := &bodyWaiter{n: want + room, ready: make(chan struct{}), bare: m.decode.Held() == 0}
+
+	busy := m.pool.take(m.ctx, w, &m.pool.starting)
 	if busy != nil {
 		m.Release()
 		m.err = busy
@@ -825,7 +847,7 @@ func (m *BodyMeter) grow() error {
 	hold := m.decode.Held()
 	more := max(room-hold, 0)
 
-	busy := m.pool.step(m.ctx, m.grower, body-m.held+more)
+	busy := m.pool.step(m.ctx, m.grower, body-m.held+more, hold == 0)
 	if busy != nil {
 		m.Release()
 		m.decode.Release()

@@ -8,47 +8,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test_BodyPool_StopEndsTheWaits: bodies queued for room, a stated one and a
-// step of one of unknown length, stop waiting when their request's stop
-// (StopWaitsWith) closes, long before the body wait, fail with ErrBusy and
-// leave the pool as it was.
-func Test_BodyPool_StopEndsTheWaits(t *testing.T) {
+// Test_BodyPool_StopEndsOnlyTheQueuedWaits: when the pool's stop (StopQueued)
+// closes, a body queued for admission whose request holds nothing stops
+// waiting at once, long before the body wait, and fails with ErrBusy. A body
+// of unknown length that holds some of the pool and waits for its next step,
+// and a first step whose request holds decoding room, keep waiting, and are
+// granted once room is given back. The pool ends as it began.
+func Test_BodyPool_StopEndsOnlyTheQueuedWaits(t *testing.T) {
 	SetBodyWait(time.Minute)
 	t.Cleanup(func() { SetBodyWait(DefaultBodyWait) })
 
-	p := &bodyPool{capacity: 64}
+	stop := make(chan struct{})
+	p := &bodyPool{capacity: 64, stop: stop}
 	ctx := t.Context()
-	g := &grower{claim: 32}
+	running := &grower{claim: 32}
+	holding := &grower{claim: 16}
 
 	require.NoError(t, p.acquire(ctx, 56, &p.starting))
-	require.NoError(t, p.step(ctx, g, 8))
+	require.NoError(t, p.step(ctx, running, 8, true))
 
-	stop := make(chan struct{})
-	stopped := StopWaitsWith(ctx, stop)
-	done := make(chan error, 2)
+	queued := make(chan error, 1)
+	kept := make(chan error, 2)
 
-	go func() { done <- p.acquire(stopped, 8, &p.starting) }()
-	go func() { done <- p.step(stopped, g, 8) }()
+	go func() {
+		queued <- p.take(ctx, &bodyWaiter{n: 8, ready: make(chan struct{}), bare: true}, &p.starting)
+	}()
+	go func() { kept <- p.step(ctx, running, 8, true) }()
+	go func() { kept <- p.step(ctx, holding, 8, false) }()
 
 	require.Eventually(t, func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 
-		return len(p.starting) == 1 && len(p.steps) == 1
-	}, time.Second, time.Millisecond, "both wait")
+		return len(p.starting) == 2 && len(p.steps) == 1
+	}, time.Second, time.Millisecond, "all three wait")
 
 	start := time.Now()
 
 	close(stop)
 
-	for range 2 {
-		require.ErrorIs(t, <-done, ErrBusy)
-	}
-
+	require.ErrorIs(t, <-queued, ErrBusy)
 	assert.Less(t, time.Since(start), time.Second, "answered as the stop closes, not at the wait")
 
-	p.finish(g, 8)
+	select {
+	case err := <-kept:
+		t.Fatalf("a body that holds some of the pool stopped waiting: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
 	p.release(56)
+
+	for range 2 {
+		require.NoError(t, <-kept, "granted once room is given back")
+	}
+
+	p.finish(running, 16)
+	p.finish(holding, 8)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -56,4 +71,5 @@ func Test_BodyPool_StopEndsTheWaits(t *testing.T) {
 	assert.Zero(t, p.used)
 	assert.Empty(t, p.starting)
 	assert.Empty(t, p.steps)
+	assert.Empty(t, p.growers)
 }
