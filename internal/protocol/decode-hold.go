@@ -38,10 +38,20 @@ type DecodeHold struct {
 	room int64 // the most it charges: the bound less one body at its cap
 	free bool  // charges nothing: no bound, an internal request, or released
 	err  error
+	// spent is whether a Cover has returned what it holds as covered, so the
+	// decoder may hold those bytes already: a decoder that charges as it
+	// decodes (restxml). Until then what it holds is room its body was
+	// admitted with (prepaid), which nothing has decoded into yet.
+	spent bool
 }
 
 // Cover makes the hold cover cost bytes of decoding for a request whose
 // context is ctx, waiting for room as a body does, and returns what it covers.
+// A hold that has to wait before any Cover returned gives back what it holds,
+// which nothing has decoded into, and waits for all it needs behind the holds
+// that waited before it; on ErrBusy it holds nothing. One that a Cover returned
+// before keeps what it holds while it waits, since the decoder holds those
+// bytes, and on ErrBusy keeps them until Release.
 // One request's charge stops at the bound less one body's share (bodyShare),
 // at least as much as that share, so a request alone always fits whatever the
 // bound and the service's decode factor; what it decodes beyond that is not
@@ -53,6 +63,8 @@ func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 	case h.free:
 		return math.MaxInt64, nil
 	case cost <= FreeDecode+h.held:
+		h.spent = true
+
 		return FreeDecode + h.held, nil
 	}
 
@@ -67,17 +79,17 @@ func (h *DecodeHold) Cover(ctx context.Context, cost int64) (int64, error) {
 		h.pool, h.room = pool, pool.capacity-pool.bodyShare()
 	}
 
-	want := min((cost-FreeDecode+decodeChunk-1)/decodeChunk*decodeChunk, h.room)
+	want := decodeRoom(h.pool, cost)
 	if want > h.held {
-		err := h.pool.acquire(ctx, want-h.held, &h.pool.growing)
+		err := h.grow(ctx, want)
 		if err != nil {
 			h.err = err
 
 			return 0, err
 		}
-
-		h.held = want
 	}
+
+	h.spent = true
 
 	if h.held >= h.room {
 		return math.MaxInt64, nil
@@ -117,11 +129,48 @@ func (h *DecodeHold) Held() int64 {
 	return h.held
 }
 
+// grow makes the hold take want, as Cover describes: a hold that nothing has
+// decoded into gives back what it holds while it waits (regrow), so holds that
+// each hold part of the bound never wait on one another for it.
+func (h *DecodeHold) grow(ctx context.Context, want int64) error {
+	if !h.spent {
+		err := h.pool.regrow(ctx, h.held, want)
+		if err != nil {
+			h.held = 0
+
+			return err
+		}
+
+		h.held = want
+
+		return nil
+	}
+
+	err := h.pool.acquire(ctx, want-h.held, &h.pool.growing)
+	if err != nil {
+		return err
+	}
+
+	h.held = want
+
+	return nil
+}
+
 // planned is what Cover would hold from pool for a decoding that costs cost, for
 // a hold that holds nothing yet: what passes FreeDecode, in whole steps, up to
 // its room. It is zero for a hold that charges nothing or already holds some.
 func (h *DecodeHold) planned(pool *bodyPool, cost int64) int64 {
-	if h.free || h.pool != nil || cost <= FreeDecode {
+	if h.free || h.pool != nil {
+		return 0
+	}
+
+	return decodeRoom(pool, cost)
+}
+
+// decodeRoom is what Cover holds from pool for a decoding that costs cost:
+// what passes FreeDecode, in whole steps, up to the bound less one body.
+func decodeRoom(pool *bodyPool, cost int64) int64 {
+	if cost <= FreeDecode {
 		return 0
 	}
 

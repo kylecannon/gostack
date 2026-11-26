@@ -372,6 +372,20 @@ How each piece is bounded, and why this way:
   `gateway.ServedAsInternal` is a different test: it also accepts the
   `x-localstack-data` header, which any client can send, so it only decides
   what a stopping gateway still serves.
+- **Per-service request bound** (`service.Registration.MaxRequest`,
+  `protocol.BoundBody`): the longest body, as encoded, of any valid request to
+  the service. Only SQS sets one (`sqs/request-limit.go`: 6 MiB and 64 KiB, a
+  1 MiB message or batch with every character json's six-byte escape). The
+  gateway bounds the body before it reads any, and SQS bounds a queue-URL call
+  before its route reads the form. A body that states a longer length fails
+  with `protocol.ErrBodyLong` at its first read past `FreeBody`, holding none
+  of the pool; one of unknown length fails once it passes the bound, its share
+  cut to the bound so it never holds more. The service answers it
+  (compat.md, "SQS request length"), naming a form's operation from the URL
+  or the pairs read whole before the cut (`query.CutAction`). An unsigned form
+  whose Action is only in its body is read whole by service detection before
+  the gateway knows the service, so it is bounded only by
+  `GOSTACK_MAX_REQUEST_BODY`; closing that needs `internal/route`.
 - **In-flight pool** (`protocol/in-flight.go`): a weighted semaphore of bytes.
   The gateway meters a body from a listener that states more than
   `protocol.FreeBody` (64 KiB) or no length. A smaller body takes no lock and
@@ -391,9 +405,35 @@ How each piece is bounded, and why this way:
   twice) plus `FreeBody` for structure; a query form plans nothing, since its
   pairs cost less than `FreeDecode`. A body whose decoding passes its plan, one
   dense with elements, charges the rest in steps as it decodes. A body of
-  unknown length (chunked or gzip) is charged in doubling steps of what has
-  arrived, as `ReadBody`'s buffers grow, and keeps only what it read once it
-  ends. A charge that grows waits ahead of new bodies. A waiter is served in order for up to 5 s,
+  unknown length (chunked or gzip) holds only what has arrived: it is charged
+  in doubling steps, as `ReadBody`'s buffers grow, each with the decode room
+  planned for that much, and keeps only what it read and the room planned for
+  that once it ends. Its claim is the most it may hold: its share and the room
+  planned for that. A step is granted only when every body of unknown length
+  still being read could still reach its claim in some order (the banker's
+  check: sorted by what each still needs, the free room and each one's bytes,
+  given back in turn, cover the next one's need), counting what every other
+  request holds as given back once it ends. Steps are scanned oldest body
+  first, ahead of decodings that grow, which wait ahead of new bodies, and new
+  bodies are let in strictly in the order they came. A step that fits but
+  fails the check waits for another body to read on or end, not for room, so
+  it is passed over: a younger body's step that fits and passes is granted
+  ahead of it, and the decodings and new bodies behind are let in, so a stated
+  100 KiB body is admitted at once beside it
+  (`Test_BodyPool_SafetyBlockedStepStallsNoOne`). The older step comes once a
+  younger body it waits on ends (`Test_BodyPool_YoungerFinishesThenOlder`,
+  `Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody`). A step that does
+  not fit stops the scan, so nothing younger takes the room it waits for. This
+  is the user's ruling of 2026-11-25 on SQ-434 (design B): steps of bodies
+  already admitted may pass a safety-blocked older step, and an older body can
+  be throttled when a younger one took the large allowance first. A step takes only
+  the decode room past what the request's decode hold holds, which a decoding
+  that charges as the body arrives may have raised between two steps
+  (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
+  waits for decode room while it holds its bytes. A younger body of unknown
+  length behind older ones still arriving grows to its end beside them when
+  it can finish first (`Test_BodyMeter_FastBodyBehindSlowOnesServed`). A
+  waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
   throttling error. net/http notices a client that went away only once the
   body has been read, so a waiter whose client left keeps its place, holding
@@ -894,19 +934,62 @@ memory.
   other json body over about 5 MiB is throttled while it does; four such query
   clients hold the whole pool. A client that states 16 MiB and sends one byte
   holds nothing.
-- Bodies of unknown length grow in doubling steps, and decoding past its plan
-  (rest-xml as it decodes, a dense json body once) in 1 MiB steps, so many of
-  them at once can each hold part of the pool and wait to grow until the
-  oldest waiters give up at 5 s, which answers them in waves of the wait.
-  Bodies that state their length and decode within their plan do not: 128
+- Nothing bounds how long a body may take to arrive other than the idle
+  timeout between its bytes: the server sets `ReadHeaderTimeout` and no
+  `ReadTimeout`. A client that sends one byte every idle period keeps what it
+  holds for as long as it keeps sending. A body of unknown length holds only
+  what it has read, and a younger body of unknown length that can finish
+  first grows beside it; an older one's step that needs a younger body to end
+  first waits for it, and is throttled if that takes past the wait. A minimum rate or a total body
+  deadline would change what clients are answered, so it is a separate
+  decision.
+- Decoding past its plan grows in 1 MiB steps while it keeps what it decoded
+  (rest-xml as it decodes), so many such decodings at once can each hold part
+  of the pool and wait to grow until the oldest waiters give up at 5 s, which
+  answers them in waves of the wait. A decoding that has decoded nothing yet
+  gives back its room while it waits (a dense json body), and a body of
+  unknown length grows only in steps that leave every such body a way to its
+  end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
+  1 MiB json `SendMessage` calls sent at once are all served in 0.45 to
+  0.51 s; 64 chunked 16 MiB json `PutItem` bodies (a claim of about 48 MiB
+  each) are all read and answered, 400 `ValidationException`, in 1.5 to
+  1.9 s; 64 chunked 16 MiB STS `AssumeRole` forms in 1.0 to 1.2 s. SQS refuses
+  a body past its longest valid request as it is read, so it has no 16 MiB
+  row. Bodies that state their length and decode within their plan
+  never wait while they hold part of the pool: 128
   legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
   served, and so are as many as fill the pool when they all decode at the same
   moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
-  room, so 21 such bodies held unfinished fill it; a 22nd that waits more than
-  5 s for one of them to end is throttled. 64 bodies of 16 MiB sent at once
-  with a Content-Length are admitted one at a time: on a non-race build all 64
-  are answered (400 `SerializationException`, their nesting) within 0.9 to
-  1.0 s, and the process peaks at 105 MiB RSS.
+  room. Measured (SQ-434, local non-race build, 1,048,477-byte SQS
+  `SendMessage` bodies held one byte short): with 20 held, one more is served
+  in 0.01 s; with 21 held, one more is throttled at the 5 s wait. So each
+  holds between 2.9 and 3.05 MiB, and 21 fill the pool. 64 bodies of 16 MiB of
+  `[` sent at once with a Content-Length to DynamoDB `PutItem` are admitted
+  one at a time: on a non-race build all 64 are answered (400
+  `SerializationException`, their nesting) in 0.51 to 0.53 s, and the process
+  peaks at 104 to 108 MiB RSS (three runs). SQS refuses the same bodies by
+  their stated length, all 64 within 0.25 s.
+- A form's decoding charges its pairs, not its text (`protocol.FormDecode`
+  0), and a value that needs unescaping is the one copy it makes past the
+  body: `query.unescape` builds it in one buffer of the value's length, with
+  no copy of the run it decodes (`Test_unescape_OneCopy`,
+  `Fuzz_unescape_matchesTheBufferedDecoding`). That copy is not charged.
+  Measured on local darwin non-race builds, three runs each (SQ-434): 64
+  stated 16 MiB STS forms whose `Policy` is all `+` peak at 309 to 342 MiB
+  RSS (587 MiB before), all `%41` at 292 to 425 MiB (396 to 433 MiB before),
+  and 64 stated 6 MiB SQS forms of `+` at 333 to 443 MiB (594 to 731 MiB
+  before). In the Linux image under `--memory 512m`, a fresh container per
+  run, the server process peaks at 313 to 335 MiB for the `+` STS forms
+  stated, 303 to 320 MiB sent chunked, 269 to 286 MiB for `%41` and 162 to
+  248 MiB for the SQS forms; the container never reaches its limit and no
+  run is OOM-killed. That leaves the copy uncharged.
+- At shutdown a body or decoding waiting for room is answered at once with
+  its service's throttle (`protocol.StopWaitsWith`, closed as the gateway
+  begins to stop); before, it was cut with no answer when the drain ended.
+  The stop stays closed through the drain, so a wait that begins after it, a
+  step, a decoding's `Cover` or a call one service makes to another through
+  the gateway, is answered with the throttle as well.
+  `Test_BodyPool_StopEndsTheWaits`, `Test_Gateway_ShutdownAnswersQueuedBodies`.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
