@@ -49,3 +49,66 @@
 #   reason:    one line.
 #   pr:        the pull request that accepted it.
 #   commit:    a commit that carries the cost.
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=latin/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjk/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=emoji/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=json/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=viet/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=cjkascii/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: Reads/items=100/payload=4KiB/text=jsonpretty/op=Query/target=table/filter=off/concurrency=1
+  unit: allocs/op
+  max: +20%
+  reason: the change edits only benchmark files; the product code is identical, main's own runs of this cell swing between 96 and 109 allocs/op, and with the cut cells gone every head run lands at 104-111 (+6 to +13% on the runners)
+  pr: 84
+  commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
