@@ -83,12 +83,12 @@ var ErrBodyLong = errors.New("protocol: the request body is longer than its serv
 // valid, is admitted with the room for its decoding.
 func BoundBody(ctx context.Context, limit int64) {
 	c := ChargeOf(ctx)
-	if c == nil || c.meter == nil || c.meter.read > FreeBody || limit <= 0 {
+	if c == nil || c.decode.body == nil || c.decode.body.read > FreeBody || limit <= 0 {
 		return
 	}
 
-	c.meter.limit = limit
-	c.meter.most = min(c.meter.most, limit+1)
+	c.decode.body.limit = limit
+	c.decode.body.most = min(c.decode.body.most, limit+1)
 }
 
 // The answers to a request whose body failed with ErrBusy, one per protocol.
@@ -798,6 +798,13 @@ func (m *BodyMeter) Release() {
 // meets it. An S3 object stream is never armed, so never bounded here.
 func (m *BodyMeter) IdleBy(set func(time.Time) error) {
 	m.deadline = set
+}
+
+// Charges reports whether the meter charges the in-flight bound. One made with
+// the bound off only bounds its body (BoundBody) and sets no idle deadline, so
+// the gateway builds no IdleBy setter for it.
+func (m *BodyMeter) Charges() bool {
+	return m.pool != nil
 }
 
 // trim makes a body of unknown length, at its end, hold what it read, and the

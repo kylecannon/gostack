@@ -343,7 +343,10 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		if request.IsInternal(r.Context()) {
 			state.charge.ExemptDecode()
 		} else if meter := meterBody(r); meter != nil {
-			meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+			if meter.Charges() {
+				meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+			}
+
 			state.charge.Meter(meter)
 			r.Body = meter
 		}
