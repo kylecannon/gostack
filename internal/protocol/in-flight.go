@@ -191,17 +191,17 @@ func BodiesWait(own int64) bool {
 
 	for i, queue := range [][]*bodyWaiter{pool.steps, pool.growing, pool.starting} {
 		for _, w := range queue {
-			if room < w.n {
-				return true
-			}
-
-			// A step that waits for a safe order, not for room, waits
-			// whatever the caller gives back, and holds up no one (grant).
+			// A step that waits for a safe order waits whatever the caller
+			// gives back, fits or not, and holds up no one (grant).
 			if pool.blocked(w) {
 				if i == 0 {
 					continue
 				}
 
+				return true
+			}
+
+			if room < w.n {
 				return true
 			}
 
@@ -227,14 +227,20 @@ func SetBodyWait(wait time.Duration) {
 // order they came.
 //
 // A body that states its length is charged in one step (admit), and a decoding
-// that needs more gives back what it holds and waits for all of it (regrow), so
-// neither waits for more while it keeps what it holds. A body of unknown length
-// holds only what it has read, and grows in steps (BodyMeter.grow) while it
-// holds the steps before; each step is granted only when, after it, every such
-// body could still reach its claim, the most it may hold, in some order (safe),
-// counting what every other request holds as given back once it finishes. So
-// some such body can always finish, and a step that waits for one to finish
-// lets the steps of the others pass it (grant).
+// that needs more gives back the decode room it holds and waits for all it
+// needs (regrow). Its request's body bytes stay held while it waits, and
+// p.growing is served strictly in order: a decoding at its head that does not
+// fit beside the bodies of the decodings behind it waits, and the queues behind
+// it with it, until one of those requests ends, at the latest at its own wait.
+//
+// A body of unknown length holds only what it has read, and grows in steps
+// (BodyMeter.grow) while it holds the steps before; each step is granted only
+// when, after it, every such body could still reach its claim, the most it may
+// hold, in some order (safe), counting what every other request holds as given
+// back once it finishes. So some such body can always finish, and a step that
+// waits for one to finish lets the steps of the others pass it (grant). A
+// body's first step waits in p.starting, and one that waits for a safe order
+// holds up the bodies queued behind it there.
 type bodyPool struct {
 	mu       sync.Mutex
 	capacity int64
@@ -246,9 +252,6 @@ type bodyPool struct {
 	// the pool, in the order they were admitted; seq numbers them.
 	growers []*grower
 	seq     uint64
-	// stop, once closed, ends the waits of the bodies queued for admission
-	// whose request holds nothing of the pool (StopQueued).
-	stop <-chan struct{}
 }
 
 // grower is the pool's record of a body of unknown length being read: what it
@@ -265,8 +268,10 @@ type bodyWaiter struct {
 	n     int64
 	g     *grower // the body of unknown length n is a step of, or nil
 	ready chan struct{}
-	// bare marks a body queued for admission whose request holds nothing of
-	// the pool; take gives it the pool's stop, which then ends its wait.
+	// bare marks a waiter whose request holds nothing of the pool: a body
+	// queued for admission, or a decoding whose request holds no body bytes
+	// and no decode room. take gives it the shutdown stop (StopQueued), which
+	// then ends its wait.
 	bare bool
 	stop <-chan struct{}
 }
@@ -299,11 +304,9 @@ func (p *bodyPool) step(ctx context.Context, g *grower, n int64, bare bool) erro
 // take queues w in queue, lets in what may come in, and waits for w unless it
 // came in. A step joins p.steps ahead of the steps of younger bodies.
 func (p *bodyPool) take(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
-	p.mu.Lock()
+	w.watchStop()
 
-	if w.bare {
-		w.stop = p.stop
-	}
+	p.mu.Lock()
 
 	if queue == &p.steps {
 		i := 0
@@ -394,8 +397,9 @@ func (p *bodyPool) finish(g *grower, n int64) {
 // otherwise it gives held back and waits in p.growing for all of want, in the
 // order the growing waiters came. The give-back and the joining happen under
 // one lock, so a body that arrives meanwhile cannot take the bytes given back.
-// On ErrBusy the holder holds nothing.
-func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
+// bare reports that the request holds nothing else of the pool. On ErrBusy the
+// holder holds nothing.
+func (p *bodyPool) regrow(ctx context.Context, held, want int64, bare bool) error {
 	p.mu.Lock()
 
 	if len(p.steps) == 0 && len(p.growing) == 0 && p.used+want-held <= p.capacity {
@@ -406,7 +410,8 @@ func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
 	}
 
 	p.used -= held
-	w := &bodyWaiter{n: want, ready: make(chan struct{})}
+	w := &bodyWaiter{n: want, ready: make(chan struct{}), bare: bare}
+	w.watchStop()
 	p.growing = append(p.growing, w)
 	p.grant()
 	p.mu.Unlock()
@@ -414,28 +419,37 @@ func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
 	return p.wait(ctx, w, &p.growing)
 }
 
-// StopQueued sets the channel whose close ends the waits of the bodies queued
-// for admission to the in-flight bound whose request holds nothing of it: each
-// fails with ErrBusy. A request that holds some of the bound keeps waiting for
-// its next step until its own context or the body wait ends it. The gateway
-// hands over the channel it closes as it begins to shut down, so a body it
-// queued is answered with its service's throttle within the drain, not cut
-// when the drain ends. It sets the bound SetInFlight last made, and does
-// nothing when there is none.
-func StopQueued(stop <-chan struct{}) {
-	pool := inFlight.Load()
-	if pool == nil {
+// queuedStop is the channel StopQueued set, or nil.
+var queuedStop atomic.Pointer[<-chan struct{}]
+
+// watchStop makes a bare waiter's wait end when the shutdown stop closes
+// (StopQueued).
+func (w *bodyWaiter) watchStop() {
+	if !w.bare {
 		return
 	}
 
-	pool.mu.Lock()
-	pool.stop = stop
-	pool.mu.Unlock()
+	if stop := queuedStop.Load(); stop != nil {
+		w.stop = *stop
+	}
+}
+
+// StopQueued sets the channel whose close ends the waits of the requests that
+// hold nothing of the in-flight bound, the bodies queued for admission and
+// the decodings of requests that hold neither body bytes nor decode room:
+// each fails with ErrBusy. A request that holds some of the bound keeps
+// waiting for its next step until its own context or the body wait ends it.
+// The gateway hands over the channel it closes as it begins to shut down, so a
+// body it queued is answered with its service's throttle within the drain, not
+// cut when the drain ends. It holds for whatever bound SetInFlight sets, before
+// or after; a nil channel stops nothing.
+func StopQueued(stop <-chan struct{}) {
+	queuedStop.Store(&stop)
 }
 
 // wait waits for w, in queue, to be granted, until ctx ends, the body wait
-// (SetBodyWait) passes or, for a body that holds nothing (bodyWaiter.bare),
-// the pool's stop (StopQueued) closes; then it takes w out of queue, or gives
+// (SetBodyWait) passes or, for a request that holds nothing (bodyWaiter.bare),
+// the shutdown stop (StopQueued) closes; then it takes w out of queue, or gives
 // back what it was granted as it gave up, and fails with ErrBusy.
 func (p *bodyPool) wait(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
 	n := w.n
@@ -480,12 +494,12 @@ func (p *bodyPool) release(n int64) {
 // step of a body of unknown length, leaves the pool safe. A body's first step
 // makes it the youngest of the bodies of unknown length being read.
 //
-// The steps are scanned oldest body first. A step that fits but is not safe
-// waits for another such body to read on or end, not for room, so it is passed
-// over: a younger body's step that fits and is safe is let in ahead of it, and
-// the scan starts again from the oldest, since that may have made it safe
-// (nextStep). A step that does not fit stops the scan and everything behind
-// it, so nothing younger takes the room it waits for.
+// The steps are scanned oldest body first. A step that is not safe waits for
+// another such body to read on or end, not for room, so it is passed over
+// whether or not it fits: a younger body's step that is safe and fits is let
+// in ahead of it, and the scan starts again from the oldest, since that may
+// have made it safe (nextStep). A safe step that does not fit stops the scan
+// and everything behind it, so nothing younger takes the room it waits for.
 func (p *bodyPool) grant() {
 	for {
 		i, short := p.nextStep()
@@ -503,7 +517,7 @@ func (p *bodyPool) grant() {
 	for _, queue := range []*[]*bodyWaiter{&p.growing, &p.starting} {
 		for len(*queue) > 0 {
 			w := (*queue)[0]
-			if p.used+w.n > p.capacity || p.blocked(w) {
+			if p.blocked(w) || p.used+w.n > p.capacity {
 				return
 			}
 
@@ -512,18 +526,22 @@ func (p *bodyPool) grant() {
 	}
 }
 
-// nextStep returns where in p.steps the oldest step that fits and leaves the
-// pool safe is, or -1 when there is none; short reports that a step older than
-// any such one does not fit.
+// nextStep returns where in p.steps the oldest step that leaves the pool safe
+// and fits is, or -1 when there is none; short reports that a safe step older
+// than any such one does not fit. Safety is tested first: a step that is not
+// safe waits for another body to read on or end whether or not it fits, and
+// room given to it would not let it in.
 func (p *bodyPool) nextStep() (i int, short bool) {
 	for i, w := range p.steps {
+		if p.blocked(w) {
+			continue
+		}
+
 		if p.used+w.n > p.capacity {
 			return -1, true
 		}
 
-		if !p.blocked(w) {
-			return i, false
-		}
+		return i, false
 	}
 
 	return -1, false
@@ -720,13 +738,14 @@ func (m *BodyMeter) IdleBy(set func(time.Time) error) {
 
 // trim makes a body of unknown length, at its end, hold what it read, and the
 // room planned for its decoding what a body that stated that length is
-// admitted with, unless decoding has charged more of it already, and takes it
-// out of the bodies being read (bodyPool.finish).
+// admitted with, unless decoding has charged more of it already or a Cover has
+// returned it as covered (DecodeHold.spent), and takes it out of the bodies
+// being read (bodyPool.finish).
 func (m *BodyMeter) trim() {
 	release := max(m.held-m.read, 0)
 	m.held -= release
 
-	if m.prepaid > 0 && m.decode.held == m.prepaid {
+	if m.prepaid > 0 && m.decode.held == m.prepaid && !m.decode.spent {
 		room := min(decodeRoom(m.pool, m.plan*m.read+FreeBody), m.prepaid)
 		release += m.prepaid - room
 		m.decode.held, m.prepaid = room, room

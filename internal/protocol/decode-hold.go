@@ -36,8 +36,12 @@ type DecodeHold struct {
 	pool *bodyPool
 	held int64
 	room int64 // the most it charges: the bound less one body at its cap
-	free bool  // charges nothing: no bound, an internal request, or released
 	err  error
+	// body is the request's body meter (Charge.Meter), or nil: a hold that
+	// holds nothing waits as a request holding nothing of the pool only while
+	// its body holds nothing either (bodyWaiter.bare).
+	body *BodyMeter
+	free bool // charges nothing: no bound, an internal request, or released
 	// spent is whether a Cover has returned what it holds as covered, so the
 	// decoder may hold those bytes already: a decoder that charges as it
 	// decodes (restxml). Until then what it holds is room its body was
@@ -133,8 +137,10 @@ func (h *DecodeHold) Held() int64 {
 // decoded into gives back what it holds while it waits (regrow), so holds that
 // each hold part of the bound never wait on one another for it.
 func (h *DecodeHold) grow(ctx context.Context, want int64) error {
+	bare := h.held == 0 && (h.body == nil || h.body.held == 0)
+
 	if !h.spent {
-		err := h.pool.regrow(ctx, h.held, want)
+		err := h.pool.regrow(ctx, h.held, want, bare)
 		if err != nil {
 			h.held = 0
 
@@ -146,7 +152,9 @@ func (h *DecodeHold) grow(ctx context.Context, want int64) error {
 		return nil
 	}
 
-	err := h.pool.acquire(ctx, want-h.held, &h.pool.growing)
+	w := &bodyWaiter{n: want - h.held, ready: make(chan struct{}), bare: bare}
+
+	err := h.pool.take(ctx, w, &h.pool.growing)
 	if err != nil {
 		return err
 	}

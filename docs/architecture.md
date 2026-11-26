@@ -415,18 +415,26 @@ How each piece is bounded, and why this way:
   given back in turn, cover the next one's need), counting what every other
   request holds as given back once it ends. Steps are scanned oldest body
   first, ahead of decodings that grow, which wait ahead of new bodies, and new
-  bodies are let in strictly in the order they came. A step that fits but
-  fails the check waits for another body to read on or end, not for room, so
-  it is passed over: a younger body's step that fits and passes is granted
-  ahead of it, and the decodings and new bodies behind are let in, so a stated
-  100 KiB body is admitted at once beside it
-  (`Test_BodyPool_SafetyBlockedStepStallsNoOne`). The older step comes once a
+  bodies are let in strictly in the order they came. A step that fails the
+  check waits for another body to read on or end, not for room, so it is
+  passed over whether or not it fits: a younger body's step that passes and
+  fits is granted ahead of it, and the decodings and new bodies behind are let
+  in, so a stated 100 KiB body is admitted at once beside it
+  (`Test_BodyPool_SafetyBlockedStepStallsNoOne` with a 1 MiB step that fits,
+  `Test_BodyPool_UnsafeStepShortOfRoomStallsNoOne` with a 3 MiB step that
+  does not). The older step comes once a
   younger body it waits on ends (`Test_BodyPool_YoungerFinishesThenOlder`,
-  `Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody`). A step that does
-  not fit stops the scan, so nothing younger takes the room it waits for. This
-  is the user's ruling of 2026-11-25 on SQ-434 (design B): steps of bodies
-  already admitted may pass a safety-blocked older step, and an older body can
-  be throttled when a younger one took the large allowance first. A step takes only
+  `Test_BodyPool_SafetyBlockedStepWaitsForOneYoungerBody`). A step that passes
+  the check and does not fit stops the scan, so nothing younger takes the room
+  it waits for. This is the user's ruling of 2026-11-25 on SQ-434 (design B):
+  steps of bodies already admitted may pass a safety-blocked older step, and an
+  older body can be throttled when a younger one took the large allowance
+  first. A body's first step waits among the new bodies, and one that fails the
+  check there holds up every new body behind it, stated ones included, until a
+  body of unknown length reads on or ends or its wait does: with two such
+  bodies holding 16 and 24 MiB and 24 MiB free, a stated 1 MiB body behind it
+  is throttled at 5 s (SQ-434 seam review, finding 3; main has no such check
+  and admits both at once). A step takes only
   the decode room past what the request's decode hold holds, which a decoding
   that charges as the body arrives may have raised between two steps
   (`Test_BodyMeter_StepKeepsWhatCoverTook`). A body that reaches its end never
@@ -435,9 +443,11 @@ How each piece is bounded, and why this way:
   it can finish first (`Test_BodyMeter_FastBodyBehindSlowOnesServed`). A
   waiter is served in order for up to 5 s,
   or until the request's context ends, then answered with the protocol's
-  throttling error. net/http notices a client that went away only once the
-  body has been read, so a waiter whose client left keeps its place, holding
-  nothing, until the wait ends. `SetInFlight` raises a bound below twice one
+  throttling error. Over HTTP/1.1 net/http notices a client that went away
+  only once the body has been read, so a waiter whose client left keeps its
+  place, and what its request holds, until the wait ends: a chunked body
+  admitted with 6 MiB whose next step waits gives them back 5.0 s after its
+  client closed. `SetInFlight` raises a bound below twice one
   byte over `GOSTACK_MAX_REQUEST_BODY` to that, so decoding room is never zero.
 - **Idle bodies.** An armed meter sets the connection's read deadline
   `GOSTACK_REQUEST_BODY_IDLE_TIMEOUT` ahead before each read and clears it at
@@ -947,9 +957,15 @@ memory.
   (rest-xml as it decodes), so many such decodings at once can each hold part
   of the pool and wait to grow until the oldest waiters give up at 5 s, which
   answers them in waves of the wait. A decoding that has decoded nothing yet
-  gives back its room while it waits (a dense json body), and a body of
-  unknown length grows only in steps that leave every such body a way to its
-  end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
+  gives back its room while it waits (a dense json body), but its body's bytes
+  stay held, and the decodings that wait are served strictly in order. A
+  stated 16 MiB json body whose decoding needs 46 MiB, and a 4 MiB one behind
+  it needing 16 MiB, wait with 44 MiB free: the first fits only once the
+  second's request ends, so both wait out the 5 s, one of the two is throttled
+  then, and a stated 1 MiB body arriving behind them waits as long. Main
+  stalls the same way, holding each decoding's room as well (SQ-434 seam
+  review, finding 1). A body of unknown length grows only in steps that leave
+  every such body a way to its end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
   1 MiB json `SendMessage` calls sent at once are all served in 0.45 to
   0.51 s; 64 chunked 16 MiB json `PutItem` bodies (a claim of about 48 MiB
   each) are all read and answered, 400 `ValidationException`, in 1.5 to
@@ -983,18 +999,28 @@ memory.
   stated, 303 to 320 MiB sent chunked, 269 to 286 MiB for `%41` and 162 to
   248 MiB for the SQS forms; the container never reaches its limit and no
   run is OOM-killed. That leaves the copy uncharged.
-- At shutdown a body queued for admission whose request holds nothing of the
-  pool, a stated body or the first step of one of unknown length, is
-  answered at once with its service's throttle; before, it was cut with no
-  answer when the drain ended. The stop is the pool's: `gateway.New` hands
-  it the channel it closes as it begins to stop (`protocol.StopQueued`), and
-  only a waiter reads it, so a request costs nothing more. A request that
-  holds some of the pool keeps waiting, a chunked body for its next step or
-  a decoding in `Cover`, is served when room frees within the drain, and is
-  ended by the drain deadline through its context otherwise, as before. The
-  stop stays closed through the drain, so a body that queues for admission
-  after it is answered with the throttle as well.
+- At shutdown a request that waits on the pool while it holds nothing of it,
+  a stated body or the first step of one of unknown length queued for
+  admission, or the decoding of a body too short to be metered, is answered at
+  once with its service's throttle; before, it was cut with no answer when the
+  drain ended. The throttle is the protocol's: 400 `ThrottlingException` for
+  json, 400 `Throttling` for query, 503 `SlowDown` for S3. `gateway.New` hands
+  the channel it closes as it begins to stop to `protocol.StopQueued`, which
+  holds it for whatever bound `SetInFlight` sets, before or after; only a
+  waiter reads it, so a request costs nothing more. The stop stays closed
+  through the drain, so a body that queues for admission after it is answered
+  with the throttle as well. A request that holds some of the pool keeps
+  waiting, a chunked body for its next step or a decoding in `Cover`, and is
+  served when room frees within the drain. Otherwise the drain deadline does
+  not end its wait. Over HTTP/1.1 the request's context ends only once its
+  body has been read, and closing the connection at the deadline does not
+  wake a handler that waits on the pool, so it waits out its 5 s body wait:
+  a chunked body holding 6 MiB whose next step waits at a 300 ms drain gets
+  its connection reset with no answer as `Serve` returns at 0.30 s, and gives
+  its 6 MiB back at 5.0 s, after `Serve` has returned. Main does the same
+  (SQ-434 seam review, finding 4).
   `Test_BodyPool_StopEndsOnlyTheQueuedWaits`,
+  `Test_DecodeHold_StopEndsADecodingThatHoldsNothing`,
   `Test_Gateway_ShutdownAnswersQueuedBodies`,
   `Test_Gateway_ShutdownServesAdmittedBodies`.
 

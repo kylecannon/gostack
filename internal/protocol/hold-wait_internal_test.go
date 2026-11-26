@@ -13,11 +13,14 @@ import (
 
 // Test_DecodeHold_NoHoldAndWait: bodies that each hold part of the bound, their
 // bytes and the decode room they were admitted with, and that each need more
-// room to decode than the bound has left, are all served: a hold that waits
-// gives back the room it was admitted with and waits for all it needs, in
-// order, so the first fits once the others gave theirs back, and each one
-// served gives back room for the next. With a hold that kept its room while it
-// waited, every hold would wait on the others until the wait ended.
+// room to decode than the bound has left, are all served when each decoding
+// fits beside every body's bytes (21 MiB of bodies, 8 MiB decodings): a hold
+// that waits gives back the room it was admitted with and waits for all it
+// needs, in order, so the first fits once the others gave theirs back, and
+// each one served gives back room for the next. With a hold that kept its room
+// while it waited, every hold would wait on the others until the wait ended.
+// The bodies' bytes stay held, so a decoding at the head that does not fit
+// beside them waits until a request behind it ends (bodyPool).
 func Test_DecodeHold_NoHoldAndWait(t *testing.T) {
 	SetMaxBody(DefaultMaxBody)
 	withBound(t, DefaultInFlight, 2*time.Second)
@@ -336,5 +339,97 @@ func Test_BodyPool_SafetyBlockedStepStallsNoOne(t *testing.T) {
 
 	_, held := InFlight()
 	assert.Zero(t, held, "every request gives back all it held")
+	assertQueuesEmpty(t)
+}
+
+// Test_BodyPool_UnsafeStepShortOfRoomStallsNoOne: a step that is not safe and
+// does not fit either waits for a safe order, which room given back would not
+// give it, so it holds up no one: a body that states 100 KiB is admitted at
+// once. The two bodies of unknown length claim 48 MiB each: the older holds 16
+// and the younger 40, and a stated body holds 7, so 1 MiB is free and the
+// older body's 3 MiB step is short of room and safe only once the younger body
+// ends. Were room tested first, the stated body would wait until the older
+// body's wait ended.
+func Test_BodyPool_UnsafeStepShortOfRoomStallsNoOne(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, 2*time.Second)
+
+	const mib = 1 << 20
+
+	pool := inFlight.Load()
+	older, younger := &grower{claim: 48 * mib}, &grower{claim: 48 * mib}
+	ctx := t.Context()
+
+	require.NoError(t, pool.step(ctx, older, mib, true))
+	require.NoError(t, pool.step(ctx, younger, mib, true))
+	require.NoError(t, pool.step(ctx, younger, 39*mib, true))
+	require.NoError(t, pool.step(ctx, older, 15*mib, true))
+	require.NoError(t, pool.acquire(ctx, 7*mib, &pool.starting))
+
+	olderDone := make(chan error, 1)
+
+	go func() { olderDone <- pool.step(ctx, older, 3*mib, true) }()
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.steps) }) == 1
+	}, 2*time.Second, time.Millisecond, "the older body's step waits")
+
+	assert.False(t, BodiesWait(0), "a step that waits for a safe order holds up no one, fits or not")
+
+	start := time.Now()
+	m, callCtx := meteredBody(t, 100<<10, 100<<10)
+	_, err := ReadBody(m, 100<<10)
+	require.NoError(t, err, "the stated body is admitted")
+	assert.Less(t, time.Since(start), 100*time.Millisecond, "at once, not at the older body's wait")
+	ReleaseBody(callCtx)
+
+	pool.release(7 * mib)
+	pool.finish(younger, 40*mib)
+	require.NoError(t, <-olderDone, "the older body's step comes once the younger body ends")
+	pool.finish(older, 19*mib)
+
+	_, held := InFlight()
+	assert.Zero(t, held, "every request gives back all it held")
+	assertQueuesEmpty(t)
+}
+
+// Test_BodyMeter_TrimKeepsWhatCoverReturned: a body of unknown length decoded
+// as it is read, whose decoding a Cover told it was covered by the room its
+// steps took, keeps that room at its end, though a body that stated its length
+// would have been admitted with less: the decoder may hold those bytes. A trim
+// that cut the room to the stated body's would leave them uncharged. The steps
+// take 2 MiB of room at 512 KiB read; the body ends at 600 KiB, for which
+// 1 MiB is planned.
+func Test_BodyMeter_TrimKeepsWhatCoverReturned(t *testing.T) {
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, 200*time.Millisecond)
+
+	c := new(Charge)
+	ctx := WithCharge(t.Context(), c)
+	m := NewBodyMeter(ctx, io.NopCloser(bytes.NewReader(make([]byte, 600<<10))), -1)
+	require.NotNil(t, m)
+	c.Meter(m)
+	ArmBody(ctx)
+
+	for _, n := range []int{256<<10 + 1, 256<<10 + 1, 1} {
+		_, err := io.ReadFull(m, make([]byte, n))
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, int64(2<<20), c.decode.held, "the steps' decode room")
+
+	covered, err := c.HoldDecode(FreeDecode + 3<<19)
+	require.NoError(t, err)
+	require.Equal(t, int64(FreeDecode+2<<20), covered, "covered by the room the steps took")
+
+	_, err = io.Copy(io.Discard, m)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(2<<20), c.decode.held, "the room covered stays charged at the body's end")
+
+	c.Release()
+
+	_, held := InFlight()
+	assert.Zero(t, held, "the request gives back all it held")
 	assertQueuesEmpty(t)
 }

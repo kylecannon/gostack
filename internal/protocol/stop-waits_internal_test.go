@@ -19,7 +19,10 @@ func Test_BodyPool_StopEndsOnlyTheQueuedWaits(t *testing.T) {
 	t.Cleanup(func() { SetBodyWait(DefaultBodyWait) })
 
 	stop := make(chan struct{})
-	p := &bodyPool{capacity: 64, stop: stop}
+	StopQueued(stop)
+	t.Cleanup(func() { StopQueued(nil) })
+
+	p := &bodyPool{capacity: 64}
 	ctx := t.Context()
 	running := &grower{claim: 32}
 	holding := &grower{claim: 16}
@@ -72,4 +75,77 @@ func Test_BodyPool_StopEndsOnlyTheQueuedWaits(t *testing.T) {
 	assert.Empty(t, p.starting)
 	assert.Empty(t, p.steps)
 	assert.Empty(t, p.growers)
+}
+
+// Test_DecodeHold_StopEndsADecodingThatHoldsNothing: a decoding whose request
+// holds nothing of the bound, neither body bytes nor decode room (a body short
+// enough not to be metered), is answered as the shutdown stop closes, as a
+// body queued for admission is; a decoding whose request's body holds bytes
+// keeps waiting and is granted once room is given back. The stop is set before
+// the bound is: it holds for whatever bound SetInFlight sets.
+func Test_DecodeHold_StopEndsADecodingThatHoldsNothing(t *testing.T) {
+	const mib = 1 << 20
+
+	stop := make(chan struct{})
+	StopQueued(stop)
+	t.Cleanup(func() { StopQueued(nil) })
+
+	SetMaxBody(DefaultMaxBody)
+	withBound(t, DefaultInFlight, time.Minute)
+
+	m, holdingCtx := meteredBody(t, 2*mib, 2*mib)
+	_, err := ReadBody(m, 2*mib)
+	require.NoError(t, err)
+
+	holding := ChargeOf(holdingCtx)
+	pool := inFlight.Load()
+	_, held := InFlight()
+	require.NoError(t, pool.acquire(t.Context(), DefaultInFlight-held, &pool.starting), "the rest of the bound")
+
+	kept := make(chan error, 1)
+
+	go func() {
+		_, err := holding.HoldDecode(FreeDecode + 8*mib)
+		kept <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.growing) }) == 1
+	}, time.Second, time.Millisecond, "the decoding of the body that holds bytes waits")
+
+	bare := new(Charge)
+	bareCtx := WithCharge(t.Context(), bare)
+	stopped := make(chan error, 1)
+
+	go func() {
+		_, err := bare.HoldDecode(FreeDecode + 2*mib)
+		stopped <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		return poolState(func(p *bodyPool) int { return len(p.growing) }) == 2
+	}, time.Second, time.Millisecond, "the decoding that holds nothing waits")
+
+	start := time.Now()
+
+	close(stop)
+
+	require.ErrorIs(t, <-stopped, ErrBusy)
+	assert.Less(t, time.Since(start), time.Second, "answered as the stop closes, not at the wait")
+
+	select {
+	case err := <-kept:
+		t.Fatalf("a decoding whose body holds bytes stopped waiting: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	pool.release(DefaultInFlight - held)
+	require.NoError(t, <-kept, "granted once room is given back")
+
+	holding.Release()
+	ChargeOf(bareCtx).Release()
+
+	_, held = InFlight()
+	assert.Zero(t, held, "every request gives back all it held")
+	assertQueuesEmpty(t)
 }
