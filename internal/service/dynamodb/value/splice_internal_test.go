@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -120,4 +121,17 @@ func spliceRunsJoin(h packHeader, body, added string) Packed {
 	runs, _ := spliceRuns(inline[:0], body, []string{"n"})
 
 	return spliceJoin(h, body, runs, added)
+}
+
+// Test_unpacker_flagsShareAWord: the flag the splice added to unpacker,
+// sorted, sits in the padding after open and chunked, so an unpacker is no
+// larger than on main. A word more grew the frame of Orderer.object, which
+// the snapshot runs per item, and added instructions to its member loop.
+func Test_unpacker_flagsShareAWord(t *testing.T) {
+	t.Parallel()
+
+	var u unpacker
+
+	require.Equal(t, unsafe.Offsetof(u.open)+unsafe.Sizeof(uintptr(0)), unsafe.Offsetof(u.parts))
+	require.Equal(t, unsafe.Offsetof(u.open)+2, unsafe.Offsetof(u.sorted))
 }

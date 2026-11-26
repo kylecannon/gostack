@@ -792,6 +792,12 @@ type unpacker struct {
 	// chunked is set when strs is a Decoder's chunk, whose strings outlive
 	// the read.
 	chunked bool
+	// sorted is set when the names the top object wants are in order
+	// (attrsSorted), which finds them by binary search. That object takes it,
+	// as it takes index. It sits with the other flags, in the padding after
+	// them: one word more would grow the frame of every function that builds
+	// an unpacker, Orderer.object among them, which the snapshot runs per item.
+	sorted bool
 	// parts, when not nil, holds the map each Selection's part of a map is
 	// read into (ViewSelect).
 	parts map[*Selection]*reusedMap
@@ -799,10 +805,6 @@ type unpacker struct {
 	// (Decoder.indexOf). That object takes it; one below it looks its names
 	// up one by one.
 	index map[string]int
-	// sorted is set when the names the top object wants are in order
-	// (attrsSorted), which finds them by binary search. That object takes it,
-	// as it takes index.
-	sorted bool
 }
 
 // wantLookup is how members finds a name in want: by index when it is not
