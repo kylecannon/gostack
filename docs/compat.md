@@ -496,21 +496,27 @@ caller's account and region, as LocalStack does.
   an alias, an empty path step, an overlap), as the image does, before a missing
   table, key or index, in a batch and a transaction too. Not yet: an `UPDATE`
   with no `WHERE` at all names a missing table here and the missing key
-  condition in the image; a `WHERE` with a bare `AND x`, or a `size(x)` as a
-  condition, is refused here in other words than the image's ("The arguments to
-  AND/OR must be Expressions", "Incorrect operand type for operator or
-  function; operator or function: AND, operand type: N"), the same words in an
-  `ExecuteStatement`, a batch and a transaction, whether the table is there or
-  not; `x IN 5` is refused in other words by the parser (the image: "IN operator
+  condition in the image; a `WHERE` that is no condition (`x`, `TRUE`, `1`,
+  `size(x)`) is refused as the image does, "WHERE clause must contain an
+  expression that resolves to a boolean", before the table; one under an `AND`,
+  `OR` or `NOT` (`id = 'a' AND x`, `NOT x`, `AND size(x)`) is refused here in
+  other words than the image's ("The arguments to AND/OR must be Expressions",
+  "The argument to NOT must be a Type or Expression", "Incorrect operand type
+  for operator or function; operator or function: AND, operand type: N") only
+  when the table and the key are there: gostack answers the syntax error of the
+  expression the statement is rendered to, or its `size` message, and before
+  that a missing table or key, which the image names after its own words;
+  `x IN 5` is refused in other words by the parser (the image: "IN operator
   must have a left hand argument of type Variable Reference and right hand
   argument of type Seq"); a `DELETE` whose extra condition fails on an item that
   is not there answers `ConditionalCheckFailedException` here and `200` in the
   image; a transaction prefixes a projected function's "Unexpected path
   component" with the statement's index in the image and not here; an
   `INSERT ... RETURNING` in a transaction lacks the `TransactStatements[i]`
-  prefix (as on main). A `SELECT`'s own list or `WHERE` error (an alias, a
-  function, an empty step; `UPDATE ... SET m[''] = ?` too) is read in the image
-  before the count of its `?` parameters, and here after it. The image reserves
+  prefix (as on main). A `SELECT`'s own alias, empty step or `WHERE`
+  function (`UPDATE ... SET m[''] = ?` too) is read in the image before the
+  count of its `?` parameters, and here after it; a function of its list is
+  raised by the parser here as in the image, before the count. The image reserves
   `ALL`, `DISTINCT`, `AS`, `ASC`, `DESC`, `LIMIT`, `MODIFIED`, `OLD`, `NEW`,
   `ONLY`, `PIVOT` and `UNPIVOT` (gostack does too). Two clauses the image parses
   and refuses are not well formed here: `SELECT VALUE x ...` ("Select
@@ -521,12 +527,26 @@ caller's account and region, as LocalStack does.
   own expressions and the table and key; gostack answers "Statement wasn't well
   formed". A path step the image reads in another way than gostack: `['x']` at
   the start of a path ("Unexpected path component"), `m[?]`, `l[-1]` ("List
-  index is not within the allowable range"), `id['x']` as a key ("Key
-  attributes must be scalars"). `ORDER BY m['x']` is read as `ORDER BY m.x`
-  and answers `200` in `ExecuteStatement` here, where the image answers
-  "Argument to ORDER BY must be of type VariableReference"; so does `ORDER BY
-  x` on a non-key attribute (the image: "Variable reference x in ORDER BY
-  clause must be part of the primary key").
+  index is not within the allowable range"). `ORDER BY` of a path (`m['x']`,
+  `m.x`, `l[0]`) and a `WHERE` below a key attribute (`id['x']`, `id.x`) are
+  refused as the image does, "Argument to ORDER BY must be of type
+  VariableReference. Type: PATH" and "Key attributes must be scalars", where
+  the table has the key. The image also reads the key attributes of the table's
+  indexes ("IndexKey: g"), which gostack does not, so `WHERE g['x'] = 'a'` on a
+  table with an index on `g` answers here, and `DELETE ... WHERE id = 'a' AND
+  g['x'] = 'a'` runs. `ORDER BY x` on a non-key attribute answers `200` here,
+  where the image answers "Variable reference x in ORDER BY clause must be part
+  of the primary key"; an `ORDER BY` with a `WHERE` that pins no hash key
+  answers "Must have at least one non-optional hash key condition in WHERE
+  clause when using ORDER BY clause." in the image, and here the `ORDER BY`
+  path message or `200`; and an `ORDER BY` of a missing index answers `500` in
+  the image.
+- Forms the image parses and gostack does not (`LIMIT`, `SELECT VALUE`, `x IN
+  5`, `RETURNING ALL NEW a`, `m[?]`, `l[-1]`) are no kind for the check that
+  refuses reads and writes together, where the image counts each as the kind it
+  is: a batch of an `UPDATE` and one of them applies the `UPDATE` beside the
+  statement answered "Statement wasn't well formed", where the image refuses the
+  batch. That is as on main.
 - `ExecuteTransaction` refuses a `SELECT` of an index with "Select statements
   within ExecuteTransaction must specify the primary key in the where clause.";
   the image answers "Reads on indices are not supported within transactions.".

@@ -65,13 +65,21 @@ type writeStatement struct {
 }
 
 // compileWrite compiles a write statement against its table. returnOld is
-// ReturnValuesOnConditionCheckFailure's ALL_OLD. A mistake of the statement's
-// own expressions is named as it is where the table is not there: rendered
-// whole, once (beforeTable).
+// ReturnValuesOnConditionCheckFailure's ALL_OLD. The statement's own mistakes
+// are named before the rest (refusedInOrder).
 func (c caller) compileWrite(
 	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
 ) (*writeStatement, error) {
-	name, e, err := c.lookupWriteTable(stmt, params)
+	return refusedInOrder(stmt, params, func() (*writeStatement, error) {
+		return c.writeItem(stmt, params, returnOld)
+	})
+}
+
+// writeItem is compileWrite's body: the statement against its table.
+func (c caller) writeItem(
+	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
+) (*writeStatement, error) {
+	name, e, err := c.lookupWriteTable(stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -84,16 +92,21 @@ func (c caller) compileWrite(
 		return w, w.compileInsert(stmt, key, r)
 	}
 
+	err = writeKeyPath(stmt.Where, key)
+	if err != nil {
+		return nil, err
+	}
+
 	var rest []*partiql.Node
 
 	w.key, rest, err = singleItem(stmt.Where, key, r)
 	if err != nil {
-		return nil, beforeTable(stmt, params, err)
+		return nil, err
 	}
 
 	cond, err := renderCond(joinAll(rest), r)
 	if err != nil {
-		return nil, beforeTable(stmt, params, err)
+		return nil, err
 	}
 
 	w.unwritten = keyOperators(key)
@@ -125,12 +138,7 @@ func (c caller) compileWrite(
 		}
 	}
 
-	checked, err := w.checked(err)
-	if err != nil {
-		return nil, beforeTable(stmt, params, err)
-	}
-
-	return checked, nil
+	return w.checked(err)
 }
 
 // oldOnFailure is ReturnValuesOnConditionCheckFailure for a statement that asks
@@ -145,15 +153,8 @@ func oldOnFailure(returnOld bool) *string {
 	return nil
 }
 
-// lookupWriteTable looks up the table of a write, after the refusals that come
-// before it (refusedFirst). A table that is refused is answered after the
-// statement's own expressions (beforeTable).
-func (c caller) lookupWriteTable(stmt *partiql.Statement, params []api.AttributeValue) (string, *tableEntry, error) {
-	err := refusedFirst(stmt, params)
-	if err != nil {
-		return "", nil, err
-	}
-
+// lookupWriteTable looks up the table of a write.
+func (c caller) lookupWriteTable(stmt *partiql.Statement) (string, *tableEntry, error) {
 	name, e, err := c.statementTable(&stmt.Table)
 	if err == nil {
 		return name, e, nil
@@ -164,25 +165,7 @@ func (c caller) lookupWriteTable(stmt *partiql.Statement, params []api.Attribute
 		return "", nil, api.NewResourceNotFoundException(msgTableNotFound)
 	}
 
-	return "", nil, beforeTable(stmt, params, fmt.Errorf("statement: %w", err))
-}
-
-// refusedFirst is what the image refuses of a write before it looks the table
-// up. An EXISTS reads its SELECT's list unread and refuses the table's alias
-// before anything else of it, the table's name next, as a SELECT does
-// (SQ-418 p2a x6, p2b x); a statement with an alias refuses it after the
-// statement's own expressions.
-func refusedFirst(stmt *partiql.Statement, params []api.AttributeValue) error {
-	switch {
-	case stmt.Kind == partiql.Exists && stmt.TableAliased:
-		return value.Invalid(partiql.MsgAliasing)
-	case stmt.Kind == partiql.Exists:
-		return statementName(stmt.Table)
-	case stmt.Aliased:
-		return beforeTable(stmt, params, aliasRefusal(stmt))
-	default:
-		return nil
-	}
+	return "", nil, fmt.Errorf("statement: %w", err)
 }
 
 // checked is w when it compiled, err nil, and its expressions parse.
@@ -246,7 +229,9 @@ func keyOperators(key table.KeySchema) int {
 // checkStatementExprs parses a compiled statement's condition and update
 // expressions over its placeholders. rank is where the update's actions stand
 // in the statement, and unwritten the operators its WHERE wrote that cond does
-// not hold.
+// not hold. It does not check that every name and value is used: a SELECT's
+// refusals (ownRefusal) pass it the names of its list, which its condition does
+// not use, and depend on that.
 func checkStatementExprs(
 	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int, unwritten int,
 ) error {

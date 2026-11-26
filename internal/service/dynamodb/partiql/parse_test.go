@@ -170,7 +170,7 @@ func Test_Parse_orderGaps(t *testing.T) {
 	for _, src := range []string{"SELECT m[''] FROM t", `SELECT m[""] FROM t`} {
 		s, err = partiql.Parse(src)
 		require.NoError(t, err, src)
-		require.True(t, s.Projection[0].Empty(), src)
+		require.True(t, s.Projection[0].HasEmptyStep(), src)
 		require.Equal(t, partiql.Path{{Name: "m"}, {Name: ""}}, s.Projection[0], src)
 	}
 

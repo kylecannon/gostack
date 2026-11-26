@@ -625,7 +625,7 @@ const MsgDistinct = "Unsupported token in expression: DISTINCT"
 // bracketStep reads what follows a `[` of a path: a list index, or a name in
 // quotes or bare, which the image reads as the step `.name` (`m['x']` is `m.x`).
 // A step with no name, `[”]`, is read as one: the image refuses it where the
-// path is put to use, with the statement's other expressions (Path.Empty).
+// path is put to use, with the statement's other expressions (Path.HasEmptyStep).
 func (p *parser) bracketStep() (Step, error) {
 	t := p.take()
 
@@ -653,9 +653,10 @@ func (p *parser) bracketStep() (Step, error) {
 }
 
 // reservedWords are the keywords of the grammar, which only a quoted identifier
-// may spell. The last ten are the image's: it answers each, as an attribute
-// name, a table name or an alias, as not well formed (SQ-418 p2b, p2c). The
-// image reserves others of the PartiQL grammar that were not probed.
+// may spell. The last twelve are the image's: it answers each, as a name in a
+// SELECT's list and as an attribute in a WHERE, as not well formed (SQ-418
+// p2c); where else it reserves them, and which other words of the PartiQL
+// grammar it reserves, was not probed.
 var reservedWords = [...]string{
 	"SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "BETWEEN", "IN", "IS", "NULL", "MISSING", "TRUE",
 	"FALSE", "INSERT", "INTO", "VALUE", "UPDATE", "SET", "REMOVE", "DELETE", "RETURNING", "EXISTS", "ORDER",

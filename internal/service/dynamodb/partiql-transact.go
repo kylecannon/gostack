@@ -238,13 +238,13 @@ func (c caller) refuseTxStatement(parsed *txStatements, i, n int, params []api.A
 
 	// The image names the statement's own expressions before any of it, and
 	// then an alias, before it refuses the clause (SQ-418 p2a a4).
-	err := beforeTable(parsed.stmts[i], params, aliasRefusal(parsed.stmts[i]))
+	err := ownRefusal(parsed.stmts[i], params)
 	if err != nil {
 		return txCompileError(i, n, err)
 	}
 
 	_, err = c.compileWrite(parsed.stmts[i], params, false)
-	if _, shaped := errors.AsType[*shapeError](err); shaped || isCode(err, codeNotFound) {
+	if _, shaped := errors.AsType[*shapeError](err); shaped || isCode(err, codeNotFound) || isKeyPathError(err) {
 		return txCompileError(i, n, err)
 	}
 
@@ -287,6 +287,11 @@ func txStatementError(i int, err error) error {
 	}
 
 	return txNotFound(err)
+}
+
+// isKeyPathError reports whether err refuses a path below a key attribute.
+func isKeyPathError(err error) bool {
+	return isCode(err, codeValidation) && strings.HasPrefix(messageOf(err), msgKeyPath)
 }
 
 // isKeyMessage reports whether msg refuses an item key's shape.

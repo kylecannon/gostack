@@ -182,24 +182,30 @@ func parseFailure(err error, exists bool) error {
 	}
 }
 
-// executeSelect runs a SELECT as a Query or a Scan.
+// executeSelect runs a SELECT as a Query or a Scan. The statement's own
+// mistakes are named before the rest (refusedInOrder).
 func (p *Provider) executeSelect(
+	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
+) (*api.ExecuteStatementOutput, error) {
+	return refusedInOrder(stmt, in.Parameters, func() (*api.ExecuteStatementOutput, error) {
+		return p.selectItems(ctx, in, stmt)
+	})
+}
+
+// selectItems is executeSelect's body: the SELECT against its table.
+func (p *Provider) selectItems(
 	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
 ) (*api.ExecuteStatementOutput, error) {
 	r := newRender(in.Parameters)
 
-	// The image checks the table's name, an alias and the list's overlap
-	// before it looks the table up, so a missing table or index, a WHERE
-	// without the key and an ORDER BY with no WHERE come after them, and
-	// after the WHERE's own errors (beforeTable).
-	projected, aliases, err := selectChecks(stmt, r)
+	projected, aliases, err := projection(stmt.Projection, r)
 	if err != nil {
 		return nil, err
 	}
 
 	_, e, err := p.caller(ctx).statementTable(&stmt.Table)
 	if err != nil {
-		return nil, beforeTable(stmt, in.Parameters, fmt.Errorf("statement: %w", err))
+		return nil, fmt.Errorf("statement: %w", err)
 	}
 
 	key := e.data.Key()
@@ -209,7 +215,7 @@ func (p *Provider) executeSelect(
 	if stmt.Index != "" {
 		spec, ok := e.findIndex(stmt.Index)
 		if !ok {
-			return nil, beforeTable(stmt, in.Parameters, value.Invalid(msgScanNoIndex+stmt.Index))
+			return nil, value.Invalid(msgScanNoIndex + stmt.Index)
 		}
 
 		key, index = spec.Key, &stmt.Index
@@ -220,6 +226,13 @@ func (p *Provider) executeSelect(
 	}
 
 	start, err := decodeToken(in.NextToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// After the token, the image refuses a key attribute with steps below it,
+	// and then an ORDER BY of a path (SQ-418 p4a, p4g).
+	err = selectKeyPaths(stmt, e.data.Key())
 	if err != nil {
 		return nil, err
 	}
@@ -236,9 +249,7 @@ func (p *Provider) executeSelect(
 
 	pg, err := p.runSelect(ctx, q, stmt.Where, key, r)
 	if err != nil {
-		// A WHERE of its own mistake is named as a batch and a transaction
-		// name it, with the same text (beforeTable).
-		return nil, beforeTable(stmt, in.Parameters, err)
+		return nil, err
 	}
 
 	// A page with nothing projected holds the items as stored, which go out
@@ -542,7 +553,7 @@ func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error
 	// A step that names an empty string is refused before the list's overlap
 	// (SQ-418 p2b o-4).
 	for _, path := range paths {
-		if path.Empty() {
+		if path.HasEmptyStep() {
 			return nil, nil, value.Invalid(msgEmptyComponent)
 		}
 	}

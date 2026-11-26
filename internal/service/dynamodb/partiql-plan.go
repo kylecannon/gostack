@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"encoding/base64"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -102,49 +103,111 @@ func aliasRefusal(stmt *partiql.Statement) error {
 	return nil
 }
 
-// selectChecks makes the checks the image makes of a SELECT before it looks its
-// table up: the table's name, then an alias, then the paths of the list as
-// one (SQ-418 c5). It renders the list into r.
-func selectChecks(stmt *partiql.Statement, r *render) (*string, []partiql.Path, error) {
-	if stmt.TableAliased {
-		return nil, nil, value.Invalid(partiql.MsgAliasing)
-	}
+// msgWhereBoolean refuses a WHERE clause that is no condition: a path, a value
+// or size(), where the image wants an expression that resolves to a boolean.
+const msgWhereBoolean = "WHERE clause must contain an expression that resolves to a boolean"
 
-	err := statementName(stmt.Table)
-	if err != nil {
-		return nil, nil, err
-	}
+// msgSyntaxError starts the message of an expression the parser could not read.
+const msgSyntaxError = "Syntax error;"
 
-	err = aliasRefusal(stmt)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return projection(stmt.Projection, r)
+// nonCondition reports whether n, the whole of a WHERE clause, is an operand
+// where the image wants a condition (SQ-418 p4b a-*, p4c q*).
+func nonCondition(n *partiql.Node) bool {
+	return n.Kind == partiql.KindPath || partiql.IsValue(n) || (n.Kind == partiql.KindCall && n.Name == "size")
 }
 
-// beforeTable is the answer to a statement whose table or key is refused, or
-// that failed on a condition or update of its own: the error of the
-// statement's own expressions when they have one, which the image names first
-// (SQ-418 c2, c3, c5, p2a f2). They are rendered here whole and afresh, a
-// SELECT's list first as the read renders it, so that every path to the error
-// quotes the same text, with the same placeholders and operator count, whether
-// the table is there or not. An INSERT holds none.
-func beforeTable(stmt *partiql.Statement, params []api.AttributeValue, refused error) error {
+// isSyntaxError reports whether err is the expression parser's refusal of text
+// it could not read. A statement's text is read by its own parser, so text it is
+// rendered to that the expression parser cannot read is gostack's own (a bare
+// operand under AND), which no refusal of the image's is named for.
+func isSyntaxError(err error) bool {
+	ae := asAWSError(statementFailure(err))
+
+	return ae != nil && strings.HasPrefix(ae.Message, msgSyntaxError)
+}
+
+// ownRefusal is the refusal the image names of a statement before it looks its
+// table, key or index up: the statement's own mistakes, in the order it reads
+// them (SQ-418 c2, c3, c5, p2a, p4b). A SELECT's table alias, table name, alias
+// and list come first, then every statement's WHERE, an UPDATE's actions, and
+// an alias an UPDATE or DELETE writes. nil when the statement has none; an
+// INSERT holds no expression of its own. Only the classes the image names first
+// answer: a function, an operand, an operator count, an overlap, an alias, an
+// empty step and a WHERE that is no condition. A syntax error of the text it is
+// rendered to is gostack's own, and leaves what failed in place.
+//
+// The statement is rendered whole and afresh here, a SELECT's list first as
+// the read renders it, so that every path to the error quotes the same text,
+// with the same placeholders and operator count, whether the table is there or
+// not.
+func ownRefusal(stmt *partiql.Statement, params []api.AttributeValue) error {
 	if stmt.Kind == partiql.Insert {
-		return refused
+		return aliasRefusal(stmt)
 	}
 
 	r := newRender(params)
 
-	var err error
-
-	if stmt.Kind == partiql.Select {
-		// Its list was checked already; this gives its placeholders to r.
-		_, _, err = projection(stmt.Projection, r)
+	switch stmt.Kind {
+	case partiql.Select:
+		err := selectHead(stmt, r)
 		if err != nil {
 			return err
 		}
+	case partiql.Exists:
+		// It reads its SELECT's list unread and refuses the table's alias before
+		// anything else of it, the table's name next (SQ-418 p2a x6, p2b x).
+		if stmt.TableAliased {
+			return value.Invalid(partiql.MsgAliasing)
+		}
+
+		err := statementName(stmt.Table)
+		if err != nil {
+			return err
+		}
+	default:
+	}
+
+	err := ownExpressions(stmt, r)
+	if err != nil {
+		return err
+	}
+
+	if stmt.Kind == partiql.Select || stmt.Kind == partiql.Exists {
+		return nil
+	}
+
+	return aliasRefusal(stmt)
+}
+
+// selectHead makes the checks the image makes of a SELECT before its WHERE: the
+// table's alias and name, then an alias, then the paths of the list as one
+// (SQ-418 c5). It renders the list into r.
+func selectHead(stmt *partiql.Statement, r *render) error {
+	if stmt.TableAliased {
+		return value.Invalid(partiql.MsgAliasing)
+	}
+
+	err := statementName(stmt.Table)
+	if err != nil {
+		return err
+	}
+
+	err = aliasRefusal(stmt)
+	if err != nil {
+		return err
+	}
+
+	_, _, err = projection(stmt.Projection, r)
+
+	return err
+}
+
+// ownExpressions renders a statement's WHERE and an UPDATE's actions into r and
+// checks them as the expressions they compile to. A SELECT's list was rendered
+// into r before.
+func ownExpressions(stmt *partiql.Statement, r *render) error {
+	if stmt.Where != nil && nonCondition(stmt.Where) {
+		return value.Invalid(msgWhereBoolean)
 	}
 
 	cond, err := renderCond(stmt.Where, r)
@@ -169,11 +232,113 @@ func beforeTable(stmt *partiql.Statement, params []api.AttributeValue, refused e
 	}
 
 	err = checkStatementExprs(r.attributeNames(), r.attributeValues(), cond, update, rank, 0)
-	if err != nil {
-		return err
+	if isSyntaxError(err) {
+		return nil
 	}
 
-	return refused
+	return err
+}
+
+// refusedInOrder runs body, the compile or the read of one statement of an
+// entry point (ExecuteStatement, a batch, a transaction), and answers as the
+// image does: a statement's own mistakes (ownRefusal) before whatever else is
+// wrong with it, a missing table, a missing or ill-typed key, an index or a
+// token. It is the one place that orders them, so no site of the body can leave
+// one out. An alias is refused whatever else is right of the statement; the
+// rest is looked for where body fails, so a statement that is right costs
+// nothing more.
+func refusedInOrder[T any](
+	stmt *partiql.Statement, params []api.AttributeValue, body func() (T, error),
+) (T, error) {
+	var zero T
+
+	if stmt.Aliased || stmt.TableAliased {
+		own := ownRefusal(stmt, params)
+		if own != nil {
+			return zero, own
+		}
+	}
+
+	v, err := body()
+	if err == nil {
+		return v, nil
+	}
+
+	own := ownRefusal(stmt, params)
+	if own != nil {
+		return zero, own
+	}
+
+	return zero, err
+}
+
+// The refusals of a path that goes below a key attribute, and of an ORDER BY of
+// a path. The key's name follows: " <name>" in a write, ": <name>" in a SELECT.
+const (
+	msgKeyPath   = "Key attributes must be scalars; list random access '[]' and map lookup '.' are not allowed: Key"
+	msgOrderPath = "Argument to ORDER BY must be of type VariableReference. Type: PATH"
+)
+
+// belowKey is the name of the first attribute of names that a path of n goes
+// below, as in `id['x']`, `id.x` or `id[0]`, in the order n reads them; "" for
+// none.
+func belowKey(n *partiql.Node, names ...string) string {
+	if n.Kind == partiql.KindPath && len(n.Path) > 1 && slices.Contains(names, n.Path[0].Name) {
+		return n.Path[0].Name
+	}
+
+	for _, a := range n.Args {
+		name := belowKey(a, names...)
+		if name != "" {
+			return name
+		}
+	}
+
+	return ""
+}
+
+// writeKeyPath is the refusal of a write whose WHERE goes below an attribute of
+// the table's key, which the image makes before it asks for the key's equality
+// (SQ-418 p4b b-*), nil when it does not.
+func writeKeyPath(where *partiql.Node, key table.KeySchema) error {
+	if where == nil {
+		return nil
+	}
+
+	parts := keyParts(key)
+	names := make([]string, len(parts))
+
+	for i, a := range parts {
+		names[i] = a.Name
+	}
+
+	name := belowKey(where, names...)
+	if name == "" {
+		return nil
+	}
+
+	return value.Invalid(msgKeyPath + " " + name)
+}
+
+// selectKeyPaths is what the image refuses of a SELECT's paths once it has the
+// table and the token: a WHERE that goes below an attribute of the table's key,
+// the hash key's first, then an ORDER BY of a path and not of an attribute
+// (SQ-418 p4a, p4b, p4g). It reads a key's index attributes too, which is
+// left out (docs/compat.md).
+func selectKeyPaths(stmt *partiql.Statement, key table.KeySchema) error {
+	if stmt.Where != nil {
+		for _, a := range keyParts(key) {
+			if belowKey(stmt.Where, a.Name) != "" {
+				return value.Invalid(msgKeyPath + ": " + a.Name)
+			}
+		}
+	}
+
+	if len(stmt.OrderBy) > 1 {
+		return value.Invalid(msgOrderPath)
+	}
+
+	return nil
 }
 
 // checkRangeTypes refuses a Query's range key conditions whose values are not

@@ -85,9 +85,9 @@ type Step struct {
 // Path is a document path, its first step a name.
 type Path []Step
 
-// Empty reports whether a step of p names an empty string, as `m[”]` does,
-// which the image refuses where the path is used.
-func (p Path) Empty() bool {
+// HasEmptyStep reports whether a step of p names an empty string, as `m[”]`
+// does, which the image refuses where the path is used.
+func (p Path) HasEmptyStep() bool {
 	for _, s := range p {
 		if !s.IsIndex && s.Name == "" {
 			return true

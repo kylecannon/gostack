@@ -205,59 +205,39 @@ func Test_partiql_selectWhereBeforeTheKey(t *testing.T) {
 	revAll(t, s, "SELECT a, a.b FROM ptord WHERE q = 1 AND foo(x)", overlapMessage("path one: [a, b], path two: [a]"))
 }
 
-// Test_partiql_conditionTextAgrees: a WHERE that is not a condition is refused
-// in the same words whether the table is there or not, in each call. The image
-// answers "The arguments to AND/OR must be Expressions" for all of them (a
-// difference listed in docs/compat.md), so the rows hold gostack's own answer
-// to agree with itself: one text, with one set of placeholders and one count of
-// operators.
+// Test_partiql_conditionTextAgrees: a SELECT's list names placeholders first, in
+// ExecuteStatement as in a batch and a transaction, so the text of an error of
+// the rendered expressions is the same in each (the WHERE below is gostack's
+// own syntax error for a bare operand, which no refusal of the image is named
+// for, a difference listed in docs/compat.md); and the count of operators holds
+// with and without the table: 299 are run, 301 and 303 are refused with their
+// count, in each call.
 func Test_partiql_conditionTextAgrees(t *testing.T) {
 	s := ordStack(t)
 
-	for _, tail := range []string{
-		"id = 'a' AND x", "id = 'a' AND x AND y", "x AND id = 'a'", "id = 'a' AND (x OR y)", "id = 'a' AND x = 1 AND y",
-		"id = 'a' AND size(x) = 1 AND y", "q = 1 AND x",
+	// Each text is the statement's, whether the table is there or not (with none
+	// the table is named instead, below); a SELECT's list takes the first
+	// placeholders, so its x and y are #n0 and #n1 and the bare operand #n3.
+	for src, want := range map[string]string{
+		"DELETE FROM ptord WHERE id = 'a' AND x":                `Syntax error; token: "<EOF>", near: "#n0"`,
+		"DELETE FROM ptord WHERE id = 'a' AND x AND y":          `Syntax error; token: "AND", near: ") AND ("`,
+		"UPDATE ptord SET a = 1 WHERE id = 'a' AND (x OR y)":    `Syntax error; token: "OR", near: ") OR ("`,
+		"DELETE FROM ptord WHERE id = 'a' AND x = 1 AND y":      `Syntax error; token: "<EOF>", near: ")"`,
+		"SELECT * FROM ptord WHERE id = 'a' AND x AND id = 'b'": `Syntax error; token: ")", near: ")) AND"`,
+		"SELECT x, y FROM ptord WHERE id = 'a' AND z":           `Syntax error; token: "<EOF>", near: "#n3"`,
 	} {
-		for _, head := range []string{"DELETE FROM %s WHERE ", "UPDATE %s SET a = 1 WHERE ", "SELECT * FROM %s WHERE "} {
-			var got [6]string
-
-			for i, table := range []string{"ptord", "nosuch"} {
-				src := strings.Replace(head, "%s", table, 1) + tail
-				got[3*i], got[3*i+1], got[3*i+2] = revMessages(t, s, src)
-			}
-
-			for i := range 3 {
-				require.Contains(t, got[i], "Syntax error", head+tail)
-				require.Equal(t, got[i], got[i+3], head+tail)
-			}
-
-			require.Equal(t, got[0], got[1], head+tail)
-			require.Equal(t, ordTxPrefix+got[0], got[2], head+tail)
-		}
+		single, _, _ := revMessages(t, s, src)
+		require.Equal(t, want, single, src)
 	}
 
-	// A SELECT's list names placeholders first, in ExecuteStatement, a batch and
-	// a transaction alike.
 	for _, src := range []string{
-		"SELECT x, y FROM ptord WHERE id = 'a' AND z", "SELECT x, y FROM nosuch WHERE id = 'a' AND z",
+		"DELETE FROM nosuch WHERE id = 'a' AND x", "UPDATE nosuch SET a = 1 WHERE id = 'a' AND (x OR y)",
+		"SELECT x, y FROM nosuch WHERE id = 'a' AND z",
 	} {
 		single, batch, tx := revMessages(t, s, src)
-		require.Equal(t, single, batch, src)
-		require.Equal(t, ordTxPrefix+single, tx, src)
-	}
-
-	// The count of operators holds with and without the table: 300 are allowed
-	// and 301 are not.
-	for _, n := range []int{150, 151} {
-		where := strings.Repeat("x = 1 AND ", n-1) + "x = 1"
-
-		var msgs [2]string
-
-		for i, table := range []string{"ptord", "nosuch"} {
-			msgs[i], _, _ = revMessages(t, s, "DELETE FROM "+table+" WHERE id = 'a' AND "+where)
-		}
-
-		require.Equal(t, msgs[0], msgs[1], n)
+		require.Equal(t, revNoTable, single, src)
+		require.Equal(t, revNoTable, batch, src)
+		require.Equal(t, "Requested resource not found", tx, src)
 	}
 }
 

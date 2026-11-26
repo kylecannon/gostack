@@ -110,8 +110,15 @@ func (r *render) resolve(n *partiql.Node) (api.AttributeValue, error) {
 // rootKeyName is where a value outside an INSERT's item stands, for messages.
 const rootKeyName = "root"
 
-// operand renders n where an operand stands: a path, a value, or size().
+// operand renders n where an operand stands: a path, a value, size(), or a
+// condition nested in one. It is cond, which holds the one list of the kinds
+// that are conditions.
 func (r *render) operand(n *partiql.Node) (string, error) {
+	return r.cond(n)
+}
+
+// leaf renders n as an operand that is no condition.
+func (r *render) leaf(n *partiql.Node) (string, error) {
 	switch {
 	case n.Kind == partiql.KindPath:
 		return r.userPath(n.Path)
@@ -127,14 +134,10 @@ func (r *render) operand(n *partiql.Node) (string, error) {
 	case n.Kind == partiql.KindCall:
 		return r.call(n)
 	case n.Kind == partiql.KindArith:
-		// A sum has no place in a condition; handing it to cond would hand it
-		// back here, without end.
+		// A sum has no place in a condition.
 		return "", value.Invalid(msgConditionOperator + n.Op)
-	case isConditionKind(n.Kind):
-		return r.cond(n)
 	default:
-		// cond hands what it does not render here: a kind neither knows must
-		// end here, not go back.
+		// A kind cond does not render and neither does leaf has no rendering.
 		return "", fmt.Errorf("%w: %d", errNodeKind, n.Kind)
 	}
 }
@@ -143,23 +146,12 @@ func (r *render) operand(n *partiql.Node) (string, error) {
 // parser does not make.
 var errNodeKind = errors.New("partiql: no rendering for a node of this kind")
 
-// isConditionKind reports whether cond renders a node of kind k itself.
-func isConditionKind(k partiql.Kind) bool {
-	switch k {
-	case partiql.KindAnd, partiql.KindOr, partiql.KindNot, partiql.KindCompare, partiql.KindBetween,
-		partiql.KindIn, partiql.KindIsNull, partiql.KindIsMissing:
-		return true
-	default:
-		return false
-	}
-}
-
 // userPath is the path a statement wrote, rendered with its names as
 // placeholders, or the image's refusal of a step that names an empty string,
 // made where the image makes it: as the path is put to use, in the order of the
 // statement's expressions (SQ-418 p2a e1, p2b o).
 func (r *render) userPath(p partiql.Path) (string, error) {
-	if p.Empty() {
+	if p.HasEmptyStep() {
 		return "", value.Invalid(msgEmptyComponent)
 	}
 
@@ -202,7 +194,7 @@ func (*render) callWith(n *partiql.Node, arg func(*partiql.Node) (string, error)
 	return n.Name + "(" + strings.Join(args, ", ") + ")", nil
 }
 
-// cond renders n as a condition.
+// cond renders n as a condition, or as the operand it is when it is none.
 func (r *render) cond(n *partiql.Node) (string, error) {
 	switch n.Kind {
 	case partiql.KindAnd, partiql.KindOr:
@@ -234,7 +226,7 @@ func (r *render) cond(n *partiql.Node) (string, error) {
 	case partiql.KindIsNull, partiql.KindIsMissing:
 		return r.is(n)
 	default:
-		return r.operand(n)
+		return r.leaf(n)
 	}
 }
 
