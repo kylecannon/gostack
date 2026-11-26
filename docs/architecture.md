@@ -960,11 +960,15 @@ memory.
   legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
   served, and so are as many as fill the pool when they all decode at the same
   moment. A 1 MiB json body takes about 3 MiB of the pool with its decode
-  room, so 21 such bodies held unfinished fill it; a 22nd that waits more than
-  5 s for one of them to end is throttled. 64 bodies of 16 MiB sent at once
-  with a Content-Length are admitted one at a time: on a non-race build all 64
-  are answered (400 `SerializationException`, their nesting) within 0.9 to
-  1.0 s, and the process peaks at 105 MiB RSS.
+  room. Measured (SQ-434, local non-race build, 1,048,477-byte SQS
+  `SendMessage` bodies held one byte short): with 20 held, one more is served
+  in 0.01 s; with 21 held, one more is throttled at the 5 s wait. So each
+  holds between 2.9 and 3.05 MiB, and 21 fill the pool. 64 bodies of 16 MiB of
+  `[` sent at once with a Content-Length to DynamoDB `PutItem` are admitted
+  one at a time: on a non-race build all 64 are answered (400
+  `SerializationException`, their nesting) in 0.51 to 0.53 s, and the process
+  peaks at 104 to 108 MiB RSS (three runs). SQS refuses the same bodies by
+  their stated length, all 64 within 0.25 s.
 - A form's decoding charges its pairs, not its text (`protocol.FormDecode`
   0), and a value that needs unescaping is the one copy it makes past the
   body: `query.unescape` builds it in one buffer of the value's length, with
@@ -974,11 +978,18 @@ memory.
   stated 16 MiB STS forms whose `Policy` is all `+` peak at 309 to 342 MiB
   RSS (587 MiB before), all `%41` at 292 to 425 MiB (396 to 433 MiB before),
   and 64 stated 6 MiB SQS forms of `+` at 333 to 443 MiB (594 to 731 MiB
-  before).
+  before). In the Linux image under `--memory 512m`, a fresh container per
+  run, the server process peaks at 313 to 335 MiB for the `+` STS forms
+  stated, 303 to 320 MiB sent chunked, 269 to 286 MiB for `%41` and 162 to
+  248 MiB for the SQS forms; the container never reaches its limit and no
+  run is OOM-killed. That leaves the copy uncharged.
 - At shutdown a body or decoding waiting for room is answered at once with
   its service's throttle (`protocol.StopWaitsWith`, closed as the gateway
   begins to stop); before, it was cut with no answer when the drain ended.
-  `Test_BodyPool_StopEndsTheWaits`.
+  The stop stays closed through the drain, so a wait that begins after it, a
+  step, a decoding's `Cover` or a call one service makes to another through
+  the gateway, is answered with the throttle as well.
+  `Test_BodyPool_StopEndsTheWaits`, `Test_Gateway_ShutdownAnswersQueuedBodies`.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,
