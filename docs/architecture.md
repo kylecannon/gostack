@@ -949,9 +949,13 @@ memory.
   answers them in waves of the wait. A decoding that has decoded nothing yet
   gives back its room while it waits (a dense json body), and a body of
   unknown length grows only in steps that leave every such body a way to its
-  end: 128 chunked or gzip 1 MiB `SendMessage` calls sent at once are all
-  served in about 0.4 s, and 64 chunked 16 MiB ones are all read and answered
-  in about 1.5 s. Bodies that state their length and decode within their plan
+  end. Measured on local non-race builds, ten runs each (SQ-434): 128 chunked
+  1 MiB json `SendMessage` calls sent at once are all served in 0.45 to
+  0.51 s; 64 chunked 16 MiB json `PutItem` bodies (a claim of about 48 MiB
+  each) are all read and answered, 400 `ValidationException`, in 1.5 to
+  1.9 s; 64 chunked 16 MiB STS `AssumeRole` forms in 1.0 to 1.2 s. SQS refuses
+  a body past its longest valid request as it is read, so it has no 16 MiB
+  row. Bodies that state their length and decode within their plan
   never wait while they hold part of the pool: 128
   legal 1 MiB `SendMessage` calls sent at once to a fresh process are all
   served, and so are as many as fill the pool when they all decode at the same
@@ -961,6 +965,20 @@ memory.
   with a Content-Length are admitted one at a time: on a non-race build all 64
   are answered (400 `SerializationException`, their nesting) within 0.9 to
   1.0 s, and the process peaks at 105 MiB RSS.
+- A form's decoding charges its pairs, not its text (`protocol.FormDecode`
+  0), and a value that needs unescaping is the one copy it makes past the
+  body: `query.unescape` builds it in one buffer of the value's length, with
+  no copy of the run it decodes (`Test_unescape_OneCopy`,
+  `Fuzz_unescape_matchesTheBufferedDecoding`). That copy is not charged.
+  Measured on local darwin non-race builds, three runs each (SQ-434): 64
+  stated 16 MiB STS forms whose `Policy` is all `+` peak at 309 to 342 MiB
+  RSS (587 MiB before), all `%41` at 292 to 425 MiB (396 to 433 MiB before),
+  and 64 stated 6 MiB SQS forms of `+` at 333 to 443 MiB (594 to 731 MiB
+  before).
+- At shutdown a body or decoding waiting for room is answered at once with
+  its service's throttle (`protocol.StopWaitsWith`, closed as the gateway
+  begins to stop); before, it was cut with no answer when the drain ended.
+  `Test_BodyPool_StopEndsTheWaits`.
 
 `Test_Gateway_WideBodies`, `Test_Gateway_DenseBodiesNearTheBudget`,
 `Test_Gateway_InFlightBound`, `Test_Gateway_DecodeChargeBound`,

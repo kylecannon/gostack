@@ -400,20 +400,35 @@ func (p *bodyPool) regrow(ctx context.Context, held, want int64) error {
 	return p.wait(ctx, w, &p.growing)
 }
 
-// wait waits for w, in queue, to be granted, until ctx ends or the body wait
-// (SetBodyWait) passes; then it takes w out of queue, or gives back what it
-// was granted as it gave up, and fails with ErrBusy.
+type stopKey struct{}
+
+// StopWaitsWith returns ctx carrying stop: a body or decoding of the request
+// whose context is ctx that waits for room in the in-flight bound stops waiting
+// and fails with ErrBusy when stop closes. The gateway closes it as it begins
+// to shut down, so a body it queued is answered with its service's throttle
+// within the drain, not cut when the drain ends.
+func StopWaitsWith(ctx context.Context, stop <-chan struct{}) context.Context {
+	return context.WithValue(ctx, stopKey{}, stop)
+}
+
+// wait waits for w, in queue, to be granted, until ctx ends, the body wait
+// (SetBodyWait) passes or the request's stop (StopWaitsWith) closes; then it
+// takes w out of queue, or gives back what it was granted as it gave up, and
+// fails with ErrBusy.
 func (p *bodyPool) wait(ctx context.Context, w *bodyWaiter, queue *[]*bodyWaiter) error {
 	n := w.n
 
 	timer := time.NewTimer(time.Duration(bodyWait.Load()))
 	defer timer.Stop()
 
+	stop, _ := ctx.Value(stopKey{}).(<-chan struct{})
+
 	select {
 	case <-w.ready:
 		return nil
 	case <-ctx.Done():
 	case <-timer.C:
+	case <-stop:
 	}
 
 	p.mu.Lock()

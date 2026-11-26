@@ -100,7 +100,12 @@ func unescape(s string) string {
 		return s
 	}
 
+	// What unescaping writes is never longer than s: a percent-escape that
+	// stays one writes its three characters again, and everything else as
+	// long or shorter. So the value is built in one buffer of that length, and
+	// is the one copy a form's decoding makes of its text.
 	var out strings.Builder
+	out.Grow(len(s))
 
 	for len(s) > 0 {
 		run := 0
@@ -124,33 +129,58 @@ func unescape(s string) string {
 	return out.String()
 }
 
-// unescapeRun decodes one run of ASCII characters.
+// unescapeRun decodes one run of ASCII characters into out as it reads it,
+// with no copy of the run: a byte decoded past ASCII is written with the bytes
+// decoded after it that make one UTF-8 character, and one that starts none
+// stays escaped, upper case.
 func unescapeRun(out *strings.Builder, run string) {
-	decoded := make([]byte, 0, len(run))
+	for i := 0; i < len(run); {
+		c, next := decodeByte(run, i)
+		if c < asciiLimit {
+			out.WriteByte(c)
+			i = next
 
-	for i := 0; i < len(run); i++ {
-		switch c := run[i]; {
-		case c == '+':
-			decoded = append(decoded, ' ')
-		case c == '%' && i+2 < len(run) && isHex(run[i+1]) && isHex(run[i+2]):
-			decoded = append(decoded, unhex(run[i+1])<<4|unhex(run[i+2]))
-			i += 2
-		default:
-			decoded = append(decoded, c)
+			continue
 		}
-	}
 
-	for len(decoded) > 0 {
-		r, size := utf8.DecodeRune(decoded)
+		// utf8.DecodeRune reads at most UTFMax bytes, so these decide it.
+		var (
+			seq  [utf8.UTFMax]byte
+			ends [utf8.UTFMax]int
+		)
+
+		seq[0], ends[0] = c, next
+		n := 1
+
+		for ; n < utf8.UTFMax && ends[n-1] < len(run); n++ {
+			seq[n], ends[n] = decodeByte(run, ends[n-1])
+		}
+
+		r, size := utf8.DecodeRune(seq[:n])
 		if r == utf8.RuneError && size == 1 {
 			out.WriteByte('%')
-			out.WriteByte(hexUpper[decoded[0]>>4])
-			out.WriteByte(hexUpper[decoded[0]&0x0f])
-		} else {
-			out.Write(decoded[:size])
+			out.WriteByte(hexUpper[c>>4])
+			out.WriteByte(hexUpper[c&0x0f])
+			i = next
+
+			continue
 		}
 
-		decoded = decoded[size:]
+		out.Write(seq[:size])
+		i = ends[size-1]
+	}
+}
+
+// decodeByte decodes the byte of run at i: a plus is a space and a valid
+// percent-escape its byte. It returns where the next one starts.
+func decodeByte(run string, i int) (byte, int) {
+	switch c := run[i]; {
+	case c == '+':
+		return ' ', i + 1
+	case c == '%' && i+2 < len(run) && isHex(run[i+1]) && isHex(run[i+2]):
+		return unhex(run[i+1])<<4 | unhex(run[i+2]), i + 3 //nolint:mnd // a percent-escape is three characters
+	default:
+		return c, i + 1
 	}
 }
 
