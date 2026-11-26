@@ -571,3 +571,111 @@
   reason: product code is identical; on main a process sometimes enters a lower-GC heap mode after the unkeyed 4 KiB concurrency=16 PartiQLSelect cells and runs this cell 17-35% faster (fast in 2-10 of 22 runs); the change cuts those cells, so the head is always in the normal mode, and main with only the head's PartiQL cells is fast 0 of 6
   pr: 84
   commit: bf12e75cdedda38fe7acdc4a661c5a08f9653179
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=1
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=1
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=16
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=64
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_384/payload=4KiB/concurrency=64
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=1
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=1
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=16
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=16
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=64
+  unit: sec/op
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/kms
+  benchmark: VerifyMac/proto=json/spec=HMAC_512/payload=4KiB/concurrency=64
+  unit: B/s
+  max: +30%
+  reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
+  pr: 86
+  commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
