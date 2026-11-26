@@ -71,7 +71,10 @@ type itemPayload struct {
 // gate's runners (ten runs, bench run 45505878281 of PR 84) PutItem at 399 KiB
 // and concurrency 64, 25.5 MB, took 12.3 to 14.1 ms, and 14.0 to 16.8 ms with
 // persist=on; at 16, 6.4 MB, it took 3.7 to 4.0 ms, and 4.2 to 4.5 ms with
-// persist=on, which the budget keeps. GetItem reads the same bytes in at most
+// persist=on, which the budget keeps. On the slower runner of bench run
+// 45732740061 (1.65 times this family's time) the cells at 16 took 5.1 to
+// 6.0 ms and, with persist=on, 5.8 to 7.1 ms: the dearest cell kept, over the
+// 6.5 ms margin and under 8. GetItem reads the same bytes in at most
 // 4.4 ms (399 KiB at 64), so keeps every cell (unbudgeted).
 const maxIterationPutBytes = 8 << 20
 

@@ -104,6 +104,7 @@ func BenchmarkPartiQLSelectWidth(b *testing.B) {
 // gate's runners (bench run 45505878281 of PR 84), for the cells at its edge:
 //
 //	top, 1,000 items, 1,000 paths, 1 worker (5,000 units)    7.7 ms  kept
+//	                (7.4 ms in run 45732740061, the slower runner, the dearest kept)
 //	nested, 100 items, 601 paths, 1 worker (6,260)           5.5 ms  kept
 //	nested, 100 items, 1,000 paths, 1 worker (10,350)       11.9 ms  left out
 //	top, 1,000 items, 1 path, 16 workers (16,064)           11.5 ms  left out
