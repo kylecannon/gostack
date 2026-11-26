@@ -34,7 +34,7 @@ import (
 //     (protocol.TakeDenseLane), and another that arrives while one is walked and
 //     decoded waits its turn in the dense queue (protocol.WaitDense), so an
 //     iteration of 16 or 64 of them takes 16 or 64 times one, past the time
-//     limit below. The queue's matrix is BenchmarkDenseAdmission.
+//     limit below. BenchmarkDenseAdmission measures the smallest such bodies.
 //   - A cell whose iteration costs more than maxDecodeMicros
 //     (decodeBody.microsPerKB) is left out, so that the gate makes at least 50
 //     iterations and the slowest of its runs is at most 8 ms (docs/standards.md,
@@ -206,57 +206,54 @@ func passesBudget(b *testing.B, operation, body string) bool {
 
 // BenchmarkDenseAdmission is the dense queue's matrix: a PutItem whose body
 // passes protocol.DecodeBudget, sent through the real gateway with the
-// in-flight bound set, from concurrency workers at once. One iteration is one
-// call from each worker. At concurrency 1 the body finds no queue, the calls
-// main makes; at 2 one worker's body waits in the dense queue
-// (protocol.WaitDense) for the other's to give back the lane, and none is
-// throttled. The bodies are lists nested to DynamoDB's depth limit
-// (nestedLists), the cheapest to decode of the bodies that pass the budget:
-// the smallest such body, 342 lists in 85 KB, is served in 3 ms, where a list
-// of numbers past the budget takes 18 ms. Sub-benchmark names carry the axes,
-// for example
+// in-flight bound set, at concurrency 1: the body finds no queue, the calls main
+// makes. The bodies are lists nested to DynamoDB's depth limit (nestedLists),
+// the cheapest to decode of the bodies that pass the budget: the budget is
+// protocol.DecodeSlack (16 MiB) and twice the body, so the smallest such body,
+// 342 lists in 85 KB, decodes 16 MiB, and a list of numbers past the budget
+// takes 18 ms. Sub-benchmark names carry the axes, for example
 //
-//	BenchmarkDenseAdmission/body=88KB/concurrency=2
+//	BenchmarkDenseAdmission/body=88KB/concurrency=1
 //
-// Cells left out, and why: concurrency 4 of the 88 KB body and 2 of the 150 KB
-// one, which serve their bodies one after another: four of 3 ms and two of
-// 5 ms, near the 10 ms limit. The slowest operations of the cells kept, over
-// three runs at the gate's benchtime: 3.0 ms and 4.9 ms for the 88 KB body at
-// concurrency 1 and 2, and 5.0 ms for the 150 KB one.
+// Cells left out, and why: a body that waits in the dense queue
+// (protocol.WaitDense) for another's to give back the lane, which is
+// concurrency 2 of the 88 KB body, and 4 of it, 2 of the 150 KB one, which
+// serve their bodies one after another. No body is smaller than 85 KB, so two
+// of them cost two of the 4.4 ms (median) one takes: the 88 KB body at 2 took
+// 7.3 to 9.2 ms (median 7.6) on the gate's runners, 4 CPUs, ten runs, bench run
+// 45727425239 of PR 84, over the 8 ms a cell is held to, and a 150 KB body at 1,
+// 7.0 to 9.4 ms (median 7.4), which is now 100 KB (400 lists) at about 5 ms. The
+// queue's waits are held by tests, not a benchmark:
+// Test_decodeBudget_twoDenseSendersInAClosedLoopAreAllServed
+// (decode-budget-queue_test.go) and the queue's own in internal/protocol. The
+// 88 KB cell kept took 4.2 to 5.2 ms in that run. The 100 KB cell is not timed
+// on the runners: a Mac of 10 CPUs took 3.4 to 3.6 ms for it and 3.0 to 3.3 ms
+// for the 88 KB body, where the 150 KB body took 5.1 to 5.3 ms (local, five
+// runs), which the runner timed at 7.0 to 9.4 ms, so 100 KB is about 5 ms
+// there.
 func BenchmarkDenseAdmission(b *testing.B) {
 	roomyMemoryLimit(b)
 	protocol.SetInFlight(protocol.DefaultInFlight)
 	b.Cleanup(func() { protocol.SetInFlight(0) })
 
 	for _, size := range []struct {
-		name   string
-		lists  int
-		widest int
-	}{{"88KB", 350, 2}, {"150KB", 600, 1}} {
-		for _, workers := range []int{1, 2} {
-			if workers > size.widest {
-				continue
+		name  string
+		lists int
+	}{{"88KB", 350}, {"100KB", 400}} {
+		bodies := []string{`{"TableName":"missing","Item":` + denseItem("n0", nestedLists(size.lists)) + `}`}
+
+		require.True(b, passesBudget(b, opPut, bodies[0]), "the body takes the dense lane")
+
+		b.Run(fmt.Sprintf("body=%s/concurrency=1", size.name), func(b *testing.B) {
+			s := newStack(b)
+
+			b.SetBytes(int64(len(bodies[0])))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				require.NoError(b, notFound(b, s, opPut, bodies))
 			}
-
-			bodies := make([]string, workers)
-			for worker := range workers {
-				bodies[worker] = `{"TableName":"missing","Item":` +
-					denseItem(fmt.Sprint("n", worker), nestedLists(size.lists)) + `}`
-			}
-
-			require.True(b, passesBudget(b, opPut, bodies[0]), "the body takes the dense lane")
-
-			b.Run(fmt.Sprintf("body=%s/concurrency=%d", size.name, workers), func(b *testing.B) {
-				s := newStack(b)
-
-				b.SetBytes(int64(len(bodies[0]) * workers))
-				b.ReportAllocs()
-
-				for b.Loop() {
-					require.NoError(b, notFound(b, s, opPut, bodies))
-				}
-			})
-		}
+		})
 	}
 }
 
