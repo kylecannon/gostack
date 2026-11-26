@@ -237,7 +237,10 @@ func Test_BodyPool_APassedOverFirstStepIsAnsweredAtItsWait(t *testing.T) {
 			m, callCtx := meteredBody(t, passMiB, passMiB)
 			_, err := ReadBody(m, passMiB)
 			require.NoError(t, err, "stated body %d is admitted", passed)
-			assert.Less(t, time.Since(called), 100*time.Millisecond, "stated body %d passes at once", passed)
+			// Well inside the wait, which a body held up by the first step
+			// would wait out; at -race -count=20 beside the gateway's tests
+			// one read of 1 MiB took 139 ms.
+			assert.Less(t, time.Since(called), wait/2, "stated body %d passes without waiting on it", passed)
 			ReleaseBody(callCtx)
 
 			passed++
