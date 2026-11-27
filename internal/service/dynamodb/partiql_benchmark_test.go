@@ -19,21 +19,15 @@ import (
 // following NextToken or LastEvaluatedKey. Names carry the axes, for example
 //
 //	BenchmarkPartiQLSelect/items=100/payload=4KiB/read=unkeyed/via=statement/concurrency=16
+//
+// The cells run concurrency by concurrency, each on a stack of its own
+// (itemConcurrency).
 func BenchmarkPartiQLSelect(b *testing.B) {
-	for _, n := range []int{1, 100} {
-		for _, payload := range readPayloads {
-			b.Run(fmt.Sprintf("items=%d/payload=%s", n, payload.name), func(b *testing.B) {
-				s := newStack(b)
-				s.ok(b, opCreate, readTable)
-
-				data := strings.Repeat("x", payload.size)
-				for i := range n {
-					s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
-						`"},"g":{"S":"G"},"d":{"S":"`+data+`"}}}`)
-				}
-
-				selectCells(b, s, n, payload.size)
-			})
+	for _, workers := range readConcurrency {
+		for _, n := range []int{1, 100} {
+			for _, payload := range readPayloads {
+				selectCells(b, n, payload, workers)
+			}
 		}
 	}
 }
@@ -61,30 +55,33 @@ func BenchmarkPartiQLSelect(b *testing.B) {
 // 100 items. The list of ten is not timed on the runners: on a Mac of 10 CPUs
 // the slowest of five runs was 3.1 ms at 16 over 100 items (nested), 2.1 ms at
 // 1 over 1,000 items (local).
+//
+// The cells run concurrency by concurrency, each on a table of its own
+// (itemConcurrency).
 func BenchmarkPartiQLSelectWidth(b *testing.B) {
-	for _, n := range []int{100, 1000} {
-		s := newStack(b)
-		s.ok(b, opCreate, readTable)
-
-		for i := range n {
-			s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
-				`"},"g":{"S":"G"},"k0":{"S":"x"},"k1":{"S":"x"},"m":{"M":{"k0":{"S":"x"},"k1":{"S":"x"}}}}}`)
-		}
-
-		for _, paths := range []int{1, 10, 300, 601, 1000} {
-			for _, shape := range selectShapes {
-				cell := selectCell{
-					readUnkeyed, viaStatement, opStatement,
-					stmt("SELECT " + selectList(shape.prefix, paths) + " FROM bench"), n,
-				}
-
-				for _, workers := range readConcurrency {
+	for _, workers := range readConcurrency {
+		for _, n := range []int{100, 1000} {
+			for _, paths := range []int{1, 10, 300, 601, 1000} {
+				for _, shape := range selectShapes {
 					if tooSlowToGate(shape.units(n, paths, workers), selectWidthBudget) {
 						continue
 					}
 
+					cell := selectCell{
+						readUnkeyed, viaStatement, opStatement,
+						stmt("SELECT " + selectList(shape.prefix, paths) + " FROM bench"), n,
+					}
 					name := fmt.Sprintf("items=%d/paths=%d/shape=%s/concurrency=%d", n, paths, shape.name, workers)
+
 					b.Run(name, func(b *testing.B) {
+						s := newStack(b)
+						s.ok(b, opCreate, readTable)
+
+						for i := range n {
+							s.ok(b, opPut, `{"TableName":"bench","Item":{"pk":{"S":"a"},"sk":{"N":"`+strconv.Itoa(i)+
+								`"},"g":{"S":"G"},"k0":{"S":"x"},"k1":{"S":"x"},"m":{"M":{"k0":{"S":"x"},"k1":{"S":"x"}}}}}`)
+						}
+
 						b.ReportAllocs()
 
 						for b.Loop() {
@@ -266,12 +263,13 @@ type selectCell struct {
 }
 
 // selectCells runs each read, through a statement and through the call it
-// compiles to, at each concurrency whose iteration carries at most
+// compiles to, at workers callers when the iteration carries at most
 // maxIterationReadBytes, the budget of a Query and a Scan of the same bytes
 // (BenchmarkReads): 100 items of 4 KiB at 16 callers, 6.5 MB, took 6.0 to
 // 8.4 ms through the call and 6.8 to 9.9 ms through the statement on the gate's
-// runners (ten runs, bench run 45505878281 of PR 84), and are left out.
-func selectCells(b *testing.B, s *stack, n, size int) {
+// runners (ten runs, bench run 45505878281 of PR 84), and are left out. Each
+// cell reads n items of payload on a table of its own.
+func selectCells(b *testing.B, n int, payload itemPayload, workers int) {
 	b.Helper()
 
 	cells := []selectCell{
@@ -285,21 +283,22 @@ func selectCells(b *testing.B, s *stack, n, size int) {
 	}
 
 	for _, cell := range cells {
-		for _, workers := range readConcurrency {
-			if tooSlowToGate(cell.items*size*workers, maxIterationReadBytes) {
-				continue
-			}
-
-			name := fmt.Sprintf("read=%s/via=%s/concurrency=%d", cell.read, cell.via, workers)
-			b.Run(name, func(b *testing.B) {
-				b.SetBytes(int64(cell.items * size * workers))
-				b.ReportAllocs()
-
-				for b.Loop() {
-					require.NoError(b, fanOutErr(workers, func(int) error { return s.selectAll(b, cell) }))
-				}
-			})
+		if tooSlowToGate(cell.items*payload.size*workers, maxIterationReadBytes) {
+			continue
 		}
+
+		name := fmt.Sprintf("items=%d/payload=%s/read=%s/via=%s/concurrency=%d",
+			n, payload.name, cell.read, cell.via, workers)
+		b.Run(name, func(b *testing.B) {
+			s := filledReads(b, n, payload.size)
+
+			b.SetBytes(int64(cell.items * payload.size * workers))
+			b.ReportAllocs()
+
+			for b.Loop() {
+				require.NoError(b, fanOutErr(workers, func(int) error { return s.selectAll(b, cell) }))
+			}
+		})
 	}
 }
 

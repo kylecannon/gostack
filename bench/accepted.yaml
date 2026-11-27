@@ -679,3 +679,129 @@
   reason: no added work on this request (bytes and allocs equal, local A/B flat on arm64); the gateway frame grew 8 bytes, which moves where Go's amd64 SHA-512 assembly stores to the stack, and only the SHA-384/512 4 KiB cells shift, on two runner CPUs
   pr: 86
   commit: b0caed35e9f16d639c957240cdc9f18ecbb3ed7e
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=latin
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=latin
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=cjk
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=cjk
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=emoji
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=emoji
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=json
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=json
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=viet
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=viet
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=cjkascii
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=cjkascii
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=jsonpretty
+  unit: sec/op
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2
+
+- gate: benchstat
+  package: internal/service/dynamodb
+  benchmark: GetItem/payload=4KiB/concurrency=1/text=jsonpretty
+  unit: B/s
+  max: +30%
+  reason: product code is identical; on main this cell ran after the large concurrency=16/64 GetItem cells and reused their pooled response buffers, so it ran faster in some runs (base spread 6-17%); the change runs every concurrency=1 cell first, so the head measures it without them (spread 2-4%)
+  pr: 89
+  commit: 706ba500755913f6e0f363270a91534bfbbba0d2

@@ -38,6 +38,8 @@ var (
 	readSizes       = []int{1, 100, 500}
 	readPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}}
 	readConcurrency = []int{1, 16}
+	readSerial      = readConcurrency[:1]
+	readParallel    = readConcurrency[1:]
 	updateActions   = []int{1, 10, 50}
 	readFilters     = []struct{ name, expr string }{{"off", ""}, {"on", "attribute_exists(d)"}}
 )
@@ -54,23 +56,45 @@ const readTable = `{"TableName":"bench","BillingMode":"PAY_PER_REQUEST",` +
 	`"GlobalSecondaryIndexes":[{"IndexName":"gall","KeySchema":[{"AttributeName":"g","KeyType":"HASH"}],` +
 	`"Projection":{"ProjectionType":"ALL"}}]}`
 
+// BenchmarkReads runs its cells at concurrency 1 (the matrix, then the text
+// cells) before the ones at 16 (the matrix, then the paged reads), each cell on
+// a stack of its own: a read at 1 of the 1 MB pages leaves large buffers in the
+// json encoder, and the cells at 16 grow more (itemConcurrency).
 func BenchmarkReads(b *testing.B) {
-	for _, n := range readSizes {
-		for _, payload := range readPayloads {
-			b.Run(fmt.Sprintf("items=%d/payload=%s", n, payload.name), func(b *testing.B) {
-				readCells(b, filledReads(b, n, payload.size), n, payload.size)
-			})
+	readMatrix(b, readSerial)
+	readTexts(b)
+	readMatrix(b, readParallel)
+	pagedReads(b)
+}
+
+// readMatrix runs readCells for every number of items and payload at each of
+// concurrencies, in order.
+func readMatrix(b *testing.B, concurrencies []int) {
+	b.Helper()
+
+	for _, workers := range concurrencies {
+		for _, n := range readSizes {
+			for _, payload := range readPayloads {
+				readCells(b, n, payload, workers)
+			}
 		}
 	}
+}
 
-	pagedReads(b)
+// readTexts runs the text cells: a Query of 100 items of 4 KiB of each text, at
+// concurrency 1.
+func readTexts(b *testing.B) {
+	b.Helper()
 
 	const textItems = 100
 
-	for _, text := range itemTexts {
-		payload := readPayloads[1]
+	payload := readPayloads[1]
 
-		b.Run(fmt.Sprintf("items=%d/payload=%s/text=%s", textItems, payload.name, text.name), func(b *testing.B) {
+	for _, text := range itemTexts {
+		name := fmt.Sprintf("items=%d/payload=%s/text=%s/op=Query/target=table/filter=off/concurrency=1",
+			textItems, payload.name, text.name)
+
+		b.Run(name, func(b *testing.B) {
 			s := newStack(b)
 			s.ok(b, opCreate, readTable)
 
@@ -84,14 +108,12 @@ func BenchmarkReads(b *testing.B) {
 
 			body := readBody(opQuery, "table", "")
 
-			b.Run("op=Query/target=table/filter=off/concurrency=1", func(b *testing.B) {
-				b.SetBytes(int64(textItems * payload.size))
-				b.ReportAllocs()
+			b.SetBytes(int64(textItems * payload.size))
+			b.ReportAllocs()
 
-				for b.Loop() {
-					require.NoError(b, s.readAll(b, opQuery, body, textItems))
-				}
-			})
+			for b.Loop() {
+				require.NoError(b, s.readAll(b, opQuery, body, textItems))
+			}
 		})
 	}
 }
@@ -129,22 +151,22 @@ func pagedReads(b *testing.B) {
 
 	payload := readPayloads[0]
 
-	b.Run(fmt.Sprintf("items=%d/payload=%s/limit=%d", n, payload.name, limit), func(b *testing.B) {
-		s := filledReads(b, n, payload.size)
+	for _, op := range []string{opQuery, opScan} {
+		body := readBody(op, "table", "") + fmt.Sprintf(`,"Limit":%d`, limit)
+		name := fmt.Sprintf("items=%d/payload=%s/limit=%d/op=%s/target=table/filter=off/concurrency=%d",
+			n, payload.name, limit, op, workers)
 
-		for _, op := range []string{opQuery, opScan} {
-			body := readBody(op, "table", "") + fmt.Sprintf(`,"Limit":%d`, limit)
+		b.Run(name, func(b *testing.B) {
+			s := filledReads(b, n, payload.size)
 
-			b.Run(fmt.Sprintf("op=%s/target=table/filter=off/concurrency=%d", op, workers), func(b *testing.B) {
-				b.SetBytes(int64(n * payload.size * workers))
-				b.ReportAllocs()
+			b.SetBytes(int64(n * payload.size * workers))
+			b.ReportAllocs()
 
-				for b.Loop() {
-					require.NoError(b, fanOutErr(workers, func(int) error { return s.readAll(b, op, body, n) }))
-				}
-			})
-		}
-	})
+			for b.Loop() {
+				require.NoError(b, fanOutErr(workers, func(int) error { return s.readAll(b, op, body, n) }))
+			}
+		})
+	}
 }
 
 // What one iteration of a read cell may carry, counted over its workers
@@ -182,31 +204,32 @@ func readTooSlow(n, size, workers int, filter string) bool {
 	return tooSlowToGate(items, maxIterationReadItems) || tooSlowToGate(n*size*workers, maxIterationReadBytes)
 }
 
-// readCells runs every operation, target, filter and concurrency over the
-// filled table that readTooSlow leaves in.
-func readCells(b *testing.B, s *stack, n, size int) {
+// readCells runs every operation, target and filter at workers callers over
+// n items of payload, on a table of its own, that readTooSlow leaves in.
+func readCells(b *testing.B, n int, payload itemPayload, workers int) {
 	b.Helper()
 
 	for _, op := range []string{opQuery, opScan} {
 		for _, target := range []string{"table", targetGSI} {
 			for _, filter := range readFilters {
-				body := readBody(op, target, filter.expr)
-
-				for _, workers := range readConcurrency {
-					if readTooSlow(n, size, workers, filter.expr) {
-						continue
-					}
-
-					name := fmt.Sprintf("op=%s/target=%s/filter=%s/concurrency=%d", op, target, filter.name, workers)
-					b.Run(name, func(b *testing.B) {
-						b.SetBytes(int64(n * size * workers))
-						b.ReportAllocs()
-
-						for b.Loop() {
-							require.NoError(b, fanOutErr(workers, func(int) error { return s.readAll(b, op, body, n) }))
-						}
-					})
+				if readTooSlow(n, payload.size, workers, filter.expr) {
+					continue
 				}
+
+				body := readBody(op, target, filter.expr)
+				name := fmt.Sprintf("items=%d/payload=%s/op=%s/target=%s/filter=%s/concurrency=%d",
+					n, payload.name, op, target, filter.name, workers)
+
+				b.Run(name, func(b *testing.B) {
+					s := filledReads(b, n, payload.size)
+
+					b.SetBytes(int64(n * payload.size * workers))
+					b.ReportAllocs()
+
+					for b.Loop() {
+						require.NoError(b, fanOutErr(workers, func(int) error { return s.readAll(b, op, body, n) }))
+					}
+				})
 			}
 		}
 	}
