@@ -51,6 +51,11 @@ const (
 
 	// maxReceiveCountLimit is the largest maxReceiveCount of a RedrivePolicy.
 	maxReceiveCountLimit = 1000
+
+	// maxPolicyBytes is the longest Policy and RedrivePolicy a queue takes: the
+	// SQS policy quotas' "Bytes: 8,192". It is checked before either is parsed,
+	// so a policy that would parse into a wide tree is refused at its length.
+	maxPolicyBytes = 8192
 )
 
 // knownAttributes holds every name the QueueAttributeName enum has.
@@ -203,6 +208,14 @@ func validateAttributes(kind queueKind, attrs map[string]string) *awserr.Error {
 			return sqsapi.NewInvalidAttributeValue(
 				"Invalid value for the parameter " + r.name + ". Reason: " + r.reason() + ".")
 		}
+	}
+
+	if len(attrs[attrPolicy]) > maxPolicyBytes {
+		return sqsapi.NewInvalidAttributeValue("Invalid value for the parameter Policy.")
+	}
+
+	if len(attrs[attrRedrivePolicy]) > maxPolicyBytes {
+		return invalidParameterValue("Invalid value for the parameter RedrivePolicy.")
 	}
 
 	if kind == kindFIFO {

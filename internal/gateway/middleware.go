@@ -73,14 +73,13 @@ func ServedAsInternal(ctx context.Context) bool {
 }
 
 // markInternal is root step 1. A header that does not hold a json object is
-// ignored, as LocalStack ignores a parameter blob it cannot load.
+// ignored, as LocalStack ignores a parameter blob it cannot load. Nothing reads
+// the object's members, so the header is checked without decoding it: decoded,
+// a header of 900 KiB of {} held about 20 times its length (SQ-317).
 func markInternal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if value := r.Header.Get(internalRequestHeader); value != "" {
-			var params map[string]any
-
-			err := json.Unmarshal([]byte(value), &params)
-			if readable := err == nil && params != nil; readable {
+			if isJSONObject(value) {
 				r = r.WithContext(context.WithValue(r.Context(), internalKey{}, true))
 			} else {
 				slog.WarnContext(r.Context(), "ignoring unreadable internal request parameters")
@@ -89,6 +88,14 @@ func markInternal(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isJSONObject reports whether value is one json object, as json.Unmarshal
+// into a map would take it, without building the map.
+func isJSONObject(value string) bool {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+
+	return trimmed != "" && trimmed[0] == '{' && json.Valid([]byte(value))
 }
 
 // shutdownGuard is root step 2, LocalStack's RuntimeShutdownHandler. Once the

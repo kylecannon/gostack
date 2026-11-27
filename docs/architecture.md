@@ -290,19 +290,46 @@ allocates is at most four times its decoded size plus a constant
 that would pass a bound is refused with its protocol's own error before the
 allocation. `docs/compat.md` lists the answers.
 
-Open: these paths take client bytes the rule does not yet bound, and stay as
-they are on `main`. Each is filed on its own.
+Paths outside the decoders, bounded on their own:
 
-- Policy documents a service parses after decoding: SQS `SetQueueAttributes`
-  `Policy` and `AddPermission`, S3 `PutBucketPolicy`, STS
-  `AssumeRoleWithSAML`. Their nesting is bounded; their width is not.
-- The `x-localstack-data` header, parsed as json in `markInternal`.
-- `POST /_localstack/health`.
-- The part headers of an S3 browser POST upload.
-- SQS `SetQueueAttributes` `RedrivePolicy`, parsed into a generic tree
-  (`sqs/redrive.go`): 16 KB of gzip reaches 665 MiB.
+- Documents a service parses after decoding are held to AWS's length before
+  they are parsed: an SQS `Policy` or `RedrivePolicy` to 8,192 bytes, which
+  also holds every policy `AddPermission` and `RemovePermission` write
+  (`sqs.storePolicy`; past it the write is refused with `OverLimit`), an S3
+  bucket policy to 20 KB, an STS SAML assertion to botocore's 100,000
+  characters. `docs/compat.md` lists the answers.
+- The `x-localstack-data` header is checked with `json.Valid` in
+  `markInternal` and never decoded; net/http's 1 MiB header limit bounds its
+  length.
+- The internal API's json bodies (`/_localstack/health` POST and PUT, the
+  config update) are read through `protocol.ReadRequest` and charge 64 times
+  their length for decoding (`internalapi.genericDecode`), so they hold the
+  in-flight bound as a service's body does. A body of 16 KiB or less charges
+  nothing, its decoding fitting in `protocol.FreeDecode`, and the charge stops
+  at the bound less one body share. Their 1 MiB cap is the body meter's bound
+  (`protocol.BoundBody`), and only a metered body is bounded by the meter: one
+  that states a longer length is refused before it is read past
+  `protocol.FreeBody`, and one of unknown length can be read to about 2 MiB
+  before it is refused. An in-process body has no meter and is bounded by
+  `GOSTACK_MAX_REQUEST_BODY`, then checked against the cap. With no room,
+  health and a config update answer `503`.
+- An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
+  before its file part (`s3.preDataReader`), so a part header cannot grow
+  past it.
+
+Open: these paths stay as they are on `main`.
+
+- S3 answers before reading the body. A handler that answers without reading
+  its body to the end (`PutObject` to a bucket that does not exist) leaves
+  net/http to read up to 256 KiB of the rest before it writes the answer, with
+  no deadline. A client that sends part of such a body and stops gets no
+  answer, and the connection and its goroutine stay open. SQ-320's probes saw
+  no answer in 4 s to such a `PutObject` with 1,000 of 60,000 bytes sent, and
+  none in 25 s to a `PUT ?lifecycle` stalled the same way, whose body of under
+  64 KiB is read with no idle deadline.
 - SSM `PutParameter` `Policies`, kept and parsed again by every
-  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call. It is filed
+  on its own.
 
 Settings, all read at start-up:
 
