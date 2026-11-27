@@ -24,9 +24,17 @@ func (a *api) getConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 // localstackUpdateConfig answers POST /_localstack/config. An invalid request is
-// a 400 with the body {}, as in LocalStack.
+// a 400 with the body {}, as in LocalStack; a body the in-flight bound has no
+// room for is a 503 (writeBusy), as for health.
 func (a *api) localstackUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	update, ok := parseConfigUpdate(w, r)
+	body, busy := decodeObject(r)
+	if busy {
+		writeBusy(w)
+
+		return
+	}
+
+	update, ok := parseConfigUpdate(body)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]any{})
 
@@ -44,7 +52,14 @@ func (a *api) localstackUpdateConfig(w http.ResponseWriter, r *http.Request) {
 // gostackUpdateConfig answers POST and PATCH /_gostack/config, with the same
 // request and response bodies as the LocalStack alias, and a message in the 400.
 func (a *api) gostackUpdateConfig(w http.ResponseWriter, r *http.Request) {
-	update, ok := parseConfigUpdate(w, r)
+	body, busy := decodeObject(r)
+	if busy {
+		writeBusy(w)
+
+		return
+	}
+
+	update, ok := parseConfigUpdate(body)
 	if !ok {
 		writeError(w, http.StatusBadRequest, `the body must be {"variable": "<NAME>", "value": <value>}`)
 
@@ -61,10 +76,9 @@ func (a *api) gostackUpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 // parseConfigUpdate reads {"variable": ..., "value": ...}. The variable must be
 // made of letters, digits and underscores. A number written as a string counts as
-// a number, as in LocalStack, where is_number converts it to a float.
-func parseConfigUpdate(w http.ResponseWriter, r *http.Request) (configUpdate, bool) {
-	// A body the in-flight bound has no room for is refused as an invalid one.
-	body, _ := decodeObject(w, r)
+// a number, as in LocalStack, where is_number converts it to a float. body is
+// the request's, as decodeObject returns it.
+func parseConfigUpdate(body map[string]any) (configUpdate, bool) {
 	variable, _ := body["variable"].(string)
 	if !variablePattern.MatchString(variable) {
 		return configUpdate{}, false

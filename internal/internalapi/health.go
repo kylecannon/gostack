@@ -59,7 +59,7 @@ func (a *api) ready(w http.ResponseWriter, r *http.Request) {
 // backdoor that restarts or stops the instance. An empty or invalid body is a
 // 400 and an unknown action does nothing, as in LocalStack's services/internal.py.
 func (a *api) healthAction(w http.ResponseWriter, r *http.Request) {
-	data, busy := decodeObject(w, r)
+	data, busy := decodeObject(r)
 	if busy {
 		writeBusy(w)
 
@@ -124,7 +124,7 @@ func (*api) localstackHealthHead(w http.ResponseWriter, _ *http.Request) {
 // localstackHealthPut answers PUT /_localstack/health: it stores arbitrary data
 // that GET reports back.
 func (a *api) localstackHealthPut(w http.ResponseWriter, r *http.Request) {
-	data, busy := decodeObject(w, r)
+	data, busy := decodeObject(r)
 	if busy {
 		writeBusy(w)
 
