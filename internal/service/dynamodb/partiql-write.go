@@ -19,6 +19,9 @@ const (
 	// msgExistsOnlyTx refuses an EXISTS outside ExecuteTransaction, in the
 	// image's words, which name no statement (SQ-467 image-probe.log).
 	msgExistsOnlyTx = "EXISTS can only be used in ExecuteTransaction write requests."
+	// msgUnsupportedTx refuses, inside a transaction, an EXISTS around an
+	// expression that is not a SELECT, as the image does (SQ-418 c4).
+	msgUnsupportedTx = "Unsupported operation in transaction."
 )
 
 // conditionFailedError is a ConditionalCheckFailedException that carries the item
@@ -62,20 +65,23 @@ type writeStatement struct {
 }
 
 // compileWrite compiles a write statement against its table. returnOld is
-// ReturnValuesOnConditionCheckFailure's ALL_OLD.
-//
-//nolint:revive // flag-parameter: what the request asked for, not a mode
+// ReturnValuesOnConditionCheckFailure's ALL_OLD. The statement's own mistakes
+// are named before the rest (refusedInOrder).
 func (c caller) compileWrite(
 	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
 ) (*writeStatement, error) {
-	name, e, err := c.statementTable(&stmt.Table)
-	if err != nil {
-		// DynamoDB Local looks an INSERT's table up without checking its name.
-		if stmt.Kind == partiql.Insert && isCode(err, codeValidation) {
-			return nil, api.NewResourceNotFoundException(msgTableNotFound)
-		}
+	return refusedInOrder(stmt, params, func() (*writeStatement, error) {
+		return c.writeItem(stmt, params, returnOld)
+	})
+}
 
-		return nil, fmt.Errorf("statement: %w", err)
+// writeItem is compileWrite's body: the statement against its table.
+func (c caller) writeItem(
+	stmt *partiql.Statement, params []api.AttributeValue, returnOld bool,
+) (*writeStatement, error) {
+	name, e, err := c.lookupWriteTable(stmt)
+	if err != nil {
+		return nil, err
 	}
 
 	key := e.data.Key()
@@ -84,6 +90,11 @@ func (c caller) compileWrite(
 
 	if stmt.Kind == partiql.Insert {
 		return w, w.compileInsert(stmt, key, r)
+	}
+
+	err = writeKeyPath(stmt.Where, key)
+	if err != nil {
+		return nil, err
 	}
 
 	var rest []*partiql.Node
@@ -100,10 +111,7 @@ func (c caller) compileWrite(
 
 	w.unwritten = keyOperators(key)
 
-	var onFailure *string
-	if returnOld {
-		onFailure = new(returnAllOld)
-	}
+	onFailure := oldOnFailure(returnOld)
 
 	switch stmt.Kind {
 	case partiql.Update:
@@ -131,6 +139,33 @@ func (c caller) compileWrite(
 	}
 
 	return w.checked(err)
+}
+
+// oldOnFailure is ReturnValuesOnConditionCheckFailure for a statement that asks
+// for the old item when its condition fails, nil when it does not.
+//
+//nolint:revive // flag-parameter: what the request asked for, not a mode
+func oldOnFailure(returnOld bool) *string {
+	if returnOld {
+		return new(returnAllOld)
+	}
+
+	return nil
+}
+
+// lookupWriteTable looks up the table of a write.
+func (c caller) lookupWriteTable(stmt *partiql.Statement) (string, *tableEntry, error) {
+	name, e, err := c.statementTable(&stmt.Table)
+	if err == nil {
+		return name, e, nil
+	}
+
+	// DynamoDB Local looks an INSERT's table up without checking its name.
+	if stmt.Kind == partiql.Insert && isCode(err, codeValidation) {
+		return "", nil, api.NewResourceNotFoundException(msgTableNotFound)
+	}
+
+	return "", nil, fmt.Errorf("statement: %w", err)
 }
 
 // checked is w when it compiled, err nil, and its expressions parse.
@@ -194,7 +229,9 @@ func keyOperators(key table.KeySchema) int {
 // checkStatementExprs parses a compiled statement's condition and update
 // expressions over its placeholders. rank is where the update's actions stand
 // in the statement, and unwritten the operators its WHERE wrote that cond does
-// not hold.
+// not hold. It does not check that every name and value is used: a SELECT's
+// refusals (ownRefusal) pass it the names of its list, which its condition does
+// not use, and depend on that.
 func checkStatementExprs(
 	names map[string]string, values map[string]api.AttributeValue, cond, update *string, rank []int, unwritten int,
 ) error {

@@ -34,10 +34,27 @@ type readStatement struct {
 }
 
 // compileRead compiles a SELECT that reads one item by its full key and
-// nothing else; any other answers errNotSingle.
+// nothing else; any other answers errNotSingle. The statement's own mistakes
+// are named before the rest (refusedInOrder).
 func (c caller) compileRead(
 	stmt *partiql.Statement, params []api.AttributeValue, consistent *bool,
 ) (*readStatement, error) {
+	return refusedInOrder(stmt, params, func() (*readStatement, error) {
+		return c.readItem(stmt, params, consistent)
+	})
+}
+
+// readItem is compileRead's body: the SELECT against its table.
+func (c caller) readItem(
+	stmt *partiql.Statement, params []api.AttributeValue, consistent *bool,
+) (*readStatement, error) {
+	r := newRender(params)
+
+	projected, nested, err := projection(stmt.Projection, r)
+	if err != nil {
+		return nil, err
+	}
+
 	name, e, err := c.statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
@@ -46,8 +63,6 @@ func (c caller) compileRead(
 	if stmt.Index != "" {
 		return nil, errNotSingle
 	}
-
-	r := newRender(params)
 
 	key, rest, err := singleItem(stmt.Where, e.data.Key(), r)
 
@@ -61,27 +76,7 @@ func (c caller) compileRead(
 	}
 
 	if len(rest) > 0 {
-		// The rest is refused as a filter, after its own errors: an unknown
-		// function or a wrong operand is named before the select is refused.
-		var filter string
-
-		filter, err = r.cond(joinAll(rest))
-		if err != nil {
-			return nil, err
-		}
-
-		err = checkStatementExprs(
-			r.attributeNames(), r.attributeValues(), &filter, nil, nil, keyOperators(e.data.Key()))
-		if err != nil {
-			return nil, err
-		}
-
 		return nil, errNotSingle
-	}
-
-	projected, nested, err := projection(stmt.Projection, r)
-	if err != nil {
-		return nil, err
 	}
 
 	if nested != nil {

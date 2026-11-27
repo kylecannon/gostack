@@ -98,6 +98,11 @@ func Test_Value_errors(t *testing.T) {
 			"missing", "INSERT INTO t VALUE {'id': 'k', 'm': MISSING}",
 			"Unsupported data type: MISSING under key root at 1:38:7",
 		},
+		{
+			// A token's length counts characters, as the image's does: 'é' is 3 (SQ-418).
+			"key of characters", "INSERT INTO t VALUE {'é': 'e', 'é': 'f'}",
+			"Duplicate keys in tuple. Key: é under root at 1:32:3",
+		},
 	}
 
 	for _, tc := range cases {
@@ -113,6 +118,97 @@ func Test_Value_errors(t *testing.T) {
 			require.Equal(t, tc.want, pe.Message)
 		})
 	}
+}
+
+// Test_Parse_orderGaps: the forms the image takes that the parser once refused
+// (SQ-418): a REMOVE of one path, a path step in quotes, an alias it parses and
+// leaves to the caller to refuse, and a comment in a block.
+func Test_Parse_orderGaps(t *testing.T) {
+	s, err := partiql.Parse("UPDATE t REMOVE a REMOVE b.c SET d = 1, e = 2 WHERE id = 'a'")
+	require.NoError(t, err)
+	require.Len(t, s.Actions, 4)
+
+	wantActions := []struct {
+		path  partiql.Path
+		value string
+	}{
+		{partiql.Path{{Name: "a"}}, ""},
+		{partiql.Path{{Name: "b"}, {Name: "c"}}, ""},
+		{partiql.Path{{Name: "d"}}, "1"},
+		{partiql.Path{{Name: "e"}}, "2"},
+	}
+	for i, want := range wantActions {
+		require.Equal(t, want.path, s.Actions[i].Path, i)
+
+		if want.value == "" {
+			require.Nil(t, s.Actions[i].Value, i)
+
+			continue
+		}
+
+		require.Equal(t, partiql.LitNumber, s.Actions[i].Value.Literal.Kind, i)
+		require.Equal(t, want.value, s.Actions[i].Value.Literal.Text, i)
+	}
+
+	for _, src := range []string{"UPDATE t REMOVE a, b WHERE id = 'a'", "UPDATE t REMOVE a, WHERE id = 'a'"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src)
+	}
+
+	for _, step := range []string{"m['x']", `m["x"]`, "m[x]", "m.x"} {
+		s, err = partiql.Parse("SELECT " + step + " FROM t")
+		require.NoError(t, err, step)
+		require.Equal(t, partiql.Path{{Name: "m"}, {Name: "x"}}, s.Projection[0], step)
+	}
+
+	s, err = partiql.Parse("SELECT m[1]['x'][2] FROM t")
+	require.NoError(t, err)
+	require.Equal(t, partiql.Path{{Name: "m"}, {Index: 1, IsIndex: true}, {Name: "x"}, {Index: 2, IsIndex: true}},
+		s.Projection[0])
+
+	// A step with no name parses: the image refuses it where the path is used.
+	for _, src := range []string{"SELECT m[''] FROM t", `SELECT m[""] FROM t`} {
+		s, err = partiql.Parse(src)
+		require.NoError(t, err, src)
+		require.True(t, s.Projection[0].HasEmptyStep(), src)
+		require.Equal(t, partiql.Path{{Name: "m"}, {Name: ""}}, s.Projection[0], src)
+	}
+
+	for _, src := range []string{"SELECT m[' FROM t", "SELECT m[''  FROM t", "SELECT m['' FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
+
+	aliases := map[string][2]bool{
+		"SELECT a AS z FROM t": {true, false}, "SELECT a z, b FROM t": {true, false}, "SELECT a FROM t u": {true, true},
+		"SELECT a FROM t AS u WHERE id = 1": {true, true}, "UPDATE t AS u SET a = 1": {true, true},
+		"DELETE FROM t u WHERE id = 1": {true, true}, "SELECT a FROM t WHERE id = 1": {false, false},
+	}
+	for src, want := range aliases {
+		s, err = partiql.Parse(src)
+		require.NoError(t, err, src)
+		require.Equal(t, want, [2]bool{s.Aliased, s.TableAliased}, src)
+	}
+
+	for _, src := range []string{"SELECT a AS FROM t", "SELECT * AS z FROM t", "SELECT a AS 'z' FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
+
+	s, err = partiql.Parse("SELECT /* a\n*/ a /**/ FROM /*/ b */ t -- c /*\n WHERE /* d */ id = 'x/*y*/'")
+	require.NoError(t, err)
+	require.Equal(t, "t", s.Table)
+	require.Equal(t, partiql.KindCompare, s.Where.Kind)
+	require.Equal(t, partiql.LitString, s.Where.Args[1].Literal.Kind)
+	require.Equal(t, "x/*y*/", s.Where.Args[1].Literal.Text, "a comment inside a string is the string's")
+
+	for _, src := range []string{"SELECT a FROM t /* open", "SELECT a FROM t /*/", "SELECT /* /* */ */ a FROM t"} {
+		_, err = partiql.Parse(src)
+		require.EqualError(t, err, partiql.MsgNotWellFormed+src, src)
+	}
+
+	_, err = partiql.Parse("SELECT /* é\n😀 */ f(x) FROM t")
+	require.EqualError(t, err, "Unexpected path component at 2:6:1")
 }
 
 // FuzzParse: no statement panics the parser or the value builder. A table
