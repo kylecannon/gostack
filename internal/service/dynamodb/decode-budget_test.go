@@ -557,7 +557,8 @@ func Test_decodeBudget_pastTheLimitsIsRefusedBeforeDecoding(t *testing.T) {
 	got = s.call(t, usEast1, opPut, over)
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, got.status)
-	assert.Contains(t, got.body, "RequestEntityTooLarge")
+	// The image's answer: 413 and {"__type": "413"}, with no message.
+	assert.JSONEq(t, `{"__type":"413"}`, got.body)
 }
 
 // convoyBatch is a BatchWriteItem of 25 items for client, each one string of

@@ -441,11 +441,16 @@ func (g *generator) emitReaders(p *printer) {
 
 // jsonOverBody is the Go expression for the answer to a json body over
 // protocol.MaxBody. SQS (serviceOptions.QueryOverBody) keeps the query
-// protocol's MalformedQueryString, which its tests and docs/compat.md pin; any
-// other json service answers 413 RequestEntityTooLarge.
+// protocol's MalformedQueryString, which its tests and docs/compat.md pin;
+// DynamoDB (StatusOverBody) answers the image's bare 413; any other json
+// service answers 413 RequestEntityTooLarge.
 func (g *generator) jsonOverBody() string {
 	if g.opts.QueryOverBody {
 		return "query.MalformedQueryString()"
+	}
+
+	if g.opts.StatusOverBody {
+		return `&awserr.Error{Code: "413", StatusCode: 413, Fault: awserr.FaultSender}`
 	}
 
 	return "protocol.BodyTooLarge()"

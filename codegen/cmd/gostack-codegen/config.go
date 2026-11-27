@@ -23,6 +23,13 @@ type serviceOptions struct {
 	// RequestEntityTooLarge, and a decode that passes its budget answers
 	// awsjson.ErrTooLarge.
 	QueryOverBody bool
+	// StatusOverBody answers a json body over the request cap with the bare
+	// status the LocalStack image sends: 413 with the body {"__type":"413"} and
+	// no message, as its DynamoDB does (its HTTP server refuses the body before
+	// any service sees it). Without it, and without QueryOverBody, a body over
+	// the cap answers 413 RequestEntityTooLarge with a message. A decode that
+	// passes its budget keeps awsjson.ErrTooLarge either way.
+	StatusOverBody bool
 	// MissingParam is the error a missing required member gives. A nil value
 	// means the generic ValidationError.
 	MissingParam *missingParam
@@ -127,6 +134,9 @@ var serviceTable = map[string]serviceOptions{
 	},
 	"sts": {},
 	"dynamodb": {
+		// The image answers a body over 16 MiB with 413 and {"__type": "413"}
+		// (checked with 16.5 MiB and 17 MiB PutItem bodies).
+		StatusOverBody: true,
 		// An AttributeValue sets exactly one of its members, which the model
 		// does not say: DynamoDB answers a ValidationException for none or two.
 		UnionShapes: []string{"AttributeValue"},
