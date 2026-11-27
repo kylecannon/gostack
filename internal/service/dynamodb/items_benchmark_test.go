@@ -25,10 +25,23 @@ import (
 // GetItem also has a text axis, at concurrency 1: the item's string is
 // non-ASCII or escape-dense text, which json quotes differently from the
 // ASCII of the other cells. Its value changes nothing else a call does.
+//
+// A family runs its cells at concurrency 1 before its cells at 16 and 64. The
+// json encoder keeps the large response buffers (over 256 KiB) that a burst of
+// callers grew, up to 32 MiB of them, for as long as calls go on, and the
+// collector paces itself by the live heap: a cell at concurrency 1 that follows
+// a cell of large bodies at 16 or 64 inherits them in some runs and not in
+// others, and its time and allocations spread by 5 to 12% on the base side
+// alone (SQ-548).
 
 var (
 	itemPayloads    = []itemPayload{{"100B", 100}, {"4KiB", 4 << 10}, {"399KiB", 399 << 10}}
 	itemConcurrency = []int{1, 16, 64}
+
+	// itemSerial is the concurrency of one caller and itemParallel the others,
+	// for a family that has a cell at 1 of another shape to run between them.
+	itemSerial   = itemConcurrency[:1]
+	itemParallel = itemConcurrency[1:]
 )
 
 const benchTable = "bench"
@@ -83,17 +96,22 @@ const maxIterationPutBytes = 8 << 20
 // the table bench, keyed by id.
 func itemMatrix(b *testing.B, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int)) {
 	b.Helper()
-	itemMatrixOn(b, newStack, budget, run)
+	itemMatrixOn(b, newStack, itemConcurrency, budget, run)
 }
 
-// itemMatrixOn is itemMatrix on the stacks mk builds.
+// itemMatrixOn is itemMatrix on the stacks mk builds, at the concurrencies
+// given, which it runs one after another, in order.
 func itemMatrixOn(
-	b *testing.B, mk func(testing.TB) *stack, budget int, run func(b *testing.B, s *stack, p itemPayload, workers int),
+	b *testing.B,
+	mk func(testing.TB) *stack,
+	concurrencies []int,
+	budget int,
+	run func(b *testing.B, s *stack, p itemPayload, workers int),
 ) {
 	b.Helper()
 
-	for _, payload := range itemPayloads {
-		for _, workers := range itemConcurrency {
+	for _, workers := range concurrencies {
+		for _, payload := range itemPayloads {
 			if tooSlowToGate(payload.size*workers, budget) {
 				continue
 			}
@@ -158,7 +176,9 @@ func (s *stack) fanOut(b *testing.B, operation string, workers int, body func(wo
 
 func BenchmarkPutItem(b *testing.B) {
 	itemMatrix(b, maxIterationPutBytes, benchPut)
-	b.Run(persistOn, func(b *testing.B) { itemMatrixOn(b, persistedStack, maxIterationPutBytes, benchPut) })
+	b.Run(persistOn, func(b *testing.B) {
+		itemMatrixOn(b, persistedStack, itemConcurrency, maxIterationPutBytes, benchPut)
+	})
 }
 
 func benchPut(b *testing.B, s *stack, p itemPayload, workers int) {
@@ -234,8 +254,11 @@ func BenchmarkDeleteItem(b *testing.B) {
 	}
 }
 
+// BenchmarkGetItem runs its text cells, at concurrency 1, between the payload
+// cells at 1 and the ones at 16 and 64, whose 399 KiB responses the text cells
+// would otherwise inherit as large buffers.
 func BenchmarkGetItem(b *testing.B) {
-	itemMatrix(b, unbudgeted, func(b *testing.B, s *stack, p itemPayload, workers int) {
+	run := func(b *testing.B, s *stack, p itemPayload, workers int) {
 		for worker := range workers {
 			s.ok(b, opPut, putBody(worker, p.size))
 		}
@@ -251,7 +274,16 @@ func BenchmarkGetItem(b *testing.B) {
 		for b.Loop() {
 			require.NoError(b, s.fanOut(b, opGet, workers, func(worker int) string { return bodies[worker] }))
 		}
-	})
+	}
+
+	itemMatrixOn(b, newStack, itemSerial, unbudgeted, run)
+	benchGetTexts(b)
+	itemMatrixOn(b, newStack, itemParallel, unbudgeted, run)
+}
+
+// benchGetTexts is BenchmarkGetItem's text axis.
+func benchGetTexts(b *testing.B) {
+	b.Helper()
 
 	for _, p := range itemTextPayloads {
 		for _, text := range itemTexts {

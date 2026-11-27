@@ -93,12 +93,14 @@ const (
 	writeItemOverhead = 4 << 10
 )
 
-// batchMatrix runs one sub-benchmark for every batch payload at every
-// concurrency whose iteration, items of the payload's size and overhead each
+// batchMatrix runs one sub-benchmark for every batch payload at each of
+// concurrencies whose iteration, items of the payload's size and overhead each
 // besides, carries at most budget, each on a fresh stack holding the table
-// bench. prepare runs before the timer for each worker.
+// bench. prepare runs before the timer for each worker. The cells run
+// concurrency by concurrency, in the order of concurrencies (itemConcurrency).
 func batchMatrix(
 	b *testing.B,
+	concurrencies []int,
 	operation string,
 	budget, overhead int,
 	prepare func(b *testing.B, s *stack, worker, size int),
@@ -106,8 +108,8 @@ func batchMatrix(
 ) {
 	b.Helper()
 
-	for _, payload := range batchPayloads {
-		for _, workers := range itemConcurrency {
+	for _, workers := range concurrencies {
+		for _, payload := range batchPayloads {
 			if tooSlowToGate(maxBenchBatch*workers*(payload.size+overhead), budget) {
 				continue
 			}
@@ -135,8 +137,8 @@ func batchMatrix(
 
 // BenchmarkBatchWriteItem: each call puts 25 of the worker's items.
 func BenchmarkBatchWriteItem(b *testing.B) {
-	batchMatrix(b, opBatchWrite, maxIterationWriteBytes, writeItemOverhead, func(*testing.B, *stack, int, int) {},
-		batchWriteBody)
+	batchMatrix(b, itemConcurrency, opBatchWrite, maxIterationWriteBytes, writeItemOverhead,
+		func(*testing.B, *stack, int, int) {}, batchWriteBody)
 }
 
 // BenchmarkBatchGetItem: each call reads the 25 items of the worker that one
@@ -151,11 +153,23 @@ func BenchmarkBatchWriteItem(b *testing.B) {
 // items it took 4.0 to 5.2 ms there. What the row no longer reads is the
 // buffer kept past that 32 MiB, and no cell measures what keeping it costs now:
 // the encoder's tests (internal/protocol/awsjson/buffers_internal_test.go) hold
-// what it keeps, not its time.
+// what it keeps, not its time. It is a cell at concurrency 1, so it runs after
+// the other cells at 1 and before the ones at 16 and 64, which its large
+// buffer would otherwise reach.
 func BenchmarkBatchGetItem(b *testing.B) {
-	batchMatrix(b, opBatchGet, maxIterationBatchBytes, 0, func(b *testing.B, s *stack, worker, size int) {
+	prepare := func(b *testing.B, s *stack, worker, size int) {
 		s.ok(b, opBatchWrite, batchWriteBody(worker, size))
-	}, func(worker, _ int) string { return batchGetBody(worker) })
+	}
+	body := func(worker, _ int) string { return batchGetBody(worker) }
+
+	batchMatrix(b, itemSerial, opBatchGet, maxIterationBatchBytes, 0, prepare, body)
+	batchGetNewlines(b)
+	batchMatrix(b, itemParallel, opBatchGet, maxIterationBatchBytes, 0, prepare, body)
+}
+
+// batchGetNewlines is BenchmarkBatchGetItem's row of 12 items of newlines.
+func batchGetNewlines(b *testing.B) {
+	b.Helper()
 
 	b.Run("payload=399KiB/items=12/text=newlines/concurrency=1", func(b *testing.B) {
 		const items = 12
