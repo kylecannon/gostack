@@ -276,9 +276,7 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
   4566, as in LocalStack's `config.py`. The container check mirrors its
   `in_docker()` (see Container detection).
 - `ReadHeaderTimeout` is set. There is no `WriteTimeout`, because SQS long-polls
-  for 20s and responses stream. After an HTTP/1.1 answer whose request body was
-  not read to its end, the rest of the body gets 1 s (`gateway.unreadDrain`)
-  before the connection closes (see Request memory).
+  for 20s and responses stream.
 - `DisableGeneralOptionsHandler` is set.
 
 ### Request memory
@@ -314,18 +312,19 @@ Paths outside the decoders, bounded on their own:
 - An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
   before its file part (`s3.preDataReader`), so a part header cannot grow
   past it.
-- A handler that answers before reading its body to the end (S3 `PutObject`
-  to a bucket that does not exist) closes the connection: the gateway sets
-  `Connection: close` on the answer and gives net/http 1 s to read what is
-  left (`gateway.unreadBody`). This holds for HTTP/1.1 only: on HTTP/2 a
-  `Connection: close` ends every stream on the connection, and an unread body
-  ends with its own stream, so an HTTP/2 body is not followed. The
-  shutdown-guard `503` and the CORS `403` answer above this layer
-  (`recoverPanic`) and keep net/http's own read of the rest of the body.
 
-Open: SSM `PutParameter` `Policies`, kept and parsed again by every
-`DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call. It stays as it
-is on `main` and is filed on its own.
+Open: these paths stay as they are on `main`. Each is filed on its own.
+
+- S3 answers before reading the body. A handler that answers without reading
+  its body to the end (`PutObject` to a bucket that does not exist) leaves
+  net/http to read up to 256 KiB of the rest before it writes the answer, with
+  no deadline. A client that sends part of such a body and stops gets no
+  answer, and the connection and its goroutine stay open. SQ-320's probes saw
+  no answer in 4 s to such a `PutObject` with 1,000 of 60,000 bytes sent, and
+  none in 25 s to a `PUT ?lifecycle` stalled the same way, whose body of under
+  64 KiB is read with no idle deadline.
+- SSM `PutParameter` `Policies`, kept and parsed again by every
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
 
 Settings, all read at start-up:
 

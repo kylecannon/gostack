@@ -45,7 +45,6 @@ type claim struct {
 type call struct {
 	rc     *request.Context
 	charge protocol.Charge
-	body   unreadBody
 }
 
 // Record tells the recovery middleware which call r is, so that a panic is
@@ -350,27 +349,16 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		// caused it.
 		if request.IsInternal(r.Context()) {
 			state.charge.ExemptDecode()
-		} else {
-			state.body.follow(r)
-			sw.body = &state.body
-
-			if meter := meterBody(r); meter != nil {
-				if meter.Charges() {
-					meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
-				}
-
-				state.charge.Meter(meter)
-				r.Body = meter
+		} else if meter := meterBody(r); meter != nil {
+			if meter.Charges() {
+				meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
 			}
+
+			state.charge.Meter(meter)
+			r.Body = meter
 		}
 
-		// Last, on every way out: give back the charge, whose meter clears
-		// its read deadline, then set the one the rest of an unread body is
-		// read under (drainUnread).
-		defer func() {
-			state.charge.Release()
-			sw.drainUnread(w)
-		}()
+		defer state.charge.Release()
 
 		defer func() {
 			if returned {
@@ -492,9 +480,6 @@ type statusWriter struct {
 
 	status int
 
-	// body is the request's body, followed to its end, or nil.
-	body *unreadBody
-
 	// pending is the call serveAWS is serving, whose success marks state dirty,
 	// and whether it has been marked.
 	pending pendingMark
@@ -518,7 +503,6 @@ func (w *statusWriter) WriteHeader(code int) {
 	// A 1xx response is informational and does not end the header phase.
 	if w.status == 0 && code >= http.StatusOK {
 		w.status = code
-		w.closeUnread()
 	}
 
 	w.ResponseWriter.WriteHeader(code)
@@ -548,7 +532,6 @@ func (w *statusWriter) NoteStatus(code int) {
 func (w *statusWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
-		w.closeUnread()
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
@@ -558,7 +541,6 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 func (w *statusWriter) Flush() {
 	if w.status == 0 {
 		w.status = http.StatusOK
-		w.closeUnread()
 	}
 
 	_ = http.NewResponseController(w.ResponseWriter).Flush()

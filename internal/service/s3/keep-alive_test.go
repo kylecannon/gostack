@@ -18,16 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAStreamedPutObjectKeepsTheConnection is SQ-320. The gateway closes the
-// connection after an answer whose request body was not read to its end
-// (gateway.unreadBody), so S3 must read a PutObject's body to its end, the
-// framing after the last aws-chunked chunk included, or every streamed upload
-// would cost the client a new connection. Each body below is over 64 KiB, in
-// several chunks, and is sent without its last bytes (the CRLF that ends an
-// aws-chunked body, or the last chunk of an HTTP chunked one): S3 must not
-// answer until they arrive, and then answers 200 without Connection: close,
-// and a GET of the object is served on the same connection. A decoder that
-// stopped at the last payload byte would answer early, closing the connection.
+// TestAStreamedPutObjectKeepsTheConnection is SQ-320. S3 reads a PutObject's
+// body to its end, the framing after the last aws-chunked chunk included,
+// before it answers, so a streamed upload keeps its HTTP/1.1 connection. Each
+// body below is over 64 KiB, in several chunks, and is sent without its last
+// bytes (the CRLF that ends an aws-chunked body, or the last chunk of an HTTP
+// chunked one): S3 must not answer until they arrive, and then answers 200
+// without Connection: close, and a GET of the object is served on the same
+// connection. A decoder that stopped at the last payload byte would answer
+// before they arrive.
 func TestAStreamedPutObjectKeepsTheConnection(t *testing.T) {
 	srv := startEdgeServer(t, nil)
 
