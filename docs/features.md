@@ -40,7 +40,7 @@ Only tests LocalStack passes count toward Parity done and Complete. Excluded tes
 | [cloudformation](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [cloudwatch](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [configservice](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
-| [dynamodb](#dynamodb) | In progress | 36 of 57 | [7](parity.md#dynamodb) | [row](parity.md#dynamodb) |  |
+| [dynamodb](#dynamodb) | Parity done | 36 of 57 | [5](parity.md#dynamodb) | [row](parity.md#dynamodb) |  |
 | [dynamodbstreams](#dynamodbstreams) | Complete | 4 of 4 | [3](parity.md#dynamodbstreams) | [row](parity.md#dynamodbstreams) |  |
 | [ec2](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [ecr](#services-with-no-code) | Not started | n/a | n/a | no ledger | CloudFormation resource providers only |
@@ -62,7 +62,7 @@ Only tests LocalStack passes count toward Parity done and Complete. Excluded tes
 | [s3](#s3) | Parity done | 90 of 112 | [24](parity.md#s3) | [row](parity.md#s3) |  |
 | [s3control](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [scheduler](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
-| [secretsmanager](#secretsmanager) | In progress | 21 of 23 | [8](parity.md#secretsmanager) | [row](parity.md#secretsmanager) |  |
+| [secretsmanager](#secretsmanager) | Parity done | 21 of 23 | [7](parity.md#secretsmanager) | [row](parity.md#secretsmanager) |  |
 | [ses](#services-with-no-code) | Not started | n/a | n/a | no ledger |  |
 | [sns](#sns) | Parity done | 36 of 42 | [25](parity.md#sns) | [row](parity.md#sns) |  |
 | [sqs](#sqs) | Complete | 23 of 23 | [46](parity.md#sqs) | [row](parity.md#sqs) |  |
@@ -77,15 +77,13 @@ Only tests LocalStack passes count toward Parity done and Complete. Excluded tes
 
 ### dynamodb
 
-Status: In progress. Operations implemented: 36 of 57.
-
-In progress because 2 excluded tests wait on kms, which gostack now serves.
+Status: Parity done. Operations implemented: 36 of 57.
 
 Parity: [dynamodb in parity.md](parity.md#dynamodb), which counts its excluded tests.
 
 Persistence: state saved when `PERSIST_DYNAMODB` is on.
 
-Headings of [compat.md](compat.md) that name dynamodb: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB until KMS](compat.md#dynamodb-until-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
+Headings of [compat.md](compat.md) that name dynamodb: [DynamoDB](compat.md#dynamodb), [DynamoDB operations](compat.md#dynamodb-operations), [DynamoDB and KMS](compat.md#dynamodb-and-kms), [DynamoDB expressions and reads](compat.md#dynamodb-expressions-and-reads), [DynamoDB batches and transactions](compat.md#dynamodb-batches-and-transactions).
 
 Other headings of compat.md with a table row under them that names dynamodb: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [Request memory limits](compat.md#request-memory-limits), [DynamoDB Streams](compat.md#dynamodb-streams).
 
@@ -151,9 +149,9 @@ Parity: [kms in parity.md](parity.md#kms), which counts its excluded tests.
 
 Persistence: state saved when `PERSIST_KMS` is on.
 
-Headings of [compat.md](compat.md) that name kms: [KMS](compat.md#kms), [DynamoDB until KMS](compat.md#dynamodb-until-kms).
+Headings of [compat.md](compat.md) that name kms: [KMS](compat.md#kms), [DynamoDB and KMS](compat.md#dynamodb-and-kms).
 
-Other headings of compat.md with a table row under them that names kms: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [S3 default encryption](compat.md#s3-default-encryption), [S3 limits](compat.md#s3-limits), [DynamoDB operations](compat.md#dynamodb-operations), [SSM Parameter Store](compat.md#ssm-parameter-store).
+Other headings of compat.md with a table row under them that names kms: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [S3 default encryption](compat.md#s3-default-encryption), [S3 limits](compat.md#s3-limits), [SSM Parameter Store](compat.md#ssm-parameter-store).
 
 **Implemented (45)**
 
@@ -234,9 +232,7 @@ Other headings of compat.md with a table row under them that names s3: [Gateway 
 
 ### secretsmanager
 
-Status: In progress. Operations implemented: 21 of 23.
-
-In progress because 1 excluded test waits on kms, which gostack now serves.
+Status: Parity done. Operations implemented: 21 of 23.
 
 Parity: [secretsmanager in parity.md](parity.md#secretsmanager), which counts its excluded tests.
 

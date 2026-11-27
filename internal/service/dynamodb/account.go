@@ -119,13 +119,31 @@ func (p *Provider) home(c caller, name string) (*State, string) {
 // table's owning region: DescribeTable, UpdateTable, DeleteTable, the item
 // operations, Query and Scan. Batch and transaction calls do not forward.
 func (p *Provider) lookupHome(c caller, name *string) (string, *tableEntry, error) {
+	return c.lookupAt(p.owning(c, name), name)
+}
+
+// owning is the table name's owning place: a caller of c's account with the
+// owner's region and state, which is c itself for a table that is not a
+// replica's. It reads the replica directory once; an operation that needs the
+// owner more than once asks here once and passes the answer on, since a replica
+// deleted meanwhile would change it.
+func (p *Provider) owning(c caller, name *string) caller {
+	if name == nil {
+		return c
+	}
+
+	state, owner := p.home(c, tableName(*name))
+
+	return caller{account: c.account, region: owner, state: state, shared: c.shared, from: c.from}
+}
+
+// lookupAt is lookup in the state of owning, which owning answered for name.
+func (c caller) lookupAt(owning caller, name *string) (string, *tableEntry, error) {
 	if name == nil {
 		return c.lookup(name)
 	}
 
-	state, _ := p.home(c, tableName(*name))
-
-	return caller{account: c.account, region: c.region, state: state, shared: c.shared}.lookup(name)
+	return caller{account: c.account, region: c.region, state: owning.state, shared: c.shared}.lookup(name)
 }
 
 // replicaNames are the names of the tables replicated to region.

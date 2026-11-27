@@ -11,8 +11,3 @@
 "tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_binary_data_with_stream": depends-on:kinesis
 "tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_with_kinesis_stream": depends-on:kinesis
 "tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_stream_destination_records": depends-on:kinesis
-
-# --- depends-on:kms: dynamodb ---------------------------------------------
-# Both call kms.describe_key on the table's KMSMasterKeyArn.
-"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_create_table_with_partial_sse_specification": depends-on:kms
-"tests/aws/services/dynamodb/test_dynamodb.py::TestDynamoDB::test_dynamodb_update_table_without_sse_specification_change": depends-on:kms

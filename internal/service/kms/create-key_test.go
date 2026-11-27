@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kylecannon/gostack/internal/request"
 	"github.com/stretchr/testify/require"
 )
 
@@ -234,5 +235,57 @@ func Test_CreateKey_errors(t *testing.T) {
 	t.Run("secp256k1 is made with the dependency", func(t *testing.T) {
 		meta := s.createKey(map[string]any{fieldKeySpec: "ECC_SECG_P256K1", fieldKeyUsage: usageSignVerify})
 		require.Equal(t, []any{"ECDSA_SHA_256"}, meta["SigningAlgorithms"])
+	})
+}
+
+// Test_CreateKey_awsManaged is LocalStack's set_key_managed, which DynamoDB
+// calls on the key it makes: an internal call that names the AWS manager makes
+// the key AWS managed, and a client that sends the same header does not.
+func Test_CreateKey_awsManaged(t *testing.T) {
+	const manager = "X-Gostack-Key-Manager"
+
+	t.Run("an internal call that names the AWS manager makes an AWS managed key", func(t *testing.T) {
+		s := newStack(t)
+		outer := s.handler
+		s.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Header.Set(manager, "AWS")
+			outer.ServeHTTP(w, r.WithContext(request.MarkInternal(r.Context())))
+		})
+
+		meta := s.createKey(map[string]any{fieldDescription: "managed"})
+		require.Equal(t, "AWS", meta["KeyManager"])
+		require.Equal(t, "managed", meta[fieldDescription])
+
+		described, ok := s.ok("DescribeKey", map[string]any{fieldKeyID: keyID(t, meta)})["KeyMetadata"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "AWS", described["KeyManager"])
+	})
+
+	t.Run("an internal call that names no manager, or another, makes a customer key", func(t *testing.T) {
+		s := newStack(t)
+		outer := s.handler
+		value := ""
+		s.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if value != "" {
+				r.Header.Set(manager, value)
+			}
+
+			outer.ServeHTTP(w, r.WithContext(request.MarkInternal(r.Context())))
+		})
+
+		for _, value = range []string{"", "CUSTOMER", "aws"} {
+			require.Equal(t, "CUSTOMER", s.createKey(map[string]any{})["KeyManager"], value)
+		}
+	})
+
+	t.Run("a call from outside the process that sends the header makes a customer key", func(t *testing.T) {
+		s := newStack(t)
+		outer := s.handler
+		s.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Header.Set(manager, "AWS")
+			outer.ServeHTTP(w, r)
+		})
+
+		require.Equal(t, "CUSTOMER", s.createKey(map[string]any{})["KeyManager"])
 	})
 }

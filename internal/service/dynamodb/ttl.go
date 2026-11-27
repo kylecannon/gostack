@@ -294,6 +294,8 @@ func (p *Provider) anyTTL() bool {
 // good. The shards keep their records, so a save after close still holds
 // them.
 func (p *Provider) close(context.Context) {
+	p.client.Close()
+
 	p.expiry.mu.Lock()
 	p.expiry.closed = true
 

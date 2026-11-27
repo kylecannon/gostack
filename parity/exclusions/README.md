@@ -22,7 +22,7 @@ Reasons in use:
 | --- | --- |
 | `requires_in_process` | Marked so in LocalStack; it patches state inside the server process, which no external container can reach. A test carrying the marker is excluded unless `parity/bridgeable.yaml` lists it: either all it patches is `localstack.config`, which the bridge forwards, or it is marked only because it starts the runner's `HTTPServer`, which the target reaches through the shared network namespace, or it touches nothing in the server process at all and only carries the marker (`marker-only`). |
 | `hard-skipped` | LocalStack's own source skips the test unconditionally. |
-| `depends-on:<service>` | Needs a service outside the current scope. |
+| `depends-on:<service>` | Needs a service outside the current scope. Several services are joined by `+` with no space (`depends-on:lambda+iam`); text after a space or a comma is a note and is not read. `eventbridge` names the service gostack calls `events`. parity-check fails on one that names a service with an `internal/service/<service>/` package: remove the exclusion and run the test, or drop that service from the reason. |
 | `engine-deferred` | Needs a real engine (OpenSearch, Transcribe) that gostack defers. |
 | `runner-docker` | Needs Docker from inside the runner. |
 

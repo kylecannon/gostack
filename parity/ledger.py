@@ -277,13 +277,18 @@ EVERY_SERVICE = "*"
 # - sns, ssm: the services that will call sqs and secretsmanager.
 # - dynamodb, dynamodbstreams: a pair that depends on each other through the
 #   state they share, which is in no import.
+# - secretsmanager: its package calls no service, but a test of its suite makes
+#   a key with kms (test_cross_account_access_non_default_key).
 # A key stays listed after its service becomes a real caller; its dependencies
 # are still held to the services that exist.
-DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "sns", "ssm")
+DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "secretsmanager", "sns", "ssm")
 DEPENDS_ON = {
-    "dynamodb": ("dynamodbstreams",),
-    "dynamodbstreams": ("dynamodb",),
+    "dynamodb": ("dynamodbstreams", "kms"),
+    # dynamodbstreams imports dynamodb, which imports kms for its header.
+    "dynamodbstreams": ("dynamodb", "kms"),
     "s3": ("kms", "sns", "sqs"),
+    # test_cross_account_access_non_default_key makes a key with kms.
+    "secretsmanager": ("kms",),
     "sns": ("sqs",),
     "ssm": ("secretsmanager",),
     EVERY_SERVICE: ("sts",),
@@ -705,6 +710,42 @@ def unserved_results(rows: dict[str, dict], served: set[str]) -> list[str]:
     ]
 
 
+# A reason names its services after depends-on: one, or several joined by + with
+# no space (depends-on:kms+lambda). Text after the list, such as a note after a
+# comma or in parentheses, is not read.
+DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+(?:\+[\w-]+)*)")
+# The reasons spell one service two ways: s3.yaml says eventbridge, ssm.yaml
+# says events, and gostack knows it as events. No other reason in use is an
+# alias.
+DEPENDENCY_ALIASES = {"eventbridge": "events"}
+
+
+def reason_services(reason: str) -> list[str]:
+    """The services a depends-on reason names, as gostack names them."""
+    named = DEPENDS_ON_REASON.match(reason)
+    if not named:
+        return []
+    return [DEPENDENCY_ALIASES.get(name, name) for name in named.group(1).split("+")]
+
+
+def served_dependencies(exclusions: dict[str, str], served: set[str]) -> list[str]:
+    """An exclusion whose reason names a service with an
+    internal/service/<svc>/ package after depends-on:. The reason said the test
+    needs a service gostack lacks; once it has the service the test runs, and
+    an exclusion left in place hides a row that passes or a gap that should show
+    as a failure. A reason that names several fails for each one served: it
+    should name what is still missing."""
+    stale = []
+    for pattern, reason in sorted(exclusions.items()):
+        for name in reason_services(reason):
+            if name in served:
+                stale.append(
+                    f"  parity/exclusions/{service_of(pattern)}.yaml: {pattern}: {reason}, but {name} is served "
+                    f"(internal/service/{name}/); remove the exclusion and let the test run, or give the real reason"
+                )
+    return stale
+
+
 def compare_rows(base: dict[str, dict], current: dict[str, dict], demotions: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
     """(regressions, warnings, demoted) between the base and the working tree.
     gostack: pass to anything else is a regression unless demotions lists it.
@@ -734,7 +775,12 @@ def check(args: argparse.Namespace) -> None:
     exclusions = load_exclusions(args.exclusions)
     demotions = load_demotions(args.demotions)
     demotions_name = args.demotions.name
-    stale_entries = stale_demotions(current, demotions, demotions_name) + unserved_results(current, service_dirs())
+    served = service_dirs()
+    stale_entries = (
+        stale_demotions(current, demotions, demotions_name)
+        + unserved_results(current, served)
+        + served_dependencies(exclusions, served)
+    )
     commit = resolve_base(args.base)
     committed = committed_ledger(commit, args.ledger) if commit is not None else None
     if committed is None:

@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -503,6 +504,90 @@ class CheckAgainstBaseTest(unittest.TestCase):
         code, out = self.check(base)
         self.assertEqual(code, 1, out)
         self.assertIn("no internal/service/sqs/ package", out)
+
+    def test_an_exclusion_that_depends_on_a_served_service_fails_and_is_named(self) -> None:
+        # SQ-479: two dynamodb rows and one secretsmanager row stayed excluded
+        # as depends-on:kms after kms was served.
+        base = self.split_base()
+        kms = self.repo / "internal" / "service" / "kms"
+        kms.mkdir(parents=True)
+        (kms / "kms.go").write_text("package kms\n", encoding="utf-8")
+        (self.exclusions / "sqs.yaml").write_text(
+            f'"{SQS}::d": depends-on:kms\n"{SQS}::e": depends-on:kms (describe_key)\n"{SQS}::f": depends-on:lambda\n',
+            encoding="utf-8",
+        )
+        for target in (base, "HEAD"):
+            code, out = self.check(target)
+            self.assertEqual(code, 1, out)
+            self.assertIn(f"parity/exclusions/sqs.yaml: {SQS}::d: depends-on:kms, but kms is served", out)
+            self.assertIn(f"{SQS}::e: depends-on:kms (describe_key), but kms is served", out)
+            self.assertNotIn(f"{SQS}::f", out)
+            self.assertNotIn(f"{STS}::iam", out)
+
+    def test_an_exclusion_that_depends_on_a_served_service_fails_without_a_committed_ledger(self) -> None:
+        (self.repo / "README").write_text("x\n", encoding="utf-8")
+        base = self.commit("no ledger")
+        kms = self.repo / "internal" / "service" / "kms"
+        kms.mkdir(parents=True)
+        (kms / "kms.go").write_text("package kms\n", encoding="utf-8")
+        (self.exclusions / "sqs.yaml").write_text(f'"{SQS}::d": depends-on:kms\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("kms is served", out)
+
+    def serve(self, *services: str) -> None:
+        for name in services:
+            package = self.repo / "internal" / "service" / name
+            package.mkdir(parents=True, exist_ok=True)
+            (package / f"{name}.go").write_text(f"package {name}\n", encoding="utf-8")
+
+    def test_the_services_a_depends_on_reason_names_are_read_whole_and_by_their_gostack_names(self) -> None:
+        self.assertEqual(ledger.reason_services("depends-on:kms"), ["kms"])
+        self.assertEqual(ledger.reason_services("depends-on:kms+lambda"), ["kms", "lambda"])
+        self.assertEqual(ledger.reason_services("depends-on:lambda+eventbridge"), ["lambda", "events"])
+        self.assertEqual(ledger.reason_services("depends-on:eventbridge"), ["events"])
+        # Prose after a comma or in parentheses is not a service name.
+        self.assertEqual(ledger.reason_services("depends-on:lambda, sqs event source mapping"), ["lambda"])
+        self.assertEqual(ledger.reason_services("depends-on:kms (describe_key)"), ["kms"])
+        self.assertEqual(ledger.reason_services("hard-skipped (depends-on:kms)"), [])
+        # Every name a reason of the exclusions lists, after each +, that is not a
+        # service of TEST_DIRS under its own name is an alias.
+        used = {
+            service
+            for reason in ledger.load_exclusions(ledger.EXCLUSIONS).values()
+            for match in re.findall(r"^depends-on:([\w+-]+)", reason)
+            for service in match.split("+")
+        }
+        self.assertEqual({name for name in used if name not in ledger.TEST_DIRS}, set(ledger.DEPENDENCY_ALIASES))
+
+    def test_an_alias_of_a_served_service_fails(self) -> None:
+        # s3.yaml spells events eventbridge.
+        base = self.split_base()
+        self.serve("events")
+        (self.exclusions / "sqs.yaml").write_text(f'"{SQS}::d": depends-on:eventbridge\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("depends-on:eventbridge, but events is served", out)
+
+    def test_every_service_a_reason_names_is_read(self) -> None:
+        base = self.split_base()
+        self.serve("kms")
+        (self.exclusions / "sqs.yaml").write_text(
+            f'"{SQS}::d": depends-on:lambda+iam+kms\n"{SQS}::e": depends-on:lambda, kms event source mapping\n'
+            f'"{SQS}::f": depends-on:lambda+iam\n',
+            encoding="utf-8",
+        )
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{SQS}::d: depends-on:lambda+iam+kms, but kms is served", out)
+        self.assertNotIn(f"{SQS}::e", out)
+        self.assertNotIn(f"{SQS}::f", out)
+
+    def test_an_exclusion_that_depends_on_a_service_gostack_lacks_passes(self) -> None:
+        base = self.split_base()
+        (self.exclusions / "sqs.yaml").write_text(f'"{SQS}::d": depends-on:kms\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
 
     def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
         base = self.split_base()

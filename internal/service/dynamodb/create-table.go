@@ -90,9 +90,14 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 		return nil, err
 	}
 
+	sse, err := p.sseDescription(ctx, c, in.SSESpecification)
+	if err != nil {
+		return nil, err
+	}
+
 	now := p.now()
 	meta := newMeta(in, now)
-	meta.SSE = c.sseDescription(in.SSESpecification)
+	meta.SSE = sse
 
 	entry := &tableEntry{meta: meta, data: meta.newEngine(), notify: p.streamsChanged}
 	if meta.Stream != nil {
@@ -105,7 +110,19 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 
 	p.account(c).setTags(c.tableARN(meta.Name), in.Tags)
 
-	d := entry.description(c.tableARN(meta.Name))
+	d := createdDescription(entry, c.tableARN(meta.Name), in, sse)
+
+	return &api.CreateTableOutput{TableDescription: d}, nil
+}
+
+// createdDescription is the answer to a CreateTable for entry, which in made
+// with the encryption sse: the table's description with the members
+// LocalStack's answer adds or leaves out. sse is the one the table was made
+// with, not entry's, which another call may change once the table is listed.
+func createdDescription(
+	entry *tableEntry, arn string, in *api.CreateTableInput, sse *api.SSEDescription,
+) *api.TableDescription {
+	d := entry.description(arn)
 	d.WarmThroughput = nil
 
 	if in.WarmThroughput != nil {
@@ -124,11 +141,11 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 		d.StreamSpecification = in.StreamSpecification
 	}
 
-	if meta.SSE != nil && meta.SSE.Status == nil {
-		d.SSEDescription = meta.SSE
+	if sse != nil && sse.Status == nil {
+		d.SSEDescription = sse
 	}
 
-	return &api.CreateTableOutput{TableDescription: d}, nil
+	return d
 }
 
 // newMeta is the definition of the table in, which checkCreate accepted.
@@ -201,25 +218,40 @@ func capacity(throughput *api.ProvisionedThroughput) (read, write int64) {
 	return read, write
 }
 
-// sseDescription is LocalStack's SSEUtils.get_sse_description. A specification
-// that is not enabled describes as an empty SSEDescription. One enabled without
-// a key would take a KMS key LocalStack creates; gostack has no KMS yet and
-// leaves KMSMasterKeyArn out.
-func (c caller) sseDescription(spec *api.SSESpecification) *api.SSEDescription {
+// sseDescription is LocalStack's SSEUtils.get_sse_description of the
+// specification a request gave, nil for none. A specification that is not
+// enabled describes as an empty SSEDescription. One enabled without a key takes
+// the AWS managed key KMS makes for the caller's account and region
+// (managedKey); when no KMS answers, KMSMasterKeyArn is left out.
+func (p *Provider) sseDescription(
+	ctx context.Context, c caller, spec *api.SSESpecification,
+) (*api.SSEDescription, error) {
 	if spec == nil {
-		return nil
+		return nil, nil //nolint:nilnil // no specification, no description
 	}
 
 	if spec.Enabled == nil || !*spec.Enabled {
-		return &api.SSEDescription{}
+		return &api.SSEDescription{}, nil
 	}
 
 	d := &api.SSEDescription{Status: new("ENABLED"), SSEType: new("KMS")}
-	if spec.KMSMasterKeyId != nil {
+
+	if spec.KMSMasterKeyId != nil && *spec.KMSMasterKeyId != "" {
 		d.KMSMasterKeyArn = new(c.kmsKeyARN(*spec.KMSMasterKeyId))
+
+		return d, nil
 	}
 
-	return d
+	arn, err := p.managedKey(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+
+	if arn != "" {
+		d.KMSMasterKeyArn = &arn
+	}
+
+	return d, nil
 }
 
 // kmsKeyARN is LocalStack's arns.kms_key_arn: a key id in the caller's
