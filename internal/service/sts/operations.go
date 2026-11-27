@@ -140,6 +140,7 @@ func (p *provider) AssumeRoleWithSAML(
 	var limits violations
 
 	limits.roleARN(in.RoleArn)
+	limits.samlAssertion(in.SAMLAssertion)
 	limits.duration(in.DurationSeconds, maxRoleDurationSeconds)
 
 	invalid := limits.err()

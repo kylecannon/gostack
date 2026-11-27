@@ -63,7 +63,8 @@ func (a *api) gostackUpdateConfig(w http.ResponseWriter, r *http.Request) {
 // made of letters, digits and underscores. A number written as a string counts as
 // a number, as in LocalStack, where is_number converts it to a float.
 func parseConfigUpdate(w http.ResponseWriter, r *http.Request) (configUpdate, bool) {
-	body := decodeObject(w, r)
+	// A body the in-flight bound has no room for is refused as an invalid one.
+	body, _ := decodeObject(w, r)
 	variable, _ := body["variable"].(string)
 	if !variablePattern.MatchString(variable) {
 		return configUpdate{}, false

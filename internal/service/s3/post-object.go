@@ -129,22 +129,27 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 		return nil, nil, malformedPost()
 	}
 
-	reader := multipart.NewReader(body, boundary)
+	limited := &preDataReader{r: body, left: maxPreData + preDataReadAhead}
+	reader := multipart.NewReader(limited, boundary)
 	form := make(map[string]string)
 	budget := int64(maxPreData)
 
 	for {
 		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			return form, nil, nil
-		}
 
-		if err != nil {
+		switch {
+		case limited.over:
+			return nil, nil, preDataTooLarge()
+		case errors.Is(err, io.EOF):
+			return form, nil, nil
+		case err != nil:
 			return nil, nil, malformedPost()
 		}
 
 		name := strings.ToLower(part.FormName())
 		if name == formFile {
+			limited.left = -1
+
 			return form, part, nil
 		}
 
@@ -154,7 +159,11 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 		}
 
 		value, err := io.ReadAll(io.LimitReader(part, budget+1))
-		if err != nil {
+
+		switch {
+		case limited.over:
+			return nil, nil, preDataTooLarge()
+		case err != nil:
 			return nil, nil, malformedPost()
 		}
 
@@ -167,6 +176,46 @@ func readForm(body io.Reader, boundary string) (map[string]string, *multipart.Pa
 			form[name] = string(value)
 		}
 	}
+}
+
+// preDataReadAhead is what the form reader may read past maxPreData before its
+// file part: twice the 4 KiB mime/multipart buffers ahead of what it parsed.
+const preDataReadAhead = 8 << 10
+
+// errPreDataRead is what a preDataReader fails with once the form passes its
+// bytes before the file.
+var errPreDataRead = errors.New("s3: the form fields before the file are over 20 KB")
+
+// preDataReader caps what the form reader reads from the body until readForm
+// finds the file part. mime/multipart reads a part's headers whole before
+// readForm can count them, up to 10 MiB each: without the cap 32 clients that
+// stopped inside a 9 MiB part header held 852 MiB (SQ-317). A left below zero
+// is no cap, for the file.
+type preDataReader struct {
+	r    io.Reader
+	left int64
+	over bool
+}
+
+func (p *preDataReader) Read(b []byte) (int, error) {
+	if p.left < 0 {
+		return p.r.Read(b)
+	}
+
+	if p.left == 0 {
+		p.over = true
+
+		return 0, errPreDataRead
+	}
+
+	if int64(len(b)) > p.left {
+		b = b[:p.left]
+	}
+
+	n, err := p.r.Read(b)
+	p.left -= int64(n)
+
+	return n, err
 }
 
 // headerSize is the bytes of a part's header lines: name, ": ", value, CRLF.

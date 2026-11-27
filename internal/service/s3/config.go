@@ -185,9 +185,20 @@ func (p *Provider) DeleteBucketPolicy(
 	return &s3api.DeleteBucketPolicyOutput{}, nil
 }
 
-// validatePolicy is LocalStack's check: a JSON object, which is not empty.
+// maxBucketPolicy is the longest bucket policy S3 takes: "Bucket policies are
+// limited to 20 KB in size" (S3 User Guide, adding a bucket policy). It is
+// checked before the policy is parsed, so a policy of millions of keys is
+// refused at its length.
+const maxBucketPolicy = 20 << 10
+
+// validatePolicy is AWS's length, then LocalStack's check: a JSON object, which
+// is not empty.
 func validatePolicy(policy string) error {
 	const notJSON = "Policies must be valid JSON and the first byte must be '{'"
+
+	if len(policy) > maxBucketPolicy {
+		return configError("MalformedPolicy", "Policy exceeds the maximum allowed document size.", http.StatusBadRequest)
+	}
 
 	if policy == "" || policy[0] != '{' {
 		return configError("MalformedPolicy", notJSON, http.StatusBadRequest)

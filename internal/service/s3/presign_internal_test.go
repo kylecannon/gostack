@@ -245,6 +245,28 @@ func Test_readForm(t *testing.T) {
 		require.Less(t, written, parts/100)
 	})
 
+	// SQ-320: mime/multipart reads a part's headers whole, up to 10 MiB, before
+	// readForm counts them, so 32 clients stopped inside a 9 MiB part header
+	// held 852 MiB (SQ-317). The bytes read before the file are capped.
+	for _, file := range []string{"key", "file"} {
+		t.Run("a 9 MiB header on the "+file+" part is refused after a bounded read", func(t *testing.T) {
+			t.Parallel()
+
+			const boundary = "xyz320"
+
+			head := "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + file + "\"\r\nX-Long: "
+			body := &countingReader{r: io.MultiReader(strings.NewReader(head),
+				strings.NewReader(strings.Repeat("a", 9<<20)), strings.NewReader("\r\n\r\nv\r\n--"+boundary+"--\r\n"))}
+
+			_, _, err := readForm(body, boundary)
+
+			var refused *awserr.Error
+			require.ErrorAs(t, err, &refused)
+			require.Equal(t, "MaxPostPreDataLengthExceeded", refused.Code)
+			require.LessOrEqual(t, body.n, int64(maxPreData+8<<10))
+		})
+	}
+
 	t.Run("fields just under the limit reach the file", func(t *testing.T) {
 		t.Parallel()
 

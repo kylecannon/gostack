@@ -32,6 +32,10 @@ const (
 	minAccessKeyLength = 16
 	maxAccessKeyLength = 128
 
+	// maxSAMLAssertionLength is SAMLAssertionType's max. It is checked before
+	// the assertion is decoded, so a wide assertion is refused at its length.
+	maxSAMLAssertionLength = 100000
+
 	maxTags           = 50
 	minTagKeyLength   = 1
 	maxTagKeyLength   = 128
@@ -93,6 +97,19 @@ func (v *violations) roleARN(value *string) {
 	}
 
 	v.length("roleArn", *value, minRoleARNLength, maxRoleARNLength)
+}
+
+// samlAssertion checks a SAMLAssertion against the model's max. The shape is
+// sensitive, so the message leaves the value out, as AWS's does for a
+// sensitive member.
+func (v *violations) samlAssertion(value *string) {
+	if value == nil || len(*value) <= maxSAMLAssertionLength ||
+		utf8.RuneCountInString(*value) <= maxSAMLAssertionLength {
+		return
+	}
+
+	*v = append(*v, "Value at 'sAMLAssertion' failed to satisfy constraint: "+
+		"Member must have length less than or equal to "+strconv.Itoa(maxSAMLAssertionLength))
 }
 
 // accessKeyID checks the AccessKeyId of GetAccessKeyInfo against the model's

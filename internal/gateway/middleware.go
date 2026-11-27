@@ -45,6 +45,7 @@ type claim struct {
 type call struct {
 	rc     *request.Context
 	charge protocol.Charge
+	body   unreadBody
 }
 
 // Record tells the recovery middleware which call r is, so that a panic is
@@ -73,14 +74,13 @@ func ServedAsInternal(ctx context.Context) bool {
 }
 
 // markInternal is root step 1. A header that does not hold a json object is
-// ignored, as LocalStack ignores a parameter blob it cannot load.
+// ignored, as LocalStack ignores a parameter blob it cannot load. Nothing reads
+// the object's members, so the header is checked without decoding it: decoded,
+// a header of 900 KiB of {} held about 20 times its length (SQ-317).
 func markInternal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if value := r.Header.Get(internalRequestHeader); value != "" {
-			var params map[string]any
-
-			err := json.Unmarshal([]byte(value), &params)
-			if readable := err == nil && params != nil; readable {
+			if isJSONObject(value) {
 				r = r.WithContext(context.WithValue(r.Context(), internalKey{}, true))
 			} else {
 				slog.WarnContext(r.Context(), "ignoring unreadable internal request parameters")
@@ -89,6 +89,14 @@ func markInternal(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isJSONObject reports whether value is one json object, as json.Unmarshal
+// into a map would take it, without building the map.
+func isJSONObject(value string) bool {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+
+	return trimmed != "" && trimmed[0] == '{' && json.Valid([]byte(value))
 }
 
 // shutdownGuard is root step 2, LocalStack's RuntimeShutdownHandler. Once the
@@ -342,13 +350,18 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		// caused it.
 		if request.IsInternal(r.Context()) {
 			state.charge.ExemptDecode()
-		} else if meter := meterBody(r); meter != nil {
-			if meter.Charges() {
-				meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
-			}
+		} else {
+			state.body.follow(r)
+			sw.body = &state.body
 
-			state.charge.Meter(meter)
-			r.Body = meter
+			if meter := meterBody(r); meter != nil {
+				if meter.Charges() {
+					meter.IdleBy(http.NewResponseController(w).SetReadDeadline)
+				}
+
+				state.charge.Meter(meter)
+				r.Body = meter
+			}
 		}
 
 		defer state.charge.Release()
@@ -366,6 +379,8 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 
 		returned = true
+
+		sw.drainUnread(w)
 	})
 }
 
@@ -473,6 +488,9 @@ type statusWriter struct {
 
 	status int
 
+	// body is the request's body, followed to its end, or nil.
+	body *unreadBody
+
 	// pending is the call serveAWS is serving, whose success marks state dirty,
 	// and whether it has been marked.
 	pending pendingMark
@@ -496,6 +514,7 @@ func (w *statusWriter) WriteHeader(code int) {
 	// A 1xx response is informational and does not end the header phase.
 	if w.status == 0 && code >= http.StatusOK {
 		w.status = code
+		w.closeUnread()
 	}
 
 	w.ResponseWriter.WriteHeader(code)
@@ -525,6 +544,7 @@ func (w *statusWriter) NoteStatus(code int) {
 func (w *statusWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
+		w.closeUnread()
 	}
 
 	return w.ResponseWriter.Write(p) //nolint:wrapcheck // io.Writer: the error of the Write it delegates to.
@@ -534,6 +554,7 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 func (w *statusWriter) Flush() {
 	if w.status == 0 {
 		w.status = http.StatusOK
+		w.closeUnread()
 	}
 
 	_ = http.NewResponseController(w.ResponseWriter).Flush()
