@@ -151,7 +151,8 @@ class AffectedServicesTest(ServedTestCase):
         self.assertEqual(ledger.DEPENDS_ON["sns"], ("sqs",))
         self.assertEqual(ledger.DEPENDS_ON["ssm"], ("secretsmanager",))
         self.assertEqual(ledger.DEPENDS_ON["dynamodbstreams"], ("dynamodb",))
-        self.assertEqual(ledger.DEPENDS_ON["dynamodb"], ("dynamodbstreams",))
+        # dynamodb calls kms for the managed key of a table with SSE and no key.
+        self.assertEqual(ledger.DEPENDS_ON["dynamodb"], ("dynamodbstreams", "kms"))
         for service, dependencies in ledger.DEPENDS_ON.items():
             for name in (service, *dependencies):
                 if name != ledger.EVERY_SERVICE:
@@ -162,7 +163,7 @@ class AffectedServicesTest(ServedTestCase):
         known = built
         with mock.patch.object(ledger, "service_dirs", return_value=built):
             cases = {
-                "internal/service/kms/keys.go": {"kms", "s3"},
+                "internal/service/kms/keys.go": {"kms", "s3", "dynamodb", "dynamodbstreams"},
                 "internal/service/sns/topics.go": {"sns", "s3"},
                 "internal/api/sns/types.go": {"sns", "s3"},
                 "internal/service/secretsmanager/secrets.go": {"secretsmanager", "ssm"},

@@ -281,7 +281,7 @@ EVERY_SERVICE = "*"
 # are still held to the services that exist.
 DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "sns", "ssm")
 DEPENDS_ON = {
-    "dynamodb": ("dynamodbstreams",),
+    "dynamodb": ("dynamodbstreams", "kms"),
     "dynamodbstreams": ("dynamodb",),
     "s3": ("kms", "sns", "sqs"),
     "sns": ("sqs",),
@@ -705,6 +705,25 @@ def unserved_results(rows: dict[str, dict], served: set[str]) -> list[str]:
     ]
 
 
+DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+)")
+
+
+def served_dependencies(exclusions: dict[str, str], served: set[str]) -> list[str]:
+    """An exclusion whose reason is depends-on:<svc> for a service with an
+    internal/service/<svc>/ package. The reason said the test needs a service
+    gostack lacks; once it has the service the test runs, and an exclusion left
+    in place hides a row that passes or a gap that should show as a failure."""
+    stale = []
+    for pattern, reason in sorted(exclusions.items()):
+        needed = DEPENDS_ON_REASON.match(reason)
+        if needed and needed.group(1) in served:
+            stale.append(
+                f"  parity/exclusions/{service_of(pattern)}.yaml: {pattern}: {reason}, but {needed.group(1)} is served "
+                f"(internal/service/{needed.group(1)}/); remove the exclusion and let the test run, or give the real reason"
+            )
+    return stale
+
+
 def compare_rows(base: dict[str, dict], current: dict[str, dict], demotions: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
     """(regressions, warnings, demoted) between the base and the working tree.
     gostack: pass to anything else is a regression unless demotions lists it.
@@ -734,7 +753,12 @@ def check(args: argparse.Namespace) -> None:
     exclusions = load_exclusions(args.exclusions)
     demotions = load_demotions(args.demotions)
     demotions_name = args.demotions.name
-    stale_entries = stale_demotions(current, demotions, demotions_name) + unserved_results(current, service_dirs())
+    served = service_dirs()
+    stale_entries = (
+        stale_demotions(current, demotions, demotions_name)
+        + unserved_results(current, served)
+        + served_dependencies(exclusions, served)
+    )
     commit = resolve_base(args.base)
     committed = committed_ledger(commit, args.ledger) if commit is not None else None
     if committed is None:

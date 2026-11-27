@@ -50,12 +50,20 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
-	created, err := e.update(in, c, p.now)
+	sse, err := p.sseDescription(ctx, c, in.SSESpecification)
+	if err != nil {
+		return nil, err
+	}
+
+	created, ending, err := e.update(in, c, p.now, sse)
 	if err != nil {
 		return nil, err
 	}
 
 	d := e.description(c.tableARN(name))
+	if ending != nil {
+		d.SSEDescription = ending
+	}
 
 	for i := range d.GlobalSecondaryIndexes {
 		index := &d.GlobalSecondaryIndexes[i]
@@ -116,9 +124,13 @@ func indexUpdateName(update *api.GlobalSecondaryIndexUpdate) (*string, bool) {
 }
 
 // update applies in to the table under its lock, read clock there, and
-// returns the names of the indexes it created. It checks everything before it
-// changes anything, and the lock is released however it ends.
-func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() time.Time) ([]string, error) {
+// returns the names of the indexes it created, and the encryption the answer
+// shows in place of the table's own, when the update turns it off. sse is the
+// description of in's SSESpecification. It checks everything before it changes
+// anything, and the lock is released however it ends.
+func (e *tableEntry) update(
+	in *api.UpdateTableInput, c caller, clock func() time.Time, sse *api.SSEDescription,
+) ([]string, *api.SSEDescription, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -130,20 +142,22 @@ func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() tim
 
 	err := next.updateBilling(in, now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	created, dropped, err := next.updateIndexes(in.GlobalSecondaryIndexUpdates)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	streamChanged, err := next.setStream(in.StreamSpecification, now, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	next.updateSettings(in, c)
+	ending := endingSSE(e.meta.SSE, sse)
+
+	next.updateSettings(in, sse)
 
 	for _, name := range dropped {
 		e.data.DropIndex(name)
@@ -162,7 +176,22 @@ func (e *tableEntry) update(in *api.UpdateTableInput, c caller, clock func() tim
 		e.applyStream(now, clock, c.region)
 	}
 
-	return names, nil
+	return names, ending, nil
+}
+
+// endingSSE is what an UpdateTable that turns encryption off answers for it:
+// the encryption the table had, UPDATING (LocalStack sets the status on the
+// description it read before the update, in update_table). It is nil for any
+// other update, and for a table that had none.
+func endingSSE(before, after *api.SSEDescription) *api.SSEDescription {
+	if before == nil || before.Status == nil || after == nil || after.Status != nil {
+		return nil
+	}
+
+	ending := *before
+	ending.Status = new(statusUpdating)
+
+	return &ending
 }
 
 // updateIndexes applies GlobalSecondaryIndexUpdates in order and returns the
@@ -193,9 +222,9 @@ func (m *tableMeta) updateIndexes(updates []api.GlobalSecondaryIndexUpdate) ([]i
 
 // updateSettings applies the encryption, class, deletion protection,
 // on-demand and warm throughput members, none of which can be refused.
-func (m *tableMeta) updateSettings(in *api.UpdateTableInput, c caller) {
+func (m *tableMeta) updateSettings(in *api.UpdateTableInput, sse *api.SSEDescription) {
 	if in.SSESpecification != nil {
-		m.SSE = c.sseDescription(in.SSESpecification)
+		m.SSE = sse
 	}
 
 	if in.TableClass != nil {

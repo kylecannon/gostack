@@ -17,6 +17,7 @@ import (
 	"github.com/kylecannon/gostack/internal/account"
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/awserr"
+	"github.com/kylecannon/gostack/internal/inproc"
 	"github.com/kylecannon/gostack/internal/protocol/awsjson"
 	"github.com/kylecannon/gostack/internal/request"
 	"github.com/kylecannon/gostack/internal/service"
@@ -62,6 +63,9 @@ type Provider struct {
 	api.Unimplemented
 
 	settings func() Settings
+	// client calls KMS through the gateway, for the managed key of a table with
+	// SSE enabled and no key (kms.go).
+	client   *inproc.Client
 	states   *store.Bundle[State]
 	accounts *store.Bundle[accountState]
 	now      func() time.Time
@@ -104,6 +108,7 @@ const streamsService = "dynamodbstreams"
 func New(settings func() Settings, changed func(name string)) *Provider {
 	return &Provider{
 		settings: settings,
+		client:   inproc.New(),
 		changed:  changed,
 		states:   store.NewBundle(func(string, string) *State { return newState() }, (*State).reset),
 		accounts: store.NewBundle(func(string, string) *accountState { return newAccountState() }, (*accountState).reset),
@@ -121,6 +126,7 @@ func (p *Provider) Registration() service.Registration {
 		Reset:    p.reset,
 		Mount:    p.mountExpired,
 		Close:    p.close,
+		Bind:     p.Bind,
 		Persist:  p,
 		Handler:  p,
 		// Every operation takes AttributeValues, which decode into 160-byte
@@ -136,6 +142,12 @@ func (p *Provider) Registration() service.Registration {
 }
 
 const decodeFactor = 256
+
+// Bind hands the Provider the handler it calls KMS through, normally the
+// gateway's.
+func (p *Provider) Bind(h http.Handler) {
+	p.client.Bind(h)
+}
 
 // streamsChanged tells persistence that a stream record was written.
 func (p *Provider) streamsChanged() {

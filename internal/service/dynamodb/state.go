@@ -40,13 +40,26 @@ type State struct {
 
 	// tokens are the TransactWriteItems ClientRequestTokens in their window.
 	tokens tokens
+
+	// managedKeys is the ARN of the AWS managed KMS key of each account and
+	// region ("account/region") whose tables this state holds, which is one
+	// place unless DYNAMODB_SHARE_DB gives every caller this state. keyMu
+	// guards it and is held across the call to KMS that makes a key, so two
+	// first tables share one. It is taken with no other lock held, and reset
+	// takes it before mu.
+	keyMu       sync.Mutex
+	managedKeys map[string]string
 }
 
 func newState() *State {
-	return &State{tables: map[string]*tableEntry{}}
+	return &State{tables: map[string]*tableEntry{}, managedKeys: map[string]string{}}
 }
 
 func (s *State) reset() {
+	s.keyMu.Lock()
+	clear(s.managedKeys)
+	s.keyMu.Unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

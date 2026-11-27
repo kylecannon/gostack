@@ -504,6 +504,42 @@ class CheckAgainstBaseTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("no internal/service/sqs/ package", out)
 
+    def test_an_exclusion_that_depends_on_a_served_service_fails_and_is_named(self) -> None:
+        # SQ-479: two dynamodb rows and one secretsmanager row stayed excluded
+        # as depends-on:kms after kms was served.
+        base = self.split_base()
+        kms = self.repo / "internal" / "service" / "kms"
+        kms.mkdir(parents=True)
+        (kms / "kms.go").write_text("package kms\n", encoding="utf-8")
+        (self.exclusions / "sqs.yaml").write_text(
+            f'"{SQS}::d": depends-on:kms\n"{SQS}::e": depends-on:kms (describe_key)\n"{SQS}::f": depends-on:lambda\n',
+            encoding="utf-8",
+        )
+        for target in (base, "HEAD"):
+            code, out = self.check(target)
+            self.assertEqual(code, 1, out)
+            self.assertIn(f"parity/exclusions/sqs.yaml: {SQS}::d: depends-on:kms, but kms is served", out)
+            self.assertIn(f"{SQS}::e: depends-on:kms (describe_key), but kms is served", out)
+            self.assertNotIn(f"{SQS}::f", out)
+            self.assertNotIn(f"{STS}::iam", out)
+
+    def test_an_exclusion_that_depends_on_a_served_service_fails_without_a_committed_ledger(self) -> None:
+        (self.repo / "README").write_text("x\n", encoding="utf-8")
+        base = self.commit("no ledger")
+        kms = self.repo / "internal" / "service" / "kms"
+        kms.mkdir(parents=True)
+        (kms / "kms.go").write_text("package kms\n", encoding="utf-8")
+        (self.exclusions / "sqs.yaml").write_text(f'"{SQS}::d": depends-on:kms\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 1, out)
+        self.assertIn("kms is served", out)
+
+    def test_an_exclusion_that_depends_on_a_service_gostack_lacks_passes(self) -> None:
+        base = self.split_base()
+        (self.exclusions / "sqs.yaml").write_text(f'"{SQS}::d": depends-on:kms\n', encoding="utf-8")
+        code, out = self.check(base)
+        self.assertEqual(code, 0, out)
+
     def test_a_row_that_passed_at_the_base_and_fails_now_exits_non_zero(self) -> None:
         base = self.split_base()
         self.flip(f"{STS}::a")
