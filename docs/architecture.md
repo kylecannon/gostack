@@ -276,7 +276,9 @@ LocalStack serves HTTP, HTTPS and h2c on one port. The listener mirrors
   4566, as in LocalStack's `config.py`. The container check mirrors its
   `in_docker()` (see Container detection).
 - `ReadHeaderTimeout` is set. There is no `WriteTimeout`, because SQS long-polls
-  for 20s and responses stream.
+  for 20s and responses stream. After an HTTP/1.1 answer whose request body was
+  not read to its end, the rest of the body gets 1 s (`gateway.unreadDrain`)
+  before the connection closes (see Request memory).
 - `DisableGeneralOptionsHandler` is set.
 
 ### Request memory
@@ -293,24 +295,33 @@ allocation. `docs/compat.md` lists the answers.
 Paths outside the decoders, bounded on their own:
 
 - Documents a service parses after decoding are held to AWS's length before
-  they are parsed: an SQS `Policy` or `RedrivePolicy` to 8,192 bytes, an S3
-  bucket policy to 20 KB, an STS SAML assertion to botocore's 100,000
-  characters. `docs/compat.md` lists the answers.
+  they are parsed: an SQS `Policy` or `RedrivePolicy` to 8,192 bytes, which
+  also holds the policy `AddPermission` builds (past it the statement is
+  refused with `OverLimit`), an S3 bucket policy to 20 KB, an STS SAML
+  assertion to botocore's 100,000 characters. `docs/compat.md` lists the
+  answers.
 - The `x-localstack-data` header is checked with `json.Valid` in
   `markInternal` and never decoded; net/http's 1 MiB header limit bounds its
   length.
 - The internal API's json bodies (`/_localstack/health` POST and PUT, the
   config update) are read through `protocol.ReadRequest` and charge 64 times
   their length for decoding (`internalapi.genericDecode`), so they hold the
-  in-flight bound as a service's body does. With no room, health answers
-  `503` and a config update the `400` of an invalid body.
+  in-flight bound as a service's body does. A body of 16 KiB or less charges
+  nothing, its decoding fitting in `protocol.FreeDecode`, and the charge stops
+  at the bound less one body share. Their 1 MiB cap is the body meter's bound
+  (`protocol.BoundBody`). With no room, health and a config update answer
+  `503`.
 - An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
   before its file part (`s3.preDataReader`), so a part header cannot grow
   past it.
 - A handler that answers before reading its body to the end (S3 `PutObject`
   to a bucket that does not exist) closes the connection: the gateway sets
   `Connection: close` on the answer and gives net/http 1 s to read what is
-  left (`gateway.unreadBody`).
+  left (`gateway.unreadBody`). This holds for HTTP/1.1 only: on HTTP/2 a
+  `Connection: close` ends every stream on the connection, and an unread body
+  ends with its own stream, so an HTTP/2 body is not followed. The
+  shutdown-guard `503` and the CORS `403` answer above this layer
+  (`recoverPanic`) and keep net/http's own read of the rest of the body.
 
 Open: SSM `PutParameter` `Policies`, kept and parsed again by every
 `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call. It stays as it
