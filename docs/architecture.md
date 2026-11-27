@@ -317,7 +317,7 @@ Paths outside the decoders, bounded on their own:
   before its file part (`s3.preDataReader`), so a part header cannot grow
   past it.
 
-Open: these paths stay as they are on `main`. Each is filed on its own.
+Open: these paths stay as they are on `main`.
 
 - S3 answers before reading the body. A handler that answers without reading
   its body to the end (`PutObject` to a bucket that does not exist) leaves
@@ -328,7 +328,8 @@ Open: these paths stay as they are on `main`. Each is filed on its own.
   none in 25 s to a `PUT ?lifecycle` stalled the same way, whose body of under
   64 KiB is read with no idle deadline.
 - SSM `PutParameter` `Policies`, kept and parsed again by every
-  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
+  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call. It is filed
+  on its own.
 
 Settings, all read at start-up:
 
