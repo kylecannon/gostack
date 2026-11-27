@@ -393,7 +393,7 @@ Parity: [sts in parity.md](parity.md#sts), which counts its excluded tests.
 
 Persistence: no snapshotter is registered, so `PERSIST_STS` saves nothing.
 
-Other headings of compat.md with a table row under them that names sts: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [SSM Parameter Store](compat.md#ssm-parameter-store), [Accepted LocalStack-only behavior](compat.md#accepted-localstack-only-behavior).
+Other headings of compat.md with a table row under them that names sts: [Gateway and process](compat.md#gateway-and-process), [Where gostack follows AWS](compat.md#where-gostack-follows-aws), [Request nesting limits](compat.md#request-nesting-limits), [Request memory limits](compat.md#request-memory-limits), [SSM Parameter Store](compat.md#ssm-parameter-store), [Accepted LocalStack-only behavior](compat.md#accepted-localstack-only-behavior).
 
 **Implemented (7)**
 

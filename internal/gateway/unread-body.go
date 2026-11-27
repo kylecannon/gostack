@@ -19,9 +19,9 @@ const unreadDrain = time.Second
 // answer to a request whose body was not can close the connection
 // (closeUnread, drainUnread). Without it net/http reads what is left of the
 // body, up to 256 KiB, before it writes the answer and again after, with no
-// deadline: an S3 PutBucketLifecycleConfiguration without Content-MD5, which
-// is answered before its body is read, waited on a client that had stopped
-// for as long as the client kept the connection (SQ-320). It is a field of
+// deadline: an S3 PutObject to a bucket that does not exist, which is
+// answered before its body is read, waited on a client that had stopped for
+// as long as the client kept the connection (SQ-320). It is a field of
 // call, so following a body allocates nothing.
 //
 // Read runs on whatever goroutine reads the body, and remains on the one that

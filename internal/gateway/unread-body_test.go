@@ -18,8 +18,8 @@ import (
 )
 
 // Test_Gateway_AnswerBeforeTheBody is SQ-320. A handler that answers without
-// reading its request's body (S3 answers a PutBucketLifecycleConfiguration
-// without Content-MD5 so) gets its answer to a client that stopped sending,
+// reading its request's body (S3 answers a PutObject to a bucket that does not
+// exist so) gets its answer to a client that stopped sending,
 // and the server gives back the connection soon after: net/http would read the
 // rest of the body, under 256 KiB, before writing the answer, with no
 // deadline. A client that sends its whole body still reads the answer, and a

@@ -290,19 +290,30 @@ allocates is at most four times its decoded size plus a constant
 that would pass a bound is refused with its protocol's own error before the
 allocation. `docs/compat.md` lists the answers.
 
-Open: these paths take client bytes the rule does not yet bound, and stay as
-they are on `main`. Each is filed on its own.
+Paths outside the decoders, bounded on their own:
 
-- Policy documents a service parses after decoding: SQS `SetQueueAttributes`
-  `Policy` and `AddPermission`, S3 `PutBucketPolicy`, STS
-  `AssumeRoleWithSAML`. Their nesting is bounded; their width is not.
-- The `x-localstack-data` header, parsed as json in `markInternal`.
-- `POST /_localstack/health`.
-- The part headers of an S3 browser POST upload.
-- SQS `SetQueueAttributes` `RedrivePolicy`, parsed into a generic tree
-  (`sqs/redrive.go`): 16 KB of gzip reaches 665 MiB.
-- SSM `PutParameter` `Policies`, kept and parsed again by every
-  `DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call.
+- Documents a service parses after decoding are held to AWS's length before
+  they are parsed: an SQS `Policy` or `RedrivePolicy` to 8,192 bytes, an S3
+  bucket policy to 20 KB, an STS SAML assertion to botocore's 100,000
+  characters. `docs/compat.md` lists the answers.
+- The `x-localstack-data` header is checked with `json.Valid` in
+  `markInternal` and never decoded; net/http's 1 MiB header limit bounds its
+  length.
+- The internal API's json bodies (`/_localstack/health` POST and PUT, the
+  config update) are read through `protocol.ReadRequest` and charge 64 times
+  their length for decoding (`internalapi.genericDecode`), so they hold the
+  in-flight bound as a service's body does. No room answers `503`.
+- An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
+  before its file part (`s3.preDataReader`), so a part header cannot grow
+  past it.
+- A handler that answers before reading its body to the end (S3 `PutObject`
+  to a bucket that does not exist) closes the connection: the gateway sets
+  `Connection: close` on the answer and gives net/http 1 s to read what is
+  left (`gateway.unreadBody`).
+
+Open: SSM `PutParameter` `Policies`, kept and parsed again by every
+`DescribeParameters` (`ssm/labels.go`): about 1.5 GiB per call. It stays as it
+is on `main` and is filed on its own.
 
 Settings, all read at start-up:
 
