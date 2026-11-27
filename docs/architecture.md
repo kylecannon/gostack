@@ -307,8 +307,12 @@ Paths outside the decoders, bounded on their own:
   in-flight bound as a service's body does. A body of 16 KiB or less charges
   nothing, its decoding fitting in `protocol.FreeDecode`, and the charge stops
   at the bound less one body share. Their 1 MiB cap is the body meter's bound
-  (`protocol.BoundBody`). With no room, health and a config update answer
-  `503`.
+  (`protocol.BoundBody`), and only a metered body is bounded by the meter: one
+  that states a longer length is refused before it is read past
+  `protocol.FreeBody`, and one of unknown length can be read to about 2 MiB
+  before it is refused. An in-process body has no meter and is bounded by
+  `GOSTACK_MAX_REQUEST_BODY`, then checked against the cap. With no room,
+  health and a config update answer `503`.
 - An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
   before its file part (`s3.preDataReader`), so a part header cannot grow
   past it.

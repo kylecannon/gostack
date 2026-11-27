@@ -178,7 +178,7 @@ func Test_InternalBodies_AreBoundByTheirMeter(t *testing.T) {
 		mostRead int
 	}{
 		{"a stated length past the cap is not read", int64(len(long)), 2 * protocol.FreeBody},
-		{"an unknown length stops at the cap", -1, 2*limit + protocol.FreeBody},
+		{"an unknown length is refused within twice the cap", -1, 2*limit + protocol.FreeBody},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newHarness(t, nil)

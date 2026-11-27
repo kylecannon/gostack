@@ -70,10 +70,14 @@ const genericDecode = 64
 // bound has no room it reports busy, and its caller answers with writeBusy.
 //
 // maxBody is the body meter's bound (protocol.BoundBody), as a service's
-// MaxRequest is, so a body that states a longer length is refused before it
-// is read past protocol.FreeBody, and one of unknown length is read no
-// further than the cap. A body with no meter (one of FreeBody or less, or a
-// request that did not come through the gateway) is checked once read.
+// MaxRequest is, and only a metered body is bounded by the meter. A metered
+// body that states a longer length is refused before it is read past
+// protocol.FreeBody. One of unknown length is refused by the read that passes
+// the cap, whose buffer can be as large as what arrived before it
+// (protocol.ReadBody), so it can be read to about 2 MiB first. A body with no
+// meter (one that states FreeBody or less, or an in-process request that did
+// not come through the gateway) is read whole, up to GOSTACK_MAX_REQUEST_BODY,
+// and checked against maxBody once read.
 func decodeObject(r *http.Request) (object map[string]any, busy bool) {
 	protocol.BoundBody(r.Context(), maxBody)
 
