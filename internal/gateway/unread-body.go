@@ -31,14 +31,23 @@ type unreadBody struct {
 	length int64 // the stated length, or -1
 	read   atomic.Int64
 	ended  atomic.Bool
+	// failed is whether a read of the connection failed: the body's idle
+	// timeout passed (protocol.ErrBodyIdle), or the client went away.
+	failed atomic.Bool
 }
 
 func (b *unreadBody) Read(p []byte) (int, error) {
 	n, err := b.src.Read(p)
 
 	read := b.read.Add(int64(n))
-	if errors.Is(err, io.EOF) || (b.length >= 0 && read >= b.length) {
+
+	switch {
+	case errors.Is(err, io.EOF) || (b.length >= 0 && read >= b.length):
 		b.ended.Store(true)
+	case err != nil:
+		b.failed.Store(true)
+	default:
+		// More of the body is to come.
 	}
 
 	return n, err
@@ -77,10 +86,15 @@ func (w *statusWriter) closeUnread() {
 	}
 }
 
-// drainUnread runs when the handler has returned. For a body that remains
-// unread, it closes the connection after the answer (when nothing was written
-// yet) and bounds the read net/http makes of the rest of the body by
-// unreadDrain.
+// drainUnread runs when the handler has ended, by returning, panicking or
+// calling runtime.Goexit, after the request's charge is given back. For a body
+// that remains unread, it closes the connection after the answer (when nothing
+// was written yet) and bounds the read net/http makes of the rest of the body
+// by unreadDrain. It is the one owner of the read deadline from here on: the
+// body's meter cleared its own (BodyMeter.IdleBy) when the charge was given
+// back, which is why it runs after. A body whose read already failed keeps the
+// deadline it failed under: a body the meter timed out has its deadline in the
+// past, and gets no further unreadDrain.
 func (w *statusWriter) drainUnread(rw http.ResponseWriter) {
 	if !w.body.remains() {
 		return
@@ -88,6 +102,10 @@ func (w *statusWriter) drainUnread(rw http.ResponseWriter) {
 
 	if w.status == 0 {
 		w.Header().Set("Connection", "close")
+	}
+
+	if w.body.failed.Load() {
+		return
 	}
 
 	// A hijacked connection, or a writer that has no deadline, has nothing

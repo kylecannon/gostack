@@ -364,7 +364,13 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 			}
 		}
 
-		defer state.charge.Release()
+		// Last, on every way out: give back the charge, whose meter clears
+		// its read deadline, then set the one the rest of an unread body is
+		// read under (drainUnread).
+		defer func() {
+			state.charge.Release()
+			sw.drainUnread(w)
+		}()
 
 		defer func() {
 			if returned {
@@ -379,8 +385,6 @@ func (g *Gateway) recoverPanic(next http.Handler) http.Handler {
 		next.ServeHTTP(sw, r)
 
 		returned = true
-
-		sw.drainUnread(w)
 	})
 }
 
