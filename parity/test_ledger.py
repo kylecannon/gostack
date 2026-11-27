@@ -544,16 +544,19 @@ class CheckAgainstBaseTest(unittest.TestCase):
     def test_the_services_a_depends_on_reason_names_are_read_whole_and_by_their_gostack_names(self) -> None:
         self.assertEqual(ledger.reason_services("depends-on:kms"), ["kms"])
         self.assertEqual(ledger.reason_services("depends-on:kms+lambda"), ["kms", "lambda"])
-        self.assertEqual(ledger.reason_services("depends-on:kms, lambda"), ["kms", "lambda"])
+        self.assertEqual(ledger.reason_services("depends-on:lambda+eventbridge"), ["lambda", "events"])
         self.assertEqual(ledger.reason_services("depends-on:eventbridge"), ["events"])
+        # Prose after a comma or in parentheses is not a service name.
+        self.assertEqual(ledger.reason_services("depends-on:lambda, sqs event source mapping"), ["lambda"])
         self.assertEqual(ledger.reason_services("depends-on:kms (describe_key)"), ["kms"])
         self.assertEqual(ledger.reason_services("hard-skipped (depends-on:kms)"), [])
-        # Every reason the exclusions use that is not a service of TEST_DIRS
-        # under its own name is an alias.
+        # Every name a reason of the exclusions lists, after each +, that is not a
+        # service of TEST_DIRS under its own name is an alias.
         used = {
             service
             for reason in ledger.load_exclusions(ledger.EXCLUSIONS).values()
-            for service in re.findall(r"depends-on:([\w-]+)", reason)
+            for match in re.findall(r"^depends-on:([\w+-]+)", reason)
+            for service in match.split("+")
         }
         self.assertEqual({name for name in used if name not in ledger.TEST_DIRS}, set(ledger.DEPENDENCY_ALIASES))
 
@@ -570,13 +573,14 @@ class CheckAgainstBaseTest(unittest.TestCase):
         base = self.split_base()
         self.serve("kms")
         (self.exclusions / "sqs.yaml").write_text(
-            f'"{SQS}::d": depends-on:lambda+kms\n"{SQS}::e": depends-on:lambda, kms\n"{SQS}::f": depends-on:lambda+iam\n',
+            f'"{SQS}::d": depends-on:lambda+iam+kms\n"{SQS}::e": depends-on:lambda, kms event source mapping\n'
+            f'"{SQS}::f": depends-on:lambda+iam\n',
             encoding="utf-8",
         )
         code, out = self.check(base)
         self.assertEqual(code, 1, out)
-        self.assertIn(f"{SQS}::d: depends-on:lambda+kms, but kms is served", out)
-        self.assertIn(f"{SQS}::e: depends-on:lambda, kms, but kms is served", out)
+        self.assertIn(f"{SQS}::d: depends-on:lambda+iam+kms, but kms is served", out)
+        self.assertNotIn(f"{SQS}::e", out)
         self.assertNotIn(f"{SQS}::f", out)
 
     def test_an_exclusion_that_depends_on_a_service_gostack_lacks_passes(self) -> None:

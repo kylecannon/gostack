@@ -710,12 +710,13 @@ def unserved_results(rows: dict[str, dict], served: set[str]) -> list[str]:
     ]
 
 
-# A reason names its services after depends-on: one, or several joined by + or
-# a comma (depends-on:kms+lambda, depends-on:kms, lambda). Text after the list,
-# such as a parenthesised note, is not read.
-DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+(?:\s*[+,]\s*[\w-]+)*)")
-# The reasons spell a service two ways: eventbridge (the s3 and ssm exclusions)
-# is the service gostack knows as events. No other reason in use is an alias.
+# A reason names its services after depends-on: one, or several joined by + with
+# no space (depends-on:kms+lambda). Text after the list, such as a note after a
+# comma or in parentheses, is not read.
+DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+(?:\+[\w-]+)*)")
+# The reasons spell one service two ways: s3.yaml says eventbridge, ssm.yaml
+# says events, and gostack knows it as events. No other reason in use is an
+# alias.
 DEPENDENCY_ALIASES = {"eventbridge": "events"}
 
 
@@ -724,8 +725,7 @@ def reason_services(reason: str) -> list[str]:
     named = DEPENDS_ON_REASON.match(reason)
     if not named:
         return []
-    names = (name.strip() for name in re.split(r"[+,]", named.group(1)))
-    return [DEPENDENCY_ALIASES.get(name, name) for name in names]
+    return [DEPENDENCY_ALIASES.get(name, name) for name in named.group(1).split("+")]
 
 
 def served_dependencies(exclusions: dict[str, str], served: set[str]) -> list[str]:

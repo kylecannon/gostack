@@ -174,7 +174,8 @@ Pre-commit and CI both run on the toolchain pinned in `go.mod`.
     `internal/inproc` or another service's package. Every such service must
     be a key (a caller with no key is a missed selection). A key that is not a
     caller only over-selects, so it passes when it is on `DECLARED_AHEAD` in
-    `parity/ledger.py` (`dynamodb`, `dynamodbstreams`, `sns`, `ssm`), and fails
+    `parity/ledger.py` (`dynamodb`, `dynamodbstreams`, `secretsmanager`, `sns`,
+    `ssm`), and fails
     otherwise; the first commit of a service, its API package imported and no
     in-process call yet, needs no table edit, and a key stays on the list once
     its service calls another. An entry for a service that has a generated

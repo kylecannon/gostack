@@ -299,6 +299,16 @@ func Test_managedKey(t *testing.T) {
 		require.Contains(t, keyOf(t, answer), ":kms:"+owner+":")
 		require.Equal(t, 1, s.keysIn(t, owner))
 		require.Equal(t, 0, s.keysIn(t, replica))
+
+		// A key the request names is reported in the caller's region, not the owner's.
+		named := s.call(t, replica, opUpdate,
+			`{"TableName":"tab1","SSESpecification":{"Enabled":true,"KMSMasterKeyId":"k1"}}`)
+		require.Equal(t, http.StatusOK, named.status, named.body)
+
+		answer = nil
+		require.NoError(t, json.Unmarshal([]byte(named.body), &answer))
+		require.Equal(t, "arn:aws:kms:"+replica+":000000000000:key/k1", keyOf(t, answer))
+		require.Equal(t, 1, s.keysIn(t, owner))
 	})
 
 	t.Run("a gateway that serves no KMS leaves the key out", func(t *testing.T) {

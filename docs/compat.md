@@ -421,21 +421,25 @@ differs:
 - A gateway that serves no KMS leaves `KMSMasterKeyArn` out of the
   `SSEDescription`. A KMS that fails the call makes `CreateTable` or
   `UpdateTable` answer `500 InternalServerError` naming the KMS error.
-- `UpdateTable` with `SSESpecification`: LocalStack does not change the
-  encryption. It forwards to DynamoDB Local, which answers "Nothing to update"
-  to a request with only that member (and to one with other members, which it
-  applies without touching the encryption), and only in that first case does the
-  provider act on it: `Enabled` false drops the stored description and answers
-  the one the table had with `Status` `UPDATING`; `Enabled` true does nothing.
-  gostack applies it, as the `UpdateTable` API reference documents the member
-  as a change to the table's server-side encryption, and that decides: `Enabled` true
-  with no key gives the table the managed key (made for the table's owning
-  region, which is not the region of a replica's call, and only once the rest
-  of the request has passed its checks), and `Enabled` false answers the
-  `SSEDescription` the table had with `Status` `UPDATING`, with whatever else
-  the request changed, and `DescribeTable` then has none. A table that had none
-  answers none. A request without the member leaves the encryption as it was
-  and answers it with `Status` `ENABLED`, as LocalStack does.
+- `UpdateTable` with `SSESpecification`: LocalStack's provider acts on the
+  member only when DynamoDB Local, which it forwards the request to, answers
+  "Nothing to update", which is when no other member of the request changes
+  anything. Then `Enabled` false drops the stored description and answers the
+  one the table had with `Status` `UPDATING`, and `Enabled` true does nothing.
+  In any other request the member does nothing. gostack applies it in every
+  request, as the `UpdateTable` API reference documents the member as a change
+  to the table's server-side encryption, and that decides. `Enabled` true with
+  no key gives the table the managed key, made for the table's owning region,
+  which is not the region of a replica's call, once the rest of the request has
+  passed its checks: a refused update makes no key unless a concurrent update
+  changes the table between the check and the update, and the key it then
+  leaves is the shared one every such table takes. A key the request names is
+  reported in the caller's account and region, as for `CreateTable`. `Enabled`
+  false answers the `SSEDescription` the table had with `Status` `UPDATING`,
+  whatever else the request changed, and `DescribeTable` then has none. A table
+  that had none answers none. A request without the member leaves the
+  encryption as it was and answers it with `Status` `ENABLED`, as LocalStack
+  does.
 
 ## DynamoDB expressions and reads
 

@@ -26,15 +26,15 @@ const (
 func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*api.UpdateTableOutput, error) {
 	c := p.caller(ctx)
 
-	name, e, err := p.lookupHome(c, in.TableName)
+	owning := p.owning(c, in.TableName)
+
+	name, e, err := c.lookupAt(owning, in.TableName)
 	if err != nil {
 		return nil, err
 	}
 
 	if onlyReplicaUpdates(in) {
-		_, owner := p.home(c, name)
-
-		err = p.updateReplicas(c, owner, name, in.ReplicaUpdates)
+		err = p.updateReplicas(c, owning.region, name, in.ReplicaUpdates)
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +50,7 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
-	sse, err := p.updatedSSE(ctx, c, name, e, in)
+	sse, err := p.updatedSSE(ctx, c, owning, e, in)
 	if err != nil {
 		return nil, err
 	}
@@ -79,25 +79,27 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 	return &api.UpdateTableOutput{TableDescription: d}, nil
 }
 
-// updatedSSE is the encryption in's SSESpecification gives the table name of
-// entry e, nil when it has none. A key the table needs is made for the table's
-// owning account and region, which a replica region's call does not name, and
-// only once the rest of the update has passed its checks, so a refused update
-// leaves no key behind. It takes no table lock while KMS is called.
+// updatedSSE is the encryption in's SSESpecification gives the table of entry e,
+// nil when it has none. A key the table needs is made for the table's owning
+// account and region, owning, which a replica region's call does not name; a key
+// the request names is reported in the caller's, c. The managed key is made
+// once the rest of the update has passed its checks, so a refused update makes
+// none unless a concurrent update changes the table between the check and the
+// update, and the key it then leaves is the shared one every such table takes.
+// It takes no table lock while KMS is called.
 func (p *Provider) updatedSSE(
-	ctx context.Context, c caller, name string, e *tableEntry, in *api.UpdateTableInput,
+	ctx context.Context, c, owning caller, e *tableEntry, in *api.UpdateTableInput,
 ) (*api.SSEDescription, error) {
-	if needsManagedKey(in.SSESpecification) {
-		err := e.check(in, p.now)
-		if err != nil {
-			return nil, err
-		}
+	if !needsManagedKey(in.SSESpecification) {
+		return p.sseDescription(ctx, c, in.SSESpecification)
 	}
 
-	state, owner := p.home(c, name)
-	home := caller{account: c.account, region: owner, state: state, shared: c.shared, from: c.from}
+	err := e.check(in, p.now)
+	if err != nil {
+		return nil, err
+	}
 
-	return p.sseDescription(ctx, home, in.SSESpecification)
+	return p.sseDescription(ctx, owning, in.SSESpecification)
 }
 
 // checkIndexUpdates refuses a request that names one index twice, then one
