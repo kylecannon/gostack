@@ -1,6 +1,8 @@
 package dynamodb
 
 import (
+	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,6 +19,8 @@ const (
 	msgSetFuncTarget  = "The first argument to %s must equal the assignment value"
 	msgSetFuncValue   = "The second argument to %s must be a value with type SET at "
 	msgUpdateFunc     = "The function is not allowed in an update expression; function: "
+	// msgEmptyComponent refuses a path step that names an empty string.
+	msgEmptyComponent = "Path component cannot be an empty string"
 )
 
 // render turns a statement's expressions into DynamoDB's expression
@@ -106,11 +110,18 @@ func (r *render) resolve(n *partiql.Node) (api.AttributeValue, error) {
 // rootKeyName is where a value outside an INSERT's item stands, for messages.
 const rootKeyName = "root"
 
-// operand renders n where an operand stands: a path, a value, or size().
+// operand renders n where an operand stands: a path, a value, size(), or a
+// condition nested in one. It is cond, which holds the one list of the kinds
+// that are conditions.
 func (r *render) operand(n *partiql.Node) (string, error) {
+	return r.cond(n)
+}
+
+// leaf renders n as an operand that is no condition.
+func (r *render) leaf(n *partiql.Node) (string, error) {
 	switch {
 	case n.Kind == partiql.KindPath:
-		return r.path(n.Path), nil
+		return r.userPath(n.Path)
 	case partiql.IsValue(n):
 		v, err := r.resolve(n)
 		if err != nil {
@@ -122,10 +133,34 @@ func (r *render) operand(n *partiql.Node) (string, error) {
 		return "", value.Invalid(msgMissingCompare)
 	case n.Kind == partiql.KindCall:
 		return r.call(n)
+	case n.Kind == partiql.KindArith:
+		// A sum has no place in a condition.
+		return "", value.Invalid(msgConditionOperator + n.Op)
 	default:
-		return r.cond(n)
+		// A kind cond does not render and neither does leaf has no rendering.
+		return "", fmt.Errorf("%w: %d", errNodeKind, n.Kind)
 	}
 }
+
+// errNodeKind is a node of a kind the renderer has no case for, which the
+// parser does not make.
+var errNodeKind = errors.New("partiql: no rendering for a node of this kind")
+
+// userPath is the path a statement wrote, rendered with its names as
+// placeholders, or the image's refusal of a step that names an empty string,
+// made where the image makes it: as the path is put to use, in the order of the
+// statement's expressions (SQ-418 p2a e1, p2b o).
+func (r *render) userPath(p partiql.Path) (string, error) {
+	if p.HasEmptyStep() {
+		return "", value.Invalid(msgEmptyComponent)
+	}
+
+	return r.path(p), nil
+}
+
+// msgConditionOperator refuses an arithmetic operator in a condition; the
+// operator follows.
+const msgConditionOperator = "Unsupported operator in Condition Expression. Operator: "
 
 // The functions a condition may call, and those an UPDATE's SET may.
 var (
@@ -159,7 +194,7 @@ func (*render) callWith(n *partiql.Node, arg func(*partiql.Node) (string, error)
 	return n.Name + "(" + strings.Join(args, ", ") + ")", nil
 }
 
-// cond renders n as a condition.
+// cond renders n as a condition, or as the operand it is when it is none.
 func (r *render) cond(n *partiql.Node) (string, error) {
 	switch n.Kind {
 	case partiql.KindAnd, partiql.KindOr:
@@ -191,7 +226,7 @@ func (r *render) cond(n *partiql.Node) (string, error) {
 	case partiql.KindIsNull, partiql.KindIsMissing:
 		return r.is(n)
 	default:
-		return r.operand(n)
+		return r.leaf(n)
 	}
 }
 
@@ -302,15 +337,18 @@ func (r *render) update(actions []partiql.Action) (string, []int, error) {
 // updateAction renders one action of an UPDATE, and says which clause it
 // belongs to.
 func (r *render) updateAction(a partiql.Action) (int, string, error) {
-	target := r.path(a.Path)
+	target, err := r.userPath(a.Path)
+	if err != nil {
+		return 0, "", err
+	}
 
 	switch {
 	case a.Value == nil:
 		return clauseRemove, target, nil
 	case a.Value.Kind == partiql.KindCall && (a.Value.Name == "set_add" || a.Value.Name == "set_delete"):
-		operand, err := r.setFunc(a)
-		if err != nil {
-			return 0, "", err
+		operand, setErr := r.setFunc(a)
+		if setErr != nil {
+			return 0, "", setErr
 		}
 
 		if a.Value.Name == "set_add" {
@@ -319,9 +357,9 @@ func (r *render) updateAction(a partiql.Action) (int, string, error) {
 
 		return clauseDelete, target + " " + operand, nil
 	default:
-		v, err := r.updateValue(a.Value)
+		v, valueErr := r.updateValue(a.Value)
 
-		return clauseSet, target + " = " + v, err
+		return clauseSet, target + " = " + v, valueErr
 	}
 }
 

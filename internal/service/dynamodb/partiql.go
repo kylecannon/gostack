@@ -128,10 +128,10 @@ func (m *mixing) check(stmt *partiql.Statement) error {
 	return nil
 }
 
-// parseStatement parses a request's statement and checks it has a value for
-// each of its parameters; one that does not is returned with the error, as it
-// has a kind (mixing). An EXISTS parses only where exists allows it, in a
-// transaction.
+// parseStatement parses a request's statement and refuses a DISTINCT and a
+// statement that has no value for one of its parameters; those are returned
+// with the error, as the statement has a kind (mixing). An EXISTS parses only
+// where exists allows it, in a transaction.
 //
 //nolint:revive // flag-parameter: whether the operation runs EXISTS
 func parseStatement(src *string, params []api.AttributeValue, exists bool) (*partiql.Statement, error) {
@@ -152,6 +152,13 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 		return nil, value.Invalid(msgExistsOnlyTx)
 	}
 
+	// DISTINCT comes before the parameters, and before everything else of the
+	// statement (SQ-418 p2b d-1, d-27). The SELECT of an EXISTS is read for its
+	// WHERE alone (p2c x-d1).
+	if stmt.Distinct && stmt.Kind == partiql.Select {
+		return stmt, value.Invalid(partiql.MsgDistinct)
+	}
+
 	if stmt.Params > len(params) {
 		return stmt, value.Invalid(partiql.MsgParamCount)
 	}
@@ -159,24 +166,43 @@ func parseStatement(src *string, params []api.AttributeValue, exists bool) (*par
 	return stmt, nil
 }
 
-// parseFailure is the answer to a statement that did not parse. Outside a
-// transaction (exists false) an EXISTS around an expression is refused as an
-// EXISTS, where inside one it is not well formed.
-//
-//nolint:revive // flag-parameter: whether the operation runs EXISTS
+// parseFailure is the answer to a statement that did not parse. An EXISTS
+// around an expression is refused as an EXISTS outside a transaction (exists
+// false), and inside one as an operation it does not support.
 func parseFailure(err error, exists bool) error {
 	pe, ok := errors.AsType[*partiql.Error](err)
-	if ok && pe.ExistsOnly && !exists {
-		return value.Invalid(msgExistsOnlyTx)
-	}
 
-	return statementError(err)
+	switch {
+	case ok && pe.ExistsOnly && exists:
+		return value.Invalid(msgUnsupportedTx)
+	case ok && pe.ExistsOnly:
+		return value.Invalid(msgExistsOnlyTx)
+	default:
+		return statementError(err)
+	}
 }
 
-// executeSelect runs a SELECT as a Query or a Scan.
+// executeSelect runs a SELECT as a Query or a Scan. The statement's own
+// mistakes are named before the rest (refusedInOrder).
 func (p *Provider) executeSelect(
 	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
 ) (*api.ExecuteStatementOutput, error) {
+	return refusedInOrder(stmt, in.Parameters, func() (*api.ExecuteStatementOutput, error) {
+		return p.selectItems(ctx, in, stmt)
+	})
+}
+
+// selectItems is executeSelect's body: the SELECT against its table.
+func (p *Provider) selectItems(
+	ctx context.Context, in *api.ExecuteStatementInput, stmt *partiql.Statement,
+) (*api.ExecuteStatementOutput, error) {
+	r := newRender(in.Parameters)
+
+	projected, aliases, err := projection(stmt.Projection, r)
+	if err != nil {
+		return nil, err
+	}
+
 	_, e, err := p.caller(ctx).statementTable(&stmt.Table)
 	if err != nil {
 		return nil, fmt.Errorf("statement: %w", err)
@@ -204,9 +230,9 @@ func (p *Provider) executeSelect(
 		return nil, err
 	}
 
-	r := newRender(in.Parameters)
-
-	projected, aliases, err := projection(stmt.Projection, r)
+	// After the token, the image refuses a key attribute with steps below it,
+	// and then an ORDER BY of a path (SQ-418 p4a, p4g).
+	err = selectKeyPaths(stmt, e.data.Key())
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +548,14 @@ func renderCond(n *partiql.Node, r *render) (*string, error) {
 func projection(paths []partiql.Path, r *render) (*string, []partiql.Path, error) {
 	if paths == nil {
 		return nil, nil, nil
+	}
+
+	// A step that names an empty string is refused before the list's overlap
+	// (SQ-418 p2b o-4).
+	for _, path := range paths {
+		if path.HasEmptyStep() {
+			return nil, nil, value.Invalid(msgEmptyComponent)
+		}
 	}
 
 	whole := newRender(nil)

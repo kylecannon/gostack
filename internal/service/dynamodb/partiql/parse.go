@@ -145,6 +145,18 @@ const MsgVariable = "Unsupported operation: VariableReference"
 func (p *parser) selectStatement() (*Statement, error) {
 	s := &Statement{Kind: Select}
 
+	// A set quantifier: ALL is the default and changes nothing, where DISTINCT
+	// parses and is refused later (Statement.Distinct).
+	switch {
+	case p.peek().is("DISTINCT"):
+		p.i++
+
+		s.Distinct = true
+	case p.peek().is("ALL"):
+		p.i++
+	default:
+	}
+
 	if p.peek().punct("*") {
 		p.i++
 	} else {
@@ -155,6 +167,11 @@ func (p *parser) selectStatement() (*Statement, error) {
 			}
 
 			s.Projection = append(s.Projection, path)
+
+			err = p.aliased(s)
+			if err != nil {
+				return nil, err
+			}
 
 			if !p.peek().punct(",") {
 				break
@@ -167,6 +184,10 @@ func (p *parser) selectStatement() (*Statement, error) {
 	err := p.keyword("FROM")
 	if err == nil {
 		err = p.target(s, true)
+	}
+
+	if err == nil {
+		err = p.tableAliased(s)
 	}
 
 	if err == nil {
@@ -242,6 +263,44 @@ func (p *parser) target(s *Statement, index bool) error {
 	return nil
 }
 
+// alias takes the alias after a projected path or a table, `AS name` or a bare
+// name, and reports whether there was one. The image parses an alias in a
+// SELECT, UPDATE and DELETE and refuses it later; `AS` with no name after it
+// is not well formed.
+func (p *parser) alias() (bool, error) {
+	as := p.peek().is("AS")
+	if as {
+		p.i++
+	}
+
+	_, ok := p.name()
+	if as && !ok {
+		return false, errMalformed
+	}
+
+	return ok, nil
+}
+
+// tableAliased reads an alias after a table, and marks s with it.
+func (p *parser) tableAliased(s *Statement) error {
+	ok, err := p.alias()
+	if ok {
+		s.Aliased, s.TableAliased = true, true
+	}
+
+	return err
+}
+
+// aliased reads an alias after a projected path, and marks s with it.
+func (p *parser) aliased(s *Statement) error {
+	ok, err := p.alias()
+	if ok {
+		s.Aliased = true
+	}
+
+	return err
+}
+
 // name takes an identifier, bare or quoted.
 func (p *parser) name() (string, bool) {
 	t := p.peek()
@@ -310,6 +369,10 @@ func (p *parser) updateStatement() (*Statement, error) {
 	s := &Statement{Kind: Update}
 
 	err := p.target(s, false)
+	if err == nil {
+		err = p.tableAliased(s)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -379,21 +442,18 @@ func (p *parser) setActions(s *Statement) error {
 	}
 }
 
+// removeActions reads the one path a REMOVE names. The image refuses a comma
+// after it as not well formed (`REMOVE a, b`), where SET takes a list: a second
+// path takes a second REMOVE.
 func (p *parser) removeActions(s *Statement) error {
-	for {
-		path, err := p.path()
-		if err != nil {
-			return err
-		}
-
-		s.Actions = append(s.Actions, Action{Path: path})
-
-		if !p.peek().punct(",") {
-			return nil
-		}
-
-		p.i++
+	path, err := p.path()
+	if err != nil {
+		return err
 	}
+
+	s.Actions = append(s.Actions, Action{Path: path})
+
+	return nil
 }
 
 func (p *parser) deleteStatement() (*Statement, error) {
@@ -402,6 +462,10 @@ func (p *parser) deleteStatement() (*Statement, error) {
 	err := p.keyword("FROM")
 	if err == nil {
 		err = p.target(s, false)
+	}
+
+	if err == nil {
+		err = p.tableAliased(s)
 	}
 
 	if err == nil {
@@ -490,7 +554,8 @@ func (p *parser) existsStatement() (*Statement, error) {
 // (verification/SQ-439 round3 exists-cand.log, 78 statements probed).
 func (p *parser) existsOperand() error {
 	first := p.peek()
-	if first.kind == tokEOF || first.is("UPDATE") || first.is("DELETE") || first.is("FROM") {
+	if first.kind == tokEOF || first.is("UPDATE") || first.is("DELETE") || first.is("FROM") ||
+		first.is("WHERE") || first.is("ORDER") || first.is("RETURNING") || first.punct(",") {
 		return errMalformed
 	}
 
@@ -539,29 +604,73 @@ func (p *parser) path() (Path, error) {
 		case p.peek().punct("["):
 			p.i++
 
-			t := p.take()
-
-			n, err := strconv.Atoi(t.text)
-			if t.kind != tokNumber || err != nil || p.expect("]") != nil {
-				return nil, errMalformed
+			step, err := p.bracketStep()
+			if err != nil {
+				return nil, err
 			}
 
-			path = append(path, Step{Index: n, IsIndex: true})
+			path = append(path, step)
 		default:
 			return path, nil
 		}
 	}
 }
 
-// reserved reports whether a bare identifier is a keyword of the grammar,
-// which only a quoted identifier may spell.
-func reserved(s string) bool {
-	switch strings.ToUpper(s) {
-	case "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "BETWEEN", "IN", "IS", "NULL", "MISSING", "TRUE",
-		"FALSE", "INSERT", "INTO", "VALUE", "UPDATE", "SET", "REMOVE", "DELETE", "RETURNING", "EXISTS", "ORDER",
-		"BY":
-		return true
+// MsgAliasing is the refusal of a statement that names an alias.
+const MsgAliasing = "Aliasing is not supported"
+
+// MsgDistinct is the refusal of a SELECT DISTINCT.
+const MsgDistinct = "Unsupported token in expression: DISTINCT"
+
+// bracketStep reads what follows a `[` of a path: a list index, or a name in
+// quotes or bare, which the image reads as the step `.name` (`m['x']` is `m.x`).
+// A step with no name, `[”]`, is read as one: the image refuses it where the
+// path is put to use, with the statement's other expressions (Path.HasEmptyStep).
+func (p *parser) bracketStep() (Step, error) {
+	t := p.take()
+
+	var step Step
+
+	switch {
+	case t.kind == tokNumber:
+		n, err := strconv.Atoi(t.text)
+		if err != nil {
+			return Step{}, errMalformed
+		}
+
+		step = Step{Index: n, IsIndex: true}
+	case t.kind == tokString || t.kind == tokQuoted || (t.kind == tokIdent && !reserved(t.text)):
+		step = Step{Name: t.text}
 	default:
-		return false
+		return Step{}, errMalformed
 	}
+
+	if p.expect("]") != nil {
+		return Step{}, errMalformed
+	}
+
+	return step, nil
+}
+
+// reservedWords are the keywords of the grammar, which only a quoted identifier
+// may spell. The last twelve are the image's: it answers each, as a name in a
+// SELECT's list and as an attribute in a WHERE, as not well formed (SQ-418
+// p2c); where else it reserves them, and which other words of the PartiQL
+// grammar it reserves, was not probed.
+var reservedWords = [...]string{
+	"SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "BETWEEN", "IN", "IS", "NULL", "MISSING", "TRUE",
+	"FALSE", "INSERT", "INTO", "VALUE", "UPDATE", "SET", "REMOVE", "DELETE", "RETURNING", "EXISTS", "ORDER",
+	"BY", "ALL", "DISTINCT", "AS", "ASC", "DESC", "LIMIT", "MODIFIED", "OLD", "NEW", "ONLY", "PIVOT", "UNPIVOT",
+}
+
+// reserved reports whether a bare identifier is a keyword of the grammar. It
+// compares without a case-folded copy, so the check costs no allocation.
+func reserved(s string) bool {
+	for _, w := range reservedWords {
+		if len(w) == len(s) && strings.EqualFold(w, s) {
+			return true
+		}
+	}
+
+	return false
 }
