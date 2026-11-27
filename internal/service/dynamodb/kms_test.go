@@ -22,7 +22,6 @@ const (
 	sseOn          = `"SSESpecification":{"Enabled":true}`
 	sseOff         = `"SSESpecification":{"Enabled":false}`
 	managedKeyText = "Default key that protects my DynamoDB data when no other key is defined"
-	keyManager     = "X-Gostack-Key-Manager"
 	arnPattern     = `^arn:aws:kms:us-east-1:000000000000:key/[0-9a-f-]{36}$`
 )
 
@@ -67,15 +66,15 @@ func bindStack(tb testing.TB, others ...service.Registration) *stack {
 	return s
 }
 
-// kmsCall sends a KMS operation as the test account in us-east-1, through the
+// kmsCall sends a KMS operation as the test account in region, through the
 // gateway as an outside client would.
-func (s *kmsStack) kmsCall(tb testing.TB, operation, body string, header http.Header) map[string]any {
+func (s *kmsStack) kmsCall(tb testing.TB, region, operation, body string, header http.Header) map[string]any {
 	tb.Helper()
 
 	req := httptest.NewRequestWithContext(tb.Context(), http.MethodPost, "/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "TrentService."+operation)
-	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/"+usEast1+
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=test/20130524/"+region+
 		"/kms/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc")
 	maps.Copy(req.Header, header)
 
@@ -132,11 +131,11 @@ func makeTable(name string, members ...string) string {
 	return body(append([]string{named(name), idKey, idDefs, throughput}, members...)...)
 }
 
-// keysIn is how many keys KMS holds in us-east-1.
-func (s *kmsStack) keysIn(tb testing.TB) int {
+// keysIn is how many keys KMS holds in region.
+func (s *kmsStack) keysIn(tb testing.TB, region string) int {
 	tb.Helper()
 
-	keys, ok := s.kmsCall(tb, "ListKeys", `{}`, nil)["Keys"].([]any)
+	keys, ok := s.kmsCall(tb, region, "ListKeys", `{}`, nil)["Keys"].([]any)
 	require.True(tb, ok)
 
 	return len(keys)
@@ -153,7 +152,7 @@ func Test_managedKey(t *testing.T) {
 		arn := keyOf(t, s.ok(t, opCreate, makeTable(tab1, sseOn)))
 		require.Regexp(t, arnPattern, arn)
 
-		meta := keyMetadata(t, s.kmsCall(t, "DescribeKey", `{"KeyId":"`+arn+`"}`, nil))
+		meta := keyMetadata(t, s.kmsCall(t, usEast1, "DescribeKey", `{"KeyId":"`+arn+`"}`, nil))
 		require.Equal(t, "AWS", meta["KeyManager"])
 		require.Equal(t, managedKeyText, meta["Description"])
 		require.Equal(t, "Enabled", meta["KeyState"])
@@ -172,7 +171,7 @@ func Test_managedKey(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(other.body), &made))
 		require.NotEqual(t, first, keyOf(t, made))
 		require.Contains(t, keyOf(t, made), ":kms:eu-west-1:")
-		require.Equal(t, 1, s.keysIn(t))
+		require.Equal(t, 1, s.keysIn(t, usEast1))
 	})
 
 	t.Run("a named key makes no key and is reported as an ARN", func(t *testing.T) {
@@ -180,7 +179,7 @@ func Test_managedKey(t *testing.T) {
 
 		made := s.ok(t, opCreate, makeTable(tab1, `"SSESpecification":{"Enabled":true,"KMSMasterKeyId":"k1"}`))
 		require.JSONEq(t, wantSSE("ENABLED", "arn:aws:kms:us-east-1:000000000000:key/k1"), sseOf(t, made))
-		require.Equal(t, 0, s.keysIn(t))
+		require.Equal(t, 0, s.keysIn(t, usEast1))
 	})
 
 	t.Run("an update that leaves SSE alone keeps it, and one that turns it off answers it UPDATING", func(t *testing.T) {
@@ -223,6 +222,85 @@ func Test_managedKey(t *testing.T) {
 		require.NotEqual(t, first, keyOf(t, s.ok(t, opCreate, makeTable(tab1, sseOn))))
 	})
 
+	t.Run("a key KMS no longer has, or has not enabled, is replaced", func(t *testing.T) {
+		s := newKMSStack(t)
+
+		first := keyOf(t, s.ok(t, opCreate, makeTable(tab1, sseOn)))
+		require.Equal(t, first, keyOf(t, s.ok(t, opCreate, makeTable("tab2", sseOn))), "a usable key is kept")
+
+		// A reset of KMS alone.
+		s.kms.Reset("", "")
+
+		second := keyOf(t, s.ok(t, opCreate, makeTable("tab3", sseOn)))
+		require.NotEqual(t, first, second)
+		require.Equal(t, 1, s.keysIn(t, usEast1))
+
+		// A scheduled deletion leaves the key PendingDeletion, which is not enabled.
+		s.kmsCall(t, usEast1, "ScheduleKeyDeletion", `{"KeyId":"`+second+`","PendingWindowInDays":7}`, nil)
+
+		third := keyOf(t, s.ok(t, opCreate, makeTable("tab4", sseOn)))
+		require.NotEqual(t, second, third)
+		require.Regexp(t, arnPattern, third)
+	})
+
+	t.Run("under DYNAMODB_SHARE_DB a reset of KMS alone, or a scoped one, still makes a new key", func(t *testing.T) {
+		s := newKMSStack(t)
+		s.settings.Store(&dynamodb.Settings{Host: testHost, ShareDB: true})
+
+		first := keyOf(t, s.ok(t, opCreate, makeTable(tab1, sseOn)))
+
+		s.kms.Reset(accountID, usEast1)
+		// The shared state lives at 000000000000/ddblocal, which a reset of an
+		// account and region does not reach.
+		s.provider.Registration().Reset(accountID, usEast1)
+
+		require.NotEqual(t, first, keyOf(t, s.ok(t, opCreate, makeTable("tab2", sseOn))))
+	})
+
+	t.Run("an update that is refused makes no key", func(t *testing.T) {
+		s := newKMSStack(t)
+
+		s.ok(t, opCreate, hashTable(tab1))
+
+		// Pay per request with a throughput is refused by the billing check.
+		refused := s.call(t, usEast1, opUpdate, `{"TableName":"tab1","BillingMode":"PAY_PER_REQUEST",`+
+			`"ProvisionedThroughput":{"ReadCapacityUnits":1,"WriteCapacityUnits":1},`+sseOn+`}`)
+		require.Equal(t, http.StatusBadRequest, refused.status, refused.body)
+		require.Equal(t, 0, s.keysIn(t, usEast1))
+
+		// A stream that is not there to disable is refused by the stream check.
+		refused = s.call(t, usEast1, opUpdate, `{"TableName":"tab1","StreamSpecification":{"StreamEnabled":false},`+
+			sseOn+`}`)
+		require.Equal(t, http.StatusBadRequest, refused.status, refused.body)
+		require.Equal(t, 0, s.keysIn(t, usEast1))
+
+		on := s.ok(t, opUpdate, `{"TableName":"tab1",`+sseOn+`}`)
+		require.Regexp(t, arnPattern, keyOf(t, on))
+		require.Equal(t, 1, s.keysIn(t, usEast1))
+	})
+
+	t.Run("a table updated in a replica region gets a key of its owning region", func(t *testing.T) {
+		const owner, replica = "ap-south-1", "eu-west-1"
+
+		s := newKMSStack(t)
+
+		created := s.call(t, owner, opCreate, hashTable(tab1))
+		require.Equal(t, http.StatusOK, created.status, created.body)
+
+		made := s.call(t, owner, opUpdate,
+			`{"TableName":"tab1","ReplicaUpdates":[{"Create":{"RegionName":"`+replica+`","KMSMasterKeyId":"k"}}]}`)
+		require.Equal(t, http.StatusOK, made.status, made.body)
+
+		update := s.call(t, replica, opUpdate, `{"TableName":"tab1",`+sseOn+`}`)
+		require.Equal(t, http.StatusOK, update.status, update.body)
+
+		var answer map[string]any
+		require.NoError(t, json.Unmarshal([]byte(update.body), &answer))
+		require.Contains(t, keyOf(t, answer), ":kms:"+owner+":")
+		require.Equal(t, 1, s.keysIn(t, owner))
+		require.Equal(t, 0, s.keysIn(t, replica))
+	})
+
 	t.Run("a gateway that serves no KMS leaves the key out", func(t *testing.T) {
 		for name, s := range map[string]*stack{"unbound": newStack(t), "no KMS registered": bindStack(t)} {
 			require.JSONEq(t, `{"Status":"ENABLED","SSEType":"KMS"}`,
@@ -233,7 +311,7 @@ func Test_managedKey(t *testing.T) {
 	t.Run("a client that sends the key manager header makes a customer key", func(t *testing.T) {
 		s := newKMSStack(t)
 
-		made := s.kmsCall(t, "CreateKey", `{}`, http.Header{keyManager: {"AWS"}})
+		made := s.kmsCall(t, usEast1, "CreateKey", `{}`, http.Header{kms.KeyManagerHeader: {kms.ManagerAWS}})
 		require.Equal(t, "CUSTOMER", keyMetadata(t, made)["KeyManager"])
 	})
 }

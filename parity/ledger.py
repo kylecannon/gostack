@@ -277,13 +277,18 @@ EVERY_SERVICE = "*"
 # - sns, ssm: the services that will call sqs and secretsmanager.
 # - dynamodb, dynamodbstreams: a pair that depends on each other through the
 #   state they share, which is in no import.
+# - secretsmanager: its package calls no service, but a test of its suite makes
+#   a key with kms (test_cross_account_access_non_default_key).
 # A key stays listed after its service becomes a real caller; its dependencies
 # are still held to the services that exist.
-DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "sns", "ssm")
+DECLARED_AHEAD = ("dynamodb", "dynamodbstreams", "secretsmanager", "sns", "ssm")
 DEPENDS_ON = {
     "dynamodb": ("dynamodbstreams", "kms"),
-    "dynamodbstreams": ("dynamodb",),
+    # dynamodbstreams imports dynamodb, which imports kms for its header.
+    "dynamodbstreams": ("dynamodb", "kms"),
     "s3": ("kms", "sns", "sqs"),
+    # test_cross_account_access_non_default_key makes a key with kms.
+    "secretsmanager": ("kms",),
     "sns": ("sqs",),
     "ssm": ("secretsmanager",),
     EVERY_SERVICE: ("sts",),
@@ -705,22 +710,39 @@ def unserved_results(rows: dict[str, dict], served: set[str]) -> list[str]:
     ]
 
 
-DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+)")
+# A reason names its services after depends-on: one, or several joined by + or
+# a comma (depends-on:kms+lambda, depends-on:kms, lambda). Text after the list,
+# such as a parenthesised note, is not read.
+DEPENDS_ON_REASON = re.compile(r"^depends-on:([\w-]+(?:\s*[+,]\s*[\w-]+)*)")
+# The reasons spell a service two ways: eventbridge (the s3 and ssm exclusions)
+# is the service gostack knows as events. No other reason in use is an alias.
+DEPENDENCY_ALIASES = {"eventbridge": "events"}
+
+
+def reason_services(reason: str) -> list[str]:
+    """The services a depends-on reason names, as gostack names them."""
+    named = DEPENDS_ON_REASON.match(reason)
+    if not named:
+        return []
+    names = (name.strip() for name in re.split(r"[+,]", named.group(1)))
+    return [DEPENDENCY_ALIASES.get(name, name) for name in names]
 
 
 def served_dependencies(exclusions: dict[str, str], served: set[str]) -> list[str]:
-    """An exclusion whose reason is depends-on:<svc> for a service with an
-    internal/service/<svc>/ package. The reason said the test needs a service
-    gostack lacks; once it has the service the test runs, and an exclusion left
-    in place hides a row that passes or a gap that should show as a failure."""
+    """An exclusion whose reason names a service with an
+    internal/service/<svc>/ package after depends-on:. The reason said the test
+    needs a service gostack lacks; once it has the service the test runs, and
+    an exclusion left in place hides a row that passes or a gap that should show
+    as a failure. A reason that names several fails for each one served: it
+    should name what is still missing."""
     stale = []
     for pattern, reason in sorted(exclusions.items()):
-        needed = DEPENDS_ON_REASON.match(reason)
-        if needed and needed.group(1) in served:
-            stale.append(
-                f"  parity/exclusions/{service_of(pattern)}.yaml: {pattern}: {reason}, but {needed.group(1)} is served "
-                f"(internal/service/{needed.group(1)}/); remove the exclusion and let the test run, or give the real reason"
-            )
+        for name in reason_services(reason):
+            if name in served:
+                stale.append(
+                    f"  parity/exclusions/{service_of(pattern)}.yaml: {pattern}: {reason}, but {name} is served "
+                    f"(internal/service/{name}/); remove the exclusion and let the test run, or give the real reason"
+                )
     return stale
 
 

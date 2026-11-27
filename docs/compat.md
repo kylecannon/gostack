@@ -395,34 +395,47 @@ variables, above.
 
 ## DynamoDB and KMS
 
-A table created or updated with `SSESpecification` enabled and no
-`KMSMasterKeyId` takes an AWS managed KMS key, as in LocalStack
-(`SSEUtils.get_sse_kms_managed_key`): DynamoDB calls `CreateKey` through the
-gateway as the table's account and region, with the description "Default key
-that protects my DynamoDB data when no other key is defined", has KMS mark it
-`KeyManager` `AWS`, and reports its ARN as `KMSMasterKeyArn`. Every table of
-that account and region gets the same key. A table given a `KMSMasterKeyId`
-reports it as an ARN in the caller's account and region and makes no key.
-KMS reads the manager from an internal call alone (the
-`X-Gostack-Key-Manager` header on a call from inside the process); the same
-header from a client is ignored and the key is `CUSTOMER`. Where gostack
+A `CreateTable` with `SSESpecification` enabled and no `KMSMasterKeyId` takes
+an AWS managed KMS key, as in LocalStack (`SSEUtils.get_sse_kms_managed_key`):
+DynamoDB calls `CreateKey` through the gateway as the table's account and
+region, with the description "Default key that protects my DynamoDB data when no
+other key is defined", has KMS mark it `KeyManager` `AWS`, and reports its ARN
+as `KMSMasterKeyArn`. Every table of that account and region gets the same key.
+A table given a `KMSMasterKeyId` reports it as an ARN in the caller's account
+and region and makes no key. KMS reads the manager from an internal call alone
+(the `X-Gostack-Key-Manager` header on a call from inside the process); the
+same header from a client is ignored and the key is `CUSTOMER`. Where gostack
 differs:
 
 - LocalStack keeps the key in a module-level dictionary keyed by region alone,
   so a second account's tables report an ARN of the first account's key id in
   the second account, which no KMS holds. gostack keeps one key per account and
-  region.
-- The key is DynamoDB's own state and is not persisted, as in LocalStack. After
-  a restart, or after `/_gostack/state/reset` of the account or region, the next
-  such table makes a new key; a table made before keeps the ARN it was given,
-  which with `PERSIST_DYNAMODB=1` and `PERSIST_KMS=0` names a key the next
-  process's KMS lacks.
+  region, and asks KMS for the one it kept before it reuses it: a key KMS no
+  longer has (a reset of KMS alone, or of an account and region under
+  `DYNAMODB_SHARE_DB`) or one that is not enabled (`ScheduleKeyDeletion`,
+  `DisableKey`) is replaced by a new one for the next such table.
+- The kept key is DynamoDB's own state and is not persisted, as in LocalStack. A
+  restart, or `/_gostack/state/reset` of the account or region, forgets it; a
+  table made before keeps the ARN it was given, which with `PERSIST_DYNAMODB=1`
+  and `PERSIST_KMS=0` names a key the next process's KMS lacks.
 - A gateway that serves no KMS leaves `KMSMasterKeyArn` out of the
   `SSEDescription`. A KMS that fails the call makes `CreateTable` or
   `UpdateTable` answer `500 InternalServerError` naming the KMS error.
-- `UpdateTable` with `SSESpecification` `Enabled` false answers the
-  `SSEDescription` the table had with `Status` `UPDATING`, as LocalStack does,
-  and `DescribeTable` then has none. A table that had none answers none.
+- `UpdateTable` with `SSESpecification`: LocalStack does not change the
+  encryption. It forwards to DynamoDB Local, which answers "Nothing to update"
+  to a request with only that member (and to one with other members, which it
+  applies without touching the encryption), and only in that first case does the
+  provider act on it: `Enabled` false drops the stored description and answers
+  the one the table had with `Status` `UPDATING`; `Enabled` true does nothing.
+  gostack applies it, as the `UpdateTable` API reference documents the member
+  as a change to the table's server-side encryption, and that decides: `Enabled` true
+  with no key gives the table the managed key (made for the table's owning
+  region, which is not the region of a replica's call, and only once the rest
+  of the request has passed its checks), and `Enabled` false answers the
+  `SSEDescription` the table had with `Status` `UPDATING`, with whatever else
+  the request changed, and `DescribeTable` then has none. A table that had none
+  answers none. A request without the member leaves the encryption as it was
+  and answers it with `Status` `ENABLED`, as LocalStack does.
 
 ## DynamoDB expressions and reads
 

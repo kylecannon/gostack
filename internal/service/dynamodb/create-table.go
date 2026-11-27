@@ -110,13 +110,18 @@ func (p *Provider) CreateTable(ctx context.Context, in *api.CreateTableInput) (*
 
 	p.account(c).setTags(c.tableARN(meta.Name), in.Tags)
 
-	return &api.CreateTableOutput{TableDescription: createdDescription(entry, c.tableARN(meta.Name), in)}, nil
+	d := createdDescription(entry, c.tableARN(meta.Name), in, sse)
+
+	return &api.CreateTableOutput{TableDescription: d}, nil
 }
 
-// createdDescription is the answer to a CreateTable for entry, which in made:
-// the table's description with the members LocalStack's answer adds or leaves
-// out.
-func createdDescription(entry *tableEntry, arn string, in *api.CreateTableInput) *api.TableDescription {
+// createdDescription is the answer to a CreateTable for entry, which in made
+// with the encryption sse: the table's description with the members
+// LocalStack's answer adds or leaves out. sse is the one the table was made
+// with, not entry's, which another call may change once the table is listed.
+func createdDescription(
+	entry *tableEntry, arn string, in *api.CreateTableInput, sse *api.SSEDescription,
+) *api.TableDescription {
 	d := entry.description(arn)
 	d.WarmThroughput = nil
 
@@ -136,7 +141,7 @@ func createdDescription(entry *tableEntry, arn string, in *api.CreateTableInput)
 		d.StreamSpecification = in.StreamSpecification
 	}
 
-	if sse := entry.meta.SSE; sse != nil && sse.Status == nil {
+	if sse != nil && sse.Status == nil {
 		d.SSEDescription = sse
 	}
 

@@ -21,12 +21,17 @@ const (
 	originAWS      = "AWS_KMS"
 	originExternal = "EXTERNAL"
 
-	// managerCustomer and managerAWS are the KeyManager a key reports.
-	// keyManagerHeader is the header an internal CreateKey sets to have the key
-	// made as managerAWS.
-	managerCustomer  = "CUSTOMER"
-	managerAWS       = "AWS"
-	keyManagerHeader = "X-Gostack-Key-Manager"
+	managerCustomer = "CUSTOMER"
+)
+
+// ManagerAWS is the KeyManager of an AWS managed key, and KeyManagerHeader the
+// header with which a service of this process has CreateKey make its key as
+// ManagerAWS. KMS reads it from an internal call alone (awsManaged), so no
+// client can set it. DynamoDB's managedKey is the one user; S3's managed key
+// (managedKMSKey) stays a CUSTOMER key, as in LocalStack.
+const (
+	ManagerAWS       = "AWS"
+	KeyManagerHeader = "X-Gostack-Key-Manager"
 )
 
 // keyRequest is what a new key is made from, its spec and usage already
@@ -67,7 +72,7 @@ func (p *Provider) CreateKey(ctx context.Context, in *api.CreateKeyInput) (*api.
 	}
 
 	if awsManaged(ctx, rc) {
-		k.manager = managerAWS
+		k.manager = ManagerAWS
 	}
 
 	p.stateAt(rc.AccountID, rc.Region).addKey(k)
@@ -77,11 +82,11 @@ func (p *Provider) CreateKey(ctx context.Context, in *api.CreateKeyInput) (*api.
 
 // awsManaged reports whether a CreateKey is a service of this process making
 // its AWS managed key: the call is internal and names the manager in
-// keyManagerHeader. LocalStack's DynamoDB calls set_key_managed on the key it
+// KeyManagerHeader. LocalStack's DynamoDB calls set_key_managed on the key it
 // has just made (SSEUtils.get_sse_kms_managed_key); an outside client sends the
 // header to no effect, since no header sets request.IsInternal.
 func awsManaged(ctx context.Context, rc *request.Context) bool {
-	return request.IsInternal(ctx) && rc.Request != nil && rc.Request.Header.Get(keyManagerHeader) == managerAWS
+	return request.IsInternal(ctx) && rc.Request != nil && rc.Request.Header.Get(KeyManagerHeader) == ManagerAWS
 }
 
 // createRequest reads the parts of a CreateKey request that a key is made

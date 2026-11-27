@@ -50,7 +50,7 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 		return nil, err
 	}
 
-	sse, err := p.sseDescription(ctx, c, in.SSESpecification)
+	sse, err := p.updatedSSE(ctx, c, name, e, in)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +77,27 @@ func (p *Provider) UpdateTable(ctx context.Context, in *api.UpdateTableInput) (*
 	d.Replicas = p.replicas(c, name)
 
 	return &api.UpdateTableOutput{TableDescription: d}, nil
+}
+
+// updatedSSE is the encryption in's SSESpecification gives the table name of
+// entry e, nil when it has none. A key the table needs is made for the table's
+// owning account and region, which a replica region's call does not name, and
+// only once the rest of the update has passed its checks, so a refused update
+// leaves no key behind. It takes no table lock while KMS is called.
+func (p *Provider) updatedSSE(
+	ctx context.Context, c caller, name string, e *tableEntry, in *api.UpdateTableInput,
+) (*api.SSEDescription, error) {
+	if needsManagedKey(in.SSESpecification) {
+		err := e.check(in, p.now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	state, owner := p.home(c, name)
+	home := caller{account: c.account, region: owner, state: state, shared: c.shared, from: c.from}
+
+	return p.sseDescription(ctx, home, in.SSESpecification)
 }
 
 // checkIndexUpdates refuses a request that names one index twice, then one
@@ -136,53 +157,88 @@ func (e *tableEntry) update(
 
 	now := clock()
 
-	next := e.meta
-	next.Attributes = mergeAttributes(e.meta.Attributes, in.AttributeDefinitions)
-	next.Global = slices.Clone(e.meta.Global)
-
-	err := next.updateBilling(in, now)
+	plan, err := e.plan(in, now)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	created, dropped, err := next.updateIndexes(in.GlobalSecondaryIndexUpdates)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	streamChanged, err := next.setStream(in.StreamSpecification, now, true)
-	if err != nil {
-		return nil, nil, err
-	}
-
+	next := plan.next
 	ending := endingSSE(e.meta.SSE, sse)
 
 	next.updateSettings(in, sse)
 
-	for _, name := range dropped {
+	for _, name := range plan.dropped {
 		e.data.DropIndex(name)
 	}
 
-	names := make([]string, 0, len(created))
+	names := make([]string, 0, len(plan.created))
 
-	for i := range created {
-		e.data.AddIndex(next.indexSpec(&created[i], true))
-		names = append(names, created[i].Name)
+	for i := range plan.created {
+		e.data.AddIndex(next.indexSpec(&plan.created[i], true))
+		names = append(names, plan.created[i].Name)
 	}
 
 	e.meta = next
 
-	if streamChanged {
+	if plan.streamChanged {
 		e.applyStream(now, clock, c.region)
 	}
 
 	return names, ending, nil
 }
 
+// check refuses in as update would, and changes nothing. UpdateTable asks it
+// before it has KMS make a key, so that a request that fails makes none. The
+// answer holds only until the table changes: update checks again.
+func (e *tableEntry) check(in *api.UpdateTableInput, clock func() time.Time) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	_, err := e.plan(in, clock())
+
+	return err
+}
+
+// tablePlan is what an update of a table does: the definition it leaves, the
+// indexes it creates and drops, and whether the stream changes.
+type tablePlan struct {
+	next          tableMeta
+	created       []indexMeta
+	dropped       []string
+	streamChanged bool
+}
+
+// plan checks in against the table and returns what it would do, changing the
+// table in no way: every change is to a copy of the definition. The caller holds
+// e.mu.
+func (e *tableEntry) plan(in *api.UpdateTableInput, now time.Time) (tablePlan, error) {
+	plan := tablePlan{next: e.meta}
+	plan.next.Attributes = mergeAttributes(e.meta.Attributes, in.AttributeDefinitions)
+	plan.next.Global = slices.Clone(e.meta.Global)
+
+	err := plan.next.updateBilling(in, now)
+	if err != nil {
+		return tablePlan{}, err
+	}
+
+	plan.created, plan.dropped, err = plan.next.updateIndexes(in.GlobalSecondaryIndexUpdates)
+	if err != nil {
+		return tablePlan{}, err
+	}
+
+	plan.streamChanged, err = plan.next.setStream(in.StreamSpecification, now, true)
+	if err != nil {
+		return tablePlan{}, err
+	}
+
+	return plan, nil
+}
+
 // endingSSE is what an UpdateTable that turns encryption off answers for it:
-// the encryption the table had, UPDATING (LocalStack sets the status on the
-// description it read before the update, in update_table). It is nil for any
-// other update, and for a table that had none.
+// the encryption the table had, UPDATING, which is what LocalStack's
+// update_table answers on the one path where it acts on the member
+// (docs/compat.md, "DynamoDB and KMS"). It is nil for any other update, and for
+// a table that had none.
 func endingSSE(before, after *api.SSEDescription) *api.SSEDescription {
 	if before == nil || before.Status == nil || after == nil || after.Status != nil {
 		return nil

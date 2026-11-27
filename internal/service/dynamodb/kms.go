@@ -10,6 +10,7 @@ import (
 
 	api "github.com/kylecannon/gostack/internal/api/dynamodb"
 	"github.com/kylecannon/gostack/internal/inproc"
+	"github.com/kylecannon/gostack/internal/service/kms"
 )
 
 // DynamoDB's call to KMS: the AWS managed key a table with SSE enabled and no
@@ -26,17 +27,23 @@ const (
 	// managedKeyDescription is the description LocalStack gives the key.
 	managedKeyDescription = "Default key that protects my DynamoDB data when no other key is defined"
 
-	// keyManagerHeader names the manager of the key a CreateKey makes. KMS reads
-	// it from an internal call alone, so no client can set it.
-	keyManagerHeader = "X-Gostack-Key-Manager"
-	keyManagerAWS    = "AWS"
+	kmsNotFound = "NotFoundException"
 )
 
-// managedKey is the ARN of the AWS managed KMS key of the caller's account and
-// region: a key KMS makes on the first table that needs it, then the same key
-// for every later one (MANAGED_KMS_KEYS, which LocalStack keys by region alone).
-// It is "" when no KMS answers: DynamoDB is not bound to a gateway, or the
-// gateway serves no KMS. The caller holds no lock.
+// needsManagedKey reports whether spec asks for encryption with no key named,
+// which is when the table takes the AWS managed key.
+func needsManagedKey(spec *api.SSESpecification) bool {
+	return spec != nil && spec.Enabled != nil && *spec.Enabled &&
+		(spec.KMSMasterKeyId == nil || *spec.KMSMasterKeyId == "")
+}
+
+// managedKey is the ARN of the AWS managed KMS key of c's account and region,
+// which are the table's own: a key KMS makes on the first table that needs it,
+// then the same key for every later one (MANAGED_KMS_KEYS, which LocalStack
+// keys by region alone). A key kept from before is asked for first, and a new
+// one is made when KMS no longer has it or it is not enabled: a reset of KMS
+// alone, or a scheduled deletion. It is "" when no KMS answers: DynamoDB is not
+// bound to a gateway, or the gateway serves no KMS. The caller holds no lock.
 func (p *Provider) managedKey(ctx context.Context, c caller) (string, error) {
 	s := c.state
 	s.keyMu.Lock()
@@ -44,7 +51,16 @@ func (p *Provider) managedKey(ctx context.Context, c caller) (string, error) {
 
 	place := c.account + "/" + c.region
 	if arn := s.managedKeys[place]; arn != "" {
-		return arn, nil
+		usable, err := p.keyUsable(ctx, c, arn)
+		if err != nil {
+			return "", err
+		}
+
+		if usable {
+			return arn, nil
+		}
+
+		delete(s.managedKeys, place)
 	}
 
 	body, err := json.Marshal(map[string]string{"Description": managedKeyDescription})
@@ -52,21 +68,18 @@ func (p *Provider) managedKey(ctx context.Context, c caller) (string, error) {
 		return "", api.NewInternalServerError(err.Error())
 	}
 
-	resp, err := p.client.Do(ctx, inproc.Call{
-		Account: c.account, Region: c.region, Service: kmsService, Target: kmsTargetPrefix + "CreateKey",
-		ContentType: kmsContentType, Body: body, Header: http.Header{keyManagerHeader: {keyManagerAWS}},
-	})
+	resp, err := p.kmsCall(ctx, c, "CreateKey", body, http.Header{kms.KeyManagerHeader: {kms.ManagerAWS}})
 
 	switch {
-	case errors.Is(err, inproc.ErrNotBound) || err == nil && resp.NotEnabled():
+	case unavailable(resp, err):
 		return "", nil
 	case err != nil:
-		return "", api.NewInternalServerError("kms CreateKey: " + err.Error())
+		return "", api.NewInternalServerError(err.Error())
 	case !resp.OK():
 		return "", api.NewInternalServerError("kms CreateKey: " + kmsFailure(resp.Body))
 	}
 
-	var made createdKey
+	var made keyAnswer
 
 	err = json.Unmarshal(resp.Body, &made)
 	if err != nil || made.KeyMetadata.Arn == "" {
@@ -78,28 +91,93 @@ func (p *Provider) managedKey(ctx context.Context, c caller) (string, error) {
 	return made.KeyMetadata.Arn, nil
 }
 
-// createdKey is the part of KMS's CreateKey answer DynamoDB reads.
-type createdKey struct {
+// keyUsable reports whether KMS still has the key arn and has it enabled. A
+// KMS that cannot be asked, one that is not bound or not served, leaves the key
+// as it was.
+func (p *Provider) keyUsable(ctx context.Context, c caller, arn string) (bool, error) {
+	body, err := json.Marshal(map[string]string{"KeyId": arn})
+	if err != nil {
+		return false, api.NewInternalServerError(err.Error())
+	}
+
+	resp, err := p.kmsCall(ctx, c, "DescribeKey", body, nil)
+
+	switch {
+	case unavailable(resp, err):
+		return true, nil
+	case err != nil:
+		return false, api.NewInternalServerError(err.Error())
+	case !resp.OK() && kmsErrorType(resp.Body) == kmsNotFound:
+		return false, nil
+	case !resp.OK():
+		return false, api.NewInternalServerError("kms DescribeKey: " + kmsFailure(resp.Body))
+	}
+
+	var described keyAnswer
+
+	err = json.Unmarshal(resp.Body, &described)
+	if err != nil {
+		return false, api.NewInternalServerError("kms DescribeKey: " + err.Error())
+	}
+
+	return described.KeyMetadata.Enabled, nil
+}
+
+// kmsCall makes one KMS call as c's account in c's region.
+func (p *Provider) kmsCall(
+	ctx context.Context, c caller, operation string, body []byte, header http.Header,
+) (inproc.Response, error) {
+	resp, err := p.client.Do(ctx, inproc.Call{
+		Account: c.account, Region: c.region, Service: kmsService, Target: kmsTargetPrefix + operation,
+		ContentType: kmsContentType, Body: body, Header: header,
+	})
+	if err != nil {
+		return resp, fmt.Errorf("kms %s: %w", operation, err)
+	}
+
+	return resp, nil
+}
+
+// unavailable reports a call no KMS answered: DynamoDB is not bound to a
+// gateway, or the gateway does not serve KMS.
+func unavailable(resp inproc.Response, err error) bool {
+	return errors.Is(err, inproc.ErrNotBound) || err == nil && resp.NotEnabled()
+}
+
+// keyAnswer is the part of KMS's CreateKey and DescribeKey answers DynamoDB
+// reads.
+type keyAnswer struct {
 	KeyMetadata keyMetadata `json:"KeyMetadata"`
 }
 
 type keyMetadata struct {
-	Arn string `json:"Arn"`
+	Arn     string `json:"Arn"`
+	Enabled bool   `json:"Enabled"`
 }
 
-// kmsFailure is the error type and message of a KMS error answer, with any
-// namespace before a # dropped from the type.
-func kmsFailure(body []byte) string {
+// kmsErrorType is the error type of a KMS error answer, with any namespace
+// before a # dropped.
+func kmsErrorType(body []byte) string {
 	var failure struct {
-		Type    string `json:"__type"`
-		Message string `json:"message"`
+		Type string `json:"__type"`
 	}
 
 	_ = json.Unmarshal(body, &failure)
 
 	if i := strings.LastIndexByte(failure.Type, '#'); i >= 0 {
-		failure.Type = failure.Type[i+1:]
+		return failure.Type[i+1:]
 	}
 
-	return fmt.Sprintf("%s: %s", failure.Type, failure.Message)
+	return failure.Type
+}
+
+// kmsFailure is the error type and message of a KMS error answer.
+func kmsFailure(body []byte) string {
+	var failure struct {
+		Message string `json:"message"`
+	}
+
+	_ = json.Unmarshal(body, &failure)
+
+	return kmsErrorType(body) + ": " + failure.Message
 }
