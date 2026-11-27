@@ -294,10 +294,10 @@ Paths outside the decoders, bounded on their own:
 
 - Documents a service parses after decoding are held to AWS's length before
   they are parsed: an SQS `Policy` or `RedrivePolicy` to 8,192 bytes, which
-  also holds the policy `AddPermission` builds (past it the statement is
-  refused with `OverLimit`), an S3 bucket policy to 20 KB, an STS SAML
-  assertion to botocore's 100,000 characters. `docs/compat.md` lists the
-  answers.
+  also holds every policy `AddPermission` and `RemovePermission` write
+  (`sqs.storePolicy`; past it the write is refused with `OverLimit`), an S3
+  bucket policy to 20 KB, an STS SAML assertion to botocore's 100,000
+  characters. `docs/compat.md` lists the answers.
 - The `x-localstack-data` header is checked with `json.Valid` in
   `markInternal` and never decoded; net/http's 1 MiB header limit bounds its
   length.

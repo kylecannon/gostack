@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/account"
@@ -188,24 +189,7 @@ func (q *Queue) addPermission(label string, actions, accountIDs []string) *awser
 		"Resource":  q.arn,
 	})
 
-	encoded, err := encodePolicy(doc)
-	if err != nil {
-		return err
-	}
-
-	// The policy AddPermission writes is held to the quota a policy that
-	// SetQueueAttributes sets is (maxPolicyBytes). Past it, the statement is
-	// refused with OverLimit, which the botocore SQS model lists for
-	// AddPermission when "the maximum number of permissions for the queue is
-	// reached".
-	if len(encoded) > maxPolicyBytes {
-		return sqsapi.NewOverLimit("The Policy attribute would be longer than " +
-			strconv.Itoa(maxPolicyBytes) + " bytes.")
-	}
-
-	q.attrs[attrPolicy] = encoded
-
-	return nil
+	return q.storePolicy(doc)
 }
 
 func (q *Queue) removePermission(label string) *awserr.Error {
@@ -234,10 +218,24 @@ func (q *Queue) removePermission(label string) *awserr.Error {
 	return q.storePolicy(doc)
 }
 
+// storePolicy writes doc as the queue's Policy attribute. Every policy that
+// AddPermission and RemovePermission write is held to the quota a policy that
+// SetQueueAttributes sets is (maxPolicyBytes), counted as written. Past it the
+// write is refused with OverLimit and the attribute is left as it was. The
+// botocore SQS model lists OverLimit for AddPermission, when "the maximum
+// number of permissions for the queue is reached"; it lists no error naming a
+// limit for RemovePermission, whose write can be longer than the policy it
+// read only by the escapes json must write (  for U+2028), and that is
+// refused with OverLimit too.
 func (q *Queue) storePolicy(doc policy) *awserr.Error {
 	encoded, err := encodePolicy(doc)
 	if err != nil {
 		return err
+	}
+
+	if len(encoded) > maxPolicyBytes {
+		return sqsapi.NewOverLimit("The Policy attribute would be longer than " +
+			strconv.Itoa(maxPolicyBytes) + " bytes.")
 	}
 
 	q.attrs[attrPolicy] = encoded
@@ -245,14 +243,22 @@ func (q *Queue) storePolicy(doc policy) *awserr.Error {
 	return nil
 }
 
-// encodePolicy is doc as the Policy attribute holds it.
+// encodePolicy is doc as the Policy attribute holds it. It escapes no &, < or
+// > for HTML, which json.Marshal would write as six bytes each, so a policy
+// is no longer for being written back than json needs it to be.
 func encodePolicy(doc policy) (string, *awserr.Error) {
-	encoded, err := json.Marshal(doc)
+	var b strings.Builder
+
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+
+	err := enc.Encode(doc)
 	if err != nil {
 		return "", awserr.Internal("the Policy attribute cannot be written")
 	}
 
-	return string(encoded), nil
+	// Encode ends the value with a newline, which the attribute does not hold.
+	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
 // statementID is the Sid of a policy statement, or "" when it has none.
