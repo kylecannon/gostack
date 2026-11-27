@@ -48,9 +48,14 @@ func (b *unreadBody) Close() error {
 	return b.src.Close()
 }
 
-// follow makes b follow r's body, for a request from a listener that has one.
+// follow makes b follow r's body, for an HTTP/1.x request from a listener that
+// has one. On HTTP/2 net/http turns a handler's Connection: close into a GOAWAY
+// that ends every stream on the connection, and an unread HTTP/2 body ends
+// with its stream, not the connection, so an HTTP/2 body is not followed. Nor is one of length zero,
+// which HTTP/2 gives a request that has no body. A chunked body states no
+// length (-1) and is followed.
 func (b *unreadBody) follow(r *http.Request) {
-	if r.Body == nil || r.Body == http.NoBody {
+	if r.Body == nil || r.Body == http.NoBody || r.ProtoMajor >= 2 || r.ContentLength == 0 {
 		return
 	}
 
