@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/kylecannon/gostack/internal/account"
@@ -187,7 +188,24 @@ func (q *Queue) addPermission(label string, actions, accountIDs []string) *awser
 		"Resource":  q.arn,
 	})
 
-	return q.storePolicy(doc)
+	encoded, err := encodePolicy(doc)
+	if err != nil {
+		return err
+	}
+
+	// The policy AddPermission writes is held to the quota a policy that
+	// SetQueueAttributes sets is (maxPolicyBytes). Past it, the statement is
+	// refused with OverLimit, which the botocore SQS model lists for
+	// AddPermission when "the maximum number of permissions for the queue is
+	// reached".
+	if len(encoded) > maxPolicyBytes {
+		return sqsapi.NewOverLimit("The Policy attribute would be longer than " +
+			strconv.Itoa(maxPolicyBytes) + " bytes.")
+	}
+
+	q.attrs[attrPolicy] = encoded
+
+	return nil
 }
 
 func (q *Queue) removePermission(label string) *awserr.Error {
@@ -217,14 +235,24 @@ func (q *Queue) removePermission(label string) *awserr.Error {
 }
 
 func (q *Queue) storePolicy(doc policy) *awserr.Error {
-	encoded, err := json.Marshal(doc)
+	encoded, err := encodePolicy(doc)
 	if err != nil {
-		return awserr.Internal("the Policy attribute cannot be written")
+		return err
 	}
 
-	q.attrs[attrPolicy] = string(encoded)
+	q.attrs[attrPolicy] = encoded
 
 	return nil
+}
+
+// encodePolicy is doc as the Policy attribute holds it.
+func encodePolicy(doc policy) (string, *awserr.Error) {
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return "", awserr.Internal("the Policy attribute cannot be written")
+	}
+
+	return string(encoded), nil
 }
 
 // statementID is the Sid of a policy statement, or "" when it has none.

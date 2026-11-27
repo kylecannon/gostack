@@ -1,6 +1,7 @@
 package sqs_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,6 +22,55 @@ func redriveOfLength(n int) string {
 	const head, tail = policyTarget + `"maxReceiveCount":5`, `}`
 
 	return head + strings.Repeat(" ", n-len(head)-len(tail)) + tail
+}
+
+// Test_AddPermission_IsRefusedPastThePolicyQuota is SQ-320. The Policy that
+// AddPermission writes is held to the same 8,192 bytes as one that
+// SetQueueAttributes sets. The botocore SQS model lists OverLimit among
+// AddPermission's errors ("the maximum number of permissions for the queue is
+// reached"), so a statement that would take the policy past the quota is
+// refused with it and the policy is left as it was.
+func Test_AddPermission_IsRefusedPastThePolicyQuota(t *testing.T) {
+	t.Parallel()
+
+	for _, protocol := range protocols {
+		t.Run(protocol, func(t *testing.T) {
+			t.Parallel()
+
+			c := newStack(t).as(protocol)
+			url := c.createQueue("grants", nil)
+
+			accounts := []string{"111111111111", "222222222222", "333333333333"}
+			actions := []string{opSend, opReceiveMessage, opDeleteMessage, opGetQueueAttributes}
+
+			var refused bool
+
+			for i := range 100 {
+				before := attributesOf(c, url)[attrPolicy]
+				res := c.call("AddPermission", map[string]any{
+					paramQueueURL: url, paramLabel: "grant-" + strconv.Itoa(i),
+					paramAccountIDs: accounts, paramActions: actions,
+				})
+
+				if res.ok() {
+					assert.LessOrEqual(t, len(attributesOf(c, url)[attrPolicy]), 8192, "grant %d", i)
+
+					continue
+				}
+
+				assert.Equal(t, 400, res.status)
+				assert.Equal(t, "OverLimit", res.errorCode(), res.errorMessage())
+				assert.Equal(t, before, attributesOf(c, url)[attrPolicy], "a refused grant leaves the policy")
+				assert.Positive(t, i, "grants within the quota are stored")
+
+				refused = true
+
+				break
+			}
+
+			assert.True(t, refused, "a grant past the quota is refused")
+		})
+	}
 }
 
 // Test_PolicyAttributes_AreRefusedPastTheQuota is SQ-320. A queue's Policy and
