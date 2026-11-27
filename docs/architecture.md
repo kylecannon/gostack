@@ -302,7 +302,8 @@ Paths outside the decoders, bounded on their own:
 - The internal API's json bodies (`/_localstack/health` POST and PUT, the
   config update) are read through `protocol.ReadRequest` and charge 64 times
   their length for decoding (`internalapi.genericDecode`), so they hold the
-  in-flight bound as a service's body does. No room answers `503`.
+  in-flight bound as a service's body does. With no room, health answers
+  `503` and a config update the `400` of an invalid body.
 - An S3 browser POST reads at most 20 KiB of fields and 8 KiB of read-ahead
   before its file part (`s3.preDataReader`), so a part header cannot grow
   past it.
