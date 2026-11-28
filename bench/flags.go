@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 )
@@ -18,6 +19,9 @@ const (
 	// slowFloorUS is the p50 a gostack operation has to reach as well, so a tick
 	// of the timer's resolution is not called slow.
 	slowFloorUS = 1000
+	// cycleOpsTolerance is how far apart the operations a cycle takes may be, as
+	// a share of LocalStack's, for the two cycles to be the same work.
+	cycleOpsTolerance = 0.1
 
 	// growthFloorBytes and growthShare set when RSS has grown with the payload and
 	// not with the runtime's own warming up: by at least the floor, and by at
@@ -38,9 +42,20 @@ func (r report) flags(b *strings.Builder) {
 	b.WriteString("Only three things are flagged. Everything else is in the tables above.\n\n")
 
 	b.WriteString("### A gostack cell ten times slower than LocalStack\n\n")
-	b.WriteString("A p50 ten times LocalStack's and over 1 ms, or a tenth of LocalStack's cycles a second. " +
+	b.WriteString("An operation whose p50 is ten times LocalStack's and over 1 ms, named with both p50s, or a tenth " +
+		"of LocalStack's cycles a second when both targets run the same operations a cycle. A cycle rate does " +
+		"not say which operation is slow, and a cycle that is not the same work on both targets (a batch of " +
+		"ten, a listing that pages, a seeding phase counted in) is noted below the flags and not flagged. " +
 		"A persistence-on cell is held against LocalStack's persistence-off cell, which cannot persist.\n\n")
-	writeList(b, r.slowerFlags(), "none (or LocalStack was not measured)")
+
+	flags, notes := r.slowerFlags()
+	writeList(b, flags, "none (or LocalStack was not measured)")
+
+	if len(notes) > 0 {
+		b.WriteString("Noted, not flagged: a tenth of LocalStack's cycles a second, from cycles that are not the " +
+			"same work on both targets.\n\n")
+		writeList(b, notes, "")
+	}
 
 	b.WriteString("### Memory that grows with object size\n\n")
 	b.WriteString("Peak RSS above the start of the run, held against the smallest payload of the same cell at the " +
@@ -56,14 +71,14 @@ func (r report) flags(b *strings.Builder) {
 // isGostack is true for the gostack images, full and slim.
 func isGostack(t targetResult) bool { return strings.HasPrefix(t.Name, targetGostack) }
 
-// slowerFlags lists the gostack cells a LocalStack twin beats tenfold.
-func (r report) slowerFlags() []string {
+// slowerFlags lists the gostack cells a LocalStack twin beats tenfold, and then
+// the cells whose cycle rate alone is a tenth of the twin's while the cycles are
+// not the same work, which are notes and not flags.
+func (r report) slowerFlags() (flags, notes []string) {
 	reference, ok := r.target(targetLocalstack)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-
-	var lines []string
 
 	for _, t := range r.Targets {
 		if !isGostack(t) {
@@ -79,18 +94,25 @@ func (r report) slowerFlags() []string {
 				continue
 			}
 
-			if why := tenfoldSlower(c, ref); why != "" {
-				lines = append(lines, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, why))
+			slow, note := tenfoldSlower(c, ref)
+			if slow != "" {
+				flags = append(flags, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, slow))
+			}
+
+			if note != "" {
+				notes = append(notes, fmt.Sprintf("- %s `%s`: %s", t.Name, c.ID, note))
 			}
 		}
 	}
 
-	return lines
+	return flags, notes
 }
 
 // tenfoldSlower says how a cell is ten times slower than its LocalStack twin, or
-// returns "".
-func tenfoldSlower(c, ref cellResult) string {
+// returns "". An operation is slow on its own p50. The cycle rate is held only
+// when both targets ran the same operations a cycle; a rate a tenth of
+// LocalStack's from cycles that are not the same work is the note.
+func tenfoldSlower(c, ref cellResult) (slow, note string) {
 	var reasons []string
 
 	for _, name := range c.opNames() {
@@ -101,11 +123,51 @@ func tenfoldSlower(c, ref cellResult) string {
 	}
 
 	got, want := c.CyclesPerSec.Median, ref.CyclesPerSec.Median
-	if got > 0 && want > 0 && got*orderOfMagnitude <= want {
-		reasons = append(reasons, fmt.Sprintf("%.2f cycles/s against %.2f", got, want))
+	if got <= 0 || want <= 0 || got*orderOfMagnitude > want {
+		return strings.Join(reasons, "; "), ""
 	}
 
-	return strings.Join(reasons, "; ")
+	rate := fmt.Sprintf("%.2f cycles/s against %.2f", got, want)
+
+	if why := cyclesDiffer(c, ref); why != "" {
+		return strings.Join(reasons, "; "), rate + ", " + why
+	}
+
+	return strings.Join(append(reasons, rate+", the same operations a cycle"), "; "), ""
+}
+
+// cyclesDiffer says how a cycle of the cell is not the same work as its twin's,
+// or returns "": an operation timed on one target only, or operations a cycle
+// (operations a second over cycles a second, so a seeding phase and empty
+// receives count) further apart than cycleOpsTolerance, when both results have
+// the rates.
+func cyclesDiffer(c, ref cellResult) string {
+	names := map[string]bool{}
+
+	for name := range c.Ops {
+		names[name] = true
+	}
+
+	for name := range ref.Ops {
+		names[name] = true
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(names)) {
+		if (c.Ops[name].Count > 0) != (ref.Ops[name].Count > 0) {
+			return name + " was timed on one target only"
+		}
+	}
+
+	if c.OpsPerSec.Median <= 0 || ref.OpsPerSec.Median <= 0 {
+		return ""
+	}
+
+	got, want := c.OpsPerSec.Median/c.CyclesPerSec.Median, ref.OpsPerSec.Median/ref.CyclesPerSec.Median
+	if math.Abs(got-want) > cycleOpsTolerance*want {
+		return fmt.Sprintf("%.1f operations a cycle against %.1f", got, want)
+	}
+
+	return ""
 }
 
 // growth is how far a cell's resident set rose above the start of its runs.
