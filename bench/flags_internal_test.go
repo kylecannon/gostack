@@ -69,6 +69,102 @@ func Test_flags_name_a_tenfold_slowdown_and_not_a_smaller_gap(t *testing.T) {
 	assert.NotContains(t, flagged(t, gostack, localstack), slow.id())
 }
 
+// withOpsRate sets the operations a second of a cell, which with its cycles a
+// second says how many operations a cycle takes.
+func withOpsRate(c cellResult, opsPerSec float64) cellResult {
+	c.OpsPerSec = around(opsPerSec)
+
+	return c
+}
+
+// cycleFlags is the cell of one gostack target held against the same cell of
+// LocalStack, and what the report says of it: the flags, then the notes.
+func cycleFlags(t *testing.T, gostack, localstack cellResult) (flags, notes string) {
+	t.Helper()
+
+	var b strings.Builder
+
+	report{Targets: []targetResult{
+		{Name: targetGostack, Cells: []cellResult{gostack}},
+		{Name: targetLocalstack, Cells: []cellResult{localstack}},
+	}}.flags(&b)
+
+	out := b.String()
+	section, _, _ := strings.Cut(out, "### Memory")
+	flags, notes, _ = strings.Cut(section, "Noted, not flagged")
+
+	return flags, notes
+}
+
+func Test_a_slow_operation_is_flagged_and_named_with_both_p50s(t *testing.T) {
+	spec := objectsCell(s3Payload64KiB, "", levelMid)
+
+	// Put is 30 times slower, get is not, and the cycles run at the same rate.
+	flags, notes := cycleFlags(t,
+		withOpsRate(s3Cell(spec, 60_000, 100, 0, 0), 200),
+		withOpsRate(s3Cell(spec, 2_000, 100, 0, 0), 200))
+
+	assert.Contains(t, flags, "- gostack `"+spec.id()+"`: put p50 60.00 ms against 2.00\n")
+	assert.NotContains(t, flags, "get p50")
+	assert.NotContains(t, flags, "cycles/s")
+	assert.Empty(t, notes)
+}
+
+func Test_a_slower_cycle_with_no_slow_operation_is_not_flagged(t *testing.T) {
+	spec := objectsCell(s3Payload64KiB, "", levelMid)
+
+	// Every p50 is the same on both targets, and the cycle rate is 5 times lower,
+	// short of the tenfold the flag takes.
+	flags, notes := cycleFlags(t,
+		withOpsRate(s3Cell(spec, 2_000, 20, 0, 0), 40),
+		withOpsRate(s3Cell(spec, 2_000, 100, 0, 0), 200))
+
+	assert.NotContains(t, flags, spec.id())
+	assert.Empty(t, notes, "a smaller gap is in the tables and is not chased")
+}
+
+func Test_a_tenfold_cycle_rate_flags_only_the_same_operations_a_cycle(t *testing.T) {
+	spec := objectsCell(s3Payload64KiB, "", levelMid)
+
+	// Two operations a cycle on both, at a tenth of the rate, with no p50 over the
+	// limit: the rate is the figure, and it is held.
+	flags, notes := cycleFlags(t,
+		withOpsRate(s3Cell(spec, 2_000, 10, 0, 0), 20),
+		withOpsRate(s3Cell(spec, 2_000, 100, 0, 0), 200))
+
+	assert.Contains(t, flags, "- gostack `"+spec.id()+"`: 10.00 cycles/s against 100.00, the same operations a cycle\n")
+	assert.Empty(t, notes)
+}
+
+func Test_cycles_that_are_not_comparable_are_noted_and_not_flagged(t *testing.T) {
+	spec := objectsCell(s3Payload64KiB, "", levelMid)
+	localstack := withOpsRate(s3Cell(spec, 2_000, 100, 0, 0), 200)
+
+	// A tenth of the cycle rate, with no slow operation, from a cycle that takes
+	// ten times the operations: 2 a cycle on LocalStack, 20 on gostack.
+	flags, notes := cycleFlags(t, withOpsRate(s3Cell(spec, 2_000, 10, 0, 0), 200), localstack)
+
+	assert.NotContains(t, flags, spec.id(), "not the same work, so not held against LocalStack's rate")
+	assert.Contains(t, notes,
+		"- gostack `"+spec.id()+"`: 10.00 cycles/s against 100.00, 20.0 operations a cycle against 2.0\n")
+
+	// An operation that only one target timed is another cycle as well.
+	other := s3Cell(spec, 2_000, 10, 0, 0)
+	delete(other.Ops, opGetObject)
+
+	flags, notes = cycleFlags(t, other, localstack)
+
+	assert.NotContains(t, flags, spec.id())
+	assert.Contains(t, notes, "get was timed on one target only")
+
+	// A slow operation in the same cell is flagged whatever the cycles.
+	flags, notes = cycleFlags(t, withOpsRate(s3Cell(spec, 60_000, 10, 0, 0), 200), localstack)
+
+	assert.Contains(t, flags, "put p50 60.00 ms against 2.00")
+	assert.NotContains(t, flags, "cycles/s")
+	assert.Contains(t, notes, "10.00 cycles/s against 100.00")
+}
+
 func Test_flags_name_memory_that_grows_with_the_payload(t *testing.T) {
 	small, large := objectsCell(s3Payload1KiB, "", levelMid), objectsCell(s3Payload16MiB, "", levelMid)
 

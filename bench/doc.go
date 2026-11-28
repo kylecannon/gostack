@@ -307,7 +307,10 @@
 // # The flags
 //
 // The markdown report flags three things (flags.go) and leaves every other gap to
-// the tables: a gostack cell ten times slower than its LocalStack twin, memory
+// the tables: a gostack cell with an operation whose p50 is ten times its
+// LocalStack twin's (named, with both p50s; the cell's cycle rate at a tenth of
+// the twin's counts only when both run the same operations a cycle, within 10%,
+// and is a note under the flags when they do not), memory
 // that grows with object size (RSS above the start of the run that follows the
 // payload and not the runtime warming up), and CPU over 1% of a core while idle.
 //
